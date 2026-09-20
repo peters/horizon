@@ -44,7 +44,21 @@ impl Dispatcher {
     pub fn call(&self, command: Command) -> Response {
         let result = self.lock().and_then(|lock| {
             let observation = matches!(command, Command::Screenshot(_)).then(|| self.marker("resize-observe"));
-            let value = self.execute(command)?;
+            let mut owner = if matches!(command, Command::Act(_) | Command::Resize(_)) {
+                super::control_owner::ControlOwner::begin(&self.target_file)?
+            } else {
+                None
+            };
+            let result = self.execute(command);
+            if (result.is_ok()
+                || result
+                    .as_ref()
+                    .is_err_and(|error| error.resize_uncertain() || matches!(error, DeviceError::Indeterminate(_))))
+                && let Some(owner) = &mut owner
+            {
+                owner.complete();
+            }
+            let value = result?;
             Ok(Response::new(
                 json!({"ok":true,"result":value}),
                 Some(lock),

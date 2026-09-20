@@ -44,73 +44,9 @@ pub(super) fn render_workspace_layout_toolbar(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = WORKSPACE_LAYOUT_BUTTON_SPACING;
-                        let is_default = workspace.layout.is_none();
-                        let response = ui
-                            .add(
-                                Button::new(egui::RichText::new("Default").size(10.5).color(if is_default {
-                                    theme::FG()
-                                } else {
-                                    theme::FG_SOFT()
-                                }))
-                                .min_size(Vec2::new(
-                                    WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH,
-                                    WORKSPACE_LAYOUT_BUTTON_HEIGHT,
-                                ))
-                                .fill(if is_default {
-                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.22), 236)
-                                } else {
-                                    theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
-                                })
-                                .stroke(Stroke::new(
-                                    1.0_f32,
-                                    if is_default {
-                                        theme::alpha(workspace.color, 224)
-                                    } else {
-                                        theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216)
-                                    },
-                                ))
-                                .corner_radius(8),
-                            )
-                            .on_hover_text("Manual placement");
-                        if response.clicked() {
-                            action = Some(WorkspaceAction::ClearLayout);
-                        }
-
-                        for layout in WorkspaceLayout::ALL {
-                            let is_selected = workspace.layout == Some(layout);
-                            let response = ui
-                                .add(
-                                    Button::new(
-                                        egui::RichText::new(workspace_layout_label(layout))
-                                            .size(10.5)
-                                            .color(if is_selected { theme::FG() } else { theme::FG_SOFT() }),
-                                    )
-                                    .min_size(Vec2::new(
-                                        workspace_layout_button_width(layout),
-                                        WORKSPACE_LAYOUT_BUTTON_HEIGHT,
-                                    ))
-                                    .fill(if is_selected {
-                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.22), 236)
-                                    } else {
-                                        theme::alpha(theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05), 220)
-                                    })
-                                    .stroke(Stroke::new(
-                                        1.0_f32,
-                                        if is_selected {
-                                            theme::alpha(workspace.color, 224)
-                                        } else {
-                                            theme::alpha(
-                                                theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24),
-                                                216,
-                                            )
-                                        },
-                                    ))
-                                    .corner_radius(8),
-                                )
-                                .on_hover_text(layout.label());
-                            if response.clicked() {
-                                action = Some(WorkspaceAction::ArrangeLayout(layout));
-                            }
+                        let mut layout = workspace.layout;
+                        if workspace_layout_buttons(ui, &mut layout, workspace.color) {
+                            action = Some(layout.map_or(WorkspaceAction::ClearLayout, WorkspaceAction::ArrangeLayout));
                         }
 
                         if render_detach_button(ui, workspace) {
@@ -121,6 +57,49 @@ pub(super) fn render_workspace_layout_toolbar(
         });
 
     action
+}
+
+/// Shared segmented layout controls for workspaces and cloud groups.
+pub(in crate::app) fn workspace_layout_buttons(
+    ui: &mut egui::Ui,
+    selected: &mut Option<WorkspaceLayout>,
+    color: egui::Color32,
+) -> bool {
+    let mut changed = false;
+    ui.spacing_mut().item_spacing.x = WORKSPACE_LAYOUT_BUTTON_SPACING;
+    for layout in std::iter::once(None).chain(WorkspaceLayout::ALL.into_iter().map(Some)) {
+        let active = *selected == layout;
+        let label = layout.map_or("Default", workspace_layout_label);
+        let width = layout.map_or(WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH, workspace_layout_button_width);
+        let response = ui
+            .add(
+                Button::new(egui::RichText::new(label).size(10.5).color(if active {
+                    theme::FG()
+                } else {
+                    theme::FG_SOFT()
+                }))
+                .min_size(Vec2::new(width, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+                .fill(theme::alpha(
+                    theme::blend(theme::PANEL_BG_ALT(), color, if active { 0.22 } else { 0.05 }),
+                    if active { 236 } else { 220 },
+                ))
+                .stroke(Stroke::new(
+                    1.0,
+                    if active {
+                        theme::alpha(color, 224)
+                    } else {
+                        theme::alpha(theme::blend(theme::BORDER_SUBTLE(), color, 0.24), 216)
+                    },
+                ))
+                .corner_radius(8),
+            )
+            .on_hover_text(layout.map_or("Manual placement", WorkspaceLayout::label));
+        if response.clicked() {
+            *selected = layout;
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub(super) fn show_workspace_context_menu(
@@ -164,7 +143,10 @@ pub(super) fn show_workspace_context_menu(
         }
         for layout in WorkspaceLayout::ALL {
             let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
-            if ui.add(Button::new(text).frame(false)).clicked() {
+            if ui
+                .add_enabled(workspace.cloud_count == 0, Button::new(text).frame(false))
+                .clicked()
+            {
                 interaction.action = Some(WorkspaceAction::ArrangeLayout(layout));
                 ui.close();
             }
@@ -265,6 +247,7 @@ mod tests {
             label_hidden: false,
             panel_count: 3,
             layout: None,
+            cloud_count: 0,
         }
     }
 

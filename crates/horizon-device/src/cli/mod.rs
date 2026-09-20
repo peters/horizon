@@ -1,4 +1,5 @@
 //! Shared command-line and MCP entry point for device adapters.
+mod control_owner;
 mod dispatch;
 mod mcp;
 mod permission;

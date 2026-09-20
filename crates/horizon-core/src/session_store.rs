@@ -256,6 +256,28 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Make a saved session durable before allocating external resources for it.
+    ///
+    /// # Errors
+    /// Returns an error if saved contents or their directory entries cannot be synced.
+    pub fn sync_runtime_state(&self, session_id: &str) -> Result<()> {
+        for path in [
+            self.home.session_runtime_path(session_id),
+            self.home.session_meta_path(session_id),
+            self.home.session_index_path(),
+        ] {
+            fs::File::open(&path)?.sync_all()?;
+            #[cfg(unix)]
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+                if let Some(ancestor) = parent.parent() {
+                    fs::File::open(ancestor)?.sync_all()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Create or replace the lease file for an active session.
     ///
     /// # Errors

@@ -8,7 +8,7 @@ use super::super::canvas_drag::canvas_drag_delta;
 use super::super::canvas_scroll::route_canvas_scroll;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
-    shortcut_pressed, take_captured_clipboard_event,
+    shortcut_key_may_emit_text, shortcut_pressed, take_captured_clipboard_event,
 };
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
@@ -147,15 +147,22 @@ impl HorizonApp {
         });
 
         if window_toggle {
+            self.consume_navigation_key(ctx, self.shortcuts.fullscreen_window);
             let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
         } else if panel_toggle {
+            self.consume_navigation_key(ctx, self.shortcuts.fullscreen_panel);
             self.fullscreen_panel = if self.fullscreen_panel.is_some() {
                 None
             } else {
                 self.board.focused
             };
-        } else if exit_fullscreen && self.fullscreen_panel.is_some() && !self.speech_escape_cancelled {
+        } else if exit_fullscreen
+            && self.fullscreen_panel.is_some()
+            && self.command_palette.is_none()
+            && !self.speech_escape_cancelled
+        {
+            self.consume_navigation_key(ctx, self.shortcuts.exit_fullscreen_panel);
             self.fullscreen_panel = None;
         }
 
@@ -264,6 +271,9 @@ impl HorizonApp {
                 .iter()
                 .any(|(_, geometry)| geometry.screen_rect.contains(position))
         });
+        #[cfg(feature = "cloud-workspaces")]
+        let pointer_over_panel = pointer_over_panel
+            || pointer_position.is_some_and(|position| self.pointer_over_cloud_runtime(ctx, position));
         let scroll_routing = route_canvas_scroll(
             ctx,
             !pointer_over_panel,
@@ -647,17 +657,6 @@ fn arm_correlated_shift_text(binding: horizon_core::ShortcutBinding, pending: &m
     if binding.modifiers.shift() && shortcut_key_may_emit_text(binding.key) {
         *pending = true;
     }
-}
-
-fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
-    matches!(
-        key,
-        horizon_core::ShortcutKey::Letter(_)
-            | horizon_core::ShortcutKey::Digit(_)
-            | horizon_core::ShortcutKey::Comma
-            | horizon_core::ShortcutKey::Minus
-            | horizon_core::ShortcutKey::Plus
-    )
 }
 
 /// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on

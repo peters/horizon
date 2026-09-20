@@ -441,7 +441,7 @@ impl Board {
     }
 }
 
-fn arranged_panel_layout(
+pub(crate) fn arranged_panel_layout(
     origin: [f32; 2],
     layout: WorkspaceLayout,
     index: usize,

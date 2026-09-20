@@ -404,3 +404,28 @@ MCP and its owning host. `controller/provider_usage` is the MCP transport bounda
 `app/browser_provider_usage` performs host authorization and dispatch into the
 shared core model. The CLI plan runner invokes the same public tool. Provider API
 and credential logic must not be copied into either transport or UI rendering.
+
+## Cloud workspaces
+
+`horizon-cloud` owns portable repository configuration, typed worker identities,
+RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
+caller supplied. It must not depend on core/UI, terminal, browser, device, Git,
+settings storage or a provider CLI.
+
+`horizon-core::cloud_runtime` coordinates local image preparation, committed source
+transfer, durable deployment/session references and existing OpenSSH transport.
+Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
+separate. Disconnecting presentation never terminates compute or remote processes.
+Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
+layout calculations. UI modules render controls, consume progress and attach the
+ordinary panel types; worker/provider operations run outside the render thread.
+
+`horizon-cloud-worker` hosts the existing browser runtime and public MCP queues
+inside one container. The device CLI owns serialized native input and attribution.
+SSH carries presentation; agent tools and tmux remain on the worker. Image build
+scripts and runtime contract examples live in `examples/cloud-worker`.
+
+The default `cloud-workspaces` feature enables operational RunPod clouds.
+`cloud-panel-mock` additionally enables labelled design fixtures; simulated
+providers never authorize allocation. Original fixture details remain in
+[the prototype guide](../prototypes/cloud-panels.md).

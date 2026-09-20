@@ -2272,6 +2272,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-cloud"
+version = "0.2.7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.20",
+ "ureq",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-cloud-worker"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-browser",
+ "horizon-browser-control",
+ "horizon-browser-protocol",
+ "horizon-cloud",
+ "png",
+ "serde",
+ "serde_json",
+ "toml_edit",
+]
+
+[[package]]
 name = "horizon-core"
 version = "0.2.7"
 dependencies = [
@@ -2283,7 +2310,9 @@ dependencies = [
  "git2",
  "horizon-browser",
  "horizon-browser-control",
+ "horizon-browser-protocol",
  "horizon-browser-routines",
+ "horizon-cloud",
  "keyring-core",
  "libc",
  "profiling",

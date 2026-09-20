@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!Dockerfile.gpu
+!horizon-worker-*
+!bin/
+!bin/**

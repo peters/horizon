@@ -90,6 +90,8 @@ impl HorizonApp {
                 "Device viewer requires a numeric loopback address and nonzero port",
             );
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.cloud_attach_agent_child(actor.panel_id, id);
         // Creating a viewer must not steal keyboard input from the caller.
         if let Some(focused) = focused {
             self.board.focus(focused);

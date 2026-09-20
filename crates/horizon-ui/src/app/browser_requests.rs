@@ -326,6 +326,8 @@ impl HorizonApp {
                 return;
             }
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.cloud_attach_agent_child(actor_panel.panel_id, panel_id);
         let Some(panel_local_id) = self.board.panel(panel_id).map(|panel| panel.local_id.clone()) else {
             tracing::error!(request_id = %request.request_id, "created browser panel disappeared before registration");
             complete_failure(

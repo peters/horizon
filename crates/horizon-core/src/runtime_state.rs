@@ -53,6 +53,8 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub cloud_groups: crate::cloud_panel::CloudGroups,
     /// Browser config injected by the app before restore. Core-only board
     /// snapshots store a default placeholder because a [`Board`] does not
     /// own the config that created it.
@@ -84,6 +86,8 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_groups: crate::cloud_panel::CloudGroups::default(),
             browser: config.browser.clone(),
         }
     }
@@ -318,18 +322,31 @@ impl RuntimeState {
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
-                            browser_profile: browser.map(|browser| BrowserProfileState {
-                                session_id: browser.shared_profile_id().map(str::to_string),
-                                root: browser.profile_root_for_persistence().map(Path::to_path_buf),
-                                backend: Some(browser.backend()),
-                                hidden: !panel.visible,
-                                remote_target: browser.remote_target().map(str::to_string),
-                            }),
+                            browser_profile: browser
+                                .map(|browser| BrowserProfileState {
+                                    session_id: browser.shared_profile_id().map(str::to_string),
+                                    root: browser.profile_root_for_persistence().map(Path::to_path_buf),
+                                    backend: Some(browser.backend()),
+                                    hidden: !panel.visible,
+                                    remote_target: browser.remote_target().map(str::to_string),
+                                })
+                                .or_else(|| {
+                                    panel.disconnected_browser_profile.clone().map(|mut profile| {
+                                        profile.hidden = !panel.visible;
+                                        profile
+                                    })
+                                }),
                             // `Some("")` is meaningful: Chrome committed its
                             // blank startup target, so restore must not fall
                             // back to the requested/configured URL.
                             browser_url: browser
-                                .and_then(|browser| browser.committed_url_for_persistence().map(str::to_string)),
+                                .and_then(|browser| browser.committed_url_for_persistence().map(str::to_string))
+                                .or_else(|| {
+                                    panel
+                                        .disconnected_browser_profile
+                                        .as_ref()
+                                        .and(panel.launch_command.clone())
+                                }),
                         }
                     })
                     .collect();
@@ -362,6 +379,8 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_groups: board.cloud_groups.clone(),
             // Save-path placeholder: the app refreshes this field with the
             // current config before any restore uses it.
             browser: crate::browser::BrowserConfig::default(),
@@ -384,6 +403,8 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_groups: crate::cloud_panel::CloudGroups::default(),
             browser: crate::browser::BrowserConfig::default(),
         }
     }

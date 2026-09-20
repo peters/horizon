@@ -572,6 +572,10 @@ impl HorizonApp {
                     .size(11.0)
                     .color(theme::FG_DIM()),
             );
+            #[cfg(feature = "cloud-workspaces")]
+            let can_move = !self.cloud_prototype.groups.contains_panel(&self.board, panel_id);
+            #[cfg(not(feature = "cloud-workspaces"))]
+            let can_move = true;
             for other_workspace in workspace_data {
                 if other_workspace.id == workspace.id {
                     continue;
@@ -579,7 +583,11 @@ impl HorizonApp {
                 let text = egui::RichText::new(&other_workspace.name)
                     .size(12.0)
                     .color(theme::FG_SOFT());
-                if ui.add(Button::new(text).frame(false)).clicked() {
+                if ui
+                    .add_enabled(can_move, Button::new(text).frame(false))
+                    .on_disabled_hover_text("This panel belongs to its cloud environment.")
+                    .clicked()
+                {
                     self.board.assign_panel_to_workspace(panel_id, other_workspace.id);
                     self.mark_runtime_dirty();
                     ui.close();

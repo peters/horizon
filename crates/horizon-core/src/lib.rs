@@ -5,6 +5,10 @@ mod agents;
 mod attention;
 mod board;
 pub mod browser;
+#[cfg(feature = "cloud-workspaces")]
+pub mod cloud_panel;
+#[cfg(feature = "cloud-workspaces")]
+pub mod cloud_runtime;
 mod config;
 mod config_migration;
 mod device;

@@ -9,6 +9,13 @@ use super::arrangement::rects_overlap;
 use super::{Board, WorkspaceDockSide, vec2_eq};
 
 impl Board {
+    #[cfg(feature = "cloud-workspaces")]
+    pub fn retain_workspace_when_empty(&mut self, id: WorkspaceId) {
+        if self.workspace(id).is_some() {
+            self.retained_empty_workspaces.insert(id);
+        }
+    }
+
     #[must_use]
     pub fn create_workspace(&mut self, name: &str) -> WorkspaceId {
         let id = WorkspaceId(self.next_workspace_id);
@@ -275,6 +282,15 @@ impl Board {
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.workspace(id).is_some_and(|workspace| {
+            self.cloud_groups
+                .0
+                .iter()
+                .any(|group| group.workspace == workspace.local_id)
+        }) {
+            return;
+        }
         // Never remove the last workspace.
         if self.workspaces.len() <= 1 {
             return;
@@ -317,6 +333,10 @@ impl Board {
     /// Move a panel to a different workspace, physically relocating it to
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_groups.contains_panel(self, panel_id) {
+            return;
+        }
         let Some(source_workspace_id) = self.panel_workspace_id(panel_id) else {
             return;
         };

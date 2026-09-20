@@ -159,6 +159,8 @@ pub struct PanelOptions {
     pub browser_config: Option<crate::browser::BrowserConfig>,
     /// Stable profile identity shared by explicitly duplicated browser pages.
     pub browser_session_id: Option<String>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub cloud_connection: Option<crate::cloud_runtime::ssh::Connection>,
     /// Run the browser panel at a remote grid with this prepared request
     /// instead of launching a local browser.
     pub remote_session: Option<horizon_browser::RemoteSessionRequest>,
@@ -195,6 +197,8 @@ impl Default for PanelOptions {
             template: None,
             browser_config: None,
             browser_session_id: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_connection: None,
             remote_session: None,
             remote_target: None,
             transcript_root: None,
@@ -217,6 +221,8 @@ pub struct Panel {
     pub visible: bool,
     pub workspace_id: WorkspaceId,
     pub content: PanelContent,
+    /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
+    pub(crate) disconnected_browser_profile: Option<crate::runtime_state::BrowserProfileState>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -313,6 +319,18 @@ impl Panel {
         self.content.browser()
     }
 
+    /// Preserve the selected engine even while a remote browser view is disconnected.
+    #[must_use]
+    pub fn browser_backend(&self) -> Option<crate::browser::BackendKind> {
+        self.browser()
+            .map(crate::browser::BrowserPanelState::backend)
+            .or_else(|| {
+                self.disconnected_browser_profile
+                    .as_ref()
+                    .and_then(|profile| profile.backend)
+            })
+    }
+
     /// Mutable accessor for the browser content.
     pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
         self.content.browser_mut()
@@ -362,6 +380,7 @@ impl Panel {
             visible: true,
             workspace_id,
             content,
+            disconnected_browser_profile: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -382,7 +401,7 @@ impl Panel {
     /// # Errors
     ///
     /// Returns an error if the placeholder terminal runtime cannot be created.
-    pub(crate) fn restore_failure(
+    pub fn restore_failure(
         id: PanelId,
         workspace_id: WorkspaceId,
         opts: PanelOptions,
@@ -507,7 +526,7 @@ impl Panel {
     }
 
     #[must_use]
-    pub(crate) fn name_is_custom(&self) -> bool {
+    pub fn name_is_custom(&self) -> bool {
         self.has_custom_name
     }
 
@@ -741,6 +760,7 @@ mod tests {
             visible: true,
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
+            disconnected_browser_profile: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,

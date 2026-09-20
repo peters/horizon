@@ -11,6 +11,8 @@ mod browser_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_scroll;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud_panel;
 mod detached_viewports;
 mod device_requests;
 #[cfg(test)]
@@ -20,6 +22,7 @@ mod file_drop_highlight;
 mod frame_stats;
 mod lifecycle;
 mod minimap;
+mod navigation_input;
 mod panel_chrome;
 mod panels;
 mod persistence;
@@ -198,6 +201,8 @@ pub struct PanelRenderCaches {
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
+    #[cfg(feature = "cloud-workspaces")]
+    cloud_prototype: cloud_panel::CloudPrototype,
     panels_to_close: Vec<PanelId>,
     panels_to_restart: Vec<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
@@ -251,6 +256,7 @@ pub struct HorizonApp {
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
+    held_navigation_keys: Vec<horizon_core::ShortcutBinding>,
     sidebar_visible: bool,
     sidebar_drag_workspace: Option<WorkspaceId>,
     minimap_visible: bool,

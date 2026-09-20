@@ -1,0 +1,43 @@
+# Repository defaults. Account and registry credential bindings stay machine-local.
+version: 1
+default: development
+profiles:
+  development:
+    provider: runpod
+    image: registry.example.com/horizon/dev
+    build:
+      context: .
+      dockerfile: .horizon/Dockerfile
+      platform: linux/amd64
+    cpu: 4
+    memory_gb: 8
+    gpu: false
+    capabilities:
+      agents: [codex, claude]
+      browsers: [chromium, firefox]
+      desktop: true
+  gpu:
+    provider: runpod
+    image: registry.example.com/horizon/gpu
+    build:
+      context: .
+      dockerfile: .horizon/Dockerfile.gpu
+      platform: linux/amd64
+    cpu: 8
+    memory_gb: 32
+    gpu: true
+    capabilities:
+      agents: [codex, claude]
+      desktop: true
+  image-only:
+    provider: runpod
+    image: registry.example.com/horizon/dev:tested
+    cpu: 4
+    memory_gb: 8
+    gpu: false
+  minimal:
+    provider: runpod
+    image: registry.example.com/horizon/minimal:tested
+    cpu: 2
+    memory_gb: 4
+    capabilities: {}

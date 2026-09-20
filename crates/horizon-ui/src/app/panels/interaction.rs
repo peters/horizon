@@ -237,6 +237,25 @@ impl HorizonApp {
         });
     }
 
+    fn resize_panel_in_environment(
+        &mut self,
+        panel_id: PanelId,
+        size: [f32; 2],
+        workspace_collision_ids: &[WorkspaceId],
+    ) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .cloud_prototype
+            .groups
+            .resize_panel(&mut self.board, panel_id, size)
+        {
+            return;
+        }
+        let _ = self
+            .board
+            .resize_panel_with_workspace_scope(panel_id, size, workspace_collision_ids);
+    }
+
     pub(super) fn apply_panel_outcome(
         &mut self,
         ctx: &Context,
@@ -286,11 +305,7 @@ impl HorizonApp {
         );
         if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
-            let _ = self.board.resize_panel_with_workspace_scope(
-                panel_id,
-                [new_size.x, new_size.y],
-                workspace_collision_ids,
-            );
+            self.resize_panel_in_environment(panel_id, [new_size.x, new_size.y], workspace_collision_ids);
             self.mark_runtime_dirty();
         }
         if outcome.commit_terminal_resize {

@@ -329,7 +329,16 @@ impl HorizonApp {
     }
 
     pub(super) fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
-        if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
+        let bounds = self.board.workspace_bounds_map();
+        #[cfg(feature = "cloud-workspaces")]
+        let bounds = {
+            let mut bounds = bounds;
+            self.cloud_prototype
+                .groups
+                .extend_workspace_bounds(&self.board, &mut bounds);
+            bounds
+        };
+        if let Some(&(min, max)) = bounds.get(&workspace_id) {
             return Some((
                 Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT),
                 Vec2::new(
@@ -444,6 +453,26 @@ mod tests {
     };
 
     #[test]
+    #[cfg(feature = "cloud-workspaces")]
+    fn workspace_fit_includes_empty_cloud_and_runtime_card() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("fixture");
+        let group = horizon_core::cloud_panel::CloudGroup::new(
+            1,
+            "Fixture".into(),
+            app.board.workspace(workspace).unwrap().local_id.clone(),
+            temp.path().into(),
+            [1700.0, 900.0],
+        );
+        let (min, max) = group.overview_bounds();
+        app.cloud_prototype.groups.0.push(group);
+        let (position, size) = app.workspace_focus_frame(workspace).unwrap();
+        let frame = Rect::from_min_size(position, size);
+        assert!(frame.contains(Pos2::from(min)));
+        assert!(frame.contains(Pos2::from(max)));
+    }
+
+    #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
         let rect = Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1200.0, 800.0));
         let view = CanvasViewState::new([48.0, -16.0], 1.5);
@@ -496,7 +525,8 @@ mod tests {
 
     #[test]
     fn fit_zoom_for_frame_clamps_large_and_small_values() {
-        let zoomed_out = fit_zoom_for_frame(Vec2::new(600.0, 400.0), Vec2::new(4000.0, 3000.0), Vec2::splat(64.0));
+        let oversized = Vec2::new(600.0, 400.0) / MIN_CANVAS_ZOOM;
+        let zoomed_out = fit_zoom_for_frame(Vec2::new(600.0, 400.0), oversized, Vec2::splat(64.0));
         let zoomed_in = fit_zoom_for_frame(Vec2::new(1600.0, 1000.0), Vec2::new(100.0, 80.0), Vec2::splat(64.0));
 
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
@@ -557,17 +587,16 @@ mod tests {
     #[test]
     fn reveal_view_state_bottom_aligns_panel_taller_than_viewport() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        // 4000px panel cannot fit even at the minimum zoom (0.25 -> 1000px).
-        let panel = (Pos2::new(100.0, 0.0), Vec2::new(4000.0, 4000.0));
+        // The panel remains 1000px tall at the shared minimum zoom.
+        let extent = 1000.0 / MIN_CANVAS_ZOOM;
+        let panel = (Pos2::new(100.0, 0.0), Vec2::splat(extent));
         let workspace_pos = Pos2::new(84.0, -44.0);
 
         let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
 
         assert!((zoom - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
-        // x: workspace left edge at the margin: 40 - 84 * 0.25 ;
-        // y bottom-aligned: 800 - 40 - (0 + 4000) * 0.25.
-        assert!((pan.x - 19.0).abs() < 0.001);
-        assert!((pan.y - (-240.0)).abs() < 0.001);
+        assert!((pan.x + workspace_pos.x * zoom - 40.0).abs() < 0.001);
+        assert!((pan.y + extent * zoom - 760.0).abs() < 0.001);
     }
 
     #[test]

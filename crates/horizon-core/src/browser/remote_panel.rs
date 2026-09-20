@@ -182,6 +182,10 @@ impl BrowserPanelState {
     /// Whether this panel drives a remote session rather than a local browser.
     #[must_use]
     pub fn is_remote(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return true;
+        }
         self.remote.is_some()
     }
 
@@ -282,6 +286,10 @@ impl BrowserPanelState {
     /// duplicate a session the provider still holds.
     #[must_use]
     pub fn can_retry(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return true;
+        }
         !self.is_remote()
     }
 

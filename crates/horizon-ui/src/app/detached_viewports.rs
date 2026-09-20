@@ -206,6 +206,7 @@ impl HorizonApp {
         // handle_canvas_pan_in_rect below: a second pass would consume the
         // one-shot frame keyboard metadata twice and re-run the stateful
         // speech filter (leaking an orphan hotkey key-up).
+        self.filter_held_navigation_keys(ctx);
         self.handle_detached_shortcuts(ctx, workspace_id);
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
@@ -749,6 +750,43 @@ mod tests {
             .map(|input| input.event.clone())
             .collect::<Vec<_>>();
         assert_eq!(collected, events);
+    }
+
+    #[test]
+    fn root_navigation_release_is_consumed_after_focus_moves_to_detached_window() {
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        let workspace = app.board.create_workspace("detached navigation");
+        let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+        app.detach_workspace(workspace);
+        let binding = horizon_core::ShortcutBinding::parse("Escape").unwrap();
+        let _ = ctx
+            .run_ui(RawInput::default(), |_ui| app.consume_navigation_key(&ctx, binding))
+            .discard_textures();
+        let viewport_id = detached_viewport_id(&local_id);
+        for (pressed, should_pass) in [(false, false), (true, true)] {
+            let key = Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut input = raw_input([800.0, 600.0], None);
+            input.viewport_id = viewport_id;
+            input.events = vec![key];
+            input.viewports.entry(viewport_id).or_default().focused = Some(true);
+            let _ = ctx
+                .run_ui(input, |ui| {
+                    app.render_detached_workspace_window(ui, workspace, &local_id);
+                    assert_eq!(
+                        ctx.input(|input| input.events.iter().any(|event| matches!(event, Event::Key { .. }))),
+                        should_pass,
+                        "navigation must own release across viewports but preserve a fresh press"
+                    );
+                })
+                .discard_textures();
+        }
     }
 
     #[test]

@@ -1,0 +1,159 @@
+use super::*;
+#[test]
+fn committed_transfer_excludes_dirty_working_tree_and_preserves_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+    ] {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    std::fs::write(repo.join("file.txt"), "committed\n").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["add", "."])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["commit", "-m", "Create source fixture"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::write(repo.join("file.txt"), "private dirty value\n").unwrap();
+    std::fs::write(repo.join("untracked.txt"), "private untracked value").unwrap();
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    let sha = resolve(&repo, "HEAD").unwrap();
+    let export = snapshot(&repo, &sha, temp.path(), &runner).unwrap();
+    assert_eq!(std::fs::read_to_string(export.join("file.txt")).unwrap(), "committed\n");
+    assert!(!export.join("untracked.txt").exists());
+    validate_tree(&repo, &sha, &runner).unwrap();
+    pack(&repo, &sha, &temp.path().join("objects.pack"), &runner).unwrap();
+    assert!(temp.path().join("objects.pack").metadata().unwrap().len() > 0);
+}
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+fn init(repo: &Path) {
+    std::fs::create_dir_all(repo).unwrap();
+    git(repo, &["init", "-b", "main"]);
+    git(repo, &["config", "user.name", "Fixture"]);
+    git(repo, &["config", "user.email", "fixture@example.invalid"]);
+}
+#[test]
+fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let module = repo.join("module");
+    init(&module);
+    std::fs::write(module.join("value.txt"), "committed module").unwrap();
+    git(&module, &["add", "value.txt"]);
+    git(&module, &["commit", "-m", "Create source fixture"]);
+    let module_sha = git(&module, &["rev-parse", "HEAD"]);
+    let content = b"selected binary content";
+    let mut oid = String::with_capacity(64);
+    for byte in Sha256::digest(content) {
+        use std::fmt::Write as _;
+        write!(oid, "{byte:02x}").unwrap();
+    }
+    let media = repo.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]);
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join(&oid), content).unwrap();
+    std::fs::write(
+        repo.join("asset.bin"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+            content.len()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("README"),
+        "This documentation mentions version https://git-lfs.github.com/spec/v1 without being a pointer.",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join(".gitattributes"),
+        "asset.bin filter=lfs diff=lfs merge=lfs -text\n",
+    )
+    .unwrap();
+    std::fs::copy(repo.join("asset.bin"), repo.join("pointer-fixture.txt")).unwrap();
+    git(
+        &repo,
+        &["add", ".gitattributes", "asset.bin", "README", "pointer-fixture.txt"],
+    );
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{module_sha},module"),
+        ],
+    );
+    git(&repo, &["commit", "-m", "Pin source dependencies"]);
+    std::fs::write(repo.join("asset.bin"), "dirty secret").unwrap();
+    std::fs::write(repo.join(".gitattributes"), "asset.bin -filter\n").unwrap();
+    std::fs::write(repo.join(".git/info/attributes"), "asset.bin -filter\n").unwrap();
+    std::fs::write(module.join("value.txt"), "dirty module secret").unwrap();
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    validate_tree(&repo, "HEAD", &runner).unwrap();
+    let snapshot = snapshot(&repo, "HEAD", temp.path(), &runner).unwrap();
+    assert_eq!(std::fs::read(snapshot.join("asset.bin")).unwrap(), content);
+    assert!(
+        std::fs::read_to_string(snapshot.join("pointer-fixture.txt"))
+            .unwrap()
+            .starts_with("version https://git-lfs.github.com/spec/v1\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(snapshot.join("module/value.txt")).unwrap(),
+        "committed module"
+    );
+    let root = temp.path().join("transfer");
+    std::fs::create_dir(&root).unwrap();
+    auxiliary(&repo, "HEAD", &root, &runner).unwrap();
+    let manifest = std::fs::read_to_string(root.join("material/manifest.json")).unwrap();
+    assert!(manifest.contains(&module_sha));
+    assert!(!manifest.contains(repo.to_str().unwrap()));
+    assert!(root.join("material/module-0.pack").metadata().unwrap().len() > 0);
+    std::fs::write(media.join(&oid), b"damaged binary content").unwrap();
+    assert!(validate_tree(&repo, "HEAD", &runner).is_err());
+}
