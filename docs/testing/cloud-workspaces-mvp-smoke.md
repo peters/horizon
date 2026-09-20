@@ -520,6 +520,26 @@ No profile may export credentials solely because repository YAML requests them.
   worker/session; close the device and verify exact release before revoking the
   copied credential and terminating the task worker.
 
+### Worker container restart and private tunnel recovery
+
+- Retain an owned hosted-device allocation, record worker/container identity, and
+  restart only that task worker. Verify that vanished agent and browser processes
+  are reported as lost; reconnect must never respawn them under their old identity.
+- With an image that records its container incarnation, reconnect the same cloud.
+  The private tunnel may restart only after matching shutdown evidence or a proven
+  container change. A legacy, malformed or same-container record without matching
+  shutdown evidence remains fenced.
+- Fail reconnect before Ready. The explicit remote-device release action must
+  remain available, complete through its own response channel, and preserve the
+  setup failure. Pending release blocks concurrent lifecycle actions.
+- After a failed release, confirm the retained allocation state before retrying.
+  Successful release or Stop cleanup must clear its previous release error.
+  Explicit release must preserve any separate unresolved deployment failure.
+- Inspect/reconcile the exact retained allocation through public MCP. Confirm its
+  release before removing runtime credentials or terminating compute. A changed
+  account binding must be refused until the existing binding has been revoked,
+  even after a container restart; neither private file may be overwritten.
+
 ### Existing New cloud dialog presentation
 
 Retain the same title, repository, committed revision, profile and create/deploy

@@ -448,3 +448,83 @@ It restored the existing remote session through the live native viewer. A later
 isolated-display interruption is retained as an unconfirmed fixture failure;
 the task desktop was restored without changing remote workers or shared sessions.
 Fresh final-image and post-review smoke remain pending.
+
+Post-review container-restart correction, 2026-09-20: the preceding candidate
+passed hosted checks and its ninth review, but the required live fault test found
+a tunnel recovery defect. Runtime files survived container restart while the
+supervisor did not, leaving the old shutdown fence permanently unresolved. New
+images record container incarnation before spawning the tunnel and accept either
+matching shutdown evidence or a proven container change. Legacy/unverifiable
+records remain fenced. Changed account bindings cannot overwrite credentials
+until existing remote allocations are released. The explicit release action also
+remains available after reconnect failure, with an independent completion channel
+that does not erase the original setup failure or falsely promote the cloud to Ready.
+
+Independent local source review is clear on manifest
+`f30373304e15d1b3d08f6485016fa5a896c3ec3b0f67535caf963976ed4545fb`.
+The smoke plan retains the container-restart, credential-preservation and failed-
+reconnect release scenarios. After incorporating the separate current-PR update
+from main, `final-validation-19/` passed all required tiers: 2,328 workspace tests,
+2,373 speech tests, zero failures and 15 ignored per tier. All worker regressions,
+formatting, maintainability, blocking and strict Clippy passed. The advisory tier
+retains three unchanged device-test diagnostics. An earlier five-second CLI test
+startup timeout is retained; its focused rerun and the complete final matrix pass.
+Frozen native candidate `development-60/` has SHA-256
+`3cea9b694d14c1663c6018a3e4e3f173f6ebb5ebbf51cdf23e1220cd9a531299`.
+
+The corrected immutable test image reached worker Ready in approximately 178
+seconds from the native Deploy action. This is worker readiness, not application
+startup. Its fresh rebuild reused existing base layers; cached-build measurements
+and compressed-layer sizes are retained privately. Live application, process-loss
+recovery and the next current-head hosted review/final-smoke gates remain open.
+Hosted-device release on the preceding worker was confirmed through the public
+allocation tool; private copies remain on that task worker until verified cleanup.
+No shared checkout, baseline worker, merge or release was changed.
+
+The queued Cloud onboarding/menu phase also includes readiness timing: display
+elapsed setup time while working and the completed time to worker Ready. Show an
+ETA only when grounded in measured progress; unknown stages show activity and
+elapsed time. Keep initial deployment separate from reconnect and from application
+readiness. This requested UI work remains gated on the current-settings acceptance,
+review, post-review smoke and task-resource cleanup described above.
+
+
+Final restart acceptance, 2026-09-20: the corrected immutable image completed
+private application qualification with 5,901 tests passing, 35 not executed and
+zero failures. Two real interactive agents proved separate worktrees and observed
+shared browser views without taking control. Both local browser engines and a
+physical mobile device completed private navigation/capture checks. A test-only
+map integration error is retained privately; that application feature is not
+claimed as passed. The latest mobile export contains one frame and therefore
+proves a screenshot, not movement.
+
+The deliberate container restart retained worker identity, recovered the private
+tunnel using its new incarnation and reported vanished processes without silently
+replacing them. Exact hosted-allocation release was confirmed through public MCP
+before the explicit cleanup retry stopped the tunnel and removed copied runtime
+credentials. A bounded SSH authentication interruption then verified failed release
+and successful retry. Cleanup clears its own stale error while preserving a separate
+discovery failure. Authoritative Stop/Snapshot cleanup also clears stale release
+errors. The permanent smoke plan includes these regressions.
+
+Independent review is clear on the final six-file correction manifest
+`ff3b45922957add84a801830dde704cb8a8ab74698208f8adf7448440b1bc224`.
+Pending browser discovery is represented separately from an authoritative empty
+result, eliminating the redundant flag exposed by the updated advisory checks.
+The complete final matrix, frozen candidate and hosted review receipts are being
+updated after preserving the latest CI-only update from main. The user agreed to
+keep the PR head stable through this review-and-smoke pass. New Cloud setup/menu
+work remains queued behind review, final smoke and verified task-resource cleanup.
+
+
+The combined candidate passed `final-validation-23/`: 2,330 workspace tests
+(15 ignored), 790 speech-feature UI tests (zero ignored), all worker regressions,
+formatting, maintainability, device CLI checks, and blocking/strict/advisory lint
+tiers. The speech scope follows the updated repository matrix. The CI change-
+classification and dependency-installer suites also passed 18 tests. The earlier
+complete speech workspace tier passed 2,375 tests. Frozen native candidate
+`development-62/` has SHA-256
+`99413d0636ecb1472e8f0157d9190c9fd345a341c9883ec9611823b9e6e2cbd7`;
+its actual isolated application PID and hash were verified. It restored existing
+cloud membership/lost-process presentation and created a fresh agent through the
+normal in-cloud picker. Hosted review/CI and post-review final smoke remain pending.

@@ -264,8 +264,8 @@ impl HorizonApp {
             };
             let pending_sessions = runtime.pending_session_attachments.clone();
             let pending_browsers = runtime.pending_browser_attachments.clone();
-            let discovered = runtime.browsers_discovered;
-            let browsers = runtime.browsers.clone();
+            let discovered = runtime.browsers.is_some();
+            let browsers = runtime.browsers.clone().unwrap_or_default();
             let workspace = group.workspace.clone();
             let collapsed = group.collapsed;
             if retry && !pending_sessions.is_empty() {

@@ -81,12 +81,39 @@ def alive():
                           stderr=subprocess.DEVNULL, timeout=5).returncode == 0
 
 
+def container_incarnation():
+    # PID 1 cannot exit without ending the other processes in its PID namespace.
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    fields = Path('/proc/1/stat').read_text().rsplit(')', 1)[1].split()
+    return {'version': 1, 'boot_id': str(uuid.UUID(boot)),
+            'pid_namespace': os.stat('/proc/self/ns/pid').st_ino,
+            'init_start_ticks': int(fields[19])}
+
+
+def valid_incarnation(value):
+    if not isinstance(value, dict) or set(value) != {'version', 'boot_id', 'pid_namespace', 'init_start_ticks'}:
+        return False
+    try:
+        return (type(value['version']) is int and value['version'] == 1
+                and str(uuid.UUID(value['boot_id'])) == value['boot_id']
+                and all(type(value[key]) is int and value[key] > 0
+                        for key in ['pid_namespace', 'init_start_ticks']))
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def shutdown_confirmed():
     if not STARTED.exists():
         return True
     started = json.loads(STARTED.read_text())
     stopped = json.loads(STOPPED.read_text()) if STOPPED.exists() else {}
-    return bool(started.get('generation')) and stopped.get('generation') == started['generation']
+    if started.get('generation') and stopped.get('generation') == started['generation']:
+        return True
+    previous = started.get('container_incarnation')
+    if not valid_incarnation(previous):
+        return False
+    current = container_incarnation()
+    return valid_incarnation(current) and previous != current
 
 
 def install():
@@ -96,8 +123,11 @@ def install():
     value = json.loads(raw)
     selected = json.loads(Path('/workspace/capabilities.json').read_text()).get('browserstack')
     validate(value, selected)
-    if CONFIG.exists() and json.loads(CONFIG.read_text()) != value and alive():
-        raise ValueError('Stop the existing private tunnel before changing its account binding')
+    running = alive()
+    if CONFIG.exists() and json.loads(CONFIG.read_text()) != value:
+        raise ValueError('Revoke existing remote browsers before changing their account binding')
+    if not running and not shutdown_confirmed():
+        raise ValueError('Previous private tunnel shutdown is unconfirmed')
     if value['local_ports']:
         configuration = tunnel_configuration(value)
         private_write(ROOT / 'browserstack-local.yml', configuration)
@@ -105,9 +135,7 @@ def install():
     if not value['local_ports']:
         REVOKED.unlink(missing_ok=True)
         return
-    if not alive():
-        if not shutdown_confirmed():
-            raise ValueError('Previous private tunnel shutdown is unconfirmed')
+    if not running:
         READY.unlink(missing_ok=True)
         STOPPED.unlink(missing_ok=True)
         subprocess.run(TMUX + ['new-session', '-d', '-s', 'local', 'horizon-worker-browserstack supervise'],
@@ -137,11 +165,12 @@ def supervise():
     READY.unlink(missing_ok=True)
     STOPPED.unlink(missing_ok=True)
     generation = uuid.uuid4().hex
-    private_write(STARTED, {'generation': generation, 'pid': None})
+    incarnation = container_incarnation()
+    private_write(STARTED, {'generation': generation, 'pid': None, 'container_incarnation': incarnation})
     # Credentials are in a private configuration file, never argv or the environment.
     process = subprocess.Popen(['BrowserStackLocal', '--config-file', str(ROOT / 'browserstack-local.yml')],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=ROOT)
-    private_write(STARTED, {'generation': generation, 'pid': process.pid})
+    private_write(STARTED, {'generation': generation, 'pid': process.pid, 'container_incarnation': incarnation})
     try:
         for line in process.stdout:
             if 'You can now access your local server(s)' in line:

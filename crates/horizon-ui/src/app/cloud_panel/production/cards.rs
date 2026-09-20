@@ -59,8 +59,7 @@ impl HorizonApp {
                         {
                             fullscreen = Some(group.issue);
                         }
-                        if runtime.stage == Some(Stage::Ready)
-                            && launch.profile.capabilities.browserstack.is_some()
+                        if runtime.can_release_remote_devices()
                             && ui.button("Release devices and remove remote credentials").on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.").clicked()
                         {
                             action = Some((group.issue, Action::RevokeBrowserstack));
@@ -159,6 +158,11 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     }
     progress_output(ui, runtime);
     ui.add_space(8.0);
+    if runtime.remote_release.is_some() {
+        ui.spinner();
+        ui.label("Releasing remote devices…");
+        return None;
+    }
     if !runtime.state_unavailable
         && runtime.receiver.is_none()
         && runtime
@@ -271,7 +275,7 @@ fn progress_output(ui: &mut egui::Ui, runtime: &super::Runtime) {
         );
     }
     runtime.progress.render(ui);
-    if let Some(error) = &runtime.error {
+    for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     egui::CollapsingHeader::new("Verbose output").show(ui, |ui| {

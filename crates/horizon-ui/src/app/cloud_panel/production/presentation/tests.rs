@@ -56,20 +56,22 @@ fn restore_scenario(lost: bool) {
         Some("http://example.invalid/saved")
     );
     app.board = Board::from_runtime_state(&roundtrip).unwrap();
-    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = [
-        ("firefox", BackendKind::FirefoxBidi),
-        ("chromium", BackendKind::ChromiumCdp),
-    ]
-    .into_iter()
-    .map(|(id, backend)| CloudViewState {
-        id: id.into(),
-        backend,
-        visible: true,
-        ready: !lost,
-        lost,
-        ..Default::default()
-    })
-    .collect();
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = Some(
+        [
+            ("firefox", BackendKind::FirefoxBidi),
+            ("chromium", BackendKind::ChromiumCdp),
+        ]
+        .into_iter()
+        .map(|(id, backend)| CloudViewState {
+            id: id.into(),
+            backend,
+            visible: true,
+            ready: !lost,
+            lost,
+            ..Default::default()
+        })
+        .collect(),
+    );
     app.sync_cloud_presentations();
     for (local, backend) in [
         ("firefox", BackendKind::FirefoxBidi),
@@ -185,12 +187,7 @@ fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement(
         .remote_target = Some("phone".into());
     app.board = Board::from_runtime_state(&saved).unwrap();
     app.sync_cloud_presentations();
-    app.cloud_prototype
-        .production
-        .runtimes
-        .get_mut(&1)
-        .unwrap()
-        .browsers_discovered = true;
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = Some(Vec::new());
     app.sync_cloud_presentations();
     let panel = app
         .board
@@ -275,12 +272,7 @@ fn fullscreen_panel_continues_processing_cloud_ownership_and_lifecycle_events() 
 fn lost_browser_placeholder_can_be_dismissed_without_remote_release() {
     let (_temp, mut app) = restore_fixture();
     app.sync_cloud_presentations();
-    app.cloud_prototype
-        .production
-        .runtimes
-        .get_mut(&1)
-        .unwrap()
-        .browsers_discovered = true;
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = Some(Vec::new());
     app.sync_cloud_presentations();
     let id = app.board.panel_id_by_local_id("firefox").unwrap();
     assert!(app.board.panel(id).unwrap().browser().is_none());
@@ -499,19 +491,20 @@ fn browser_attachment_keeps_repainting_after_discovery_watch_stops() {
     runtime.needs_attach = false;
     runtime.pending_member_attachments.clear();
     runtime.pending_session_attachments.clear();
-    runtime.browsers_discovered = true;
-    runtime.browsers = [
-        ("firefox", BackendKind::FirefoxBidi),
-        ("chromium", BackendKind::ChromiumCdp),
-    ]
-    .into_iter()
-    .map(|(id, backend)| CloudViewState {
-        id: id.into(),
-        backend,
-        ready: true,
-        ..Default::default()
-    })
-    .collect();
+    runtime.browsers = Some(
+        [
+            ("firefox", BackendKind::FirefoxBidi),
+            ("chromium", BackendKind::ChromiumCdp),
+        ]
+        .into_iter()
+        .map(|(id, backend)| CloudViewState {
+            id: id.into(),
+            backend,
+            ready: true,
+            ..Default::default()
+        })
+        .collect(),
+    );
     let settings = temp.path().join("settings.json");
     let bytes = std::fs::read(&settings).unwrap();
     std::fs::remove_file(&settings).unwrap();

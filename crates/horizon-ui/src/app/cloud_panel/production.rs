@@ -49,6 +49,8 @@ pub(super) enum Confirmation {
 #[derive(Default)]
 pub(super) struct Runtime {
     receiver: Option<Receiver<Event>>,
+    remote_release: Option<Receiver<cloud_runtime::Result<Deployment>>>,
+    remote_release_error: Option<String>,
     repaint_context: Option<egui::Context>,
     sender: Option<std::sync::mpsc::Sender<Event>>,
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
@@ -68,12 +70,19 @@ pub(super) struct Runtime {
     pub(in crate::app::cloud_panel) desktop_controller: Option<String>,
     pub(in crate::app::cloud_panel) desktop_last_input: Option<String>,
     desktop: Option<std::sync::Arc<cloud_runtime::tunnel::DesktopTunnel>>,
-    browsers: Vec<horizon_core::browser::CloudViewState>,
-    browsers_discovered: bool,
+    browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
+        self.poll_remote_release();
+        if self.needs_repaint() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
     fn needs_repaint(&self) -> bool {
-        (self.receiver.is_some() && self.stage != Some(Stage::Ready))
+        self.remote_release.is_some()
+            || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.needs_attach
             || self.needs_desktop
             || !self.pending_browser_attachments.is_empty()
@@ -116,7 +125,9 @@ impl HorizonApp {
                         resumed.push(id);
                     }
                     Event::ClosedBrowsers(ids) => {
-                        runtime.browsers.retain(|b| !ids.contains(&b.id));
+                        if let Some(browsers) = &mut runtime.browsers {
+                            browsers.retain(|b| !ids.contains(&b.id));
+                        }
                         removed.extend(ids.into_iter().map(|local| (id, local)));
                     }
                     Event::DesktopControl { active, last } => {
@@ -128,8 +139,7 @@ impl HorizonApp {
                         runtime.needs_desktop = true;
                     }
                     Event::Browsers(browsers) => {
-                        runtime.browsers = browsers;
-                        runtime.browsers_discovered = true;
+                        runtime.browsers = Some(browsers);
                     }
                     Event::Deleted => {
                         runtime.progress.stage(Stage::Deleted, std::time::Instant::now());
@@ -151,8 +161,7 @@ impl HorizonApp {
                     }
                     Event::Ready(state, at) => {
                         runtime.progress.stage(Stage::Ready, at);
-                        runtime.browsers.clear();
-                        runtime.browsers_discovered = false;
+                        runtime.browsers = None;
                         runtime.needs_attach = true;
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
@@ -166,9 +175,7 @@ impl HorizonApp {
                     }
                 }
             }
-            if runtime.needs_repaint() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
-            }
+            runtime.poll_release_and_repaint(ctx);
         }
         self.finish_failed_cloud_operations(finished);
         for id in resumed {
@@ -476,7 +483,8 @@ impl HorizonApp {
                 .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
             let connection = Connection::new(worker, &settings, store.root())?;
             if options.kind == PanelKind::Browser {
-                let observed = runtime.and_then(|runtime| runtime.browsers.iter().find(|browser| browser.id == id));
+                let observed =
+                    runtime.and_then(|runtime| runtime.browsers.as_ref()?.iter().find(|browser| browser.id == id));
                 capabilities::prepare_browser(
                     &launch.profile.capabilities,
                     &state.browserstack_targets,

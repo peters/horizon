@@ -1,4 +1,4 @@
-use super::{Confirmation, Event, HorizonApp, Settings, Stage, Store, channel, cloud_runtime, deployment};
+use super::{Confirmation, Event, HorizonApp, Runtime, Settings, Stage, Store, channel, cloud_runtime, deployment};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Action {
@@ -13,6 +13,44 @@ pub(super) enum Action {
 
 #[cfg(test)]
 mod tests;
+
+impl Runtime {
+    pub(super) fn can_release_remote_devices(&self) -> bool {
+        self.remote_release.is_none()
+            && (self.receiver.is_none() || self.stage == Some(Stage::Ready))
+            && self.state.as_ref().is_some_and(|state| {
+                state.requires_browserstack_release()
+                    && matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
+            })
+    }
+
+    pub(super) fn poll_remote_release(&mut self) {
+        if self.state.as_ref().is_some_and(|state| state.browserstack_released) {
+            self.remote_release_error = None;
+        }
+        let Some(receiver) = &self.remote_release else { return };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(cloud_runtime::Error::Invalid(
+                "Remote device release ended without a result",
+            )),
+        };
+        self.remote_release = None;
+        match result {
+            Ok(state) => {
+                self.remote_release_error = None;
+                self.state = Some(state);
+                self.logs
+                    .push_back("Remote devices released and copied credentials removed".into());
+                while self.logs.len() > 150 {
+                    self.logs.pop_front();
+                }
+            }
+            Err(error) => self.remote_release_error = Some(error.to_string()),
+        }
+    }
+}
 
 impl HorizonApp {
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
@@ -30,7 +68,7 @@ impl HorizonApp {
             return;
         };
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
+        if runtime.remote_release.is_some() || (runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready)) {
             return;
         }
         let settings = match Settings::load(&root.join("settings.json")) {
@@ -49,7 +87,12 @@ impl HorizonApp {
             }
         };
         if action == Action::RevokeBrowserstack {
-            let Some(tx) = runtime.sender.clone() else { return };
+            if !runtime.can_release_remote_devices() {
+                return;
+            }
+            let (tx, rx) = channel();
+            runtime.remote_release_error = None;
+            runtime.remote_release = Some(rx);
             let ctx = ctx.clone();
             std::thread::spawn(move || {
                 let result = cloud_runtime::lifecycle::revoke_browserstack(
@@ -57,11 +100,7 @@ impl HorizonApp {
                     &settings,
                     &cloud_runtime::Cancellation::default(),
                 );
-                let event = result.map_or_else(
-                    |error| Event::Output(error.to_string()),
-                    |state| Event::Snapshot(Box::new(state)),
-                );
-                let _ = tx.send(event);
+                let _ = tx.send(result);
                 ctx.request_repaint();
             });
             return;
