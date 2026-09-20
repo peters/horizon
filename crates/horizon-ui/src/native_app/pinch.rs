@@ -28,9 +28,15 @@ pub(super) enum NativePinch {
 
 impl NativePinch {
     pub(super) fn start(event_loop: &EventLoop<UserEvent>) -> Option<Self> {
-        X11Pinch::start(event_loop)
-            .map(Self::X11)
-            .or_else(|| horizon_wayland::PinchBridge::start(event_loop).map(Self::Wayland))
+        X11Pinch::start(event_loop).map(Self::X11).or_else(|| {
+            // SAFETY: the bridge is owned by `KeyboardAwareApp`, which
+            // releases it in `exiting` — the last callback winit makes
+            // while this event loop's `wl_display` is still alive. It is
+            // never handed anywhere that could outlive the loop.
+            #[allow(unsafe_code)]
+            let bridge = unsafe { horizon_wayland::PinchBridge::start(event_loop) };
+            bridge.map(Self::Wayland)
+        })
     }
 
     pub(super) fn observe_window(&mut self, id: WindowId, event: &WindowEvent) {

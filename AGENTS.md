@@ -127,7 +127,7 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 - Keep APIs explicit: prefer `Result<T, E>` and typed structs/enums over ad-hoc tuples
 - Keep default values and default-selection rules centralized. Prefer `Default`, associated consts, or focused helper functions over repeating literals or enum variants across call sites. Use `static` items only when stable global storage is actually required
 - Prefer `tracing` for structured logging
-- `#![forbid(unsafe_code)]` on all crates
+- `#![forbid(unsafe_code)]` on all crates. Two exceptions carry `#![deny(unsafe_code)]` with narrowly scoped `#[allow]`s instead, because they call platform FFI that has no safe equivalent: `horizon-cursor` (Win32 `GetCursorPos`) and the `horizon-wayland` pinch bridge together with its single call site in `horizon-ui` (libwayland `wl_display` adoption, whose lifetime winit's `run_app(self)` makes impossible to encode in a type). Do not widen either exception; new crates get `forbid`
 - Consolidate repeated helpers into shared modules in horizon-core
 - Keep new or edited modules single-purpose; avoid mixing rendering, persistence, session bootstrap, and filesystem logic in one file
 - If UI code needs shared layout math, state conversion, or template-sync logic, move it into `horizon-core` instead of duplicating it in `horizon-ui`

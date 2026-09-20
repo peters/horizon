@@ -260,14 +260,22 @@ impl HorizonApp {
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
-        // Topmost panel under the pointer: the geometry is in draw order, so a
-        // panel later in the list covers the ones before it.
+        // Topmost panel under the pointer. `panel_geometry` follows board
+        // order, while rendering draws the focused panel last, so mirror that:
+        // the focused panel wins, then the last board-order panel that hits.
         let panel_under_pointer = pointer_position.and_then(|position| {
-            panel_geometry
-                .iter()
-                .rev()
-                .find(|(_, geometry)| geometry.screen_rect.contains(position))
-                .map(|(id, _)| *id)
+            let hits = |id: PanelId| {
+                panel_geometry
+                    .iter()
+                    .any(|(candidate, geometry)| *candidate == id && geometry.screen_rect.contains(position))
+            };
+            self.board.focused.filter(|id| hits(*id)).or_else(|| {
+                panel_geometry
+                    .iter()
+                    .rev()
+                    .find(|(_, geometry)| geometry.screen_rect.contains(position))
+                    .map(|(id, _)| *id)
+            })
         });
         let scroll_routing = route_canvas_scroll(
             ctx,

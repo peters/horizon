@@ -10,9 +10,13 @@
 //! The bridge owns no thread and never blocks. libwayland demultiplexes a read
 //! to every queue of the connection, so the toolkit's own event loop feeds our
 //! queue as a side effect of its normal polling and [`PinchBridge::poll`] only
-//! drains what is already pending. That keeps every display access inside a
-//! `&mut self` call made by the display's owner from within its event loop,
-//! which is what makes the constructor safe to expose.
+//! drains what is already pending.
+//!
+//! libwayland requires the adopted `wl_display` to outlive the backend and
+//! every clone of it, and that cannot be expressed in the type system here:
+//! winit's `run_app` takes the event loop by value, so no borrow of it can be
+//! held across the run. [`PinchBridge::start`] is therefore `unsafe`, and the
+//! lifetime proof belongs to the integration layer that owns both ends.
 
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use wayland_client::backend::Backend;
@@ -52,16 +56,23 @@ impl PinchBridge {
     /// pointer gestures, or the seat has no pointer.
     ///
     /// Call [`PinchBridge::poll`] from the display owner's event loop.
-    pub fn start(display: &impl HasDisplayHandle) -> Option<Self> {
+    ///
+    /// # Safety
+    ///
+    /// `display`'s `wl_display` must outlive the returned bridge. The borrow
+    /// only proves it is alive for this call, and libwayland requires it to
+    /// outlive the adopted backend and every clone of it, so the caller must
+    /// drop the bridge before the display is torn down.
+    #[allow(unsafe_code)]
+    pub unsafe fn start(display: &impl HasDisplayHandle) -> Option<Self> {
         let handle = display.display_handle().ok()?;
         let RawDisplayHandle::Wayland(display) = handle.as_raw() else {
             return None;
         };
-        // SAFETY: `display_handle()` yields a live `wl_display` belonging to the
-        // caller, and the borrow proves it is alive for this call. The adopted
-        // backend is only ever used again from `&mut self` methods, which the
-        // caller can only reach while it still owns that display, and a
-        // foreign-display backend never disconnects the display it adopted.
+        // SAFETY: `display_handle()` yields a live `wl_display`, and this
+        // function's own contract makes the caller responsible for keeping it
+        // alive for as long as the bridge exists. A foreign-display backend
+        // never disconnects the display it adopted.
         #[allow(unsafe_code)]
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
@@ -85,6 +96,7 @@ impl PinchBridge {
         let handle = queue.handle();
         let mut state = Gestures {
             protocol: globals.bind(&handle, 1..=3, ())?,
+            pointer: None,
             pinch: None,
             sequence: PinchSequence::default(),
             pending: Vec::new(),
@@ -122,9 +134,38 @@ impl PinchBridge {
 
 struct Gestures {
     protocol: ZwpPointerGesturesV1,
+    /// Kept so both objects can be released when the seat drops its pointer.
+    pointer: Option<wl_pointer::WlPointer>,
     pinch: Option<ZwpPointerGesturePinchV1>,
     sequence: PinchSequence,
     pending: Vec<Pinch>,
+}
+
+impl Gestures {
+    fn acquire_pointer(&mut self, seat: &wl_seat::WlSeat, handle: &QueueHandle<Self>) {
+        if self.pinch.is_some() {
+            return;
+        }
+        let pointer = seat.get_pointer(handle, ());
+        self.pinch = Some(self.protocol.get_pinch_gesture(&pointer, handle, ()));
+        self.pointer = Some(pointer);
+    }
+
+    /// A seat can drop its pointer across a device or seat reconfiguration.
+    /// The protocol forbids a pre-removal pointer from emitting again once a
+    /// version 5+ seat regains the capability, so both objects have to go and
+    /// be recreated rather than reused.
+    fn release_pointer(&mut self) {
+        if let Some(pinch) = self.pinch.take() {
+            pinch.destroy();
+        }
+        if let Some(pointer) = self.pointer.take()
+            && pointer.version() >= wl_pointer::REQ_RELEASE_SINCE
+        {
+            pointer.release();
+        }
+        self.sequence.end();
+    }
 }
 
 /// The gesture in flight, tracked apart from the protocol objects so the scale
@@ -181,9 +222,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for Gestures {
         else {
             return;
         };
-        if capabilities.contains(wl_seat::Capability::Pointer) && state.pinch.is_none() {
-            let pointer = seat.get_pointer(handle, ());
-            state.pinch = Some(state.protocol.get_pinch_gesture(&pointer, handle, ()));
+        if capabilities.contains(wl_seat::Capability::Pointer) {
+            state.acquire_pointer(seat, handle);
+        } else {
+            state.release_pointer();
         }
     }
 }
