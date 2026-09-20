@@ -173,6 +173,17 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
 #[test]
 fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement() {
     let (_temp, mut app) = restore_fixture();
+    let mut saved = RuntimeState::from_board(
+        &app.board,
+        horizon_core::WindowConfig::default(),
+        horizon_core::CanvasViewState::default(),
+    );
+    saved.workspaces[0].panels[0]
+        .browser_profile
+        .as_mut()
+        .unwrap()
+        .remote_target = Some("phone".into());
+    app.board = Board::from_runtime_state(&saved).unwrap();
     app.sync_cloud_presentations();
     app.cloud_prototype
         .production
@@ -187,6 +198,16 @@ fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement(
         .unwrap();
     assert!(panel.browser().is_none());
     assert_eq!(panel.browser_backend(), Some(BackendKind::FirefoxBidi));
+    assert_eq!(panel.browser_remote_target(), Some("phone"));
+    let persisted = RuntimeState::from_board(
+        &app.board,
+        horizon_core::WindowConfig::default(),
+        horizon_core::CanvasViewState::default(),
+    );
+    let persisted: RuntimeState = serde_yaml::from_str(&persisted.to_yaml().unwrap()).unwrap();
+    let profile = persisted.workspaces[0].panels[0].browser_profile.as_ref().unwrap();
+    assert_eq!(profile.remote_target.as_deref(), Some("phone"));
+    assert_eq!(profile.backend, Some(BackendKind::FirefoxBidi));
     let text = panel.terminal().unwrap().full_text_lines(100).0.join("\n");
     assert!(text.contains("Remote browser process is no longer available"));
     assert!(

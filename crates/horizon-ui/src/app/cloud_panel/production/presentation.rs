@@ -382,10 +382,7 @@ impl HorizonApp {
             size: Some(panel.layout.size),
             visible: panel.visible,
             command: panel.launch_command.clone(),
-            remote_target: panel
-                .browser()
-                .and_then(|browser| browser.remote_target())
-                .map(str::to_owned),
+            remote_target: panel.browser_remote_target().map(str::to_owned),
             browser_config: Some(horizon_core::browser::BrowserConfig {
                 backend: panel.browser_backend().unwrap_or(self.template_config.browser.backend),
                 ..self.template_config.browser.clone()

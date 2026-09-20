@@ -5,11 +5,17 @@ pub fn poll(host: &mut Host) {
     host_controls(host);
     super::remote::poll(&mut host.remote_allocations, &host.capabilities, &mut host.catalog);
     host.catalog.poll(&host.capabilities);
+    host.retry_cleanup();
     device_viewer_requests();
     let membership = workspace();
     for browser in host.browsers.values() {
         let _ = manifest::sync_host_state(&browser.state.id, browser.state.visible, &membership);
     }
+    create_requests(host);
+    pending_requests(host);
+}
+
+fn create_requests(host: &mut Host) {
     if let Ok(requests) = manifest::list_create_requests() {
         for request in requests {
             if !request.actor.starts_with("horizon:cloud-") {
@@ -32,13 +38,15 @@ pub fn poll(host: &mut Host) {
                 continue;
             }
             let id = format!("browser-{}", request.request_id);
-            match host.open(
-                &id,
-                request.url.clone(),
-                request.backend,
-                request.target.as_deref(),
-                &request.actor,
-            ) {
+            match start_before_deadline(&request, manifest::now_millis(), || {
+                host.open(
+                    &id,
+                    request.url.clone(),
+                    request.backend,
+                    request.target.as_deref(),
+                    &request.actor,
+                )
+            }) {
                 Ok(()) => {
                     if let Some(browser) = host.browsers.get_mut(&id) {
                         browser.state.visible = request.visible;
@@ -55,8 +63,24 @@ pub fn poll(host: &mut Host) {
             }
         }
     }
+}
+
+fn pending_requests(host: &mut Host) {
     host.pending.retain(|request| {
         let id = format!("browser-{}", request.request_id);
+        if let Some(message) = pending_failure(
+            request,
+            host.browsers.get(&id).map(|browser| &browser.state),
+            manifest::now_millis(),
+        ) {
+            host.pending_cleanup.insert(id);
+            return manifest::complete_create_request(&BrowserCreateResult::failed(
+                request,
+                "browser_start_failed",
+                message,
+            ))
+            .is_err();
+        }
         let Some(browser) = host.browsers.get(&id) else {
             return false;
         };
@@ -87,17 +111,39 @@ pub fn poll(host: &mut Host) {
                     .saturating_sub(request.requested_at_millis)
                     .unsigned_abs(),
             ))
-        } else if browser.state.lost || manifest::now_millis() > request.deadline_at_millis {
-            Some(BrowserCreateResult::failed(
-                request,
-                "browser_start_failed",
-                "Worker browser did not become ready",
-            ))
         } else {
             None
         };
         result.is_none_or(|result| manifest::complete_create_request(&result).is_err())
     });
+}
+
+fn start_before_deadline(
+    request: &manifest::BrowserCreateRequest,
+    now: i64,
+    start: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if now >= request.deadline_at_millis {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Browser creation deadline expired",
+        ));
+    }
+    start()
+}
+
+fn pending_failure(
+    request: &manifest::BrowserCreateRequest,
+    state: Option<&horizon_browser_protocol::cloud_view::CloudViewState>,
+    now: i64,
+) -> Option<&'static str> {
+    if now >= request.deadline_at_millis {
+        Some("Browser creation deadline expired")
+    } else if state.is_none_or(|state| state.lost) {
+        Some("Worker browser did not become ready")
+    } else {
+        None
+    }
 }
 
 fn device_viewer_requests() {
@@ -165,5 +211,57 @@ fn host_controls(host: &mut Host) {
             };
             let _ = manifest::complete_close_request(&result);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_browser_protocol::cloud_view::CloudViewState;
+
+    #[test]
+    fn expired_create_never_invokes_the_allocator() {
+        let mut request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        request.deadline_at_millis = 100;
+        for now in [100, 101, i64::MAX] {
+            let error = start_before_deadline(&request, now, || panic!("expired allocation started")).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        }
+        let mut started = false;
+        start_before_deadline(&request, 99, || {
+            started = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(started);
+    }
+
+    #[test]
+    fn expired_pending_browser_is_retired_even_if_it_became_ready() {
+        let mut request = manifest::BrowserCreateRequest::for_tests("cloud-agent");
+        request.deadline_at_millis = 100;
+        for ready in [false, true] {
+            let state = CloudViewState {
+                ready,
+                ..Default::default()
+            };
+            assert_eq!(pending_failure(&request, Some(&state), 99), None);
+            assert_eq!(
+                pending_failure(&request, Some(&state), 100),
+                Some("Browser creation deadline expired")
+            );
+        }
+        assert!(pending_failure(&request, None, 99).is_some());
+        assert!(
+            pending_failure(
+                &request,
+                Some(&CloudViewState {
+                    lost: true,
+                    ..Default::default()
+                }),
+                99
+            )
+            .is_some()
+        );
     }
 }

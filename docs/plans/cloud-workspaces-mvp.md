@@ -305,3 +305,31 @@ reload as candidates for that phase. Machine-local provider and agent API-key
 bindings currently have a file-based setup contract; there is no cloud credential
 entry UI yet. Do not implement a new setup wizard, picker or credential UI before
 the review gate. No merge or release is authorized.
+
+Next-phase design preference: the user requests a polished Cloud settings pane
+for compute credentials and agent authentication, with a clear choice between
+supported subscription login and API-key authentication. Evaluate its relationship
+to existing remote-browser settings, keeping credential storage machine-local and
+the repository YAML free of secrets. This preference does not lift the review,
+current-settings smoke or task-compute cleanup gates above.
+
+Final review batch, 2026-09-20: expired browser-create requests are rejected
+before allocation and retired before ready results can be published. Automatic
+cleanup polls shutdown without blocking the worker loop and retains uncertain
+release identities. Authenticated malformed catalog deadlines saturate safely.
+Missing-process placeholders preserve their saved remote target through persistence.
+The remote-only image smoke expects its declared browser tools. Live acceptance
+also found that worker video capture used the wrong retention directory; captures
+now use the encoded per-panel profile path. That capture correction still needs
+cloud verification on the rebuilt immutable image.
+
+The nine-file review batch passed independent review and every required local
+validation tier in `final-validation-11/`: 2,304 workspace tests and 2,349 tests
+with speech, zero failures, 15 ignored in each tier. The advisory tier retains
+three unchanged device CLI test diagnostics. Existing immutable images passed
+minimal, remote-only and full-browser capability smoke, with task-container cleanup
+confirmed. Native candidate `development-54/` reattached after restart; the existing
+form was checked at 900×600 and the 4K resize recording was decoded. Its binary
+SHA-256 is `5afe45b47544591980edfebc96917c8fded773a416bbc55d23819d9830eb4993`.
+Hosted review, final immutable-image acceptance and post-review smoke/cleanup
+remain open; these local results do not close those gates.

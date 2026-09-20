@@ -331,6 +331,14 @@ impl Panel {
             })
     }
 
+    /// Preserve remote identity while the view is a disconnected snapshot.
+    #[must_use]
+    pub fn browser_remote_target(&self) -> Option<&str> {
+        self.browser()
+            .and_then(crate::browser::BrowserPanelState::remote_target)
+            .or_else(|| self.disconnected_browser_profile.as_ref()?.remote_target.as_deref())
+    }
+
     /// Mutable accessor for the browser content.
     pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
         self.content.browser_mut()

@@ -22,6 +22,7 @@ pub struct Host {
     pub capabilities: horizon_cloud::Capabilities,
     pub browsers: BTreeMap<String, HostedBrowser>,
     pub pending: Vec<manifest::BrowserCreateRequest>,
+    pub pending_cleanup: std::collections::BTreeSet<String>,
     root: PathBuf,
     closed: std::collections::BTreeSet<String>,
     stopping: BTreeMap<String, horizon_browser::BrowserShutdownSignal>,
@@ -52,6 +53,7 @@ impl Host {
             capabilities,
             browsers: BTreeMap::new(),
             pending: Vec::new(),
+            pending_cleanup: std::collections::BTreeSet::new(),
             root,
             closed,
             stopping: BTreeMap::new(),
@@ -119,7 +121,12 @@ impl Host {
                 height: 800,
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: Some(Arc::new(coordination)),
-                capture_directory: Some(self.root.join("captures")),
+                capture_directory: Some(
+                    self.root
+                        .join("profiles")
+                        .join(horizon_browser_control::paths::safe_local_id(id))
+                        .join("captures"),
+                ),
                 video: Arc::new(VideoCaptureHandle::default()),
                 remote,
             })
@@ -258,15 +265,21 @@ impl Host {
         if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') || id.is_empty() || id.len() > 100 {
             return Err(io::Error::other("Invalid browser identity"));
         }
-        if let Some(browser) = self.browsers.remove(id) {
-            self.stopping.insert(id.into(), browser.session.shutdown_signal());
-        }
+        self.begin_shutdown(id);
         if let Some(signal) = self.stopping.get(id)
             && !signal.wait(std::time::Duration::from_secs(10))
             && !signal.force_cleanup(std::time::Duration::from_secs(3))
         {
             return Err(io::Error::other("Browser shutdown is unresolved"));
         }
+        self.finish_close(id)
+    }
+    fn begin_shutdown(&mut self, id: &str) {
+        if let Some(browser) = self.browsers.remove(id) {
+            self.stopping.insert(id.into(), browser.session.shutdown_signal());
+        }
+    }
+    fn finish_close(&mut self, id: &str) -> io::Result<()> {
         if self
             .stopping
             .get(id)
@@ -281,6 +294,14 @@ impl Host {
         self.closed.insert(id.into());
         std::fs::write(self.root.join(id), "closed")?;
         Ok(())
+    }
+    pub fn retry_cleanup(&mut self) {
+        for id in std::mem::take(&mut self.pending_cleanup) {
+            self.begin_shutdown(&id);
+            if self.stopping.get(&id).is_some_and(|signal| !signal.is_complete()) || self.finish_close(&id).is_err() {
+                self.pending_cleanup.insert(id);
+            }
+        }
     }
     fn snapshot(&self, id: &str, after: u64) -> CloudViewResponse {
         let Some(browser) = self.browsers.get(id) else {
@@ -395,16 +416,33 @@ mod tests {
             catalog: crate::catalog::Host::default(),
             browsers: BTreeMap::new(),
             pending: Vec::new(),
+            pending_cleanup: std::collections::BTreeSet::new(),
             root: root.path().into(),
             closed: std::collections::BTreeSet::default(),
             stopping: BTreeMap::new(),
             remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
         };
+        let (completion, signal) = std::sync::mpsc::channel();
+        host.stopping
+            .insert("phone".into(), horizon_browser::BrowserShutdownSignal::for_test(signal));
+        host.pending_cleanup.insert("phone".into());
+        let started = std::time::Instant::now();
+        host.retry_cleanup();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(host.pending_cleanup.contains("phone"));
+        assert!(host.request(CloudViewRequest::List).error.is_none());
+        completion.send(()).unwrap();
+        host.retry_cleanup();
+        assert!(host.pending_cleanup.is_empty());
+        assert!(host.closed.remove("phone"));
+        std::fs::remove_file(root.path().join("phone")).unwrap();
         host.stopping.insert(
             "phone".into(),
             horizon_browser::BrowserShutdownSignal::completed_remote_for_test("account", None),
         );
-        assert!(host.close("phone").is_err());
+        host.pending_cleanup.insert("phone".into());
+        host.retry_cleanup();
+        assert!(host.pending_cleanup.contains("phone"));
         assert!(host.stopping.contains_key("phone"));
         assert!(!host.closed.contains("phone"));
         assert!(!root.path().join("phone").exists());
@@ -415,7 +453,8 @@ mod tests {
                 Some(horizon_browser::RemoteReleaseOutcome::Released),
             ),
         );
-        host.close("phone").unwrap();
+        host.retry_cleanup();
+        assert!(host.pending_cleanup.is_empty());
         assert!(!host.stopping.contains_key("phone"));
         assert!(host.closed.contains("phone"));
         assert_eq!(std::fs::read(root.path().join("phone")).unwrap(), b"closed");

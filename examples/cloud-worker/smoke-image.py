@@ -76,7 +76,7 @@ def main():
                 assert check.stdout.strip() == 'False', 'Unexpected installed executable: ' + executable
             config = json.loads(run('docker', 'exec', name, 'cat', '/workspace/agent-mcp.json').stdout)
             expected = set()
-            if caps.get('browsers'):
+            if caps.get('browsers') or caps.get('browserstack') is not None:
                 expected.add('horizon-browser')
             if caps.get('desktop'):
                 expected.add('horizon-device')
