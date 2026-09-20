@@ -4,10 +4,17 @@ Temporary validation artifact for the browser/device panel zoom pull request.
 macOS is the platform this change cannot be fully qualified on elsewhere: the
 zoom modifier is Command rather than Control, and trackpad pinch arrives as a
 native gesture instead of the X11 XInput bridge used on Linux. Run every lane
-on a logged-in Mac desktop against the exact PR head.
+against the exact PR head, on a task-owned isolated desktop.
 
 ## Safety contract
 
+- Run the interactive lanes on a **task-owned isolated macOS desktop** exposed
+  through a task-owned loopback VNC server and watched live in a Horizon
+  native Device panel, as `scripts/device-smoke/README.md` requires. Never
+  drive, screenshot, or record the developer's active desktop. If no isolated
+  desktop with a VNC endpoint and a supporting native panel is available,
+  report lanes B, C and D as **blocked** rather than running them anywhere
+  else; the unit lane still applies.
 - Do not stop, signal, reuse, or automate a pre-existing Horizon process.
   Record existing Horizon PIDs first and exclude them from every command.
 - Launch only a task-owned build with an isolated home, config, and session
@@ -27,19 +34,37 @@ cd /tmp/horizon-macos-zoom-smoke
 git rev-parse HEAD && git status --short
 sw_vers && uname -m && rustc --version
 cargo build --bin horizon
+smoke_bin=$(mktemp -d /tmp/horizon-macos-zoom-bin.XXXXXX)
+cp target/debug/horizon "$smoke_bin/horizon"
+shasum -a 256 "$smoke_bin/horizon" | tee "$smoke_bin/SHA256SUMS"
 ```
 
-Confirm `HEAD` equals the PR SHA, the worktree is clean, and the launched
-process is the binary just built (`ps -o comm= -p <pid>`).
+Confirm `HEAD` equals the PR SHA and the worktree is clean. After launching
+the frozen copy, find the actual Horizon child PID in the fixture's own
+process tree and prove it is the candidate: resolve its executable and hash
+it, rather than trusting the process name or the build output.
+
+```bash
+horizon_pid=<child pid from the fixture's process tree>
+exe=$(ps -o comm= -p "$horizon_pid")
+shasum -a 256 "$exe"          # must equal SHA256SUMS
+```
+
+Record the PID and hash with the evidence; a mismatch invalidates every lane
+below.
 
 ## 2. Lane A — unit tiers
 
 ```bash
-cargo test -p horizon-ui --bin horizon -- panel_zoom device_widget browser_widget
+cargo test -p horizon-ui --bin horizon -- panel_zoom
+cargo test -p horizon-ui --bin horizon -- device_widget
+cargo test -p horizon-ui --bin horizon -- browser_widget
 cargo test --workspace
 ```
 
-Both must pass on the Mac toolchain; no lane below substitutes for them.
+All must pass on the Mac toolchain; no lane below substitutes for them. Each
+filter runs as its own command so the lane does not depend on a libtest that
+accepts several positional filters.
 
 ## 3. Lane B — device panel (trackpad)
 
@@ -84,15 +109,33 @@ With both panels on the canvas, pinch over empty canvas: the board zooms as
 before. Pinch over each panel: only that panel's content zooms. Neither case
 may move the canvas pan offset unexpectedly.
 
+## 6. Visual evidence
+
+Zoom is a visible, motion-sensitive change, so lanes B, C and D each require
+artifacts captured from the isolated desktop (never from the developer's
+screen):
+
+- A screenshot after launch, and one at each zoom stop the lane names.
+- One short video per interactive lane covering the gesture itself — the
+  percentage changing and the content scaling under the pointer. Verify the
+  recording has usable frames before accepting it; if recording is
+  unavailable or produces no frames, report the lane as blocked.
+
+Evidence stays private unless publication is separately authorized, and only
+synthetic fixture content is eligible.
+
 ## Pass criteria
 
 | Lane | Required |
 |---|---|
-| A | Both cargo commands pass on macOS |
+| A | Every cargo command passes on macOS |
 | B | Dropdown, pinch, Command+wheel and pan all work; target desktop unchanged; controls still work on a retained frame |
 | C | Viewport scales inversely with zoom; clicks land; page scroll intact |
-| D | Panels own the gesture over their frame; empty canvas still zooms the board |
+| D | Panels own the gesture over their body; empty canvas and panel titlebars still zoom the board |
 
-Report ends with `SMOKE-TEST: DONE` plus the tested SHA, macOS version, and
-architecture. Lanes B and C require a real trackpad or mouse; a headless
-runner cannot substitute for them.
+A lane passes only with the artifacts from section 6 attached; without them
+it is reported as blocked, not done. The report ends with `SMOKE-TEST: DONE`
+plus the tested SHA, the verified child PID and executable hash, the macOS
+version, and the architecture. Lanes B, C and D require a real trackpad or
+mouse on a task-owned isolated desktop; a headless runner and the developer's
+own desktop are both unacceptable substitutes.
