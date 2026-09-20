@@ -68,44 +68,41 @@ pub(super) fn prepare_terminal_keyboard_events(
     // frame is not evidence of one: on Wayland every text-input round trip
     // ends with a bare `Preedit("")` (winit's `Done` handler), which means
     // "nothing is composing" and used to take the frame's Backspace with it.
-    // egui reports that terminator after the keys it arrived with, so a frame
-    // whose composition news is nothing but "not composing" starts uncomposed.
-    // A frame that also carries a live candidate or committed text is not that
-    // frame: its latch stands, and each IME event still ends or starts the
-    // composition where it arrives.
-    let mut composing = ime_enabled && !reports_no_composition(events);
+    // A trailing empty preedit cannot retroactively release the frame's keys:
+    // reaching this point with a latched composition means this frame carries
+    // its genuine end, so the Backspace that deleted the last preedit character
+    // is the IME's, not the terminal's. A dismissal already reported in an
+    // earlier frame has cleared the latch, so it never reaches this branch.
+    let mut composing = ime_enabled;
     let mut filtered = Vec::with_capacity(events.len());
     for event in events {
         match &event.event {
-            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => composing = !text.is_empty(),
-            egui::Event::Ime(egui::ImeEvent::Commit(_)) => composing = false,
-            _ if composing && is_ime_incompatible_event(&event.event) => continue,
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                // Composition state only; the text itself is the user's input.
+                tracing::trace!(latched = ime_enabled, live = !text.is_empty(), "terminal IME preedit");
+                composing = !text.is_empty();
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                tracing::trace!(
+                    latched = ime_enabled,
+                    chars = text.chars().count(),
+                    "terminal IME commit"
+                );
+                composing = false;
+            }
+            _ if composing && is_ime_incompatible_event(&event.event) => {
+                // The one place a terminal panel drops a key it was given. A
+                // session that loses navigation without a visible composition
+                // is diagnosed from here.
+                tracing::debug!(withheld = ?event.event, latched = ime_enabled, "terminal key held by a live IME composition");
+                continue;
+            }
             _ => {}
         }
         filtered.push(event.clone());
     }
     filtered.sort_by_key(|event| !matches!(event.event, egui::Event::Ime(_)));
     filtered
-}
-
-/// Whether the frame's only composition news is that nothing is composing.
-/// An empty preedit is winit's end-of-round-trip bookkeeping and an empty
-/// commit is a cancelled composition; neither produced text, so neither can
-/// retire keys it never owned. Any other IME event — a candidate preedit, a
-/// commit that carries text — is a composition this frame cannot speak against,
-/// and the latch keeps its say.
-fn reports_no_composition(events: &[TerminalInputEvent]) -> bool {
-    let mut reported = false;
-    for event in events {
-        let egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) = &event.event else {
-            continue;
-        };
-        if !text.is_empty() {
-            return false;
-        }
-        reported = true;
-    }
-    reported
 }
 
 fn is_ime_incompatible_event(event: &egui::Event) -> bool {
@@ -320,37 +317,22 @@ mod tests {
         );
     }
 
-    /// The bare `Preedit("")` that ends a Wayland round trip reports "nothing
-    /// is composing", and egui reports it after the keys it arrived with, so
-    /// it must not take them with it. A cancelled composition — an empty
-    /// preedit followed by an empty commit — says the same thing.
+    /// Backspace that deletes the last preedit character dismisses the
+    /// composition, so the frame is `[Backspace, Preedit("")]` and the key
+    /// belongs to the IME. The trailing empty preedit cannot hand it to the
+    /// terminal: a dismissal already reported in an earlier frame would have
+    /// cleared the latch before this one.
     #[test]
-    fn keys_survive_the_empty_preedit_that_ends_a_wayland_round_trip() {
-        for trailing in [
-            vec![preedit("")],
-            vec![preedit(""), preedit("")],
-            vec![preedit(""), commit("")],
-        ] {
-            let mut events = vec![key(Key::ArrowDown, false), key(Key::Backspace, true)];
+    fn a_composition_dismissed_by_its_last_character_keeps_that_key() {
+        for trailing in [vec![preedit("")], vec![preedit(""), commit("")]] {
+            let mut events = vec![key(Key::Backspace, false), key(Key::ArrowDown, false)];
             events.extend(trailing);
 
             let filtered = prepare_terminal_keyboard_events(&events, true);
 
             assert!(
-                filtered.iter().any(|event| matches!(
-                    event.event,
-                    Event::Key {
-                        key: Key::ArrowDown,
-                        ..
-                    }
-                )),
-                "arrow reached the terminal"
-            );
-            assert!(
-                filtered
-                    .iter()
-                    .any(|event| matches!(event.event, Event::Key { repeat: true, .. })),
-                "held backspace reached the terminal"
+                filtered.iter().all(|event| !matches!(event.event, Event::Key { .. })),
+                "the composition keeps the keys that dismissed it"
             );
         }
     }
