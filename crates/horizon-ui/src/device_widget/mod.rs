@@ -180,7 +180,7 @@ impl DeviceUiState {
     /// scale still changes before any desktop has arrived; only the
     /// pointer-anchored scroll needs a painted image.
     fn handle_zoom_gesture(&mut self, ui: &Ui, view: Option<ImageView>) {
-        let Some(delta) = panel_zoom::gesture_delta(ui, panel_zoom::owns_pointer(ui)) else {
+        let Some(delta) = panel_zoom::gesture_delta(ui, panel_zoom::owns_gesture(ui)) else {
             return;
         };
         // Start from the scale actually on screen, which for `Fit` can sit

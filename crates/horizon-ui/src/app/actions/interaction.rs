@@ -6,7 +6,7 @@ use horizon_core::{PanelId, WorkspaceId};
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::canvas_drag::canvas_drag_delta;
 use super::super::canvas_scroll::route_canvas_scroll;
-use super::super::panels::PanelScreenGeometry;
+use super::super::panels::{PanelScreenGeometry, panel_layer_salt};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -167,31 +167,29 @@ impl HorizonApp {
         }
     }
 
-    /// Whether the panel under the pointer zooms its own content. Panels are
+    /// The panel under the pointer that zooms its own content. Panels are
     /// resolved with the paint order the current viewport's renderer recorded,
     /// so an overlapping panel on top keeps the gesture, and the rectangle is
     /// the panel body the widget itself tests. A fullscreen panel in the root
     /// window is not special-cased: that path returns before this handler
     /// runs, while detached viewports keep routing with their own geometry.
-    fn panel_owns_zoom_gesture(
+    fn zoom_gesture_panel(
         &self,
         panel_geometry: &[(PanelId, PanelScreenGeometry)],
         pointer: Option<egui::Pos2>,
-    ) -> bool {
-        let Some(pointer) = pointer else {
-            return false;
-        };
-        let topmost = self.panel_screen_order.iter().rev().find(|panel_id| {
+    ) -> Option<PanelId> {
+        let pointer = pointer?;
+        let topmost = *self.panel_screen_order.iter().rev().find(|panel_id| {
             self.panel_screen_rects
                 .get(panel_id)
                 .is_some_and(|rect| rect.contains(pointer))
-        });
-        let Some(topmost) = topmost else {
-            return false;
-        };
-        panel_geometry.iter().any(|(panel_id, geometry)| {
-            panel_id == topmost && geometry.zoom_body.is_some_and(|body| body.contains(pointer))
-        })
+        })?;
+        panel_geometry
+            .iter()
+            .any(|(panel_id, geometry)| {
+                *panel_id == topmost && geometry.zoom_body.is_some_and(|body| body.contains(pointer))
+            })
+            .then_some(topmost)
     }
 
     #[profiling::function]
@@ -276,7 +274,12 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         // A panel that zooms its own content owns the gesture over its frame.
-        let pointer_over_panel_zoom = self.panel_owns_zoom_gesture(&panel_geometry, pointer_position);
+        // The first owner keeps the whole gesture: egui keeps smoothing zoom
+        // deltas after the input stops, and the pointer may leave the panel.
+        let candidate = self
+            .zoom_gesture_panel(&panel_geometry, pointer_position)
+            .map(panel_layer_salt);
+        let pointer_over_panel_zoom = crate::panel_zoom::gesture_owner(ctx, candidate).is_some();
         if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {
             route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());

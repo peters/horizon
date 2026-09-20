@@ -142,6 +142,9 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
     // stays with the canvas: ownership and handling share one rectangle.
     let titlebar = egui::pos2(panel_rect.center().x, panel_rect.top() + 4.0);
     let mut over_titlebar = raw_input([1400.0, 900.0], None);
+    // Past the gesture idle boundary, so this is a new gesture rather than a
+    // continuation of the one the panel just claimed.
+    over_titlebar.time = Some(10.0);
     over_titlebar.events.push(egui::Event::PointerMoved(titlebar));
     over_titlebar.events.push(egui::Event::Zoom(1.25));
     run_app_frame_with_input(&ctx, &mut app, over_titlebar);
@@ -159,6 +162,7 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
         "the control point must be empty canvas"
     );
     let mut over_canvas = raw_input([1400.0, 900.0], None);
+    over_canvas.time = Some(20.0);
     over_canvas.events.push(egui::Event::PointerMoved(empty));
     over_canvas.events.push(egui::Event::Zoom(1.25));
     run_app_frame_with_input(&ctx, &mut app, over_canvas);

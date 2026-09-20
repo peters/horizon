@@ -69,8 +69,15 @@ pub(super) fn events(
     // mouseMoved messages, so only the final move in each adjacent run is
     // forwarded while button and wheel ordering is preserved.
     // Follow egui's own zoom modifier so the suppression below matches what
-    // it actually turns into a zoom gesture on this platform.
+    // it actually turns into a zoom gesture on this platform, and ask egui
+    // whether this frame's wheel is already being spent on zoom: it latches
+    // the modifiers a wheel gesture started with and reports no scroll at all
+    // while zooming, so kinetic events arriving after the modifier is
+    // released still belong to the zoom.
     let zoom_modifier = ui.ctx().options(|options| options.input_options.zoom_modifier);
+    let frame_wheel_zooms = ui.input(|input| {
+        input.smooth_scroll_delta == egui::Vec2::ZERO && (input.zoom_delta() - 1.0).abs() > f32::EPSILON
+    });
     let mut event_buttons = captured_buttons(state);
     let mut event_modifiers = state.pointer_modifiers;
     let mut pending_move: Option<(f64, f64, u32, BrowserModifiers)> = None;
@@ -132,7 +139,7 @@ pub(super) fn events(
                 unit, delta, modifiers, ..
             } => {
                 flush_pending_move(browser, &mut pending_move);
-                if !wheel_is_panel_zoom(*modifiers, zoom_modifier)
+                if !wheel_is_panel_zoom(*modifiers, zoom_modifier, frame_wheel_zooms)
                     && let Some(position) = wheel_pos
                 {
                     forward_wheel(browser, frame, position, *unit, *delta, event_modifiers);
@@ -506,8 +513,10 @@ fn forward_wheel(
 
 /// A wheel that egui turns into a zoom gesture belongs to the panel's own
 /// zoom, not to the page: forwarding it would make Chrome zoom a second time.
-fn wheel_is_panel_zoom(modifiers: egui::Modifiers, zoom_modifier: egui::Modifiers) -> bool {
-    modifiers.matches_any(zoom_modifier)
+/// `frame_zooms` covers a gesture whose classification egui latched, whose
+/// later events can carry no modifier of their own.
+fn wheel_is_panel_zoom(modifiers: egui::Modifiers, zoom_modifier: egui::Modifiers, frame_zooms: bool) -> bool {
+    frame_zooms || modifiers.matches_any(zoom_modifier)
 }
 
 fn cdp_wheel_delta(delta: egui::Vec2, scale: f32) -> (f64, f64) {
@@ -560,13 +569,16 @@ mod tests {
     #[test]
     fn only_wheels_outside_the_zoom_modifier_reach_the_page() {
         let default_zoom = egui::Modifiers::COMMAND;
-        assert!(!wheel_is_panel_zoom(egui::Modifiers::NONE, default_zoom));
-        assert!(!wheel_is_panel_zoom(egui::Modifiers::SHIFT, default_zoom));
-        assert!(wheel_is_panel_zoom(egui::Modifiers::CTRL, default_zoom));
-        assert!(wheel_is_panel_zoom(egui::Modifiers::MAC_CMD, default_zoom));
+        assert!(!wheel_is_panel_zoom(egui::Modifiers::NONE, default_zoom, false));
+        assert!(!wheel_is_panel_zoom(egui::Modifiers::SHIFT, default_zoom, false));
+        assert!(wheel_is_panel_zoom(egui::Modifiers::CTRL, default_zoom, false));
+        assert!(wheel_is_panel_zoom(egui::Modifiers::MAC_CMD, default_zoom, false));
         // A host that rebinds the gesture moves the suppression with it.
-        assert!(wheel_is_panel_zoom(egui::Modifiers::ALT, egui::Modifiers::ALT));
-        assert!(!wheel_is_panel_zoom(egui::Modifiers::CTRL, egui::Modifiers::ALT));
+        assert!(wheel_is_panel_zoom(egui::Modifiers::ALT, egui::Modifiers::ALT, false));
+        assert!(!wheel_is_panel_zoom(egui::Modifiers::CTRL, egui::Modifiers::ALT, false));
+        // Kinetic events after the modifier is released keep zooming, so they
+        // must not reach the page as scroll either.
+        assert!(wheel_is_panel_zoom(egui::Modifiers::NONE, default_zoom, true));
     }
 
     #[test]

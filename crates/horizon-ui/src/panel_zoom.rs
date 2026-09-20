@@ -6,7 +6,7 @@
 //! of their own, changed by a dropdown or by a pinch/zoom-modifier wheel
 //! over the content.
 
-use egui::Ui;
+use egui::{Context, Id, Ui};
 
 pub(crate) const MIN_ZOOM: f32 = 0.25;
 pub(crate) const MAX_ZOOM: f32 = 4.0;
@@ -108,12 +108,54 @@ fn show(
     *selection != before
 }
 
-/// Whether the pointer is over this panel's body, which is the whole area a
-/// panel widget is given. The canvas leaves the gesture alone over exactly
-/// this rectangle, and egui resolves the stacking, so the two cannot
-/// disagree about which panel a pinch belongs to.
-pub(crate) fn owns_pointer(ui: &Ui) -> bool {
-    ui.rect_contains_pointer(ui.max_rect())
+/// Idle gap that ends a gesture whose wheel events carry no touch phase,
+/// matching the canvas scroll router.
+const GESTURE_IDLE_SECONDS: f64 = 0.15;
+
+/// Owner of the zoom gesture in progress, and when it was last seen. egui
+/// keeps smoothing a wheel or pinch for several frames after the input stops,
+/// and the pointer can leave the panel it started on, so one gesture must
+/// keep one owner instead of splitting between a panel and the canvas.
+#[derive(Clone, Copy)]
+struct GestureLatch {
+    /// The panel layer that owns it, or `None` for the canvas.
+    owner: Option<Id>,
+    last_seen: f64,
+}
+
+fn latch_id(ctx: &Context) -> Id {
+    Id::new(("panel_zoom_gesture", ctx.viewport_id()))
+}
+
+fn fresh_latch(ctx: &Context, now: f64) -> Option<GestureLatch> {
+    ctx.data(|data| data.get_temp::<GestureLatch>(latch_id(ctx)))
+        .filter(|latch| now - latch.last_seen <= GESTURE_IDLE_SECONDS)
+}
+
+/// Latch who owns the gesture in progress. `candidate` is what the pointer
+/// says right now; the first answer of a gesture wins until it goes idle.
+pub(crate) fn gesture_owner(ctx: &Context, candidate: Option<Id>) -> Option<Id> {
+    let (active, now) = ctx.input(|input| ((input.zoom_delta() - 1.0).abs() > f32::EPSILON, input.time));
+    if !active {
+        return candidate;
+    }
+    let owner = fresh_latch(ctx, now).map_or(candidate, |latch| latch.owner);
+    let id = latch_id(ctx);
+    ctx.data_mut(|data| {
+        data.insert_temp(id, GestureLatch { owner, last_seen: now });
+    });
+    owner
+}
+
+/// Whether this panel owns the gesture. While one is latched the owner keeps
+/// it; otherwise the pointer decides, over the panel body — the whole area a
+/// panel widget is given, and exactly the rectangle the canvas leaves alone.
+pub(crate) fn owns_gesture(ui: &Ui) -> bool {
+    let now = ui.input(|input| input.time);
+    fresh_latch(ui.ctx(), now).map_or_else(
+        || ui.rect_contains_pointer(ui.max_rect()),
+        |latch| latch.owner == Some(ui.layer_id().id),
+    )
 }
 
 /// The pointer in the caller's layer coordinates. Panels are painted through
@@ -169,6 +211,44 @@ mod tests {
         assert_eq!(gesture_target(MAX_ZOOM, 1.5), None);
         // A degenerate layout still accepts the gesture from 100%.
         assert_eq!(gesture_target(0.0, 1.25), Some(PanelZoom::new(1.25)));
+    }
+
+    #[test]
+    fn one_gesture_keeps_one_owner_until_it_goes_idle() {
+        use super::gesture_owner;
+        let ctx = egui::Context::default();
+        let panel = egui::Id::new("panel-a");
+        let other = egui::Id::new("panel-b");
+        let owner_at = |time: f64, zooming: bool, candidate: Option<egui::Id>| {
+            let mut owner = None;
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        events: if zooming {
+                            vec![egui::Event::Zoom(1.1)]
+                        } else {
+                            Vec::new()
+                        },
+                        ..Default::default()
+                    },
+                    |ui| owner = gesture_owner(ui.ctx(), candidate),
+                )
+                .discard_textures();
+            owner
+        };
+        // The pointer's panel claims the gesture, and keeps it while the
+        // smoothed delta continues even after the pointer moves elsewhere.
+        assert_eq!(owner_at(1.0, true, Some(panel)), Some(panel));
+        assert_eq!(owner_at(1.05, true, Some(other)), Some(panel));
+        assert_eq!(owner_at(1.1, true, None), Some(panel));
+        // A gesture that starts on the canvas keeps the canvas the same way.
+        assert_eq!(owner_at(5.0, true, None), None);
+        assert_eq!(owner_at(5.05, true, Some(panel)), None);
+        // Once the gesture goes idle the next one is claimed afresh.
+        assert_eq!(owner_at(9.0, true, Some(other)), Some(other));
+        // With no gesture in flight the pointer's own answer is returned.
+        assert_eq!(owner_at(9.02, false, Some(panel)), Some(panel));
     }
 
     #[test]

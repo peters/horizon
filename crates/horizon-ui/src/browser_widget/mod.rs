@@ -193,7 +193,7 @@ impl<'a> BrowserView<'a> {
         if interactive {
             // Zoom belongs to the whole panel, chrome and placeholders
             // included, so it matches what the canvas leaves alone.
-            render::apply_zoom_gesture(ui, state, crate::panel_zoom::owns_pointer(ui));
+            render::apply_zoom_gesture(ui, state, crate::panel_zoom::owns_gesture(ui));
         }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
