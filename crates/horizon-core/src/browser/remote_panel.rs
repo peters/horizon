@@ -295,8 +295,8 @@ impl BrowserPanelState {
     #[must_use]
     pub fn can_retry(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud.is_some() {
-            return true;
+        if let Some(cloud) = &self.cloud {
+            return !cloud.process_lost;
         }
         !self.is_remote()
     }

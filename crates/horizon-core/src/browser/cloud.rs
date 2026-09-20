@@ -23,6 +23,7 @@ pub(super) struct CloudView {
     backend: super::BackendKind,
     pub(super) target: Option<String>,
     pub(super) device: Option<String>,
+    pub(super) process_lost: bool,
     tx: mpsc::SyncSender<BrowserCommand>,
     latest: Latest,
     waker: Waker,
@@ -86,6 +87,7 @@ impl CloudView {
             initial_url: url,
             target,
             device: None,
+            process_lost: false,
             backend,
             tx,
             latest,
@@ -266,6 +268,7 @@ impl BrowserPanelState {
             self.pending_user_navigation = None;
         }
         if let Some(cloud) = &mut self.cloud {
+            cloud.process_lost |= state.lost;
             cloud.target.clone_from(&state.remote_target);
             cloud.device.clone_from(&state.remote_device);
         }
@@ -305,6 +308,9 @@ impl BrowserPanelState {
         }
     }
     pub(super) fn relaunch_cloud(&mut self) {
+        if !self.can_retry() {
+            return;
+        }
         let Some(old) = self.cloud.take() else { return };
         let next = CloudView::start(
             old.connection.clone(),

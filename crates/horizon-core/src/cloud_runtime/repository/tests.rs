@@ -157,3 +157,65 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
     std::fs::write(media.join(&oid), b"damaged binary content").unwrap();
     assert!(validate_tree(&repo, "HEAD", &runner).is_err());
 }
+
+#[test]
+fn oversized_lfs_pointer_is_rejected_but_ordinary_pointer_text_is_preserved() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let bytes = format!(
+        "version https://git-lfs.github.com/spec/v1\next-0-test {}\noid sha256:{}\nsize 1\n",
+        "x".repeat(2048),
+        "a".repeat(64)
+    );
+    std::fs::write(repo.join("ordinary.txt"), &bytes).unwrap();
+    git(&repo, &["add", "ordinary.txt"]);
+    git(&repo, &["commit", "-m", "Create ordinary text fixture"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let emit = |_| {};
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec![],
+    };
+    validate_tree(&repo, "HEAD", &runner).unwrap();
+    std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs\n").unwrap();
+    git(&repo, &["add", ".gitattributes"]);
+    let oid = git(&repo, &["hash-object", "-w", "ordinary.txt"]);
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{oid},asset.bin"),
+        ],
+    );
+    git(&repo, &["commit", "-m", "Pin extended source pointer"]);
+    assert!(matches!(
+        validate_tree(&repo, "HEAD", &runner),
+        Err(Error::Invalid("Extended or malformed Git LFS pointers are unsupported"))
+    ));
+}
+
+#[test]
+fn large_ordinary_blob_with_later_lfs_attribute_is_not_treated_as_a_pointer() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    std::fs::write(repo.join("asset.bin"), vec![b'x'; 8 * 1024 * 1024]).unwrap();
+    git(&repo, &["add", "asset.bin"]);
+    git(&repo, &["commit", "-m", "Create large ordinary fixture"]);
+    std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs\n").unwrap();
+    git(&repo, &["add", ".gitattributes"]);
+    git(&repo, &["commit", "-m", "Declare later LFS tracking"]);
+    // Packed objects exercise the path where libgit2 cannot stream a prefix.
+    git(&repo, &["gc", "--prune=now"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    validate_tree(&repo, "HEAD", &runner).unwrap();
+}

@@ -70,6 +70,7 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         backend: super::super::BackendKind::ChromiumCdp,
         target: None,
         device: None,
+        process_lost: false,
         tx,
         latest: Latest::default(),
         waker: Waker::default(),
@@ -92,6 +93,28 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         assert!(panel.cloud.is_some());
         assert!(!panel.backend_capabilities().clipboard);
     }
+    panel.apply_cloud_state(
+        CloudViewState {
+            lost: true,
+            ..Default::default()
+        },
+        false,
+    );
+    assert!(!panel.can_retry());
+    let child = panel.cloud.as_ref().unwrap().child.clone();
+    panel.relaunch_cloud();
+    assert!(Arc::ptr_eq(&child, &panel.cloud.as_ref().unwrap().child));
+    panel.apply_cloud_state(
+        CloudViewState {
+            error: Some("transport interrupted".into()),
+            ..Default::default()
+        },
+        false,
+    );
+    assert!(
+        !panel.can_retry(),
+        "transport failure must not forget confirmed process loss"
+    );
 }
 
 #[test]

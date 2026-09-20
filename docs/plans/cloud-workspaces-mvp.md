@@ -285,3 +285,23 @@ The New cloud and remote browser changes are committed locally as
 will include this follow-up. The original public candidate's review and smoke
 do not validate the additional behavior. Detailed private application qualification
 and resource ledgers remain outside the public repository.
+
+Review corrections, 2026-09-20: source validation now rejects oversized attributed
+LFS pointers using a bounded, cancellable read; ordinary files remain supported.
+Remote browser process loss remains distinct from transport interruption. Inert
+lost-process views can be closed, and failed attachments retain only their pending
+identities so retries neither replace healthy terminals nor reopen dismissed views.
+Worker preflight checks the Python APIs required for safe source import. Independent
+local review is clear after adding the packed-blob, cancellation and partial-retry
+regressions. The apparent progress-rate finding was disproved by a preceding-stage
+regression; the timestamp baseline cancels in the sample-duration calculation.
+
+Next-phase gate, explicitly requested by the user: finish current-settings
+acceptance and the current-head hosted review first, then rerun final smoke and
+delete every task-created compute allocation while preserving pre-existing workers.
+Only after those gates, start a clean-state UI setup walkthrough. Record the missing
+repository-YAML path, agent-assisted configuration preparation and explicit profile
+reload as candidates for that phase. Machine-local provider and agent API-key
+bindings currently have a file-based setup contract; there is no cloud credential
+entry UI yet. Do not implement a new setup wizard, picker or credential UI before
+the review gate. No merge or release is authorized.

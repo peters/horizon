@@ -60,12 +60,24 @@ pub(super) struct Runtime {
     state_unavailable: bool,
     needs_attach: bool,
     pending_browser_attachments: std::collections::HashSet<String>,
+    pending_member_attachments: std::collections::HashSet<String>,
+    pending_session_attachments: std::collections::HashSet<String>,
+    next_attachment_attempt: Option<std::time::Instant>,
     needs_desktop: bool,
     pub(in crate::app::cloud_panel) desktop_controller: Option<String>,
     pub(in crate::app::cloud_panel) desktop_last_input: Option<String>,
     desktop: Option<std::sync::Arc<cloud_runtime::tunnel::DesktopTunnel>>,
     browsers: Vec<horizon_core::browser::CloudViewState>,
     browsers_discovered: bool,
+}
+impl Runtime {
+    fn needs_repaint(&self) -> bool {
+        self.receiver.is_some()
+            || self.needs_attach
+            || self.needs_desktop
+            || !self.pending_session_attachments.is_empty()
+            || !self.pending_member_attachments.is_empty()
+    }
 }
 impl HorizonApp {
     pub(super) fn prepare_production_clouds(&mut self, ctx: &egui::Context) {
@@ -151,7 +163,7 @@ impl HorizonApp {
                     }
                 }
             }
-            if runtime.receiver.is_some() {
+            if runtime.needs_repaint() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
         }

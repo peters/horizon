@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Validate real requested runtimes before allocation and on worker startup."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--capabilities-json')
@@ -64,6 +66,9 @@ def services_ready(selected):
                     raise ValueError('Worker desktop service is not ready')
 
 try:
+    if not hasattr(hashlib, 'file_digest') or not hasattr(tarfile, 'data_filter'):
+        print('Worker contract requires Python with hashlib.file_digest and safe tar extraction; use Python 3.12 or newer.', file=sys.stderr)
+        sys.exit(1)
     available = capabilities(json.loads(Path('/etc/horizon-worker/capabilities.json').read_text()))
     raw = args.capabilities_json or os.environ.get('HORIZON_WORKER_CAPABILITIES')
     runtime = Path('/workspace/capabilities.json')

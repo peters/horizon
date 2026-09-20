@@ -132,4 +132,25 @@ mod tests {
         timeline.stage(Stage::Provision, start + Duration::from_secs(3));
         assert_eq!(timeline.stage_label(Stage::Push), "Push image · 0m 03s");
     }
+    #[test]
+    fn preceding_stages_do_not_inflate_transfer_rate_or_eta() {
+        let start = Instant::now();
+        let mut timeline = Timeline::default();
+        timeline.stage(Stage::Build, start);
+        timeline.stage(Stage::Push, start + Duration::from_secs(100));
+        for (seconds, bytes) in [(102, 0), (104, 200)] {
+            timeline.update(Progress {
+                observed_at: start + Duration::from_secs(seconds),
+                transferred: Some(bytes),
+                completed: bytes,
+                total: Some(1000),
+                ..Progress::default()
+            });
+        }
+        assert_eq!(timeline.rate.bytes_per_second(), Some(100));
+        assert_eq!(
+            timeline.rate.remaining(timeline.detail.as_ref().unwrap()),
+            Some(Duration::from_secs(8))
+        );
+    }
 }

@@ -249,3 +249,222 @@ fn fullscreen_panel_continues_processing_cloud_ownership_and_lifecycle_events() 
     assert_eq!(runtime.error.as_deref(), Some("Synthetic readiness failure"));
     assert_eq!(app.fullscreen_panel, Some(panel));
 }
+
+#[test]
+fn lost_browser_placeholder_can_be_dismissed_without_remote_release() {
+    let (_temp, mut app) = restore_fixture();
+    app.sync_cloud_presentations();
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .browsers_discovered = true;
+    app.sync_cloud_presentations();
+    let id = app.board.panel_id_by_local_id("firefox").unwrap();
+    assert!(app.board.panel(id).unwrap().browser().is_none());
+    assert!(!app.close_cloud_browser(id));
+    assert!(app.cloud_prototype.error.is_none());
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .state
+            .as_ref()
+            .unwrap()
+            .worker
+            .is_some()
+    );
+}
+
+fn add_restored_member(app: &mut HorizonApp, local: &str, kind: PanelKind) {
+    let mut saved = RuntimeState::from_board(
+        &app.board,
+        horizon_core::WindowConfig::default(),
+        horizon_core::CanvasViewState::default(),
+    );
+    saved.workspaces[0].panels.push(PanelState {
+        local_id: local.into(),
+        kind,
+        ..Default::default()
+    });
+    app.cloud_prototype.groups.0[0].panels.push(local.into());
+    saved.cloud_groups = app.cloud_prototype.groups.clone();
+    app.board = Board::from_runtime_state(&saved).unwrap();
+}
+
+#[test]
+fn failed_member_attachment_retries_without_replacing_successful_terminal() {
+    let (temp, mut app) = restore_fixture();
+    add_restored_member(&mut app, "first-shell", PanelKind::Shell);
+    add_restored_member(&mut app, "second-shell", PanelKind::Shell);
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_member_attachments
+            .is_empty()
+    );
+    let first = app.board.panel_id_by_local_id("first-shell").unwrap();
+    app.board
+        .panel_mut(first)
+        .unwrap()
+        .terminal_mut()
+        .unwrap()
+        .resize_immediately(17, 37, 8, 16);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .pending_member_attachments
+        .insert("second-shell".into());
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .next_attachment_attempt = None;
+    let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_member_attachments
+            .contains("second-shell")
+    );
+    assert_eq!(app.board.panel(first).unwrap().terminal().unwrap().cols(), 37);
+    drop(lock);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .next_attachment_attempt = None;
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_member_attachments
+            .is_empty()
+    );
+    assert_eq!(app.board.panel(first).unwrap().terminal().unwrap().cols(), 37);
+}
+
+#[test]
+fn missing_durable_session_retries_after_store_lock_is_released() {
+    let (temp, mut app) = restore_fixture();
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .state
+        .as_mut()
+        .unwrap()
+        .sessions
+        .push(cloud_runtime::state::Session {
+            panel_id: "missing-shell".into(),
+            agent: "shell".into(),
+            tmux: "missing-shell".into(),
+            branch: "agent/missing-shell".into(),
+            worktree: "/workspace/agents/missing-shell".into(),
+        });
+    let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_session_attachments
+            .contains("missing-shell")
+    );
+    assert!(app.board.panel_id_by_local_id("missing-shell").is_none());
+    drop(lock);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .next_attachment_attempt = None;
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_session_attachments
+            .is_empty()
+    );
+    assert!(app.board.panel_id_by_local_id("missing-shell").is_some());
+    assert!(
+        app.cloud_prototype.groups.0[0]
+            .panels
+            .contains(&"missing-shell".to_owned())
+    );
+}
+
+#[test]
+fn unavailable_desktop_attachment_stays_pending() {
+    let (_temp, mut app) = restore_fixture();
+    add_restored_member(&mut app, "desktop", PanelKind::Device);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .needs_desktop = true;
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_member_attachments
+            .contains("desktop")
+    );
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .next_attachment_attempt = None;
+    app.sync_cloud_presentations();
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_member_attachments
+            .contains("desktop")
+    );
+}
+
+#[test]
+fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
+    let (temp, mut app) = restore_fixture();
+    add_restored_member(&mut app, "healthy-shell", PanelKind::Shell);
+    let sessions = ["healthy-shell", "missing-shell"].map(|id| cloud_runtime::state::Session {
+        panel_id: id.into(),
+        agent: "shell".into(),
+        tmux: id.into(),
+        branch: format!("agent/{id}"),
+        worktree: format!("/workspace/agents/{id}"),
+    });
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .state
+        .as_mut()
+        .unwrap()
+        .sessions = sessions.into();
+    let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
+    app.sync_cloud_presentations();
+    assert_eq!(
+        app.cloud_prototype.production.runtimes[&1].pending_session_attachments,
+        ["missing-shell".to_owned()].into()
+    );
+    let healthy = app.board.panel_id_by_local_id("healthy-shell").unwrap();
+    app.board.close_panel(healthy);
+    drop(lock);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .get_mut(&1)
+        .unwrap()
+        .next_attachment_attempt = None;
+    app.sync_cloud_presentations();
+    assert!(app.board.panel_id_by_local_id("healthy-shell").is_none());
+    assert!(app.board.panel_id_by_local_id("missing-shell").is_some());
+    assert!(
+        app.cloud_prototype.production.runtimes[&1]
+            .pending_session_attachments
+            .is_empty()
+    );
+}

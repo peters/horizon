@@ -240,3 +240,9 @@ account key; rotate it at the provider when necessary.
 Local tunnel flags and isolation rules follow the provider documentation:
 [Local binary options](https://www.browserstack.com/docs/local-testing/binary-params)
 and [multiple connections](https://www.browserstack.com/docs/automate/selenium/manage-multiple-connections).
+
+The source-import contract requires Python's `hashlib.file_digest` and safe
+`tarfile.data_filter` extraction APIs. Python 3.12+ provides both; older
+distribution images must supply compatible APIs before use. The worker check
+rejects missing APIs during local image validation, before allocating compute.
+A pinned GPU base does not by itself satisfy this runtime contract.

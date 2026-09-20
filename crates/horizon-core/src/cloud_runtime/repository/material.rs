@@ -69,11 +69,8 @@ impl Material {
             TreeWalkResult::Ok
         })
         .map_err(|_| Error::Invalid("Cannot inspect committed source tree"))?;
-        let database = repo
-            .odb()
-            .map_err(|_| Error::Invalid("Cannot open committed source objects"))?;
         let mut media = None;
-        let mut attributes = None;
+        let attributes = super::attributes::Attributes::new(&repo, &tree)?;
         for (name, oid, mode) in entries {
             runner.cancel.check()?;
             safe_path(Path::new(&name))?;
@@ -87,34 +84,11 @@ impl Material {
                 });
                 self.visit(&local, &oid.to_string(), &path, depth + 1, runner)?;
             } else if mode == 0o100_644 || mode == 0o100_755 {
-                if database
-                    .read_header(oid)
-                    .map_err(|_| Error::Invalid("Missing source object"))?
-                    .0
-                    > 1024
-                {
+                if !attributes.is_lfs(Path::new(&name))? {
                     continue;
                 }
-                let blob = repo
-                    .find_blob(oid)
-                    .map_err(|_| Error::Invalid("Missing committed source object"))?;
-                if !blob
-                    .content()
-                    .starts_with(b"version https://git-lfs.github.com/spec/v1\n")
-                {
-                    continue;
-                }
-                if attributes.is_none() {
-                    attributes = Some(super::attributes::Attributes::new(&repo, &tree)?);
-                }
-                if !attributes
-                    .as_ref()
-                    .ok_or(Error::Invalid("Missing committed attributes"))?
-                    .is_lfs(Path::new(&name))?
-                {
-                    continue;
-                }
-                let Some((oid, size)) = pointer(blob.content())? else {
+                let bytes = blob_prefix(&repo, directory, oid, runner)?;
+                let Some((oid, size)) = pointer(&bytes)? else {
                     continue;
                 };
                 if media.is_none() {
@@ -145,6 +119,34 @@ impl Material {
         Ok(())
     }
 }
+fn blob_prefix(repo: &Repository, directory: &Path, oid: git2::Oid, runner: &Runner<'_>) -> Result<Vec<u8>> {
+    let size = repo
+        .odb()
+        .and_then(|odb| odb.read_header(oid))
+        .map_err(|_| Error::Invalid("Missing committed source object"))?
+        .0;
+    if size <= 1024 {
+        return repo
+            .find_blob(oid)
+            .map(|blob| blob.content().to_vec())
+            .map_err(|_| Error::Invalid("Missing committed source object"));
+    }
+    // Packed Git objects do not support libgit2 streaming; isolate their decoding
+    // in a cancellable process and retain only enough bytes to classify a pointer.
+    let bytes = runner.prefix(
+        Command::new("git")
+            .arg("--no-replace-objects")
+            .arg("-C")
+            .arg(directory)
+            .args(["cat-file", "blob", &oid.to_string()]),
+        1025,
+        Duration::from_secs(30),
+    )?;
+    if bytes.len() != 1025 {
+        return Err(Error::Invalid("Cannot read committed source object"));
+    }
+    Ok(bytes)
+}
 fn portable_path(path: &Path) -> Result<String> {
     safe_path(path)?;
     path.components()
@@ -168,8 +170,11 @@ fn safe_path(path: &Path) -> Result<()> {
     Ok(())
 }
 fn pointer(bytes: &[u8]) -> Result<Option<(String, u64)>> {
-    if bytes.len() > 1024 || !bytes.starts_with(b"version https://git-lfs.github.com/spec/v1\n") {
+    if !bytes.starts_with(b"version https://git-lfs.github.com/spec/v1\n") {
         return Ok(None);
+    }
+    if bytes.len() > 1024 {
+        return Err(Error::Invalid("Extended or malformed Git LFS pointers are unsupported"));
     }
     let text = std::str::from_utf8(bytes).map_err(|_| Error::Invalid("Invalid Git LFS pointer"))?;
     let lines: Vec<_> = text.lines().collect();

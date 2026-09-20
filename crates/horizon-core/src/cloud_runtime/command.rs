@@ -1,5 +1,6 @@
 //! Bounded command output and cancellation for task-owned process groups.
 mod build_progress;
+mod prefix;
 pub mod terminal_progress;
 use super::{Error, Event, Result};
 use horizon_cloud::Cancellation;

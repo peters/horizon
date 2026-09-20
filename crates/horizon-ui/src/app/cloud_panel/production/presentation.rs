@@ -74,9 +74,71 @@ pub(super) fn watch(
         ctx.request_repaint();
     }
 }
+impl super::Runtime {
+    fn prepare_attachments(
+        &mut self,
+        board: &horizon_core::Board,
+        group: &horizon_core::cloud_panel::CloudGroup,
+    ) -> bool {
+        let restore = std::mem::take(&mut self.needs_attach);
+        if restore {
+            self.pending_session_attachments = self
+                .state
+                .as_ref()
+                .into_iter()
+                .flat_map(|state| &state.sessions)
+                .filter(|session| board.panel_id_by_local_id(&session.panel_id).is_none())
+                .map(|session| session.panel_id.clone())
+                .collect();
+            self.pending_browser_attachments = group
+                .panels
+                .iter()
+                .filter(|local| {
+                    board
+                        .panel_id_by_local_id(local)
+                        .and_then(|id| board.panel(id))
+                        .is_some_and(|panel| panel.kind == PanelKind::Browser)
+                })
+                .cloned()
+                .collect();
+        }
+        let restore_desktop = std::mem::take(&mut self.needs_desktop);
+        if restore || restore_desktop {
+            self.pending_member_attachments.extend(
+                group
+                    .panels
+                    .iter()
+                    .filter(|local| {
+                        board
+                            .panel_id_by_local_id(local)
+                            .and_then(|id| board.panel(id))
+                            .is_some_and(|panel| match panel.kind {
+                                PanelKind::Browser => false,
+                                PanelKind::Device => restore_desktop,
+                                _ => restore,
+                            })
+                    })
+                    .cloned(),
+            );
+            self.next_attachment_attempt = None;
+        }
+        let retry = self
+            .next_attachment_attempt
+            .is_none_or(|at| std::time::Instant::now() >= at);
+        if retry {
+            self.next_attachment_attempt = Some(std::time::Instant::now() + Duration::from_secs(1));
+        }
+        retry
+    }
+}
+
 impl HorizonApp {
     pub(in crate::app) fn close_cloud_browser(&mut self, id: horizon_core::PanelId) -> bool {
-        let Some(panel) = self.board.panel(id).filter(|p| p.kind == PanelKind::Browser) else {
+        let Some(panel) = self
+            .board
+            .panel(id)
+            .filter(|p| p.kind == PanelKind::Browser && p.browser().is_some())
+        else {
             return false;
         };
         let Some(group) = self
@@ -176,36 +238,37 @@ impl HorizonApp {
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {
                 continue;
             };
-            if runtime.state.is_none() {
+            if runtime
+                .state
+                .as_ref()
+                .is_none_or(|state| state.stage != cloud_runtime::Stage::Ready)
+            {
                 continue;
             }
-            let restore = std::mem::take(&mut runtime.needs_attach);
-            if restore {
-                runtime.pending_browser_attachments = group
-                    .panels
-                    .iter()
-                    .filter(|local| {
-                        self.board
-                            .panel_id_by_local_id(local)
-                            .and_then(|id| self.board.panel(id))
-                            .is_some_and(|panel| panel.kind == PanelKind::Browser)
-                    })
-                    .cloned()
-                    .collect();
-            }
+            let retry = runtime.prepare_attachments(&self.board, group);
+            let members = if retry {
+                runtime.pending_member_attachments.clone()
+            } else {
+                std::collections::HashSet::default()
+            };
+            let pending_sessions = runtime.pending_session_attachments.clone();
             let pending_browsers = runtime.pending_browser_attachments.clone();
             let discovered = runtime.browsers_discovered;
-            let restore_desktop = std::mem::take(&mut runtime.needs_desktop);
             let browsers = runtime.browsers.clone();
-            let members = group.panels.clone();
             let workspace = group.workspace.clone();
             let collapsed = group.collapsed;
-            if restore {
-                self.restore_missing_cloud_sessions(index);
+            if retry && !pending_sessions.is_empty() {
+                let pending = self.restore_missing_cloud_sessions(index, &pending_sessions);
+                if let Some(runtime) = self
+                    .cloud_prototype
+                    .production
+                    .runtimes
+                    .get_mut(&self.cloud_prototype.groups.0[index].issue)
+                {
+                    runtime.pending_session_attachments = pending;
+                }
             }
-            if restore || restore_desktop {
-                self.restore_cloud_members(index, members, restore, restore_desktop);
-            }
+            self.restore_cloud_members(index, members);
             if discovered {
                 self.restore_missing_cloud_browsers(index, &pending_browsers, &browsers);
             }
@@ -288,20 +351,21 @@ impl HorizonApp {
             }
         }
     }
-    fn restore_cloud_members(&mut self, index: usize, members: Vec<String>, restore: bool, restore_desktop: bool) {
-        for local_id in members {
-            let Some(id) = self.board.panel_id_by_local_id(&local_id) else {
-                continue;
-            };
-            let Some(panel) = self.board.panel(id) else { continue };
-            // Browser attachment waits for the worker's authoritative engine and identity.
-            if panel.kind == PanelKind::Browser {
-                continue;
+    fn restore_cloud_members(&mut self, index: usize, members: std::collections::HashSet<String>) {
+        for local in members {
+            let restored = self
+                .board
+                .panel_id_by_local_id(&local)
+                .is_none_or(|id| self.restore_cloud_member(index, id, false));
+            if restored
+                && let Some(runtime) = self
+                    .cloud_prototype
+                    .production
+                    .runtimes
+                    .get_mut(&self.cloud_prototype.groups.0[index].issue)
+            {
+                runtime.pending_member_attachments.remove(&local);
             }
-            if panel.kind == PanelKind::Device && !restore_desktop || panel.kind != PanelKind::Device && !restore {
-                continue;
-            }
-            self.restore_cloud_member(index, id, false);
         }
     }
     fn restore_cloud_member(&mut self, index: usize, id: horizon_core::PanelId, missing: bool) -> bool {

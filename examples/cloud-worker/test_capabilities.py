@@ -51,6 +51,19 @@ class CapabilitiesTests(unittest.TestCase):
                 status = error.code
         return status, output.getvalue(), commands.call_args_list
 
+    def test_old_python_source_apis_fail_before_runtime_probes(self):
+        for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
+            imported = __import__(module)
+            original = getattr(imported, attribute)
+            try:
+                delattr(imported, attribute)
+                status, output, commands = self.run_check()
+            finally:
+                setattr(imported, attribute, original)
+            self.assertEqual(status, 1)
+            self.assertIn('Worker contract requires Python', output)
+            self.assertEqual(commands, [])
+
     def test_native_contract_does_not_probe_browsers_or_unselected_agents(self):
         status, output, commands = self.run_check(missing=('grok', 'firefox', 'geckodriver', 'horizon-browser'))
         self.assertEqual(status, 0, output)
