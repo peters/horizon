@@ -46,8 +46,13 @@ socket; an X11 or XWayland-backed one holds that socket.
 Start the candidate with the filter's diagnostics on:
 
 ```sh
-RUST_LOG=horizon=debug target/debug/horizon 2>&1 | tee /tmp/horizon-ime.log
+RUST_LOG=horizon=debug,horizon::terminal_widget::ime=trace \
+  target/debug/horizon 2>&1 | tee /tmp/horizon-ime.log
 ```
+
+The withheld-key line is `debug`, the preedit and commit records are `trace`,
+so the module needs the trace directive or Lane A collects only half its
+evidence.
 
 | # | Step | Expected | Reading |
 |---|------|----------|---------|
