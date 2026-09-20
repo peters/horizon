@@ -7,6 +7,15 @@ use super::super::test_support::{editor_workspace_state, raw_input, run_app_fram
 use super::{ScrollGesture, route_canvas_scroll};
 use crate::test_egui::DiscardTextures;
 
+/// The gesture only needs to know whether a panel is under the pointer, so the
+/// tests use one stand-in id for "some panel".
+const PANEL: horizon_core::PanelId = horizon_core::PanelId(1);
+const OTHER_PANEL: horizon_core::PanelId = horizon_core::PanelId(2);
+
+fn panel(on_canvas: bool) -> Option<horizon_core::PanelId> {
+    (!on_canvas).then_some(PANEL)
+}
+
 fn assert_offset(actual: [f32; 2], expected: [f32; 2]) {
     assert!(
         (Vec2::from(actual) - Vec2::from(expected)).length() < 0.001,
@@ -233,7 +242,7 @@ fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Ev
         1.0,
         egui::InputOptions::default(),
     );
-    gesture.route(&input, on_canvas, true, false).pans_canvas
+    gesture.route(&input, panel(on_canvas), true, &|_| false).pans_canvas
 }
 
 #[test]
@@ -321,7 +330,7 @@ fn focus_loss_and_disallowed_input_release_the_gesture() {
         ));
         let mut input = egui::InputState::default();
         input.focused = focused;
-        assert!(!gesture.route(&input, false, !focused, false).pans_canvas);
+        assert!(!gesture.route(&input, panel(false), !focused, &|_| false).pans_canvas);
         assert!(!claim(
             &mut gesture,
             1.016,
@@ -346,7 +355,7 @@ fn root_and_detached_viewports_have_separate_scroll_owners() {
         let _ = ctx
             .run_ui(input, |ui| {
                 assert_eq!(
-                    route_canvas_scroll(ui.ctx(), starts_on_canvas, true, false).pans_canvas,
+                    route_canvas_scroll(ui.ctx(), panel(starts_on_canvas), true, |_| false).pans_canvas,
                     expected
                 );
             })
@@ -365,7 +374,7 @@ fn route(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, chain: bool, e
         1.0,
         egui::InputOptions::default(),
     );
-    gesture.route(&input, on_canvas, true, chain).pans_canvas
+    gesture.route(&input, panel(on_canvas), true, &|_| chain).pans_canvas
 }
 
 #[test]
@@ -395,4 +404,46 @@ fn chaining_never_steals_a_gesture_that_started_on_the_canvas() {
     let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
     assert!(route(&mut gesture, 1.0, true, false, scroll()));
     assert!(route(&mut gesture, 1.016, true, true, scroll()));
+}
+
+#[test]
+fn chaining_follows_the_gesture_owner_not_the_hover_target() {
+    // A gesture latched to one panel must not chain because some *other*
+    // panel the pointer drifted over happens to be exhausted.
+    let mut gesture = ScrollGesture::default();
+    let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
+    let only_other_is_exhausted = |id: horizon_core::PanelId| id == OTHER_PANEL;
+
+    let input = |time: f64| {
+        egui::InputState::default().begin_pass(
+            RawInput {
+                time: Some(time),
+                events: scroll(),
+                ..RawInput::default()
+            },
+            false,
+            1.0,
+            egui::InputOptions::default(),
+        )
+    };
+
+    // Latches to PANEL, which can still scroll.
+    assert!(
+        !gesture
+            .route(&input(1.0), Some(PANEL), true, &only_other_is_exhausted)
+            .pans_canvas
+    );
+    // The pointer moves over OTHER_PANEL, which is exhausted. The owner still
+    // is not, so the gesture stays with its panel.
+    assert!(
+        !gesture
+            .route(&input(1.016), Some(OTHER_PANEL), true, &only_other_is_exhausted)
+            .pans_canvas
+    );
+    // Once the owner itself is exhausted, the gesture chains.
+    assert!(
+        gesture
+            .route(&input(1.032), Some(OTHER_PANEL), true, &|_| true)
+            .pans_canvas
+    );
 }

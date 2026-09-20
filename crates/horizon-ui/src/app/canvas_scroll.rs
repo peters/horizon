@@ -1,4 +1,5 @@
 use egui::{Context, Event, Id, InputState, TouchPhase, Vec2};
+use horizon_core::PanelId;
 
 use crate::input::TerminalInputEvent;
 
@@ -8,6 +9,9 @@ const SCROLL_GESTURE_IDLE_SECONDS: f64 = 0.15;
 #[derive(Clone, Default)]
 struct ScrollGesture {
     canvas_owned: Option<bool>,
+    /// The panel the gesture latched onto, so chaining is decided for its
+    /// owner rather than whatever the pointer happens to be over later.
+    owner: Option<PanelId>,
     last_motion_at: f64,
     has_touch_phase: bool,
 }
@@ -20,12 +24,19 @@ pub(super) struct ScrollRouting {
 }
 
 impl ScrollGesture {
+    /// Bind the gesture to the surface it started over. A gesture with no
+    /// panel under the pointer belongs to the canvas outright.
+    fn latch(&mut self, panel: Option<PanelId>) {
+        self.canvas_owned = Some(panel.is_none());
+        self.owner = panel;
+    }
+
     fn route(
         &mut self,
         input: &InputState,
-        starts_on_canvas: bool,
+        panel: Option<PanelId>,
         allowed: bool,
-        chain_to_canvas: bool,
+        exhausted: &impl Fn(PanelId) -> bool,
     ) -> ScrollRouting {
         if !allowed || !input.focused || input.pointer.any_pressed() {
             *self = Self::default();
@@ -45,7 +56,7 @@ impl ScrollGesture {
         {
             match phase {
                 TouchPhase::Start => {
-                    self.canvas_owned = Some(starts_on_canvas);
+                    self.latch(panel);
                     self.last_motion_at = input.time;
                     self.has_touch_phase = true;
                 }
@@ -53,16 +64,17 @@ impl ScrollGesture {
                     if self.canvas_owned.is_none()
                         || (!self.has_touch_phase && input.time - self.last_motion_at > SCROLL_GESTURE_IDLE_SECONDS)
                     {
-                        self.canvas_owned = Some(starts_on_canvas);
+                        self.latch(panel);
                     }
                     self.last_motion_at = input.time;
                 }
                 TouchPhase::End | TouchPhase::Cancel | TouchPhase::Move => {}
             }
             // Scroll chaining: a gesture latched to a panel moves to the canvas
-            // once that panel is at its scroll extent, and stays there for the
-            // rest of the gesture.
-            if chain_to_canvas && self.canvas_owned == Some(false) {
+            // once *that* panel is at its scroll extent, and stays there for
+            // the rest of the gesture. The owner decides, so a pointer that
+            // drifts over some other panel mid-gesture changes nothing.
+            if self.canvas_owned == Some(false) && self.owner.is_some_and(exhausted) {
                 self.canvas_owned = Some(true);
             }
             if self.canvas_owned == Some(true) {
@@ -81,15 +93,18 @@ impl ScrollGesture {
     }
 }
 
+/// Route this frame's scroll. `panel` is the panel under the pointer, used only
+/// when a gesture latches; `exhausted` reports whether a panel can still absorb
+/// the scroll and is always asked about the gesture's own owner.
 pub(super) fn route_canvas_scroll(
     ctx: &Context,
-    starts_on_canvas: bool,
+    panel: Option<PanelId>,
     allowed: bool,
-    chain_to_canvas: bool,
+    exhausted: impl Fn(PanelId) -> bool,
 ) -> ScrollRouting {
     let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
-    let routing = ctx.input(|input| gesture.route(input, starts_on_canvas, allowed, chain_to_canvas));
+    let routing = ctx.input(|input| gesture.route(input, panel, allowed, &exhausted));
     ctx.data_mut(|data| data.insert_temp(id, gesture));
     routing
 }

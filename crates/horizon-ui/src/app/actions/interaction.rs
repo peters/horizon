@@ -1,13 +1,12 @@
 use std::mem;
 
 use alacritty_terminal::term::TermMode;
-use egui::{Context, Event, Key, Modifiers, Pos2, Rect, Vec2};
+use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::canvas_drag::canvas_drag_delta;
 use super::super::canvas_scroll::route_canvas_scroll;
-use super::super::panels::PanelScreenGeometry;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -250,7 +249,7 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, false, false, false);
+            route_canvas_scroll(ctx, None, false, |_| false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
@@ -261,16 +260,20 @@ impl HorizonApp {
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
-        let pointer_over_panel = pointer_position.is_some_and(|position| {
+        // Topmost panel under the pointer: the geometry is in draw order, so a
+        // panel later in the list covers the ones before it.
+        let panel_under_pointer = pointer_position.and_then(|position| {
             panel_geometry
                 .iter()
-                .any(|(_, geometry)| geometry.screen_rect.contains(position))
+                .rev()
+                .find(|(_, geometry)| geometry.screen_rect.contains(position))
+                .map(|(id, _)| *id)
         });
         let scroll_routing = route_canvas_scroll(
             ctx,
-            !pointer_over_panel,
+            panel_under_pointer,
             pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
-            self.panel_scroll_exhausted(pointer_position, &panel_geometry, scroll, modifiers.shift),
+            |panel| self.panel_scroll_exhausted(panel, scroll, modifiers.shift),
         );
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
@@ -297,23 +300,16 @@ impl HorizonApp {
         }
     }
 
-    /// Whether the panel under `position` can still absorb this scroll. A
-    /// latched gesture chains to the canvas once it cannot, the way a browser
-    /// hands off at a scroll container's edge. Only terminals expose a
-    /// reliable extent; other panel kinds keep the gesture.
-    fn panel_scroll_exhausted(
-        &self,
-        position: Option<Pos2>,
-        panel_geometry: &[(PanelId, PanelScreenGeometry)],
-        scroll: Vec2,
-        shift: bool,
-    ) -> bool {
-        let Some(position) = position else { return false };
-        let Some(terminal) = panel_geometry
+    /// Whether `panel` has run out of scroll to absorb. A latched gesture
+    /// chains to the canvas once its own panel cannot absorb any more, the way
+    /// a browser hands off at a scroll container's edge. Only terminals expose
+    /// a reliable extent; other panel kinds keep the gesture.
+    fn panel_scroll_exhausted(&self, panel: PanelId, scroll: Vec2, shift: bool) -> bool {
+        let Some(terminal) = self
+            .board
+            .panels
             .iter()
-            .rev()
-            .find(|(_, geometry)| geometry.screen_rect.contains(position))
-            .and_then(|(id, _)| self.board.panels.iter().find(|panel| panel.id == *id))
+            .find(|candidate| candidate.id == panel)
             .and_then(Panel::terminal)
         else {
             return false;
