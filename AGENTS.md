@@ -161,6 +161,7 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 - Concise imperative messages, optionally scoped: `feat(board):`, `fix(render):`, `ci:`
 - One logical change per commit
+- No assistant attribution anywhere in repository history: never add a `Co-authored-by` trailer, a session link or a similar tool or vendor identifier to a commit message, PR body or squash-merge message, and strip an inherited one when amending, rebasing or squashing someone else's work
 - Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
 - Fix Clippy warnings introduced or worsened by the PR and any warnings that block required tiers before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
