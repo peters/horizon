@@ -1,8 +1,19 @@
 //! Wayland protocol support that winit 0.30 does not provide.
 //!
-//! The crate exists to quarantine one `unsafe` call — adopting a foreign
-//! `wl_display` — behind a safe API, so every other Horizon crate can keep
-//! `#![forbid(unsafe_code)]`.
+//! The crate exists to confine the platform FFI Horizon needs for trackpad
+//! pinch: adopting the toolkit's `wl_display` through libwayland's
+//! foreign-display entry point.
+//!
+//! That adoption cannot be made safe here. libwayland requires the display to
+//! outlive the adopted backend, and winit's `run_app` takes the event loop by
+//! value, so no borrow of it survives into the bridge for the type system to
+//! check. [`PinchBridge::start`] is therefore an explicit `unsafe fn`, and its
+//! one caller in `horizon-ui` discharges the contract by owning the bridge for
+//! the life of the event loop and holding an `OwnedDisplayHandle` that outlives
+//! it on both the normal and the unwinding path.
+//!
+//! Both crates use `#![deny(unsafe_code)]` with narrowly scoped `#[allow]`s
+//! rather than `forbid`; every other Horizon crate keeps `forbid`.
 
 #![deny(unsafe_code)]
 

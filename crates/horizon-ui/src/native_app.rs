@@ -22,6 +22,9 @@ pub(crate) fn run_native_with_keyboard_observer(
     #[cfg(target_os = "linux")]
     {
         app.pinch = pinch::NativePinch::start(&event_loop);
+        // Keeps the platform display alive independently of the event loop,
+        // so the bridge above still outlives it when a callback unwinds.
+        app.display_handle = Some(event_loop.owned_display_handle());
     }
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -32,8 +35,14 @@ struct KeyboardAwareApp<'app> {
     observed_keyboard_inputs: ObservedKeyboardInputs,
     modifiers: egui::Modifiers,
     native_window_liveness: NativeWindowLiveness,
+    // `pinch` borrows the platform display through raw FFI, so it must be
+    // declared before `display_handle`: fields drop in declaration order, and
+    // that ordering is what keeps the display alive on the unwind path too,
+    // where `exiting` never runs.
     #[cfg(target_os = "linux")]
     pinch: Option<pinch::NativePinch>,
+    #[cfg(target_os = "linux")]
+    display_handle: Option<winit::event_loop::OwnedDisplayHandle>,
 }
 
 impl<'app> KeyboardAwareApp<'app> {
@@ -45,6 +54,8 @@ impl<'app> KeyboardAwareApp<'app> {
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
+            #[cfg(target_os = "linux")]
+            display_handle: None,
         }
     }
 }
