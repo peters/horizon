@@ -72,7 +72,7 @@ impl DevicePanelState {
         ] {
             if let Some(value) = label {
                 let trimmed = value.trim();
-                if trimmed.chars().count() > 256 || trimmed.chars().any(char::is_control) {
+                if trimmed.chars().count() > 256 || value.chars().any(char::is_control) {
                     return Err(Error::Config(
                         "Device identity labels must be plain text of at most 256 characters".into(),
                     ));
@@ -225,7 +225,13 @@ mod tests {
     #[test]
     fn invalid_identity_is_rejected_before_panel_creation() {
         use crate::browser::manifest::device::DeviceIdentity;
-        for label in ["bad\nname".into(), "a".repeat(257)] {
+        for label in [
+            "bad\nname".into(),
+            "\nname".into(),
+            "name\t".into(),
+            "\n\t".into(),
+            "a".repeat(257),
+        ] {
             assert!(
                 Panel::spawn(
                     PanelId(1),
