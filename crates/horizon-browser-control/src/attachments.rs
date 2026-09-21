@@ -162,7 +162,13 @@ impl AttachmentPolicy {
             path: display.clone(),
             reason: error.kind().to_string(),
         };
-        let file = std::fs::File::open(path).map_err(unresolvable)?;
+        // Refuse anything but a regular file before opening it, then open
+        // without blocking so a FIFO swapped in between cannot hang the
+        // caller waiting for a writer; the opened handle is checked again.
+        if !std::fs::metadata(path).map_err(unresolvable)?.is_file() {
+            return Err(AttachmentPolicyError::NotAFile { path: display });
+        }
+        let file = open_without_blocking(path).map_err(unresolvable)?;
         let metadata = file.metadata().map_err(unresolvable)?;
         if !metadata.is_file() {
             return Err(AttachmentPolicyError::NotAFile { path: display });
@@ -192,6 +198,23 @@ impl AttachmentPolicy {
             })
         }
     }
+}
+
+/// Open for reading without waiting on the target: on Unix `O_NONBLOCK`
+/// makes a FIFO open return at once instead of blocking for a writer, and
+/// it has no effect on reading a regular file.
+#[cfg(unix)]
+fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// The resolved location of an open file. Linux reads it from the handle
@@ -397,12 +420,14 @@ pub fn prune_attachments(
                 continue;
             };
             let pending = action.path().join(PENDING_MARKER).exists();
-            if modified < stale_before || (!pending && !is_current) {
-                if modified < stale_before && std::fs::remove_dir_all(action.path()).is_err() && is_current {
+            if modified < stale_before {
+                // Only age reaches other panels: their fresh copies may
+                // still be read lazily by their own pages.
+                if std::fs::remove_dir_all(action.path()).is_err() && is_current {
                     // Still on disk, so still counted below.
                     retained.push((modified, directory_bytes(&action.path()), action.path(), false));
                 }
-            } else {
+            } else if is_current {
                 retained.push((modified, directory_bytes(&action.path()), action.path(), pending));
             }
         }
@@ -673,6 +698,58 @@ mod tests {
         settle_attachments(&attachments, "panel", "pending");
         prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect("room");
         assert!(!action_directory(&attachments, "panel", "pending").exists());
+    }
+
+    #[test]
+    fn other_panels_lose_only_stale_staging() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let attachments = root.path().join("attachments");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "other", "fresh", &authorized).expect("fresh");
+        settle_attachments(&attachments, "other", "fresh");
+        for action in ["one", "two", "three"] {
+            stage_attachments(&attachments, "panel", action, &authorized).expect(action);
+            settle_attachments(&attachments, "panel", action);
+        }
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, 6, 0).expect("room");
+        assert!(
+            action_directory(&attachments, "other", "fresh").exists(),
+            "count and byte limits apply to the current panel only"
+        );
+        assert_eq!(
+            std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
+                .expect("panel dir")
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let root = tempfile::tempdir().expect("root");
+        let fifo = root.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|status| status.success());
+        if !made {
+            return;
+        }
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            policy.authorize(std::slice::from_ref(&fifo)),
+            Err(AttachmentPolicyError::NotAFile { .. })
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the FIFO open must not wait for a writer"
+        );
     }
 
     #[test]

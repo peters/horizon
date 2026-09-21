@@ -124,6 +124,10 @@ pub(crate) enum ControlError {
     #[error("browser action {action_id} timed out after {timeout_millis} ms; inspect browser_audit before retrying")]
     Timeout { action_id: String, timeout_millis: u64 },
     #[error(
+        "browser set_files timed out after {timeout_millis} ms while its files were being staged; the staging may still finish and queue the action, so inspect browser_audit before retrying"
+    )]
+    StagingTimeout { timeout_millis: u64 },
+    #[error(
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
     )]
     CreateTimeout { action_id: String, timeout_millis: u64 },
@@ -507,11 +511,45 @@ impl BrowserController {
         timeout_millis: Option<u64>,
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
+        let started = Instant::now();
         self.refuse_remote_attachments(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
-        let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
-            .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
-        self.wait_for_result(panel_id, action_id, timeout_millis).await
+        let action_id = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+            self.enqueue_attachments(panel_id, action, timeout_millis).await?
+        } else {
+            manifest::enqueue_action(panel_id, self.identity(), action)
+                .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?
+        };
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.wait_for_result(panel_id, action_id, timeout_millis.saturating_sub(elapsed).max(1))
+            .await
+    }
+
+    /// Queue a `set_files` action off the async runtime: staging copies
+    /// files and may wait for the panel's staging lock, so it runs on a
+    /// blocking thread and counts against the caller's deadline. On
+    /// timeout the copy may still finish and queue the action afterwards,
+    /// like a queued action whose result is never read.
+    async fn enqueue_attachments(
+        &self,
+        panel_id: &str,
+        action: BrowserControlAction,
+        timeout_millis: u64,
+    ) -> Result<String, ControlError> {
+        let panel = panel_id.to_string();
+        let actor = self.actor.clone();
+        let host_instance = self.host_instance.clone();
+        let enqueue = tokio::task::spawn_blocking(move || {
+            manifest::enqueue_action(&panel, AgentIdentity::new(&actor, host_instance.as_deref()), action)
+        });
+        match tokio::time::timeout(Duration::from_millis(timeout_millis), enqueue).await {
+            Ok(Ok(queued)) => queued.map_err(|source| self.denied(panel_id, "could not queue browser action", source)),
+            Ok(Err(join)) => Err(ControlError::internal_io(
+                "could not queue browser action",
+                io::Error::other(join.to_string()),
+            )),
+            Err(_) => Err(ControlError::StagingTimeout { timeout_millis }),
+        }
     }
 
     /// A `set_files` action on a remote panel is refused here, before any

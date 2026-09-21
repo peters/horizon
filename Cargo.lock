@@ -2221,6 +2221,7 @@ version = "0.2.7"
 dependencies = [
  "atomicwrites",
  "horizon-browser",
+ "libc",
  "same-file",
  "schemars",
  "serde",

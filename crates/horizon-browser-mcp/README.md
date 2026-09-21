@@ -128,7 +128,10 @@ shell commands, files, or other MCP servers.
   staging for actions whose result has not been consumed yet (queued,
   dispatched or in flight) is never pruned for room, and when those alone
   leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
-  is refused before any copy is made. `accept` extension tokens match the end of the file name,
+  is refused before any copy is made. Staging runs on a blocking thread
+  and counts against the call's `timeout_millis`; a call that times out
+  while staging reports so, and the staging may still finish and queue the
+  action afterwards. `accept` extension tokens match the end of the file name,
   so compound tokens such as `.tar.gz` work. Copies live under the runtime root, or on
   Linux under `~/Horizon/browser-attachments` when the runtime root is a
   hidden directory beneath the home directory, which a Snap-confined browser
