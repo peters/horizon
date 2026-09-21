@@ -1,5 +1,7 @@
 """Required services remain owned and healthy across every bootstrap phase."""
 import json
+import os
+import signal
 from pathlib import Path
 import runpy
 import subprocess
@@ -28,6 +30,13 @@ class SupervisionTests(unittest.TestCase):
     def start(self, name, code='import time; time.sleep(60)'):
         return self.supervisor.start(name, [sys.executable, '-c', code])
 
+    def stop_unreaped(self, child):
+        os.kill(child.pid, signal.SIGTERM)
+        deadline = time.monotonic() + 3
+        while MODULE['exited'](child) is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertIsNotNone(MODULE['exited'](child))
+
     def capabilities(self, desktop):
         (self.root / 'capabilities.json').write_text(json.dumps({'desktop': desktop}))
 
@@ -41,8 +50,7 @@ class SupervisionTests(unittest.TestCase):
         for service in ['xvfb', 'openbox', 'vnc']:
             with self.subTest(service=service):
                 child = self.start(service)
-                child.terminate()
-                child.wait()
+                self.stop_unreaped(child)
                 with self.assertRaisesRegex(ValueError, service):
                     self.supervisor.configure([sys.executable, '-c', 'pass'])
                 self.supervisor.close()
@@ -68,7 +76,7 @@ class SupervisionTests(unittest.TestCase):
                 while not started.exists() and time.monotonic() < deadline:
                     time.sleep(.01)
                 self.assertTrue(started.exists())
-                child.terminate()
+                self.stop_unreaped(child)
                 thread.join(timeout=3)
                 self.assertFalse(thread.is_alive())
                 self.assertTrue(errors and service in errors[0], errors)
@@ -117,8 +125,7 @@ class SupervisionTests(unittest.TestCase):
         self.ready(True)
         with mock.patch.dict(CHECK.__globals__, desktop_ready=lambda pid: True):
             CHECK(self.root, self.root)
-            self.supervisor.children['openbox'].terminate()
-            self.supervisor.children['openbox'].wait()
+            self.stop_unreaped(self.supervisor.children['openbox'])
             self.assertIsNone(self.supervisor.children['vnc'].poll())
             self.assertIsNone(self.supervisor.children['control'].poll())
             with self.assertRaises((ValueError, OSError)):
@@ -129,8 +136,7 @@ class SupervisionTests(unittest.TestCase):
             with self.subTest(service=service):
                 self.ready(True)
                 child = self.supervisor.children[service]
-                child.terminate()
-                child.wait()
+                self.stop_unreaped(child)
                 with self.assertRaisesRegex(ValueError, service):
                     self.supervisor.assert_running()
                 with self.assertRaises((OSError, ValueError)):
@@ -190,8 +196,7 @@ class SupervisionTests(unittest.TestCase):
         descendant = int(child_pid.read_text())
         self.start('sshd')
         self.supervisor.publish(False)
-        parent.terminate()
-        parent.wait()
+        self.stop_unreaped(parent)
         owned = list(self.supervisor.children.values())
         self.supervisor.close()
         self.assertFalse((self.root / 'services.json').exists())
@@ -205,6 +210,103 @@ class SupervisionTests(unittest.TestCase):
             time.sleep(.01)
         else:
             self.fail('Owned service descendant survived shutdown')
+
+    def test_exit_observation_reserves_leader_until_group_retirement(self):
+        child = self.start('control')
+        self.stop_unreaped(child)
+        first = MODULE['exited'](child)
+        self.assertEqual(MODULE['exited'](child), first)
+        self.assertIsNone(child.returncode)
+        self.assertTrue(MODULE['owns_group'](child, self.supervisor.identities['control']))
+        self.supervisor.close()
+        with self.assertRaises(ChildProcessError):
+            MODULE['exited'](child)
+
+    def test_external_reaping_and_changed_receipts_never_signal_an_unverified_group(self):
+        for reaped in ['popen', 'external', 'changed']:
+            with self.subTest(reaped=reaped):
+                child = self.start('control')
+                self.stop_unreaped(child)
+                if reaped == 'popen':
+                    child.wait(timeout=1)
+                elif reaped == 'external':
+                    os.waitpid(child.pid, 0)
+                else:
+                    self.supervisor.identities['control']['start'] = 'invalid'
+                with mock.patch.object(os, 'killpg') as signaling:
+                    with self.assertRaisesRegex(ValueError, 'unverified'):
+                        self.supervisor.close()
+                    signaling.assert_not_called()
+                child.wait(timeout=1)
+
+    def test_signaling_finishes_before_bounded_reaping_even_if_a_wait_times_out(self):
+        events = []
+        children = [mock.Mock(pid=101, returncode=None), mock.Mock(pid=102, returncode=None)]
+        def waited(pid, timeout):
+            events.append(('wait', pid))
+            self.assertGreaterEqual(timeout, 0)
+            self.assertLessEqual(timeout, 3)
+            if pid == 101:
+                raise subprocess.TimeoutExpired('service', timeout)
+        for child in children:
+            child.wait.side_effect = lambda timeout, pid=child.pid: waited(pid, timeout)
+        stopping = MODULE['stop_groups']
+        with mock.patch.dict(stopping.__globals__, owns_group=lambda child, receipt: True,
+                             cleanup_exited=lambda child: True):
+            with mock.patch.object(os, 'killpg', side_effect=lambda pid, sig: events.append((sig, pid))):
+                with self.assertRaisesRegex(ValueError, 'cleanup deadline'):
+                    stopping([(child, {}) for child in children])
+        self.assertEqual(events, [(signal.SIGTERM, 101), (signal.SIGTERM, 102),
+                                  (signal.SIGKILL, 101), (signal.SIGKILL, 102),
+                                  ('wait', 101), ('wait', 102)])
+
+    def test_signal_killed_configuration_fails_without_publishing(self):
+        with self.assertRaisesRegex(ValueError, 'configuration failed'):
+            self.supervisor.configure([sys.executable, '-c', 'import os,signal; os.kill(os.getpid(),signal.SIGTERM)'])
+        self.assertFalse((self.root / 'services.json').exists())
+
+    def test_signal_failure_does_not_skip_other_owned_groups_or_bounded_waits(self):
+        stopping = MODULE['stop_groups']
+        for error in [ProcessLookupError, PermissionError]:
+            with self.subTest(error=error):
+                children = [mock.Mock(pid=201, returncode=None), mock.Mock(pid=202, returncode=None)]
+                events = []
+                def signaling(pid, sig):
+                    events.append((sig, pid))
+                    if pid == 201:
+                        raise error()
+                with mock.patch.dict(stopping.__globals__, owns_group=lambda child, receipt: True,
+                                     cleanup_exited=lambda child: True):
+                    with mock.patch.object(os, 'killpg', side_effect=signaling):
+                        with self.assertRaisesRegex(ValueError, 'could not signal'):
+                            stopping([(child, {}) for child in children])
+                self.assertEqual(events, [(signal.SIGTERM, 201), (signal.SIGTERM, 202),
+                                          (signal.SIGKILL, 201), (signal.SIGKILL, 202)])
+                for child in children:
+                    child.wait.assert_called_once()
+                    self.assertLessEqual(child.wait.call_args.kwargs['timeout'], 3)
+
+    def test_configuration_kills_term_resistant_descendant_before_reaping_leader(self):
+        marker = self.root / 'resistant-ready'
+        descendant = self.root / 'resistant-pid'
+        code = ('import signal,time; from pathlib import Path; '
+                'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                'Path(' + repr(str(marker)) + ').touch(); time.sleep(60)')
+        parent = ('import subprocess,time; from pathlib import Path; '
+                  'child=subprocess.Popen([' + repr(sys.executable) + ',"-c",' + repr(code) + ']); '
+                  'Path(' + repr(str(descendant)) + ').write_text(str(child.pid))\n'
+                  'while not Path(' + repr(str(marker)) + ').exists(): time.sleep(.01)')
+        self.supervisor.configure([sys.executable, '-c', parent])
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                MODULE['process_identity'](int(descendant.read_text()))
+            except (OSError, ValueError):
+                break
+            time.sleep(.01)
+        else:
+            self.fail('TERM-resistant descendant survived group retirement')
+        self.assertNotIn('configure', self.supervisor.children)
 
 
 if __name__ == '__main__':
