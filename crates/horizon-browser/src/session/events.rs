@@ -260,12 +260,10 @@ impl DriverState {
                     self.write_manifest(true);
                     // The page is gone (tab closed by another CDP client,
                     // navigation to a new target, …). Re-attach has
-                    // nothing to bind to: surface a retryable error
-                    // instead of silently ignoring input on a frozen frame.
+                    // nothing to bind to: end the driver and its page instead
+                    // of keeping an unusable panel and profile alive.
                     frame_slot.clear();
-                    let _ = event_tx.send(BrowserEvent::Warning(
-                        "the page target was destroyed; retry to reattach".to_string(),
-                    ));
+                    let _ = event_tx.send(BrowserEvent::Warning("the page target was destroyed".to_string()));
                 }
             }
             "Target.targetInfoChanged" => {
@@ -332,6 +330,7 @@ impl DriverState {
         self.pending_reattach = false;
         self.reset_runtime_enable_state();
         self.manifest_dirty = true;
+        self.stop_requested.store(true, std::sync::atomic::Ordering::Release);
         true
     }
 
@@ -672,6 +671,7 @@ mod tests {
         ));
 
         assert!(!state.forget_destroyed_bound_target(Some("popup"), &events));
+        assert!(!state.stop_requested.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(state.target_id.as_deref(), Some("bound"));
         assert!(!state.manifest_dirty);
         assert_eq!(
@@ -682,6 +682,7 @@ mod tests {
         );
 
         assert!(state.forget_destroyed_bound_target(Some("bound"), &events));
+        assert!(state.stop_requested.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(state.target_id, None);
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);

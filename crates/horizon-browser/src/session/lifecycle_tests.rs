@@ -17,6 +17,40 @@ struct SetupOutcome {
     events: Vec<BrowserEvent>,
 }
 
+#[test]
+fn reattach_exhaustion_ends_the_driver_but_recoverable_attempts_do_not() {
+    let config = BrowserSessionConfig {
+        browser: BrowserConfig::default(),
+        panel_local_id: "reattach-cleanup".into(),
+        initial_url: None,
+        width: 800,
+        height: 600,
+        frame_slot: Arc::default(),
+        coordination: None,
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut state = DriverState::new(&config, "ws://127.0.0.1/test", None, Arc::clone(&stop));
+    let (tx, rx) = mpsc::channel();
+    let events = BrowserEventSender {
+        tx,
+        wake: BrowserEventWake::default(),
+        committed_url: CommittedUrl::default(),
+    };
+    for _ in 0..4 {
+        state.note_reattach_failure(&events, "unavailable");
+        assert!(!stop.load(Ordering::Acquire));
+        assert!(state.pending_reattach);
+    }
+    assert!(rx.try_recv().is_err());
+    state.note_reattach_failure(&events, "unavailable");
+    assert!(stop.load(Ordering::Acquire));
+    assert!(!state.pending_reattach);
+    assert!(matches!(rx.try_recv(), Ok(BrowserEvent::Warning(_))));
+}
+
 fn run_setup(failure: Option<&'static str>, malformed_id: bool, confirm_state: &str) -> SetupOutcome {
     run_setup_with_browser(
         BrowserConfig {
