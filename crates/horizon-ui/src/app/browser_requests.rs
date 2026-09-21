@@ -180,6 +180,7 @@ impl HorizonApp {
         // the cadence-based one by forgetting the last stamped placement.
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
+            changed |= self.close_ended_browser_panels();
             changed |= self.poll_host_requests();
             self.browser_create_host.stamped_placement = None;
         }
@@ -828,7 +829,7 @@ fn terminal_create_failure(browser: &horizon_core::browser::BrowserPanelState) -
             || match &browser.status {
                 BrowserStatus::Error { .. } => (
                     "backend_start_failed",
-                    "the selected browser backend did not start; inspect the visible panel or local logs",
+                    "the selected browser backend did not start; inspect the local logs",
                 ),
                 _ => (
                     "backend_stopped",

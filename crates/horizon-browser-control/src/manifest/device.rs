@@ -22,6 +22,9 @@ pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
         endpoint: String,
+        /// Optional labels supplied by the session creator, not verified by VNC.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<DeviceIdentity>,
     },
     List,
     Inspect {
@@ -49,11 +52,33 @@ pub enum Connection {
     Disconnected,
 }
 
+/// Machine details supplied by the session creator; never inferred from loopback.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeviceIdentity {
+    pub machine_name: Option<String>,
+    pub hostname: Option<String>,
+    pub ip_addresses: Vec<std::net::IpAddr>,
+    pub tailscale_name: Option<String>,
+}
+
+/// Details observed on this VNC connection, not persisted machine identity.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct DeviceServerDetails {
+    pub name: Option<String>,
+    pub desktop_size: Option<[usize; 2]>,
+}
+
 /// Host observation, separate from request dispatch or VNC handshake success.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PanelState {
     pub panel_id: String,
     pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<DeviceIdentity>,
+    #[serde(default)]
+    pub server: DeviceServerDetails,
     pub visible: bool,
     pub owned_by_caller: bool,
     pub connection: Connection,
@@ -267,5 +292,16 @@ mod tests {
                 .kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+    #[test]
+    fn endpoint_only_requests_remain_valid_and_identity_ips_are_typed() {
+        let legacy: Operation = serde_json::from_str(r#"{"operation":"create","endpoint":"127.0.0.1:5900"}"#).unwrap();
+        assert!(matches!(legacy, Operation::Create { identity: None, .. }));
+        let input = r#"{"operation":"create","endpoint":"127.0.0.1:5900","identity":{"hostname":"lab-host","ip_addresses":["192.0.2.1","2001:db8::1"]}}"#;
+        let request: Operation = serde_json::from_str(input).unwrap();
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(encoded["identity"]["hostname"], "lab-host");
+        assert_eq!(encoded["identity"]["ip_addresses"][1], "2001:db8::1");
+        assert!(serde_json::from_str::<Operation>(&input.replace("192.0.2.1", "not-an-ip")).is_err());
     }
 }

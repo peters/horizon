@@ -4,6 +4,7 @@ use crate::test_egui::DiscardTextures;
 fn fixture_device() -> DevicePanelState {
     DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+        identity: None,
         connect_on_start: false,
     }
 }
@@ -377,6 +378,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
     let ctx = egui::Context::default();
     let device = DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+        identity: None,
         connect_on_start: false,
     };
     for zoom in [None, Some(PanelZoom::ONE)] {
@@ -839,4 +841,61 @@ fn presentation_changes_discard_anchors_but_ordinary_frames_and_fps_do_not() {
             assert!(state.pending_scroll.is_none());
         })
         .discard_textures();
+}
+
+#[test]
+fn connection_details_show_supplied_and_observed_values_separately() {
+    use horizon_core::browser::manifest::device::DeviceIdentity;
+    let ctx = egui::Context::default();
+    let mut device = fixture_device();
+    device.identity = Some(DeviceIdentity {
+        machine_name: Some("Lab workstation".into()),
+        hostname: Some("lab-host".into()),
+        tailscale_name: Some("lab-host.example.ts.net".into()),
+        ip_addresses: vec!["192.0.2.10".parse().unwrap()],
+    });
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        server: DeviceServerDetails {
+            name: Some("Fixture desktop".into()),
+            desktop_size: Some([640, 360]),
+        },
+        ..Default::default()
+    };
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    click_label(&ctx, &mut state, &device, "Connection details");
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, true),
+        )
+        .discard_textures();
+    for label in [
+        "Lab workstation",
+        "Supplied by session creator",
+        "lab-host",
+        "lab-host.example.ts.net",
+        "192.0.2.10",
+        "Local endpoint",
+        "127.0.0.1:5900",
+        "Server-reported",
+        "Fixture desktop",
+        "640 × 360",
+    ] {
+        text_center(&output, label);
+    }
+    state.status = Status::Disconnected("fixture ended".into());
+    let observation = state.observation("fixture".into(), &device, true, "actor");
+    assert_eq!(observation.server.name.as_deref(), Some("Fixture desktop"));
+    assert_eq!(observation.connection, Connection::Disconnected);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    device.target = horizon_core::DeviceViewTarget::parse(&listener.local_addr().unwrap().to_string()).unwrap();
+    state.reconnect(&ctx, &device);
+    let observation = state.observation("fixture".into(), &device, true, "actor");
+    assert_eq!(observation.server, DeviceServerDetails::default());
+    assert_eq!(observation.identity, device.identity);
 }

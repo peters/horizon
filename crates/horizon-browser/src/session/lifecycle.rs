@@ -462,8 +462,9 @@ impl DriverState {
             self.reattach_failures = 0;
             self.pending_reattach = false;
             self.pending_restart_at = None;
+            self.stop_requested.store(true, Ordering::Release);
             let _ = event_tx.send(BrowserEvent::Warning(format!(
-                "could not re-attach to the page: {message}; retry to restart"
+                "could not re-attach to the page: {message}"
             )));
         } else {
             self.pending_reattach = true;
