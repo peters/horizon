@@ -1,6 +1,8 @@
 use super::*;
 use crate::app::cloud_panel::production::Runtime;
+#[cfg(unix)]
 use crate::app::test_support::test_app;
+#[cfg(unix)]
 use horizon_core::{
     Board, BrowserProfileState, PanelState, RuntimeState, WorkspaceState,
     browser::{BackendKind, CloudViewState},
@@ -8,15 +10,18 @@ use horizon_core::{
 };
 
 #[test]
+#[cfg(unix)]
 fn cloud_browser_restore_waits_for_discovery_and_preserves_engines_through_autosave() {
     restore_scenario(false);
 }
 
 #[test]
+#[cfg(unix)]
 fn lost_cloud_browser_leaves_reconnecting_placeholder_without_recreating_identity() {
     restore_scenario(true);
 }
 
+#[cfg(unix)]
 fn restore_scenario(lost: bool) {
     let (_temp, mut app) = restore_fixture();
     app.sync_cloud_presentations();
@@ -108,6 +113,7 @@ fn restore_scenario(lost: bool) {
     assert_eq!(app.cloud_prototype.groups.0[0].panels, ["firefox", "chromium"]);
 }
 
+#[cfg(unix)]
 fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
     let (temp, mut app) = test_app();
     let profile = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n    capabilities:\n      browsers: [chromium, firefox]\n").unwrap().profiles["dev"].clone();
@@ -173,6 +179,7 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
 }
 
 #[test]
+#[cfg(unix)]
 fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement() {
     let (_temp, mut app) = restore_fixture();
     let mut saved = RuntimeState::from_board(
@@ -215,6 +222,7 @@ fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement(
 }
 
 #[test]
+#[cfg(unix)]
 fn fullscreen_panel_continues_processing_cloud_ownership_and_lifecycle_events() {
     use crate::test_egui::DiscardTextures;
     let (_temp, mut app) = restore_fixture();
@@ -269,6 +277,7 @@ fn fullscreen_panel_continues_processing_cloud_ownership_and_lifecycle_events() 
 }
 
 #[test]
+#[cfg(unix)]
 fn lost_browser_placeholder_can_be_dismissed_without_remote_release() {
     let (_temp, mut app) = restore_fixture();
     app.sync_cloud_presentations();
@@ -288,6 +297,7 @@ fn lost_browser_placeholder_can_be_dismissed_without_remote_release() {
     );
 }
 
+#[cfg(unix)]
 fn add_restored_member(app: &mut HorizonApp, local: &str, kind: PanelKind) {
     let mut saved = RuntimeState::from_board(
         &app.board,
@@ -305,6 +315,7 @@ fn add_restored_member(app: &mut HorizonApp, local: &str, kind: PanelKind) {
 }
 
 #[test]
+#[cfg(unix)]
 fn failed_member_attachment_retries_without_replacing_successful_terminal() {
     let (temp, mut app) = restore_fixture();
     add_restored_member(&mut app, "first-shell", PanelKind::Shell);
@@ -360,6 +371,7 @@ fn failed_member_attachment_retries_without_replacing_successful_terminal() {
 }
 
 #[test]
+#[cfg(unix)]
 fn missing_durable_session_retries_after_store_lock_is_released() {
     let (temp, mut app) = restore_fixture();
     app.cloud_prototype
@@ -408,6 +420,7 @@ fn missing_durable_session_retries_after_store_lock_is_released() {
 }
 
 #[test]
+#[cfg(unix)]
 fn unavailable_desktop_attachment_stays_pending() {
     let (_temp, mut app) = restore_fixture();
     add_restored_member(&mut app, "desktop", PanelKind::Device);
@@ -438,6 +451,7 @@ fn unavailable_desktop_attachment_stays_pending() {
 }
 
 #[test]
+#[cfg(unix)]
 fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
     let (temp, mut app) = restore_fixture();
     add_restored_member(&mut app, "healthy-shell", PanelKind::Shell);
@@ -483,6 +497,7 @@ fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
 }
 
 #[test]
+#[cfg(unix)]
 fn browser_attachment_keeps_repainting_after_discovery_watch_stops() {
     let (temp, mut app) = restore_fixture();
     app.sync_cloud_presentations();
@@ -532,6 +547,7 @@ fn browser_attachment_keeps_repainting_after_discovery_watch_stops() {
 }
 
 #[test]
+#[cfg(unix)]
 fn dismissing_pending_browser_placeholders_stops_repaint_retries() {
     let (_temp, mut app) = restore_fixture();
     app.sync_cloud_presentations();
@@ -563,6 +579,7 @@ fn ready_discovery_receiver_does_not_schedule_idle_repaint() {
 }
 
 #[test]
+#[cfg(unix)]
 fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
     use horizon_core::browser::{BrowserPanelState, BrowserStatus};
 
@@ -621,6 +638,7 @@ fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cloud_device_identity_survives_placeholder_autosave_and_reattachment() {
     use horizon_core::browser::manifest::device::DeviceIdentity;
     let (_temp, mut app) = restore_fixture();

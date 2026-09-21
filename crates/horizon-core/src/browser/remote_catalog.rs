@@ -12,6 +12,7 @@ pub fn refresh(
     profile: &RemoteProviderProfile,
     credentials: &CredentialWorkbench,
 ) {
+    cache.invalidate_credentials(credentials.generation());
     if !cache.needs_refresh(name, profile) {
         return;
     }

@@ -32,9 +32,17 @@ actual target machine; never substitute the local tunnel endpoint or the
 viewer's own hostname. Omit unknown fields. Inspect/list return these labels.
 
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
-verify `connection: "connected"`, `image_received`, `image_displayed` and an
-advancing `frame_sequence` while target output changes. `visible` is only a
-presentation setting; an image can be off canvas or clipped. Set
+check `connection: "connected"`. For a visible, on-screen viewer, also verify
+`image_received`, `image_displayed` and an advancing `frame_sequence` while target
+output changes. `visible` is only a presentation setting; an image can be off
+canvas or clipped. For hidden or off-canvas viewers, use an advancing
+`received_frame_sequence` while target output changes to verify reception;
+uploads and display may remain absent or unchanged. This counter tracks received
+image updates independently of the uploaded-image `frame_sequence`. Background
+reception does not satisfy the live-view requirement for interactive testing.
+Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
+is not a connection failure. Older hosts may omit reception progress; do not
+interpret a missing/default-zero counter as a failure. Set
 `operation: "visibility", visible: true` for a hidden owned viewer, then verify
 actual presentation. Never claim that a separate isolated viewer is visible to
 the user merely because its screenshot is available.
@@ -55,8 +63,9 @@ requires `operation: "reveal"` on hosts advertising it. Reveal an owned viewer
 at most once, then inspect again; this changes the viewport without reconnecting
 or claiming live-image proof. When diagnostics are present, record connection
 generation, decoded-frame sequence and age, sampling pause, last displayed age
-and presentation reason. `not_rendered` with paused sampling is not a transport
-failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
+and presentation reason. Current hosts keep reception active while hidden or off
+canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling
+pause proves a transport failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
 prove display. Older hosts may lack reveal or diagnostics: record
 `presentation_unverified` and the missing capability instead of asking the user
 to move or watch the panel. Continue non-interactive checks. Never restart the

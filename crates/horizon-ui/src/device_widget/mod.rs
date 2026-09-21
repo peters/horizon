@@ -33,6 +33,7 @@ pub(crate) struct DeviceUiState {
 #[derive(Default)]
 struct ImageDisplay {
     sequence: u64,
+    received_sequence: u64,
     displayed: bool,
     previous_displayed: bool,
     /// This connection has uploaded a frame. A retained texture is not evidence.
@@ -75,6 +76,7 @@ impl DeviceUiState {
             (updates, full)
         });
         if let Some((updates, full)) = incoming {
+            self.image.received_sequence = updates.received_frame_sequence;
             if let Some(desktop) = updates.desktop {
                 self.desktop = Some(desktop);
                 self.server.desktop_size = Some(desktop);

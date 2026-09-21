@@ -48,3 +48,37 @@ fn legacy_no_cloud_state_writes_a_compatible_empty_array() {
         serde_json::json!([])
     );
 }
+
+#[test]
+fn disabled_cloud_membership_survives_remove_and_move_requests() {
+    let state: RuntimeState = serde_json::from_value(serde_json::json!({
+        "cloud_groups": [{"workspace":"cloud", "panels":["member"], "remote":{}}],
+        "workspaces":[
+            {"local_id":"cloud", "panels":[{"local_id":"member", "kind":PanelKind::Shell}]},
+            {"local_id":"local", "panels":[{"local_id":"ordinary", "kind":PanelKind::Shell, "command":"/bin/true"}]}
+        ]
+    }))
+    .unwrap();
+    let mut board = Board::from_runtime_state(&state).unwrap();
+    let cloud = board.workspace_id_by_local_id("cloud").unwrap();
+    let local = board.workspace_id_by_local_id("local").unwrap();
+    let member = board.panels.iter().find(|p| p.local_id == "member").unwrap().id;
+    let ordinary = board.panels.iter().find(|p| p.local_id == "ordinary").unwrap().id;
+    board.remove_workspace(cloud);
+    assert!(board.workspace(cloud).is_some());
+    board.assign_panel_to_workspace(member, local);
+    board.assign_panel_to_workspace(ordinary, cloud);
+    assert_eq!(board.panel(member).unwrap().workspace_id, cloud);
+    assert_eq!(board.panel(ordinary).unwrap().workspace_id, local);
+    board.remove_workspace(local);
+    assert!(board.workspace(local).is_some(), "only a cloud destination remains");
+    let next = board.create_workspace("Other local");
+    board.assign_panel_to_workspace(ordinary, next);
+    assert_eq!(board.panel(ordinary).unwrap().workspace_id, next);
+    board.assign_panel_to_workspace(ordinary, local);
+    board.remove_workspace(local);
+    assert!(board.workspace(local).is_none());
+    assert_eq!(board.panel(ordinary).unwrap().workspace_id, next);
+    board.active_workspace = Some(cloud);
+    assert_eq!(board.ensure_local_workspace("Fallback"), next);
+}

@@ -147,6 +147,10 @@ impl HorizonApp {
                     code: "provider_unknown",
                     message: "Catalog provider is not configured".into(),
                 })?;
+            self.browser_create_host
+                .catalog
+                .cache
+                .invalidate_credentials(self.remote_browser_credentials.generation());
             let device = self
                 .browser_create_host
                 .catalog
@@ -353,6 +357,53 @@ mod tests {
         CredentialWorkbench::with_opener(Box::new(|| {
             Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
         }))
+    }
+
+    #[test]
+    fn same_binding_credential_change_fences_a_previously_discovered_target() {
+        use horizon_core::browser::remote_catalog::{CatalogDevice, CatalogQuery};
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.template_config = config();
+        let profile = app.template_config.browser.remote.providers["grid"].clone();
+        let reference = CredentialReference::from("key");
+        app.remote_browser_credentials
+            .set_session_value("grid", &profile, &reference, b"original")
+            .unwrap();
+        let target = format!("catalog.grid.{}", "a".repeat(64));
+        let row = CatalogDevice {
+            target: target.clone(),
+            provider: "grid".into(),
+            os: "ios".into(),
+            os_version: "18".into(),
+            browser: "iphone".into(),
+            browser_version: None,
+            device: Some("Synthetic phone".into()),
+            real_mobile: true,
+        };
+        let cache = &mut app.browser_create_host.catalog.cache;
+        cache.invalidate_credentials(app.remote_browser_credentials.generation());
+        cache.start("grid", &profile, move || Ok(vec![row]));
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let query = CatalogQuery {
+            provider: "grid".into(),
+            ..Default::default()
+        };
+        while cache.page(&profile, &query).unwrap().is_none() {
+            cache.poll();
+            assert!(std::time::Instant::now() < end);
+            std::thread::yield_now();
+        }
+        app.remote_browser_credentials
+            .set_session_value("grid", &profile, &reference, b"replacement")
+            .unwrap();
+        let mut request = horizon_core::browser::manifest::BrowserCreateRequest::for_tests("fixture");
+        request.target = Some(target);
+        let workspace = app.board.create_workspace("Local");
+        let Err(error) = app.plan_and_admit_remote(&request, workspace) else {
+            panic!("stale catalog admitted after credential replacement")
+        };
+        assert_eq!(error.code, "provider_catalog_refresh_required");
+        assert!(app.browser_create_host.catalog.cache.needs_refresh("grid", &profile));
     }
 
     #[test]

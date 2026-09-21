@@ -139,6 +139,7 @@ fn release_waits_for_setup_and_requires_a_bound_worker() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();

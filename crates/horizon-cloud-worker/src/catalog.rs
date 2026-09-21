@@ -11,6 +11,12 @@ pub struct Host {
     pub pending: Vec<UsageRequest>,
 }
 impl Host {
+    pub fn revoke(&mut self, fence: &Path) -> io::Result<()> {
+        std::fs::write(fence, "revoked")?;
+        self.cache = CatalogCache::default();
+        Ok(())
+    }
+
     pub fn page(
         &mut self,
         capabilities: &horizon_cloud::Capabilities,
@@ -80,6 +86,39 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn revocation_discards_pending_catalog_without_dropping_request_results() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = serde_json::from_str(
+            r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub"}"#,
+        )
+        .unwrap();
+        let mut host = Host::default();
+        let (release, wait) = std::sync::mpsc::channel();
+        host.cache.start("account", &profile, move || {
+            wait.recv().unwrap();
+            Ok(Vec::new())
+        });
+        assert!(!host.cache.needs_refresh("account", &profile));
+        let request = serde_json::from_value(serde_json::json!({
+            "request_id":"pending", "actor":"horizon:cloud-fixture", "host_instance":manifest::host_instance(),
+            "deadline_at_millis":i64::MAX, "catalog":{"provider":"account"}, "claimed":true
+        }))
+        .unwrap();
+        host.pending.push(request);
+        assert!(host.revoke(&root.path().join("missing-parent/fence")).is_err());
+        assert!(
+            !host.cache.needs_refresh("account", &profile),
+            "failed revocation preserves existing state"
+        );
+        let fence = root.path().join("revoked");
+        host.revoke(&fence).unwrap();
+        assert_eq!(std::fs::read_to_string(fence).unwrap(), "revoked");
+        assert_eq!(host.pending.len(), 1, "pending callers must still receive a result");
+        release.send(()).unwrap();
+        host.cache.poll();
+        assert!(host.cache.needs_refresh("account", &profile));
+    }
     #[test]
     fn authenticated_minimum_deadline_times_out_without_requesting_a_catalog() {
         let request: UsageRequest = serde_json::from_value(serde_json::json!({

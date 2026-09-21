@@ -152,3 +152,21 @@ Compatibility and standalone build regressions:
 - Preparation with an already pinned commit must not inspect Git or the repository
   mount on the UI thread. Invalid/unresolved revisions are rejected; background
   deployment still validates the committed tree before allocating compute.
+
+Final ownership and credential-cache regressions:
+
+- In a build without cloud support, removing a cloud workspace or moving panels
+  into/out of it is refused. Ordinary moves and compatible workspace removal work.
+- Replace/delete a session or keychain credential without changing its binding.
+  Both catalog discovery and direct selection require fresh rows. A late fetch
+  from the old generation cannot repopulate the cache. Worker revoke/reinstall
+  has the same behavior and pending callers still receive outcomes.
+- Leave only a resize-pending journal, with no observation marker. Input must
+  return resize_uncertain before target access and preserve prior ownership.
+- Hide a native viewer and inspect the immediate response before another render
+  frame: hidden presentation must retain active reception. During changing target
+  output, received/decoded sequences advance while upload/display remains paused. Reveal still needs
+  actual displayed and advancing frame evidence.
+- Unsupported directory-durability platforms reject cloud operations before state
+  writes or provider mutations; existing records and ordinary local sessions are
+  preserved. Unix session synchronization must fail when a saved file is missing.

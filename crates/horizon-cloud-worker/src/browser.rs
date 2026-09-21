@@ -233,7 +233,10 @@ impl Host {
                 },
             },
             CloudViewRequest::RevokeRemote => {
-                if let Err(error) = std::fs::write("/run/horizon-credentials/browserstack-revoked", "revoked") {
+                if let Err(error) = self
+                    .catalog
+                    .revoke(Path::new("/run/horizon-credentials/browserstack-revoked"))
+                {
                     return CloudViewResponse {
                         error: Some(error.to_string()),
                         ..CloudViewResponse::default()

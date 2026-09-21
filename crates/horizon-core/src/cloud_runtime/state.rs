@@ -61,8 +61,10 @@ pub fn cloud_directory(root: &Path, cloud_id: &str) -> Result<PathBuf> {
 }
 impl Store {
     /// # Errors
-    /// Refuses simultaneous controllers. OS locks release after a crash.
+    /// Refuses simultaneous controllers and platforms without supported directory durability.
+    /// OS locks release after a crash. Unsupported hosts fail before state or provider mutation.
     pub fn lock(root: &Path) -> Result<Self> {
+        crate::session_store::require_directory_durability()?;
         std::fs::create_dir_all(root)?;
         let file = OpenOptions::new()
             .create(true)
@@ -126,6 +128,20 @@ impl Drop for Store {
 mod tests {
     use super::*;
     #[test]
+    #[cfg(not(unix))]
+    fn unsupported_cloud_control_does_not_create_or_modify_state() {
+        let root = tempfile::tempdir().unwrap();
+        let absent = root.path().join("new-state");
+        assert!(Store::lock(&absent).is_err());
+        assert!(!absent.exists());
+        let existing = root.path().join("deployment.json");
+        std::fs::write(&existing, b"preserve existing record").unwrap();
+        assert!(Store::lock(root.path()).is_err());
+        assert_eq!(std::fs::read(existing).unwrap(), b"preserve existing record");
+        assert!(!root.path().join("operation.lock").exists());
+    }
+
+    #[test]
     fn persisted_cloud_ids_cannot_escape_the_state_root() {
         let temp = tempfile::tempdir().unwrap();
         for id in ["", "..", "../outside", "/outside", "C:\\outside", "a/b", "a\\b"] {
@@ -138,6 +154,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
     #[test]
+    #[cfg(unix)]
     fn competing_controllers_cannot_both_hold_operation_lock() {
         let temp = tempfile::tempdir().unwrap();
         let store = Store::lock(temp.path()).unwrap();

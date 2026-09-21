@@ -5,6 +5,13 @@ branches and worktrees; browser and Device panels share that cloud's runtime.
 Only RunPod provisions workers. Daytona and Fly.io appear in labelled design
 fixtures.
 
+Cloud deployment and lifecycle control currently require a Unix host with supported
+file and directory synchronization. Windows cloud operations fail before state or
+provider mutation until durable directory updates are implemented; ordinary local
+sessions and preserved cloud metadata remain available. The standalone provider
+crate remains portable. Windows cloud durability is tracked in #823; native Device
+platform qualification remains separately tracked in #741.
+
 ## One-time machine setup
 
 Open **Cloud > New cloud**. On first use, Horizon opens **Cloud settings**:

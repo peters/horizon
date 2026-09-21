@@ -227,3 +227,20 @@ fn test_root(label: &str) -> tempfile::TempDir {
         .tempdir()
         .expect("create temp root")
 }
+
+#[test]
+fn durable_cloud_gate_requires_supported_platform_and_saved_files() {
+    let root_dir = test_root("durable-cloud-gate");
+    let home = HorizonHome::from_root(root_dir.path().into());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).unwrap();
+    if cfg!(unix) {
+        store.sync_runtime_state(&created.session_id).unwrap();
+        std::fs::remove_file(&created.runtime_state_path).unwrap();
+        assert!(store.sync_runtime_state(&created.session_id).is_err());
+    } else {
+        assert!(store.sync_runtime_state(&created.session_id).is_err());
+        assert!(created.runtime_state_path.exists());
+        assert!(RuntimeState::load(&created.runtime_state_path).is_ok());
+    }
+}

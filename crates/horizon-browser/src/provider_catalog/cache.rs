@@ -37,9 +37,18 @@ struct Entry {
 
 #[derive(Default)]
 pub struct CatalogCache {
+    credential_generation: u64,
     entries: BTreeMap<String, Entry>,
 }
 impl CatalogCache {
+    /// Discard completed and pending rows after an in-process credential change.
+    pub fn invalidate_credentials(&mut self, generation: u64) {
+        if self.credential_generation != generation {
+            self.entries.clear();
+            self.credential_generation = generation;
+        }
+    }
+
     /// Returns true when a new bounded fetch is needed. Changed account bindings invalidate cached rows.
     pub fn needs_refresh(&mut self, name: &str, profile: &RemoteProviderProfile) -> bool {
         self.poll();
@@ -149,6 +158,62 @@ mod tests {
     fn profile() -> RemoteProviderProfile {
         serde_json::from_str(r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub"}"#)
             .unwrap()
+    }
+    #[test]
+    fn credential_change_discards_ready_rows_and_late_results() {
+        let profile = profile();
+        let mut cache = CatalogCache::default();
+        let rows = super::super::decode(
+            "account",
+            br#"[{"os":"ios","os_version":"18","browser":"iphone","device":"iPhone 16","real_mobile":true}]"#,
+        )
+        .unwrap();
+        let target = rows[0].target.clone();
+        cache.entries.insert(
+            "account".into(),
+            Entry {
+                profile: profile.clone(),
+                started: Instant::now(),
+                pending: None,
+                result: Some(Ok(rows.clone())),
+            },
+        );
+        assert!(cache.target(&profile, &target).is_ok());
+        cache.invalidate_credentials(1);
+        assert!(cache.entries.is_empty());
+        assert_eq!(
+            cache.target(&profile, &target).unwrap_err(),
+            CatalogError::RefreshRequired
+        );
+        let (old_result, old_receiver) = channel();
+        cache.entries.insert(
+            "account".into(),
+            Entry {
+                profile: profile.clone(),
+                started: Instant::now(),
+                pending: Some(old_receiver),
+                result: None,
+            },
+        );
+        cache.invalidate_credentials(2);
+        assert!(
+            old_result.send(Ok(rows)).is_err(),
+            "an old credential fetch cannot repopulate the cache"
+        );
+        cache.poll();
+        assert!(cache.needs_refresh("account", &profile));
+        assert_eq!(
+            cache
+                .page(
+                    &profile,
+                    &CatalogQuery {
+                        provider: "account".into(),
+                        ..Default::default()
+                    }
+                )
+                .unwrap_err(),
+            CatalogError::RefreshRequired
+        );
     }
     #[test]
     fn bounded_rebinding_recovers_while_old_fetch_waits_and_expiry_invalidates_targets() {

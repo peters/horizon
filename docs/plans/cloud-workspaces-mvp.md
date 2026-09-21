@@ -1148,3 +1148,32 @@ Retained regressions cover disabled-feature round trips, inert panel restoration
 standalone Docker input parity, and preparation without an accessible repository.
 Full validation 46, independent review, fresh native proof and hosted checks gate
 publication. Qualification follow-ups remain open; no new compute is allocated.
+
+### Final ownership and compatibility review
+
+The next hosted pass confirmed all CI lanes and raised six comments. A local
+BuildKit/Node reproduction disproved the build-argument environment claim; the
+recipe remains unchanged. Five bounded corrections protect opaque cloud workspace
+membership, invalidate catalog rows after credential replacement/revocation in
+both host and worker, fence input inherited from an uncertain resize, report
+hidden sampling immediately, and reject cloud operations before mutation on hosts
+without supported directory durability. Ordinary local sessions remain available.
+
+Regressions cover failed/late catalog fetches, same-binding credential changes,
+worker revocation, immutable disabled-feature membership, resize crash journals,
+immediate visibility and session synchronization failure. These changes require
+full validation 47, independent review and fresh native/hosted evidence. No new
+compute is allocated. Unsupported-platform durability joins the follow-up scope;
+remaining final-image qualification and user acceptance remain separately tracked.
+
+Main integration update: `46e2d3ef` keeps reception active when the viewer is hidden
+or off canvas. The visibility review finding is superseded by that behavior:
+immediate hide reports hidden presentation with sampling active, and the new
+received-frame counter is preserved alongside diagnostics. Regression tests
+cover background reception, retained pixels, reveal and reconnect resets.
+Validation 47 was stopped and superseded when this main update arrived.
+Supported cloud-persistence tests are Unix-gated; unsupported-platform refusal
+and platform-neutral validation remain covered.
+
+Windows cloud durability follow-up: #823. It retains ordinary local sessions and
+requires platform-native crash/restart qualification before enabling allocation.

@@ -15,7 +15,9 @@ impl DeviceUiState {
         actor: &str,
     ) -> PanelState {
         if let Some(session) = &self.session {
-            if let Some(status) = session.take_status() {
+            let observation = session.observation();
+            self.image.received_sequence = observation.received_frame_sequence;
+            if let Some(status) = observation.status {
                 self.status = status;
             }
             let details = session.take_server_details();
@@ -59,6 +61,7 @@ impl DeviceUiState {
                 image_received: self.image.received,
                 image_displayed: displayed,
                 frame_sequence: self.image.sequence,
+                received_frame_sequence: self.image.received_sequence,
             },
             diagnostics: Some(Diagnostics {
                 observed_at_millis: manifest::now_millis(),

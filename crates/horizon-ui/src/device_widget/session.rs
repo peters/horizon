@@ -7,7 +7,7 @@ use std::{
 
 use egui::{ColorImage, Context, ViewportId};
 use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
 use super::frame::{Framebuffer, present_image};
@@ -40,6 +40,7 @@ pub(super) struct Updates {
     pub image: Option<ColorImage>,
     pub produced_with: Option<DeviceViewOptions>,
     pub status: Option<Status>,
+    pub received_frame_sequence: u64,
     viewport: ViewportId,
     visible: bool,
     options: DeviceViewOptions,
@@ -53,11 +54,15 @@ pub(super) struct StreamEvidence {
     pub last_frame: Option<Instant>,
 }
 
+pub(super) struct Observation {
+    pub status: Option<Status>,
+    pub received_frame_sequence: u64,
+}
+
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
     latest_full: Arc<Mutex<Option<ColorImage>>>,
     stop: Option<oneshot::Sender<()>>,
-    visibility: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -73,6 +78,7 @@ impl Session {
             image: None,
             produced_with: None,
             status: Some(Status::Connecting),
+            received_frame_sequence: 0,
             viewport,
             visible: true,
             options,
@@ -83,7 +89,6 @@ impl Session {
         let state = Arc::clone(&updates);
         let retained = Arc::clone(&latest_full);
         let (stop, cancelled) = oneshot::channel();
-        let (visibility, visible) = watch::channel(true);
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -94,7 +99,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(address, &state, &retained, &ctx, visible) => result,
+                            result = connection(address, &state, &retained, &ctx) => result,
                         }
                     })
                 });
@@ -109,7 +114,6 @@ impl Session {
             updates,
             latest_full,
             stop: Some(stop),
-            visibility,
             thread: Some(thread),
         })
     }
@@ -130,7 +134,6 @@ impl Session {
 
     #[cfg(test)]
     pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
-        let (visibility, _) = watch::channel(true);
         Self {
             updates: Arc::new(Mutex::new(Updates {
                 stream: StreamEvidence {
@@ -140,6 +143,7 @@ impl Session {
                 image: Some(image),
                 produced_with: Some(produced_with),
                 status: Some(Status::Connected),
+                received_frame_sequence: 1,
                 viewport: ViewportId::ROOT,
                 visible: true,
                 options: produced_with,
@@ -148,7 +152,6 @@ impl Session {
             })),
             latest_full: Arc::new(Mutex::new(Some(latest_full))),
             stop: None,
-            visibility,
             thread: None,
         }
     }
@@ -158,14 +161,6 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .visible = visible;
-        self.visibility.send_if_modified(|current| {
-            if *current == visible {
-                false
-            } else {
-                *current = visible;
-                true
-            }
-        });
     }
 
     pub(super) fn take_updates(&self, viewport: ViewportId) -> Updates {
@@ -176,6 +171,7 @@ impl Session {
             image: state.image.take(),
             produced_with: state.produced_with,
             status: state.status.take(),
+            received_frame_sequence: state.received_frame_sequence,
             viewport,
             visible: state.visible,
             options: state.options,
@@ -192,17 +188,17 @@ impl Session {
         }
     }
 
-    pub(super) fn take_status(&self) -> Option<Status> {
-        self.updates
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .status
-            .take()
+    pub(super) fn observation(&self) -> Observation {
+        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Observation {
+            status: state.status.take(),
+            received_frame_sequence: state.received_frame_sequence,
+        }
     }
 
     pub(super) fn stream_evidence(&self) -> (StreamEvidence, bool) {
         let state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        (state.stream, !state.visible)
+        (state.stream, false)
     }
 }
 
@@ -235,13 +231,12 @@ async fn connection(
     updates: &Mutex<Updates>,
     latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
-    mut visible: watch::Receiver<bool>,
 ) -> Result<(), ViewError> {
     let client = connect_client(address).await?;
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
     // ServerInit queues resolution before the client is returned. Observe that
-    // metadata even if a hidden viewer pauses before its first image refresh.
+    // metadata before the first image refresh, independently of presentation.
     if let Some(event) = client.poll_event().await? {
         apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
     }
@@ -252,21 +247,12 @@ async fn connection(
     }
     publish_status(updates, ctx, Status::Connected);
     loop {
-        let mut full_refresh = !*visible.borrow_and_update();
-        if full_refresh {
-            visible
-                .wait_for(|visible| *visible)
-                .await
-                .map_err(|_| ViewError::Frame("viewer closed"))?;
-        }
+        let mut full_refresh = false;
         let options = updates
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .options;
         tokio::time::sleep(options.interval()).await;
-        if !*visible.borrow() {
-            continue;
-        }
         let mut changed = false;
         let started = std::time::Instant::now();
         let mut idle = false;
@@ -309,6 +295,7 @@ async fn connection(
                 state.stream.last_frame = Some(Instant::now());
                 state.produced_with = Some(options.for_desktop(framebuffer.size()));
                 state.desktop = Some(framebuffer.size());
+                state.received_frame_sequence = state.received_frame_sequence.saturating_add(1);
                 state.visible.then_some(state.viewport)
             };
             if let Some(viewport) = viewport {

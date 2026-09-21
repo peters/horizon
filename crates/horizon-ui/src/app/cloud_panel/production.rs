@@ -359,17 +359,22 @@ impl HorizonApp {
             launch.deployment_started = true;
         }
         self.save_cloud_prototype();
-        if !existing
-            && (!self.active_session.as_ref().is_some_and(|session| session.persistent)
+        if !existing {
+            if !self.active_session.as_ref().is_some_and(|session| session.persistent)
                 || !self.auto_save_runtime_state()
-                || self
-                    .active_session
-                    .as_ref()
-                    .is_none_or(|session| self.session_store.sync_runtime_state(&session.session_id).is_err()))
-        {
-            self.cloud_prototype.error =
-                Some("Save this workspace in a persistent Horizon session before allocating a worker".into());
-            return;
+            {
+                self.cloud_prototype.error =
+                    Some("Save this workspace in a persistent Horizon session before allocating a worker".into());
+                return;
+            }
+            let Some(session) = &self.active_session else {
+                self.cloud_prototype.error = Some("The active session changed before deployment could be saved".into());
+                return;
+            };
+            if let Err(error) = self.session_store.sync_runtime_state(&session.session_id) {
+                self.cloud_prototype.error = Some(error.to_string());
+                return;
+            }
         }
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
         if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {

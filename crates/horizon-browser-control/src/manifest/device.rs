@@ -112,7 +112,7 @@ pub struct Diagnostics {
     pub observed_at_millis: i64,
     pub connection_generation: u64,
     pub presentation: Presentation,
-    /// Sampling pauses when the viewer is not rendered. It is not a transport failure.
+    /// Legacy pause signal. Current viewers keep sampling while hidden or off canvas.
     pub sampling_paused: bool,
     /// Decoded frames, independent of texture uploads and rendering.
     pub decoded_frame_sequence: u64,
@@ -123,7 +123,7 @@ pub struct Diagnostics {
     pub last_displayed_age_millis: Option<u64>,
 }
 
-/// Uploaded image and completed-frame presentation evidence for one connection.
+/// Reception, upload and completed-frame presentation evidence for one connection.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ImageEvidence {
     /// A decoded image was uploaded in this connection; may be stale after disconnect.
@@ -131,6 +131,9 @@ pub struct ImageEvidence {
     /// The most recent completed UI frame painted the connected image.
     pub image_displayed: bool,
     pub frame_sequence: u64,
+    /// Worker-published image updates, including while hidden; not a heartbeat.
+    #[serde(default)]
+    pub received_frame_sequence: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
@@ -302,6 +305,20 @@ mod tests {
         }))
         .unwrap();
         assert!(diagnostics.last_uploaded_age_millis.is_none());
+    }
+
+    #[test]
+    fn reception_evidence_is_additive_and_round_trips_without_display() {
+        let legacy = r#"{"panel_id":"viewer","endpoint":"127.0.0.1:5900","visible":false,"owned_by_caller":true,"connection":"connected","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
+        let mut panel: PanelState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(panel.image.received_frame_sequence, 0);
+        panel.image.received_frame_sequence = 7;
+        let encoded = serde_json::to_value(panel).unwrap();
+        assert_eq!(encoded["received_frame_sequence"], 7);
+        let decoded: PanelState = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.image.received_frame_sequence, 7);
+        assert_eq!(decoded.image.frame_sequence, 0);
+        assert!(!decoded.image.image_received && !decoded.image.image_displayed);
     }
 
     #[test]

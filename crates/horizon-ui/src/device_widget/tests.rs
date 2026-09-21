@@ -90,6 +90,44 @@ fn presented_size(state: &DeviceUiState) -> Option<[usize; 2]> {
 }
 
 #[test]
+fn hidden_observation_preserves_pending_image_until_first_display() {
+    let ctx = egui::Context::default();
+    let device = fixture_device();
+    let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
+    let mut state = DeviceUiState {
+        initialized: true,
+        session: Some(Session::pending_frame(
+            image.clone(),
+            image,
+            DeviceViewOptions::default(),
+        )),
+        ..Default::default()
+    };
+    state.begin_frame();
+    state.finish_frame();
+    for _ in 0..2 {
+        let observation = state.observation("panel".into(), &device, false, "agent");
+        assert_eq!(observation.connection, Connection::Connected);
+        assert_eq!(observation.image.received_frame_sequence, 1);
+        assert_eq!(observation.image.frame_sequence, 0);
+        assert!(!observation.image.image_received);
+        assert!(!observation.image.image_displayed);
+        assert!(state.texture.is_none());
+    }
+    // The server is now static: show must consume the retained image immediately.
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| state.show(ui, &device, true))
+        .discard_textures();
+    assert_eq!(presented_size(&state), Some([2, 2]));
+    state.begin_frame();
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observation.image.received_frame_sequence, 1);
+    assert_eq!(observation.image.frame_sequence, 1);
+    assert!(observation.image.image_received);
+    assert!(observation.image.image_displayed);
+}
+
+#[test]
 fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
     let mut state = DeviceUiState::default();
     state.controls.options.max_width = 8192;
@@ -224,6 +262,7 @@ fn apply_viewport_and_reconnect_keep_the_last_desktop() {
     assert!(!evidence.image.image_received);
     assert!(!evidence.image.image_displayed);
     assert_eq!(evidence.image.frame_sequence, 0);
+    assert_eq!(evidence.image.received_frame_sequence, 0);
 }
 
 #[test]
@@ -251,6 +290,7 @@ fn reconnect_does_not_report_a_retained_texture_as_live_evidence() {
     assert!(!evidence.image.image_received);
     assert!(!evidence.image.image_displayed);
     assert_eq!(evidence.image.frame_sequence, 0);
+    assert_eq!(evidence.image.received_frame_sequence, 0);
 }
 
 #[test]
@@ -377,7 +417,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
 }
 
 #[test]
-fn diagnostics_distinguish_paused_offscreen_and_pending_pixels() {
+fn diagnostics_distinguish_hidden_presentation_from_active_reception() {
     use horizon_core::browser::manifest::device::Presentation;
     let device = fixture_device();
     let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
@@ -391,11 +431,16 @@ fn diagnostics_distinguish_paused_offscreen_and_pending_pixels() {
         )),
         ..Default::default()
     };
+    // Hiding presentation never pauses background reception, including the immediate response.
+    let observed = state.observation("panel".into(), &device, false, "agent");
+    let diagnostics = observed.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::Hidden);
+    assert!(!diagnostics.sampling_paused);
     state.session.as_ref().unwrap().set_visible(false);
     let observed = state.observation("panel".into(), &device, true, "agent");
     let diagnostics = observed.diagnostics.unwrap();
     assert_eq!(diagnostics.presentation, Presentation::NotRendered);
-    assert!(diagnostics.sampling_paused);
+    assert!(!diagnostics.sampling_paused);
     assert_eq!(diagnostics.decoded_frame_sequence, 1);
     assert!(diagnostics.last_decoded_age_millis.is_some());
     assert!(diagnostics.last_uploaded_age_millis.is_none());

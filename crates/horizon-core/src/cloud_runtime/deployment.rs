@@ -414,6 +414,7 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
 mod tests {
     use super::*;
     #[test]
+    #[cfg(unix)]
     fn completed_source_is_durable_before_session_configuration() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
@@ -461,6 +462,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn ready_timing_preserves_unknown_legacy_history_and_survives_reconnect() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
@@ -481,6 +483,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does() {
         let root = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(root.path().join("repo")).unwrap();
@@ -525,6 +528,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(unix)]
     fn preparation_preserves_pinned_revision_without_reading_a_repository() {
         let root = tempfile::tempdir().unwrap();
         let mut request = Request {

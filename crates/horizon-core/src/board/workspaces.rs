@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
-use crate::runtime_state::WorkspaceState;
+use crate::runtime_state::{WorkspaceState, cloud_groups};
 use crate::workspace::{Workspace, WorkspaceId};
 
 use super::arrangement::rects_overlap;
@@ -65,8 +65,7 @@ impl Board {
     /// Select an ordinary local workspace for preparation that must not inherit a remote environment.
     pub fn ensure_local_workspace(&mut self, fallback_name: &str) -> WorkspaceId {
         let eligible = |workspace: &&Workspace| {
-            #[cfg(feature = "cloud-workspaces")]
-            if self.cloud_groups.contains_workspace(&workspace.local_id) {
+            if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
                 return false;
             }
             workspace.remote_workspace.is_none()
@@ -310,13 +309,10 @@ impl Board {
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
-        #[cfg(feature = "cloud-workspaces")]
-        if self.workspace(id).is_some_and(|workspace| {
-            self.cloud_groups
-                .0
-                .iter()
-                .any(|group| group.workspace == workspace.local_id)
-        }) {
+        if self
+            .workspace(id)
+            .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
+        {
             return;
         }
         // Never remove the last workspace.
@@ -329,13 +325,7 @@ impl Board {
             .iter()
             .find(|ws| {
                 ws.id != id
-                    && {
-                        #[cfg(feature = "cloud-workspaces")]
-                        if self.cloud_groups.contains_workspace(&ws.local_id) {
-                            return false;
-                        }
-                        true
-                    }
+                    && !cloud_groups::contains_workspace(&self.cloud_groups, &ws.local_id)
                     && self
                         .panels
                         .iter()
@@ -368,11 +358,12 @@ impl Board {
     /// Move a panel to a different workspace, physically relocating it to
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_groups.contains_panel(self, panel_id)
+        if self
+            .panel(panel_id)
+            .is_some_and(|panel| cloud_groups::contains_panel(&self.cloud_groups, &panel.local_id))
             || self
                 .workspace(workspace_id)
-                .is_some_and(|workspace| self.cloud_groups.contains_workspace(&workspace.local_id))
+                .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
         {
             return;
         }
