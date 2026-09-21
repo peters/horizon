@@ -21,6 +21,7 @@ test-support = []
 workspace = true
 
 [dependencies]
+mime_guess.workspace = true
 horizon-browser-protocol.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

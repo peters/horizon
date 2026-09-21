@@ -176,7 +176,12 @@ pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
     })
 }
 
+/// The MIME type an extension implies, from the shared registry with a few
+/// image formats it does not carry.
 fn mime_for_extension(extension: &str) -> Option<&'static str> {
+    if let Some(mime) = mime_guess::from_ext(extension).first_raw() {
+        return Some(mime);
+    }
     Some(match extension {
         "pdf" => "application/pdf",
         "png" => "image/png",
@@ -187,6 +192,8 @@ fn mime_for_extension(extension: &str) -> Option<&'static str> {
         "svg" => "image/svg+xml",
         "heic" => "image/heic",
         "heif" => "image/heif",
+        "avif" => "image/avif",
+        "jxl" => "image/jxl",
         "tif" | "tiff" => "image/tiff",
         "txt" => "text/plain",
         "csv" => "text/csv",
@@ -233,15 +240,28 @@ const FILE_INPUT_PROBE_FUNCTION: &str = r"function(selector) {
     return { accept: String(element.getAttribute('accept') || '').slice(0, 2048), multiple: element.hasAttribute('multiple') };
 }";
 
+// The readback also reads the first and last byte of every file: a browser
+// can list a file it was handed and still be unable to open it (a Snap
+// confined browser and a hidden directory, for instance), and that must be
+// a failure here rather than an empty upload later.
 const ATTACHED_FILES_FUNCTION: &str = r"function(selector) {
     let element;
     try { element = document.querySelector(selector); }
     catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
     if (!(element instanceof HTMLInputElement) || element.type !== 'file')
         return { error: { code: 'no_such_element', message: 'the file input is no longer in the document' } };
-    return { files: Array.from(element.files || [], (file) => ({
-        name: String(file.name).slice(0, 512), size: Number(file.size) || 0, mime: String(file.type).slice(0, 128)
-    })) };
+    const files = Array.from(element.files || []);
+    const readable = (file) => file.size === 0
+        ? Promise.resolve()
+        : Promise.all([file.slice(0, 1).arrayBuffer(), file.slice(file.size - 1, file.size).arrayBuffer()]);
+    return Promise.all(files.map((file) => readable(file).then(() => null, (error) => String(error?.message || error).slice(0, 256))))
+        .then((failures) => {
+            const failed = failures.findIndex((failure) => failure !== null);
+            if (failed >= 0) return { error: { code: 'attachment_unreadable', message: `the browser cannot read ${String(files[failed].name).slice(0, 512)}: ${failures[failed]}` } };
+            return { files: files.map((file) => ({
+                name: String(file.name).slice(0, 512), size: Number(file.size) || 0, mime: String(file.type).slice(0, 128)
+            })) };
+        });
 }";
 
 #[cfg(test)]
@@ -266,6 +286,12 @@ mod tests {
         assert!(!accept_allows("image/*", pdf));
         assert!(!accept_allows(".png,.jpg", pdf));
         assert!(accept_allows("image/*", Path::new("/uploads/photo.HEIC")));
+        assert!(accept_allows("image/*", Path::new("/uploads/photo.avif")));
+        assert!(accept_allows("audio/*", Path::new("/uploads/voice.flac")));
+        assert!(accept_allows(
+            "application/vnd.oasis.opendocument.presentation",
+            Path::new("/uploads/deck.odp")
+        ));
         assert!(!accept_allows("image/*", Path::new("/uploads/photo.unknownext")));
         assert!(accept_allows(".unknownext", Path::new("/uploads/photo.unknownext")));
         assert!(!accept_allows(".pdf", Path::new("/uploads/no-extension")));

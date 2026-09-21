@@ -90,15 +90,38 @@ impl BrowserRuntimePaths {
 
     /// Private copies of files an agent attaches through `set_files`, one
     /// directory per action, removed when the action result is consumed.
+    /// The browser must be able to read them: on Linux a Snap-confined
+    /// browser cannot open hidden directories directly beneath the home
+    /// directory, so a runtime root such as `~/.horizon` stages under the
+    /// visible `~/Horizon` directory the Snap profile root already uses.
+    /// The path is absolute even when the runtime root is the relative
+    /// fallback, because queued attachment paths must be absolute.
     #[must_use]
     pub fn browser_attachments_dir(&self) -> PathBuf {
-        self.root.join("runtime").join("browser-attachments")
+        let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
+        browser_visible_attachments_dir(&root).unwrap_or_else(|| root.join("runtime").join("browser-attachments"))
     }
 
     #[must_use]
     pub fn browser_audit_dir(&self) -> PathBuf {
         self.root.join("audit").join("browsers")
     }
+}
+
+#[cfg(target_os = "linux")]
+fn browser_visible_attachments_dir(root: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let hidden_beneath_home = root
+        .strip_prefix(&home)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|component| component.as_os_str().to_string_lossy().starts_with('.'));
+    hidden_beneath_home.then(|| home.join("Horizon").join("browser-attachments"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn browser_visible_attachments_dir(_root: &Path) -> Option<PathBuf> {
+    None
 }
 
 #[must_use]

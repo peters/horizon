@@ -120,9 +120,16 @@ shell commands, files, or other MCP servers.
   file under the agent work root (`HORIZON_WORK_ROOT`, else the server's
   working directory) or a root listed in `HORIZON_BROWSER_ATTACHMENT_ROOTS`;
   symlinks are judged by where they resolve, and the queue stages a private
-  copy of each checked file (at most 512 MiB each) under Horizon's runtime
-  root for the browser to read, removed once the result is consumed, so a
-  pathname re-pointed after the check cannot reach the browser. The input's
+  copy of each checked file (at most 512 MiB each) for the browser to read,
+  so a pathname re-pointed after the check cannot reach the browser. The
+  page reads an attached file lazily, often only on submit, so the copies
+  stay for the panel: each panel keeps its attachment actions for 24 hours,
+  at most 32 actions and 4 GiB, pruned when the next attachment is staged. Copies live under the runtime root, or on
+  Linux under `~/Horizon/browser-attachments` when the runtime root is a
+  hidden directory beneath the home directory, which a Snap-confined browser
+  cannot open. The readback opens every attached file's first and last byte
+  in the page, so a browser that lists a file it cannot read fails with
+  `attachment_unreadable` instead of uploading nothing. The input's
   `multiple` and
   `accept` attributes are checked first (`multiple_not_allowed`,
   `accept_mismatch`), a target that is not a file input returns

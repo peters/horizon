@@ -183,11 +183,14 @@ pub fn request_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, reason
 /// A `set_files` action is queued with private staged copies of its files:
 /// the paths are resolved and confirmed under the attachment roots of this
 /// process, the audit summary keeps those resolved paths, and the engine
-/// receives copies under the runtime root that the original pathnames can
-/// no longer influence. The rebuilt action is validated again because
-/// resolution can change a pathname. Every other action passes through.
+/// receives copies that the original pathnames can no longer influence.
+/// The copies stay for the panel (bounded by age, count and size) because
+/// the page reads them lazily. The rebuilt action is validated again
+/// because resolution can change a pathname. Every other action passes
+/// through.
 fn authorize_attachments(
     action: BrowserControlAction,
+    panel_local_id: &str,
     action_id: &str,
 ) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
     let BrowserControlAction::SetFiles { target, paths } = action else {
@@ -203,13 +206,21 @@ fn authorize_attachments(
         paths: authorized.iter().map(|file| file.path().to_path_buf()).collect(),
     });
     let attachments_dir = crate::BrowserRuntimePaths::resolve().browser_attachments_dir();
-    crate::attachments::prune_stale_attachments(&attachments_dir, crate::attachments::STALE_ATTACHMENT_AGE);
+    crate::attachments::prune_attachments(
+        &attachments_dir,
+        panel_local_id,
+        crate::attachments::ATTACHMENT_RETENTION,
+        crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
+        crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES,
+    );
     let staged = StagedAttachments {
         attachments_dir: attachments_dir.clone(),
+        panel_local_id: panel_local_id.to_string(),
         action_id: action_id.to_string(),
         keep: false,
     };
-    let paths = crate::attachments::stage_attachments(&attachments_dir, action_id, &authorized).map_err(refused)?;
+    let paths = crate::attachments::stage_attachments(&attachments_dir, panel_local_id, action_id, &authorized)
+        .map_err(refused)?;
     let action = BrowserControlAction::SetFiles { target, paths };
     action
         .validate()
@@ -252,6 +263,7 @@ fn check_enqueue_eligibility(
 /// Staged copies that are removed unless the action reached the queue.
 struct StagedAttachments {
     attachments_dir: std::path::PathBuf,
+    panel_local_id: String,
     action_id: String,
     keep: bool,
 }
@@ -259,7 +271,7 @@ struct StagedAttachments {
 impl Drop for StagedAttachments {
     fn drop(&mut self) {
         if !self.keep {
-            crate::attachments::release_attachments(&self.attachments_dir, &self.action_id);
+            crate::attachments::release_attachments(&self.attachments_dir, &self.panel_local_id, &self.action_id);
         }
     }
 }
@@ -289,7 +301,7 @@ pub fn enqueue_action(
         // below would reject anyway before any of that work.
         check_enqueue_eligibility(panel_local_id, identity, agent_name)?;
     }
-    let (action, summary, mut staged) = authorize_attachments(action, &action_id)?;
+    let (action, summary, mut staged) = authorize_attachments(action, panel_local_id, &action_id)?;
     let request = AgentAction {
         action_id: action_id.clone(),
         actor: agent_name.to_string(),

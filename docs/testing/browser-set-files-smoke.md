@@ -77,8 +77,18 @@ reply with the matching `id` arrives.
 | `set_files #avatar` with `photo.png` | `files: [photo.png]` and the avatar handler ran |
 | `browser_audit` | `set_files` entries carry the resolved `paths` and target; no file contents anywhere |
 
-After the run, `<runtime root>/runtime/browser-attachments/` holds no
-directory for a consumed action.
+After the run, the staging directory (`<runtime root>/runtime/browser-attachments/`,
+or `~/Horizon/browser-attachments/` on Linux when the runtime root is a
+hidden directory beneath `HOME`) holds one directory per panel with the
+staged copies of its attachment actions; they are retained for the page's
+lazy reads and pruned by age, count and size on the next attachment.
+
+Snap check (Linux, Snap Chromium or Firefox): put a copy of `claim.pdf`
+under a hidden directory directly beneath the real home directory, list that
+directory in `HORIZON_BROWSER_ATTACHMENT_ROOTS`, attach it, then
+`browser_evaluate` a `file.arrayBuffer()` read of `input.files[0]`; the
+read must succeed because the browser reads the staged copy, not the hidden
+source.
 
 ## Lane A: Chromium (Linux, macOS, Windows)
 

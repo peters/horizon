@@ -8,9 +8,12 @@
 //! symlinks before the root check, so a link inside a root cannot reach out
 //! of it. Authorization alone does not bind the browser's later read to the
 //! checked file (the pathname could be re-pointed in between), so the queue
-//! stages a private copy of each authorized file under the runtime root and
-//! hands the engine those copies; the staging directory is removed when the
-//! action result is consumed or when it goes stale.
+//! stages a private copy of each authorized file and hands the engine those
+//! copies. A page reads an attached `File` lazily, often only when the form
+//! is submitted, so the copies stay for the panel's lifetime: each panel
+//! keeps its attachment actions for a bounded time, count and size, pruned
+//! when the next attachment is staged, and a queue failure releases its own
+//! staging right away.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,8 +21,12 @@ use std::time::Duration;
 
 /// Largest single file `set_files` stages.
 pub const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
-/// Staging directories older than this are removed on the next attachment.
-pub const STALE_ATTACHMENT_AGE: Duration = Duration::from_hours(2);
+/// How long a panel's staged attachments stay readable for its page.
+pub const ATTACHMENT_RETENTION: Duration = Duration::from_hours(24);
+/// Most attachment actions one panel keeps staged at a time.
+pub const MAX_RETAINED_ATTACHMENT_ACTIONS: usize = 32;
+/// Most staged bytes one panel keeps at a time.
+pub const MAX_RETAINED_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Horizon's work-root variable; kept in sync with `horizon_core::agent_work::WORK_ROOT_ENV`.
 pub const WORK_ROOT_ENV: &str = "HORIZON_WORK_ROOT";
@@ -198,24 +205,32 @@ fn handle_location(file: &std::fs::File, requested: &Path) -> std::io::Result<Pa
     }
 }
 
-/// Copy each authorized file into `<root>/runtime/browser-attachments/<action>/<index>/<name>`
-/// from its open handle, so the bytes the browser reads are the bytes that
-/// were checked. Returns the staged paths in request order; any failure
-/// removes the whole staging directory.
+/// Copy each authorized file into
+/// `<attachments>/<panel>/<action>/<index>/<name>` from its open handle, so
+/// the bytes the browser reads are the bytes that were checked. Returns the
+/// staged paths in request order; any failure removes the action's staging
+/// directory.
 ///
 /// # Errors
 /// Returns the first file that could not be copied.
 pub fn stage_attachments(
     attachments_dir: &Path,
+    panel_local_id: &str,
     action_id: &str,
     files: &[AuthorizedFile],
 ) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
-    let directory = attachments_dir.join(crate::paths::safe_local_id(action_id));
+    let directory = action_directory(attachments_dir, panel_local_id, action_id);
     let staged = stage_into(&directory, files);
     if staged.is_err() {
-        release_attachments(attachments_dir, action_id);
+        release_attachments(attachments_dir, panel_local_id, action_id);
     }
     staged
+}
+
+fn action_directory(attachments_dir: &Path, panel_local_id: &str, action_id: &str) -> PathBuf {
+    attachments_dir
+        .join(crate::paths::safe_local_id(panel_local_id))
+        .join(crate::paths::safe_local_id(action_id))
 }
 
 fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
@@ -242,8 +257,11 @@ fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>
                 .create_new(true)
                 .open(&target)
                 .map_err(staging)?;
-            // The size was checked on metadata; a file that grows afterwards
-            // is cut off at the limit and refused rather than staged whole.
+            // The copy starts at the file's beginning whatever was read from
+            // the handle before. The size was checked on metadata; a file
+            // that grows afterwards is cut off at the limit and refused
+            // rather than staged whole.
+            std::io::Seek::seek(&mut &authorized.file, std::io::SeekFrom::Start(0)).map_err(staging)?;
             let mut source = std::io::Read::take(&authorized.file, MAX_ATTACHMENT_BYTES + 1);
             let copied = std::io::copy(&mut source, &mut copy).map_err(staging)?;
             if copied > MAX_ATTACHMENT_BYTES {
@@ -273,8 +291,8 @@ fn create_private_dir(directory: &Path) -> Result<(), AttachmentPolicyError> {
 }
 
 /// Remove the staged copies of one action; a missing directory is fine.
-pub fn release_attachments(attachments_dir: &Path, action_id: &str) {
-    let directory = attachments_dir.join(crate::paths::safe_local_id(action_id));
+pub fn release_attachments(attachments_dir: &Path, panel_local_id: &str, action_id: &str) {
+    let directory = action_directory(attachments_dir, panel_local_id, action_id);
     if let Err(error) = std::fs::remove_dir_all(&directory)
         && error.kind() != std::io::ErrorKind::NotFound
     {
@@ -282,23 +300,75 @@ pub fn release_attachments(attachments_dir: &Path, action_id: &str) {
     }
 }
 
-/// Remove staging directories whose action never consumed its result.
-pub fn prune_stale_attachments(attachments_dir: &Path, max_age: Duration) {
-    let Ok(entries) = std::fs::read_dir(attachments_dir) else {
+/// Make room for one more attachment action on `panel_local_id`: every
+/// panel's actions older than `retention` go (a closed panel's staging
+/// ages out this way), and the panel keeps at most `max_actions - 1`
+/// newer actions within `max_bytes` so the new one fits.
+pub fn prune_attachments(
+    attachments_dir: &Path,
+    panel_local_id: &str,
+    retention: Duration,
+    max_actions: usize,
+    max_bytes: u64,
+) {
+    let stale_before = std::time::SystemTime::now()
+        .checked_sub(retention)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let Ok(panels) = std::fs::read_dir(attachments_dir) else {
         return;
     };
-    let now = std::time::SystemTime::now();
-    for entry in entries.flatten() {
-        let stale = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age > max_age);
-        if stale && let Err(error) = std::fs::remove_dir_all(entry.path()) {
-            tracing::warn!(target: "browser", path = %entry.path().display(), "failed to prune stale attachments: {error}");
+    let current = crate::paths::safe_local_id(panel_local_id);
+    for panel in panels.flatten() {
+        let Ok(actions) = std::fs::read_dir(panel.path()) else {
+            continue;
+        };
+        let mut retained = Vec::new();
+        for action in actions.flatten() {
+            let Ok(modified) = action.metadata().and_then(|metadata| metadata.modified()) else {
+                continue;
+            };
+            if modified < stale_before {
+                remove_action_dir(&action.path());
+            } else if panel.file_name().to_string_lossy() == current {
+                retained.push((modified, directory_bytes(&action.path()), action.path()));
+            }
+        }
+        retained.sort_by_key(|(modified, _, _)| std::cmp::Reverse(*modified));
+        let mut kept_bytes = 0u64;
+        for (index, (_, bytes, path)) in retained.into_iter().enumerate() {
+            kept_bytes = kept_bytes.saturating_add(bytes);
+            if index + 1 >= max_actions || kept_bytes > max_bytes {
+                remove_action_dir(&path);
+            }
         }
     }
+}
+
+fn remove_action_dir(path: &Path) {
+    if let Err(error) = std::fs::remove_dir_all(path) {
+        tracing::warn!(target: "browser", path = %path.display(), "failed to prune staged attachments: {error}");
+    }
+}
+
+fn directory_bytes(path: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    total
 }
 
 #[cfg(test)]
@@ -313,7 +383,7 @@ mod tests {
         let attachments = root.path().join("attachments");
         let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
         let authorized = policy.authorize(&[source.clone(), source.clone()]).expect("authorized");
-        let staged = stage_attachments(&attachments, "action-1", &authorized).expect("staged");
+        let staged = stage_attachments(&attachments, "panel", "action-1", &authorized).expect("staged");
         assert_eq!(staged.len(), 2);
         assert_ne!(staged[0], staged[1], "each slot keeps its own copy of a repeated file");
         assert!(
@@ -325,10 +395,11 @@ mod tests {
         // The staged copies are independent of the source from here on.
         std::fs::write(&source, b"swapped").expect("rewrite");
         assert_eq!(std::fs::read(&staged[1]).expect("read"), b"%PDF");
-        assert!(attachments.join(crate::paths::safe_local_id("action-1")).is_dir());
-        release_attachments(&attachments, "action-1");
-        assert!(!attachments.join(crate::paths::safe_local_id("action-1")).exists());
-        release_attachments(&attachments, "action-1");
+        let directory = action_directory(&attachments, "panel", "action-1");
+        assert!(directory.is_dir());
+        release_attachments(&attachments, "panel", "action-1");
+        assert!(!directory.exists());
+        release_attachments(&attachments, "panel", "action-1");
     }
 
     #[test]
@@ -340,7 +411,7 @@ mod tests {
         let authorized = policy.authorize(std::slice::from_ref(&good)).expect("authorized");
         let attachments = root.path().join("attachments");
         std::fs::write(&attachments, b"not a directory").expect("block the staging root");
-        let error = stage_attachments(&attachments, "action-2", &authorized).expect_err("cannot stage");
+        let error = stage_attachments(&attachments, "panel", "action-2", &authorized).expect_err("cannot stage");
         assert!(matches!(error, AttachmentPolicyError::Staging { .. }), "{error}");
         assert!(!attachments.is_dir(), "nothing was created in place of the blocker");
     }
@@ -360,25 +431,46 @@ mod tests {
         std::fs::write(&secret, b"secret").expect("write");
         std::fs::remove_file(&inside).expect("remove");
         std::os::unix::fs::symlink(&secret, &inside).expect("re-point");
-        let staged = stage_attachments(&root.path().join("attachments"), "swap", &authorized).expect("staged");
+        let staged = stage_attachments(&root.path().join("attachments"), "panel", "swap", &authorized).expect("staged");
         assert_eq!(std::fs::read(&staged[0]).expect("read"), b"inside");
     }
 
     #[test]
-    fn stale_staging_directories_are_pruned_and_fresh_ones_kept() {
+    fn pruning_ages_out_every_panel_and_bounds_the_current_one() {
         let root = tempfile::tempdir().expect("root");
         let source = root.path().join("a.txt");
-        std::fs::write(&source, b"a").expect("write");
+        std::fs::write(&source, b"abcdef").expect("write");
         let attachments = root.path().join("attachments");
         let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
             .authorize(std::slice::from_ref(&source))
             .expect("authorized");
-        stage_attachments(&attachments, "old", &authorized).expect("old");
+        stage_attachments(&attachments, "other", "old", &authorized).expect("old on another panel");
+        stage_attachments(&attachments, "panel", "first", &authorized).expect("first");
         std::thread::sleep(Duration::from_millis(600));
-        stage_attachments(&attachments, "fresh", &authorized).expect("fresh");
-        prune_stale_attachments(&attachments, Duration::from_millis(300));
-        assert!(!attachments.join(crate::paths::safe_local_id("old")).exists());
-        assert!(attachments.join(crate::paths::safe_local_id("fresh")).exists());
+        stage_attachments(&attachments, "panel", "second", &authorized).expect("second");
+        stage_attachments(&attachments, "panel", "third", &authorized).expect("third");
+        // Age: the other panel's old action and this panel's first go.
+        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX);
+        assert!(!action_directory(&attachments, "other", "old").exists());
+        assert!(!action_directory(&attachments, "panel", "first").exists());
+        assert!(action_directory(&attachments, "panel", "second").exists());
+        assert!(action_directory(&attachments, "panel", "third").exists());
+        // Count: room for one more means only the newest of the two stays.
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX);
+        assert_eq!(
+            std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
+                .expect("panel dir")
+                .count(),
+            1
+        );
+        // Bytes: a budget below one action's size clears the panel.
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 5);
+        assert_eq!(
+            std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
+                .expect("panel dir")
+                .count(),
+            0
+        );
     }
 
     #[test]
