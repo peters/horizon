@@ -26,12 +26,14 @@ describes the isolated fixture; launch it with `--native-view` and use its
 `vnc_address`, not a browser URL.
 
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
-verify `connection: "connected"`, `image_received`, `image_displayed` and an
-advancing `frame_sequence` while target output changes. `visible` is only a
-presentation setting; an image can be off canvas or clipped. Hidden and off-canvas
-viewers continue receiving: `received_frame_sequence` counts received image
-updates independently of the uploaded-image `frame_sequence`. Use reception
-progress for background observation and `image_displayed` for visual evidence.
+check `connection: "connected"`. For a visible, on-screen viewer, also verify
+`image_received`, `image_displayed` and an advancing `frame_sequence` while target
+output changes. `visible` is only a presentation setting; an image can be off
+canvas or clipped. For hidden or off-canvas viewers, use an advancing
+`received_frame_sequence` while target output changes to verify reception;
+uploads and display may remain absent or unchanged. This counter tracks received
+image updates independently of the uploaded-image `frame_sequence`. Background
+reception does not satisfy the live-view requirement for interactive testing.
 Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
 is not a connection failure. Older hosts may omit reception progress; do not
 interpret a missing/default-zero counter as a failure. Set
