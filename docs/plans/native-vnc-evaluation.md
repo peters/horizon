@@ -94,13 +94,14 @@ synthetic Horizon fixture and must be inspected before publication.
 
 View controls are session-local. The default maximum refresh is 20 fps (range
 1–30); rendered images fit within 2048×2048 pixels by default, with independently
-adjustable width/height limits from 1 to 8192. Rendering retains aspect ratio and
-never upscales its source. The always-visible zoom selector chooses Fit (the
-image fills the available panel area) or a scale from 25% to 400%, where 100%
-is one rendered image pixel per UI point and anything larger scrolls; pinch, or
-wheel with the zoom modifier, over the image zooms around the pointer. Desktop
-and image dimensions are shown separately. Controls never change the target
-desktop resolution.
+adjustable width/height limits from 1 to 8192. Image preparation retains aspect
+ratio and never increases the source pixel dimensions. Display scaling is
+separate: the always-visible zoom selector chooses Fit (which can enlarge the
+image to fill the available panel area) or a scale from 25% to 400%. At 100%,
+one prepared image pixel maps to one UI point. Images larger than the panel
+body can be scrolled. Over the image, pinch or use the wheel with the zoom
+modifier to zoom around the pointer. Desktop and image dimensions are shown
+separately. Controls never change the target desktop resolution.
 
 An explicit viewport selects a nonempty rectangle inside the source desktop.
 Apply refuses invalid bounds; Whole desktop clears the crop. Viewport, image
