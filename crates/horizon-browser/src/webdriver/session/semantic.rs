@@ -92,7 +92,7 @@ fn send_keys_through(
 /// Attach host files to one already resolved file input through the W3C
 /// Element Send Keys command under `session`: for an
 /// `input[type=file]`, Send Keys takes newline-separated host paths instead
-/// of typing them. Safari may temporarily normalize a universal accept hint;
+/// of typing them. Safari may temporarily normalize a wildcard accept hint;
 /// its restoration is attempted even when selection fails.
 fn set_files_through(
     transport: &dyn ClassicTransport,
@@ -121,13 +121,13 @@ fn set_files_through(
         .join("\n");
     let element = encode_path_segment(element_id);
     let reference = json!({ELEMENT_KEY: element_id});
-    // Safari's native picker rejects */* even though our complete accept
-    // check permits every file. Restore the exact element after either result.
+    // Safari's native picker handles wildcard hints inconsistently. The full
+    // accept policy has already passed; restore the element after either result.
     let original_accept = if safari {
         let response = post(
             "execute/sync",
             &json!({
-                "script": "const e = arguments[0], a = e.getAttribute('accept'); if (a !== null && a.split(',').some(t => t.trim() === '*/*')) { e.removeAttribute('accept'); return a; } return null;",
+                "script": "const e = arguments[0], a = e.getAttribute('accept'); if (a !== null && a.includes('*')) { e.removeAttribute('accept'); return a; } return null;",
                 "args": [reference],
             }),
         )?;
