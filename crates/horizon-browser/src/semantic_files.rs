@@ -166,12 +166,14 @@ pub(crate) fn verify_attached(
 /// tokens (including compound ones such as `.tar.gz`) match the end of the
 /// file name, `type/subtype` and `type/*` tokens match the MIME type derived
 /// from the final extension. A file whose extension is unknown is refused
-/// by a MIME-only list rather than guessed.
+/// by a MIME-only list rather than guessed. Tokens that are neither an
+/// extension nor a MIME type are ignored, as browsers ignore them, so a
+/// list with no valid token restricts nothing.
 pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
     let tokens = accept
         .split(',')
         .map(|token| token.trim().to_ascii_lowercase())
-        .filter(|token| !token.is_empty())
+        .filter(|token| is_accept_token(token))
         .collect::<Vec<_>>();
     if tokens.is_empty() {
         return true;
@@ -193,6 +195,15 @@ pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
             mime == Some(token.as_str())
         }
     })
+}
+
+/// A valid file type specifier: an extension with something after the dot,
+/// or `type/subtype` (`subtype` may be `*`) with both halves present.
+fn is_accept_token(token: &str) -> bool {
+    if let Some(extension) = token.strip_prefix('.') {
+        return !extension.is_empty() && !extension.contains('/');
+    }
+    matches!(token.split_once('/'), Some((kind, subtype)) if !kind.is_empty() && !subtype.is_empty() && !subtype.contains('/'))
 }
 
 /// The MIME type an extension implies, from the shared registry with a few
@@ -318,6 +329,19 @@ mod tests {
         assert!(!accept_allows("image/*", pdf));
         assert!(!accept_allows(".png,.jpg", pdf));
         assert!(accept_allows("image/*", Path::new("/uploads/photo.HEIC")));
+        assert!(
+            accept_allows("garbage", pdf),
+            "an invalid token restricts nothing, as in browsers"
+        );
+        assert!(accept_allows(".", pdf), "a bare dot is not a specifier");
+        assert!(
+            accept_allows("image/", pdf),
+            "a type without a subtype is not a specifier"
+        );
+        assert!(
+            !accept_allows("garbage, image/*", pdf),
+            "valid tokens still apply beside invalid ones"
+        );
         assert!(accept_allows("image/*", Path::new("/uploads/photo.avif")));
         assert!(accept_allows("audio/*", Path::new("/uploads/voice.flac")));
         assert!(accept_allows(

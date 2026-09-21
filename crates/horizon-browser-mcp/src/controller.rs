@@ -874,6 +874,27 @@ fn authorize_and_enqueue_attachments(
     .map_err(AttachmentEnqueueError::Queue)
 }
 
+/// How often a running server sweeps staged attachments on its own, so the
+/// retention bound holds for a server that receives no further calls.
+const ATTACHMENT_SWEEP_INTERVAL: Duration = Duration::from_hours(1);
+
+/// Sweep staged attachments every hour for as long as the server runs, in
+/// addition to the sweeps at startup, listing and close. A server built
+/// outside a Tokio runtime (unit tests) gets no timer.
+pub(crate) fn spawn_attachment_janitor() {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async {
+        let mut ticks = tokio::time::interval(ATTACHMENT_SWEEP_INTERVAL);
+        ticks.tick().await;
+        loop {
+            ticks.tick().await;
+            let _ = tokio::task::spawn_blocking(sweep_stale_attachments).await;
+        }
+    });
+}
+
 /// Age out staged attachments past retention across every panel and drop
 /// the staging of panels whose manifest is gone (closed from the UI, the
 /// CLI or a crashed host), so the retention bound holds even when no

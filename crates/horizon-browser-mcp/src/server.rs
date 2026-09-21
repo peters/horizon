@@ -44,6 +44,7 @@ impl HorizonBrowserMcp {
     }
 
     fn new(controller: BrowserController) -> Self {
+        crate::controller::spawn_attachment_janitor();
         Self {
             controller,
             network_watch: NetworkWatchState::default(),
@@ -294,6 +295,11 @@ impl HorizonBrowserMcp {
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
         let action = input.build_action()?;
+        // Request errors are backend-independent: the protocol check runs
+        // before any backend or panel state is consulted.
+        action
+            .validate()
+            .map_err(|message| format!("browser action refused (invalid_input): {message}"))?;
         self.controller
             .refuse_remote_attachments(&input.panel_id, &action)
             .map_err(|error| error.to_string())?;

@@ -125,9 +125,9 @@ shell commands, files, or other MCP servers.
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
   at most 32 actions and 4 GiB, pruned when the next attachment is staged
-  and swept when an MCP server starts, lists panels or closes one, and at
-  every attachment, which also drops all staging of panels whose manifest
-  is gone however they closed;
+  and swept when an MCP server starts, every hour while it runs, when it
+  lists panels or closes one, and at every attachment, which also drops all
+  staging of panels whose manifest is gone however they closed;
   staging for actions whose result has not been consumed yet (queued,
   dispatched or in flight) is never pruned for room, and when those alone
   leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
@@ -148,8 +148,11 @@ shell commands, files, or other MCP servers.
   `accept` attributes are checked first (`multiple_not_allowed`,
   `accept_mismatch`), a target that is not a file input returns
   `not_file_input`, a path outside the roots returns `attachment_policy`, a
-  malformed or missing path `invalid_input`, and a file over the limit
-  `file_too_large`, all with no side effects. Chromium attaches through `DOM.setFileInputFiles`, which
+  malformed or missing path `invalid_input` (checked before any backend or
+  panel state, so the answer is the same for remote panels), and a file
+  over the limit `file_too_large`, all with no side effects. `accept`
+  tokens that are neither an extension nor a MIME type are ignored, as
+  browsers ignore them. Chromium attaches through `DOM.setFileInputFiles`, which
   fires the page's `input` and `change` handlers; local Firefox and Safari
   use Element Send Keys with the paths. The result's `files` lists the
   names, sizes, and MIME types read back from the input, and a readback that
