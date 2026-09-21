@@ -539,6 +539,35 @@ fn a_latched_gesture_keeps_its_anchor_after_the_pointer_leaves() {
 }
 
 #[test]
+fn changing_render_layers_discards_the_old_zoom_anchor() {
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.controls.zoom = Some(PanelZoom::new(2.0));
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::PointerMoved(egui::pos2(600.0, 500.0)),
+            egui::Event::Zoom(1.2),
+        ],
+    );
+    assert!(state.zoom_anchor.is_some());
+    let selection = state.controls.zoom;
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            ui.scope_builder(
+                egui::UiBuilder::new().layer_id(egui::LayerId::new(egui::Order::Middle, egui::Id::new("fullscreen"))),
+                |ui| state.show(ui, &device, false),
+            );
+        })
+        .discard_textures();
+    assert!(state.zoom_anchor.is_none());
+    assert!(state.pending_scroll.is_none());
+    assert_eq!(state.controls.zoom, selection);
+}
+
+#[test]
 fn choosing_a_zoom_abandons_the_previous_gesture_state() {
     // A pending offset or anchor belongs to the scale it was computed for.
     let (ctx, device, mut state) = disconnected_viewer();

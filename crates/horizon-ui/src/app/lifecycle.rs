@@ -277,6 +277,7 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         self.process_pending_detached_reattach(ui.ctx());
+        crate::panel_zoom::synchronize_fullscreen(ui.ctx(), self.fullscreen_panel.map(super::panels::panel_layer_salt));
 
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ui);

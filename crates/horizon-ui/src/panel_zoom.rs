@@ -137,6 +137,20 @@ fn latch_id(ctx: &Context) -> Id {
     Id::new(("panel_zoom_gesture", ctx.viewport_id()))
 }
 
+/// Board and fullscreen content use different layers and hit-test geometry.
+/// A rendering-mode transition starts routing afresh in the new view.
+pub(crate) fn synchronize_fullscreen(ctx: &Context, fullscreen_panel: Option<Id>) {
+    let latch = latch_id(ctx);
+    let mode = Id::new(("panel_zoom_fullscreen", ctx.viewport_id()));
+    ctx.data_mut(|data| {
+        let previous = data.get_temp::<Option<Id>>(mode).flatten();
+        if previous != fullscreen_panel {
+            data.remove::<GestureLatch>(latch);
+        }
+        data.insert_temp(mode, fullscreen_panel);
+    });
+}
+
 fn fresh_latch(ctx: &Context, now: f64) -> Option<GestureLatch> {
     ctx.data(|data| data.get_temp::<GestureLatch>(latch_id(ctx)))
         .filter(|latch| now - latch.last_seen <= GESTURE_IDLE_SECONDS)

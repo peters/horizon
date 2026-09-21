@@ -30,6 +30,8 @@ pub(crate) struct DeviceUiState {
     /// smoothing a gesture after the pointer has moved on, so recomputing the
     /// anchor from a pointer that has left the image would make it jump.
     zoom_anchor: Option<ZoomAnchor>,
+    /// Anchors and pending offsets are expressed in this rendering layer.
+    zoom_layer: Option<egui::Id>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
@@ -63,6 +65,11 @@ struct ImageDisplay {
 
 impl DeviceUiState {
     #[cfg(test)]
+    pub(crate) fn zoom_factor(&self) -> f32 {
+        self.controls.zoom.unwrap_or_default().factor()
+    }
+
+    #[cfg(test)]
     pub(crate) fn was_rendered(&self) -> bool {
         self.rendered
     }
@@ -81,6 +88,11 @@ impl DeviceUiState {
 
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {
         self.rendered = true;
+        if self.zoom_layer.is_some_and(|layer| layer != ui.layer_id().id) {
+            self.pending_scroll = None;
+            self.zoom_anchor = None;
+        }
+        self.zoom_layer = Some(ui.layer_id().id);
         if !self.initialized {
             self.initialized = true;
             if device.connect_on_start {

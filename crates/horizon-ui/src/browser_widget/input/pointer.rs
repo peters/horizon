@@ -582,6 +582,45 @@ mod tests {
     }
 
     #[test]
+    fn wheel_forwarding_matches_egui_for_combined_modifiers() {
+        use crate::test_egui::DiscardTextures;
+
+        for modifiers in [
+            egui::Modifiers::NONE,
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::CTRL,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            egui::Modifiers::MAC_CMD | egui::Modifiers::ALT,
+        ] {
+            let ctx = egui::Context::default();
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        events: [egui::TouchPhase::Start, egui::TouchPhase::Move]
+                            .map(|phase| Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: egui::vec2(0.0, 20.0),
+                                phase,
+                                modifiers,
+                            })
+                            .to_vec(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let zooms = ui.input(|input| (input.zoom_delta() - 1.0).abs() > f32::EPSILON);
+                        let zoom_modifier = ui.ctx().options(|options| options.input_options.zoom_modifier);
+                        assert_eq!(
+                            wheel_is_panel_zoom(modifiers, zoom_modifier, false),
+                            zooms,
+                            "{modifiers:?}"
+                        );
+                    },
+                )
+                .discard_textures();
+        }
+    }
+
+    #[test]
     fn wheel_deltas_follow_the_dom_direction() {
         assert_eq!(cdp_wheel_delta(egui::vec2(2.0, 3.0), 16.0), (-32.0, -48.0));
         assert_eq!(cdp_wheel_delta(egui::vec2(-2.0, -3.0), 16.0), (32.0, 48.0));

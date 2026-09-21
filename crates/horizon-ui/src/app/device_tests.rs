@@ -170,6 +170,32 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
 }
 
 #[test]
+fn a_zoom_gesture_continues_when_the_device_enters_fullscreen() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5902"));
+    render(&ctx, &mut app);
+    let body = app
+        .visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)
+        .into_iter()
+        .find(|(id, _)| *id == panel)
+        .and_then(|(_, geometry)| geometry.zoom_body)
+        .expect("device body");
+    let before = app.canvas_view;
+    for (time, fullscreen, expected) in [(1.0, false, 1.25), (1.05, true, 1.5625), (1.1, false, 1.953_125)] {
+        app.fullscreen_panel = fullscreen.then_some(panel);
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(time);
+        input.events = vec![egui::Event::PointerMoved(body.center()), egui::Event::Zoom(1.25)];
+        run_app_frame_with_input(&ctx, &mut app, input);
+        let zoom = app.panel_render_caches.device_ui_state[&panel].zoom_factor();
+        assert!(
+            (zoom - expected).abs() < 0.001,
+            "fullscreen={fullscreen}: {zoom} != {expected}"
+        );
+        assert_eq!(app.canvas_view, before);
+    }
+}
+
+#[test]
 fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
     let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");

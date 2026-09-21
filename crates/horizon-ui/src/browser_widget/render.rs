@@ -131,7 +131,8 @@ pub fn show_body(
     };
 
     // Letterbox (upscale allowed; linear filtering smooths it).
-    let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
+    let responsive = browser.backend_capabilities().viewport && super::explicit_viewport(browser).is_none();
+    let scale = frame_scale(body_rect.size(), vec2(frame_size[0], frame_size[1]), responsive);
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
     paint_page_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
@@ -189,12 +190,25 @@ fn side_limit(max_texture_side: usize) -> f32 {
 /// viewport for it alongside the panel's own unzoomed size.
 fn sync_viewport_sizes(ui: &Ui, state: &mut BrowserUiState, available: egui::Vec2) -> ((u32, u32), (u32, u32)) {
     let max_texture_side = ui.ctx().input(|input| input.max_texture_side);
-    state.effective_zoom =
-        crate::panel_zoom::PanelZoom::new(effective_zoom(available, state.zoom.factor(), max_texture_side));
-    (
-        zoomed_viewport(available, state.zoom.factor(), max_texture_side),
-        zoomed_viewport(available, 1.0, max_texture_side),
-    )
+    let viewport = zoomed_viewport(available, state.zoom.factor(), max_texture_side);
+    let frame_size = vec2(
+        f32::from(u16::try_from(viewport.0).unwrap_or(u16::MAX)),
+        f32::from(u16::try_from(viewport.1).unwrap_or(u16::MAX)),
+    );
+    state.effective_zoom = crate::panel_zoom::PanelZoom::new(frame_scale(available, frame_size, true));
+    (viewport, zoomed_viewport(available, 1.0, max_texture_side))
+}
+
+/// An oversized body may need a smaller frame than even 400% zoom permits.
+/// Keep the frame budget and letterbox the remaining space instead of silently
+/// magnifying beyond the selector's maximum. Fixed viewports still fit normally.
+fn frame_scale(available: egui::Vec2, frame_size: egui::Vec2, responsive: bool) -> f32 {
+    let fitted = (available.x / frame_size.x).min(available.y / frame_size.y);
+    if responsive {
+        fitted.min(crate::panel_zoom::MAX_ZOOM)
+    } else {
+        fitted
+    }
 }
 
 /// The zoom a panel can actually apply. Zooming in is capped where the
@@ -402,6 +416,35 @@ mod tests {
                 && f32::from(u16::try_from(width).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE,
             "{width}x{height} is below the stable viewport floor"
         );
+    }
+
+    #[test]
+    fn oversized_bodies_letterbox_at_the_reported_zoom_limit() {
+        use crate::test_egui::DiscardTextures;
+        use egui::vec2;
+        let ctx = egui::Context::default();
+        for available in [vec2(12_000.0, 12_000.0), vec2(40_000.0, 120.0)] {
+            let mut state = BrowserUiState {
+                zoom: crate::panel_zoom::PanelZoom::new(4.0),
+                ..Default::default()
+            };
+            let _ = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let (viewport, _) = super::sync_viewport_sizes(ui, &mut state, available);
+                    let frame = vec2(
+                        f32::from(u16::try_from(viewport.0).expect("bounded frame")),
+                        f32::from(u16::try_from(viewport.1).expect("bounded frame")),
+                    );
+                    let scale = super::frame_scale(available, frame, true);
+                    assert!(scale <= crate::panel_zoom::MAX_ZOOM);
+                    assert!((scale - state.effective_zoom.factor()).abs() < 0.001);
+                    assert!(f64::from(viewport.0) * f64::from(viewport.1) <= f64::from(super::MAX_FRAME_PIXELS));
+                    assert!(frame.x * scale <= available.x && frame.y * scale <= available.y);
+                })
+                .discard_textures();
+        }
+        let fixed_scale = super::frame_scale(vec2(1000.0, 1000.0), vec2(100.0, 100.0), false);
+        assert!((fixed_scale - 10.0).abs() < f32::EPSILON);
     }
 
     #[test]
