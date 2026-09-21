@@ -36,7 +36,8 @@ with these entries:
   ```
 
 - `uploads/claim.pdf`, `uploads/photo.png`, `uploads/notes.txt`: any small
-  synthetic files with those extensions.
+  synthetic files with those extensions, and `uploads/empty.txt` with no
+  content.
 - `uploads/looks-inside.txt`: a symlink to a file outside the fixture root.
 - A file outside the fixture root, for example `../outside/secret.txt`.
 
@@ -67,6 +68,9 @@ reply with the matching `id` arrives.
 | `browser_act set_files` with the `#docs` ref and `claim.pdf` + `photo.png` | `completed: true`, `files` lists both names with sizes > 0 and MIME types |
 | `browser_evaluate` `document.getElementById('status').textContent` | `2 file(s) after 1 change event(s)` |
 | `browser_query` `#docs` | `file_input.files == 2` |
+| `set_files #docs` with `empty.txt` | `files: [{name: empty.txt, size: 0}]` (the readback really reads an empty file) |
+| `set_files #docs` with `notes.txt` | `files` holds only `notes.txt`: an attachment replaces the selection on every backend, including WebDriver where Send Keys would otherwise append |
+| `browser_evaluate` the status text | `1 file(s) after 3 change event(s)` |
 | `set_files #avatar` with `claim.pdf` | error `accept_mismatch` |
 | `set_files #avatar` with two files | error `multiple_not_allowed` |
 | `set_files` on the button `#add` | error `not_file_input` |
@@ -95,7 +99,7 @@ source.
 
 `horizon-browser mcp --standalone --backend chromium` with `HOME` pointed at
 a throwaway directory. The engine path is `DOM.setFileInputFiles`.
-Last run: Linux, 17/17, 2026-09-21.
+Last run: Linux, 20/20, 2026-09-21.
 
 ## Lane B: Firefox (Linux, macOS, Windows)
 
@@ -103,7 +107,7 @@ Last run: Linux, 17/17, 2026-09-21.
 `geckodriver` on `PATH`). The engine path is Element Send Keys with
 newline-separated paths. Page-side refusals travel as script values whose
 object has an `error` member; the transport must not mistake them for a W3C
-error envelope. Last run: Linux, 17/17, 2026-09-21.
+error envelope. Last run: Linux, 20/20, 2026-09-21.
 
 ## Lane C: Safari (macOS only)
 

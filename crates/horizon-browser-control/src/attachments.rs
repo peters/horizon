@@ -231,8 +231,17 @@ fn handle_location(file: &std::fs::File, _requested: &Path) -> std::io::Result<P
 #[cfg(not(target_os = "linux"))]
 fn handle_location(file: &std::fs::File, requested: &Path) -> std::io::Result<PathBuf> {
     let resolved = std::fs::canonicalize(requested)?;
+    // The resolved name is reopened without blocking and checked to be a
+    // regular file too, so a FIFO swapped in after resolution cannot hang
+    // this second open either.
+    let reopened = open_without_blocking(&resolved)?;
+    if !reopened.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "the attachment changed while it was being checked",
+        ));
+    }
     let opened = same_file::Handle::from_file(file.try_clone()?)?;
-    let named = same_file::Handle::from_path(&resolved)?;
+    let named = same_file::Handle::from_file(reopened)?;
     if opened == named {
         Ok(resolved)
     } else {
