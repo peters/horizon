@@ -232,6 +232,17 @@ impl HorizonApp {
             .then_some(*topmost)
     }
 
+    pub(in crate::app) fn zoom_gesture_blocker(&self, ctx: &Context) -> Option<egui::Id> {
+        crate::panel_zoom::blocking_layer(
+            ctx,
+            self.board
+                .panels
+                .iter()
+                .map(|panel| panel_layer_salt(panel.id))
+                .chain(self.panel_screen_order.iter().copied().map(panel_layer_salt)),
+        )
+    }
+
     #[profiling::function]
     pub(in super::super) fn handle_canvas_pan(&mut self, ctx: &Context) {
         self.handle_canvas_pan_in_rect(ctx, self.canvas_rect(ctx), None);
@@ -316,11 +327,15 @@ impl HorizonApp {
         // A panel that zooms its own content owns the gesture over its frame.
         // The first owner keeps the whole gesture: egui keeps smoothing zoom
         // deltas after the input stops, and the pointer may leave the panel.
-        let candidate = self
-            .zoom_gesture_panel(ctx, visible_workspace, &panel_geometry, pointer_position)
-            .map(panel_layer_salt);
-        let pointer_over_panel_zoom = crate::panel_zoom::gesture_owner(ctx, candidate).is_some();
-        if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {
+        let zooming = (zoom_delta - 1.0).abs() > f32::EPSILON;
+        let pointer_over_panel_zoom = zooming && {
+            let candidate = self.zoom_gesture_blocker(ctx).or_else(|| {
+                self.zoom_gesture_panel(ctx, visible_workspace, &panel_geometry, pointer_position)
+                    .map(panel_layer_salt)
+            });
+            crate::panel_zoom::gesture_owner(ctx, candidate).is_some()
+        };
+        if pointer_in_canvas && !pointer_over_panel_zoom && zooming {
             route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {

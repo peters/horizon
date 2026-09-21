@@ -431,10 +431,14 @@ impl HorizonApp {
                     |ui| {
                         // egui's pointer layer can still name the board panel on
                         // the transition frame. Fullscreen owns this body now.
-                        let zoom_owner = crate::panel_zoom::local_pointer(ui)
-                            .filter(|pointer| ui.max_rect().contains(*pointer))
-                            .map(|_| ui.layer_id().id);
-                        crate::panel_zoom::gesture_owner(ui.ctx(), zoom_owner);
+                        if ui.input(|input| (input.zoom_delta() - 1.0).abs() > f32::EPSILON) {
+                            let zoom_owner = self.zoom_gesture_blocker(ui.ctx()).or_else(|| {
+                                crate::panel_zoom::local_pointer(ui)
+                                    .filter(|pointer| ui.max_rect().contains(*pointer))
+                                    .map(|_| ui.layer_id().id)
+                            });
+                            crate::panel_zoom::gesture_owner(ui.ctx(), zoom_owner);
+                        }
                         let mut reconnect_requested = false;
                         let claim_editor_focus = !self.speech_text_surface_active().0;
                         if let Some(panel) = self.board.panel_mut(panel_id) {

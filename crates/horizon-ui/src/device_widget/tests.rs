@@ -585,3 +585,144 @@ fn choosing_a_zoom_abandons_the_previous_gesture_state() {
     assert!(state.pending_scroll.is_none(), "a stale offset survived the selection");
     assert!(state.zoom_anchor.is_none(), "a stale anchor survived the selection");
 }
+
+#[test]
+fn changing_viewports_with_the_same_layer_discards_the_old_zoom_anchor() {
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.controls.zoom = Some(PanelZoom::new(1.5));
+    let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("panel"));
+    let detached = egui::ViewportId::from_hash_of("detached");
+    for (index, viewport_id) in [egui::ViewportId::ROOT, detached, egui::ViewportId::ROOT]
+        .into_iter()
+        .enumerate()
+    {
+        state.zoom_anchor = Some(ZoomAnchor {
+            captured_at: 1.0,
+            pointer: egui::pos2(100.0, 100.0),
+            content: egui::vec2(50.0, 50.0),
+        });
+        state.pending_scroll = Some(egui::vec2(30.0, 40.0));
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    viewport_id,
+                    viewports: [
+                        (egui::ViewportId::ROOT, egui::ViewportInfo::default()),
+                        (detached, egui::ViewportInfo::default()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().layer_id(layer), |ui| {
+                        state.show(ui, &device, false);
+                    });
+                },
+            )
+            .discard_textures();
+        if index > 0 {
+            assert!(state.zoom_anchor.is_none());
+            assert!(state.pending_scroll.is_none());
+        }
+        assert_eq!(state.controls.zoom, Some(PanelZoom::new(1.5)));
+    }
+}
+
+#[test]
+fn reversing_a_gesture_after_holding_a_zoom_limit_keeps_its_anchor() {
+    for (scale, outward, reverse, expected) in [
+        (panel_zoom::MAX_ZOOM, 1.1, 0.5, 2.0),
+        (panel_zoom::MIN_ZOOM, 0.9, 2.0, 0.5),
+    ] {
+        let ctx = egui::Context::default();
+        let mut state = DeviceUiState::default();
+        state.controls.zoom = Some(PanelZoom::new(scale));
+        let anchor_pointer = egui::pos2(200.0, 200.0);
+        let outside = egui::pos2(900.0, 700.0);
+        let body = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0));
+        for (time, pointer, delta) in [
+            (1.0, anchor_pointer, outward),
+            (1.1, outside, outward),
+            (1.2, outside, outward),
+            (1.3, outside, reverse),
+        ] {
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        events: vec![egui::Event::PointerMoved(pointer), egui::Event::Zoom(delta)],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel_zoom::gesture_owner(ui.ctx(), Some(ui.layer_id().id));
+                        state.handle_zoom_gesture(
+                            ui,
+                            Some(ImageView {
+                                scale,
+                                image_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(4000.0, 3200.0)),
+                                body,
+                            }),
+                        );
+                    },
+                )
+                .discard_textures();
+            let anchor = state.zoom_anchor.expect("active samples retain the initial anchor");
+            assert_eq!(anchor.pointer, anchor_pointer);
+            assert!((anchor.captured_at - time).abs() < f64::EPSILON);
+        }
+        assert_eq!(state.controls.zoom, Some(PanelZoom::new(expected)));
+        let offset = (anchor_pointer.to_vec2() / scale * expected - (anchor_pointer - body.min)).max(egui::Vec2::ZERO);
+        assert_eq!(state.pending_scroll, Some(offset));
+    }
+}
+
+#[test]
+fn presentation_changes_discard_anchors_but_ordinary_frames_and_fps_do_not() {
+    let (ctx, _device, mut state) = disconnected_viewer();
+    let seed_anchor = |state: &mut DeviceUiState| {
+        state.zoom_anchor = Some(ZoomAnchor {
+            captured_at: 1.0,
+            pointer: egui::pos2(50.0, 40.0),
+            content: egui::vec2(25.0, 20.0),
+        });
+        state.pending_scroll = Some(egui::vec2(10.0, 20.0));
+    };
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            state.update_texture(ui, patterned_desktop());
+            seed_anchor(&mut state);
+            state.update_texture(ui, egui::ColorImage::filled([8, 4], egui::Color32::RED));
+            assert!(state.zoom_anchor.is_some());
+            assert!(state.pending_scroll.is_some());
+            let previous = state.controls.options;
+            state.controls.options.max_fps = 1;
+            assert!(!state.apply_view_options(previous));
+            assert!(state.zoom_anchor.is_some());
+            assert!(state.pending_scroll.is_some());
+            for crop in [false, true] {
+                seed_anchor(&mut state);
+                let previous = state.controls.options;
+                if crop {
+                    state.controls.options.viewport = Some(horizon_core::DeviceViewport {
+                        x: 1,
+                        y: 0,
+                        width: 4,
+                        height: 4,
+                    });
+                } else {
+                    state.controls.options.max_width = 4;
+                }
+                assert!(state.apply_view_options(previous));
+                assert!(state.zoom_anchor.is_none());
+                assert!(state.pending_scroll.is_none());
+            }
+            state.controls.options = DeviceViewOptions::default();
+            state.update_texture(ui, patterned_desktop());
+            seed_anchor(&mut state);
+            state.update_texture(ui, egui::ColorImage::filled([16, 8], egui::Color32::RED));
+            assert!(state.zoom_anchor.is_none());
+            assert!(state.pending_scroll.is_none());
+        })
+        .discard_textures();
+}

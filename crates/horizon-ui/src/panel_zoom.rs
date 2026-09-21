@@ -156,6 +156,14 @@ fn fresh_latch(ctx: &Context, now: f64) -> Option<GestureLatch> {
         .filter(|latch| now - latch.last_seen <= GESTURE_IDLE_SECONDS)
 }
 
+/// Reserve new gestures for foreground controls such as menus. Known panel
+/// layers are excluded because their previous-frame hit geometry may be stale.
+pub(crate) fn blocking_layer(ctx: &Context, mut panel_layers: impl Iterator<Item = Id>) -> Option<Id> {
+    let pointer = ctx.input(|input| input.pointer.hover_pos())?;
+    let layer = ctx.layer_id_at(pointer)?;
+    (layer.order >= egui::Order::Foreground && !panel_layers.any(|id| id == layer.id)).then_some(layer.id)
+}
+
 /// Latch who owns the gesture in progress. `candidate` is what the pointer
 /// says right now; the first answer of a gesture wins until it goes idle.
 pub(crate) fn gesture_owner(ctx: &Context, candidate: Option<Id>) -> Option<Id> {

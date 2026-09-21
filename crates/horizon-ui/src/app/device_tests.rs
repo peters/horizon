@@ -300,6 +300,7 @@ fn zoom_routing_follows_retained_layers_after_focus_leaves_overlapping_panels() 
     render(&ctx, &mut app);
     app.board.focused = None;
     for frame in 0..3 {
+        assert_eq!(app.board.focused, None);
         let geometry = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None);
         let point = geometry
             .iter()
@@ -319,5 +320,75 @@ fn zoom_routing_follows_retained_layers_after_focus_leaves_overlapping_panels() 
             ctx.layer_id_at(point).map(|layer| layer.id),
             Some(super::panels::panel_layer_salt(panel))
         );
+    }
+    for (top, expected) in [(notes, None), (panel, Some(panel))] {
+        ctx.move_to_top(egui::LayerId::new(
+            egui::Order::Middle,
+            super::panels::panel_layer_salt(top),
+        ));
+        render(&ctx, &mut app);
+        assert_eq!(app.board.focused, None);
+        let geometry = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None);
+        let point = geometry
+            .iter()
+            .find(|(id, _)| *id == panel)
+            .expect("device")
+            .1
+            .zoom_body
+            .expect("body")
+            .center();
+        assert_eq!(
+            ctx.layer_id_at(point).map(|layer| layer.id),
+            Some(super::panels::panel_layer_salt(top))
+        );
+        assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), expected);
+    }
+}
+
+#[test]
+fn popup_gestures_do_not_zoom_the_covered_panel_or_canvas() {
+    use crate::test_egui::DiscardTextures;
+    for fullscreen in [false, true] {
+        let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+        render(&ctx, &mut app);
+        render(&ctx, &mut app);
+        let point = app
+            .visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)
+            .iter()
+            .find(|(id, _)| *id == panel)
+            .expect("device")
+            .1
+            .zoom_body
+            .expect("body")
+            .center();
+        app.fullscreen_panel = fullscreen.then_some(panel);
+        let before = app.canvas_view;
+        let popup = egui::Id::new("blocking-menu");
+        for step in 0..4 {
+            let mut input = raw_input([1400.0, 900.0], None);
+            input.time = Some(f64::from(step) * 0.05);
+            input.events.push(egui::Event::PointerMoved(point));
+            if step >= 2 {
+                input.events.push(egui::Event::Zoom(1.25));
+            }
+            let mut frame = eframe::Frame::_new_kittest();
+            let _ = ctx
+                .run_ui(input, |ui| {
+                    eframe::App::ui(&mut app, ui, &mut frame);
+                    egui::Popup::new(popup, ui.ctx().clone(), egui::Rect::NOTHING, ui.layer_id())
+                        .at_position(point - egui::vec2(40.0, 40.0))
+                        .kind(egui::PopupKind::Menu)
+                        .open(true)
+                        .show(|ui| {
+                            ui.allocate_exact_size(egui::vec2(160.0, 160.0), egui::Sense::hover());
+                        });
+                })
+                .discard_textures();
+            if step >= 2 {
+                assert_eq!(ctx.layer_id_at(point).map(|layer| layer.id), Some(popup));
+                assert_eq!(app.canvas_view, before, "fullscreen={fullscreen}");
+                assert!((app.panel_render_caches.device_ui_state[&panel].zoom_factor() - 1.0).abs() < f32::EPSILON);
+            }
+        }
     }
 }

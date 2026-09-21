@@ -30,8 +30,8 @@ pub(crate) struct DeviceUiState {
     /// smoothing a gesture after the pointer has moved on, so recomputing the
     /// anchor from a pointer that has left the image would make it jump.
     zoom_anchor: Option<ZoomAnchor>,
-    /// Anchors and pending offsets are expressed in this rendering layer.
-    zoom_layer: Option<egui::Id>,
+    /// Anchors and pending offsets belong to this viewport and rendering layer.
+    zoom_layer: Option<(egui::ViewportId, egui::Id)>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
@@ -42,7 +42,7 @@ pub(crate) struct DeviceUiState {
 struct ZoomAnchor {
     captured_at: f64,
     pointer: egui::Pos2,
-    /// Source pixel under the pointer when the gesture started.
+    /// Pixel of the displayed image under the pointer when the gesture started.
     content: egui::Vec2,
 }
 
@@ -88,11 +88,12 @@ impl DeviceUiState {
 
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {
         self.rendered = true;
-        if self.zoom_layer.is_some_and(|layer| layer != ui.layer_id().id) {
+        let zoom_layer = (ui.ctx().viewport_id(), ui.layer_id().id);
+        if self.zoom_layer.is_some_and(|layer| layer != zoom_layer) {
             self.pending_scroll = None;
             self.zoom_anchor = None;
         }
-        self.zoom_layer = Some(ui.layer_id().id);
+        self.zoom_layer = Some(zoom_layer);
         if !self.initialized {
             self.initialized = true;
             if device.connect_on_start {
@@ -213,22 +214,28 @@ impl DeviceUiState {
         let Some(delta) = panel_zoom::gesture_delta(ui, panel_zoom::owns_gesture(ui)) else {
             return;
         };
+        // Samples against a scale limit still belong to this gesture, so its
+        // anchor must stay fresh until the user reverses or stops.
+        self.refresh_zoom_anchor(ui, view);
         // Start from the scale actually on screen, which for `Fit` can sit
         // outside the supported range.
         let displayed = view.map_or_else(|| self.controls.zoom.unwrap_or_default().factor(), |view| view.scale);
         let Some(next) = panel_zoom::gesture_target(displayed, delta) else {
             return;
         };
-        self.anchor_zoom(ui, view, next);
+        if let (Some(anchor), Some(view)) = (self.zoom_anchor, view) {
+            self.pending_scroll =
+                Some((anchor.content * next.factor() - (anchor.pointer - view.body.min)).max(egui::Vec2::ZERO));
+        }
         self.controls.zoom = Some(next);
         ui.ctx().request_repaint();
     }
 
-    /// Hold one source pixel in place for the whole gesture. The anchor is
+    /// Hold one displayed pixel in place for the whole gesture. The anchor is
     /// captured where the gesture started and reused while it lasts, so the
     /// smoothed tail of a gesture whose pointer has left the image cannot
     /// drag the view somewhere else.
-    fn anchor_zoom(&mut self, ui: &Ui, view: Option<ImageView>, next: PanelZoom) {
+    fn refresh_zoom_anchor(&mut self, ui: &Ui, view: Option<ImageView>) {
         let Some(view) = view else {
             return;
         };
@@ -246,12 +253,7 @@ impl DeviceUiState {
                     content: (pointer - view.image_rect.min) / view.scale,
                 })
             });
-        let Some(anchor) = anchor else {
-            return;
-        };
-        self.pending_scroll =
-            Some((anchor.content * next.factor() - (anchor.pointer - view.body.min)).max(egui::Vec2::ZERO));
-        self.zoom_anchor = Some(ZoomAnchor {
+        self.zoom_anchor = anchor.map(|anchor| ZoomAnchor {
             captured_at: now,
             ..anchor
         });
@@ -296,6 +298,8 @@ impl DeviceUiState {
         if previous.same_presentation(self.controls.options) {
             return false;
         }
+        self.zoom_anchor = None;
+        self.pending_scroll = None;
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
@@ -333,6 +337,10 @@ impl DeviceUiState {
     }
 
     fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) -> bool {
+        if self.texture.as_ref().is_none_or(|texture| texture.size() != image.size) {
+            self.zoom_anchor = None;
+            self.pending_scroll = None;
+        }
         let limit = ui.ctx().input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
