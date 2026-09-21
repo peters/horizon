@@ -34,7 +34,13 @@ viewer's own hostname. Omit unknown fields. Inspect/list return these labels.
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
 verify `connection: "connected"`, `image_received`, `image_displayed` and an
 advancing `frame_sequence` while target output changes. `visible` is only a
-presentation setting; an image can be off canvas or clipped. Set
+presentation setting; an image can be off canvas or clipped. Hidden and off-canvas
+viewers continue receiving: `received_frame_sequence` counts received image
+updates independently of the uploaded-image `frame_sequence`. Use reception
+progress for background observation and `image_displayed` for visual evidence.
+Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
+is not a connection failure. Older hosts may omit reception progress; do not
+interpret a missing/default-zero counter as a failure. Set
 `operation: "visibility", visible: true` for a hidden owned viewer, then verify
 actual presentation. Never claim that a separate isolated viewer is visible to
 the user merely because its screenshot is available.

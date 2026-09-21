@@ -313,6 +313,18 @@ UI frame and requires a connected image intersecting the drawing clip. An old
 texture after a disconnect is not a live image. The frame sequence counts
 uploaded images in the current connection and resets on explicit reconnect.
 
+Hidden and off-canvas viewers continue receiving at their configured refresh rate
+without frame-triggered repaints or off-screen GPU uploads. `received_frame_sequence`
+counts worker-published image updates independently of `frame_sequence` uploads.
+It advances without UI rendering and resets on reconnect; inspection does not
+consume the pending image. Revealing a viewer displays the latest retained image,
+even if the desktop has since become static. Older hosts omit this field, which
+new clients deserialize as zero: that alone does not establish failed reception.
+Neither counter is a connection heartbeat. An unchanged desktop can keep both
+stationary; use connection errors to identify failures, and require
+`image_displayed` separately when proving a live visible view.
+
+
 All operations require a Horizon-injected caller and host identity. Discovery
 and inspection are workspace-scoped. Only the creator/owner may change visibility
 or close a viewer. Explicit reconnect can acquire an unowned viewer, including a
