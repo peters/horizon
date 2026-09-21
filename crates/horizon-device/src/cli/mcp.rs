@@ -6,7 +6,7 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::{
         CallToolResult, ClientNotification, ContentBlock, Implementation, JsonRpcMessage, RequestId,
-        ServerCapabilities, ServerInfo,
+        ServerCapabilities, ServerConfig,
     },
     service::{RequestContext, RxJsonRpcMessage, TxJsonRpcMessage},
     tool, tool_router,
@@ -271,8 +271,8 @@ impl ServerHandler for Server {
         Self::tool_router().get(name).cloned()
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-device", env!("CARGO_PKG_VERSION")))
             .with_instructions("Only control the configured authorized device. Observe before and after input. Live viewing is read-only; use device tools for application input. Bounded input already in progress finishes and releases held input even if a tool request is cancelled.")
     }
