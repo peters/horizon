@@ -45,6 +45,26 @@ pub struct DevicePanelState {
 }
 
 impl DevicePanelState {
+    const MAX_LABEL_CHARS: usize = 256;
+
+    /// Bound the untrusted handshake label and flatten controls for plain-text display.
+    #[must_use]
+    pub fn server_label(raw: &str) -> Option<String> {
+        let bounded: String = raw
+            .chars()
+            .take(Self::MAX_LABEL_CHARS)
+            .map(|character| {
+                if character.is_control() || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect();
+        let trimmed = bounded.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    }
+
     /// Choose an available human-readable label without treating it as verified identity.
     #[must_use]
     pub fn display_name<'a>(&'a self, server_name: Option<&'a str>) -> Option<&'a str> {
@@ -72,7 +92,7 @@ impl DevicePanelState {
         ] {
             if let Some(value) = label {
                 let trimmed = value.trim();
-                if trimmed.chars().count() > 256 || value.chars().any(char::is_control) {
+                if trimmed.chars().count() > Self::MAX_LABEL_CHARS || value.chars().any(char::is_control) {
                     return Err(Error::Config(
                         "Device identity labels must be plain text of at most 256 characters".into(),
                     ));
@@ -298,5 +318,25 @@ mod tests {
                 .is_none()
         );
         Ok(())
+    }
+    #[test]
+    fn server_labels_are_optional_bounded_unicode_plain_text() {
+        use super::DevicePanelState;
+        assert_eq!(DevicePanelState::server_label("\0\n "), None);
+        assert_eq!(
+            DevicePanelState::server_label("  Lab\nÆØÅ\t ").as_deref(),
+            Some("Lab ÆØÅ")
+        );
+        assert_eq!(
+            DevicePanelState::server_label(&"Æ".repeat(300))
+                .unwrap()
+                .chars()
+                .count(),
+            256
+        );
+        assert_eq!(
+            DevicePanelState::server_label("left\u{202e}right").as_deref(),
+            Some("left right")
+        );
     }
 }

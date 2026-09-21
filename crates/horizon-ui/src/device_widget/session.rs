@@ -6,7 +6,7 @@ use std::{
 };
 
 use egui::{ColorImage, Context, ViewportId};
-use horizon_core::DeviceViewOptions;
+use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 use tokio::sync::{oneshot, watch};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
@@ -43,6 +43,7 @@ pub(super) struct Updates {
     visible: bool,
     options: DeviceViewOptions,
     pub desktop: Option<[usize; 2]>,
+    pub server_name: Option<String>,
 }
 
 pub(super) struct Session {
@@ -68,6 +69,7 @@ impl Session {
             visible: true,
             options,
             desktop: None,
+            server_name: None,
         }));
         let latest_full = Arc::new(Mutex::new(None));
         let state = Arc::clone(&updates);
@@ -130,6 +132,7 @@ impl Session {
                 visible: true,
                 options: produced_with,
                 desktop: Some(latest_full.size),
+                server_name: None,
             })),
             latest_full: Arc::new(Mutex::new(Some(latest_full))),
             stop: None,
@@ -164,6 +167,15 @@ impl Session {
             visible: state.visible,
             options: state.options,
             desktop: state.desktop,
+            server_name: state.server_name.take(),
+        }
+    }
+
+    pub(super) fn take_server_details(&self) -> DeviceServerDetails {
+        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        DeviceServerDetails {
+            name: state.server_name.take(),
+            desktop_size: state.desktop,
         }
     }
 
@@ -207,31 +219,20 @@ async fn connection(
     ctx: &Context,
     mut visible: watch::Receiver<bool>,
 ) -> Result<(), ViewError> {
-    let client = tokio::time::timeout(Duration::from_secs(5), async {
-        let stream = tokio::net::TcpStream::connect(address).await?;
-        stream.set_nodelay(true)?;
-        // The local MVP has no credentials. Password-required servers fail
-        // explicitly; input and clipboard are never forwarded by this viewer.
-        let client = VncConnector::new(stream)
-            .set_auth_method(async { Err(vnc::VncError::NoPassword) })
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
-            .allow_shared(true)
-            .set_pixel_format(PixelFormat::rgba())
-            .build()?
-            .try_start()
-            .await?
-            .finish()?;
-        Ok::<_, ViewError>(client)
-    })
-    .await
-    .map_err(|_| ViewError::Timeout)??;
-    publish_status(updates, ctx, Status::Connected);
+    let client = connect_client(address).await?;
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
+    // ServerInit queues resolution before the client is returned. Observe that
+    // metadata even if a hidden viewer pauses before its first image refresh.
+    if let Some(event) = client.poll_event().await? {
+        apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
+    }
+    {
+        let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.server_name = DevicePanelState::server_label(client.server_name());
+        state.desktop = (!framebuffer.size().contains(&0)).then(|| framebuffer.size());
+    }
+    publish_status(updates, ctx, Status::Connected);
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
         if full_refresh {
@@ -268,6 +269,12 @@ async fn connection(
                 idle = true;
             }
         }
+        if !framebuffer.size().contains(&0) {
+            updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .desktop = Some(framebuffer.size());
+        }
         // Sample off the UI thread. The full desktop is retained so view
         // controls can re-present after disconnect or an options change.
         if received_pixels && changed && !framebuffer.size().contains(&0) {
@@ -298,6 +305,31 @@ async fn connection(
         .await
         .map_err(|_| ViewError::Timeout)??;
     }
+}
+
+async fn connect_client(address: SocketAddr) -> Result<vnc::VncClient, ViewError> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let stream = tokio::net::TcpStream::connect(address).await?;
+        stream.set_nodelay(true)?;
+        // The local MVP has no credentials. Password-required servers fail
+        // explicitly; input and clipboard are never forwarded by this viewer.
+        let client = VncConnector::new(stream)
+            .set_auth_method(async { Err(vnc::VncError::NoPassword) })
+            .add_encoding(VncEncoding::Zrle)
+            .add_encoding(VncEncoding::CopyRect)
+            .add_encoding(VncEncoding::Raw)
+            .add_encoding(VncEncoding::DesktopSizePseudo)
+            .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
+            .allow_shared(true)
+            .set_pixel_format(PixelFormat::rgba())
+            .build()?
+            .try_start()
+            .await?
+            .finish()?;
+        Ok::<_, ViewError>(client)
+    })
+    .await
+    .map_err(|_| ViewError::Timeout)?
 }
 
 fn apply_frame_event(

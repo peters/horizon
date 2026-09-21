@@ -261,6 +261,19 @@ configuration. CLI plans invoke the same tool; see the
 
 ## Native Device viewer lifecycle
 
+The compact viewer summary selects the supplied machine name, hostname,
+Tailscale name, server-advertised VNC name, then local endpoint. Expand
+**Connection details** for selectable supplied labels, the local endpoint,
+server name and desktop resolution. Unknown fields are omitted.
+
+Inspect/list expose the same observed information in `server.name` and
+`server.desktop_size` (`[width, height]`). Server labels are bounded to 256
+characters and controls are flattened. Observations remain labelled as last
+connection data after disconnect, clear on reconnect and are never persisted.
+Supplied labels persist but are not verified by the server; loopback does not
+identify the remote host and no SSH/Tailscale discovery or tunnel is created.
+
+
 Creation accepts optional creator-supplied host labels:
 
 ```json

@@ -1,12 +1,13 @@
 //! Read-only native VNC rendering; device actions stay in the CLI/MCP crate.
 mod controls;
+mod details;
 mod frame;
 mod session;
 
 use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
 use horizon_core::{
     DevicePanelState, DeviceViewOptions,
-    browser::manifest::device::{Connection, ImageEvidence, PanelState},
+    browser::manifest::device::{Connection, DeviceServerDetails, ImageEvidence, PanelState},
 };
 
 use frame::present_image;
@@ -24,6 +25,7 @@ pub(crate) struct DeviceUiState {
     texture: Option<TextureHandle>,
     presented_options: Option<DeviceViewOptions>,
     status: Status,
+    server: DeviceServerDetails,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
 }
@@ -72,6 +74,10 @@ impl DeviceUiState {
         if let Some((updates, full)) = incoming {
             if let Some(desktop) = updates.desktop {
                 self.desktop = Some(desktop);
+                self.server.desktop_size = Some(desktop);
+            }
+            if let Some(name) = updates.server_name {
+                self.server.name = Some(name);
             }
             if let Some(status) = updates.status {
                 self.status = status;
@@ -90,27 +96,11 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Read-only");
-            ui.monospace(device.target.address().to_string());
-            if ui.add_enabled(interactive, egui::Button::new("Reconnect")).clicked() {
-                self.reconnect(ui.ctx(), device);
-            }
-            match &self.status {
-                Status::Stopped => {
-                    ui.label("Stopped — select Reconnect");
-                }
-                Status::Connecting => {
-                    ui.spinner();
-                    ui.label("Connecting…");
-                }
-                Status::Connected => {
-                    ui.label("Connected");
-                }
-                Status::Disconnected(error) => {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
-                }
-            }
+        if details::header(ui, device, &self.server, &self.status, interactive) {
+            self.reconnect(ui.ctx(), device);
+        }
+        ui.add_enabled_ui(interactive, |ui| {
+            details::show(ui, device, &self.server, matches!(self.status, Status::Connected));
         });
         let previous = self.controls.options;
         let changed = ui
@@ -245,6 +235,7 @@ impl DeviceUiState {
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
         self.initialized = true;
         self.image = ImageDisplay::default();
+        self.server = DeviceServerDetails::default();
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
@@ -272,8 +263,17 @@ impl DeviceUiState {
     ) -> PanelState {
         // Observe worker failures even when the panel is hidden or off canvas.
         // Retain pending pixels for show(); only rendering may assert display.
-        if let Some(status) = self.session.as_ref().and_then(Session::take_status) {
-            self.status = status;
+        if let Some(session) = &self.session {
+            if let Some(status) = session.take_status() {
+                self.status = status;
+            }
+            let details = session.take_server_details();
+            if let Some(name) = details.name {
+                self.server.name = Some(name);
+            }
+            if let Some(size) = details.desktop_size {
+                self.server.desktop_size = Some(size);
+            }
         }
         let (connection, connection_error) = match &self.status {
             Status::Stopped => (Connection::Stopped, None),
@@ -285,6 +285,7 @@ impl DeviceUiState {
             panel_id,
             endpoint: device.target.address().to_string(),
             identity: device.identity.clone(),
+            server: self.server.clone(),
             visible,
             owned_by_caller: self.owner.as_deref() == Some(actor),
             image: ImageEvidence {
