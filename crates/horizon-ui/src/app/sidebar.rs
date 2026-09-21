@@ -727,9 +727,14 @@ fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
     is_active || !accordion
 }
 
-fn sidebar_workspace_name_width(available_width: f32, detached: bool) -> f32 {
-    let count_reserve = 28.0;
-    let detached_reserve = if detached { 62.0 } else { 0.0 };
+/// Width left for the workspace name after the badges that follow it: the
+/// panel count (accordion rows only) and the `NEW WINDOW` badge (detached
+/// rows). Sizing the label to this width lets it truncate instead of running
+/// past the sidebar edge.
+fn sidebar_workspace_name_width(available_width: f32, detached: bool, accordion: bool) -> f32 {
+    let count_reserve = if accordion { 28.0 } else { 0.0 };
+    // Badge text plus the explicit 4px gap and egui's item spacing before it.
+    let detached_reserve = if detached { 76.0 } else { 0.0 };
     (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
 }
 
@@ -761,15 +766,16 @@ fn render_sidebar_workspace_row_contents(
         })
         .size(13.0)
         .strong();
-    let name_response = if accordion {
-        let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached);
-        ui.add_sized(
+    // A sized, left-to-right scope (rather than `add_sized`, which centers)
+    // keeps the name flush left while letting long names truncate.
+    let name_width = sidebar_workspace_name_width(ui.available_width(), workspace.detached, accordion);
+    let name_response = ui
+        .allocate_ui_with_layout(
             Vec2::new(name_width, 18.0),
-            egui::Label::new(name).truncate().sense(Sense::click()),
+            Layout::left_to_right(Align::Center),
+            |ui| ui.add(egui::Label::new(name).truncate().sense(Sense::click())),
         )
-    } else {
-        ui.add(egui::Label::new(name).sense(Sense::click()))
-    };
+        .inner;
     hovered |= name_response.hovered();
     clicked |= name_response.clicked();
 
@@ -942,9 +948,21 @@ mod tests {
     #[test]
     fn accordion_name_width_fits_detached_row_at_minimum_sidebar() {
         // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
-        let width = sidebar_workspace_name_width(143.0, true);
+        let width = sidebar_workspace_name_width(143.0, true, true);
         assert!(width < 48.0);
-        assert!((width - 43.0).abs() <= f32::EPSILON);
+        assert!((width - 29.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn flat_name_width_reserves_only_the_detached_badge() {
+        // Flat rows draw no panel count, so the name keeps that room.
+        assert!((sidebar_workspace_name_width(143.0, false, false) - 133.0).abs() <= f32::EPSILON);
+        assert!((sidebar_workspace_name_width(143.0, true, false) - 57.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn name_width_never_goes_negative() {
+        assert!(sidebar_workspace_name_width(20.0, true, true).abs() <= f32::EPSILON);
     }
 
     // `is_focused` is decorative in these tests: the reveal helpers read the
