@@ -3,6 +3,8 @@ use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Worker,
 use serde_json::{Value, json};
 use std::time::Duration;
 
+pub mod recovery;
+
 #[cfg(test)]
 mod tests;
 
@@ -42,10 +44,30 @@ impl RunPod {
         spec.validate()?;
         cancel.check()?;
         progress(Progress::Reconciling);
+        if *state == CreateState::Requested {
+            let recovered = self.reconcile(spec, state, None, cancel, &mut persist)?;
+            return match recovered.outcome {
+                recovery::Outcome::Found { worker_id } => {
+                    progress(Progress::WorkerFound(worker_id));
+                    recovered.worker.ok_or(CloudError::InvalidResponse)
+                }
+                recovery::Outcome::Conflicting { .. } => Err(CloudError::DuplicateWorkers),
+                recovery::Outcome::Inactive { .. } => Err(CloudError::Invalid(
+                    "Existing worker is not running; check provider before reconnecting",
+                )),
+                recovery::Outcome::Missing { .. } | recovery::Outcome::Terminated { .. } => Err(CloudError::WorkerLost),
+                recovery::Outcome::Prepared | recovery::Outcome::Unresolved => Err(CloudError::CreationUnresolved),
+            };
+        }
         match state {
             CreateState::Bound { worker_id } => {
                 let worker = self.inspect(worker_id, cancel)?.ok_or(CloudError::WorkerLost)?;
                 worker.verify(spec)?;
+                if worker.desired_status != "RUNNING" {
+                    return Err(CloudError::Invalid(
+                        "Existing worker is not running; check provider before reconnecting",
+                    ));
+                }
                 return Ok(worker);
             }
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),
@@ -64,9 +86,6 @@ impl RunPod {
             bind(state, &worker, &mut persist)?;
             progress(Progress::WorkerFound(worker.id.clone()));
             return Ok(worker);
-        }
-        if *state == CreateState::Requested {
-            return Err(CloudError::CreationUnresolved);
         }
         cancel.check()?;
         persist(&CreateState::Requested)?;

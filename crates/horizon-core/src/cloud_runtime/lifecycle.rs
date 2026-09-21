@@ -7,6 +7,52 @@ use super::{
 use horizon_cloud::{WorkerStatus, runpod::RunPod};
 use std::path::Path;
 
+#[derive(Debug)]
+pub struct ReconciledDeployment {
+    pub state: Deployment,
+    pub report: horizon_cloud::runpod::recovery::Reconciliation,
+}
+
+/// # Errors
+/// Checks only the recorded operation. A provider-confirmed worker hint cannot reset its fence.
+/// Image builds, source preparation and agent credentials are not needed for recovery.
+pub fn reconcile(
+    root: &Path,
+    settings: &Settings,
+    worker_hint: Option<&str>,
+    cancel: &Cancellation,
+) -> Result<ReconciledDeployment> {
+    let store = Store::lock(root)?;
+    let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
+    if spec.operation_id != state.cloud_id || spec.profile != state.profile {
+        return Err(Error::Invalid("Deployment and worker identities differ"));
+    }
+    let provider = RunPod::new(settings.credential()?);
+    let mut operation = state.operation.clone();
+    let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
+        if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
+            return Err(horizon_cloud::CloudError::Invalid(
+                "Worker terminated; verify hosted-device release before recording cleanup",
+            ));
+        }
+        state.operation = next.clone();
+        store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
+    })?;
+    let changed = report.worker.is_some() || matches!(operation, CreateState::Terminated { .. });
+    if let Some(worker) = &report.worker {
+        state.worker = Some(worker.clone());
+    }
+    if matches!(operation, CreateState::Terminated { .. }) {
+        state.worker = None;
+        state.stage = Stage::Deleted;
+    }
+    if changed {
+        store.save(&state)?;
+    }
+    Ok(ReconciledDeployment { state, report })
+}
+
 /// # Errors
 /// Persists stop intent before provider I/O. A lost response never causes automatic resume.
 pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Deployment> {

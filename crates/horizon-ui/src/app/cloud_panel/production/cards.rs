@@ -163,6 +163,11 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         ui.label("Releasing remote devices…");
         return None;
     }
+    if runtime.recovery_receiver.is_some()
+        || (runtime.receiver.is_none() && runtime.state.as_ref().is_some_and(super::Runtime::needs_provider_check))
+    {
+        return recovery_actions(ui, runtime);
+    }
     if !runtime.state_unavailable
         && runtime.receiver.is_none()
         && runtime
@@ -225,6 +230,24 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             runtime.confirmation = Confirmation::Stop;
         }
     }
+    bound_provider_check(ui, runtime)
+        .or_else(|| deletion_action(ui, runtime))
+        .or(action)
+}
+
+fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
+    if runtime.receiver.is_none()
+        && runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. }))
+    {
+        return ui.button("Check provider").clicked().then_some(Action::Reconcile);
+    }
+    None
+}
+
+fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     if runtime.state.is_some() {
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(
@@ -232,7 +255,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
                 "Delete this worker and its files? Running sessions cannot be recovered.",
             );
             if ui.button("Delete worker permanently").clicked() {
-                action = Some(Action::Delete);
+                return Some(Action::Delete);
             }
             if ui.button("Keep worker").clicked() {
                 runtime.confirmation = Confirmation::None;
@@ -241,7 +264,32 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             runtime.confirmation = Confirmation::Delete;
         }
     }
-    action
+    None
+}
+
+fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+    ui.label("Worker status needs confirmation");
+    ui.small("Check the original request with the provider. This check cannot allocate, start or delete a worker.");
+    ui.collapsing("Provider-confirmed worker ID (optional)", |ui| {
+        ui.small("Use an ID supplied by the provider. Horizon verifies that it belongs to this cloud.");
+        ui.add(egui::TextEdit::singleline(&mut runtime.recovery_worker_id));
+    });
+    if runtime.recovery_receiver.is_some() {
+        ui.spinner();
+        ui.label("Checking provider…");
+        None
+    } else {
+        let action = ui.button("Check provider").clicked().then_some(Action::Reconcile);
+        if runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. }))
+        {
+            deletion_action(ui, runtime).or(action)
+        } else {
+            action
+        }
+    }
 }
 
 fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {

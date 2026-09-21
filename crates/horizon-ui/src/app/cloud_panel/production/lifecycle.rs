@@ -9,12 +9,72 @@ pub(super) enum Action {
     Desktop,
     Remove,
     RevokeBrowserstack,
+    Reconcile,
 }
 
 #[cfg(test)]
 mod tests;
 
 impl Runtime {
+    fn start_reconciliation(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
+        if self.receiver.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.error = None;
+        self.recovery_receiver = Some(rx);
+        let worker_id = self.recovery_worker_id.trim().to_owned();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = cloud_runtime::lifecycle::reconcile(
+                &state_root,
+                &settings,
+                (!worker_id.is_empty()).then_some(worker_id.as_str()),
+                &cloud_runtime::Cancellation::default(),
+            );
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_recovery(&mut self) {
+        let Some(receiver) = &self.recovery_receiver else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(cloud_runtime::Error::Invalid(
+                "Provider reconciliation ended without a result; the operation remains fenced",
+            )),
+        };
+        self.recovery_receiver = None;
+        match result {
+            Ok(recovered) => {
+                self.stage = Some(recovered.state.stage);
+                self.state = Some(recovered.state);
+                if self
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Bound { .. }))
+                {
+                    self.recovery_worker_id.clear();
+                }
+                self.state_unavailable = false;
+                self.error = recovered
+                    .report
+                    .outcome
+                    .needs_attention()
+                    .then(|| recovered.report.outcome.explanation().into());
+                self.logs.push_back(recovered.report.outcome.explanation().into());
+                while self.logs.len() > 150 {
+                    self.logs.pop_front();
+                }
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
     pub(super) fn can_release_remote_devices(&self) -> bool {
         self.remote_release.is_none()
             && (self.receiver.is_none() || self.stage == Some(Stage::Ready))
@@ -68,7 +128,10 @@ impl HorizonApp {
             return;
         };
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        if runtime.remote_release.is_some() || (runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready)) {
+        if runtime.remote_release.is_some()
+            || runtime.recovery_receiver.is_some()
+            || (runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready))
+        {
             return;
         }
         let settings = match Settings::load(&root.join("settings.json")) {
@@ -86,6 +149,10 @@ impl HorizonApp {
                 return;
             }
         };
+        if action == Action::Reconcile {
+            runtime.start_reconciliation(state_root, settings, ctx);
+            return;
+        }
         if action == Action::RevokeBrowserstack {
             if !runtime.can_release_remote_devices() {
                 return;
@@ -126,7 +193,7 @@ impl HorizonApp {
                 Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
                     .map(|state| Event::Snapshot(Box::new(state))),
                 Action::Delete => deployment::terminate(&root, &settings, &cancel).map(|()| Event::Deleted),
-                Action::Deploy | Action::Desktop | Action::Remove => return,
+                Action::Deploy | Action::Desktop | Action::Remove | Action::Reconcile => return,
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()
