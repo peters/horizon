@@ -225,6 +225,7 @@ pub struct Panel {
     pub content: PanelContent,
     /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
     pub(crate) disconnected_browser_profile: Option<crate::runtime_state::BrowserProfileState>,
+    pub(crate) disconnected_device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -352,6 +353,14 @@ impl Panel {
         self.content.device()
     }
 
+    /// Supplied machine labels survive an inert cloud restore placeholder.
+    #[must_use]
+    pub fn device_identity(&self) -> Option<&crate::browser::manifest::device::DeviceIdentity> {
+        self.device()
+            .and_then(|device| device.identity.as_ref())
+            .or(self.disconnected_device_identity.as_ref())
+    }
+
     /// Convenience accessor for the git changes content (if this panel holds one).
     #[must_use]
     pub fn git_changes(&self) -> Option<&DiffViewer> {
@@ -391,6 +400,7 @@ impl Panel {
             workspace_id,
             content,
             disconnected_browser_profile: None,
+            disconnected_device_identity: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -771,6 +781,7 @@ mod tests {
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
             disconnected_browser_profile: None,
+            disconnected_device_identity: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,

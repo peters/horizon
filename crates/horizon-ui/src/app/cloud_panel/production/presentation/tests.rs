@@ -619,3 +619,49 @@ fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
     assert_eq!(app.board.panel_id_by_local_id("firefox"), Some(id));
     assert_eq!(app.fullscreen_panel, Some(id));
 }
+
+#[test]
+fn cloud_device_identity_survives_placeholder_autosave_and_reattachment() {
+    use horizon_core::browser::manifest::device::DeviceIdentity;
+    let (_temp, mut app) = restore_fixture();
+    let identity = DeviceIdentity {
+        machine_name: Some("Synthetic worker".into()),
+        hostname: Some("worker.invalid".into()),
+        ..Default::default()
+    };
+    let mut saved = RuntimeState::from_board(
+        &app.board,
+        horizon_core::WindowConfig::default(),
+        horizon_core::CanvasViewState::default(),
+    );
+    saved.workspaces[0].panels.push(PanelState {
+        local_id: "desktop".into(),
+        kind: PanelKind::Device,
+        command: Some("127.0.0.1:5900".into()),
+        device_identity: Some(identity.clone()),
+        ..Default::default()
+    });
+    saved.cloud_groups.0[0].panels.push("desktop".into());
+    app.cloud_prototype.groups = saved.cloud_groups.clone();
+    app.board = Board::from_runtime_state(&saved).unwrap();
+    let id = app.board.panel_id_by_local_id("desktop").unwrap();
+    assert!(app.board.panel(id).unwrap().device().is_none());
+    assert_eq!(app.board.panel(id).unwrap().device_identity(), Some(&identity));
+    let snapshot = RuntimeState::from_board(
+        &app.board,
+        horizon_core::WindowConfig::default(),
+        horizon_core::CanvasViewState::default(),
+    );
+    let snapshot: RuntimeState = serde_yaml::from_str(&snapshot.to_yaml().unwrap()).unwrap();
+    assert_eq!(snapshot.workspaces[0].panels[2].device_identity, Some(identity.clone()));
+    app.board = Board::from_runtime_state(&snapshot).unwrap();
+    let id = app.board.panel_id_by_local_id("desktop").unwrap();
+    // Metadata replacement is independent of SSH tunnel establishment.
+    app.cloud_prototype.groups.0[0].remote = None;
+    for _ in 0..2 {
+        assert!(app.restore_cloud_member(0, id, false));
+        let panel = app.board.panel(id).unwrap();
+        assert_eq!(panel.local_id, "desktop");
+        assert_eq!(panel.device().unwrap().identity, Some(identity.clone()));
+    }
+}

@@ -113,6 +113,7 @@ impl StaticPanelSeed {
             workspace_id: self.workspace_id,
             content,
             disconnected_browser_profile: None,
+            disconnected_device_identity: None,
             session_binding: None,
             template: self.template,
             launched_at_millis: current_unix_millis(),

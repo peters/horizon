@@ -14,8 +14,17 @@ impl DeviceUiState {
         visible: bool,
         actor: &str,
     ) -> PanelState {
-        if let Some(status) = self.session.as_ref().and_then(super::Session::take_status) {
-            self.status = status;
+        if let Some(session) = &self.session {
+            if let Some(status) = session.take_status() {
+                self.status = status;
+            }
+            let details = session.take_server_details();
+            if let Some(name) = details.name {
+                self.server.name = Some(name);
+            }
+            if let Some(size) = details.desktop_size {
+                self.server.desktop_size = Some(size);
+            }
         }
         let (connection, connection_error) = match &self.status {
             Status::Stopped => (Connection::Stopped, None),
@@ -43,6 +52,7 @@ impl DeviceUiState {
             panel_id,
             endpoint: device.target.address().to_string(),
             identity: device.identity.clone(),
+            server: self.server.clone(),
             visible,
             owned_by_caller: self.owner.as_deref() == Some(actor),
             image: ImageEvidence {

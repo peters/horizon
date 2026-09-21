@@ -45,6 +45,32 @@ pub struct DevicePanelState {
 }
 
 impl DevicePanelState {
+    const MAX_LABEL_CHARS: usize = 256;
+
+    /// Bound the untrusted handshake label and flatten controls for plain-text display.
+    #[must_use]
+    pub fn server_label(raw: &str) -> Option<String> {
+        let bounded: String = raw
+            .chars()
+            .take(Self::MAX_LABEL_CHARS)
+            .map(|character| {
+                if Self::is_label_control(character) {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect();
+        let trimmed = bounded.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    }
+
+    fn is_label_control(character: char) -> bool {
+        character.is_control()
+            || matches!(character,
+                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    }
+
     /// Choose an available human-readable label without treating it as verified identity.
     #[must_use]
     pub fn display_name<'a>(&'a self, server_name: Option<&'a str>) -> Option<&'a str> {
@@ -63,7 +89,7 @@ impl DevicePanelState {
     /// Normalize creator labels and bound the metadata stored with a panel.
     ///
     /// # Errors
-    /// Rejects control characters, labels longer than 256 characters and more than 16 IPs.
+    /// Rejects control or bidi-formatting characters, labels over 256 characters and more than 16 IPs.
     pub fn normalize_identity(identity: &mut DeviceIdentity) -> Result<()> {
         for label in [
             &mut identity.machine_name,
@@ -72,7 +98,7 @@ impl DevicePanelState {
         ] {
             if let Some(value) = label {
                 let trimmed = value.trim();
-                if trimmed.chars().count() > 256 || value.chars().any(char::is_control) {
+                if trimmed.chars().count() > Self::MAX_LABEL_CHARS || value.chars().any(Self::is_label_control) {
                     return Err(Error::Config(
                         "Device identity labels must be plain text of at most 256 characters".into(),
                     ));
@@ -257,5 +283,100 @@ mod tests {
         assert!(blank.machine_name.is_none());
         blank.ip_addresses = vec!["192.0.2.1".parse().unwrap(); 17];
         assert!(super::DevicePanelState::normalize_identity(&mut blank).is_err());
+    }
+    #[test]
+    fn creator_identity_survives_restore_without_reconnecting() -> crate::Result<()> {
+        use crate::browser::manifest::device::DeviceIdentity;
+        let mut board = Board::new();
+        let workspace = board.create_workspace("identity fixture");
+        let identity = DeviceIdentity {
+            machine_name: Some("Lab workstation".into()),
+            hostname: Some("lab-host".into()),
+            ip_addresses: vec!["192.0.2.10".parse().unwrap(), "2001:db8::10".parse().unwrap()],
+            tailscale_name: Some("lab-host.example.ts.net".into()),
+        };
+        board.create_panel(
+            PanelOptions {
+                kind: PanelKind::Device,
+                command: Some("127.0.0.1:5900".into()),
+                device_identity: Some(identity.clone()),
+                ..Default::default()
+            },
+            workspace,
+        )?;
+        let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let yaml = saved.to_yaml()?;
+        let restored: RuntimeState = serde_yaml::from_str(&yaml).unwrap();
+        let panel = Panel::spawn(
+            PanelId(2),
+            workspace,
+            restored.workspaces[0].panels[0].to_panel_options(&crate::browser::BrowserConfig::default()),
+        )?;
+        let device = panel.device().unwrap();
+        assert_eq!(device.identity.as_ref(), Some(&identity));
+        assert!(!device.connect_on_start);
+        let legacy: crate::PanelState = serde_yaml::from_str("kind: device\ncommand: '127.0.0.1:5900'\n").unwrap();
+        assert!(legacy.device_identity.is_none());
+        assert!(
+            legacy
+                .to_panel_options(&crate::browser::BrowserConfig::default())
+                .device_identity
+                .is_none()
+        );
+        Ok(())
+    }
+    #[test]
+    fn server_labels_are_optional_bounded_unicode_plain_text() {
+        use super::DevicePanelState;
+        assert_eq!(DevicePanelState::server_label("\0\n "), None);
+        assert_eq!(
+            DevicePanelState::server_label("  Lab\nÆØÅ\t ").as_deref(),
+            Some("Lab ÆØÅ")
+        );
+        assert_eq!(
+            DevicePanelState::server_label(&"Æ".repeat(300))
+                .unwrap()
+                .chars()
+                .count(),
+            256
+        );
+        assert_eq!(
+            DevicePanelState::server_label("left\u{202e}right").as_deref(),
+            Some("left right")
+        );
+    }
+    #[test]
+    fn directional_formatting_is_rejected_for_supplied_identity_and_flattened_for_servers() {
+        use super::DevicePanelState;
+        use crate::browser::manifest::device::DeviceIdentity;
+        for marker in [
+            '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}',
+            '\u{2067}', '\u{2068}', '\u{2069}',
+        ] {
+            for field in 0..3 {
+                let mut identity = DeviceIdentity::default();
+                let label = Some(format!("host{marker}"));
+                match field {
+                    0 => identity.machine_name = label,
+                    1 => identity.hostname = label,
+                    _ => identity.tailscale_name = label,
+                }
+                assert!(
+                    DevicePanelState::normalize_identity(&mut identity).is_err(),
+                    "{marker:?}"
+                );
+            }
+            assert_eq!(
+                DevicePanelState::server_label(&format!("left{marker}right")).as_deref(),
+                Some("left right")
+            );
+        }
+        let mut identity = DeviceIdentity {
+            machine_name: Some("مختبر".into()),
+            ..Default::default()
+        };
+        DevicePanelState::normalize_identity(&mut identity).unwrap();
+        assert_eq!(identity.machine_name.as_deref(), Some("مختبر"));
+        assert_eq!(DevicePanelState::server_label("مختبر").as_deref(), Some("مختبر"));
     }
 }

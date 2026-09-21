@@ -47,6 +47,9 @@ pub(in crate::panel) fn restore_failure_panel(
 ) -> Result<Panel> {
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
     let visible = opts.visible;
+    let device_identity = (opts.kind == PanelKind::Device)
+        .then(|| opts.device_identity.clone())
+        .flatten();
     let browser_profile = (opts.kind == PanelKind::Browser).then(|| crate::runtime_state::BrowserProfileState {
         session_id: opts.browser_session_id.clone(),
         root: opts
@@ -135,6 +138,7 @@ pub(in crate::panel) fn restore_failure_panel(
     );
     panel.visible = visible;
     panel.disconnected_browser_profile = browser_profile;
+    panel.disconnected_device_identity = device_identity;
     Ok(panel)
 }
 
@@ -409,6 +413,7 @@ fn build_terminal_panel(
         workspace_id,
         content: PanelContent::Terminal(terminal),
         disconnected_browser_profile: None,
+        disconnected_device_identity: None,
         session_binding,
         template,
         launched_at_millis: current_unix_millis(),

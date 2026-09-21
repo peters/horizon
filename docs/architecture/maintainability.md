@@ -26,9 +26,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 ### Native Device panels
 
 - `horizon-core::device` owns the validated local VNC target and panel state;
-  `panel::spawn::device` creates a panel without a PTY. Existing command metadata
+  `panel::spawn::device` creates a panel without a PTY. Creator-supplied identity
+  is normalized in core and persisted with panel state; VNC observations stay
+  connection-local. Existing command metadata
   persists the target. Restored panels require manual reconnect.
-- `horizon-ui::device_widget` owns only read-only presentation. `frame` validates
+- `horizon-ui::device_widget` owns only read-only presentation. `details` renders
+  labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
   worker and a single latest-frame slot. The completed UI pass reconciles root
   and detached viewer visibility; hidden workers pause frame requests and resume

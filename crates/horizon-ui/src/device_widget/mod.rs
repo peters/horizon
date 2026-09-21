@@ -1,11 +1,12 @@
 //! Read-only native VNC rendering; device actions stay in the CLI/MCP crate.
 mod controls;
+mod details;
 mod frame;
 mod observation;
 mod session;
 
 use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
-use horizon_core::{DevicePanelState, DeviceViewOptions};
+use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 
 use frame::present_image;
 use session::{Session, Status};
@@ -24,6 +25,7 @@ pub(crate) struct DeviceUiState {
     texture: Option<TextureHandle>,
     presented_options: Option<DeviceViewOptions>,
     status: Status,
+    server: DeviceServerDetails,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
 }
@@ -75,6 +77,10 @@ impl DeviceUiState {
         if let Some((updates, full)) = incoming {
             if let Some(desktop) = updates.desktop {
                 self.desktop = Some(desktop);
+                self.server.desktop_size = Some(desktop);
+            }
+            if let Some(name) = updates.server_name {
+                self.server.name = Some(name);
             }
             if let Some(status) = updates.status {
                 self.status = status;
@@ -93,27 +99,11 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Read-only");
-            ui.monospace(device.target.address().to_string());
-            if ui.add_enabled(interactive, egui::Button::new("Reconnect")).clicked() {
-                self.reconnect(ui.ctx(), device);
-            }
-            match &self.status {
-                Status::Stopped => {
-                    ui.label("Stopped — select Reconnect");
-                }
-                Status::Connecting => {
-                    ui.spinner();
-                    ui.label("Connecting…");
-                }
-                Status::Connected => {
-                    ui.label("Connected");
-                }
-                Status::Disconnected(error) => {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
-                }
-            }
+        if details::header(ui, device, &self.server, &self.status, interactive) {
+            self.reconnect(ui.ctx(), device);
+        }
+        ui.add_enabled_ui(interactive, |ui| {
+            details::show(ui, device, &self.server, matches!(self.status, Status::Connected));
         });
         let previous = self.controls.options;
         let changed = ui
@@ -253,6 +243,7 @@ impl DeviceUiState {
         self.initialized = true;
         self.connection_generation = self.connection_generation.saturating_add(1);
         self.image = ImageDisplay::default();
+        self.server = DeviceServerDetails::default();
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }

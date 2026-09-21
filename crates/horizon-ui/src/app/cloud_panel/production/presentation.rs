@@ -386,6 +386,7 @@ impl HorizonApp {
         let workspace_id = panel.workspace_id;
         let mut options = PanelOptions {
             local_id: Some(panel.local_id.clone()),
+            device_identity: panel.device_identity().cloned(),
             kind: panel.kind,
             name: Some(panel.title.clone()),
             name_is_custom: Some(panel.name_is_custom()),

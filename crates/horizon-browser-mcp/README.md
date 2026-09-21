@@ -261,17 +261,33 @@ configuration. CLI plans invoke the same tool; see the
 
 ## Native Device viewer lifecycle
 
+The compact viewer summary selects the supplied machine name, hostname,
+Tailscale name, server-advertised VNC name, then local endpoint. Expand
+**Connection details** for selectable supplied labels, the local endpoint,
+server name and desktop resolution. Unknown fields are omitted.
+
+Inspect/list expose the same observed information in `server.name` and
+`server.desktop_size` (`[width, height]`). Server labels are bounded to 256
+characters and control/bidi-formatting characters are flattened. Observations remain labelled as last
+connection data after disconnect, clear on reconnect and are never persisted.
+Supplied labels persist but are not verified by the server; loopback does not
+identify the remote host and no SSH/Tailscale discovery or tunnel is created.
+
+
 Creation accepts optional creator-supplied host labels:
 
 ```json
 {"operation":"create","endpoint":"127.0.0.1:5900","identity":{"machine_name":"Lab workstation","hostname":"lab-host","ip_addresses":["192.0.2.10","2001:db8::10"],"tailscale_name":"lab-host.example.ts.net"}}
 ```
 
-Labels are plain text, trimmed, and limited to 256 characters each; up to 16
+Labels are plain text, trimmed, and limited to 256 characters each. Control and
+Unicode bidi-formatting characters are rejected; up to 16
 numeric IPv4/IPv6 addresses are accepted. Empty labels become absent values. Create,
 list and inspect return the supplied identity separately from the local VNC
 endpoint. These labels are not verified by VNC and never change routing or
 initiate host discovery. Existing endpoint-only callers remain supported.
+Supplied identity persists with the panel. Restored viewers remain stopped until
+explicitly reconnected; saved labels do not verify the machine now behind a reused port.
 The standalone device CLI controls an explicitly configured target; viewer
 creation and identity are exposed through `device_panel` on the browser MCP.
 

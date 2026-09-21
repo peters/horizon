@@ -319,6 +319,7 @@ impl RuntimeState {
                             ssh_connection: panel.ssh_connection.clone(),
                             session_binding: panel.session_binding.clone(),
                             template: panel.template.clone(),
+                            device_identity: panel.device_identity().cloned(),
                             editor_content: editor
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
