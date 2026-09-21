@@ -49,9 +49,19 @@ workspaces:
 
 ## Linux headless record (2026-09-21)
 
-Xvfb `:97`, `target/debug/horizon --config board.yaml --ephemeral`.
-Baseline (main, release binary): the long name overflowed the sidebar edge.
-After the fix: the name truncated to `Cloud MVP — temporary ...` inside the
-row, and `Short` stayed flush left. Lanes 2 to 4 need a real desktop.
+Xvfb `:97` with openbox, `target/debug/horizon --config board.yaml
+--ephemeral`, driven with xdotool. Baseline (main, release binary): the long
+name overflowed the sidebar edge.
 
-SMOKE-TEST: PENDING (macOS lanes 2 to 4)
+- Lane 1 (flat): the name truncated to `Cloud MVP — temporary ...` inside the
+  row background and `Short` stayed flush left. PASS.
+- Lane 3 (accordion via `features.sidebar_accordion: true`): the name
+  truncated before the panel-count badge (`Cloud MVP — tempo... 2`) and
+  `Short 1` stayed flush left. PASS.
+- Lane 4 (click): a left click on the truncated `Short` name made it the
+  active workspace, focused `notes-b`, and panned the canvas to it. PASS.
+- Lane 2 (detached): the row context menu opened but was painted behind the
+  sidebar on this headless display, so the `Open in New Window` click could
+  not be delivered. Needs a real desktop.
+
+SMOKE-TEST: PENDING (macOS lane 2)
