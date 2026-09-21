@@ -74,6 +74,10 @@ child panels remain together. Use cloud Full screen for a focused view. Move an
 ordinary detached workspace back to the main window before creating a cloud in
 it. Older saved detached-cloud entries restore in the main window, retaining
 their cloud and panel identities.
+Workspace layout presets are disabled for workspaces containing clouds. Each
+cloud keeps its own layout; ordinary panel resize collision handling does not
+move cloud members. New clouds are placed relative to their workspace and are
+reconciled before the overview is fitted.
 
 ## Sessions and lifecycle
 
@@ -89,6 +93,10 @@ starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any
 retry; Horizon never allocates a replacement for a missing worker automatically.
+After a worker-service crash, a private journal that durably confirms a remote
+device was released can be cleaned up without the old provider credentials.
+Unreleased, malformed or mismatched identities remain blocked until their exact
+release can be verified.
 
 Browser panels display their actual controller. Native VNC Device panels are
 read-only viewers; worker-local device tools perform input and report its agent.

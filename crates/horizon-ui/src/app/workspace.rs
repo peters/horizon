@@ -68,6 +68,21 @@ struct WorkspaceDockTarget {
 }
 
 impl HorizonApp {
+    pub(super) fn workspace_can_arrange_panels(&self, id: WorkspaceId) -> bool {
+        if !self.board.workspace_accepts_panel_layout(id) {
+            return false;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .board
+            .workspace(id)
+            .is_some_and(|workspace| self.cloud_prototype.groups.contains_workspace(&workspace.local_id))
+        {
+            return false;
+        }
+        true
+    }
+
     #[profiling::function]
     pub(super) fn render_workspace_backgrounds(
         &mut self,

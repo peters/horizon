@@ -577,3 +577,64 @@ freeze. Its hosted review thread stays open until the correction reaches the PR.
 The next step requires permission to advance that head, followed by hosted review,
 affected final smoke and verified task-resource cleanup. The queued onboarding
 phase has not started.
+
+Follow-up on 2026-09-21: the user authorized the validated detachment correction,
+which was pushed as `cb364664bcfebd93fb80331c7e8f5383a7001517`. Every applicable
+hosted CI lane passed. The new review accepted the detachment fix and raised one
+release-journal recovery finding plus two layout observations. Independent
+inspection confirmed all three. Their corrections are being validated locally as
+one batch: durable released identities no longer require old provider credentials;
+cloud placement and initial Fit use consistent workspace coordinates; parent
+sidebar layouts and ordinary resize collisions preserve cloud members.
+
+The released-journal regression also verifies conservative handling of unreleased,
+nonprivate, malformed and mismatched identities. Its independent source review is
+clear. The layout review additionally caught initial Fit occurring before origin
+reconciliation; this is corrected and covered for a workspace far from the origin.
+The current PR head stays fixed during this local validation. Post-review smoke,
+verified cleanup and the queued first-use UI remain open. No new worker was
+allocated for the detachment push; the task-owned worker inventory and protected
+pre-existing resources were verified before preparing cleanup.
+
+The user additionally requested a separate playground configuration containing all
+repositories exercised during acceptance, prepared after the remaining delivery
+gates. Keep the current Horizon instance, settings and sessions running untouched.
+Use a distinct configuration/session for the playground, with machine-local
+credential bindings and deliberate deployment actions; do not include private
+repository details in public issue or PR prose. Verify the playground against the
+actual completed acceptance inventory rather than including untested examples.
+
+The settled review correction passes all ten lanes in `final-validation-28/`:
+2,341 workspace tests and 2,386 full workspace speech-feature tests, with 15
+ignored tests in each tier; worker/device suites, formatting, maintainability and
+all lint tiers also pass. The no-default-features build passes. Independent source
+review is clear for manifest
+`8dcd4941da7b31241dae4850f8470a4d5af24ed821371ee7a0c16b86dc906592`.
+Earlier validation attempts retained test-lint/import failures; they are not the
+passing receipt.
+
+The frozen `development-67/` candidate has SHA-256
+`65b58fe2e0e246f731902668e76c6e39a584b93213a531de7197ee78fcddfc88`.
+Native checks observed disabled parent layout controls and two synthetic cloud
+cards at the correct positions in a translated workspace, including the expected
+48-unit gap after the taller runtime card. No compute was allocated by those
+creation checks. The initial synthetic fixture lacked a committed revision and
+correctly failed validation; it was then initialized with a synthetic commit.
+The native viewer reported displayed, advancing frames during these checks, but
+intermittently reported no presentation afterward. Two private 4K recordings
+retain 1,800 and 2,400 decoded frames. They contain private operational content
+and are not public attachments.
+
+A clean immutable worker image with the corrected release recovery passes the
+local contract without network access or credentials. Its service image grew
+from 1,464,068,186 to 1,464,074,380 compressed bytes. Build/push took 66.13/13.13
+seconds; cached build/push took 0.74/0.51 seconds. These are image-preparation
+measurements, not worker or application startup timing. New-image cloud
+qualification and the post-review final smoke remain pending.
+
+The user requested automatic native viewer diagnosis and recovery. Separate
+[issue #801](https://github.com/peters/horizon/issues/801) records the observed
+intermittent status and the missing presentation/freshness diagnostics. The
+viewer was closed and recreated with permission; both Horizon applications
+continued running. Test guidance now requires bounded automatic diagnosis and
+precise blocked reporting instead of repeated human visibility confirmation.

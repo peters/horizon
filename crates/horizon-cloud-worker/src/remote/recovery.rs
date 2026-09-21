@@ -17,6 +17,7 @@ impl Allocations {
         }
     }
     pub(super) fn restore_retained(&mut self, capabilities: &horizon_cloud::Capabilities) {
+        self.restore_released();
         if self.orphans.is_empty() {
             return;
         }
@@ -24,6 +25,31 @@ impl Allocations {
             return;
         };
         self.restore_with(&config);
+    }
+    fn restore_released(&mut self) {
+        let mut restored = Vec::new();
+        for (id, journal) in &self.orphans {
+            let path = self.root.join("identities").join(id);
+            let Ok(Some(allocation)) = RemoteAllocation::restore_released_journal(&path) else {
+                continue;
+            };
+            if allocation.reference() == journal.reference {
+                restored.push((id.clone(), journal.provider.clone(), journal.owner.clone(), allocation));
+            }
+        }
+        for (id, provider, owner, allocation) in restored {
+            self.orphans.remove(&id);
+            self.held.insert(
+                allocation.reference().into(),
+                Held {
+                    id,
+                    provider,
+                    owner: owner.unwrap_or_default(),
+                    allocation,
+                    restored: true,
+                },
+            );
+        }
     }
     fn restore_with(&mut self, config: &Configuration) {
         let mut restored = Vec::new();
@@ -95,6 +121,58 @@ mod tests {
         net::TcpListener,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn released_crash_journals_clean_up_without_provider_configuration() {
+        for owner in [Some("owner"), Some(""), None] {
+            let root = retained_fixture(true, "reference", owner);
+            let mut allocations = Allocations::new(root.path().into()).unwrap();
+            assert!(allocations.ensure_recoverable().is_err());
+            allocations.reconcile_retained_for_host(&horizon_cloud::Capabilities::default());
+            assert!(allocations.ensure_recoverable().is_ok());
+            assert!(allocations.held["reference"].allocation.is_released());
+            allocations.confirm_closed("phone").unwrap();
+            assert!(!root.path().join("phone").exists());
+            assert!(!root.path().join("identities/phone").exists());
+            assert!(
+                Allocations::new(root.path().into())
+                    .unwrap()
+                    .ensure_recoverable()
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_credentials_do_not_clear_unreleased_or_mismatched_journals() {
+        for (released, reference) in [(false, "reference"), (true, "different-reference")] {
+            let root = retained_fixture(released, reference, Some("owner"));
+            let mut allocations = Allocations::new(root.path().into()).unwrap();
+            allocations.reconcile_retained_for_host(&horizon_cloud::Capabilities::default());
+            assert!(allocations.ensure_recoverable().is_err());
+            assert!(allocations.confirm_closed("phone").is_err());
+            assert!(root.path().join("phone").exists());
+            assert!(root.path().join("identities/phone").exists());
+        }
+    }
+
+    fn retained_fixture(released: bool, reference: &str, owner: Option<&str>) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("identities")).unwrap();
+        std::fs::write(
+            root.path().join("phone"),
+            json!({"provider":"removed","reference":"reference","owner":owner}).to_string(),
+        )
+        .unwrap();
+        let identity = root.path().join("identities/phone");
+        std::fs::write(&identity, json!({"version":1,"endpoint":"http://127.0.0.1:1/wd/hub","quota_key":"removed","reference":reference,"session":"exact","released":released}).to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&identity, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        root
+    }
 
     #[test]
     fn restart_recovery_preserves_the_hold_until_exact_provider_release() {

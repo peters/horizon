@@ -222,7 +222,8 @@ impl CloudGroup {
 
     pub fn reconcile(&mut self, board: &mut Board) {
         let workspace = board.workspace_id_by_local_id(&self.workspace);
-        if let Some(ws) = workspace.and_then(|id| board.workspace(id)) {
+        if let Some(ws) = workspace.and_then(|id| board.workspace_mut(id)) {
+            ws.layout = None;
             for axis in 0..2 {
                 self.position[axis] += ws.position[axis] - self.workspace_position[axis];
             }
@@ -274,6 +275,19 @@ impl CloudGroup {
 }
 
 impl CloudGroups {
+    #[must_use]
+    pub fn next_position(&self, workspace: &str) -> [f32; 2] {
+        [
+            24.0,
+            self.0
+                .iter()
+                .filter(|group| group.workspace == workspace)
+                .map(|group| group.overview_bounds().1[1] - group.workspace_position[1])
+                .fold(80.0, f32::max)
+                + 48.0,
+        ]
+    }
+
     #[must_use]
     pub fn contains_workspace(&self, local_id: &str) -> bool {
         self.0.iter().any(|group| group.workspace == local_id)

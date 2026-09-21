@@ -7,6 +7,50 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 #[test]
+fn durable_release_restores_without_provider_access() {
+    use crate::webdriver::remote::RemoteReleaseOutcome;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("identity");
+    let request = request("http://127.0.0.1:1/wd/hub");
+    request.recovery.retain_journal(&path, &request).unwrap();
+    assert!(RemoteAllocation::restore_released_journal(&path).unwrap().is_none());
+    let host = RemoteHost::connect(&request).unwrap();
+    request
+        .recovery
+        .identify(host.transport, "exact-session".into(), host.report)
+        .unwrap();
+    assert!(RemoteAllocation::restore_released_journal(&path).unwrap().is_none());
+    request.recovery.finish(Some(&RemoteReleaseOutcome::Released));
+    let reference = request.recovery.reference().to_owned();
+    drop(request);
+
+    let restored = RemoteAllocation::restore_released_journal(&path).unwrap().unwrap();
+    assert_eq!(restored.reference(), reference);
+    restored.reconcile();
+    assert!(restored.is_released());
+
+    let mut record: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["version"] = 2.into();
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    assert!(RemoteAllocation::restore_released_journal(&path).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn released_journals_still_require_private_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("identity");
+    let request = request("http://127.0.0.1:1/wd/hub");
+    request.recovery.retain_journal(&path, &request).unwrap();
+    request
+        .recovery
+        .finish(Some(&crate::webdriver::remote::RemoteReleaseOutcome::Released));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(RemoteAllocation::restore_released_journal(&path).is_err());
+}
+
+#[test]
 fn restarted_allocation_probes_only_its_bound_session_and_persists_release() {
     let server = Server::start(vec![Reply::json(404, &json!({"value":{"error":"invalid session id"}}))]);
     let root = tempfile::tempdir().unwrap();

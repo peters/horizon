@@ -320,6 +320,8 @@ login as part of task-copy cleanup.
 | R10 | Open the sidebar context menu for a workspace containing clouds; attempt direct detachment | Open in New Window is disabled with an explanation; the central action also refuses detachment |
 | R11 | Restore an older state containing a detached cloud workspace and an ordinary detached workspace | Cloud and all members restore together in the main window; ordinary workspace remains detached |
 | R12 | Select an ordinary detached workspace and attempt cloud creation | Clear instruction to move it to the main window; no cloud, worker or sessions allocated; creation succeeds after reattachment |
+| R13 | Move a workspace to positive and negative coordinates, then create two clouds | Correct 48-pixel overview gap; first creation immediately fits the actual cloud; no drift after reconcile/restart |
+| R14 | Try sidebar workspace presets with Default and named cloud layouts; add and resize an ordinary panel | Parent presets disabled, cloud geometry and layouts preserved, ordinary workspace presets still work |
 
 Preserve both before/after process records, operation journals and fresh provider
 inventories. Do not destroy the retained user-acceptance worker to exercise failures;
@@ -542,6 +544,12 @@ No profile may export credentials solely because repository YAML requests them.
   release before removing runtime credentials or terminating compute. A changed
   account binding must be refused until the existing binding has been revoked,
   even after a container restart; neither private file may be overwritten.
+- Exercise the crash window after durable remote release but before local journal
+  cleanup. Remove the old provider binding and restart the service: the released
+  identity must clean up without network/provider access. Unreleased, corrupt,
+  nonprivate and reference-mismatched records must retain their holds. Keep this
+  deterministic recovery test separate from genuine provider release evidence;
+  never alter a live allocation journal to fabricate release.
 
 ### Existing New cloud dialog presentation
 

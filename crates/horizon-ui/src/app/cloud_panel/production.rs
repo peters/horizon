@@ -326,17 +326,7 @@ impl HorizonApp {
             .unwrap_or(100)
             .checked_add(1)
             .ok_or(cloud_runtime::Error::Invalid("Too many clouds"))?;
-        let position = [
-            24.0,
-            self.cloud_prototype
-                .groups
-                .0
-                .iter()
-                .filter(|g| g.workspace == workspace)
-                .map(|g| g.overview_bounds().1[1])
-                .fold(80.0, f32::max)
-                + 48.0,
-        ];
+        let position = self.cloud_prototype.groups.next_position(&workspace);
         let mut group = CloudGroup::new(id, title, workspace, repo, position);
         group.environment.id.clone_from(&launch.id);
         group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
@@ -344,12 +334,10 @@ impl HorizonApp {
         group.environment.profile = Some(launch.profile_name.clone());
         group.environment.image.clone_from(&launch.profile.image);
         group.remote = Some(launch);
+        group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.production.creating = false;
         self.cloud_prototype.error = None;
-        if let Some(ws) = self.board.workspace_mut(ws) {
-            ws.layout = None;
-        }
         self.save_cloud_prototype();
         self.cloud_overview(ctx);
         Ok(())

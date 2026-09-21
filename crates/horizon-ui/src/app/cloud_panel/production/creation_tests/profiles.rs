@@ -166,3 +166,51 @@ fn cloud_creation_requires_the_selected_workspace_in_the_main_window() {
     app.create_production_cloud(&ctx).unwrap();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
 }
+
+#[test]
+fn new_cloud_placement_is_relative_to_translated_workspace() {
+    for origin in [[500.0, -100.0], [-500.0, 250.0], [0.0, 0.0], [5000.0, 5000.0]] {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        prepare(&mut app, &ctx, temp.path());
+        let workspace = app.board.ensure_workspace();
+        app.board.workspace_mut(workspace).unwrap().position = origin;
+        app.create_production_cloud(&ctx).unwrap();
+        assert_position(
+            app.cloud_prototype.groups.0[0].position,
+            [origin[0] + 24.0, origin[1] + 128.0],
+        );
+        let initial_view = app.canvas_view;
+        app.cloud_prototype.groups.reconcile(&mut app.board);
+        app.cloud_overview(&ctx);
+        assert_eq!(app.canvas_view, initial_view);
+        app.create_production_cloud(&ctx).unwrap();
+        let first = &app.cloud_prototype.groups.0[0];
+        let second = &app.cloud_prototype.groups.0[1];
+        assert_position(first.position, [origin[0] + 24.0, origin[1] + 128.0]);
+        assert_position(
+            second.position,
+            [first.position[0], first.overview_bounds().1[1] + 48.0],
+        );
+        let positions = [first.position, second.position];
+        let overview = app.canvas_view;
+        let saved = serde_json::to_vec(&app.cloud_prototype.groups).unwrap();
+        app.cloud_prototype.groups = serde_json::from_slice(&saved).unwrap();
+        for _ in 0..3 {
+            app.cloud_prototype.groups.reconcile(&mut app.board);
+            app.cloud_overview(&ctx);
+            assert_eq!(app.canvas_view, overview);
+            assert_position(app.cloud_prototype.groups.0[0].position, positions[0]);
+            assert_position(app.cloud_prototype.groups.0[1].position, positions[1]);
+        }
+        assert!(app.cloud_prototype.production.runtimes.is_empty());
+    }
+}
+
+fn assert_position(actual: [f32; 2], expected: [f32; 2]) {
+    assert!(
+        actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.001),
+        "{actual:?} != {expected:?}"
+    );
+}

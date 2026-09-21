@@ -23,7 +23,7 @@ struct WorkspaceSidebarEntry {
     color: Color32,
     is_active: bool,
     detached: bool,
-    can_detach: bool,
+    can_arrange: bool,
     panels: Vec<SidebarPanelEntry>,
     attention_count: usize,
 }
@@ -153,7 +153,7 @@ impl HorizonApp {
                     color: theme::workspace_accent(workspace.color_idx),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),
-                    can_detach: self.workspace_can_detach(workspace.id),
+                    can_arrange: self.workspace_can_arrange_panels(workspace.id),
                     panels,
                     attention_count,
                 }
@@ -390,7 +390,11 @@ impl HorizonApp {
             ui.set_min_width(160.0);
             ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
             if ui
-                .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false))
+                .add_enabled(
+                    workspace.can_arrange,
+                    Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false),
+                )
+                .on_disabled_hover_text("Use each cloud's panel layout controls.")
                 .clicked()
             {
                 actions.clear_layout = Some(workspace.id);
@@ -398,7 +402,11 @@ impl HorizonApp {
             }
             for layout in WorkspaceLayout::ALL {
                 let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
-                if ui.add(Button::new(text).frame(false)).clicked() {
+                if ui
+                    .add_enabled(workspace.can_arrange, Button::new(text).frame(false))
+                    .on_disabled_hover_text("Use each cloud's panel layout controls.")
+                    .clicked()
+                {
                     actions.arrange_layout = Some((workspace.id, layout));
                     ui.close();
                 }
@@ -412,7 +420,7 @@ impl HorizonApp {
             };
             if ui
                 .add_enabled(
-                    workspace.detached || workspace.can_detach,
+                    workspace.detached || workspace.can_arrange,
                     Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false),
                 )
                 .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.")
@@ -710,11 +718,14 @@ impl HorizonApp {
             self.close_workspace_panels(workspace_id);
         }
         if let Some(workspace_id) = actions.clear_layout
+            && self.workspace_can_arrange_panels(workspace_id)
             && self.board.clear_workspace_layout(workspace_id)
         {
             self.mark_runtime_dirty();
         }
-        if let Some((workspace_id, layout)) = actions.arrange_layout {
+        if let Some((workspace_id, layout)) = actions.arrange_layout
+            && self.workspace_can_arrange_panels(workspace_id)
+        {
             self.board.arrange_workspace(workspace_id, layout);
             self.mark_runtime_dirty();
         }
@@ -907,6 +918,59 @@ mod tests {
 
     #[test]
     #[cfg(feature = "cloud-workspaces")]
+    fn sidebar_presets_preserve_independent_cloud_layouts() {
+        use horizon_core::{WorkspaceLayout, cloud_panel::CloudGroup};
+        for layout in [None, Some(WorkspaceLayout::Rows)] {
+            let (temp, mut app) = crate::app::test_support::test_app();
+            let cloud = app.board.create_workspace("cloud");
+            let ordinary = app.board.create_workspace("ordinary");
+            let first = app.board.create_panel(editor_panel_options("first"), cloud).unwrap();
+            let second = app.board.create_panel(editor_panel_options("second"), cloud).unwrap();
+            let local = app.board.workspace(cloud).unwrap().local_id.clone();
+            let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [24.0, 128.0]);
+            group.attach(&mut app.board, first);
+            group.attach(&mut app.board, second);
+            group.set_layout(&mut app.board, layout);
+            app.cloud_prototype.groups.0.push(group);
+            let geometry = |app: &crate::app::HorizonApp| {
+                [first, second].map(|id| {
+                    let panel = app.board.panel(id).unwrap();
+                    (panel.layout.position, panel.layout.size)
+                })
+            };
+            let before = geometry(&app);
+            let rows = app.sidebar_workspace_data();
+            assert!(!rows.iter().find(|r| r.id == cloud).unwrap().can_arrange);
+            assert!(rows.iter().find(|r| r.id == ordinary).unwrap().can_arrange);
+            for parent in WorkspaceLayout::ALL {
+                app.apply_sidebar_actions(
+                    &egui::Context::default(),
+                    &super::SidebarActions {
+                        arrange_layout: Some((cloud, parent)),
+                        clear_layout: Some(cloud),
+                        ..Default::default()
+                    },
+                );
+                app.cloud_prototype.groups.reconcile(&mut app.board);
+                assert_eq!(geometry(&app), before);
+                assert_eq!(app.cloud_prototype.groups.0[0].layout, layout);
+            }
+            app.apply_sidebar_actions(
+                &egui::Context::default(),
+                &super::SidebarActions {
+                    arrange_layout: Some((ordinary, WorkspaceLayout::Columns)),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                app.board.workspace(ordinary).unwrap().layout,
+                Some(WorkspaceLayout::Columns)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "cloud-workspaces")]
     fn sidebar_cannot_detach_a_cloud_but_keeps_ordinary_workspace_actions() {
         let (temp, mut app) = crate::app::test_support::test_app();
         let cloud = app.board.create_workspace("cloud");
@@ -923,8 +987,8 @@ mod tests {
                 [0.0; 2],
             ));
         let rows = app.sidebar_workspace_data();
-        assert!(!rows.iter().find(|row| row.id == cloud).unwrap().can_detach);
-        assert!(rows.iter().find(|row| row.id == ordinary).unwrap().can_detach);
+        assert!(!rows.iter().find(|row| row.id == cloud).unwrap().can_arrange);
+        assert!(rows.iter().find(|row| row.id == ordinary).unwrap().can_arrange);
         app.apply_sidebar_actions(
             &egui::Context::default(),
             &super::SidebarActions {
