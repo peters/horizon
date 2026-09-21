@@ -169,7 +169,7 @@ impl HorizonApp {
 
     /// The panel under the pointer that zooms its own content, ignoring
     /// anything covered by a fixed overlay. Panels are resolved with the
-    /// paint order the current viewport's renderer recorded,
+    /// paint order the current viewport's renderer will use,
     /// so an overlapping panel on top keeps the gesture, and the rectangle is
     /// the panel body the widget itself tests. A fullscreen panel in the root
     /// window is not special-cased: that path returns before this handler
@@ -191,16 +191,41 @@ impl HorizonApp {
         {
             return None;
         }
-        // Z-order comes from the recorded paint order, but the rectangles come
-        // from this frame's geometry: the recorded rects are a frame behind and
-        // a panel just moved or resized would route to where it used to be.
-        let hit = |panel_id: &PanelId| {
+        // Input precedes Area rendering. Predict its stack from egui's
+        // retained layer order, the current focus, and Area's promotion of
+        // newly visible layers. Missing layers enter in renderer call order.
+        let (topmost, geometry) = ctx.memory(|memory| {
+            let layer_count = memory.layer_ids().len();
             panel_geometry
                 .iter()
-                .find(|(candidate, _)| candidate == panel_id)
-                .filter(|(_, geometry)| geometry.screen_rect.contains(pointer))
-        };
-        let (topmost, geometry) = self.panel_screen_order.iter().rev().find_map(hit)?;
+                .enumerate()
+                .filter(|(_, (_, geometry))| geometry.screen_rect.contains(pointer))
+                .max_by_key(|(index, (panel_id, _))| {
+                    let focused = Some(*panel_id) == self.board.focused;
+                    let layer = egui::LayerId::new(
+                        if focused {
+                            egui::Order::Foreground
+                        } else {
+                            egui::Order::Middle
+                        },
+                        panel_layer_salt(*panel_id),
+                    );
+                    let paint_index = memory
+                        .layer_ids()
+                        .position(|candidate| candidate == layer)
+                        .unwrap_or_else(|| {
+                            let index = visible_workspace
+                                .and_then(|workspace| self.board.workspace(workspace))
+                                .and_then(|workspace| {
+                                    workspace.panels.iter().position(|candidate| candidate == panel_id)
+                                })
+                                .unwrap_or(*index);
+                            layer_count + index
+                        });
+                    (focused, !memory.areas().visible_last_frame(&layer), paint_index)
+                })
+                .map(|(_, panel)| panel)
+        })?;
         geometry
             .zoom_body
             .is_some_and(|body| body.contains(pointer))

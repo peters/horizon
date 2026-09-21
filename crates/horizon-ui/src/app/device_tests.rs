@@ -132,11 +132,14 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
         .screen_rect;
     let before = app.canvas_view;
 
+    // A new viewport has no previous paint order when its first input arrives.
+    app.panel_screen_order.clear();
     let mut over_panel = raw_input([1400.0, 900.0], None);
     over_panel.events.push(egui::Event::PointerMoved(panel_rect.center()));
     over_panel.events.push(egui::Event::Zoom(1.25));
     run_app_frame_with_input(&ctx, &mut app, over_panel);
     assert_eq!(app.canvas_view, before, "the panel owns a pinch over its own frame");
+    assert!((app.panel_render_caches.device_ui_state[&panel].zoom_factor() - 1.25).abs() < 0.001);
 
     // The panel's own handler only covers its body, so the titlebar above it
     // stays with the canvas: ownership and handling share one rectangle.
@@ -224,9 +227,13 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
             >= 2,
         "the panels must overlap for this test to mean anything"
     );
-    app.panel_screen_order = vec![panel, notes];
-    assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), None);
+    // Focus changes before routing, while the cached paint order still
+    // describes the old frame. Both promotions must take effect immediately.
     app.panel_screen_order = vec![notes, panel];
+    app.board.focused = Some(notes);
+    assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), None);
+    app.panel_screen_order = vec![panel, notes];
+    app.board.focused = Some(panel);
     assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), Some(panel));
 
     // A detached window paints none of the root window's chrome, so a point
@@ -250,4 +257,67 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     let covered = overlay.center();
     assert!(app.overlay_exclusion_zones(&ctx).contains(covered));
     assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(covered)), None);
+}
+
+#[test]
+fn detached_zoom_routing_uses_current_workspace_order_without_a_paint_cache() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+    let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");
+    let workspace = app.board.panel(panel).expect("device").workspace_id;
+    app.board.assign_panel_to_workspace(notes, workspace);
+    let device_layout = app.board.panel(panel).expect("device").layout;
+    app.board.panel_mut(notes).expect("notes").layout = device_layout;
+    render(&ctx, &mut app);
+    let geometry = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), Some(workspace));
+    let point = geometry
+        .iter()
+        .find(|(id, _)| *id == panel)
+        .expect("device")
+        .1
+        .zoom_body
+        .expect("body")
+        .center();
+    app.board.focused = None;
+    app.panel_screen_order.clear();
+    // The detached renderer uses workspace order, which can differ from the
+    // board's root-window order after panel reassignment or rearrangement.
+    let detached_ctx = Context::default();
+    for (order, expected) in [(vec![panel, notes], None), (vec![notes, panel], Some(panel))] {
+        app.board.workspace_mut(workspace).expect("workspace").panels = order;
+        assert_eq!(
+            app.zoom_gesture_panel(&detached_ctx, Some(workspace), &geometry, Some(point)),
+            expected
+        );
+    }
+}
+
+#[test]
+fn zoom_routing_follows_retained_layers_after_focus_leaves_overlapping_panels() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+    let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");
+    let device_layout = app.board.panel(panel).expect("device").layout;
+    app.board.panel_mut(notes).expect("notes").layout = device_layout;
+    render(&ctx, &mut app);
+    app.board.focused = None;
+    for frame in 0..3 {
+        let geometry = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None);
+        let point = geometry
+            .iter()
+            .find(|(id, _)| *id == panel)
+            .expect("device")
+            .1
+            .zoom_body
+            .expect("body")
+            .center();
+        assert_eq!(
+            app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)),
+            Some(panel),
+            "frame {frame}"
+        );
+        render(&ctx, &mut app);
+        assert_eq!(
+            ctx.layer_id_at(point).map(|layer| layer.id),
+            Some(super::panels::panel_layer_salt(panel))
+        );
+    }
 }
