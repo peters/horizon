@@ -176,11 +176,12 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
 fn fixed_browser_pinches_zoom_the_canvas_while_wheels_remain_panel_owned() {
     for responsive in [false, true] {
         let (_temp, ctx, mut app, panel_id) = device_app(None);
-        let browser = if responsive {
+        let mut browser = if responsive {
             horizon_core::browser::BrowserPanelState::inert()
         } else {
             horizon_core::browser::BrowserPanelState::inert_remote("target", "provider")
         };
+        browser.status = horizon_core::browser::BrowserStatus::Ready;
         let panel = app.board.panel_mut(panel_id).expect("panel");
         panel.kind = PanelKind::Browser;
         panel.content = horizon_core::PanelContent::Browser(Box::new(browser));
