@@ -548,6 +548,14 @@ fn authorize_attachment_paths(action: BrowserControlAction) -> Result<BrowserCon
     let BrowserControlAction::SetFiles { target, paths } = action else {
         return Ok(action);
     };
+    // The caller's own paths must satisfy the protocol before resolution
+    // could turn an offending name into a clean canonical one.
+    BrowserControlAction::SetFiles {
+        target: target.clone(),
+        paths: paths.clone(),
+    }
+    .validate()
+    .map_err(|message| format!("browser set_files refused (invalid_input): {message}"))?;
     let paths = horizon_browser_control::AttachmentPolicy::from_environment()
         .authorize(&paths)
         .map_err(|error| format!("browser set_files refused (attachment_policy): {error}"))?

@@ -224,14 +224,29 @@ fn authorize_attachments(
         &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
         STAGING_LOCK_WAIT,
     )?;
+    // Actions the engine has not drained yet keep their staging whatever
+    // the retention says; the queue is read again here, under the staging
+    // lock, so a just-queued attachment is already protected.
+    let queued = super::read(panel_local_id)
+        .map(|manifest| {
+            manifest
+                .actions
+                .iter()
+                .filter(|queued| matches!(queued.action, BrowserControlAction::SetFiles { .. }))
+                .map(|queued| queued.action_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     crate::attachments::prune_attachments(
         &attachments_dir,
         panel_local_id,
+        &queued,
         crate::attachments::ATTACHMENT_RETENTION,
         crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
         crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES,
         reserved_bytes,
-    );
+    )
+    .map_err(refused)?;
     let staged = StagedAttachments {
         attachments_dir: attachments_dir.clone(),
         panel_local_id: panel_local_id.to_string(),

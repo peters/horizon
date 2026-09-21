@@ -665,7 +665,9 @@ impl ControlError {
     fn internal_io(operation: &'static str, source: io::Error) -> Self {
         tracing::warn!(operation, error = %source, "browser MCP host coordination failed");
         let reason = match source.kind() {
-            io::ErrorKind::WouldBlock => "would block while the user is steering or the action queue is full",
+            io::ErrorKind::WouldBlock => {
+                "would block while the user is steering, the action queue is full, or queued attachments leave no staging room"
+            }
             io::ErrorKind::PermissionDenied => "permission denied because browser panel ownership changed",
             io::ErrorKind::NotFound => "browser panel is not live",
             io::ErrorKind::InvalidInput => "invalid browser control input",

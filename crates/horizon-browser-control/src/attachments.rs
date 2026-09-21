@@ -47,6 +47,10 @@ pub enum AttachmentPolicyError {
     TooLarge { path: String, limit: u64 },
     #[error("attachments total {requested} bytes, above the {limit} byte budget one panel may keep staged")]
     OverBudget { requested: u64, limit: u64 },
+    #[error(
+        "the panel's staged attachments for still-queued actions leave no room within {limit_actions} actions and {limit_bytes} bytes; let the queue drain first"
+    )]
+    StagingFull { limit_actions: usize, limit_bytes: u64 },
     #[error("attachment could not be staged ({reason}): {path}")]
     Staging { path: String, reason: String },
 }
@@ -90,6 +94,7 @@ impl AttachmentPolicyError {
             Self::NoRoots | Self::OutsideRoots { .. } => std::io::ErrorKind::PermissionDenied,
             Self::Unresolvable { .. } | Self::NotAFile { .. } => std::io::ErrorKind::InvalidInput,
             Self::TooLarge { .. } | Self::OverBudget { .. } => std::io::ErrorKind::FileTooLarge,
+            Self::StagingFull { .. } => std::io::ErrorKind::WouldBlock,
             Self::Staging { .. } => std::io::ErrorKind::Other,
         }
     }
@@ -329,52 +334,87 @@ pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u6
 /// panel's actions older than `retention` go (a closed panel's staging
 /// ages out this way), and the panel keeps at most `max_actions - 1`
 /// newer actions within `max_bytes` less the `reserved_bytes` the incoming
-/// action needs, so the new one fits inside the budget.
+/// action needs, so the new one fits inside the budget. Actions listed in
+/// `protected` are still queued for the engine and are never evicted; when
+/// they alone leave no room, or a required eviction fails, the new action
+/// is refused rather than staged over the limit.
+///
+/// # Errors
+/// Returns `StagingFull` when the room cannot be made.
 pub fn prune_attachments(
     attachments_dir: &Path,
     panel_local_id: &str,
+    protected: &[String],
     retention: Duration,
     max_actions: usize,
     max_bytes: u64,
     reserved_bytes: u64,
-) {
+) -> Result<(), AttachmentPolicyError> {
     let stale_before = std::time::SystemTime::now()
         .checked_sub(retention)
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     let Ok(panels) = std::fs::read_dir(attachments_dir) else {
-        return;
+        return Ok(());
     };
     let current = crate::paths::safe_local_id(panel_local_id);
+    let protected = protected
+        .iter()
+        .map(|action_id| crate::paths::safe_local_id(action_id))
+        .collect::<Vec<_>>();
     for panel in panels.flatten() {
         let Ok(actions) = std::fs::read_dir(panel.path()) else {
             continue;
         };
+        let is_current = panel.file_name().to_string_lossy() == current;
         let mut retained = Vec::new();
         for action in actions.flatten() {
             let Ok(modified) = action.metadata().and_then(|metadata| metadata.modified()) else {
                 continue;
             };
-            if modified < stale_before {
-                remove_action_dir(&action.path());
-            } else if panel.file_name().to_string_lossy() == current {
-                retained.push((modified, directory_bytes(&action.path()), action.path()));
+            let queued = is_current && protected.iter().any(|id| action.file_name().to_string_lossy() == *id);
+            if modified < stale_before && !queued {
+                remove_action_dir_lenient(&action.path());
+            } else if is_current {
+                retained.push((modified, directory_bytes(&action.path()), action.path(), queued));
             }
         }
-        retained.sort_by_key(|(modified, _, _)| std::cmp::Reverse(*modified));
+        if !is_current {
+            continue;
+        }
+        // Queued actions are kept whatever their age or size; the newest
+        // unqueued ones then fill what room the budget leaves for them.
         let budget = max_bytes.saturating_sub(reserved_bytes);
-        let mut kept_bytes = 0u64;
-        for (index, (_, bytes, path)) in retained.into_iter().enumerate() {
-            kept_bytes = kept_bytes.saturating_add(bytes);
-            if index + 1 >= max_actions || kept_bytes > budget {
-                remove_action_dir(&path);
+        let (queued_actions, unqueued): (Vec<_>, Vec<_>) = retained.into_iter().partition(|entry| entry.3);
+        let mut kept_actions = queued_actions.len();
+        let mut kept_bytes = queued_actions
+            .iter()
+            .fold(0u64, |total, entry| total.saturating_add(entry.1));
+        if kept_actions + 1 > max_actions || kept_bytes > budget {
+            return Err(AttachmentPolicyError::StagingFull {
+                limit_actions: max_actions,
+                limit_bytes: max_bytes,
+            });
+        }
+        let mut unqueued = unqueued;
+        unqueued.sort_by_key(|(modified, _, _, _)| std::cmp::Reverse(*modified));
+        for (_, bytes, path, _) in unqueued {
+            if kept_actions + 1 < max_actions && kept_bytes.saturating_add(bytes) <= budget {
+                kept_actions += 1;
+                kept_bytes = kept_bytes.saturating_add(bytes);
+            } else {
+                std::fs::remove_dir_all(&path).map_err(|error| AttachmentPolicyError::Staging {
+                    path: path.display().to_string(),
+                    reason: format!("could not evict older staged attachments: {}", error.kind()),
+                })?;
             }
         }
     }
+    Ok(())
 }
 
-fn remove_action_dir(path: &Path) {
+fn remove_action_dir_lenient(path: &Path) {
     if let Err(error) = std::fs::remove_dir_all(path) {
-        tracing::warn!(target: "browser", path = %path.display(), "failed to prune staged attachments: {error}");
+        tracing::warn!(target: "browser", path = %path.display(), "failed to prune stale staged attachments: {error}");
     }
 }
 
@@ -478,13 +518,13 @@ mod tests {
         stage_attachments(&attachments, "panel", "second", &authorized).expect("second");
         stage_attachments(&attachments, "panel", "third", &authorized).expect("third");
         // Age: the other panel's old action and this panel's first go.
-        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0);
+        prune_attachments(&attachments, "panel", &[], Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
         assert!(!action_directory(&attachments, "other", "old").exists());
         assert!(!action_directory(&attachments, "panel", "first").exists());
         assert!(action_directory(&attachments, "panel", "second").exists());
         assert!(action_directory(&attachments, "panel", "third").exists());
         // Count: room for one more means only the newest of the two stays.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0);
+        prune_attachments(&attachments, "panel", &[], Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -493,7 +533,7 @@ mod tests {
         );
         // Bytes: a 12-byte budget with 7 reserved for the newcomer leaves
         // less than one 6-byte action, so the panel is cleared.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7);
+        prune_attachments(&attachments, "panel", &[], Duration::from_hours(1), 8, 12, 7).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -569,6 +609,43 @@ mod tests {
             policy.authorize(&[link]),
             Err(AttachmentPolicyError::OutsideRoots { .. })
         ));
+    }
+
+    #[test]
+    fn queued_actions_are_never_evicted_and_refuse_the_newcomer_instead() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let attachments = root.path().join("attachments");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "panel", "queued", &authorized).expect("queued");
+        std::thread::sleep(Duration::from_millis(600));
+        stage_attachments(&attachments, "panel", "newer", &authorized).expect("newer");
+        let queued = vec!["queued".to_string()];
+        // Age would remove the older one, but it is still queued.
+        prune_attachments(
+            &attachments,
+            "panel",
+            &queued,
+            Duration::from_millis(300),
+            8,
+            u64::MAX,
+            0,
+        )
+        .expect("room");
+        assert!(action_directory(&attachments, "panel", "queued").exists());
+        // Count: the queued action stays and the unqueued newer one goes.
+        prune_attachments(&attachments, "panel", &queued, Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
+        assert!(action_directory(&attachments, "panel", "queued").exists());
+        assert!(!action_directory(&attachments, "panel", "newer").exists());
+        // Bytes: the queued action alone exceeds the room, so the newcomer is refused.
+        let error =
+            prune_attachments(&attachments, "panel", &queued, Duration::from_hours(1), 8, 12, 7).expect_err("no room");
+        assert!(matches!(error, AttachmentPolicyError::StagingFull { .. }), "{error}");
+        assert_eq!(error.io_kind(), std::io::ErrorKind::WouldBlock);
+        assert!(action_directory(&attachments, "panel", "queued").exists());
     }
 
     #[test]
