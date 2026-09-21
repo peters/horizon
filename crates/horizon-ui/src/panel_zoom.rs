@@ -6,7 +6,9 @@
 //! of their own, changed by a dropdown or by a pinch/zoom-modifier wheel
 //! over the content.
 
-use egui::{Context, Id, Ui};
+use std::sync::Arc;
+
+use egui::{Context, Id, RichText, Ui};
 
 pub(crate) const MIN_ZOOM: f32 = 0.25;
 pub(crate) const MAX_ZOOM: f32 = 4.0;
@@ -96,26 +98,44 @@ fn show(
     interactive: bool,
 ) -> bool {
     let before = *selection;
-    let selected_text = displayed
-        .or(*selection)
-        .map_or_else(|| "Fit".to_owned(), PanelZoom::label);
+    let selected_text = dropdown_label(ui, displayed.or(*selection));
     ui.add_enabled_ui(interactive, |ui| {
         egui::ComboBox::from_id_salt(id_salt)
             .width(DROPDOWN_WIDTH)
             .selected_text(selected_text)
             .show_ui(ui, |ui| {
                 if allow_fit {
-                    ui.selectable_value(selection, None, "Fit");
+                    ui.selectable_value(selection, None, dropdown_label(ui, None));
                 }
                 for stop in STOPS {
                     let zoom = PanelZoom::new(stop);
-                    ui.selectable_value(selection, Some(zoom), zoom.label());
+                    ui.selectable_value(selection, Some(zoom), dropdown_label(ui, Some(zoom)));
                 }
             })
             .response
             .on_hover_text("Zoom this panel's content");
     });
     *selection != before
+}
+
+fn dropdown_label(ui: &Ui, zoom: Option<PanelZoom>) -> Arc<RichText> {
+    let font = egui::FontSelection::default().resolve_with_fallback(ui.style(), egui::TextStyle::Button.into());
+    let line_height = ui.fonts_mut(|fonts| fonts.row_height(&font)) + ui.spacing().extra_text_line_spacing;
+    cached_label(ui.ctx(), zoom, line_height)
+}
+
+fn cached_label(ctx: &Context, zoom: Option<PanelZoom>, line_height: f32) -> Arc<RichText> {
+    // Whole percentages need at most 376 labels plus Fit per font line height.
+    // RichText keeps egui's ComboBox clone cheap while layout remains theme-aware.
+    let percentage = zoom.map(|zoom| (zoom.factor() * 100.0).round().to_bits());
+    let id = Id::new(("panel_zoom_label", percentage, line_height.to_bits()));
+    ctx.data_mut(|data| {
+        Arc::clone(data.get_temp_mut_or_insert_with(id, || {
+            Arc::new(
+                RichText::new(zoom.map_or_else(|| "Fit".to_owned(), PanelZoom::label)).line_height(Some(line_height)),
+            )
+        }))
+    })
 }
 
 /// Idle gap that ends a gesture whose wheel events carry no touch phase,
@@ -267,6 +287,55 @@ pub(crate) fn gesture_delta(ui: &Ui, hovered: bool) -> Option<f32> {
 mod tests {
     use super::{MAX_ZOOM, MIN_ZOOM, PanelZoom, dropdown_with_fit, gesture_delta, gesture_target};
     use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn cached_labels_preserve_button_typography_and_current_theme() {
+        let ctx = egui::Context::default();
+        for (spacing, color) in [
+            (0.0, egui::Color32::LIGHT_BLUE),
+            (0.0, egui::Color32::LIGHT_RED),
+            (3.0, egui::Color32::LIGHT_GREEN),
+        ] {
+            let _ = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    ui.style_mut().spacing.extra_text_line_spacing = spacing;
+                    ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
+                    ui.style_mut().visuals.override_text_color = Some(color);
+                    let layout = |text: egui::WidgetText| {
+                        text.into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::TextStyle::Button,
+                        )
+                    };
+                    let plain = layout("150%".into());
+                    let cached = layout(super::dropdown_label(ui, Some(PanelZoom::new(1.5))).into());
+                    assert_eq!(plain.job, cached.job);
+                    assert_eq!(plain.size(), cached.size());
+                })
+                .discard_textures();
+        }
+    }
+
+    #[test]
+    fn zoom_labels_share_text_until_the_displayed_percentage_changes() {
+        let ctx = egui::Context::default();
+        let first = super::cached_label(&ctx, Some(PanelZoom::new(0.666)), 14.0);
+        let unchanged = super::cached_label(&ctx, Some(PanelZoom::new(0.667)), 14.0);
+        assert!(std::sync::Arc::ptr_eq(&first, &unchanged));
+        assert_eq!(first.text(), "67%");
+        let changed = super::cached_label(&ctx, Some(PanelZoom::new(0.68)), 14.0);
+        assert!(!std::sync::Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.text(), "68%");
+        let fit = super::cached_label(&ctx, None, 14.0);
+        assert_eq!(fit.text(), "Fit");
+        assert!(std::sync::Arc::ptr_eq(&fit, &super::cached_label(&ctx, None, 14.0)));
+        assert_eq!(super::cached_label(&ctx, Some(PanelZoom::ONE), 14.0).text(), "100%");
+        let resized = super::cached_label(&ctx, Some(PanelZoom::new(0.666)), 18.0);
+        assert!(!std::sync::Arc::ptr_eq(&first, &resized));
+        assert_eq!(resized.text(), "67%");
+    }
 
     #[test]
     fn scales_are_clamped_and_labeled_as_whole_percentages() {

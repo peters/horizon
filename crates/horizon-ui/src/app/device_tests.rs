@@ -4,7 +4,7 @@ use horizon_core::{PanelId, PanelKind, RuntimeState, StartupChooser, StartupDeci
 use super::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use super::{HorizonApp, StartupChooserState};
 
-fn device_app(command: Option<&str>) -> (tempfile::TempDir, Context, HorizonApp, PanelId) {
+pub(super) fn device_app(command: Option<&str>) -> (tempfile::TempDir, Context, HorizonApp, PanelId) {
     let mut workspace = editor_workspace_state("device", [0.0, 0.0]);
     workspace.panels[0].kind = PanelKind::Device;
     workspace.panels[0].command = command.map(str::to_owned);

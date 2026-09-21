@@ -69,6 +69,24 @@ impl SshUploadFlow {
         self.target_viewport_id == viewport_id
     }
 
+    pub(super) fn blocks_zoom_at(&self, ctx: &Context) -> bool {
+        if !self.is_visible_in(ctx.viewport_id()) {
+            return false;
+        }
+        if self.destination_picker.is_some() {
+            return true;
+        }
+        let point = ctx.input(|input| input.pointer.hover_pos());
+        let layer = egui::LayerId::new(egui::Order::Debug, egui::Id::new("ssh_upload_modal"));
+        ctx.memory(|memory| {
+            // Until this dialog paints, an old upload's retained bounds are not usable.
+            !memory.areas().visible_last_frame(&layer)
+                || memory
+                    .area_rect(layer.id)
+                    .is_none_or(|rect| point.is_some_and(|point| rect.contains(point)))
+        })
+    }
+
     fn new(
         target_viewport_id: ViewportId,
         connection: SshConnection,
@@ -494,6 +512,94 @@ mod tests {
     use crate::app::ssh_upload::worker::LocalUploadFile;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    pub(super) fn upload_flow(target_viewport_id: egui::ViewportId) -> super::SshUploadFlow {
+        super::SshUploadFlow {
+            target_viewport_id,
+            host_label: "Synthetic upload".into(),
+            connection: horizon_core::SshConnection::default(),
+            files: Vec::new(),
+            destination_input: String::new(),
+            ssh_upload_error: None,
+            taildrop_target: None,
+            transport_choice: super::UploadTransportChoice::Ssh,
+            mode: super::UploadMode::Failed("Synthetic fixture".into()),
+            destination_picker: None,
+            preparation_rx: None,
+            upload_handle: None,
+            upload_snapshot: None,
+            upload_started_at: None,
+        }
+    }
+
+    #[test]
+    fn fullscreen_entry_with_ssh_upload_only_blocks_its_visible_window() {
+        use crate::app::device_tests::device_app;
+        use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+        for inside in [false, true] {
+            for wheel in [false, true] {
+                let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+                app.sidebar_visible = true;
+                app.ssh_upload_flow = Some(upload_flow(egui::ViewportId::ROOT));
+                assert!(
+                    app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some(),
+                    "unpainted dialog"
+                );
+                for _ in 0..3 {
+                    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+                }
+                let point = if inside {
+                    ctx.memory(|memory| memory.area_rect(egui::Id::new("ssh_upload_modal")))
+                        .expect("upload window")
+                        .center()
+                } else {
+                    let point = egui::pos2(20.0, 250.0);
+                    assert_eq!(
+                        ctx.layer_id_at(point).map(|layer| layer.id),
+                        Some(egui::Id::new("sidebar"))
+                    );
+                    point
+                };
+                let before = app.canvas_view;
+                app.fullscreen_panel = Some(panel);
+                let mut input = raw_input([1400.0, 900.0], None);
+                input.time = Some(1.0);
+                input.events.push(egui::Event::PointerMoved(point));
+                input.events.push(if wheel {
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 40.0),
+                        modifiers: egui::Modifiers::CTRL,
+                        phase: egui::TouchPhase::Move,
+                    }
+                } else {
+                    egui::Event::Zoom(1.25)
+                });
+                run_app_frame_with_input(&ctx, &mut app, input);
+                let zoom = app.panel_render_caches.device_ui_state[&panel].zoom_factor();
+                assert_eq!(zoom > 1.0, !inside, "inside={inside}, wheel={wheel}, zoom={zoom}");
+                assert_eq!(app.canvas_view, before);
+                let flow = app.ssh_upload_flow.as_mut().expect("upload flow");
+                flow.target_viewport_id = egui::ViewportId::from_hash_of("other viewport");
+                assert!(
+                    !flow.blocks_zoom_at(&ctx),
+                    "another viewport must not reserve this pointer"
+                );
+                app.ssh_upload_flow = None;
+                run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+                assert!(
+                    ctx.memory(|memory| memory.area_rect(egui::Id::new("ssh_upload_modal")))
+                        .is_some()
+                );
+                app.ssh_upload_flow = Some(upload_flow(egui::ViewportId::ROOT));
+                assert!(
+                    app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some(),
+                    "retired dialog bounds"
+                );
+            }
+        }
+    }
 
     #[test]
     fn remote_file_drops_do_not_probe_saved_ssh_metadata_in_owner_or_copied_sessions() {

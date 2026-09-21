@@ -355,6 +355,32 @@ mod tests {
     };
 
     #[test]
+    fn nested_destination_picker_reserves_the_backdrop_on_fullscreen_entry() {
+        use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        let mut flow = super::super::tests::upload_flow(egui::ViewportId::ROOT);
+        flow.destination_picker = Some(RemoteDestinationPicker {
+            modal: super::PickerModalState::new("/"),
+            results: Vec::new(),
+            current_dir: "/".into(),
+            error: None,
+            pending_listing: None,
+            last_query_sent: "/".into(),
+            last_query_time: Instant::now(),
+            initial_results_loaded: true,
+        });
+        app.ssh_upload_flow = Some(flow);
+        for _ in 0..3 {
+            let mut input = raw_input([1400.0, 900.0], None);
+            input.events.push(egui::Event::PointerMoved(egui::pos2(20.0, 250.0)));
+            run_app_frame_with_input(&ctx, &mut app, input);
+        }
+        assert!(app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some());
+    }
+
+    #[test]
     fn remote_query_request_uses_parent_for_partial_leaf() {
         let request = remote_query_request("/srv/log");
         assert_eq!(request.list_path, "/srv");

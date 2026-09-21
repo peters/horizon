@@ -263,19 +263,20 @@ impl HorizonApp {
         ctx: &Context,
         view_changed: bool,
     ) -> Option<egui::Id> {
-        let dialog_visible = self.command_palette.is_some()
+        if !view_changed {
+            return self.zoom_gesture_blocker(ctx);
+        }
+        // These dialogs retain an interactive backdrop over the whole viewport.
+        // A hidden board layer may still sort above that backdrop on this frame.
+        let dialog_blocks = self.command_palette.is_some()
             || self.dir_picker.is_some()
             || self.remote_hosts_overlay.is_some()
             || self.session_manager.is_some()
             || self
                 .ssh_upload_flow
                 .as_ref()
-                .is_some_and(|flow| flow.is_visible_in(ctx.viewport_id()));
-        if view_changed && !dialog_visible {
-            None
-        } else {
-            self.zoom_gesture_blocker(ctx)
-        }
+                .is_some_and(|flow| flow.blocks_zoom_at(ctx));
+        dialog_blocks.then(|| egui::Id::new("fullscreen_dialog_zoom"))
     }
 
     pub(in crate::app) fn panel_zoom_owner(&self, panel_id: PanelId, layer: egui::Id) -> egui::Id {
