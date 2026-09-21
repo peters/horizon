@@ -53,16 +53,20 @@ impl Runtime {
             Ok(recovered) => {
                 self.stage = Some(recovered.state.stage);
                 self.state = Some(recovered.state);
+                if self
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Bound { .. }))
+                {
+                    self.recovery_worker_id.clear();
+                }
                 self.state_unavailable = false;
                 self.error = None;
                 self.logs.push_back(recovered.report.outcome.explanation().into());
                 while self.logs.len() > 150 {
                     self.logs.pop_front();
                 }
-                if matches!(
-                    self.state.as_ref().map(|state| &state.operation),
-                    Some(cloud_runtime::CreateState::Requested)
-                ) {
+                if self.state.as_ref().is_some_and(Self::needs_provider_check) {
                     self.error = Some(recovered.report.outcome.explanation().into());
                 }
             }

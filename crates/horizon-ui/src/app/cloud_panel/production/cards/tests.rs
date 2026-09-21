@@ -111,3 +111,111 @@ fn recovery_transport_failure_preserves_state_and_allows_another_check() {
     assert!(runtime.error.as_ref().unwrap().contains("Another controller"));
     assert!(!runtime.needs_attach);
 }
+
+#[test]
+fn inactive_recovery_retains_deletion_without_automatic_reconnect() {
+    use horizon_core::cloud_runtime::{self, lifecycle::ReconciledDeployment};
+    for status in ["EXITED", "TERMINATED", "UNKNOWN"] {
+        let mut runtime = super::super::Runtime {
+            recovery_worker_id: "unlisted-old-hint".into(),
+            ..Default::default()
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        runtime.recovery_receiver = Some(rx);
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"recovery-fixture","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Provision","operation":{"state":"bound","worker_id":"worker1"},"spec":null,
+            "worker":{"id":"worker1","name":"recovery-fixture","imageName":"registry.example/worker","desiredStatus":status},
+            "sessions":[]
+        })).unwrap();
+        tx.send(Ok(ReconciledDeployment {
+            state,
+            report: serde_json::from_value(serde_json::json!({
+                "operation_id":"recovery-fixture","outcome":{"status":"inactive","worker_id":"worker1"}
+            }))
+            .unwrap(),
+        }))
+        .unwrap();
+        runtime.poll_recovery();
+        assert!(runtime.recovery_worker_id.is_empty());
+        let state = runtime.state.as_ref().unwrap();
+        assert!(super::super::Runtime::needs_provider_check(state));
+        assert!(matches!(state.operation, cloud_runtime::CreateState::Bound { .. }));
+        assert_eq!(runtime.stage, Some(Stage::Provision));
+        assert!(runtime.error.as_ref().unwrap().contains("cleanup is not confirmed"));
+        assert!(runtime.receiver.is_none());
+        assert!(!runtime.needs_attach);
+    }
+}
+
+#[test]
+fn restored_bound_records_can_check_provider_after_failed_reconnect() {
+    for worker in [
+        serde_json::Value::Null,
+        serde_json::json!({
+            "id":"worker1","name":"recovery-fixture","imageName":"registry.example/worker","desiredStatus":"RUNNING"
+        }),
+    ] {
+        let saved = serde_json::json!({
+            "version":1,"cloud_id":"recovery-fixture","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Provision","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":null,"worker":worker,"sessions":[]
+        });
+        let mut runtime = super::super::Runtime {
+            state: Some(serde_json::from_str(&saved.to_string()).unwrap()),
+            error: Some("Existing worker is not running; check provider before reconnecting".into()),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut point = Pos2::ZERO;
+        for _ in 0..2 {
+            let output = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    assert!(bound_provider_check(ui, &runtime).is_none());
+                })
+                .discard_textures();
+            point = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Check provider" => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .expect("Bound recovery action must be rendered for stale and absent metadata");
+        }
+        let mut action = None;
+        for pressed in [true, false] {
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = bound_provider_check(ui, &runtime).or(action);
+                    },
+                )
+                .discard_textures();
+        }
+        assert!(matches!(action, Some(Action::Reconcile)));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        runtime.recovery_receiver = Some(rx);
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(runtime_actions(ui, &mut runtime).is_none());
+            })
+            .discard_textures();
+    }
+}

@@ -83,6 +83,16 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    fn needs_provider_check(state: &Deployment) -> bool {
+        state.operation == cloud_runtime::CreateState::Requested
+            || (matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
+                && !state.stop_requested
+                && state
+                    .worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.desired_status != "RUNNING"))
+    }
+
     fn start_deployment(&mut self, request: Request, ctx: &egui::Context) {
         if self.receiver.is_some() && self.stage != Some(Stage::Ready) {
             return;
@@ -305,8 +315,9 @@ impl HorizonApp {
                         },
                     );
                     (matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. })
-                        && !state.stop_requested)
-                        .then_some(group.issue)
+                        && !state.stop_requested
+                        && !Runtime::needs_provider_check(&state))
+                    .then_some(group.issue)
                 })
                 .collect();
             for id in reconnect {

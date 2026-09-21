@@ -163,11 +163,8 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         ui.label("Releasing remote devices…");
         return None;
     }
-    if runtime.receiver.is_none()
-        && runtime
-            .state
-            .as_ref()
-            .is_some_and(|state| state.operation == horizon_core::cloud_runtime::CreateState::Requested)
+    if runtime.recovery_receiver.is_some()
+        || (runtime.receiver.is_none() && runtime.state.as_ref().is_some_and(super::Runtime::needs_provider_check))
     {
         return recovery_actions(ui, runtime);
     }
@@ -233,7 +230,21 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             runtime.confirmation = Confirmation::Stop;
         }
     }
-    deletion_action(ui, runtime).or(action)
+    bound_provider_check(ui, runtime)
+        .or_else(|| deletion_action(ui, runtime))
+        .or(action)
+}
+
+fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
+    if runtime.receiver.is_none()
+        && runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. }))
+    {
+        return ui.button("Check provider").clicked().then_some(Action::Reconcile);
+    }
+    None
 }
 
 fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
@@ -257,7 +268,7 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
 }
 
 fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
-    ui.label("Worker creation needs confirmation");
+    ui.label("Worker status needs confirmation");
     ui.small("Check the original request with the provider. This check cannot allocate, start or delete a worker.");
     ui.collapsing("Provider-confirmed worker ID (optional)", |ui| {
         ui.small("Use an ID supplied by the provider. Horizon verifies that it belongs to this cloud.");
@@ -268,7 +279,16 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
         ui.label("Checking provider…");
         None
     } else {
-        ui.button("Check provider").clicked().then_some(Action::Reconcile)
+        let action = ui.button("Check provider").clicked().then_some(Action::Reconcile);
+        if runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. }))
+        {
+            deletion_action(ui, runtime).or(action)
+        } else {
+            action
+        }
     }
 }
 

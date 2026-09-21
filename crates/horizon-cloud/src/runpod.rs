@@ -52,6 +52,9 @@ impl RunPod {
                     recovered.worker.ok_or(CloudError::InvalidResponse)
                 }
                 recovery::Outcome::Conflicting { .. } => Err(CloudError::DuplicateWorkers),
+                recovery::Outcome::Inactive { .. } => Err(CloudError::Invalid(
+                    "Existing worker is not running; check provider before reconnecting",
+                )),
                 recovery::Outcome::Missing { .. } | recovery::Outcome::Terminated { .. } => Err(CloudError::WorkerLost),
                 recovery::Outcome::Prepared | recovery::Outcome::Unresolved => Err(CloudError::CreationUnresolved),
             };
@@ -60,6 +63,11 @@ impl RunPod {
             CreateState::Bound { worker_id } => {
                 let worker = self.inspect(worker_id, cancel)?.ok_or(CloudError::WorkerLost)?;
                 worker.verify(spec)?;
+                if worker.desired_status != "RUNNING" {
+                    return Err(CloudError::Invalid(
+                        "Existing worker is not running; check provider before reconnecting",
+                    ));
+                }
                 return Ok(worker);
             }
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),

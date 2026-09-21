@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum Outcome {
     Prepared,
     Found { worker_id: String },
+    Inactive { worker_id: String },
     Unresolved,
     Conflicting { worker_ids: Vec<String> },
     Missing { worker_id: String },
@@ -20,6 +21,9 @@ impl Outcome {
         match self {
             Self::Prepared => "No creation request is outstanding. Deployment requires a separate explicit action.",
             Self::Found { .. } => "The provider confirmed the existing worker. Reconnect continues on that worker.",
+            Self::Inactive { .. } => {
+                "The provider confirmed this worker's identity but does not report it running. It may be stopped or pending termination; cleanup is not confirmed. Check again or explicitly delete the existing worker. This operation will not allocate a replacement."
+            }
             Self::Unresolved => {
                 "The provider has not confirmed the creation outcome. An empty listing does not prove failure. Check again, or use a worker ID confirmed by the provider. If no evidence is available, retain this cloud and ask provider support to resolve the original request. Creating a replacement can cause duplicate charges."
             }
@@ -116,24 +120,18 @@ impl RunPod {
         if let Some(worker) = &result.worker {
             worker.verify(spec)?;
             cancel.check()?;
-            if worker.desired_status == "TERMINATED" {
-                let next = CreateState::Terminated {
-                    worker_id: worker.id.clone(),
-                };
-                persist(&next)?;
-                *state = next;
-                result.outcome = Outcome::Terminated {
-                    worker_id: worker.id.clone(),
-                };
-                result.worker = None;
-            } else {
-                if *state == CreateState::Requested {
-                    bind(state, worker, &mut persist)?;
-                }
-                result.outcome = Outcome::Found {
-                    worker_id: worker.id.clone(),
-                };
+            if *state == CreateState::Requested {
+                bind(state, worker, &mut persist)?;
             }
+            result.outcome = if worker.desired_status == "RUNNING" {
+                Outcome::Found {
+                    worker_id: worker.id.clone(),
+                }
+            } else {
+                Outcome::Inactive {
+                    worker_id: worker.id.clone(),
+                }
+            };
         }
         Ok(result)
     }

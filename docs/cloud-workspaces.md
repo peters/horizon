@@ -141,7 +141,10 @@ identifies worker IDs, not Horizon operation IDs; an absent billing record is
 not proof that no worker was created. A definitive rejection received from the
 original create request permits another explicit deployment attempt. Lookup
 errors cannot provide that permission. A previously bound worker that disappears
-is reported as missing. Confirmed termination retains its identity permanently.
+is reported as missing. A non-running match retains its verified worker ID but
+is reported as inactive: a desired termination status is not proof that deletion
+has finished. Check again or explicitly delete that same worker. Only the
+explicit deletion flow confirms cleanup; termination retains its identity permanently.
 
 After a worker-service crash, a private journal that durably confirms a remote
 device was released can be cleaned up without the old provider credentials.

@@ -141,14 +141,71 @@ fn mismatching_operation_marker_does_not_bind_a_matching_name() {
 }
 
 #[test]
-fn confirmed_termination_is_distinct_from_a_missing_bound_worker() {
-    let spec = spec();
-    let mut terminated = worker(&spec);
-    terminated["desiredStatus"] = json!("TERMINATED");
-    let (provider, requests, task) = server(vec![(200, json!([terminated]).to_string()), (404, "{}".into())]);
-    let mut state = CreateState::Requested;
+fn inactive_matches_bind_identity_without_confirming_cleanup() {
+    for status in ["TERMINATED", "EXITED", "UNKNOWN"] {
+        let spec = spec();
+        let mut inactive = worker(&spec);
+        inactive["desiredStatus"] = json!(status);
+        inactive["lastStatusChange"] = json!("Terminated by User");
+        let (provider, requests, task) = server(vec![
+            (200, json!([inactive.clone()]).to_string()),
+            (200, inactive.to_string()),
+            (404, "{}".into()),
+            (404, "{}".into()),
+        ]);
+        let mut state = CreateState::Requested;
+        let report = provider
+            .reconcile(&spec, &mut state, None, &Cancellation::default(), |_| Ok(()))
+            .unwrap();
+        assert_eq!(
+            report.outcome,
+            Outcome::Inactive {
+                worker_id: "worker1".into()
+            }
+        );
+        assert!(report.worker.is_some());
+        assert!(matches!(state, CreateState::Bound { .. }));
+        assert!(matches!(
+            provider.ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
+            Err(CloudError::Invalid(
+                "Existing worker is not running; check provider before reconnecting"
+            ))
+        ));
+        let missing = provider
+            .reconcile(&spec, &mut state, None, &Cancellation::default(), |_| Ok(()))
+            .unwrap();
+        assert_eq!(
+            missing.outcome,
+            Outcome::Missing {
+                worker_id: "worker1".into()
+            }
+        );
+        assert!(matches!(state, CreateState::Bound { .. }));
+        provider
+            .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+            .unwrap();
+        assert!(matches!(state, CreateState::Terminated { .. }));
+        task.join().unwrap();
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.starts_with("GET "))
+        );
+    }
+}
+
+#[test]
+fn explicit_termination_is_permanent_without_provider_access() {
+    let provider = RunPod::new(Credential::new("unused-test-key".into()).unwrap());
+    let mut state = CreateState::Terminated {
+        worker_id: "worker1".into(),
+    };
     let report = provider
-        .reconcile(&spec, &mut state, None, &Cancellation::default(), |_| Ok(()))
+        .reconcile(&spec(), &mut state, None, &Cancellation::default(), |_| {
+            panic!("Confirmed termination must stay permanent")
+        })
         .unwrap();
     assert_eq!(
         report.outcome,
@@ -157,32 +214,6 @@ fn confirmed_termination_is_distinct_from_a_missing_bound_worker() {
         }
     );
     assert!(report.worker.is_none());
-    assert!(matches!(state, CreateState::Terminated { .. }));
-    assert!(matches!(
-        provider.ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
-        Err(CloudError::WorkerLost)
-    ));
-    let mut bound = CreateState::Bound {
-        worker_id: "worker1".into(),
-    };
-    let missing = provider
-        .reconcile(&spec, &mut bound, None, &Cancellation::default(), |_| Ok(()))
-        .unwrap();
-    assert_eq!(
-        missing.outcome,
-        Outcome::Missing {
-            worker_id: "worker1".into()
-        }
-    );
-    assert!(matches!(bound, CreateState::Bound { .. }));
-    task.join().unwrap();
-    assert!(
-        requests
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.starts_with("GET "))
-    );
 }
 
 #[test]
