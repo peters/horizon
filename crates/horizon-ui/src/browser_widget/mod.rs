@@ -206,9 +206,7 @@ impl<'a> BrowserView<'a> {
             render::show_body(ui, panel_id, browser, state, interactive)
         };
         if interactive && let Some(browser) = self.panel.browser() {
-            // Zoom belongs to the whole panel, chrome and placeholders
-            // included, so it matches what the canvas leaves alone.
-            render::apply_zoom_gesture(ui, browser, state, crate::panel_zoom::owns_gesture(ui));
+            render::route_zoom(ui, browser, state, &body, self.fullscreen_active);
         }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
@@ -567,6 +565,7 @@ mod tests {
         let output = context.run_ui(egui::RawInput::default(), |ui| {
             for viewport_size in [Some((1280, 800)), Some((900, 600)), Some((900, 600))] {
                 let body = super::render::BodyOutput {
+                    native_select_menu: None,
                     image_rect: None,
                     frame_size: Some([390.0, 844.0]),
                     viewport_size,
@@ -598,6 +597,7 @@ mod tests {
                     count: 1,
                 });
                 let body = super::render::BodyOutput {
+                    native_select_menu: None,
                     image_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 844.0))),
                     frame_size,
                     viewport_size: Some((900, 600)),

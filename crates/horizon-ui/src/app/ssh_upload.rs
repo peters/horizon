@@ -40,6 +40,7 @@ impl UploadMode {
 
 pub(super) struct SshUploadFlow {
     target_viewport_id: ViewportId,
+    painted_zoom_rect: Option<egui::Rect>,
     host_label: String,
     connection: SshConnection,
     files: Vec<LocalUploadFile>,
@@ -81,8 +82,8 @@ impl SshUploadFlow {
         ctx.memory(|memory| {
             // Until this dialog paints, an old upload's retained bounds are not usable.
             !memory.areas().visible_last_frame(&layer)
-                || memory
-                    .area_rect(layer.id)
+                || self
+                    .painted_zoom_rect
                     .is_none_or(|rect| point.is_some_and(|point| rect.contains(point)))
         })
     }
@@ -96,6 +97,7 @@ impl SshUploadFlow {
     ) -> Self {
         Self {
             target_viewport_id,
+            painted_zoom_rect: None,
             host_label,
             preparation_rx: Some(spawn_preparation(connection.clone(), last_destination)),
             connection,
@@ -161,6 +163,7 @@ impl HorizonApp {
             Err(error) => {
                 self.ssh_upload_flow = Some(SshUploadFlow {
                     target_viewport_id: viewport_id,
+                    painted_zoom_rect: None,
                     host_label,
                     connection: connection.unwrap_or_default(),
                     files: Vec::new(),
@@ -516,6 +519,7 @@ mod tests {
     pub(super) fn upload_flow(target_viewport_id: egui::ViewportId) -> super::SshUploadFlow {
         super::SshUploadFlow {
             target_viewport_id,
+            painted_zoom_rect: None,
             host_label: "Synthetic upload".into(),
             connection: horizon_core::SshConnection::default(),
             files: Vec::new(),
@@ -530,6 +534,31 @@ mod tests {
             upload_snapshot: None,
             upload_started_at: None,
         }
+    }
+
+    #[test]
+    fn fullscreen_entry_ignores_a_removed_upload_dialog() {
+        use crate::app::device_tests::device_app;
+        use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+        let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+        app.ssh_upload_flow = Some(upload_flow(egui::ViewportId::ROOT));
+        for _ in 0..3 {
+            run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        }
+        let point = app
+            .ssh_upload_flow
+            .as_ref()
+            .expect("upload")
+            .painted_zoom_rect
+            .expect("painted")
+            .center();
+        app.ssh_upload_flow = None;
+        app.fullscreen_panel = Some(panel);
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.events = vec![egui::Event::PointerMoved(point), egui::Event::Zoom(1.25)];
+        run_app_frame_with_input(&ctx, &mut app, input);
+        assert!(app.panel_render_caches.device_ui_state[&panel].zoom_factor() > 1.0);
     }
 
     #[test]
@@ -580,6 +609,11 @@ mod tests {
                 let zoom = app.panel_render_caches.device_ui_state[&panel].zoom_factor();
                 assert_eq!(zoom > 1.0, !inside, "inside={inside}, wheel={wheel}, zoom={zoom}");
                 assert_eq!(app.canvas_view, before);
+                app.ssh_upload_flow = Some(upload_flow(egui::ViewportId::ROOT));
+                assert!(
+                    app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some(),
+                    "replacement flow must not reuse the preceding flow's painted bounds"
+                );
                 let flow = app.ssh_upload_flow.as_mut().expect("upload flow");
                 flow.target_viewport_id = egui::ViewportId::from_hash_of("other viewport");
                 assert!(

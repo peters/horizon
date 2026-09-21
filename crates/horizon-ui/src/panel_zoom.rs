@@ -188,10 +188,12 @@ fn latch_id(ctx: &Context) -> Id {
 pub(crate) fn synchronize_fullscreen(ctx: &Context, fullscreen_panel: Option<Id>) -> bool {
     let latch = latch_id(ctx);
     let mode = Id::new(("panel_zoom_fullscreen", ctx.viewport_id()));
+    let deferred = deferred_canvas_id(ctx);
     ctx.data_mut(|data| {
         let previous = data.get_temp::<Option<Id>>(mode).flatten();
         if previous != fullscreen_panel {
             data.remove::<GestureLatch>(latch);
+            data.remove::<DeferredCanvasZoom>(deferred);
         }
         data.insert_temp(mode, fullscreen_panel);
         previous != fullscreen_panel
@@ -211,14 +213,68 @@ pub(crate) fn blocking_layer(ctx: &Context, mut panel_layers: impl Iterator<Item
     (layer.order >= egui::Order::Foreground && !panel_layers.any(|id| id == layer.id)).then_some(layer.id)
 }
 
-/// A host-painted content menu shares its panel's layer. Give new gestures
-/// a separate owner while it is open so neither content nor canvas moves.
+/// A host-painted menu needs its current body layout before routing can
+/// distinguish menu, content and canvas. Reserve its panel until that layout.
 pub(crate) fn content_owner(layer: Id, menu_open: bool) -> Id {
     if menu_open {
-        layer.with("content_menu_zoom")
+        layer.with("deferred_content_zoom")
     } else {
         layer
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DeferredCanvasZoom {
+    pub(crate) anchor: egui::Pos2,
+    pub(crate) delta: f32,
+}
+
+fn deferred_canvas_id(ctx: &Context) -> Id {
+    Id::new(("deferred_browser_canvas_zoom", ctx.viewport_id()))
+}
+
+/// Resolve only a newly reserved gesture. An owner already chosen on an
+/// earlier sample must survive pointer movement and a menu opening/closing.
+/// Returns true when this sample starts outside the menu and should dismiss it.
+pub(crate) fn resolve_content_owner(ui: &Ui, menu_contains_pointer: bool, canvas_fallback: bool) -> bool {
+    let ctx = ui.ctx();
+    if gesture_delta(ui, true).is_none() {
+        return false;
+    }
+    let now = ui.input(|input| input.time);
+    let Some(mut latch) = fresh_latch(ctx, now) else {
+        return false;
+    };
+    let layer = ui.layer_id().id;
+    if latch.owner != Some(content_owner(layer, true)) {
+        return false;
+    }
+    latch.owner = if menu_contains_pointer {
+        Some(layer.with("content_menu_zoom"))
+    } else if canvas_fallback {
+        None
+    } else {
+        Some(layer)
+    };
+    let latch_key = latch_id(ctx);
+    ctx.data_mut(|data| data.insert_temp(latch_key, latch));
+    if !menu_contains_pointer && canvas_fallback {
+        let (anchor, delta) = ui.input(|input| (input.pointer.hover_pos(), input.zoom_delta()));
+        if let Some(anchor) = anchor {
+            let deferred_key = deferred_canvas_id(ctx);
+            ctx.data_mut(|data| data.insert_temp(deferred_key, DeferredCanvasZoom { anchor, delta }));
+        }
+    }
+    !menu_contains_pointer
+}
+
+pub(crate) fn take_deferred_canvas_zoom(ctx: &Context) -> Option<DeferredCanvasZoom> {
+    let deferred_key = deferred_canvas_id(ctx);
+    ctx.data_mut(|data| {
+        let zoom = data.get_temp(deferred_key);
+        data.remove::<DeferredCanvasZoom>(deferred_key);
+        zoom
+    })
 }
 
 /// Latch who owns the gesture in progress. `candidate` is what the pointer
@@ -402,6 +458,64 @@ mod tests {
         assert_eq!(owner_at(9.0, true, Some(other)), Some(other));
         // With no gesture in flight the pointer's own answer is returned.
         assert_eq!(owner_at(9.02, false, Some(panel)), Some(panel));
+    }
+
+    #[test]
+    fn unresolved_native_menu_gesture_waits_for_an_active_sample() {
+        let ctx = egui::Context::default();
+        for step in 0..3 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))];
+            if step != 1 {
+                events.push(egui::Event::Zoom(1.25));
+            }
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(1.0 + f64::from(step) * 0.02),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let owner = super::content_owner(ui.layer_id().id, true);
+                        if step != 1 {
+                            super::gesture_owner(ui.ctx(), Some(owner));
+                        }
+                        if step == 0 {
+                            return;
+                        } // temporarily noninteractive rendering
+                        let dismiss = super::resolve_content_owner(ui, false, super::is_native_pinch(ui.ctx()));
+                        assert_eq!(dismiss, step == 2);
+                        assert!(!super::owns_gesture(ui));
+                        assert_eq!(super::take_deferred_canvas_zoom(ui.ctx()).is_some(), step == 2);
+                    },
+                )
+                .discard_textures();
+        }
+    }
+
+    #[test]
+    fn fullscreen_transition_discards_deferred_canvas_sample() {
+        let ctx = egui::Context::default();
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(egui::pos2(20.0, 20.0)),
+                        egui::Event::Zoom(1.25),
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    super::gesture_owner(ui.ctx(), Some(super::content_owner(ui.layer_id().id, true)));
+                    assert!(super::resolve_content_owner(ui, false, true));
+                    assert!(super::synchronize_fullscreen(
+                        ui.ctx(),
+                        Some(egui::Id::new("fullscreen"))
+                    ));
+                    assert!(super::take_deferred_canvas_zoom(ui.ctx()).is_none());
+                },
+            )
+            .discard_textures();
     }
 
     #[test]

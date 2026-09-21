@@ -230,6 +230,7 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
+        self.apply_deferred_browser_canvas_zoom(ctx, canvas_rect);
         self.persist_detached_viewport_state(workspace_local_id);
 
         self.canvas_view = saved_canvas_view;

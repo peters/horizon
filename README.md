@@ -524,6 +524,20 @@ The panel is a shared human-and-agent session. It can:
 
 Safari shares the semantic action and audit surface but currently reports network capture as unsupported.
 
+Responsive panels offer 25–400% content zoom. This is a local presentation
+preference: the displayed scale depends on the native panel body and the host's
+rendering limits. It drives automatic CSS viewport sizing, not the browser's
+native page-zoom setting, and is intentionally not an MCP or CLI zoom property.
+For deterministic automation, use `browser_resize` with CSS width/height through
+MCP or the CLI plan runner; its result reports the applied dimensions. A pinned
+viewport shows disabled `Fit` and retains those dimensions as the native panel
+resizes. `browser_resize` with `reset: true` resumes automatic sizing using the
+panel's saved local zoom preference.
+
+On the board, a native pinch over fixed or pinned browser content zooms the
+canvas. In fullscreen, the fixed content stays fitted and a native pinch leaves
+the saved board zoom unchanged. Modifier-wheel input remains browser-owned.
+
 | Backend | Automation and pixels | Prerequisites | Important limits |
 |:--|:--|:--|:--|
 | **Chromium** | CDP with change-driven JPEG screencast frames | Chrome, Chromium, Edge, or Brave | Push frames; separate persistent profile per panel |

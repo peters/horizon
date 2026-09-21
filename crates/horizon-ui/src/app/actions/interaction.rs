@@ -427,6 +427,19 @@ impl HorizonApp {
         }
     }
 
+    pub(in crate::app) fn apply_deferred_browser_canvas_zoom(&mut self, ctx: &Context, canvas_rect: Rect) {
+        let Some(zoom) = crate::panel_zoom::take_deferred_canvas_zoom(ctx) else {
+            return;
+        };
+        route_canvas_scroll(ctx, false, false);
+        if self.zoom_canvas_at(canvas_rect, zoom.anchor, self.canvas_view.zoom * zoom.delta) {
+            self.clear_terminal_selections();
+        }
+        self.canvas_pan_input_claimed = false;
+        self.is_panning = false;
+        ctx.request_repaint();
+    }
+
     fn clear_terminal_selections(&self) {
         for panel in &self.board.panels {
             if let Some(terminal) = panel.terminal() {

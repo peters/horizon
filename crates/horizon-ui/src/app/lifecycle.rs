@@ -325,6 +325,7 @@ impl HorizonApp {
             }
         }
         self.render_canvas_hud(ui);
+        self.apply_deferred_browser_canvas_zoom(ui.ctx(), self.canvas_rect(ui.ctx()));
         self.render_detached_viewports(ui);
     }
 

@@ -55,7 +55,7 @@ pub(super) fn render_backdrop(ctx: &Context) {
 pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> Vec<UploadUiAction> {
     let mut actions = Vec::new();
 
-    egui::Window::new("ssh_upload_modal")
+    let response = egui::Window::new("ssh_upload_modal")
         .id(Id::new("ssh_upload_modal"))
         .title_bar(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -107,6 +107,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
             ui.add_space(20.0);
         });
 
+    flow.painted_zoom_rect = response.map(|response| response.response.rect);
     actions
 }
 

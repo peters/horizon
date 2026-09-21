@@ -133,11 +133,16 @@ button click.
 7. On the board, pin a viewport through the public browser MCP. The selector
    shows disabled `Fit`: a native pinch over the page zooms the canvas, while
    Command+scroll reaches the page without changing the canvas. Switch between
-   these inputs rapidly and confirm each keeps its own behavior. Clear the pin
-   and confirm responsive panel zoom returns.
+   these inputs rapidly and confirm each keeps its own behavior. In fullscreen,
+   a native pinch must keep the fixed content fitted and leave the saved board
+   zoom unchanged; Command+scroll remains browser-owned. Clear the pin and
+   confirm responsive panel zoom returns.
 8. Open a native select menu in a responsive or pinned browser. New pinch and
-   Command+scroll gestures over its body must move neither page nor canvas;
-   ordinary menu scrolling must still work. Repeat in fullscreen.
+   Command+scroll gestures inside the menu must move neither page nor canvas;
+   ordinary menu scrolling must still work. Outside the menu, responsive content
+   must dismiss it and zoom; pinned content must dismiss it and retain the
+   wheel/pinch behavior from step 7. Repeat in fullscreen, after changing the
+   chrome height, and while moving the pointer across the menu during one gesture.
 
 ## 5. Lane D — canvas interaction
 

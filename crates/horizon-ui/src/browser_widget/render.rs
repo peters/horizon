@@ -18,6 +18,8 @@ const MAX_FRAME_PIXELS: u32 = FRAME_BUDGET_SIZE[0] as u32 * FRAME_BUDGET_SIZE[1]
 
 pub struct BodyOutput {
     pub image_rect: Option<Rect>,
+    /// Exact menu bounds painted from this frame's popup snapshot.
+    pub native_select_menu: Option<Rect>,
     pub frame_size: Option<[f32; 2]>,
     pub viewport_size: Option<(u32, u32)>,
     /// The body's own size, before panel zoom. A pinned viewport keeps its
@@ -47,6 +49,7 @@ pub fn show_body(
     if available.size().x.min(available.size().y) < 24.0 {
         return BodyOutput {
             image_rect: None,
+            native_select_menu: None,
             frame_size: None,
             viewport_size: None,
             host_viewport_size: None,
@@ -65,6 +68,7 @@ pub fn show_body(
         let retry = placeholder(ui, panel_id, browser, available, interactive);
         return BodyOutput {
             image_rect: None,
+            native_select_menu: None,
             frame_size: None,
             viewport_size: Some(viewport_size),
             host_viewport_size: Some(host_viewport_size),
@@ -121,6 +125,7 @@ pub fn show_body(
     let Some(texture) = &state.texture else {
         return BodyOutput {
             image_rect: None,
+            native_select_menu: None,
             frame_size: Some(frame_size),
             viewport_size: Some(viewport_size),
             host_viewport_size: Some(host_viewport_size),
@@ -137,17 +142,11 @@ pub fn show_body(
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
     paint_page_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
-    let popup = browser.frame_slot.native_select_popup();
-    if popup.is_none() {
-        state.select_popup_dismissed = false;
-    }
-    super::select_popup::sync_ui_state(&mut state.select_popup, popup.as_deref());
-    if let (Some(popup), Some(open)) = (popup.as_deref(), state.select_popup.as_mut()) {
-        let _ = super::select_popup::show(ui, browser, rect, frame_size, popup, open);
-    }
+    let native_select_menu = show_native_select(ui, browser, state, rect, frame_size);
 
     BodyOutput {
         image_rect: Some(rect),
+        native_select_menu,
         frame_size: Some(frame_size),
         viewport_size: Some(viewport_size),
         host_viewport_size: Some(host_viewport_size),
@@ -156,6 +155,39 @@ pub fn show_body(
         body_clicked,
         keyboard_focus_id,
     }
+}
+
+fn show_native_select(
+    ui: &mut Ui,
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    rect: Rect,
+    frame_size: [f32; 2],
+) -> Option<Rect> {
+    let popup = browser.frame_slot.native_select_popup();
+    if popup.is_none() {
+        state.select_popup_dismissed = false;
+    }
+    super::select_popup::sync_ui_state(&mut state.select_popup, popup.as_deref());
+    let (Some(popup), Some(open)) = (popup.as_deref(), state.select_popup.as_mut()) else {
+        return None;
+    };
+    super::select_popup::show(ui, browser, rect, frame_size, popup, open).map(|layout| layout.menu)
+}
+
+pub(super) fn route_zoom(
+    ui: &Ui,
+    browser: &BrowserPanelState,
+    state: &mut BrowserUiState,
+    body: &BodyOutput,
+    fullscreen: bool,
+) {
+    if resolve_zoom_owner(ui, browser, body.native_select_menu, fullscreen) && body.native_select_menu.is_some() {
+        browser.send(horizon_core::browser::BrowserCommand::NativeSelectDismiss);
+        state.select_popup_dismissed = true;
+    }
+    // Chrome and placeholders use the same body ownership as the canvas.
+    apply_zoom_gesture(ui, browser, state, crate::panel_zoom::owns_gesture(ui));
 }
 
 /// Page zoom lays the body out in fewer (or more) CSS pixels than it occupies
@@ -245,6 +277,16 @@ fn effective_zoom(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> 
         .max(crate::panel_zoom::MIN_ZOOM);
     let ceiling = (available.min_elem() / MIN_STABLE_VIEWPORT_SIDE).max(floor);
     zoom.clamp(floor, ceiling)
+}
+
+/// Finish routing with the menu actually painted, after variable-height chrome
+/// and current frame fitting have established its geometry.
+pub(super) fn resolve_zoom_owner(ui: &Ui, browser: &BrowserPanelState, menu: Option<Rect>, fullscreen: bool) -> bool {
+    let contains_pointer =
+        menu.is_some_and(|rect| crate::panel_zoom::local_pointer(ui).is_some_and(|point| rect.contains(point)));
+    let canvas_fallback =
+        !fullscreen && !super::supports_panel_zoom(browser) && crate::panel_zoom::is_native_pinch(ui.ctx());
+    crate::panel_zoom::resolve_content_owner(ui, contains_pointer, canvas_fallback)
 }
 
 pub(super) fn apply_zoom_gesture(ui: &Ui, browser: &BrowserPanelState, state: &mut BrowserUiState, hovered: bool) {
@@ -409,13 +451,9 @@ mod tests {
         assert!((top_thumb.height() - 123.2).abs() < 0.1);
     }
 
-    #[test]
-    fn native_select_menus_reserve_new_zoom_gestures() {
-        use super::super::select_popup;
-        use crate::test_egui::DiscardTextures;
-        use egui::{Ui, vec2};
-        use horizon_core::browser::{BrowserBounds, BrowserPanelState, NativeSelectOption, NativeSelectPopup};
-        let popup = NativeSelectPopup {
+    fn zoom_menu() -> horizon_core::browser::NativeSelectPopup {
+        use horizon_core::browser::{BrowserBounds, NativeSelectOption, NativeSelectPopup};
+        NativeSelectPopup {
             css_path: "#menu".into(),
             name: "menu".into(),
             selected_index: 0,
@@ -435,70 +473,115 @@ mod tests {
                     selected: index == 0,
                 })
                 .collect(),
-        };
-        for fullscreen in [false, true] {
-            let ctx = egui::Context::default();
-            let browser = BrowserPanelState::inert();
-            let mut state = BrowserUiState::default();
-            let panel = egui::Id::new("browser-panel");
-            let mut open = None;
-            select_popup::sync_ui_state(&mut open, Some(&popup));
-            for index in 0..4 {
-                let active = index == 3;
-                let pointer = pos2(80.0, 100.0);
-                let mut events = vec![egui::Event::PointerMoved(pointer)];
-                if active {
-                    events.push(egui::Event::Zoom(1.25));
-                }
-                let _ = ctx
-                    .run_ui(
-                        egui::RawInput {
-                            time: Some(f64::from(index)),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let layer = if fullscreen { ui.layer_id().id } else { panel };
-                            if active {
-                                let owner = crate::panel_zoom::content_owner(layer, open.is_some());
-                                assert!(crate::panel_zoom::gesture_owner(ui.ctx(), Some(owner)).is_some());
-                            }
-                            let mut draw = |ui: &mut Ui| {
-                                ui.set_min_size(vec2(400.0, 400.0));
-                                let menu = select_popup::show(
-                                    ui,
-                                    &browser,
-                                    Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)),
-                                    [400.0, 400.0],
-                                    &popup,
-                                    open.as_mut().expect("open menu"),
-                                )
-                                .expect("menu is rendered");
-                                if active {
-                                    assert!(menu.contains(pointer));
-                                }
-                                super::apply_zoom_gesture(
-                                    ui,
-                                    &browser,
-                                    &mut state,
-                                    crate::panel_zoom::owns_gesture(ui),
-                                );
-                            };
-                            if fullscreen {
-                                draw(ui);
-                            } else {
-                                egui::Area::new(panel)
-                                    .fixed_pos(egui::Pos2::ZERO)
-                                    .constrain(false)
-                                    .order(egui::Order::Middle)
-                                    .show(ui.ctx(), draw);
-                            }
-                        },
-                    )
-                    .discard_textures();
-            }
-            assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::ONE);
         }
+    }
+
+    #[test]
+    fn native_select_zoom_uses_current_menu_bounds_and_keeps_its_first_owner() {
+        for fullscreen in [false, true] {
+            for fixed in [false, true] {
+                for native in [false, true] {
+                    for starts_inside in [false, true] {
+                        let event = if native {
+                            egui::Event::Zoom(1.25)
+                        } else {
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Line,
+                                delta: egui::vec2(0.0, 4.0),
+                                phase: egui::TouchPhase::Move,
+                                modifiers: egui::Modifiers::CTRL,
+                            }
+                        };
+                        check_select_zoom(fullscreen, fixed, &event, starts_inside);
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_select_zoom(fullscreen: bool, fixed: bool, event: &egui::Event, starts_inside: bool) {
+        use super::super::select_popup;
+        use crate::{panel_zoom, test_egui::DiscardTextures};
+        use egui::{Ui, vec2};
+        use horizon_core::browser::BrowserPanelState;
+        let native = matches!(event, egui::Event::Zoom(_));
+        let popup = zoom_menu();
+        let ctx = egui::Context::default();
+        let browser = if fixed {
+            BrowserPanelState::inert_remote("target", "provider")
+        } else {
+            BrowserPanelState::inert()
+        };
+        let mut state = BrowserUiState::default();
+        let panel = egui::Id::new("browser-panel");
+        let mut open = None;
+        select_popup::sync_ui_state(&mut open, Some(&popup));
+        for index in 0..5 {
+            let active = index >= 3;
+            // Chrome grows in the gesture's first frame. The old menu did not
+            // cover y=360; the current layout does. Then the pointer crosses it.
+            let header = if active { 90.0 } else { 0.0 };
+            let inside = if index == 4 { !starts_inside } else { starts_inside };
+            let pointer = pos2(if inside { 80.0 } else { 340.0 }, 360.0);
+            let mut events = vec![egui::Event::PointerMoved(pointer)];
+            if active {
+                events.push(event.clone());
+            }
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(1.0 + f64::from(index) * 0.02),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let layer = if fullscreen { ui.layer_id().id } else { panel };
+                        if active {
+                            panel_zoom::gesture_owner(ui.ctx(), Some(panel_zoom::content_owner(layer, true)));
+                        }
+                        let mut draw = |ui: &mut Ui| {
+                            ui.set_min_size(vec2(400.0, 500.0));
+                            let menu = select_popup::show(
+                                ui,
+                                &browser,
+                                Rect::from_min_size(pos2(0.0, header), vec2(400.0, 400.0)),
+                                [400.0, 400.0],
+                                &popup,
+                                open.as_mut().expect("open menu"),
+                            )
+                            .expect("menu is rendered");
+                            if !active {
+                                return;
+                            }
+                            let hit = menu.contains(panel_zoom::local_pointer(ui).expect("pointer"));
+                            assert_eq!(hit, inside);
+                            let canvas = fixed && native && !fullscreen;
+                            let dismiss = super::resolve_zoom_owner(ui, &browser, Some(menu.menu), fullscreen);
+                            assert_eq!(dismiss, index == 3 && !starts_inside);
+                            assert_eq!(panel_zoom::owns_gesture(ui), !starts_inside && !canvas);
+                            let deferred = panel_zoom::take_deferred_canvas_zoom(ui.ctx());
+                            assert_eq!(deferred.is_some(), index == 3 && !starts_inside && canvas);
+                            if let Some(zoom) = deferred {
+                                assert_eq!(zoom.anchor, pointer);
+                                assert!((zoom.delta - 1.25).abs() < 0.001);
+                            }
+                            assert!(panel_zoom::take_deferred_canvas_zoom(ui.ctx()).is_none());
+                            super::apply_zoom_gesture(ui, &browser, &mut state, panel_zoom::owns_gesture(ui));
+                        };
+                        if fullscreen {
+                            draw(ui);
+                        } else {
+                            egui::Area::new(panel)
+                                .fixed_pos(egui::Pos2::ZERO)
+                                .constrain(false)
+                                .order(egui::Order::Middle)
+                                .show(ui.ctx(), draw);
+                        }
+                    },
+                )
+                .discard_textures();
+        }
+        assert_eq!(state.zoom.factor() > 1.0, !fixed && !starts_inside);
     }
 
     #[test]

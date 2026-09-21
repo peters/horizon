@@ -225,6 +225,29 @@ fn fixed_browser_pinches_zoom_the_canvas_while_wheels_remain_panel_owned() {
 }
 
 #[test]
+fn fullscreen_fixed_browser_pinch_preserves_the_hidden_canvas_view() {
+    let (_temp, ctx, mut app, panel_id) = device_app(None);
+    let panel = app.board.panel_mut(panel_id).expect("panel");
+    panel.kind = PanelKind::Browser;
+    panel.content = horizon_core::PanelContent::Browser(Box::new(
+        horizon_core::browser::BrowserPanelState::inert_remote("target", "provider"),
+    ));
+    app.fullscreen_panel = Some(panel_id);
+    for _ in 0..2 {
+        render(&ctx, &mut app);
+    }
+    assert_eq!(app.fullscreen_panel, Some(panel_id));
+    let before = app.canvas_view;
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events = vec![
+        egui::Event::PointerMoved(egui::pos2(700.0, 450.0)),
+        egui::Event::Zoom(1.25),
+    ];
+    run_app_frame_with_input(&ctx, &mut app, input);
+    assert_eq!(app.canvas_view, before);
+}
+
+#[test]
 fn a_zoom_gesture_continues_when_the_device_enters_fullscreen() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5902"));
     render(&ctx, &mut app);

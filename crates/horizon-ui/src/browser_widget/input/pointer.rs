@@ -642,6 +642,36 @@ mod tests {
     }
 
     #[test]
+    fn fixed_browser_accepts_zoom_wheels_outside_its_native_select_menu() {
+        use crate::{panel_zoom, test_egui::DiscardTextures};
+        let browser = BrowserPanelState::inert_remote("target", "provider");
+        for inside in [false, true] {
+            let ctx = egui::Context::default();
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Line,
+                            delta: egui::vec2(0.0, 4.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: egui::Modifiers::CTRL,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel_zoom::gesture_owner(ui.ctx(), Some(panel_zoom::content_owner(ui.layer_id().id, true)));
+                        panel_zoom::resolve_content_owner(ui, inside, false);
+                        assert_eq!(
+                            wheel_reserved_for_zoom(ui, &browser, egui::Modifiers::CTRL, true),
+                            inside
+                        );
+                    },
+                )
+                .discard_textures();
+        }
+    }
+
+    #[test]
     fn wheel_forwarding_matches_egui_for_combined_modifiers() {
         use crate::test_egui::DiscardTextures;
 
