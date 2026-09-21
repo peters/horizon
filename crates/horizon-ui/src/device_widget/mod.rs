@@ -284,6 +284,7 @@ impl DeviceUiState {
         PanelState {
             panel_id,
             endpoint: device.target.address().to_string(),
+            identity: device.identity.clone(),
             visible,
             owned_by_caller: self.owner.as_deref() == Some(actor),
             image: ImageEvidence {

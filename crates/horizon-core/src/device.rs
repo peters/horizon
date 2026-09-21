@@ -3,6 +3,7 @@ pub use view::{DeviceImageLayout, DeviceViewOptions, DeviceViewport};
 
 use std::net::SocketAddr;
 
+use crate::browser::manifest::device::DeviceIdentity;
 use crate::{Error, Result};
 
 /// An explicit local VNC endpoint; connecting and rendering belong to the UI.
@@ -38,8 +39,52 @@ impl DeviceViewTarget {
 #[derive(Clone, Debug)]
 pub struct DevicePanelState {
     pub target: DeviceViewTarget,
+    pub identity: Option<DeviceIdentity>,
     /// Restored panels require explicit reconnection because local ports can be reused.
     pub connect_on_start: bool,
+}
+
+impl DevicePanelState {
+    /// Choose an available human-readable label without treating it as verified identity.
+    #[must_use]
+    pub fn display_name<'a>(&'a self, server_name: Option<&'a str>) -> Option<&'a str> {
+        self.identity
+            .as_ref()
+            .and_then(|identity| {
+                identity
+                    .machine_name
+                    .as_deref()
+                    .or(identity.hostname.as_deref())
+                    .or(identity.tailscale_name.as_deref())
+            })
+            .or(server_name.filter(|name| !name.is_empty()))
+    }
+
+    /// Normalize creator labels and bound the metadata stored with a panel.
+    ///
+    /// # Errors
+    /// Rejects control characters, labels longer than 256 characters and more than 16 IPs.
+    pub fn normalize_identity(identity: &mut DeviceIdentity) -> Result<()> {
+        for label in [
+            &mut identity.machine_name,
+            &mut identity.hostname,
+            &mut identity.tailscale_name,
+        ] {
+            if let Some(value) = label {
+                let trimmed = value.trim();
+                if trimmed.chars().count() > 256 || trimmed.chars().any(char::is_control) {
+                    return Err(Error::Config(
+                        "Device identity labels must be plain text of at most 256 characters".into(),
+                    ));
+                }
+                *label = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+            }
+        }
+        if identity.ip_addresses.len() > 16 {
+            return Err(Error::Config("Device identity supports at most 16 IP addresses".into()));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +194,62 @@ mod tests {
         );
         assert!(panel.terminal().is_none());
         Ok(())
+    }
+    #[test]
+    fn supplied_identity_is_normalized_and_selected_without_endpoint_inference() -> crate::Result<()> {
+        use crate::browser::manifest::device::DeviceIdentity;
+        let mut identity = DeviceIdentity {
+            machine_name: Some("  Lab workstation  ".into()),
+            hostname: Some("lab-host".into()),
+            tailscale_name: Some("lab-host.example.ts.net".into()),
+            ip_addresses: vec!["192.0.2.10".parse().unwrap(), "2001:db8::10".parse().unwrap()],
+        };
+        super::DevicePanelState::normalize_identity(&mut identity)?;
+        let mut device = super::DevicePanelState {
+            target: DeviceViewTarget::parse("127.0.0.1:5900")?,
+            identity: Some(identity),
+            connect_on_start: false,
+        };
+        assert_eq!(device.display_name(Some("Desktop")), Some("Lab workstation"));
+        device.identity.as_mut().unwrap().machine_name = None;
+        assert_eq!(device.display_name(Some("Desktop")), Some("lab-host"));
+        device.identity.as_mut().unwrap().hostname = None;
+        assert_eq!(device.display_name(Some("Desktop")), Some("lab-host.example.ts.net"));
+        device.identity = None;
+        assert_eq!(device.display_name(Some("Desktop")), Some("Desktop"));
+        assert_eq!(device.display_name(Some("")), None);
+        assert_eq!(device.display_name(None), None);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_identity_is_rejected_before_panel_creation() {
+        use crate::browser::manifest::device::DeviceIdentity;
+        for label in ["bad\nname".into(), "a".repeat(257)] {
+            assert!(
+                Panel::spawn(
+                    PanelId(1),
+                    WorkspaceId(1),
+                    PanelOptions {
+                        kind: PanelKind::Device,
+                        command: Some("127.0.0.1:5900".into()),
+                        device_identity: Some(DeviceIdentity {
+                            machine_name: Some(label),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+        }
+        let mut blank = DeviceIdentity {
+            machine_name: Some("  ".into()),
+            ..Default::default()
+        };
+        super::DevicePanelState::normalize_identity(&mut blank).unwrap();
+        assert!(blank.machine_name.is_none());
+        blank.ip_addresses = vec!["192.0.2.1".parse().unwrap(); 17];
+        assert!(super::DevicePanelState::normalize_identity(&mut blank).is_err());
     }
 }

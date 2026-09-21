@@ -25,6 +25,12 @@ desktop or forward input. The source checkout's `scripts/device-smoke/README.md`
 describes the isolated fixture; launch it with `--native-view` and use its
 `vnc_address`, not a browser URL.
 
+When known, include optional `identity` in create: `machine_name`, `hostname`,
+`ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels
+supplied by the session creator, not verified identity. Use details for the
+actual target machine; never substitute the local tunnel endpoint or the
+viewer's own hostname. Omit unknown fields. Inspect/list return these labels.
+
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
 verify `connection: "connected"`, `image_received`, `image_displayed` and an
 advancing `frame_sequence` while target output changes. `visible` is only a
