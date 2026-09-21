@@ -49,7 +49,7 @@ arboard.workspace = true
 tokio = { workspace = true, features = ["net", "sync"] }
 # Keep the Git tag here: Dependabot's workspace updater only updates versions,
 # so inheriting this pin produces lockfile-only bumps that fail with --locked.
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.61" }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.62" }
 transcribe-cpp = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 
