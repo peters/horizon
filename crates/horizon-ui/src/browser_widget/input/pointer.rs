@@ -74,7 +74,6 @@ pub(super) fn events(
     // the modifiers a wheel gesture started with and reports no scroll at all
     // while zooming, so kinetic events arriving after the modifier is
     // released still belong to the zoom.
-    let zoom_modifier = ui.ctx().options(|options| options.input_options.zoom_modifier);
     let frame_wheel_zooms = ui.input(|input| {
         input.smooth_scroll_delta == egui::Vec2::ZERO && (input.zoom_delta() - 1.0).abs() > f32::EPSILON
     });
@@ -139,7 +138,7 @@ pub(super) fn events(
                 unit, delta, modifiers, ..
             } => {
                 flush_pending_move(browser, &mut pending_move);
-                if !wheel_is_panel_zoom(*modifiers, zoom_modifier, frame_wheel_zooms)
+                if !wheel_reserved_for_zoom(ui, browser, *modifiers, frame_wheel_zooms)
                     && let Some(position) = wheel_pos
                 {
                     forward_wheel(browser, frame, position, *unit, *delta, event_modifiers);
@@ -515,6 +514,19 @@ fn forward_wheel(
 /// zoom, not to the page: forwarding it would make Chrome zoom a second time.
 /// `frame_zooms` covers a gesture whose classification egui latched, whose
 /// later events can carry no modifier of their own.
+fn wheel_reserved_for_zoom(
+    ui: &Ui,
+    browser: &BrowserPanelState,
+    modifiers: egui::Modifiers,
+    frame_zooms: bool,
+) -> bool {
+    let zoom_modifier = ui.ctx().options(|options| options.input_options.zoom_modifier);
+    // Fixed pages handle their own wheel input, but may not take over a
+    // gesture that started on the canvas or another panel.
+    let reserved = crate::browser_widget::supports_panel_zoom(browser) || !crate::panel_zoom::owns_gesture(ui);
+    reserved && wheel_is_panel_zoom(modifiers, zoom_modifier, frame_zooms)
+}
+
 fn wheel_is_panel_zoom(modifiers: egui::Modifiers, zoom_modifier: egui::Modifiers, frame_zooms: bool) -> bool {
     frame_zooms || modifiers.matches_any(zoom_modifier)
 }
@@ -579,6 +591,54 @@ mod tests {
         // Kinetic events after the modifier is released keep zooming, so they
         // must not reach the page as scroll either.
         assert!(wheel_is_panel_zoom(egui::Modifiers::NONE, default_zoom, true));
+    }
+
+    #[test]
+    fn fixed_browser_only_forwards_zoom_wheels_for_its_own_gesture() {
+        use crate::test_egui::DiscardTextures;
+        let remote = BrowserPanelState::inert_remote("target", "provider");
+        let other = egui::Id::new("another-panel");
+        for start_on_fixed in [false, true] {
+            for other_owner in [None, Some(other)] {
+                let ctx = egui::Context::default();
+                for (time, first_frame) in [(1.0, true), (1.05, false)] {
+                    let _ = ctx
+                        .run_ui(
+                            egui::RawInput {
+                                time: Some(time),
+                                events: vec![egui::Event::Zoom(1.25)],
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let candidate = if first_frame && !start_on_fixed {
+                                    other_owner
+                                } else {
+                                    Some(ui.layer_id().id)
+                                };
+                                crate::panel_zoom::gesture_owner(ui.ctx(), candidate);
+                                for (modifiers, frame_zooms) in [
+                                    (egui::Modifiers::CTRL, false),
+                                    (egui::Modifiers::MAC_CMD, false),
+                                    (egui::Modifiers::NONE, true),
+                                ] {
+                                    assert_eq!(
+                                        wheel_reserved_for_zoom(ui, &remote, modifiers, frame_zooms),
+                                        !start_on_fixed
+                                    );
+                                }
+                                assert!(!wheel_reserved_for_zoom(ui, &remote, egui::Modifiers::NONE, false));
+                                assert!(wheel_reserved_for_zoom(
+                                    ui,
+                                    &BrowserPanelState::inert(),
+                                    egui::Modifiers::CTRL,
+                                    false
+                                ));
+                            },
+                        )
+                        .discard_textures();
+                }
+            }
+        }
     }
 
     #[test]

@@ -205,10 +205,10 @@ impl<'a> BrowserView<'a> {
             state.synchronize_backend(browser.backend());
             render::show_body(ui, panel_id, browser, state, interactive)
         };
-        if interactive {
+        if interactive && let Some(browser) = self.panel.browser() {
             // Zoom belongs to the whole panel, chrome and placeholders
             // included, so it matches what the canvas leaves alone.
-            render::apply_zoom_gesture(ui, state, crate::panel_zoom::owns_gesture(ui));
+            render::apply_zoom_gesture(ui, browser, state, crate::panel_zoom::owns_gesture(ui));
         }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
@@ -320,6 +320,10 @@ fn restore_host_focus(ui: &Ui, state: &mut BrowserUiState, request: Option<bool>
     } else {
         ui.ctx().request_repaint_after(Duration::from_millis(10));
     }
+}
+
+pub(crate) fn supports_panel_zoom(browser: &horizon_core::browser::BrowserPanelState) -> bool {
+    browser.backend_capabilities().viewport && explicit_viewport(browser).is_none()
 }
 
 fn explicit_viewport(browser: &horizon_core::browser::BrowserPanelState) -> Option<(u32, u32)> {

@@ -131,7 +131,7 @@ pub fn show_body(
     };
 
     // Letterbox (upscale allowed; linear filtering smooths it).
-    let responsive = browser.backend_capabilities().viewport && super::explicit_viewport(browser).is_none();
+    let responsive = super::supports_panel_zoom(browser);
     let scale = frame_scale(body_rect.size(), vec2(frame_size[0], frame_size[1]), responsive);
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
@@ -166,8 +166,6 @@ pub fn show_body(
 /// never sends it, which would leave the page at its previous scale with the
 /// selected zoom doing nothing at all. A small panel zooms as far as it can
 /// instead.
-// egui layout sizes are finite and non-negative.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn zoomed_viewport(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> (u32, u32) {
     let zoom = effective_zoom(available, zoom, max_texture_side);
     // An extreme aspect ratio can want a scale that satisfies the texture
@@ -178,7 +176,13 @@ fn zoomed_viewport(available: egui::Vec2, zoom: f32, max_texture_side: usize) ->
     let side_limit = side_limit(max_texture_side);
     let width = (available.x / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
     let height = (available.y / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
-    (width.round() as u32, height.round() as u32)
+    rounded_viewport(vec2(width, height))
+}
+
+// egui layout sizes are finite and non-negative.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn rounded_viewport(size: egui::Vec2) -> (u32, u32) {
+    (size.x.round() as u32, size.y.round() as u32)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -196,7 +200,7 @@ fn sync_viewport_sizes(ui: &Ui, state: &mut BrowserUiState, available: egui::Vec
         f32::from(u16::try_from(viewport.1).unwrap_or(u16::MAX)),
     );
     state.effective_zoom = crate::panel_zoom::PanelZoom::new(frame_scale(available, frame_size, true));
-    (viewport, zoomed_viewport(available, 1.0, max_texture_side))
+    (viewport, rounded_viewport(available))
 }
 
 /// An oversized body may need a smaller frame than even 400% zoom permits.
@@ -226,7 +230,10 @@ fn effective_zoom(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> 
     zoom.clamp(floor, ceiling)
 }
 
-pub(super) fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
+pub(super) fn apply_zoom_gesture(ui: &Ui, browser: &BrowserPanelState, state: &mut BrowserUiState, hovered: bool) {
+    if !super::supports_panel_zoom(browser) {
+        return;
+    }
     let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) else {
         return;
     };
@@ -448,6 +455,51 @@ mod tests {
     }
 
     #[test]
+    fn host_dimensions_survive_responsive_frame_limits() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                for (size, expected) in [
+                    (egui::vec2(12_000.4, 12_000.6), (12_000, 12_001)),
+                    (egui::vec2(24.0, 30.0), (24, 30)),
+                ] {
+                    for zoom in [0.25, 1.0, 4.0] {
+                        let mut state = BrowserUiState {
+                            zoom: crate::panel_zoom::PanelZoom::new(zoom),
+                            ..Default::default()
+                        };
+                        let (frame, host) = super::sync_viewport_sizes(ui, &mut state, size);
+                        assert_eq!(host, expected);
+                        assert_ne!(frame, host, "only the responsive frame should be capped");
+                    }
+                }
+            })
+            .discard_textures();
+    }
+
+    #[test]
+    fn fixed_browser_keeps_its_zoom_preference_during_gestures() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let remote = horizon_core::browser::BrowserPanelState::inert_remote("target", "provider");
+        let mut state = BrowserUiState {
+            zoom: crate::panel_zoom::PanelZoom::new(1.5),
+            ..Default::default()
+        };
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Zoom(1.25)],
+                    ..Default::default()
+                },
+                |ui| apply_zoom_gesture(ui, &remote, &mut state, true),
+            )
+            .discard_textures();
+        assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::new(1.5));
+    }
+
+    #[test]
     fn a_capped_selection_still_responds_to_the_first_gesture_back() {
         use crate::test_egui::DiscardTextures;
         let ctx = egui::Context::default();
@@ -462,7 +514,7 @@ mod tests {
                     events: vec![egui::Event::Zoom(delta)],
                     ..Default::default()
                 },
-                |ui| apply_zoom_gesture(ui, &mut state, true),
+                |ui| apply_zoom_gesture(ui, &horizon_core::browser::BrowserPanelState::inert(), &mut state, true),
             );
             let _ = output.discard_textures();
             state.zoom.factor()
@@ -491,7 +543,7 @@ mod tests {
         let mut state = BrowserUiState::default();
         let mut repaint_requested = false;
         let output = ctx.run_ui(zoom_input(), |ui| {
-            apply_zoom_gesture(ui, &mut state, true);
+            apply_zoom_gesture(ui, &horizon_core::browser::BrowserPanelState::inert(), &mut state, true);
             repaint_requested = ui.ctx().has_requested_repaint();
         });
         let _ = output.discard_textures();
@@ -500,14 +552,28 @@ mod tests {
 
         // Off the body, and at the end of the range, nothing changes.
         let mut untouched = BrowserUiState::default();
-        let output = ctx.run_ui(zoom_input(), |ui| apply_zoom_gesture(ui, &mut untouched, false));
+        let output = ctx.run_ui(zoom_input(), |ui| {
+            apply_zoom_gesture(
+                ui,
+                &horizon_core::browser::BrowserPanelState::inert(),
+                &mut untouched,
+                false,
+            );
+        });
         let _ = output.discard_textures();
         assert_eq!(untouched.zoom, crate::panel_zoom::PanelZoom::ONE);
         let mut clamped = BrowserUiState {
             zoom: crate::panel_zoom::PanelZoom::new(crate::panel_zoom::MAX_ZOOM),
             ..BrowserUiState::default()
         };
-        let output = ctx.run_ui(zoom_input(), |ui| apply_zoom_gesture(ui, &mut clamped, true));
+        let output = ctx.run_ui(zoom_input(), |ui| {
+            apply_zoom_gesture(
+                ui,
+                &horizon_core::browser::BrowserPanelState::inert(),
+                &mut clamped,
+                true,
+            );
+        });
         let _ = output.discard_textures();
         assert!((clamped.zoom.factor() - crate::panel_zoom::MAX_ZOOM).abs() <= f32::EPSILON);
     }

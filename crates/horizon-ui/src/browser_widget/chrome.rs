@@ -51,7 +51,7 @@ pub fn show(
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         clicked |= video_controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
-        clicked |= zoom_picker(ui, state, interactive);
+        clicked |= zoom_picker(ui, browser, state, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
         // what the row can spare while keeping the URL bar a usable minimum
@@ -93,9 +93,12 @@ pub fn show(
     (url_focused, clicked)
 }
 
-/// Page zoom selector. Fit has no meaning here: the page always fills the
-/// panel, at whichever scale the emulated viewport was laid out for.
-fn zoom_picker(ui: &mut Ui, state: &mut BrowserUiState, interactive: bool) -> bool {
+fn zoom_picker(ui: &mut Ui, browser: &BrowserPanelState, state: &mut BrowserUiState, interactive: bool) -> bool {
+    if !super::supports_panel_zoom(browser) {
+        ui.add_enabled(false, egui::Button::new("Fit"))
+            .on_disabled_hover_text("Page zoom is unavailable while the viewport is fixed");
+        return false;
+    }
     let displayed = state.effective_zoom;
     if !crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, displayed, interactive) {
         return false;
@@ -542,6 +545,33 @@ mod tests {
             !picker_state(&local, false).enabled,
             "a non-interactive view never picks"
         );
+    }
+
+    #[test]
+    fn fixed_browser_displays_fit_instead_of_a_saved_zoom_percentage() {
+        let remote = BrowserPanelState::inert_remote("target", "provider");
+        let mut state = crate::browser_widget::BrowserUiState {
+            zoom: crate::panel_zoom::PanelZoom::new(1.5),
+            effective_zoom: crate::panel_zoom::PanelZoom::new(1.5),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(!super::zoom_picker(ui, &remote, &mut state, true));
+            })
+            .discard_textures();
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.contains(&"Fit"));
+        assert!(!labels.contains(&"150%"));
+        assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::new(1.5));
     }
 
     #[test]
