@@ -57,7 +57,9 @@ impl HorizonApp {
             );
         };
         match &request.operation {
-            Operation::Create { endpoint } => self.create_device_viewer(endpoint, actor, &request.actor, ctx),
+            Operation::Create { endpoint, identity } => {
+                self.create_device_viewer(endpoint, identity.clone(), actor, &request.actor, ctx)
+            }
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -77,9 +79,22 @@ impl HorizonApp {
         }
     }
 
-    fn create_device_viewer(&mut self, endpoint: &str, actor: ActorPanel, owner: &str, ctx: &Context) -> Outcome {
+    fn create_device_viewer(
+        &mut self,
+        endpoint: &str,
+        mut identity: Option<device::DeviceIdentity>,
+        actor: ActorPanel,
+        owner: &str,
+        ctx: &Context,
+    ) -> Outcome {
+        if let Some(identity) = &mut identity
+            && let Err(error) = horizon_core::DevicePanelState::normalize_identity(identity)
+        {
+            return Outcome::failed("invalid_identity", &error.to_string());
+        }
         let options = PanelOptions {
             kind: PanelKind::Device,
+            device_identity: identity,
             command: Some(endpoint.into()),
             ..PanelOptions::default()
         };
@@ -307,6 +322,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -340,6 +356,7 @@ mod tests {
             let create = request(
                 &app,
                 Operation::Create {
+                    identity: None,
                     endpoint: endpoint.into(),
                 },
             );
@@ -351,6 +368,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -383,6 +401,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -424,6 +443,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -511,5 +531,52 @@ mod tests {
         assert!(acquired.owned_by_caller);
         assert!(!acquired.image.image_received && !acquired.image.image_displayed);
         assert!(matches!(app.apply_device_request(&close, &ctx), Outcome::Closed { .. }));
+    }
+    #[test]
+    fn create_list_and_inspect_share_normalized_supplied_identity() {
+        let (_temp, ctx, mut app) = app();
+        let identity = device::DeviceIdentity {
+            machine_name: Some("  Lab workstation  ".into()),
+            hostname: Some("lab-host".into()),
+            ip_addresses: vec!["192.0.2.10".parse().unwrap()],
+            tailscale_name: Some("lab-host.example.ts.net".into()),
+        };
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: Some(identity),
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        assert_eq!(
+            created.identity.as_ref().unwrap().machine_name.as_deref(),
+            Some("Lab workstation")
+        );
+        for operation in [
+            Operation::List,
+            Operation::Inspect {
+                panel_id: created.panel_id,
+            },
+        ] {
+            let request = request(&app, operation);
+            let observed = one(app.apply_device_request(&request, &ctx));
+            assert_eq!(observed.identity, created.identity);
+        }
+        let count = app.board.panels.len();
+        let invalid = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: Some(device::DeviceIdentity {
+                    machine_name: Some("a".repeat(257)),
+                    ..Default::default()
+                }),
+            },
+        );
+        assert!(
+            matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_identity")
+        );
+        assert_eq!(app.board.panels.len(), count);
     }
 }

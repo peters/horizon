@@ -561,3 +561,61 @@ fn ready_discovery_receiver_does_not_schedule_idle_repaint() {
     runtime.pending_browser_attachments.insert("retry".into());
     assert!(runtime.needs_repaint());
 }
+
+#[test]
+fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
+    use horizon_core::browser::{BrowserPanelState, BrowserStatus};
+
+    let (_temp, mut app) = restore_fixture();
+    let id = app.board.panel_id_by_local_id("firefox").unwrap();
+    let workspace = app.board.panel(id).unwrap().workspace_id;
+    // A legacy restored browser may have an error and no active presentation yet.
+    let mut restored = BrowserPanelState::inert();
+    restored.status = BrowserStatus::Error {
+        message: "Waiting for cloud attachment".into(),
+    };
+    let panel = app.board.panel_mut(id).unwrap();
+    *panel = Panel::from_content(
+        id,
+        workspace,
+        PanelKind::Browser,
+        horizon_core::PanelContent::Browser(Box::new(restored)),
+    );
+    panel.local_id = "firefox".into();
+    app.fullscreen_panel = Some(id);
+    let groups = std::mem::take(&mut app.cloud_prototype.groups);
+    app.poll_browser_create_requests();
+    assert!(
+        app.board.panel(id).is_some(),
+        "saved membership must protect early restore"
+    );
+    assert_eq!(app.fullscreen_panel, Some(id));
+    app.cloud_prototype.groups = groups;
+    assert!(!app.close_ended_browser_panels());
+    assert!(
+        app.cloud_prototype.error.is_none(),
+        "cleanup must not attempt remote Close"
+    );
+
+    app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().browsers = Some(vec![CloudViewState {
+        id: "firefox".into(),
+        backend: BackendKind::FirefoxBidi,
+        ready: true,
+        visible: true,
+        ..Default::default()
+    }]);
+    app.sync_cloud_presentations();
+    let browser = app.board.panel_mut(id).unwrap().browser_mut().unwrap();
+    assert_eq!(browser.backend(), BackendKind::FirefoxBidi);
+    browser.status = BrowserStatus::Error {
+        message: "Presentation transport interrupted".into(),
+    };
+    assert!(!browser.has_ended());
+    assert!(!app.close_ended_browser_panels());
+    assert!(
+        app.cloud_prototype.error.is_none(),
+        "no implicit remote Close on transport loss"
+    );
+    assert_eq!(app.board.panel_id_by_local_id("firefox"), Some(id));
+    assert_eq!(app.fullscreen_panel, Some(id));
+}

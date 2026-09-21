@@ -189,6 +189,15 @@ impl Board {
         true
     }
 
+    /// Browser sessions that ended or failed, including stopped remote
+    /// placeholders restored from a previous run. Hidden live browsers and
+    /// page navigation errors do not end a session.
+    pub fn ended_browser_panels(&self) -> impl Iterator<Item = PanelId> + '_ {
+        self.panels
+            .iter()
+            .filter_map(|panel| panel.browser().filter(|browser| browser.has_ended()).map(|_| panel.id))
+    }
+
     pub fn close_panel(&mut self, id: PanelId) {
         if let Some(signal) = self.close_panel_returning_teardown(id) {
             self.retired_browser_shutdown_signals.push(signal);

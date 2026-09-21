@@ -241,6 +241,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     host-owned workspace stamp that keeps MCP authorization current
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
+  - `browser_cleanup`: closes ended browser panels on the host polling cadence,
+    after pending creates report their failure; uses the core board's ended-session
+    query and existing close path so remote holds and teardown remain tracked
   - `browser_remote_create`: planning for a create that names a remote target:
     provider, capabilities and credentials resolved before any panel exists,
     typed refusals that carry no value, and the per-provider session limit

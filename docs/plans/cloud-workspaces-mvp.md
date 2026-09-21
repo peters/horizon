@@ -1050,3 +1050,34 @@ settings save preserving synthetic bindings. Both the original Horizon and its
 separate ephemeral viewer remained intact. Native 4K recording and receipts are
 private in `pre-review-78/`; this is pre-push proof, not the required post-review
 pass. The synthetic nested target and its viewer were closed afterward.
+
+
+### Merge integration, 21 September 12:10 UTC
+
+The user authorized resolving the current main conflict and squash-merging once
+current-head validation and review pass. No release is authorized. Main's supplied
+Device identity is preserved in the extracted VNC observation module alongside
+independent transport, upload and display diagnostics. Updated request fixtures
+include the new optional identity.
+
+Independent integration review found that main's ended-browser cleanup could
+interpret a failed cloud presentation as the end of its worker-owned session.
+Managed membership now protects restored placeholders before cloud initialization,
+and an attached cloud view is not considered an ended local browser. A regression
+exercises early host polling, stable identity/engine on reattachment, transport
+failure, preserved fullscreen and absence of implicit remote Close. Existing local
+browser cleanup remains covered.
+
+The first integration matrix caught two missing test fields; its failure receipts
+are retained. The focused cleanup suite passes all seven tests. A new complete
+matrix, independent resolution review, frozen-binary native smoke and hosted
+current-head review/CI will gate the merge. Final immutable-image qualification
+remains incomplete because an uncertain provider creation is still fenced. It
+will be tracked explicitly in follow-up issues with remaining readiness, registry
+and supervision work; prior cloud runs are not relabelled final-head proof.
+
+Follow-up issues are now recorded: #812 uncertain creation resolution, #813 final
+immutable-image qualification and application timing, #814 desktop startup health,
+#815 private registry setup/rotation, and #816 per-agent credential isolation.
+Existing #805 covers shared CPU workers and #741 covers additional native platforms.
+Keep epic #790 open as the qualification umbrella after implementation merge.

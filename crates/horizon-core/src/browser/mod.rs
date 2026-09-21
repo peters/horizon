@@ -160,6 +160,18 @@ pub struct BrowserDrainOutput {
 }
 
 impl BrowserPanelState {
+    /// Whether the session has ended, rather than reporting a warning while
+    /// its driver is still recovering or waiting to relaunch.
+    #[must_use]
+    pub fn has_ended(&self) -> bool {
+        // Losing a presentation connection does not end the worker-owned browser.
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return false;
+        }
+        !self.status.is_alive() && self.session.is_none() && self.pending_relaunch.is_none()
+    }
+
     /// Driver-less panel for tests that only exercise command dispatch.
     #[doc(hidden)]
     #[must_use]
@@ -992,6 +1004,27 @@ mod tests {
             }
             .is_alive()
         );
+    }
+
+    #[test]
+    fn warning_during_recovery_is_not_an_ended_session() {
+        let root = tempfile::tempdir().expect("profile root");
+        let config = BrowserConfig {
+            command: Some(root.path().join("missing-browser").to_string_lossy().into_owned()),
+            profile_root: Some(root.path().join("profiles")),
+            ..BrowserConfig::default()
+        };
+        let mut state = BrowserPanelState::start("warning-recovery", &config, None).expect("session handle");
+        let mut output = BrowserDrainOutput::default();
+        state.apply_event(BrowserEvent::Warning("temporary setup failure".into()), &mut output);
+        assert!(!state.has_ended(), "a warning cannot retire an attached driver");
+        state.apply_event(BrowserEvent::Ready, &mut output);
+        assert!(!state.has_ended());
+        state.apply_event(BrowserEvent::Warning("terminal failure".into()), &mut output);
+        state.apply_event(BrowserEvent::Stopped { code: None }, &mut output);
+        assert!(state.has_ended());
+        assert!(matches!(state.status, BrowserStatus::Error { .. }));
+        assert!(state.shutdown_with_timeout(std::time::Duration::from_secs(5)));
     }
 
     #[test]

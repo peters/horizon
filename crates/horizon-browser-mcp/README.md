@@ -261,6 +261,21 @@ configuration. CLI plans invoke the same tool; see the
 
 ## Native Device viewer lifecycle
 
+Creation accepts optional creator-supplied host labels:
+
+```json
+{"operation":"create","endpoint":"127.0.0.1:5900","identity":{"machine_name":"Lab workstation","hostname":"lab-host","ip_addresses":["192.0.2.10","2001:db8::10"],"tailscale_name":"lab-host.example.ts.net"}}
+```
+
+Labels are plain text, trimmed, and limited to 256 characters each; up to 16
+numeric IPv4/IPv6 addresses are accepted. Empty labels become absent values. Create,
+list and inspect return the supplied identity separately from the local VNC
+endpoint. These labels are not verified by VNC and never change routing or
+initiate host discovery. Existing endpoint-only callers remain supported.
+The standalone device CLI controls an explicitly configured target; viewer
+creation and identity are exposed through `device_panel` on the browser MCP.
+
+
 `device_panel` manages read-only native VNC viewers in the caller's current
 Horizon workspace. It does not forward input or provision a desktop. Use the
 standalone device CLI/MCP with an explicitly configured isolated target for input.
