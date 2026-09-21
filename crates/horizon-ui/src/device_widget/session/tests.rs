@@ -55,6 +55,14 @@ fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), Vie
     Ok(())
 }
 fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
+    named_session("")
+}
+
+fn named_session(name: &str) -> Result<(Session, std::net::TcpStream), ViewError> {
+    named_session_with_visibility(name, true)
+}
+
+fn named_session_with_visibility(name: &str, visible: bool) -> Result<(Session, std::net::TcpStream), ViewError> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let session = Session::start(
@@ -63,6 +71,7 @@ fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
         ViewportId::ROOT,
         DeviceViewOptions::default(),
     )?;
+    session.set_visible(visible);
     let started = std::time::Instant::now();
     let (mut stream, _) = loop {
         match listener.accept() {
@@ -88,10 +97,10 @@ fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
     stream.write_all(&[0; 4])?;
     stream.read_exact(&mut byte)?;
     assert_eq!(byte, [1], "shared connection requested");
-    // A 2x2 true-color desktop, with no server name.
-    stream.write_all(&[
-        0, 2, 0, 2, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0, 0, 0, 0, 0,
-    ])?;
+    // A 2x2 true-color desktop.
+    stream.write_all(&[0, 2, 0, 2, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0])?;
+    stream.write_all(&u32::try_from(name.len()).unwrap().to_be_bytes())?;
+    stream.write_all(name.as_bytes())?;
     let mut pixel_format = [0; 20];
     stream.read_exact(&mut pixel_format)?;
     assert_eq!(pixel_format[0], 0);
@@ -268,5 +277,55 @@ fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> 
     send_pixel(&mut stream)?;
     wait_for_green_pixel(&session, [1, 1]);
     refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    Ok(())
+}
+
+#[test]
+fn handshake_name_is_observable_without_receiving_or_displaying_an_image() -> Result<(), ViewError> {
+    for (raw, expected) in [
+        ("Lab desktop ÆØÅ", Some("Lab desktop ÆØÅ")),
+        ("", None),
+        ("\nLab\0desktop", Some("Lab desktop")),
+    ] {
+        let (session, _stream) = named_session_with_visibility(raw, false)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(session.take_status(), Some(Status::Connected)) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let details = session.take_server_details();
+        assert_eq!(details.name.as_deref(), expected);
+        assert_eq!(details.desktop_size, Some([2, 2]));
+        assert!(session.latest_full().is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(), ViewError> {
+    for extended in [false, true] {
+        let (session, mut stream) = named_session_with_visibility("Lab desktop", false)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(session.take_status(), Some(Status::Connected)) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if extended {
+            send_extended_size(&mut stream, 3, 2)?;
+        } else {
+            stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 2, 255, 255, 255, 33])?;
+        }
+        stream.shutdown(std::net::Shutdown::Write)?;
+        // Queue both events while the consumer is paused, then drain them together.
+        std::thread::sleep(Duration::from_millis(50));
+        session.set_visible(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(session.take_status(), Some(Status::Disconnected(_))) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(session.take_server_details().desktop_size, Some([3, 2]));
+        assert!(session.latest_full().is_none());
+    }
     Ok(())
 }

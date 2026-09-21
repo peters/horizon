@@ -62,6 +62,14 @@ pub struct DeviceIdentity {
     pub tailscale_name: Option<String>,
 }
 
+/// Details observed on this VNC connection, not persisted machine identity.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct DeviceServerDetails {
+    pub name: Option<String>,
+    pub desktop_size: Option<[usize; 2]>,
+}
+
 /// Host observation, separate from request dispatch or VNC handshake success.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PanelState {
@@ -69,6 +77,8 @@ pub struct PanelState {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<DeviceIdentity>,
+    #[serde(default)]
+    pub server: DeviceServerDetails,
     pub visible: bool,
     pub owned_by_caller: bool,
     pub connection: Connection,
