@@ -41,7 +41,11 @@ build arguments from the profile. The standalone Dockerfile defaults to a minima
 image; pass these arguments explicitly when building outside Horizon. The image
 records available features in `/etc/horizon-worker/capabilities.json`. Before any
 allocation, the image checker verifies the requested subset and actual executable
-runtimes, with networking disabled. Old images can satisfy the legacy selection;
+runtimes, with networking disabled. Requested features are supplied through the
+nonsecret `HORIZON_WORKER_CAPABILITIES` environment binding, preserving legacy
+checker arguments. Capability-aware images still validate the entire requested
+selection, including the full default selection, and run their readiness checks.
+Old images can satisfy the legacy selection;
 explicit reduced/expanded selections need the capability-aware worker bootstrap.
 The provider receives the nonsecret selected features, and worker startup writes
 `/workspace/capabilities.json` before starting services or configuring tools.

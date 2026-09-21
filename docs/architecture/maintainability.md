@@ -415,7 +415,9 @@ settings storage or a provider CLI.
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
-separate. Disconnecting presentation never terminates compute or remote processes.
+separate. `worker_contract` shares capability transport and contract validation
+between local image checks and SSH readiness, including legacy full-image support.
+Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.

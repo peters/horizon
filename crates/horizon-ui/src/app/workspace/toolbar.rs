@@ -135,7 +135,10 @@ pub(super) fn show_workspace_context_menu(
         ui.separator();
         ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
         if ui
-            .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false))
+            .add_enabled(
+                workspace.cloud_count == 0,
+                Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false),
+            )
             .clicked()
         {
             interaction.action = Some(WorkspaceAction::ClearLayout);

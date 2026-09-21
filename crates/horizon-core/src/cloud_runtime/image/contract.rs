@@ -1,4 +1,5 @@
 use super::{Duration, Error, Images, Result, Runner};
+use crate::cloud_runtime::worker_contract;
 use horizon_cloud::{Cancellation, Capabilities};
 
 impl Images<'_> {
@@ -25,28 +26,7 @@ impl Images<'_> {
         // Killing a Docker client does not stop its daemon-owned container.
         self.remove_contract(&name)?;
         let output = result?;
-        if !output.lines().any(|line| line == "horizon-source-contract=1") {
-            return Err(Error::Invalid(
-                "Worker image does not support committed source dependencies",
-            ));
-        }
-        if capabilities != &Capabilities::default()
-            && !output.lines().any(|line| line == "horizon-capabilities-contract=1")
-        {
-            return Err(Error::Invalid(
-                "Worker image cannot validate selected capabilities; rebuild with the current worker bootstrap",
-            ));
-        }
-        if capabilities.browserstack.is_some() && !output.lines().any(|line| line == "horizon-browserstack-contract=1")
-        {
-            return Err(Error::Invalid(
-                "Worker image lacks requested remote-browser support; rebuild before deployment",
-            ));
-        }
-        if git_auth && !output.lines().any(|line| line == "horizon-git-auth-contract=1") {
-            return Err(Error::Invalid("Worker image does not support Git credential transfer"));
-        }
-        Ok(())
+        worker_contract::validate(&output, capabilities, git_auth)
     }
 
     fn run_contract(&self, image: &str, name: &str, capabilities: &Capabilities, git_auth: bool) -> Result<String> {
@@ -58,14 +38,13 @@ impl Images<'_> {
             "--network=none",
             "--entrypoint",
             "/usr/local/bin/horizon-worker-check",
+            "--env",
+            &worker_contract::environment(capabilities)?,
             image,
         ]);
         if git_auth {
             command.arg("--git-auth");
         }
-        command
-            .arg("--capabilities-json")
-            .arg(serde_json::to_string(capabilities).map_err(|_| Error::Json)?);
         self.runner
             .run("worker image contract creation", &mut command, Duration::from_secs(30))?;
         self.runner.run(

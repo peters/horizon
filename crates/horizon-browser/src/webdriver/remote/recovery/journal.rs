@@ -84,10 +84,14 @@ impl Journal {
         self.record.session = Some(session.into());
         self.save()
     }
-    pub(super) fn release(&mut self) {
+    pub(super) fn release(&mut self) -> io::Result<()> {
+        let previous = self.record.released;
         self.record.released = true;
-        // A failed write leaves the prior exact identity available for probing.
-        let _ = self.save();
+        if let Err(error) = self.save() {
+            self.record.released = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 }
 impl RemoteAllocation {

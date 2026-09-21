@@ -36,11 +36,11 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=()):
+    def run_check(self, *args, missing=(), environment=None):
         output = io.StringIO()
         with mock.patch('pathlib.Path', side_effect=self.path), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
-                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run') as commands, \
                 mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
@@ -104,6 +104,17 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
         self.assertEqual([call.args[0] for call in commands], [['git', 'lfs', 'version']])
+
+    def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
+        self.write('/etc/horizon-worker/capabilities.json', {})
+        self.write('/workspace/capabilities.json', {})
+        full = {'agents': ['codex', 'claude', 'grok'], 'browsers': ['chromium'], 'desktop': True}
+        status, _, commands = self.run_check(environment={'HORIZON_WORKER_CAPABILITIES': json.dumps(full)})
+        self.assertEqual(status, 1)
+        self.assertEqual(commands, [])
+        status, output, _ = self.run_check(environment={'HORIZON_WORKER_CAPABILITIES': '{}'})
+        self.assertEqual(status, 0, output)
+        self.assertIn('horizon-capabilities-contract=1', output)
 
     def test_firefox_requires_its_driver(self):
         caps = {'browsers': ['firefox']}

@@ -23,6 +23,8 @@ pub enum RemoteRecoveryStatus {
     IdentityUnavailable,
     AuthenticationRequired,
     ProviderUnavailable,
+    /// Release is confirmed, but its durable journal commit must be retried.
+    PersistenceUnavailable,
     UnsupportedResponse,
 }
 
@@ -46,6 +48,9 @@ impl RemoteRecoveryStatus {
             }
             Self::ProviderUnavailable => {
                 "The provider gave no trustworthy session result; capacity remains held. Retry when the original provider is available."
+            }
+            Self::PersistenceUnavailable => {
+                "Release was confirmed but could not be saved; capacity remains held. Restore writable recovery storage and reconcile again."
             }
         }
     }
@@ -78,6 +83,32 @@ struct State {
     journal: Option<journal::Journal>,
     retired: bool,
     status: RemoteRecoveryStatus,
+}
+
+impl State {
+    fn release_confirmed(&self) -> bool {
+        matches!(
+            self.status,
+            RemoteRecoveryStatus::Released | RemoteRecoveryStatus::PersistenceUnavailable
+        )
+    }
+
+    fn reconciliation_unavailable(&mut self) {
+        if !self.release_confirmed() {
+            self.status = RemoteRecoveryStatus::ProviderUnavailable;
+        }
+    }
+
+    fn confirm_release(&mut self) {
+        if let Some(journal) = &mut self.journal
+            && journal.release().is_err()
+        {
+            self.status = RemoteRecoveryStatus::PersistenceUnavailable;
+            return;
+        }
+        self.status = RemoteRecoveryStatus::Released;
+        self.identity = None;
+    }
 }
 
 impl Default for RemoteAllocation {
@@ -231,6 +262,9 @@ impl RemoteAllocation {
     pub(crate) fn finish(&self, outcome: Option<&RemoteReleaseOutcome>) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.retired = true;
+        if state.status == RemoteRecoveryStatus::Released {
+            return;
+        }
         if matches!(
             outcome,
             Some(
@@ -239,12 +273,8 @@ impl RemoteAllocation {
                     | RemoteReleaseOutcome::NeverAllocated
             )
         ) {
-            state.status = RemoteRecoveryStatus::Released;
-            state.identity = None;
-            if let Some(journal) = &mut state.journal {
-                journal.release();
-            }
-        } else if state.status != RemoteRecoveryStatus::Released {
+            state.confirm_release();
+        } else if !state.release_confirmed() {
             state.status = if state.identity.is_some() {
                 RemoteRecoveryStatus::Unresolved
             } else {
@@ -278,6 +308,10 @@ impl RemoteAllocation {
             {
                 return true;
             }
+            if state.release_confirmed() {
+                state.confirm_release();
+                return true;
+            }
             let Some(identity) = state.identity.clone() else {
                 state.status = RemoteRecoveryStatus::IdentityUnavailable;
                 return true;
@@ -294,12 +328,13 @@ impl RemoteAllocation {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.status = status;
-                if status == RemoteRecoveryStatus::Released {
-                    state.identity = None;
-                    if let Some(journal) = &mut state.journal {
-                        journal.release();
-                    }
+                if state.status == RemoteRecoveryStatus::Released {
+                    return;
+                }
+                if status == RemoteRecoveryStatus::Released || state.release_confirmed() {
+                    state.confirm_release();
+                } else {
+                    state.status = status;
                 }
             })
             .is_err()
@@ -307,7 +342,7 @@ impl RemoteAllocation {
             self.state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .status = RemoteRecoveryStatus::ProviderUnavailable;
+                .reconciliation_unavailable();
         }
         true
     }

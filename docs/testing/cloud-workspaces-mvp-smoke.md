@@ -550,6 +550,22 @@ No profile may export credentials solely because repository YAML requests them.
   nonprivate and reference-mismatched records must retain their holds. Keep this
   deterministic recovery test separate from genuine provider release evidence;
   never alter a live allocation journal to fabricate release.
+- Force a journal write failure in a deterministic fixture after provider release
+  or before-launch cancellation. Both direct completion and reconciliation must
+  keep their identity and cleanup hold. Remove the filesystem obstruction and
+  retry: save the retained release proof without another provider request, then
+  permit cleanup. Never inject this failure into a real provider allocation.
+
+### Legacy worker contract compatibility
+
+- A strict legacy checker that accepts no arguments must accept the original full
+  effective selection, whether omitted in YAML or explicitly selected. Reduced or
+  expanded selections require the capability marker and fail before allocation.
+- A modern minimal image must reject the full default selection before allocation.
+  Check that capability JSON reaches both local validation and SSH readiness via
+  the environment. Missing runtime services must fail modern readiness.
+- Verify modern readiness retains a bounded budget for both its baseline and
+  service checks, while legacy readiness does not receive unsupported arguments.
 
 ### Existing New cloud dialog presentation
 

@@ -638,3 +638,50 @@ intermittent status and the missing presentation/freshness diagnostics. The
 viewer was closed and recreated with permission; both Horizon applications
 continued running. Test guidance now requires bounded automatic diagnosis and
 precise blocked reporting instead of repeated human visibility confirmation.
+
+The correction was published as `3f90759be75c4691a7340da89f86229b615bde40`.
+All applicable hosted checks passed; the current-head review arrived on
+2026-09-21 and found a release-persistence failure path plus an enabled Default
+action in the cloud workspace context menu. It also raised legacy-checker
+compatibility: the supplied historical checker ignores added arguments, but a
+strict legacy checker can reject them. All three are addressed locally as a
+bounded correction batch. No new UI flow or provider is added.
+
+Failed release-journal writes now retain both the exact identity and confirmed
+release outcome. Reconciliation retries persistence before allowing cleanup,
+including cancellation before any provider identity exists. Local image checks
+and SSH readiness share environment-based capability transport; modern minimal
+images still reject full defaults, and modern readiness still checks services.
+The combined readiness timeout preserves the original budget for each check.
+Focused durability, cleanup, contract and capability regressions are retained;
+the complete matrix and final native smoke are separate gates.
+
+The fresh immutable service image reached worker Ready in 119.81 seconds through
+the shared deployment coordinator. This includes source transfer and private
+tunnel setup, not application readiness or first visible frame. Real agents
+started in separate worktrees. Their bounded work and reconnect checks are in
+progress, with results held in private evidence. The worker must not be described
+as qualifying the later uncommitted correction.
+
+Issue #801 now explicitly requires automatic freshness diagnostics and an
+owner-scoped public presentation operation. Timestamped current observations
+show a connected viewer with no confirmed presentation after bounded recovery.
+That blocks interactive native smoke, not headless tests. No human visibility
+confirmation is required, and neither Horizon application is restarted to repair
+the viewer. The API/runtime follow-up remains unimplemented.
+
+The settled durability/compatibility correction passes `final-validation-30/`,
+including a repeated complete workspace tier after the last guarded transition:
+2,345 workspace tests and 2,390 speech-feature tests pass, with 15 ignored in each
+tier. All ten validation lanes pass. Independent review is clear for source
+manifest `fb1cc45ea3255891446dc04b921d1e9603e0f0a1c4b9a382b8869d93285efbd9`.
+The preceding pass retained a state-model lint failure and is not the final receipt.
+
+On the preceding immutable image, both real agents passed worktree/branch/marker
+assertions and controlled separate public-browser sessions. A 134-second client
+disconnect preserved both agent and browser-tool process identities; an agent
+completed a timestamped assertion and inspected its existing browser during that
+interval. This is headless cloud evidence, not native UI presentation or evidence
+for the later worker correction. Browser control leases expire after inactivity;
+an idle owner value must not be mistaken for lost cloud or panel membership.
+The later correction still needs hosted review and affected final smoke.

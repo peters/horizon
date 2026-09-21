@@ -1,4 +1,5 @@
 use super::*;
+use crate::webdriver::remote::RemoteReleaseOutcome;
 use crate::webdriver::{
     remote::tests::request,
     test_server::{Reply, Server},
@@ -7,8 +8,93 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 #[test]
+fn failed_release_write_keeps_identity_and_retries_without_provider_access() {
+    for outcome in [
+        RemoteReleaseOutcome::Released,
+        RemoteReleaseOutcome::AlreadyGone,
+        RemoteReleaseOutcome::NeverAllocated,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("identity");
+        let request = request("http://127.0.0.1:1/wd/hub");
+        request.recovery.retain_journal(&path, &request).unwrap();
+        let identified = !matches!(outcome, RemoteReleaseOutcome::NeverAllocated);
+        if identified {
+            let host = RemoteHost::connect(&request).unwrap();
+            request
+                .recovery
+                .identify(host.transport, "exact-session".into(), host.report)
+                .unwrap();
+        }
+        std::fs::create_dir(path.with_extension("pending")).unwrap();
+        request.recovery.finish(Some(&outcome));
+        assert_failed_release(&request.recovery, &path, identified);
+        // A failed concurrent probe launch cannot overwrite confirmed release.
+        request.recovery.state.lock().unwrap().reconciliation_unavailable();
+        assert_failed_release(&request.recovery, &path, identified);
+        request.recovery.finish(None);
+        request.recovery.reconcile();
+        assert_failed_release(&request.recovery, &path, identified);
+
+        std::fs::remove_dir(path.with_extension("pending")).unwrap();
+        request.recovery.reconcile();
+        assert!(request.recovery.is_released());
+        request.recovery.state.lock().unwrap().reconciliation_unavailable();
+        assert!(request.recovery.is_released());
+        assert!(
+            RemoteAllocation::restore_released_journal(&path)
+                .unwrap()
+                .unwrap()
+                .is_released()
+        );
+        assert!(request.recovery.state.lock().unwrap().identity.is_none());
+    }
+}
+
+#[test]
+fn probe_release_is_not_published_until_journal_commit_succeeds() {
+    let server = Server::start(vec![Reply::json(404, &json!({"value":{"error":"invalid session id"}}))]);
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("identity");
+    let request = request(&server.endpoint("/wd/hub"));
+    request.recovery.retain_journal(&path, &request).unwrap();
+    let host = RemoteHost::connect(&request).unwrap();
+    request
+        .recovery
+        .identify(host.transport, "exact-session".into(), host.report)
+        .unwrap();
+    std::fs::create_dir(path.with_extension("pending")).unwrap();
+    request.recovery.finish(None);
+    request.recovery.reconcile();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while request.recovery.status() == RemoteRecoveryStatus::Reconciling {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_failed_release(&request.recovery, &path, true);
+    assert_eq!(server.recorded().len(), 1);
+    std::fs::remove_dir(path.with_extension("pending")).unwrap();
+    request.recovery.reconcile();
+    assert!(request.recovery.is_released());
+    assert_eq!(server.recorded().len(), 1, "retry must use retained release proof");
+    assert!(RemoteAllocation::restore_released_journal(&path).unwrap().is_some());
+}
+
+fn assert_failed_release(allocation: &RemoteAllocation, path: &Path, identified: bool) {
+    assert_eq!(allocation.status(), RemoteRecoveryStatus::PersistenceUnavailable);
+    assert!(!allocation.is_released());
+    let state = allocation.state.lock().unwrap();
+    assert_eq!(state.identity.is_some(), identified);
+    assert!(!state.journal.as_ref().unwrap().record.released);
+    drop(state);
+    let record = Record::load(path).unwrap();
+    assert!(!record.released);
+    assert_eq!(record.session.as_deref(), identified.then_some("exact-session"));
+    assert!(RemoteAllocation::restore_released_journal(path).unwrap().is_none());
+}
+
+#[test]
 fn durable_release_restores_without_provider_access() {
-    use crate::webdriver::remote::RemoteReleaseOutcome;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("identity");
     let request = request("http://127.0.0.1:1/wd/hub");

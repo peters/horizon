@@ -12,6 +12,7 @@ pub mod settings;
 pub mod ssh;
 pub mod state;
 pub mod tunnel;
+mod worker_contract;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

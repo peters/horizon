@@ -1,5 +1,5 @@
 //! Per-worker SSH identity, known-host binding and persistent tmux attachment.
-use super::{Error, Result, command::Runner, settings::Settings, state::Session};
+use super::{Error, Result, command::Runner, settings::Settings, state::Session, worker_contract};
 use horizon_cloud::{Worker, valid_id};
 use std::{path::Path, process::Command, time::Duration};
 #[derive(Clone, Debug)]
@@ -75,15 +75,14 @@ impl Connection {
     /// # Errors
     /// Checks the worker runtime through the existing OpenSSH transport.
     pub fn ready(&self, runner: &Runner<'_>, capabilities: &horizon_cloud::Capabilities) -> Result<()> {
-        let capabilities = serde_json::to_string(capabilities).map_err(|_| Error::Json)?;
-        runner.run(
+        let output = runner.run(
             "SSH readiness",
-            &mut self.command(&format!(
-                "horizon-worker-check --ready --capabilities-json '{capabilities}'"
-            )),
-            Duration::from_secs(20),
+            &mut self.command(&worker_contract::readiness_command(capabilities)?),
+            // Modern images run the baseline and service checks, each with the
+            // original readiness budget.
+            Duration::from_secs(40),
         )?;
-        Ok(())
+        worker_contract::validate(&output, capabilities, false)
     }
     /// # Errors
     /// Transfers the exact task-owned pack; does not overwrite a remote worktree.

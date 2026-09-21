@@ -263,7 +263,17 @@ mod tests {
                 .is_ok()
         );
         allocations.insert("cancelled", "owner", &request).unwrap();
+        let blocked = root.path().join("identities/cancelled.pending");
+        std::fs::create_dir(&blocked).unwrap();
         allocations.cancel_start("cancelled");
+        assert!(allocations.confirm_closed("cancelled").is_err());
+        assert!(root.path().join("cancelled").is_file());
+        assert!(root.path().join("identities/cancelled").is_file());
+        assert!(!request.recovery.is_released());
+        std::fs::remove_dir(blocked).unwrap();
+        request.recovery.reconcile();
+        assert!(request.recovery.is_released());
+        allocations.confirm_closed("cancelled").unwrap();
         assert!(!root.path().join("cancelled").exists());
         assert!(!root.path().join("identities/cancelled").exists());
     }

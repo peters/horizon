@@ -97,6 +97,9 @@ After a worker-service crash, a private journal that durably confirms a remote
 device was released can be cleaned up without the old provider credentials.
 Unreleased, malformed or mismatched identities remain blocked until their exact
 release can be verified.
+If saving confirmed release fails, the allocation keeps its exact identity and
+blocks cleanup. Reconcile after restoring writable storage to retry that save;
+the live process retains the provider's release result and need not query it again.
 
 Browser panels display their actual controller. Native VNC Device panels are
 read-only viewers; worker-local device tools perform input and report its agent.
