@@ -124,7 +124,8 @@ shell commands, files, or other MCP servers.
   so a pathname re-pointed after the check cannot reach the browser. The
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
-  at most 32 actions and 4 GiB, pruned when the next attachment is staged;
+  at most 32 actions and 4 GiB, pruned when the next attachment is staged
+  and swept for age when an MCP server starts or a panel is closed;
   staging for actions whose result has not been consumed yet (queued,
   dispatched or in flight) is never pruned for room, and when those alone
   leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
@@ -133,7 +134,7 @@ shell commands, files, or other MCP servers.
   `timeout_millis` while the ownership lease is kept alive; a call that
   times out while staging reports so, and the staging may still finish and
   queue the action afterwards. `accept` extension tokens match the end of the file name,
-  so compound tokens such as `.tar.gz` work. Copies live under the runtime root, or on
+  so compound tokens such as `.tar.gz` and dotfiles such as `.env` work. Copies live under the runtime root, or on
   Linux under `~/Horizon/browser-attachments` when the runtime root is a
   hidden directory beneath the home directory, which a Snap-confined browser
   cannot open. The readback opens every attached file's first and last byte

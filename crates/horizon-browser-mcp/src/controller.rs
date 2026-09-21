@@ -183,6 +183,7 @@ pub(crate) enum ControlError {
 
 impl BrowserController {
     pub(crate) fn from_environment() -> Self {
+        sweep_stale_attachments();
         let fallback = format!("horizon-mcp:{}", std::process::id());
         let actor = std::env::var("HORIZON_BROWSER_ACTOR")
             .ok()
@@ -472,6 +473,9 @@ impl BrowserController {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CloseUnavailable);
         }
+        // A closing panel is the natural moment to age out staged
+        // attachments that no later attachment would otherwise prune.
+        sweep_stale_attachments();
         let timeout_millis = bounded_timeout(timeout_millis);
         self.ensure_claim(panel_id)?;
         let action_id = manifest::enqueue_close(self.identity(), panel_id, Duration::from_millis(timeout_millis))
@@ -850,6 +854,15 @@ fn authorize_and_enqueue_attachments(
         BrowserControlAction::SetFiles { target, paths },
     )
     .map_err(AttachmentEnqueueError::Queue)
+}
+
+/// Age out staged attachments past retention across every panel, so the
+/// retention bound holds even when no further attachment follows.
+fn sweep_stale_attachments() {
+    horizon_browser_control::attachments::sweep_stale_attachments(
+        &horizon_browser_control::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+        horizon_browser_control::attachments::ATTACHMENT_RETENTION,
+    );
 }
 
 fn require_local_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {

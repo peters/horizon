@@ -386,6 +386,32 @@ pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u6
     Ok(requested)
 }
 
+/// Remove every panel's staged actions older than `retention`, best
+/// effort: the enforcement that does not wait for another attachment, run
+/// when an MCP server starts and when a panel is closed.
+pub fn sweep_stale_attachments(attachments_dir: &Path, retention: Duration) {
+    let stale_before = std::time::SystemTime::now()
+        .checked_sub(retention)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let Ok(panels) = std::fs::read_dir(attachments_dir) else {
+        return;
+    };
+    for panel in panels.flatten() {
+        let Ok(actions) = std::fs::read_dir(panel.path()) else {
+            continue;
+        };
+        for action in actions.flatten() {
+            let stale = std::fs::metadata(action.path().join(STAGED_STAMP))
+                .or_else(|_| action.metadata())
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| modified < stale_before);
+            if stale && let Err(error) = std::fs::remove_dir_all(action.path()) {
+                tracing::warn!(target: "browser", path = %action.path().display(), "failed to sweep stale staged attachments: {error}");
+            }
+        }
+    }
+}
+
 /// Make room for one more attachment action on `panel_local_id`: every
 /// panel's settled actions older than `retention` go (a closed panel's
 /// staging ages out this way), and the panel keeps at most
@@ -800,6 +826,23 @@ mod tests {
         );
         prune_attachments(&attachments, "other", Duration::from_hours(1), 8, u64::MAX, 0)
             .expect("an unreadable other panel is skipped");
+    }
+
+    #[test]
+    fn a_sweep_ages_out_every_panel_without_an_attachment() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let attachments = root.path().join("attachments");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "closed", "old", &authorized).expect("old");
+        std::thread::sleep(Duration::from_millis(600));
+        stage_attachments(&attachments, "live", "fresh", &authorized).expect("fresh");
+        sweep_stale_attachments(&attachments, Duration::from_millis(300));
+        assert!(!action_directory(&attachments, "closed", "old").exists());
+        assert!(action_directory(&attachments, "live", "fresh").exists());
     }
 
     #[test]

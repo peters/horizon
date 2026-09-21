@@ -180,7 +180,7 @@ pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
     let mime = extension.as_deref().and_then(mime_for_extension);
     tokens.iter().any(|token| {
         if token.starts_with('.') {
-            name.len() > token.len() && name.ends_with(token.as_str())
+            name.ends_with(token.as_str())
         } else if let Some(family) = token.strip_suffix("/*") {
             mime.is_some_and(|mime| mime.split('/').next() == Some(family))
         } else {
@@ -324,8 +324,8 @@ mod tests {
         assert!(accept_allows(".tar.gz", Path::new("/uploads/archive.TAR.GZ")));
         assert!(!accept_allows(".tar.gz", Path::new("/uploads/archive.gz")));
         assert!(
-            !accept_allows(".tar.gz", Path::new("/uploads/.tar.gz")),
-            "a bare suffix is not a name"
+            accept_allows(".env", Path::new("/uploads/.env")),
+            "a dotfile named like the token matches"
         );
         assert!(accept_allows("application/gzip", Path::new("/uploads/archive.tar.gz")));
     }
