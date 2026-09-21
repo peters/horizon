@@ -52,10 +52,17 @@ impl HorizonApp {
             })
             .collect();
 
+        let canvas_view = self.canvas_view;
+        #[cfg(feature = "cloud-workspaces")]
+        let canvas_view = self
+            .cloud_prototype
+            .fullscreen
+            .as_ref()
+            .map_or(canvas_view, |f| f.previous_view);
         let runtime_state = RuntimeState::from_board_with_detached_workspaces(
             &self.board,
             self.window_config.clone(),
-            self.canvas_view,
+            canvas_view,
             detached_workspaces,
         );
         if let Err(error) = self

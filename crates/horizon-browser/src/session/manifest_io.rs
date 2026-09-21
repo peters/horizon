@@ -235,6 +235,7 @@ impl DriverState {
             title: self.title.clone(),
             remote_target: None,
             remote_device: None,
+            remote_file_upload: false,
         }
     }
 }

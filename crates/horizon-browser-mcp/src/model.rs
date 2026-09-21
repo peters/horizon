@@ -94,7 +94,7 @@ impl BrowserPanel {
                 user_active,
                 handoff_pending,
             },
-            capabilities: semantic_capabilities(value.backend, remote),
+            capabilities: semantic_capabilities(value.backend, remote, value.remote_file_upload),
             network_capture: NetworkCaptureCapability::for_backend(value.backend, remote),
             video_capture: VideoCaptureCapability::for_backend(),
         }
@@ -892,7 +892,7 @@ fn backend_name(backend: BackendKind) -> &'static str {
     }
 }
 
-fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
+fn semantic_capabilities(backend: BackendKind, remote: bool, remote_file_upload: bool) -> Vec<String> {
     let mut capabilities = [
         "navigate",
         "snapshot",
@@ -910,7 +910,7 @@ fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
         "audit",
     ]
     .into_iter()
-    .filter(|capability| !remote || !matches!(*capability, "handoff" | "set_files"))
+    .filter(|capability| !remote || (*capability != "handoff" && (*capability != "set_files" || remote_file_upload)))
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
@@ -1007,6 +1007,21 @@ mod tests {
         let encoded = serde_json::to_string(&panel).expect("json");
         assert!(encoded.contains("\"remote_target\":\"android_phone\""));
         assert!(encoded.contains("\"remote_device\":\"Google Pixel 9, OS 16.0, physical device\""));
+
+        let supported = BrowserPanel::from_manifest(
+            BrowserManifest {
+                remote_target: Some("desktop".into()),
+                remote_file_upload: true,
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert!(
+            supported
+                .capabilities
+                .iter()
+                .any(|capability| capability == "set_files")
+        );
 
         let local = BrowserPanel::from_manifest(
             BrowserManifest {

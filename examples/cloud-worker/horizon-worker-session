@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+id="${1:?session required}"; agent="${2:?agent required}"; revision="${3:?revision required}"
+[[ "$id" =~ ^[a-zA-Z0-9_-]{1,100}$ && "$revision" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || exit 2
+case "$agent" in codex|claude|grok|shell) ;; *) exit 2;; esac
+export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
+export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="cloud:$id"
+unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
+horizon-worker-check --agent "$agent"
+mkdir -p /workspace/sessions
+exec 9>"/workspace/sessions/$id.lock"
+flock 9
+session="/workspace/sessions/$id"
+worktree="/workspace/agents/$id"
+if [ -d "$session" ]; then
+    [ "$(cat "$session/agent")" = "$agent" ] && [ "$(cat "$session/revision")" = "$revision" ] || { echo 'Session binding mismatch' >&2; exit 3; }
+    if ! tmux -L horizon-cloud has-session -t "=$id" 2>/dev/null; then
+        if [ -f "$session/launch-requested" ] || [ ! -f "$session/preparing" ]; then
+            echo 'Remote process was lost or its launch is uncertain. No replacement process was started.' >&2; exit 4
+        fi
+    fi
+else
+    staging="$(mktemp -d /workspace/sessions/.preparing-XXXXXX)"
+    printf '%s\n' "$agent" > "$staging/agent"
+    printf '%s\n' "$revision" > "$staging/revision"
+    touch "$staging/preparing"
+    mv "$staging" "$session"
+fi
+if ! tmux -L horizon-cloud has-session -t "=$id" 2>/dev/null; then
+    if [ ! -e "$worktree/.git" ]; then
+        if ! git --git-dir=/workspace/repository.git show-ref --verify --quiet "refs/heads/agent/$id"; then
+            git --git-dir=/workspace/repository.git branch "agent/$id" "$revision"
+        fi
+        git --git-dir=/workspace/repository.git worktree add "$worktree" "agent/$id"
+    fi
+    [ "$(git -C "$worktree" rev-parse HEAD)" = "$revision" ] || { echo 'Initial worktree revision mismatch' >&2; exit 3; }
+    # No process has been launched: finish a checkout interrupted after Git wrote HEAD.
+    git -C "$worktree" reset --hard "$revision"
+    horizon-worker-source checkout "$worktree"
+    # Persist the launch fence before starting a process; an uncertain launch cannot be replayed.
+    touch "$session/launch-requested"
+    sync -f "$session/launch-requested"
+    tmux -L horizon-cloud new-session -d -s "$id" -c "$worktree" "horizon-worker-run $id $agent"
+    rm "$session/preparing"
+fi
+flock -u 9
+exec 9>&-
+exec tmux -L horizon-cloud attach-session -t "=$id"

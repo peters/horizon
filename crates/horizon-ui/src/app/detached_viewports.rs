@@ -65,13 +65,23 @@ impl HorizonApp {
         )
     }
 
+    pub(super) fn workspace_can_detach(&self, workspace_id: WorkspaceId) -> bool {
+        let Some(workspace) = self.board.workspace(workspace_id) else {
+            return false;
+        };
+        if !self.workspace_can_arrange_panels(workspace_id) {
+            return false;
+        }
+        !self.detached_workspaces.contains_key(&workspace.local_id)
+    }
+
     pub(super) fn detach_workspace(&mut self, workspace_id: WorkspaceId) {
+        if !self.workspace_can_detach(workspace_id) {
+            return;
+        }
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return;
         };
-        if self.detached_workspaces.contains_key(&workspace.local_id) {
-            return;
-        }
 
         self.detached_workspaces.insert(
             workspace.local_id.clone(),
@@ -206,10 +216,12 @@ impl HorizonApp {
         // handle_canvas_pan_in_rect below: a second pass would consume the
         // one-shot frame keyboard metadata twice and re-run the stateful
         // speech filter (leaking an orphan hotkey key-up).
+        self.filter_held_navigation_keys(ctx);
         self.handle_detached_shortcuts(ctx, workspace_id);
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
+        self.apply_pending_device_reveal(workspace_local_id, canvas_rect);
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan_in_rect(ctx, canvas_rect, Some(workspace_id));
         self.render_canvas(ui);
@@ -580,6 +592,9 @@ fn detached_viewport_builder(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cloud-workspaces")]
+    mod cloud;
+
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -749,6 +764,43 @@ mod tests {
             .map(|input| input.event.clone())
             .collect::<Vec<_>>();
         assert_eq!(collected, events);
+    }
+
+    #[test]
+    fn root_navigation_release_is_consumed_after_focus_moves_to_detached_window() {
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        let workspace = app.board.create_workspace("detached navigation");
+        let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+        app.detach_workspace(workspace);
+        let binding = horizon_core::ShortcutBinding::parse("Escape").unwrap();
+        let _ = ctx
+            .run_ui(RawInput::default(), |_ui| app.consume_navigation_key(&ctx, binding))
+            .discard_textures();
+        let viewport_id = detached_viewport_id(&local_id);
+        for (pressed, should_pass) in [(false, false), (true, true)] {
+            let key = Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut input = raw_input([800.0, 600.0], None);
+            input.viewport_id = viewport_id;
+            input.events = vec![key];
+            input.viewports.entry(viewport_id).or_default().focused = Some(true);
+            let _ = ctx
+                .run_ui(input, |ui| {
+                    app.render_detached_workspace_window(ui, workspace, &local_id);
+                    assert_eq!(
+                        ctx.input(|input| input.events.iter().any(|event| matches!(event, Event::Key { .. }))),
+                        should_pass,
+                        "navigation must own release across viewports but preserve a fresh press"
+                    );
+                })
+                .discard_textures();
+        }
     }
 
     #[test]

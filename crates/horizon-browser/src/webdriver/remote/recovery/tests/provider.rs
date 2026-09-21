@@ -11,7 +11,9 @@ fn recovery(hub: &Server, report: &Server) -> RemoteAllocation {
             .expect("client"),
         )
     };
-    allocation.identify(client(hub), "exact-session".into(), Some(client(report)));
+    allocation
+        .identify(client(hub), "exact-session".into(), Some(client(report)))
+        .unwrap();
     allocation.finish(None);
     allocation
 }
@@ -37,6 +39,56 @@ fn completed_provider_execution_releases_only_the_original_exact_session() {
     assert_eq!(requests[0].path, "/automate/sessions/exact-session.json");
     assert_eq!(requests[0].authorization.as_deref(), Some("Bearer original-secret"));
     assert!(allocation.state.lock().expect("state").identity.is_none());
+}
+
+#[test]
+fn provider_timeouts_and_errors_release_only_matching_execution_records() {
+    for execution in ["timeout", "error"] {
+        for matches in [true, false] {
+            let mut body = record(execution);
+            if !matches {
+                body["automation_session"]["hashed_id"] = json!("another-session");
+            }
+            let hub = Server::start(vec![Reply::json(500, &json!({"value": null}))]);
+            let report = Server::start(vec![Reply::json(200, &body)]);
+            let allocation = recovery(&hub, &report);
+            allocation.reconcile();
+            let expected = if matches {
+                RemoteRecoveryStatus::Released
+            } else {
+                RemoteRecoveryStatus::UnsupportedResponse
+            };
+            assert_eq!(wait(&allocation), expected);
+            assert_eq!(allocation.is_released(), matches);
+        }
+    }
+}
+
+#[test]
+fn timeout_or_error_test_metadata_cannot_release_running_or_unreported_execution() {
+    for verdict in ["timeout", "error"] {
+        for running in [true, false] {
+            let mut body = record("running");
+            body["automation_session"]["status"] = json!(verdict);
+            if !running {
+                body["automation_session"]
+                    .as_object_mut()
+                    .expect("record")
+                    .remove("browserstack_status");
+            }
+            let hub = Server::start(vec![Reply::json(500, &json!({"value": null}))]);
+            let report = Server::start(vec![Reply::json(200, &body)]);
+            let allocation = recovery(&hub, &report);
+            allocation.reconcile();
+            let expected = if running {
+                RemoteRecoveryStatus::Active
+            } else {
+                RemoteRecoveryStatus::UnsupportedResponse
+            };
+            assert_eq!(wait(&allocation), expected);
+            assert!(!allocation.is_released());
+        }
+    }
 }
 
 #[test]

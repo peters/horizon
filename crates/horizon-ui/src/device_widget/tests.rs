@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_egui::DiscardTextures;
+use horizon_core::browser::manifest::device::Connection;
 
 fn fixture_device() -> DevicePanelState {
     DevicePanelState {
@@ -89,6 +90,44 @@ fn presented_size(state: &DeviceUiState) -> Option<[usize; 2]> {
 }
 
 #[test]
+fn hidden_observation_preserves_pending_image_until_first_display() {
+    let ctx = egui::Context::default();
+    let device = fixture_device();
+    let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
+    let mut state = DeviceUiState {
+        initialized: true,
+        session: Some(Session::pending_frame(
+            image.clone(),
+            image,
+            DeviceViewOptions::default(),
+        )),
+        ..Default::default()
+    };
+    state.begin_frame();
+    state.finish_frame();
+    for _ in 0..2 {
+        let observation = state.observation("panel".into(), &device, false, "agent");
+        assert_eq!(observation.connection, Connection::Connected);
+        assert_eq!(observation.image.received_frame_sequence, 1);
+        assert_eq!(observation.image.frame_sequence, 0);
+        assert!(!observation.image.image_received);
+        assert!(!observation.image.image_displayed);
+        assert!(state.texture.is_none());
+    }
+    // The server is now static: show must consume the retained image immediately.
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| state.show(ui, &device, true))
+        .discard_textures();
+    assert_eq!(presented_size(&state), Some([2, 2]));
+    state.begin_frame();
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observation.image.received_frame_sequence, 1);
+    assert_eq!(observation.image.frame_sequence, 1);
+    assert!(observation.image.image_received);
+    assert!(observation.image.image_displayed);
+}
+
+#[test]
 fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
     let mut state = DeviceUiState::default();
     state.controls.options.max_width = 8192;
@@ -107,6 +146,7 @@ fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
     assert!(state.texture.is_none());
     assert!(matches!(state.status, Status::Disconnected(_)));
     assert_eq!(state.image.sequence, 0, "rejected images are not uploaded frames");
+    assert!(state.image.last_uploaded.is_none());
 }
 
 #[test]
@@ -222,6 +262,7 @@ fn apply_viewport_and_reconnect_keep_the_last_desktop() {
     assert!(!evidence.image.image_received);
     assert!(!evidence.image.image_displayed);
     assert_eq!(evidence.image.frame_sequence, 0);
+    assert_eq!(evidence.image.received_frame_sequence, 0);
 }
 
 #[test]
@@ -249,6 +290,7 @@ fn reconnect_does_not_report_a_retained_texture_as_live_evidence() {
     assert!(!evidence.image.image_received);
     assert!(!evidence.image.image_displayed);
     assert_eq!(evidence.image.frame_sequence, 0);
+    assert_eq!(evidence.image.received_frame_sequence, 0);
 }
 
 #[test]
@@ -375,6 +417,82 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
 }
 
 #[test]
+fn diagnostics_distinguish_hidden_presentation_from_active_reception() {
+    use horizon_core::browser::manifest::device::Presentation;
+    let device = fixture_device();
+    let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        session: Some(Session::pending_frame(
+            image.clone(),
+            image,
+            DeviceViewOptions::default(),
+        )),
+        ..Default::default()
+    };
+    // Hiding presentation never pauses background reception, including the immediate response.
+    let observed = state.observation("panel".into(), &device, false, "agent");
+    let diagnostics = observed.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::Hidden);
+    assert!(!diagnostics.sampling_paused);
+    state.session.as_ref().unwrap().set_visible(false);
+    let observed = state.observation("panel".into(), &device, true, "agent");
+    let diagnostics = observed.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::NotRendered);
+    assert!(!diagnostics.sampling_paused);
+    assert_eq!(diagnostics.decoded_frame_sequence, 1);
+    assert!(diagnostics.last_decoded_age_millis.is_some());
+    assert!(diagnostics.last_uploaded_age_millis.is_none());
+    assert!(!observed.image.image_received && !observed.image.image_displayed);
+    assert!(
+        state
+            .session
+            .as_ref()
+            .unwrap()
+            .take_updates(egui::ViewportId::ROOT)
+            .image
+            .is_some()
+    );
+    state.previous_rendered = true;
+    let observed = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::AwaitingFrame);
+    let observed = state.observation("panel".into(), &device, false, "agent");
+    assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::Hidden);
+}
+
+#[test]
+fn repainting_and_cropping_retained_pixels_preserve_upload_age() {
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.status = Status::Connected;
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    assert!(state.image.last_uploaded.is_some());
+    let uploaded = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap();
+    state.image.last_uploaded = Some(uploaded);
+    let sequence = state.image.sequence;
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    let previous = state.controls.options;
+    state.controls.options.max_width = 4;
+    assert!(state.apply_view_options(previous));
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    state.begin_frame();
+    let diagnostics = state
+        .observation("panel".into(), &device, true, "agent")
+        .diagnostics
+        .unwrap();
+    assert_eq!(state.image.last_uploaded, Some(uploaded));
+    assert_eq!(state.image.sequence, sequence);
+    assert!(diagnostics.last_uploaded_age_millis.unwrap() >= 60_000);
+    assert!(diagnostics.last_displayed_age_millis.unwrap() < diagnostics.last_uploaded_age_millis.unwrap());
+    state.reconnect(&ctx, &device);
+    assert!(state.texture.is_some());
+    assert!(state.image.last_uploaded.is_none());
+    assert_eq!(state.image.sequence, 0);
+}
+
+#[test]
 fn connection_details_show_supplied_and_observed_values_separately() {
     use horizon_core::browser::manifest::device::DeviceIdentity;
     let ctx = egui::Context::default();
@@ -423,10 +541,20 @@ fn connection_details_show_supplied_and_observed_values_separately() {
     let observation = state.observation("fixture".into(), &device, true, "actor");
     assert_eq!(observation.server.name.as_deref(), Some("Fixture desktop"));
     assert_eq!(observation.connection, Connection::Disconnected);
+    assert_eq!(
+        observation.diagnostics.as_ref().unwrap().presentation,
+        horizon_core::browser::manifest::device::Presentation::Disconnected
+    );
+    let generation = observation.diagnostics.unwrap().connection_generation;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     device.target = horizon_core::DeviceViewTarget::parse(&listener.local_addr().unwrap().to_string()).unwrap();
     state.reconnect(&ctx, &device);
     let observation = state.observation("fixture".into(), &device, true, "actor");
     assert_eq!(observation.server, DeviceServerDetails::default());
     assert_eq!(observation.identity, device.identity);
+    let diagnostics = observation.diagnostics.unwrap();
+    assert_eq!(diagnostics.connection_generation, generation + 1);
+    assert_eq!(diagnostics.last_uploaded_age_millis, None);
+    assert_eq!(observation.image.frame_sequence, 0);
+    assert!(!observation.image.image_displayed);
 }

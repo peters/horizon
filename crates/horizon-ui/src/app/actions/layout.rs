@@ -48,6 +48,10 @@ impl HorizonApp {
 
     pub(in crate::app) fn canvas_rect(&self, ctx: &Context) -> Rect {
         let viewport = viewport_local_rect(ctx);
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.fullscreen.is_some() {
+            return Rect::from_min_max(viewport.min + Vec2::new(0.0, 70.0), viewport.max);
+        }
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
         let sidebar_width = if self.sidebar_visible {
@@ -83,6 +87,16 @@ impl HorizonApp {
     /// elements (e.g. workspace labels) so they stay clear.
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
         let viewport = viewport_local_rect(ctx);
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.fullscreen.is_some() {
+            let mut zones = vec![Rect::from_min_max(
+                viewport.min,
+                Pos2::new(viewport.max.x, viewport.min.y + 70.0),
+            )];
+            zones.extend(self.settings_panel_rect(ctx, viewport));
+            zones.extend(self.settings_bar_rect(ctx, viewport));
+            return OverlayExclusion::new(zones);
+        }
         let mut zones = Vec::new();
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
@@ -104,18 +118,9 @@ impl HorizonApp {
             zones.push(rect);
         }
 
-        let minimap_height = if self.fixed_overlays_visible() && self.minimap_visible && self.any_attached_workspace() {
-            let overlays = &self.template_config.overlays;
-            let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
-            let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
-            zones.push(Rect::from_min_size(
-                Pos2::new(
-                    viewport.max.x - MINIMAP_MARGIN - width,
-                    viewport.max.y - MINIMAP_MARGIN - height,
-                ),
-                Vec2::new(width, height),
-            ));
-            height
+        let minimap_height = if let Some(rect) = self.minimap_overlay_rect(ctx) {
+            zones.push(rect);
+            rect.height()
         } else {
             0.0
         };
@@ -133,6 +138,24 @@ impl HorizonApp {
         }
 
         OverlayExclusion::new(zones)
+    }
+
+    pub(in crate::app) fn minimap_overlay_rect(&self, ctx: &Context) -> Option<Rect> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.fullscreen.is_some() {
+            return None;
+        }
+        if !self.fixed_overlays_visible() || !self.minimap_visible || !self.any_attached_workspace() {
+            return None;
+        }
+        let viewport = viewport_local_rect(ctx);
+        let overlays = &self.template_config.overlays;
+        let size = Vec2::new(overlays.minimap_width.max(120.0), overlays.minimap_height.max(120.0))
+            + Vec2::splat(MINIMAP_PAD * 2.0);
+        Some(Rect::from_min_size(
+            viewport.max - Vec2::splat(MINIMAP_MARGIN) - size,
+            size,
+        ))
     }
 
     pub(in crate::app) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {

@@ -170,7 +170,16 @@ impl HorizonApp {
         self.detached_workspaces = runtime_state
             .detached_workspaces
             .iter()
-            .filter(|workspace| !workspace.workspace_local_id.is_empty())
+            .filter(|workspace| {
+                #[cfg(feature = "cloud-workspaces")]
+                if runtime_state
+                    .cloud_groups
+                    .contains_workspace(&workspace.workspace_local_id)
+                {
+                    return false;
+                }
+                !workspace.workspace_local_id.is_empty()
+            })
             .map(|workspace| {
                 (
                     workspace.workspace_local_id.clone(),

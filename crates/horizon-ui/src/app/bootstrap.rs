@@ -120,7 +120,7 @@ impl HorizonApp {
         }: AppBootstrap,
     ) -> Self {
         Self {
-            board,
+            board, #[cfg(feature = "cloud-workspaces")] cloud_prototype: super::cloud_panel::CloudPrototype::default(),
             panels_to_close: Vec::new(),
             panels_to_restart: Vec::new(),
             workspace_assignments: Vec::new(),
@@ -136,7 +136,7 @@ impl HorizonApp {
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
-            fullscreen_panel: None,
+            fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true,
             sidebar_drag_workspace: None,
             minimap_visible: true,

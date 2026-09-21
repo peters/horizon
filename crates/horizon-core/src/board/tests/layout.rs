@@ -5,6 +5,53 @@ use super::super::*;
 use super::editor_panel_options;
 
 #[test]
+#[cfg(feature = "cloud-workspaces")]
+fn parent_presets_and_reflow_preserve_cloud_layouts() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+    use std::path::PathBuf;
+    for layout in [None, Some(WorkspaceLayout::Rows), Some(WorkspaceLayout::Grid)] {
+        let mut board = Board::new();
+        let workspace = board.create_workspace("cloud");
+        let first = board.create_panel(editor_panel_options(), workspace).unwrap();
+        let second = board.create_panel(editor_panel_options(), workspace).unwrap();
+        let local = board.workspace(workspace).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(1, "Cloud".into(), local, PathBuf::default(), [24.0, 128.0]);
+        group.attach(&mut board, first);
+        group.attach(&mut board, second);
+        group.set_layout(&mut board, layout);
+        board.cloud_groups = CloudGroups(vec![group]);
+        let geometry = |board: &Board| {
+            [first, second].map(|id| {
+                let panel = board.panel(id).unwrap();
+                (panel.layout.position, panel.layout.size)
+            })
+        };
+        let before = geometry(&board);
+        for parent in WorkspaceLayout::ALL {
+            board.arrange_workspace(workspace, parent);
+            assert_eq!(geometry(&board), before);
+            assert_eq!(board.workspace(workspace).unwrap().layout, None);
+        }
+        board.workspace_mut(workspace).unwrap().layout = Some(WorkspaceLayout::Columns);
+        let added = board.create_panel(editor_panel_options(), workspace).unwrap();
+        assert_eq!(geometry(&board), before);
+        let mut groups = board.cloud_groups.clone();
+        groups.reconcile(&mut board);
+        assert_eq!(geometry(&board), before);
+        assert_eq!(groups.0[0].layout, layout);
+        assert_eq!(board.workspace(workspace).unwrap().layout, None);
+        let size = board.panel(added).unwrap().layout.size;
+        board.workspace_mut(workspace).unwrap().layout = Some(WorkspaceLayout::Grid);
+        board.resize_panel(added, [size[0] + 25.0, size[1] + 25.0]);
+        assert_eq!(geometry(&board), before);
+        assert!(vec2_eq(
+            board.panel(added).unwrap().layout.size,
+            [size[0] + 25.0, size[1] + 25.0]
+        ));
+    }
+}
+
+#[test]
 fn arranging_workspace_records_selected_layout() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("rows");

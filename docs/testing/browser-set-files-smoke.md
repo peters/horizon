@@ -77,13 +77,15 @@ reply with the matching `id` arrives.
 | `set_files` with the outside file | error `attachment_policy … outside the allowed roots` |
 | `set_files` with the symlink | error `attachment_policy … outside the allowed roots` |
 | `set_files` with a missing path | error `invalid_input … cannot be resolved` |
-| `set_files` with a relative path | error `set_files paths must be absolute` |
+| `set_files` with a relative path | error `invalid_input` with `set_files paths must be absolute` |
+| `set_files` with a valid accept token after character 2048 | the complete accept policy is enforced |
+| `set_files` with an accept attribute over 8192 UTF-16 code units | `accept_unsupported`, selection and events unchanged |
 | `browser_evaluate` avatar status | still `No avatar` (refusals had no side effects) |
 | `set_files #avatar` with `photo.png` | `files: [photo.png]` and the avatar handler ran |
 | `browser_audit` | `set_files` entries carry the resolved `paths` and target; no file contents anywhere |
 
 After the run, the staging directory (`<runtime root>/runtime/browser-attachments/`,
-or `~/Horizon/browser-attachments/<encoded runtime root>/` on Linux when the runtime root is a
+or `~/Horizon/browser-attachments/<digest of the runtime root>/` on Linux when the runtime root is a
 hidden directory beneath `HOME`) holds one directory per panel with the
 staged copies of its attachment actions; they are retained for the page's
 lazy reads and pruned by age, count and size on the next attachment.
@@ -119,8 +121,17 @@ contract; record the driver version with the result.
 
 ## Lane D: remote targets
 
-On a `browser_create target=<remote>` panel, `set_files` must return
-`unsupported_backend` and `browser_list` must not advertise `set_files`.
+Discover a BrowserStack macOS Safari target and an Android Chrome target with
+`browser_provider_devices`. Test each in a separate `browser_create` session,
+closing it before allocating the next. Both must advertise `set_files`, select
+an authorized synthetic file, read its exact bytes through the page File API,
+and submit a multipart upload successfully. Verify replacement, multiple-file
+inputs, empty files, accept refusals, and the 16 MiB/file and 32 MiB/request
+remote limits. Confirm provider usage returns to zero after closing.
+
+iOS remains unsupported: omit `set_files` from capabilities and return
+`unsupported_backend` before opening source paths. Native-picker support is
+outside this change.
 
 ## Lane E: Horizon browser panel viewed through a native VNC Device panel
 
@@ -132,21 +143,22 @@ On a `browser_create target=<remote>` panel, `set_files` must return
    `HOME`, one workspace whose terminal is `kind: browser` with
    `command: file:///…/upload.html`.
 3. Verify the child PID's `/proc/<pid>/exe` hash matches the candidate.
-4. View it through a native Device panel and confirm frames arrive:
-   - from the developer's Horizon: `device_panel create 127.0.0.1:<port>` and
-     inspect `connection: connected`, `image_received`, `image_displayed` and
-     an advancing `frame_sequence` while the page changes;
-   - or from a second candidate Horizon on another display whose config has
-     a `kind: device` terminal with `command: 127.0.0.1:<port>`; press
-     Reconnect, then F11 to fullscreen the viewer.
-5. Record the viewer display with `ffmpeg -f x11grab -i :M` across the
-   interaction, then run the checks above through `horizon-browser mcp
-   --connect` sharing the target's private `HOME`.
-6. Screenshot the viewer before and after; the Device panel must show the
-   page moving from `No files` to the file list. Decode a frame from the
-   recording to confirm the movement was captured.
-7. Close the Device panel (`device_panel close`, or the viewer Horizon's
-   window) and stop only the fixture-owned processes.
+4. In the calling agent's current workspace, use public `device_panel`
+   `create` with that fixture's VNC endpoint. Inspect `connection: connected`,
+   `image_received`, `image_displayed` and advancing `frame_sequence` during
+   changing output. A second isolated viewer alone does not satisfy this lane.
+   If presentation fails, use the bounded viewer health procedure in
+   `scripts/device-smoke/README.md`; report the lane blocked if recovery fails.
+5. Record the target display directly with `ffmpeg -f x11grab -i :N` across
+   the interaction. Run the checks above through the candidate's public
+   `browser_*` MCP tools sharing only the target's private state.
+6. Capture screenshots after launch and resize/fit. Decode representative
+   recording frames to confirm the selection and page updates were captured.
+   Record the exact candidate commit, binary hash and application child PID.
+7. Close the exact candidate window normally, close the task-owned Device
+   panel through `device_panel`, and clean up only fixture-owned processes.
 
-Last run: Linux, the PR #822 head viewed in a candidate Horizon's
-Device panel, 8/8 checks, 2026-09-21.
+Earlier Linux runs reported 20/20 standalone checks per browser and 8/8
+panel checks on 2026-09-21. The panel run used a second isolated viewer and
+therefore does not establish the current-workspace live-view requirement;
+repeat this lane on the final candidate before merge.

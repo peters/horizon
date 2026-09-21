@@ -15,9 +15,16 @@ use crate::{BrowserAttachedFile, BrowserControlFailure};
 pub(crate) struct FileInputProbe {
     #[serde(default)]
     pub(crate) accept: String,
+    /// Length of the whole `accept` attribute, which may exceed what the
+    /// probe carried; such a list is refused rather than judged in part.
+    #[serde(default, rename = "acceptLength")]
+    pub(crate) accept_length: usize,
     #[serde(default)]
     pub(crate) multiple: bool,
 }
+
+/// Longest `accept` attribute the probe carries and judges in full.
+pub(crate) const MAX_ACCEPT_CHARACTERS: usize = 8192;
 
 /// JavaScript that qualifies the selector's element as an enabled
 /// `input[type=file]` and reports its `accept` and `multiple` attributes.
@@ -68,6 +75,15 @@ pub(crate) fn parse_attached_files(value: &Value) -> Result<Vec<BrowserAttachedF
 /// Refuse a request the input cannot take before any file is attached: more
 /// than one file for a single-file input, or a file outside `accept`.
 pub(crate) fn check_attachment_request(probe: &FileInputProbe, paths: &[PathBuf]) -> Result<(), BrowserControlFailure> {
+    if probe.accept_length > MAX_ACCEPT_CHARACTERS {
+        return Err(BrowserControlFailure::new(
+            "accept_unsupported",
+            format!(
+                "the input's accept list is {} characters long, above the {MAX_ACCEPT_CHARACTERS} this action judges in full",
+                probe.accept_length
+            ),
+        ));
+    }
     if paths.len() > 1 && !probe.multiple {
         return Err(BrowserControlFailure::new(
             "multiple_not_allowed",
@@ -277,7 +293,8 @@ const FILE_INPUT_PROBE_FUNCTION: &str = r"function(selector) {
         return { error: { code: 'not_file_input', message: 'target element is not an input[type=file]; target the file input itself, not the button that opens the chooser' } };
     if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true')
         return { error: { code: 'element_disabled', message: 'target element is disabled' } };
-    return { accept: String(element.getAttribute('accept') || '').slice(0, 2048), multiple: element.hasAttribute('multiple') };
+    const accept = String(element.getAttribute('accept') || '');
+    return { accept: accept.slice(0, 8192), acceptLength: accept.length, multiple: element.hasAttribute('multiple') };
 }";
 
 // The readback also reads the first and last byte of every file: a browser
@@ -315,6 +332,7 @@ mod tests {
     fn probe(accept: &str, multiple: bool) -> FileInputProbe {
         FileInputProbe {
             accept: accept.to_string(),
+            accept_length: accept.chars().count(),
             multiple,
         }
     }
@@ -372,6 +390,16 @@ mod tests {
         );
         let error = check_attachment_request(&probe(".pdf", true), &two).expect_err("png is outside accept");
         assert_eq!(error.code, "accept_mismatch");
+        let oversized = FileInputProbe {
+            accept: ".pdf".into(),
+            accept_length: MAX_ACCEPT_CHARACTERS + 1,
+            multiple: true,
+        };
+        assert_eq!(
+            check_attachment_request(&oversized, &one).map_err(|error| error.code),
+            Err("accept_unsupported".to_string()),
+            "a list the probe could not carry in full is refused, never judged in part"
+        );
         assert!(
             error.message.contains("b.png") && error.message.contains(".pdf"),
             "{}",
@@ -381,11 +409,13 @@ mod tests {
 
     #[test]
     fn probes_and_readbacks_parse_or_surface_the_page_error() {
-        let probe = parse_file_input_probe(&json!({ "accept": ".pdf", "multiple": true })).expect("probe");
+        let probe =
+            parse_file_input_probe(&json!({ "accept": ".pdf", "acceptLength": 4, "multiple": true })).expect("probe");
         assert_eq!(
             probe,
             FileInputProbe {
                 accept: ".pdf".into(),
+                accept_length: 4,
                 multiple: true
             }
         );

@@ -1,0 +1,31 @@
+# Copy to .horizon/cloud.yml in your repository.
+# Prototype launch intent: resources and deployment output are simulated.
+# Replace example/* images with your own development images before real use.
+version: 1
+default: runpod
+profiles:
+  runpod:
+    provider: runpod
+    image: example/web-dev:latest
+    cpu: 4
+    memory_gb: 8
+    gpu: false
+  cuda:
+    provider: runpod
+    image: example/cuda-build:latest
+    cpu: 8
+    memory_gb: 32
+    gpu: true
+  app:
+    provider: daytona
+    image: example/app-dev:latest
+    cpu: 4
+    memory_gb: 8
+    gpu: false
+  fly:
+    provider: fly
+    image: example/fullstack-dev:latest
+    cpu: 4
+    memory_gb: 8
+    gpu: false
+# Credentials stay in provider settings, never in this file.

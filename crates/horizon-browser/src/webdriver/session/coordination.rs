@@ -251,6 +251,7 @@ impl Driver {
             title: self.title.clone(),
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
             remote_device: self.remote_device.clone(),
+            remote_file_upload: self.file_transfer.is_some(),
         }
     }
 

@@ -68,9 +68,9 @@ impl SessionProbe {
             return RemoteRecoveryStatus::UnsupportedResponse;
         }
         // `status` is user-editable test metadata. The provider's execution
-        // status is separate; only its documented completed value is proof.
+        // status is separate; only its documented terminal values are proof.
         match record["browserstack_status"].as_str() {
-            Some("done") => RemoteRecoveryStatus::Released,
+            Some("done" | "timeout" | "error") => RemoteRecoveryStatus::Released,
             Some("running") => RemoteRecoveryStatus::Active,
             _ => RemoteRecoveryStatus::UnsupportedResponse,
         }

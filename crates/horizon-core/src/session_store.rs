@@ -256,6 +256,30 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Make a saved session durable before allocating external resources for it.
+    ///
+    /// # Errors
+    /// Returns an error if contents or directory entries cannot be synced, or the platform
+    /// has no supported directory-durability mechanism. Ordinary local saves are unaffected.
+    pub fn sync_runtime_state(&self, session_id: &str) -> Result<()> {
+        require_directory_durability()?;
+        for path in [
+            self.home.session_runtime_path(session_id),
+            self.home.session_meta_path(session_id),
+            self.home.session_index_path(),
+        ] {
+            fs::File::open(&path)?.sync_all()?;
+            #[cfg(unix)]
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+                if let Some(ancestor) = parent.parent() {
+                    fs::File::open(ancestor)?.sync_all()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Create or replace the lease file for an active session.
     ///
     /// # Errors
@@ -517,6 +541,17 @@ fn process_is_alive(pid: u32) -> bool {
     #[cfg(not(target_os = "linux"))]
     {
         true
+    }
+}
+
+pub(crate) fn require_directory_durability() -> std::io::Result<()> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Cloud operations require a Unix host until durable directory updates are supported on this platform",
+        ))
     }
 }
 

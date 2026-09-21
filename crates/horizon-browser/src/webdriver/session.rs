@@ -24,6 +24,7 @@ pub(crate) mod native_select;
 mod navigation;
 mod network;
 mod remote_click;
+mod remote_files;
 mod safari;
 mod scrollbar;
 mod semantic;
@@ -61,6 +62,7 @@ struct Driver {
     /// it, for coordination; `None` for a local browser.
     remote_device: Option<String>,
     remote_android_chromium: bool,
+    file_transfer: Option<remote_files::Transfer>,
     session_id: String,
     bidi: Option<JsonWsLink>,
     automation_ws: String,
@@ -293,9 +295,15 @@ impl Driver {
         remote_release: crate::session::RemoteReleaseReport,
         group: Option<&super::SharedFirefoxSession>,
     ) -> Result<Self, String> {
-        let (mut host, session, remote_device) = if let Some(request) = &config.remote {
+        let (mut host, session, remote_device, file_transfer) = if let Some(request) = &config.remote {
             let (host, session, device) = start_remote(request, event_tx, &remote_release, stop_requested)?;
-            (host, session, Some(device.summary()))
+            let transfer = remote_files::Transfer::for_platform(
+                device
+                    .os_name
+                    .as_deref()
+                    .or_else(|| session.capabilities["platformName"].as_str()),
+            );
+            (host, session, Some(device.summary()), transfer)
         } else {
             let (host, session) = if let Some(group) = group {
                 let mut shared_config = config.clone();
@@ -306,7 +314,7 @@ impl Driver {
             } else {
                 start_local(config, process_control, stop_requested)?
             };
-            (host, session, None)
+            (host, session, None, None)
         };
         let NewSession {
             id: session_id,
@@ -327,6 +335,7 @@ impl Driver {
             host,
             remote_release,
             remote_device,
+            file_transfer,
             remote_android_chromium: remote_click::uses_visual_viewport(config.remote.is_some(), &capabilities),
             session_id,
             bidi,

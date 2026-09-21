@@ -389,9 +389,15 @@ impl RemoteHost {
                 });
             }
         };
-        request
+        if request
             .recovery
-            .identify(Arc::clone(&self.transport), session.id.clone(), self.report.clone());
+            .identify(Arc::clone(&self.transport), session.id.clone(), self.report.clone())
+            .is_err()
+        {
+            return Err(RemoteStartFailure::Unenforceable {
+                released: release_session(&self.transport, &session.id),
+            });
+        }
         match Watchdog::start(
             Arc::clone(&self.transport),
             session.id.clone(),

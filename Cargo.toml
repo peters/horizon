@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/horizon-cloud-worker",
+    "crates/horizon-cloud",
     "crates/horizon-device",
     "crates/horizon-device-vnc",
     "crates/horizon-browser",
@@ -52,6 +54,8 @@ png = "0.18.1"
 # CI and developer machines do not need NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 base64 = "0.23.1"
+# Selenium remote file transfer uses a one-file ZIP envelope.
+zip = { version = "8.6.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }

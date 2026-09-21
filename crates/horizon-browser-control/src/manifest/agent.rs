@@ -197,7 +197,9 @@ fn authorize_attachments(
         let summary = BrowserAuditAction::from_control(&action);
         return Ok((action, summary, None));
     };
-    let refused = |error: crate::AttachmentPolicyError| std::io::Error::new(error.io_kind(), error.to_string());
+    // The policy error travels inside the I/O error so a caller can recover
+    // its typed classification from this authoritative pass too.
+    let refused = |error: crate::AttachmentPolicyError| std::io::Error::new(error.io_kind(), error);
     let authorized = crate::AttachmentPolicy::from_environment()
         .authorize(&paths)
         .map_err(refused)?;
@@ -236,7 +238,8 @@ fn authorize_attachments(
         |panel| {
             let mut manifest = std::ffi::OsString::from(panel);
             manifest.push(".json");
-            manifests.join(manifest).exists()
+            // A liveness check that cannot be answered keeps the staging.
+            manifests.join(manifest).try_exists().unwrap_or(true)
         },
         crate::attachments::ATTACHMENT_RETENTION,
         crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
@@ -271,7 +274,7 @@ fn check_enqueue_eligibility(
     let manifest = super::read(panel_local_id)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
     let now = now_millis();
-    let refusal = if manifest.remote_target.is_some() {
+    let refusal = if manifest.remote_target.is_some() && !manifest.remote_file_upload {
         Some((
             std::io::ErrorKind::Unsupported,
             "file attachment is unavailable for remote device sessions",

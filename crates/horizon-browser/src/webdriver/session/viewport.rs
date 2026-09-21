@@ -343,6 +343,7 @@ mod tests {
             remote_release,
             remote_device,
             remote_android_chromium: false,
+            file_transfer: None,
             session_id,
             bidi,
             automation_ws,

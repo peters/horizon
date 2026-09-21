@@ -1,4 +1,4 @@
-use crate::panel::PanelId;
+use crate::{layout::point_in_panel, panel::PanelId};
 
 use super::super::Board;
 
@@ -78,11 +78,4 @@ impl Board {
         self.apply_workspace_layout(workspace_id, layout);
         true
     }
-}
-
-fn point_in_panel(point: [f32; 2], position: [f32; 2], size: [f32; 2]) -> bool {
-    point[0] >= position[0]
-        && point[0] < position[0] + size[0]
-        && point[1] >= position[1]
-        && point[1] < position[1] + size[1]
 }

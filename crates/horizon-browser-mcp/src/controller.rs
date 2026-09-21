@@ -172,7 +172,7 @@ pub(crate) enum ControlError {
     )]
     RemoteHandoffUnsupported,
     #[error(
-        "browser set_files failed (unsupported_backend): file attachment is unavailable for remote browser sessions; the files live on this host and no transfer to the remote browser exists"
+        "browser set_files failed (unsupported_backend): this remote session does not support transferring host files; iOS native file pickers are not supported"
     )]
     RemoteAttachmentUnsupported,
     #[error("browser action {action_id} failed ({code}): {message}")]
@@ -532,7 +532,7 @@ impl BrowserController {
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
         let deadline = Instant::now() + Duration::from_millis(timeout_millis);
-        self.refuse_remote_attachments(panel_id, &action)?;
+        self.validate_attachment_target(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
         let action_id = if matches!(action, BrowserControlAction::SetFiles { .. }) {
             let remaining = deadline
@@ -597,6 +597,14 @@ impl BrowserController {
             }
             Ok(Err(AttachmentEnqueueError::Policy(error))) => Err(attachment_policy_error(&error)),
             Ok(Err(AttachmentEnqueueError::Queue(source))) => {
+                // The queue's own authorization pass is authoritative; a
+                // refusal there keeps its typed classification.
+                if let Some(policy) = source
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<horizon_browser_control::AttachmentPolicyError>())
+                {
+                    return Err(attachment_policy_error(policy));
+                }
                 Err(self.denied(panel_id, "could not queue browser action", source))
             }
             Err(join) => Err(ControlError::internal_io(
@@ -606,15 +614,14 @@ impl BrowserController {
         }
     }
 
-    /// A `set_files` action on a remote panel is refused here, before any
-    /// path is opened or staged, since the engine would refuse it anyway.
-    pub(crate) fn refuse_remote_attachments(
+    /// Refuse unsupported remote platforms before opening or staging files.
+    pub(crate) fn validate_attachment_target(
         &self,
         panel_id: &str,
         action: &BrowserControlAction,
     ) -> Result<(), ControlError> {
         if matches!(action, BrowserControlAction::SetFiles { .. }) {
-            require_local_attachment_target(&self.authorized_manifest(panel_id)?)?;
+            require_attachment_target(&self.authorized_manifest(panel_id)?)?;
         }
         Ok(())
     }
@@ -908,7 +915,9 @@ fn sweep_stale_attachments() {
         |panel| {
             let mut manifest = std::ffi::OsString::from(panel);
             manifest.push(".json");
-            manifests.join(manifest).exists()
+            // A liveness check that cannot be answered keeps the staging;
+            // the next sweep asks again.
+            manifests.join(manifest).try_exists().unwrap_or(true)
         },
     );
 }
@@ -927,8 +936,8 @@ fn attachment_policy_error(error: &horizon_browser_control::AttachmentPolicyErro
     }
 }
 
-fn require_local_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
-    if panel.remote_target.is_some() {
+fn require_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
+    if panel.remote_target.is_some() && !panel.remote_file_upload {
         return Err(ControlError::RemoteAttachmentUnsupported);
     }
     Ok(())
@@ -999,10 +1008,15 @@ mod tests {
             remote_target: Some("phone".into()),
             ..manifest::BrowserManifest::default()
         };
-        let error = require_local_attachment_target(&remote).expect_err("remote attachment unavailable");
+        let error = require_attachment_target(&remote).expect_err("remote attachment unavailable");
         assert!(matches!(error, ControlError::RemoteAttachmentUnsupported));
         assert!(error.to_string().contains("unsupported_backend"));
-        require_local_attachment_target(&manifest::BrowserManifest::default()).expect("local panel");
+        require_attachment_target(&manifest::BrowserManifest::default()).expect("local panel");
+        require_attachment_target(&manifest::BrowserManifest {
+            remote_file_upload: true,
+            ..remote
+        })
+        .expect("supported remote upload");
     }
 
     #[test]

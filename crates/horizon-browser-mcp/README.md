@@ -137,7 +137,7 @@ shell commands, files, or other MCP servers.
   times out while staging reports so, and the staging may still finish and
   queue the action afterwards. `accept` extension tokens match the end of the file name,
   so compound tokens such as `.tar.gz` and dotfiles such as `.env` work. Copies live under the runtime root, or on
-  Linux under `~/Horizon/browser-attachments/<encoded runtime root>` when the runtime root is a
+  Linux under `~/Horizon/browser-attachments/<digest of the runtime root>` when the runtime root is a
   hidden directory beneath the home directory, which a Snap-confined browser
   cannot open; that visible directory is namespaced by the runtime root so
   two hidden roots under one home never share it. The readback opens every attached file's first and last byte
@@ -146,11 +146,25 @@ shell commands, files, or other MCP servers.
   replaces the input's current selection on every backend. The input's
   `multiple` and
   `accept` attributes are checked first (`multiple_not_allowed`,
-  `accept_mismatch`), a target that is not a file input returns
+  `accept_mismatch`; an `accept` attribute longer than 8192 characters is
+  refused as `accept_unsupported` rather than judged in part), a target
+  that is not a file input returns
   `not_file_input`, a path outside the roots returns `attachment_policy`, a
-  malformed or missing path `invalid_input` (checked before any backend or
-  panel state, so the answer is the same for remote panels), and a file
-  over the limit `file_too_large`, all with no side effects. `accept`
+  malformed path `invalid_input`, a missing path `invalid_input` as well,
+  and a file over the limit `file_too_large`, all with no side effects. The
+  request's shape (count, absolute, UTF-8, length, control characters) is
+  checked before any backend or panel state, so it fails the same way on
+  every backend; an unsupported remote platform is then refused with `unsupported_backend`
+  before the paths are opened, so a missing path on an unsupported remote panel reports
+  `unsupported_backend`.
+  Remote desktop sessions transfer a single-file ZIP through the Selenium
+  upload endpoint before selection; Android sessions use Appium Push File.
+  Each remote request is limited to 16 MiB per file and 32 MiB total.
+  Unsupported platforms (including iOS native pickers) omit `set_files` from
+  capabilities and return `unsupported_backend`. Transfer failures return
+  `attachment_transfer_failed` without including provider responses or file
+  contents. Transferred files remain in the provider session for lazy page
+  reads and are released with that session. `accept`
   tokens that are neither an extension nor a MIME type are ignored, as
   browsers ignore them. Chromium attaches through `DOM.setFileInputFiles`, which
   fires the page's `input` and `change` handlers; local Firefox and Safari
@@ -158,8 +172,7 @@ shell commands, files, or other MCP servers.
   names, sizes, and MIME types read back from the input, and a readback that
   does not hold exactly the requested files by name and size fails with
   `attachment_mismatch`.
-  Remote device sessions return `unsupported_backend` because the files live
-  on this host. Every audit record for the action keeps the authorized source
+  Every audit record for the action keeps the authorized source
   paths, never the private staged copies or the contents. Snapshot
   and query nodes carry `file_input` (`accept`, `multiple`, `files`) for
   file inputs so the attachment can be verified without `browser_evaluate`.
@@ -361,6 +374,18 @@ still be off canvas or clipped. `image_displayed` describes the last completed
 UI frame and requires a connected image intersecting the drawing clip. An old
 texture after a disconnect is not a live image. The frame sequence counts
 uploaded images in the current connection and resets on explicit reconnect.
+
+Hidden and off-canvas viewers continue receiving at their configured refresh rate
+without frame-triggered repaints or off-screen GPU uploads. `received_frame_sequence`
+counts worker-published image updates independently of `frame_sequence` uploads.
+It advances without UI rendering and resets on reconnect; inspection does not
+consume the pending image. Revealing a viewer displays the latest retained image,
+even if the desktop has since become static. Older hosts omit this field, which
+new clients deserialize as zero: that alone does not establish failed reception.
+Neither counter is a connection heartbeat. An unchanged desktop can keep both
+stationary; use connection errors to identify failures, and require
+`image_displayed` separately when proving a live visible view.
+
 
 All operations require a Horizon-injected caller and host identity. Discovery
 and inspection are workspace-scoped. Only the creator/owner may change visibility

@@ -115,7 +115,7 @@ impl BrowserRuntimePaths {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<PathBuf> {
     let home = home?;
     let hidden_beneath_home = root
@@ -130,30 +130,23 @@ fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<P
     })
 }
 
-/// A directory name derived from a path's exact platform bytes, so two
-/// distinct roots never share it however they are spelled.
-#[cfg(any(target_os = "linux", test))]
+/// A bounded directory name derived from a path's exact platform bytes (a
+/// SHA-256 digest in hex, 64 characters), so two distinct roots never share
+/// it however they are spelled and however long they are.
+#[cfg(target_os = "linux")]
 fn encode_path_bytes(path: &Path) -> String {
-    #[cfg(unix)]
-    let bytes: Vec<u8> = {
-        use std::os::unix::ffi::OsStrExt;
-        path.as_os_str().as_bytes().to_vec()
-    };
-    #[cfg(windows)]
-    let bytes: Vec<u8> = {
-        use std::os::windows::ffi::OsStrExt;
-        path.as_os_str().encode_wide().flat_map(u16::to_le_bytes).collect()
-    };
-    let mut encoded = String::with_capacity(1 + bytes.len() * 2);
-    encoded.push('%');
-    for byte in bytes {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let digest = Sha256::digest(path.as_os_str().as_bytes());
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
         encoded.push(LOWER_HEX[(byte >> 4) as usize] as char);
         encoded.push(LOWER_HEX[(byte & 0x0f) as usize] as char);
     }
     encoded
 }
 
-#[cfg(not(any(target_os = "linux", test)))]
+#[cfg(not(target_os = "linux"))]
 fn browser_visible_attachments_dir(_root: &Path, _home: Option<&Path>) -> Option<PathBuf> {
     None
 }
@@ -174,7 +167,7 @@ pub fn safe_local_id(local_id: &str) -> String {
     encoded
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     #[test]
     fn hidden_runtime_roots_under_one_home_stage_in_separate_visible_directories() {
@@ -183,6 +176,14 @@ mod tests {
         let second = super::browser_visible_attachments_dir(&home.join(".horizon-dev"), Some(home)).expect("hidden");
         assert!(first.starts_with(home.join("Horizon").join("browser-attachments")));
         assert_ne!(first, second, "two hidden roots never share staging");
+        assert_eq!(
+            first.file_name().map(std::ffi::OsStr::len),
+            Some(64),
+            "the namespace is a bounded digest, not the path itself"
+        );
+        let long = home.join(format!(".{}", "h".repeat(200)));
+        let bounded = super::browser_visible_attachments_dir(&long, Some(home)).expect("hidden");
+        assert_eq!(bounded.file_name().map(std::ffi::OsStr::len), Some(64));
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;

@@ -21,6 +21,8 @@ pub struct CoordinationState {
     /// The allocated remote device as the provider's evidence describes it
     /// (model, OS version, hardware evidence); `None` for a local browser.
     pub remote_device: Option<String>,
+    /// Whether this remote session supports transferring host files.
+    pub remote_file_upload: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

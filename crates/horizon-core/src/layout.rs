@@ -44,3 +44,10 @@ pub(crate) fn usize_to_f32(value: usize) -> f32 {
     let clamped = u16::try_from(value).unwrap_or(u16::MAX);
     f32::from(clamped)
 }
+
+pub(crate) fn point_in_panel(point: [f32; 2], position: [f32; 2], size: [f32; 2]) -> bool {
+    point[0] >= position[0]
+        && point[0] < position[0] + size[0]
+        && point[1] >= position[1]
+        && point[1] < position[1] + size[1]
+}

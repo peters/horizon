@@ -327,7 +327,13 @@ impl HorizonApp {
         self.board
             .panels
             .iter()
-            .filter(|panel| panel.visible)
+            .filter(|panel| {
+                #[cfg(feature = "cloud-workspaces")]
+                if visible_workspace.is_none() && !self.cloud_panel_is_in_view(&panel.local_id) {
+                    return false;
+                }
+                panel.visible
+            })
             .filter(|panel| match visible_workspace {
                 Some(workspace_id) => panel.workspace_id == workspace_id,
                 None => !self.workspace_is_detached(panel.workspace_id),
@@ -376,7 +382,13 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
-        if !self.board.panel(panel_id).is_some_and(|panel| panel.visible) {
+        if !self.board.panel(panel_id).is_some_and(|panel| {
+            #[cfg(feature = "cloud-workspaces")]
+            if !self.cloud_panel_is_in_view(&panel.local_id) {
+                return false;
+            }
+            panel.visible
+        }) {
             self.fullscreen_panel = None;
             return;
         }
@@ -402,7 +414,12 @@ impl HorizonApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
             .show(ui, |ui| {
-                let rect = ui.max_rect();
+                #[cfg(feature = "cloud-workspaces")]
+                if let Some(label) = self.cloud_ownership_label(panel_id) {
+                    ui.label(egui::RichText::new(label).color(theme::PALETTE_CYAN()));
+                    ui.add_space(4.0);
+                }
+                let rect = ui.available_rect_before_wrap();
                 let body_rect = Rect::from_min_max(
                     Pos2::new(rect.min.x + PANEL_PADDING, rect.min.y + PANEL_PADDING),
                     Pos2::new(rect.max.x - PANEL_PADDING, rect.max.y - PANEL_PADDING),
@@ -491,7 +508,13 @@ impl HorizonApp {
             self.board
                 .panels
                 .iter()
-                .filter(|panel| panel.visible && !self.workspace_is_detached(panel.workspace_id))
+                .filter(|panel| {
+                    #[cfg(feature = "cloud-workspaces")]
+                    if !self.cloud_panel_is_in_view(&panel.local_id) {
+                        return false;
+                    }
+                    panel.visible && !self.workspace_is_detached(panel.workspace_id)
+                })
                 .enumerate()
                 .map(|(index, panel)| (panel.id, index)),
         );
@@ -617,7 +640,7 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed;
+        let interactive = !self.canvas_pan_input_claimed && !self.cloud_creation_open();
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
         // Browser input suppresses app shortcuts that this viewport actually

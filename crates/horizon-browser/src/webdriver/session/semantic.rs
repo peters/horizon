@@ -408,19 +408,17 @@ impl Driver {
         Ok(BrowserControlValue::Accepted)
     }
 
-    /// Attach host files through Element Send Keys on the file input. A
-    /// remote device runs on another host, where the paths mean nothing and
-    /// no file transfer exists, so it is refused as unsupported rather than
-    /// attempted.
+    /// Transfer staged files when needed, then select them through Element
+    /// Send Keys and verify the page can read the resulting File objects.
     fn semantic_set_files(
         &mut self,
         target: &crate::BrowserTarget,
         paths: &[std::path::PathBuf],
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        if self.host.is_remote() {
+        if self.host.is_remote() && self.file_transfer.is_none() {
             return Err(BrowserControlFailure::new(
                 "unsupported_backend",
-                "file attachment is unavailable for remote device sessions: the files live on this host and no transfer to the remote browser exists",
+                "this remote platform has no supported file-transfer path; iOS native file pickers are not supported",
             ));
         }
         let selector = self.semantic.resolve(target)?;
@@ -428,6 +426,11 @@ impl Driver {
         let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(None)?;
+        let transferred = self
+            .file_transfer
+            .map(|transfer| transfer.upload(self.host.transport(), &self.session_id, paths))
+            .transpose()?;
+        let paths = transferred.as_deref().unwrap_or(paths);
         // Classic Send Keys appends to a `multiple` input's selection; the
         // action replaces it, as the Chromium primitive does.
         check_script_error(&self.evaluate_json(&reset_file_input_expression(&selector))?)?;

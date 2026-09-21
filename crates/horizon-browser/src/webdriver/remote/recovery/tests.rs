@@ -20,11 +20,13 @@ fn wait(allocation: &RemoteAllocation) -> RemoteRecoveryStatus {
 fn owned(server: &Server) -> RemoteAllocation {
     let allocation = RemoteAllocation::default();
     let header = RemoteAuthorizationHeader::new("Bearer original-secret".into()).expect("header");
-    allocation.identify(
-        Arc::new(RemoteHttpClient::new(&server.endpoint("/wd/hub"), Some(header)).expect("transport")),
-        "private-session".into(),
-        None,
-    );
+    allocation
+        .identify(
+            Arc::new(RemoteHttpClient::new(&server.endpoint("/wd/hub"), Some(header)).expect("transport")),
+            "private-session".into(),
+            None,
+        )
+        .unwrap();
     allocation.finish(None);
     allocation
 }

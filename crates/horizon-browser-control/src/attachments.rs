@@ -517,7 +517,12 @@ pub fn prune_attachments(
                 Err(error) if is_current => return Err(scan_failure(&action.path(), error)),
                 Err(_) => continue,
             };
-            let pending = action.path().join(PENDING_MARKER).exists();
+            let pending = match action.path().join(PENDING_MARKER).try_exists() {
+                Ok(pending) => pending,
+                Err(error) if is_current => return Err(scan_failure(&action.path(), error)),
+                // Another panel's action that cannot be judged is left alone.
+                Err(_) => true,
+            };
             if modified < stale_before {
                 // Only age reaches other panels: their fresh copies may
                 // still be read lazily by their own pages.
@@ -1006,6 +1011,28 @@ mod tests {
             }
         ));
         assert_eq!(error.io_kind(), std::io::ErrorKind::FileTooLarge);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_pending_marker_does_not_evict_an_in_flight_attachment() {
+        let root = tempfile::tempdir().expect("root");
+        let attachments = root.path().join("attachments");
+        let source = root.path().join("source.txt");
+        std::fs::write(&source, "pending contents").expect("source");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(&[source])
+            .expect("authorized");
+        let staged = stage_attachments(&attachments, "panel", "pending", &authorized).expect("staged");
+        let marker = action_directory(&attachments, "panel", "pending").join(PENDING_MARKER);
+        std::fs::remove_file(&marker).expect("remove marker");
+        std::os::unix::fs::symlink(PENDING_MARKER, &marker).expect("unreadable marker");
+        let result = prune_attachments(&attachments, "panel", |_| true, ATTACHMENT_RETENTION, 1, 1024, 1);
+        assert!(matches!(result, Err(AttachmentPolicyError::Staging { .. })));
+        assert_eq!(
+            std::fs::read_to_string(&staged[0]).expect("retained"),
+            "pending contents"
+        );
     }
 
     #[test]
