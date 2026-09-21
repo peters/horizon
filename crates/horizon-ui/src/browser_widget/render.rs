@@ -210,7 +210,12 @@ fn sync_viewport_sizes(ui: &Ui, state: &mut BrowserUiState, available: egui::Vec
         f32::from(u16::try_from(viewport.0).unwrap_or(u16::MAX)),
         f32::from(u16::try_from(viewport.1).unwrap_or(u16::MAX)),
     );
-    state.effective_zoom = crate::panel_zoom::PanelZoom::new(frame_scale(available, frame_size, true));
+    let effective_zoom = crate::panel_zoom::PanelZoom::new(frame_scale(available, frame_size, true));
+    if state.effective_zoom != effective_zoom {
+        state.effective_zoom = effective_zoom;
+        // The toolbar already painted the previous scale before laying out the body.
+        ui.ctx().request_repaint();
+    }
     (viewport, rounded_viewport(available))
 }
 
@@ -554,6 +559,67 @@ mod tests {
             super::zoomed_viewport(egui::vec2(960.0, 540.0), 0.25, 16_384),
             (3840, 2160),
             "a viewport exactly at the budget must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn a_changed_effective_zoom_refreshes_the_idle_selector_then_settles() {
+        use crate::{panel_zoom::PanelZoom, test_egui::DiscardTextures};
+        use std::time::Duration;
+
+        let ctx = egui::Context::default();
+        let mut state = BrowserUiState {
+            zoom: PanelZoom::new(0.25),
+            ..Default::default()
+        };
+        let frame = |state: &mut BrowserUiState, available| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::panel_zoom::dropdown(ui, "idle_zoom", &mut state.zoom, state.effective_zoom, true);
+                super::sync_viewport_sizes(ui, state, available);
+            })
+            .discard_textures()
+        };
+        let repaint_delay = |output: &egui::FullOutput| {
+            output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .expect("root viewport output")
+                .repaint_delay
+        };
+        let mut available = egui::vec2(800.0, 600.0);
+        for next in [egui::vec2(3000.0, 2000.0), available] {
+            for _ in 0..8 {
+                let _ = frame(&mut state, available);
+            }
+            assert!(
+                !repaint_delay(&frame(&mut state, available)).is_zero(),
+                "unchanged layout should idle"
+            );
+            let previous = state.effective_zoom;
+            let changed = frame(&mut state, next);
+            assert_ne!(state.effective_zoom, previous);
+            assert_eq!(
+                repaint_delay(&changed),
+                Duration::ZERO,
+                "the already-painted selector needs another frame"
+            );
+
+            let refreshed = frame(&mut state, next);
+            let label = state.effective_zoom.label();
+            assert!(
+                refreshed.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == label)
+                }),
+                "the follow-up frame must paint the applied percentage"
+            );
+            available = next;
+        }
+        for _ in 0..8 {
+            let _ = frame(&mut state, available);
+        }
+        assert!(
+            !repaint_delay(&frame(&mut state, available)).is_zero(),
+            "the final layout should idle"
         );
     }
 
