@@ -51,4 +51,13 @@ fn a_failing_command_ends_the_attachment_sequence() {
         .expect_err("unroutable");
     assert!(error.contains("cannot form a route"), "{error}");
     assert_eq!(transport.sent().len(), 1);
+
+    let transport = Scripted::new(vec![]);
+    let error = set_files_through(&transport, "/session/s1", "#doc", &[PathBuf::from("/uploads/a\n.pdf")])
+        .expect_err("line break");
+    assert!(error.contains("line break"), "{error}");
+    assert!(
+        transport.sent().is_empty(),
+        "a path that would split into two uploads never reaches the driver"
+    );
 }

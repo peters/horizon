@@ -393,7 +393,9 @@ fn validate_attachment_paths(paths: &[std::path::PathBuf]) -> Result<(), &'stati
         return Err("set_files accepts at most 32 file paths");
     }
     for path in paths {
-        let text = path.to_string_lossy();
+        let Some(text) = path.to_str() else {
+            return Err("attachment path must be valid UTF-8");
+        };
         if text.trim().is_empty() {
             return Err("attachment path must not be empty");
         }
@@ -795,6 +797,17 @@ mod tests {
         );
         let long = format!("/{}", "x".repeat(MAX_ATTACHMENT_PATH_BYTES));
         assert_eq!(invalid(vec![long.as_str()]), Err("attachment path is too long"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let action = BrowserControlAction::SetFiles {
+                target,
+                paths: vec![std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+                    b"/uploads/\xff.pdf",
+                ))],
+            };
+            assert_eq!(action.validate(), Err("attachment path must be valid UTF-8"));
+        }
     }
 
     #[test]

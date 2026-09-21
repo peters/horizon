@@ -88,6 +88,13 @@ impl BrowserRuntimePaths {
         self.root.join("runtime").join("browser-results")
     }
 
+    /// Private copies of files an agent attaches through `set_files`, one
+    /// directory per action, removed when the action result is consumed.
+    #[must_use]
+    pub fn browser_attachments_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("browser-attachments")
+    }
+
     #[must_use]
     pub fn browser_audit_dir(&self) -> PathBuf {
         self.root.join("audit").join("browsers")

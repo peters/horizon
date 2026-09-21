@@ -6,9 +6,20 @@
 //! directory when no work root is set, and any extra roots listed in
 //! `HORIZON_BROWSER_ATTACHMENT_ROOTS`. Every path is resolved through its
 //! symlinks before the root check, so a link inside a root cannot reach out
-//! of it, and the resolved path is what the engine receives.
+//! of it. Authorization alone does not bind the browser's later read to the
+//! checked file (the pathname could be re-pointed in between), so the queue
+//! stages a private copy of each authorized file under the runtime root and
+//! hands the engine those copies; the staging directory is removed when the
+//! action result is consumed or when it goes stale.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Largest single file `set_files` stages.
+pub const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
+/// Staging directories older than this are removed on the next attachment.
+pub const STALE_ATTACHMENT_AGE: Duration = Duration::from_hours(2);
 
 /// Horizon's work-root variable; kept in sync with `horizon_core::agent_work::WORK_ROOT_ENV`.
 pub const WORK_ROOT_ENV: &str = "HORIZON_WORK_ROOT";
@@ -25,6 +36,10 @@ pub enum AttachmentPolicyError {
     NotAFile { path: String },
     #[error("attachment path is outside the allowed roots [{roots}]: {path}")]
     OutsideRoots { path: String, roots: String },
+    #[error("attachment exceeds {limit} bytes: {path}")]
+    TooLarge { path: String, limit: u64 },
+    #[error("attachment could not be staged ({reason}): {path}")]
+    Staging { path: String, reason: String },
 }
 
 /// The resolved roots an attachment path must fall under.
@@ -107,9 +122,171 @@ impl AttachmentPolicy {
     }
 }
 
+/// Copy each authorized file into `<root>/runtime/browser-attachments/<action>/<index>/<name>`
+/// from an open handle, so the bytes the browser reads are the bytes that
+/// were checked. Returns the staged paths in request order; any failure
+/// removes the whole staging directory.
+///
+/// # Errors
+/// Returns the first file that is not a regular file, is too large, or
+/// could not be copied.
+pub fn stage_attachments(
+    attachments_dir: &Path,
+    action_id: &str,
+    paths: &[PathBuf],
+) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
+    let directory = attachments_dir.join(crate::paths::safe_local_id(action_id));
+    let staged = stage_into(&directory, paths);
+    if staged.is_err() {
+        release_attachments(attachments_dir, action_id);
+    }
+    staged
+}
+
+fn stage_into(directory: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
+    create_private_dir(directory)?;
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let display = path.display().to_string();
+            let staging = |error: std::io::Error| AttachmentPolicyError::Staging {
+                path: display.clone(),
+                reason: error.kind().to_string(),
+            };
+            let mut source = std::fs::File::open(path).map_err(staging)?;
+            let metadata = source.metadata().map_err(staging)?;
+            if !metadata.is_file() {
+                return Err(AttachmentPolicyError::NotAFile { path: display });
+            }
+            if metadata.len() > MAX_ATTACHMENT_BYTES {
+                return Err(AttachmentPolicyError::TooLarge {
+                    path: display,
+                    limit: MAX_ATTACHMENT_BYTES,
+                });
+            }
+            let name = path
+                .file_name()
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| AttachmentPolicyError::NotAFile { path: display.clone() })?;
+            let slot = directory.join(index.to_string());
+            create_private_dir(&slot)?;
+            let target = slot.join(name);
+            let mut copy = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(staging)?;
+            std::io::copy(&mut source, &mut copy).map_err(staging)?;
+            copy.flush().map_err(staging)?;
+            Ok(target)
+        })
+        .collect()
+}
+
+fn create_private_dir(directory: &Path) -> Result<(), AttachmentPolicyError> {
+    let staging = |error: std::io::Error| AttachmentPolicyError::Staging {
+        path: directory.display().to_string(),
+        reason: error.kind().to_string(),
+    };
+    std::fs::create_dir_all(directory).map_err(staging)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).map_err(staging)?;
+    }
+    Ok(())
+}
+
+/// Remove the staged copies of one action; a missing directory is fine.
+pub fn release_attachments(attachments_dir: &Path, action_id: &str) {
+    let directory = attachments_dir.join(crate::paths::safe_local_id(action_id));
+    if let Err(error) = std::fs::remove_dir_all(&directory)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(target: "browser", path = %directory.display(), "failed to remove staged attachments: {error}");
+    }
+}
+
+/// Remove staging directories whose action never consumed its result.
+pub fn prune_stale_attachments(attachments_dir: &Path, max_age: Duration) {
+    let Ok(entries) = std::fs::read_dir(attachments_dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > max_age);
+        if stale && let Err(error) = std::fs::remove_dir_all(entry.path()) {
+            tracing::warn!(target: "browser", path = %entry.path().display(), "failed to prune stale attachments: {error}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_copies_the_checked_bytes_and_release_removes_them() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("claim.pdf");
+        std::fs::write(&source, b"%PDF").expect("write");
+        let attachments = root.path().join("attachments");
+        let staged = stage_attachments(&attachments, "action-1", &[source.clone(), source.clone()]).expect("staged");
+        assert_eq!(staged.len(), 2);
+        assert_ne!(staged[0], staged[1], "each slot keeps its own copy of a repeated file");
+        assert!(
+            staged
+                .iter()
+                .all(|path| path.starts_with(&attachments) && path.ends_with("claim.pdf"))
+        );
+        assert_eq!(std::fs::read(&staged[0]).expect("read"), b"%PDF");
+        // Re-pointing the source afterwards does not change the staged copy.
+        std::fs::write(&source, b"swapped").expect("rewrite");
+        assert_eq!(std::fs::read(&staged[1]).expect("read"), b"%PDF");
+        assert!(attachments.join(crate::paths::safe_local_id("action-1")).is_dir());
+        release_attachments(&attachments, "action-1");
+        assert!(!attachments.join(crate::paths::safe_local_id("action-1")).exists());
+        release_attachments(&attachments, "action-1");
+    }
+
+    #[test]
+    fn staging_refuses_directories_and_cleans_up_after_a_failure() {
+        let root = tempfile::tempdir().expect("root");
+        let good = root.path().join("ok.txt");
+        std::fs::write(&good, b"ok").expect("write");
+        let attachments = root.path().join("attachments");
+        let error =
+            stage_attachments(&attachments, "action-2", &[good, root.path().to_path_buf()]).expect_err("directory");
+        assert!(matches!(error, AttachmentPolicyError::NotAFile { .. }), "{error}");
+        assert!(
+            !attachments.join(crate::paths::safe_local_id("action-2")).exists(),
+            "a failed staging leaves nothing behind"
+        );
+        assert!(matches!(
+            stage_attachments(&attachments, "action-3", &[root.path().join("missing")]),
+            Err(AttachmentPolicyError::Staging { .. })
+        ));
+    }
+
+    #[test]
+    fn stale_staging_directories_are_pruned_and_fresh_ones_kept() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"a").expect("write");
+        let attachments = root.path().join("attachments");
+        stage_attachments(&attachments, "old", std::slice::from_ref(&source)).expect("old");
+        std::thread::sleep(Duration::from_millis(600));
+        stage_attachments(&attachments, "fresh", std::slice::from_ref(&source)).expect("fresh");
+        prune_stale_attachments(&attachments, Duration::from_millis(300));
+        assert!(!attachments.join(crate::paths::safe_local_id("old")).exists());
+        assert!(attachments.join(crate::paths::safe_local_id("fresh")).exists());
+    }
 
     #[test]
     fn files_under_a_root_are_authorized_as_resolved_paths() {

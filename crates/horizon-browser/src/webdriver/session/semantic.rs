@@ -7,7 +7,7 @@ use crate::semantic::{
     target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
-    attached_files_expression, check_attachment_request, check_local_files, file_input_probe_expression,
+    attached_files_expression, check_attachment_request, file_input_probe_expression, local_file_facts,
     parse_attached_files, parse_file_input_probe, verify_attached,
 };
 use crate::semantic_fingerprint::{
@@ -104,12 +104,20 @@ fn set_files_through(
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
-    let element = find_element_segment(&post, selector)?;
     let text = paths
         .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
+        .map(|path| {
+            let text = path.to_string_lossy();
+            if text.contains(['\n', '\r']) {
+                // The separator is the newline; a path carrying one would
+                // split into other uploads.
+                return Err("attachment path contains a line break".to_string());
+            }
+            Ok(text.into_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
         .join("\n");
+    let element = find_element_segment(&post, selector)?;
     post(&format!("element/{element}/value"), &json!({ "text": text }))?;
     Ok(())
 }
@@ -416,7 +424,7 @@ impl Driver {
             ));
         }
         let selector = self.semantic.resolve(target)?;
-        check_local_files(paths)?;
+        let expected = local_file_facts(paths)?;
         let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(None)?;
@@ -430,7 +438,7 @@ impl Driver {
         result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         let readback = self.evaluate_json(&attached_files_expression(&selector))?;
         let attached = parse_attached_files(&readback)?;
-        verify_attached(&attached, paths)?;
+        verify_attached(&attached, &expected)?;
         Ok(BrowserControlValue::Files { files: attached })
     }
 

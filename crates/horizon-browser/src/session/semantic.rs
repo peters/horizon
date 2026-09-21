@@ -11,8 +11,8 @@ use crate::semantic::{
     target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
-    attached_files_expression, check_attachment_request, check_local_files, element_handle_expression,
-    file_input_probe_expression, parse_attached_files, parse_file_input_probe, verify_attached,
+    attached_files_expression, check_attachment_request, element_handle_expression, file_input_probe_expression,
+    local_file_facts, parse_attached_files, parse_file_input_probe, verify_attached,
 };
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
@@ -276,7 +276,7 @@ impl DriverState {
         paths: &[std::path::PathBuf],
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
-        check_local_files(paths)?;
+        let expected = local_file_facts(paths)?;
         let probe = self.evaluate_json(link, event_tx, frame_slot, &file_input_probe_expression(&selector))?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
@@ -305,7 +305,7 @@ impl DriverState {
         attached?;
         let readback = self.evaluate_json(link, event_tx, frame_slot, &attached_files_expression(&selector))?;
         let attached = parse_attached_files(&readback)?;
-        verify_attached(&attached, paths)?;
+        verify_attached(&attached, &expected)?;
         Ok(BrowserControlValue::Files { files: attached })
     }
 

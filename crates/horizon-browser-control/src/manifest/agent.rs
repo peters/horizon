@@ -180,17 +180,58 @@ pub fn request_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, reason
     Ok(request_id)
 }
 
-/// A `set_files` action is queued with its paths resolved and confirmed
-/// under the attachment roots of this process; every other action passes
-/// through unchanged.
-fn authorize_attachments(action: BrowserControlAction) -> std::io::Result<BrowserControlAction> {
+/// A `set_files` action is queued with private staged copies of its files:
+/// the paths are resolved and confirmed under the attachment roots of this
+/// process, the audit summary keeps those resolved paths, and the engine
+/// receives copies under the runtime root that the original pathnames can
+/// no longer influence. The rebuilt action is validated again because
+/// resolution can change a pathname. Every other action passes through.
+fn authorize_attachments(
+    action: BrowserControlAction,
+    action_id: &str,
+) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
     let BrowserControlAction::SetFiles { target, paths } = action else {
-        return Ok(action);
+        let summary = BrowserAuditAction::from_control(&action);
+        return Ok((action, summary, None));
     };
-    let paths = crate::AttachmentPolicy::from_environment()
+    let denied = |error: crate::AttachmentPolicyError| {
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.to_string())
+    };
+    let resolved = crate::AttachmentPolicy::from_environment()
         .authorize(&paths)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.to_string()))?;
-    Ok(BrowserControlAction::SetFiles { target, paths })
+        .map_err(denied)?;
+    let summary = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
+        target: target.clone(),
+        paths: resolved.clone(),
+    });
+    let attachments_dir = crate::BrowserRuntimePaths::resolve().browser_attachments_dir();
+    crate::attachments::prune_stale_attachments(&attachments_dir, crate::attachments::STALE_ATTACHMENT_AGE);
+    let staged = StagedAttachments {
+        attachments_dir: attachments_dir.clone(),
+        action_id: action_id.to_string(),
+        keep: false,
+    };
+    let paths = crate::attachments::stage_attachments(&attachments_dir, action_id, &resolved).map_err(denied)?;
+    let action = BrowserControlAction::SetFiles { target, paths };
+    action
+        .validate()
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+    Ok((action, summary, Some(staged)))
+}
+
+/// Staged copies that are removed unless the action reached the queue.
+struct StagedAttachments {
+    attachments_dir: std::path::PathBuf,
+    action_id: String,
+    keep: bool,
+}
+
+impl Drop for StagedAttachments {
+    fn drop(&mut self) {
+        if !self.keep {
+            crate::attachments::release_attachments(&self.attachments_dir, &self.action_id);
+        }
+    }
 }
 
 /// Queue one validated backend-neutral action for the live owner.
@@ -212,9 +253,8 @@ pub fn enqueue_action(
     action
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-    let action = authorize_attachments(action)?;
     let action_id = new_action_id();
-    let summary = BrowserAuditAction::from_control(&action);
+    let (action, summary, mut staged) = authorize_attachments(action, &action_id)?;
     let request = AgentAction {
         action_id: action_id.clone(),
         actor: agent_name.to_string(),
@@ -273,6 +313,9 @@ pub fn enqueue_action(
         }
         Err(std::io::Error::new(kind, message))
     } else {
+        if let Some(staged) = staged.as_mut() {
+            staged.keep = true;
+        }
         Ok(action_id)
     }
 }

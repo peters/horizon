@@ -82,51 +82,65 @@ pub(crate) fn check_attachment_request(probe: &FileInputProbe, paths: &[PathBuf]
     Ok(())
 }
 
-/// Every path must name an existing regular file on this host before the
-/// backend is asked to read it.
-pub(crate) fn check_local_files(paths: &[PathBuf]) -> Result<(), BrowserControlFailure> {
-    for path in paths {
-        match std::fs::metadata(path) {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => {
-                return Err(BrowserControlFailure::new(
-                    "not_a_file",
-                    format!("{} is not a regular file", path.display()),
-                ));
-            }
-            Err(error) => {
-                return Err(BrowserControlFailure::new(
-                    "file_not_found",
-                    format!("{} cannot be read: {error}", path.display()),
-                ));
-            }
-        }
-    }
-    Ok(())
+/// The name and size of one requested file, captured before dispatch so the
+/// readback can be compared against what was actually on disk.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct ExpectedFile {
+    pub(crate) name: String,
+    pub(crate) size: u64,
 }
 
-/// The input must hold exactly the requested files afterwards; a driver
-/// that accepted the command without attaching anything is a failed action.
+/// Every path must name an existing regular file on this host before the
+/// backend is asked to read it; the names and sizes seen here are what the
+/// readback must reproduce.
+pub(crate) fn local_file_facts(paths: &[PathBuf]) -> Result<Vec<ExpectedFile>, BrowserControlFailure> {
+    paths
+        .iter()
+        .map(|path| match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(ExpectedFile {
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                size: metadata.len(),
+            }),
+            Ok(_) => Err(BrowserControlFailure::new(
+                "not_a_file",
+                format!("{} is not a regular file", path.display()),
+            )),
+            Err(error) => Err(BrowserControlFailure::new(
+                "file_not_found",
+                format!("{} cannot be read: {error}", path.display()),
+            )),
+        })
+        .collect()
+}
+
+/// The input must hold exactly the requested files afterwards, as a multiset
+/// of (name, size): a driver that accepted the command without attaching
+/// anything, dropped a duplicate, or a handler that swapped a file for
+/// different same-named content is a failed action.
 pub(crate) fn verify_attached(
     attached: &[BrowserAttachedFile],
-    paths: &[PathBuf],
+    expected: &[ExpectedFile],
 ) -> Result<(), BrowserControlFailure> {
-    let expected = paths
+    let mut actual = attached
         .iter()
-        .map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
-        .collect::<Option<Vec<_>>>()
-        .unwrap_or_default();
-    let retained = attached.len() == expected.len()
-        && expected
-            .iter()
-            .all(|name| attached.iter().any(|file| &file.name == name));
-    if retained {
+        .map(|file| ExpectedFile {
+            name: file.name.clone(),
+            size: file.size,
+        })
+        .collect::<Vec<_>>();
+    actual.sort();
+    let mut wanted = expected.to_vec();
+    wanted.sort();
+    if actual == wanted {
         Ok(())
     } else {
         Err(BrowserControlFailure::new(
             "attachment_mismatch",
             format!(
-                "the file input holds {} file(s) after the attachment, expected {}",
+                "the file input holds {} file(s) after the attachment that do not match the {} requested by name and size",
                 attached.len(),
                 expected.len()
             ),
@@ -298,21 +312,35 @@ mod tests {
     }
 
     #[test]
-    fn readback_must_hold_exactly_the_requested_files() {
-        let paths = vec![PathBuf::from("/uploads/a.pdf"), PathBuf::from("/uploads/b.png")];
-        let attached = |names: &[&str]| {
-            names
+    fn readback_must_hold_exactly_the_requested_files_by_name_and_size() {
+        let expected = |files: &[(&str, u64)]| {
+            files
                 .iter()
-                .map(|name| BrowserAttachedFile {
+                .map(|(name, size)| ExpectedFile {
                     name: (*name).to_string(),
-                    size: 1,
+                    size: *size,
+                })
+                .collect::<Vec<_>>()
+        };
+        let attached = |files: &[(&str, u64)]| {
+            files
+                .iter()
+                .map(|(name, size)| BrowserAttachedFile {
+                    name: (*name).to_string(),
+                    size: *size,
                     mime: String::new(),
                 })
                 .collect::<Vec<_>>()
         };
-        assert!(verify_attached(&attached(&["b.png", "a.pdf"]), &paths).is_ok());
-        for retained in [&["a.pdf"][..], &["a.pdf", "c.txt"], &[]] {
-            let error = verify_attached(&attached(retained), &paths).expect_err("mismatch");
+        let wanted = expected(&[("a.pdf", 10), ("b.png", 20), ("a.pdf", 10)]);
+        assert!(verify_attached(&attached(&[("b.png", 20), ("a.pdf", 10), ("a.pdf", 10)]), &wanted).is_ok());
+        for retained in [
+            &[("a.pdf", 10), ("b.png", 20)][..],
+            &[("a.pdf", 10), ("b.png", 20), ("other.pdf", 10)],
+            &[("a.pdf", 10), ("b.png", 21), ("a.pdf", 10)],
+            &[],
+        ] {
+            let error = verify_attached(&attached(retained), &wanted).expect_err("mismatch");
             assert_eq!(error.code, "attachment_mismatch");
         }
     }
@@ -322,13 +350,19 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let file = directory.path().join("doc.pdf");
         std::fs::write(&file, b"%PDF-1.4").expect("write");
-        assert!(check_local_files(std::slice::from_ref(&file)).is_ok());
         assert_eq!(
-            check_local_files(&[directory.path().to_path_buf()]).map_err(|error| error.code),
+            local_file_facts(std::slice::from_ref(&file)).expect("facts"),
+            vec![ExpectedFile {
+                name: "doc.pdf".into(),
+                size: 8
+            }]
+        );
+        assert_eq!(
+            local_file_facts(&[directory.path().to_path_buf()]).map_err(|error| error.code),
             Err("not_a_file".to_string())
         );
         assert_eq!(
-            check_local_files(&[file, directory.path().join("missing.pdf")]).map_err(|error| error.code),
+            local_file_facts(&[file, directory.path().join("missing.pdf")]).map_err(|error| error.code),
             Err("file_not_found".to_string())
         );
     }
