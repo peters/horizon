@@ -40,13 +40,16 @@ fn delayed_visibility_survives_restart_and_never_posts() {
 }
 
 #[test]
-fn verified_operator_hint_recovers_an_unlisted_worker() {
+fn maximum_length_verified_operator_hint_recovers_an_unlisted_worker() {
     let spec = spec();
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, worker(&spec).to_string())]);
+    let worker_id = "w".repeat(100);
+    let mut found = worker(&spec);
+    found["id"] = json!(worker_id);
+    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, found.to_string())]);
     let mut state = CreateState::Requested;
     let mut saved = Vec::new();
     let report = provider
-        .reconcile(&spec, &mut state, Some("worker1"), &Cancellation::default(), |next| {
+        .reconcile(&spec, &mut state, Some(&worker_id), &Cancellation::default(), |next| {
             saved.push(next.clone());
             Ok(())
         })
@@ -54,7 +57,7 @@ fn verified_operator_hint_recovers_an_unlisted_worker() {
     assert_eq!(
         report.outcome,
         Outcome::Found {
-            worker_id: "worker1".into()
+            worker_id: worker_id.clone()
         }
     );
     assert_eq!(saved, vec![state]);
@@ -62,7 +65,7 @@ fn verified_operator_hint_recovers_an_unlisted_worker() {
     assert!(!encoded.contains("publicIp"));
     assert!(!encoded.contains("env"));
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[1].starts_with("GET /pods/worker1 "));
+    assert!(requests.lock().unwrap()[1].starts_with(&format!("GET /pods/{worker_id} ")));
 }
 
 #[test]

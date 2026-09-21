@@ -272,7 +272,7 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
     ui.small("Check the original request with the provider. This check cannot allocate, start or delete a worker.");
     ui.collapsing("Provider-confirmed worker ID (optional)", |ui| {
         ui.small("Use an ID supplied by the provider. Horizon verifies that it belongs to this cloud.");
-        ui.add(egui::TextEdit::singleline(&mut runtime.recovery_worker_id).char_limit(64));
+        ui.add(egui::TextEdit::singleline(&mut runtime.recovery_worker_id));
     });
     if runtime.recovery_receiver.is_some() {
         ui.spinner();
