@@ -415,7 +415,8 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         const interactive = Boolean(role) || element.tabIndex >= 0 || element.hasAttribute('onclick');
         if (semanticOnly && (!visible || (!interactive && !text))) continue;
         const fileInput = tag === 'input' && element.type === 'file' ? {
-            accept: compact(element.getAttribute('accept'), 2048),
+            accept: (element.getAttribute('accept') || '').slice(0, 8192),
+            accept_truncated: (element.getAttribute('accept') || '').length > 8192,
             multiple: element.hasAttribute('multiple'),
             files: element.files ? element.files.length : 0,
         } : undefined;

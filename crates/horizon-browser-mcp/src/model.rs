@@ -720,6 +720,8 @@ impl From<BrowserAttachedFile> for AttachedFileOutput {
 pub(crate) struct FileInputOutput {
     /// The element's `accept` attribute; empty when any type is accepted.
     pub(crate) accept: String,
+    /// Whether `accept` is a prefix; oversized policies cannot be enforced.
+    pub(crate) accept_truncated: bool,
     pub(crate) multiple: bool,
     /// Number of files currently attached.
     pub(crate) files: u32,
@@ -729,6 +731,7 @@ impl From<BrowserFileInput> for FileInputOutput {
     fn from(value: BrowserFileInput) -> Self {
         Self {
             accept: value.accept,
+            accept_truncated: value.accept_truncated,
             multiple: value.multiple,
             files: value.files,
         }

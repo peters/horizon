@@ -157,10 +157,10 @@ shell commands, files, or other MCP servers.
   every backend; an unsupported remote platform is then refused with `unsupported_backend`
   before the paths are opened, so a missing path on an unsupported remote panel reports
   `unsupported_backend`.
-  Remote desktop sessions transfer a single-file ZIP through the Selenium
-  upload endpoint before selection; Android sessions use Appium Push File.
+  BrowserStack desktop sessions transfer a single-file ZIP through the Selenium
+  upload endpoint before selection; BrowserStack Android sessions use Appium Push File.
   Each remote request is limited to 16 MiB per file and 32 MiB total.
-  Unsupported platforms (including iOS native pickers) omit `set_files` from
+  Generic WebDriver grids and unsupported platforms (including iOS native pickers) omit `set_files` from
   capabilities and return `unsupported_backend`. Transfer failures return
   `attachment_transfer_failed` without including provider responses or file
   contents. Transferred files remain in the provider session for lazy page
@@ -174,7 +174,7 @@ shell commands, files, or other MCP servers.
   `attachment_mismatch`.
   Every audit record for the action keeps the authorized source
   paths, never the private staged copies or the contents. Snapshot
-  and query nodes carry `file_input` (`accept`, `multiple`, `files`) for
+  and query nodes carry `file_input` (`accept`, `accept_truncated`, `multiple`, `files`) for
   file inputs so the attachment can be verified without `browser_evaluate`.
 - `browser_http_auth` is how a user supplies a username and password for HTTP
   Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).

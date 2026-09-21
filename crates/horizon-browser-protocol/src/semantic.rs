@@ -20,9 +20,12 @@ pub struct BrowserBounds {
 /// attachment target and verify an attachment without evaluating script.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BrowserFileInput {
-    /// The element's `accept` attribute; empty when any type is accepted.
+    /// The element's unnormalized `accept` attribute, up to 8192 UTF-16 code units.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub accept: String,
+    /// True when `accept` exceeds 8192 UTF-16 code units and is only a prefix.
+    #[serde(default)]
+    pub accept_truncated: bool,
     pub multiple: bool,
     /// Number of files currently attached.
     pub files: u32,

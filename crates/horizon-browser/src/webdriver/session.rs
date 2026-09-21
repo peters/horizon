@@ -297,7 +297,8 @@ impl Driver {
     ) -> Result<Self, String> {
         let (mut host, session, remote_device, file_transfer) = if let Some(request) = &config.remote {
             let (host, session, device) = start_remote(request, event_tx, &remote_release, stop_requested)?;
-            let transfer = remote_files::Transfer::for_platform(
+            let transfer = remote_files::Transfer::for_provider(
+                request.adapter,
                 device
                     .os_name
                     .as_deref()
@@ -599,6 +600,7 @@ mod tests {
             committed_url: crate::session::CommittedUrl::default(),
         };
         let request = super::super::remote::RemoteSessionRequest {
+            adapter: horizon_browser_protocol::remote::RemoteAdapterKind::Webdriver,
             recovery: crate::RemoteAllocation::default(),
             endpoint: "http://grid.example.net/wd/hub".to_string(),
             authorization: None,

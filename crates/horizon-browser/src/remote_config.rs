@@ -19,6 +19,7 @@ pub fn configured_remote_request(
 ) -> Result<RemoteSessionRequest, RemoteConfigError> {
     let limits = &provider.limits;
     Ok(RemoteSessionRequest {
+        adapter: provider.adapter,
         recovery: crate::RemoteAllocation::default(),
         endpoint: provider.endpoint.as_str().to_string(),
         authorization,

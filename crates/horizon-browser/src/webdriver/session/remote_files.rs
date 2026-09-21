@@ -23,7 +23,14 @@ pub(super) enum Transfer {
 }
 
 impl Transfer {
-    pub(super) fn for_platform(platform: Option<&str>) -> Option<Self> {
+    pub(super) fn for_provider(adapter: crate::remote::RemoteAdapterKind, platform: Option<&str>) -> Option<Self> {
+        if adapter != crate::remote::RemoteAdapterKind::Browserstack {
+            return None;
+        }
+        Self::for_platform(platform)
+    }
+
+    fn for_platform(platform: Option<&str>) -> Option<Self> {
         match platform?.to_ascii_lowercase().as_str() {
             "android" => Some(Self::Android),
             "mac" | "macos" | "mac os x" | "os x" | "windows" | "win32" | "win64" | "linux" => Some(Self::Selenium),
@@ -76,7 +83,13 @@ impl Transfer {
                     }
                     other => other,
                 }
-                .map_err(|_| failed())?;
+                .map_err(|error| {
+                    if matches!(&error, HttpError::WebDriver { error, .. } if matches!(error.as_str(), "unknown command" | "unsupported operation")) {
+                        BrowserControlFailure::new("unsupported_backend", "the remote provider does not implement file transfer")
+                    } else {
+                        failed()
+                    }
+                })?;
                 match self {
                     Self::Android => Ok(PathBuf::from(payload["path"].as_str().ok_or_else(failed)?)),
                     Self::Selenium => {
@@ -216,6 +229,18 @@ mod tests {
 
     #[test]
     fn unsupported_platforms_and_oversized_files_never_transfer() {
+        assert_eq!(
+            Transfer::for_provider(crate::remote::RemoteAdapterKind::Webdriver, Some("Windows")),
+            None
+        );
+        assert_eq!(
+            Transfer::for_provider(crate::remote::RemoteAdapterKind::Webdriver, Some("Android")),
+            None
+        );
+        assert_eq!(
+            Transfer::for_provider(crate::remote::RemoteAdapterKind::Browserstack, Some("OS X")),
+            Some(Transfer::Selenium)
+        );
         assert_eq!(Transfer::for_platform(Some("iOS")), None);
         assert_eq!(Transfer::for_platform(None), None);
         assert_eq!(Transfer::for_platform(Some("OS X")), Some(Transfer::Selenium));
@@ -239,6 +264,7 @@ mod tests {
     struct RefusingTransport {
         calls: Mutex<Vec<String>>,
         ambiguous: bool,
+        legacy_supported: bool,
     }
 
     impl ClassicTransport for RefusingTransport {
@@ -246,7 +272,7 @@ mod tests {
             self.calls.lock().expect("calls").push(path.into());
             if self.ambiguous {
                 Err(HttpError::Transport("secret echoed bytes".into()))
-            } else if path.ends_with("/se/file") {
+            } else if path.ends_with("/se/file") || !self.legacy_supported {
                 Err(HttpError::WebDriver {
                     error: "unknown command".into(),
                     message: "private response".into(),
@@ -262,10 +288,11 @@ mod tests {
         let root = tempfile::tempdir().expect("root");
         let path = root.path().join("notes.txt");
         std::fs::write(&path, "bytes").expect("file");
-        for ambiguous in [false, true] {
+        for (ambiguous, legacy_supported) in [(false, true), (true, true), (false, false)] {
             let transport = RefusingTransport {
                 calls: Mutex::default(),
                 ambiguous,
+                legacy_supported,
             };
             let result = Transfer::Selenium.upload(&transport, "session", std::slice::from_ref(&path));
             let calls = transport.calls.lock().expect("calls");
@@ -274,6 +301,9 @@ mod tests {
                 assert_eq!(error.code, "attachment_transfer_failed");
                 assert!(!error.message.contains("secret"));
                 assert_eq!(calls.len(), 1);
+            } else if !legacy_supported {
+                assert_eq!(result.expect_err("unsupported endpoints").code, "unsupported_backend");
+                assert_eq!(calls.len(), 2);
             } else {
                 assert_eq!(result.expect("legacy upload"), [PathBuf::from("/remote/notes.txt")]);
                 assert_eq!(*calls, ["/session/session/se/file", "/session/session/file"]);

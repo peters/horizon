@@ -426,10 +426,18 @@ impl Driver {
         let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(None)?;
-        let transferred = self
+        let transferred = match self
             .file_transfer
             .map(|transfer| transfer.upload(self.host.transport(), &self.session_id, paths))
-            .transpose()?;
+            .transpose()
+        {
+            Err(error) if error.code == "unsupported_backend" => {
+                self.file_transfer = None;
+                self.write_coordination(true);
+                return Err(error);
+            }
+            result => result?,
+        };
         let paths = transferred.as_deref().unwrap_or(paths);
         // Classic Send Keys appends to a `multiple` input's selection; the
         // action replaces it, as the Chromium primitive does.

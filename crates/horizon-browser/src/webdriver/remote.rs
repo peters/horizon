@@ -31,6 +31,8 @@ const RELEASE_ATTEMPTS: u8 = 3;
 /// configuration, the resolved authorization) happens before this point.
 #[derive(Clone)]
 pub struct RemoteSessionRequest {
+    /// Configured provider adapter; also selects known file-transfer support.
+    pub adapter: crate::remote::RemoteAdapterKind,
     /// Private allocation identity retained through teardown.
     pub recovery: recovery::RemoteAllocation,
     /// Control endpoint including base path, already validated by the host.

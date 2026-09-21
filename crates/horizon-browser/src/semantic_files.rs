@@ -219,7 +219,14 @@ fn is_accept_token(token: &str) -> bool {
     if let Some(extension) = token.strip_prefix('.') {
         return !extension.is_empty() && !extension.contains('/');
     }
-    matches!(token.split_once('/'), Some((kind, subtype)) if !kind.is_empty() && !subtype.is_empty() && !subtype.contains('/'))
+    matches!(token.split_once('/'), Some((kind, subtype)) if is_mime_token(kind) && is_mime_token(subtype))
+}
+
+fn is_mime_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// The MIME type an extension implies, from the shared registry with a few
@@ -376,6 +383,23 @@ mod tests {
             "a dotfile named like the token matches"
         );
         assert!(accept_allows("application/gzip", Path::new("/uploads/archive.tar.gz")));
+    }
+
+    #[test]
+    fn invalid_mime_parameters_and_syntax_do_not_restrict_the_picker() {
+        for accept in [
+            "image/png;charset=utf-8",
+            "image /png",
+            "image/png/extra",
+            "image/π",
+            "image/png=foo",
+        ] {
+            assert!(accept_allows(accept, Path::new("/uploads/a.png")), "{accept}");
+            assert!(accept_allows(accept, Path::new("/uploads/a.txt")), "{accept}");
+            assert!(!accept_allows(&format!("{accept},.pdf"), Path::new("/uploads/a.png")));
+        }
+        assert!(is_accept_token("application/vnd.example+json"));
+        assert!(is_accept_token("image/*"));
     }
 
     #[test]
