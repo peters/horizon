@@ -52,7 +52,7 @@ pub enum AttachmentPolicyError {
     OutsideRoots { path: String, roots: String },
     #[error("attachment exceeds {limit} bytes: {path}")]
     TooLarge { path: String, limit: u64 },
-    #[error("attachments total {requested} bytes, above the {limit} byte budget one panel may keep staged")]
+    #[error("attachments total {requested} bytes, above the {limit} byte attachment budget")]
     OverBudget { requested: u64, limit: u64 },
     #[error(
         "the panel's staged attachments for still-queued actions leave no room within {limit_actions} actions and {limit_bytes} bytes; let the queue drain first"
@@ -395,6 +395,22 @@ pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u6
         });
     }
     Ok(requested)
+}
+
+/// Check remote limits before pruning or copying any staged files.
+///
+/// # Errors
+/// Returns `TooLarge` or `OverBudget` without filesystem side effects.
+pub fn check_remote_budget(files: &[AuthorizedFile]) -> Result<(), AttachmentPolicyError> {
+    for file in files {
+        if file.size > horizon_browser::MAX_REMOTE_ATTACHMENT_BYTES {
+            return Err(AttachmentPolicyError::TooLarge {
+                path: file.path.display().to_string(),
+                limit: horizon_browser::MAX_REMOTE_ATTACHMENT_BYTES,
+            });
+        }
+    }
+    check_panel_budget(files, horizon_browser::MAX_REMOTE_ATTACHMENT_REQUEST_BYTES).map(|_| ())
 }
 
 /// Remove every panel's staged actions older than `retention`, and all
@@ -1044,5 +1060,32 @@ mod tests {
             policy.authorize(&[root.path().join("any.txt")]),
             Err(AttachmentPolicyError::NoRoots)
         ));
+    }
+    #[test]
+    fn remote_limits_refuse_files_and_batches_before_staging() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("large.txt");
+        let file = std::fs::File::create(&path).expect("file");
+        file.set_len(horizon_browser::MAX_REMOTE_ATTACHMENT_BYTES + 1)
+            .expect("length");
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let authorized = policy
+            .authorize(std::slice::from_ref(&path))
+            .expect("local authorization");
+        assert!(matches!(
+            check_remote_budget(&authorized),
+            Err(AttachmentPolicyError::TooLarge { .. })
+        ));
+        file.set_len(horizon_browser::MAX_REMOTE_ATTACHMENT_BYTES)
+            .expect("length");
+        let authorized = policy
+            .authorize(&[path.clone(), path.clone(), path])
+            .expect("local batch");
+        assert!(matches!(
+            check_remote_budget(&authorized),
+            Err(AttachmentPolicyError::OverBudget { .. })
+        ));
+        assert!(check_remote_budget(&authorized[..2]).is_ok());
+        assert_eq!(std::fs::read_dir(root.path()).expect("entries").count(), 1);
     }
 }

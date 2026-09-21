@@ -192,6 +192,7 @@ fn authorize_attachments(
     action: BrowserControlAction,
     panel_local_id: &str,
     action_id: &str,
+    remote: bool,
 ) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
     let BrowserControlAction::SetFiles { target, paths, .. } = action else {
         let summary = BrowserAuditAction::from_control(&action);
@@ -203,6 +204,9 @@ fn authorize_attachments(
     let authorized = crate::AttachmentPolicy::from_environment()
         .authorize(&paths)
         .map_err(refused)?;
+    if remote {
+        crate::attachments::check_remote_budget(&authorized).map_err(refused)?;
+    }
     let sources = authorized
         .iter()
         .map(|file| file.path().to_path_buf())
@@ -270,7 +274,7 @@ fn check_enqueue_eligibility(
     panel_local_id: &str,
     identity: AgentIdentity<'_>,
     agent_name: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
     let manifest = super::read(panel_local_id)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
     let now = now_millis();
@@ -293,7 +297,9 @@ fn check_enqueue_eligibility(
     } else {
         None
     };
-    refusal.map_or(Ok(()), |(kind, message)| Err(std::io::Error::new(kind, message)))
+    refusal.map_or(Ok(manifest.remote_target.is_some()), |(kind, message)| {
+        Err(std::io::Error::new(kind, message))
+    })
 }
 
 /// Longest a `set_files` enqueue waits for the panel's staging lock while
@@ -338,12 +344,14 @@ pub fn enqueue_action(
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     let action_id = new_action_id();
-    if matches!(action, BrowserControlAction::SetFiles { .. }) {
-        // Staging can copy gigabytes; refuse a caller the locked check
-        // below would reject anyway before any of that work.
-        check_enqueue_eligibility(panel_local_id, identity, agent_name)?;
-    }
-    let (action, summary, mut staged) = authorize_attachments(action, panel_local_id, &action_id)?;
+    let remote = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+        // Refuse ineligible callers before any filesystem work, and carry
+        // the target's transfer limits into the authoritative authorization.
+        check_enqueue_eligibility(panel_local_id, identity, agent_name)?
+    } else {
+        false
+    };
+    let (action, summary, mut staged) = authorize_attachments(action, panel_local_id, &action_id, remote)?;
     let request = AgentAction {
         action_id: action_id.clone(),
         actor: agent_name.to_string(),

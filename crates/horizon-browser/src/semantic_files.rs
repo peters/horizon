@@ -203,7 +203,9 @@ pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
     let mime = extension.as_deref().and_then(mime_for_extension);
     tokens.iter().any(|token| {
-        if token.starts_with('.') {
+        if token == "*/*" {
+            true
+        } else if token.starts_with('.') {
             name.ends_with(token.as_str())
         } else if let Some(family) = token.strip_suffix("/*") {
             mime.is_some_and(|mime| mime.split('/').next() == Some(family))
@@ -400,6 +402,9 @@ mod tests {
         }
         assert!(is_accept_token("application/vnd.example+json"));
         assert!(is_accept_token("image/*"));
+        assert!(accept_allows("*/*", Path::new("/uploads/unknown.ext")));
+        assert!(accept_allows("*/*,.pdf", Path::new("/uploads/a.png")));
+        assert!(accept_allows("*/*", Path::new("/uploads/no_extension")));
     }
 
     #[test]

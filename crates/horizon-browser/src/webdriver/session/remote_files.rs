@@ -12,8 +12,7 @@ use crate::webdriver::http::HttpError;
 use crate::webdriver::transport::ClassicTransport;
 
 /// Bound the in-memory JSON/base64 envelope as well as provider storage.
-const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
+use crate::{MAX_REMOTE_ATTACHMENT_BYTES as MAX_FILE_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES as MAX_REQUEST_BYTES};
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(40);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

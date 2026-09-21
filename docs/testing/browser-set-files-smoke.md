@@ -158,7 +158,7 @@ outside this change.
 7. Close the exact candidate window normally, close the task-owned Device
    panel through `device_panel`, and clean up only fixture-owned processes.
 
-Earlier Linux runs reported 20/20 standalone checks per browser and 8/8
-panel checks on 2026-09-21. The panel run used a second isolated viewer and
-therefore does not establish the current-workspace live-view requirement;
-repeat this lane on the final candidate before merge.
+Repeat this lane on each behavior-changing candidate. Keep timestamped native
+viewer observations, decoded recording frames, the executable hash and the
+candidate identity with the private smoke evidence. Standalone browser checks
+do not replace this current-workspace live-view lane.

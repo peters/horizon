@@ -69,7 +69,7 @@ fn send_keys_through(
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
-    let element = find_element_segment(&post, selector)?;
+    let element = encode_path_segment(&find_element_id(&post, selector)?);
     post(&format!("element/{element}/clear"), &json!({}))?;
     if !text.is_empty() {
         post(&format!("element/{element}/value"), &json!({ "text": text }))?;
@@ -92,12 +92,14 @@ fn send_keys_through(
 /// Attach host files to the file input `selector` matches through the W3C
 /// Find Element and Element Send Keys commands under `session`: for an
 /// `input[type=file]`, Send Keys takes newline-separated host paths instead
-/// of typing them. The first failing command ends the sequence.
+/// of typing them. Safari may temporarily normalize a universal accept hint;
+/// its restoration is attempted even when selection fails.
 fn set_files_through(
     transport: &dyn ClassicTransport,
     session: &str,
     selector: &str,
     paths: &[std::path::PathBuf],
+    safari: bool,
 ) -> Result<(), String> {
     let post = |suffix: &str, body: &Value| {
         transport
@@ -117,9 +119,34 @@ fn set_files_through(
         })
         .collect::<Result<Vec<_>, _>>()?
         .join("\n");
-    let element = find_element_segment(&post, selector)?;
-    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
-    Ok(())
+    let element_id = find_element_id(&post, selector)?;
+    let element = encode_path_segment(&element_id);
+    let reference = json!({ELEMENT_KEY: element_id});
+    // Safari's native picker rejects */* even though our complete accept
+    // check permits every file. Restore the exact element after either result.
+    let original_accept = if safari {
+        let response = post(
+            "execute/sync",
+            &json!({
+                "script": "const e = arguments[0], a = e.getAttribute('accept'); if (a !== null && a.split(',').some(t => t.trim() === '*/*')) { e.removeAttribute('accept'); return a; } return null;",
+                "args": [reference],
+            }),
+        )?;
+        webdriver_value(&response).and_then(Value::as_str).map(str::to_owned)
+    } else {
+        None
+    };
+    let result = post(&format!("element/{element}/value"), &json!({ "text": text }));
+    if let Some(accept) = original_accept {
+        post(
+            "execute/sync",
+            &json!({
+                "script": "const e = arguments[0]; if (!e.hasAttribute('accept')) e.setAttribute('accept', arguments[1]); return null;",
+                "args": [reference, accept],
+            }),
+        )?;
+    }
+    result.map(|_| ())
 }
 
 /// Click the element `selector` matches through the W3C Find Element and
@@ -134,7 +161,7 @@ fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
-    let element = find_element_segment(&post, selector)?;
+    let element = encode_path_segment(&find_element_id(&post, selector)?);
     // Element Click may wait for a navigation the element triggers, so it
     // gets the navigation-sized read timeout rather than the command default.
     transport
@@ -147,13 +174,9 @@ fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str
     Ok(())
 }
 
-/// Find Element by CSS selector, returning the reference as one encoded
-/// route segment; a reference that cannot form a route is refused here
-/// rather than on the wire.
-fn find_element_segment(
-    post: &dyn Fn(&str, &Value) -> Result<Value, String>,
-    selector: &str,
-) -> Result<String, String> {
+/// Find Element by CSS selector, returning its raw reference after checking
+/// that it can be encoded as one route segment.
+fn find_element_id(post: &dyn Fn(&str, &Value) -> Result<Value, String>, selector: &str) -> Result<String, String> {
     let found = post("element", &json!({ "using": "css selector", "value": selector }))?;
     let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
     if element.contains(['/', '%', '\\']) || element == "." || element == ".." {
@@ -165,7 +188,7 @@ fn find_element_segment(
             element.len()
         ));
     }
-    Ok(encode_path_segment(element))
+    Ok(element.to_string())
 }
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
@@ -447,6 +470,7 @@ impl Driver {
             &format!("/session/{}", self.session_id),
             &selector,
             paths,
+            self.config.browser.backend == BackendKind::SafariWebDriver,
         );
         self.frames.demand();
         result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;

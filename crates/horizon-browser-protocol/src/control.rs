@@ -20,6 +20,10 @@ pub const DEFAULT_CLICK_COUNT: u32 = 1;
 pub const MAX_CLICK_COUNT: u32 = 3;
 /// Most host files one `set_files` action attaches.
 pub const MAX_ATTACHMENT_FILES: usize = 32;
+/// Maximum bytes in one remote file-transfer envelope.
+pub const MAX_REMOTE_ATTACHMENT_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum bytes transferred by one remote attachment request.
+pub const MAX_REMOTE_ATTACHMENT_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_ATTACHMENT_PATH_BYTES: usize = 4 * 1024;
 /// Longest bounded wait an engine performs for one navigation action.
 pub const MAX_NAVIGATION_TIMEOUT_MILLIS: u64 = 60_000;
