@@ -258,7 +258,14 @@ async fn connection(
             }
             if let Some(event) = client.poll_event().await? {
                 full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
+                let previous_size = framebuffer.size();
                 changed |= apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
+                if framebuffer.size() != previous_size {
+                    updates
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .desktop = Some(framebuffer.size());
+                }
                 idle = false;
             } else if idle {
                 break;
@@ -268,12 +275,6 @@ async fn connection(
                 tokio::task::yield_now().await;
                 idle = true;
             }
-        }
-        if !framebuffer.size().contains(&0) {
-            updates
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .desktop = Some(framebuffer.size());
         }
         // Sample off the UI thread. The full desktop is retained so view
         // controls can re-present after disconnect or an options change.

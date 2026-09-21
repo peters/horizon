@@ -300,3 +300,32 @@ fn handshake_name_is_observable_without_receiving_or_displaying_an_image() -> Re
     }
     Ok(())
 }
+
+#[test]
+fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(), ViewError> {
+    for extended in [false, true] {
+        let (session, mut stream) = named_session_with_visibility("Lab desktop", false)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(session.take_status(), Some(Status::Connected)) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if extended {
+            send_extended_size(&mut stream, 3, 2)?;
+        } else {
+            stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 2, 255, 255, 255, 33])?;
+        }
+        stream.shutdown(std::net::Shutdown::Write)?;
+        // Queue both events while the consumer is paused, then drain them together.
+        std::thread::sleep(Duration::from_millis(50));
+        session.set_visible(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(session.take_status(), Some(Status::Disconnected(_))) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(session.take_server_details().desktop_size, Some([3, 2]));
+        assert!(session.latest_full().is_none());
+    }
+    Ok(())
+}
