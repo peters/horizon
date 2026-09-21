@@ -268,7 +268,7 @@ server name and desktop resolution. Unknown fields are omitted.
 
 Inspect/list expose the same observed information in `server.name` and
 `server.desktop_size` (`[width, height]`). Server labels are bounded to 256
-characters and controls are flattened. Observations remain labelled as last
+characters and control/bidi-formatting characters are flattened. Observations remain labelled as last
 connection data after disconnect, clear on reconnect and are never persisted.
 Supplied labels persist but are not verified by the server; loopback does not
 identify the remote host and no SSH/Tailscale discovery or tunnel is created.
@@ -280,7 +280,8 @@ Creation accepts optional creator-supplied host labels:
 {"operation":"create","endpoint":"127.0.0.1:5900","identity":{"machine_name":"Lab workstation","hostname":"lab-host","ip_addresses":["192.0.2.10","2001:db8::10"],"tailscale_name":"lab-host.example.ts.net"}}
 ```
 
-Labels are plain text, trimmed, and limited to 256 characters each; up to 16
+Labels are plain text, trimmed, and limited to 256 characters each. Control and
+Unicode bidi-formatting characters are rejected; up to 16
 numeric IPv4/IPv6 addresses are accepted. Empty labels become absent values. Create,
 list and inspect return the supplied identity separately from the local VNC
 endpoint. These labels are not verified by VNC and never change routing or
