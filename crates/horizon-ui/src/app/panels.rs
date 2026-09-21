@@ -387,7 +387,7 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_fullscreen_panel(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_fullscreen_panel(&mut self, ui: &mut egui::Ui, view_changed: bool) {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
@@ -428,14 +428,16 @@ impl HorizonApp {
                         .max_rect(body_rect)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                        // egui's pointer layer can still name the board panel on
-                        // the transition frame. Fullscreen owns this body now.
+                        // Board overlays remain in egui's hit map until this pass
+                        // ends, but global dialogs still render above fullscreen.
                         if ui.input(|input| (input.zoom_delta() - 1.0).abs() > f32::EPSILON) {
-                            let zoom_owner = self.zoom_gesture_blocker(ui.ctx()).or_else(|| {
-                                crate::panel_zoom::local_pointer(ui)
-                                    .filter(|pointer| ui.max_rect().contains(*pointer))
-                                    .map(|_| self.panel_zoom_owner(panel_id, ui.layer_id().id))
-                            });
+                            let zoom_owner =
+                                self.fullscreen_zoom_gesture_blocker(ui.ctx(), view_changed)
+                                    .or_else(|| {
+                                        crate::panel_zoom::local_pointer(ui)
+                                            .filter(|pointer| ui.max_rect().contains(*pointer))
+                                            .map(|_| self.panel_zoom_owner(panel_id, ui.layer_id().id))
+                                    });
                             crate::panel_zoom::gesture_owner(ui.ctx(), zoom_owner);
                         }
                         let mut reconnect_requested = false;

@@ -250,6 +250,65 @@ fn a_zoom_gesture_continues_when_the_device_enters_fullscreen() {
 }
 
 #[test]
+fn fullscreen_entry_discards_hidden_sidebar_gesture_hits() {
+    for wheel in [false, true] {
+        let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+        app.sidebar_visible = true;
+        for _ in 0..3 {
+            render(&ctx, &mut app);
+        }
+        let point = egui::pos2(20.0, 250.0);
+        assert_eq!(
+            ctx.layer_id_at(point),
+            Some(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("sidebar")))
+        );
+        let before = app.canvas_view;
+        app.fullscreen_panel = Some(panel);
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(1.0);
+        input.events.push(egui::Event::PointerMoved(point));
+        if wheel {
+            input.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 40.0),
+                modifiers: egui::Modifiers::CTRL,
+                phase: egui::TouchPhase::Move,
+            });
+        } else {
+            input.events.push(egui::Event::Zoom(1.25));
+        }
+        run_app_frame_with_input(&ctx, &mut app, input);
+        assert!(
+            app.panel_render_caches.device_ui_state[&panel].zoom_factor() > 1.0,
+            "wheel={wheel}"
+        );
+        assert_eq!(app.canvas_view, before);
+    }
+}
+
+#[test]
+fn fullscreen_entry_preserves_an_open_command_palette_gesture_blocker() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+    app.open_command_palette();
+    for _ in 0..3 {
+        render(&ctx, &mut app);
+    }
+    let point = egui::pos2(700.0, 250.0);
+    assert_eq!(
+        ctx.layer_id_at(point).map(|layer| layer.id),
+        Some(egui::Id::new("palette_modal"))
+    );
+    let before = app.canvas_view;
+    app.fullscreen_panel = Some(panel);
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.time = Some(1.0);
+    input.events = vec![egui::Event::PointerMoved(point), egui::Event::Zoom(1.25)];
+    run_app_frame_with_input(&ctx, &mut app, input);
+    assert!((app.panel_render_caches.device_ui_state[&panel].zoom_factor() - 1.0).abs() < f32::EPSILON);
+    assert_eq!(app.canvas_view, before);
+}
+
+#[test]
 fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
     let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");

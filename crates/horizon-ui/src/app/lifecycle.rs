@@ -277,10 +277,13 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         self.process_pending_detached_reattach(ui.ctx());
-        crate::panel_zoom::synchronize_fullscreen(ui.ctx(), self.fullscreen_panel.map(super::panels::panel_layer_salt));
+        let view_changed = crate::panel_zoom::synchronize_fullscreen(
+            ui.ctx(),
+            self.fullscreen_panel.map(super::panels::panel_layer_salt),
+        );
 
         if self.fullscreen_panel.is_some() {
-            self.render_fullscreen_panel(ui);
+            self.render_fullscreen_panel(ui, view_changed);
             // Detached windows are immediate viewports: egui closes any child
             // viewport that is not shown during a pass, so they must keep
             // rendering while a panel is fullscreen in the root window.

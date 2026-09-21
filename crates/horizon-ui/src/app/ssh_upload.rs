@@ -65,6 +65,10 @@ enum UploadUiAction {
 }
 
 impl SshUploadFlow {
+    pub(super) fn is_visible_in(&self, viewport_id: ViewportId) -> bool {
+        self.target_viewport_id == viewport_id
+    }
+
     fn new(
         target_viewport_id: ViewportId,
         connection: SshConnection,
@@ -241,7 +245,7 @@ impl HorizonApp {
         let Some(flow) = self.ssh_upload_flow.as_mut() else {
             return;
         };
-        if flow.target_viewport_id != ctx.viewport_id() {
+        if !flow.is_visible_in(ctx.viewport_id()) {
             return;
         }
         if flow.mode.is_uploading() {
