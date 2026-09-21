@@ -415,6 +415,10 @@ pub fn sweep_stale_attachments(
         return;
     };
     for panel in panels.flatten() {
+        // The panel staging locks are files beside the panel directories.
+        if !panel.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
         if !panel_is_live(&panel.file_name()) {
             if let Err(error) = std::fs::remove_dir_all(panel.path()) {
                 tracing::warn!(target: "browser", path = %panel.path().display(), "failed to release a closed panel's staged attachments: {error}");
@@ -478,6 +482,14 @@ pub fn prune_attachments(
         // scan error there refuses the newcomer; other panels are cleaned
         // on a best-effort basis.
         let panel = panel.map_err(|error| scan_failure(attachments_dir, error))?;
+        // The panel staging locks are files beside the panel directories.
+        if !panel
+            .file_type()
+            .map_err(|error| scan_failure(attachments_dir, error))?
+            .is_dir()
+        {
+            continue;
+        }
         let is_current = panel.file_name().to_string_lossy() == current;
         if !is_current && !panel_is_live(&panel.file_name()) {
             if let Err(error) = std::fs::remove_dir_all(panel.path()) {
@@ -905,6 +917,7 @@ mod tests {
             .expect("authorized");
         stage_attachments(&attachments, "closed", "old", &authorized).expect("old");
         stage_attachments(&attachments, "gone", "fresh-but-dead", &authorized).expect("dead panel");
+        std::fs::write(attachments.join("%6c697665.json.lock"), b"").expect("a staging lock beside the panels");
         std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "live", "fresh", &authorized).expect("fresh");
         let live = crate::paths::safe_local_id("live");
@@ -918,6 +931,10 @@ mod tests {
             "a panel without a manifest keeps nothing staged, whatever the age"
         );
         assert!(action_directory(&attachments, "live", "fresh").exists());
+        assert!(
+            attachments.join("%6c697665.json.lock").is_file(),
+            "lock files are not panels"
+        );
         release_panel_attachments(&attachments, "live");
         assert!(!attachments.join(&live).exists());
         release_panel_attachments(&attachments, "live");

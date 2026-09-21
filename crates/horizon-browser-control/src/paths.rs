@@ -126,8 +126,31 @@ fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<P
     hidden_beneath_home.then(|| {
         home.join("Horizon")
             .join("browser-attachments")
-            .join(safe_local_id(&root.to_string_lossy()))
+            .join(encode_path_bytes(root))
     })
+}
+
+/// A directory name derived from a path's exact platform bytes, so two
+/// distinct roots never share it however they are spelled.
+#[cfg(any(target_os = "linux", test))]
+fn encode_path_bytes(path: &Path) -> String {
+    #[cfg(unix)]
+    let bytes: Vec<u8> = {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    };
+    #[cfg(windows)]
+    let bytes: Vec<u8> = {
+        use std::os::windows::ffi::OsStrExt;
+        path.as_os_str().encode_wide().flat_map(u16::to_le_bytes).collect()
+    };
+    let mut encoded = String::with_capacity(1 + bytes.len() * 2);
+    encoded.push('%');
+    for byte in bytes {
+        encoded.push(LOWER_HEX[(byte >> 4) as usize] as char);
+        encoded.push(LOWER_HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 #[cfg(not(any(target_os = "linux", test)))]
@@ -160,6 +183,14 @@ mod tests {
         let second = super::browser_visible_attachments_dir(&home.join(".horizon-dev"), Some(home)).expect("hidden");
         assert!(first.starts_with(home.join("Horizon").join("browser-attachments")));
         assert_ne!(first, second, "two hidden roots never share staging");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let odd = |bytes: &[u8]| home.join(std::ffi::OsStr::from_bytes(bytes));
+            let left = super::browser_visible_attachments_dir(&odd(b".horizon-\x80"), Some(home)).expect("hidden");
+            let right = super::browser_visible_attachments_dir(&odd(b".horizon-\x81"), Some(home)).expect("hidden");
+            assert_ne!(left, right, "non-UTF-8 roots are told apart by their exact bytes");
+        }
         assert!(super::browser_visible_attachments_dir(&home.join("Horizon"), Some(home)).is_none());
         assert!(super::browser_visible_attachments_dir(&home.join(".horizon"), None).is_none());
     }

@@ -76,7 +76,7 @@ reply with the matching `id` arrives.
 | `set_files` on the button `#add` | error `not_file_input` |
 | `set_files` with the outside file | error `attachment_policy … outside the allowed roots` |
 | `set_files` with the symlink | error `attachment_policy … outside the allowed roots` |
-| `set_files` with a missing path | error `attachment_policy … cannot be resolved` |
+| `set_files` with a missing path | error `invalid_input … cannot be resolved` |
 | `set_files` with a relative path | error `set_files paths must be absolute` |
 | `browser_evaluate` avatar status | still `No avatar` (refusals had no side effects) |
 | `set_files #avatar` with `photo.png` | `files: [photo.png]` and the avatar handler ran |

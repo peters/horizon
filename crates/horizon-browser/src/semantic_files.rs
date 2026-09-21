@@ -131,8 +131,9 @@ pub(crate) fn local_file_facts(paths: &[PathBuf]) -> Result<Vec<ExpectedFile>, B
 
 /// The input must hold exactly the requested files afterwards, as a multiset
 /// of (name, size): a driver that accepted the command without attaching
-/// anything, dropped a duplicate, or a handler that swapped a file for
-/// different same-named content is a failed action.
+/// anything, dropped a duplicate, or a handler that swapped in a file of a
+/// different name or size is a failed action. Content of the same name and
+/// size is not distinguished.
 pub(crate) fn verify_attached(
     attached: &[BrowserAttachedFile],
     expected: &[ExpectedFile],

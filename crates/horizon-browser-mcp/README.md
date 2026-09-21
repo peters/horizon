@@ -147,8 +147,9 @@ shell commands, files, or other MCP servers.
   `multiple` and
   `accept` attributes are checked first (`multiple_not_allowed`,
   `accept_mismatch`), a target that is not a file input returns
-  `not_file_input`, and a refused path returns `attachment_policy` with no
-  side effects. Chromium attaches through `DOM.setFileInputFiles`, which
+  `not_file_input`, a path outside the roots returns `attachment_policy`, a
+  malformed or missing path `invalid_input`, and a file over the limit
+  `file_too_large`, all with no side effects. Chromium attaches through `DOM.setFileInputFiles`, which
   fires the page's `input` and `change` handlers; local Firefox and Safari
   use Element Send Keys with the paths. The result's `files` lists the
   names, sizes, and MIME types read back from the input, and a readback that

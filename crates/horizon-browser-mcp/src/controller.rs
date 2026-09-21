@@ -128,9 +128,11 @@ pub(crate) enum ControlError {
     )]
     StagingTimeout { timeout_millis: u64 },
     #[error("browser set_files refused (invalid_input): {message}")]
-    InvalidAttachmentRequest { message: &'static str },
+    InvalidAttachmentRequest { message: String },
     #[error("browser set_files refused (attachment_policy): {message}")]
     AttachmentRefused { message: String },
+    #[error("browser set_files refused (file_too_large): {message}")]
+    AttachmentTooLarge { message: String },
     #[error(
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
     )]
@@ -593,7 +595,7 @@ impl BrowserController {
             Ok(Err(AttachmentEnqueueError::Invalid(message))) => {
                 Err(ControlError::InvalidAttachmentRequest { message })
             }
-            Ok(Err(AttachmentEnqueueError::Refused(message))) => Err(ControlError::AttachmentRefused { message }),
+            Ok(Err(AttachmentEnqueueError::Policy(error))) => Err(attachment_policy_error(&error)),
             Ok(Err(AttachmentEnqueueError::Queue(source))) => {
                 Err(self.denied(panel_id, "could not queue browser action", source))
             }
@@ -831,8 +833,8 @@ fn finish_repolled_result(
 }
 
 enum AttachmentEnqueueError {
-    Invalid(&'static str),
-    Refused(String),
+    Invalid(String),
+    Policy(horizon_browser_control::AttachmentPolicyError),
     Queue(io::Error),
 }
 
@@ -847,14 +849,16 @@ fn authorize_and_enqueue_attachments(
     host_instance: Option<&str>,
     action: BrowserControlAction,
 ) -> Result<String, AttachmentEnqueueError> {
-    action.validate().map_err(AttachmentEnqueueError::Invalid)?;
+    action
+        .validate()
+        .map_err(|message| AttachmentEnqueueError::Invalid(message.to_string()))?;
     let BrowserControlAction::SetFiles { target, paths, .. } = action else {
         return manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), action)
             .map_err(AttachmentEnqueueError::Queue);
     };
     let paths = horizon_browser_control::AttachmentPolicy::from_environment()
         .authorize(&paths)
-        .map_err(|error| AttachmentEnqueueError::Refused(error.to_string()))?
+        .map_err(AttachmentEnqueueError::Policy)?
         .iter()
         .map(|file| file.path().to_path_buf())
         .collect();
@@ -886,6 +890,20 @@ fn sweep_stale_attachments() {
             manifests.join(manifest).exists()
         },
     );
+}
+
+/// A policy error keeps its classification through the preflight: a root
+/// refusal is an `attachment_policy` error, a malformed path is
+/// `invalid_input`, an oversized file is `file_too_large`, and a staging
+/// failure is an internal error.
+fn attachment_policy_error(error: &horizon_browser_control::AttachmentPolicyError) -> ControlError {
+    let message = error.to_string();
+    match error.io_kind() {
+        io::ErrorKind::PermissionDenied => ControlError::AttachmentRefused { message },
+        io::ErrorKind::InvalidInput => ControlError::InvalidAttachmentRequest { message },
+        io::ErrorKind::FileTooLarge => ControlError::AttachmentTooLarge { message },
+        kind => ControlError::internal_io("could not stage browser attachments", io::Error::new(kind, message)),
+    }
 }
 
 fn require_local_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
