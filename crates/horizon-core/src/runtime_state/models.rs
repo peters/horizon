@@ -353,6 +353,7 @@ impl PanelState {
             self.command.clone()
         };
         PanelOptions {
+            device_identity: None,
             name: if self.name.is_empty() {
                 None
             } else {

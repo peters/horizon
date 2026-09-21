@@ -145,6 +145,9 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_device_panel_contract(tools: &Value) {
     let device = listed_tool(tools, "device_panel").to_string();
+    for field in ["identity", "machine_name", "hostname", "ip_addresses", "tailscale_name"] {
+        assert!(device.contains(field), "missing Device identity field {field}");
+    }
     for operation in ["create", "list", "inspect", "visibility", "reconnect", "close"] {
         assert!(
             device.contains(operation),

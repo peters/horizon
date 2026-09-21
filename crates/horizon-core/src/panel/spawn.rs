@@ -158,7 +158,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let command = opts.command.take();
             let is_restore = opts.is_restore;
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
-            device::spawn_device(seed, command.as_deref(), is_restore)
+            device::spawn_device(seed, command.as_deref(), is_restore, opts.device_identity.take())
         }
         PanelKind::Browser => {
             let command = opts.command.take();
