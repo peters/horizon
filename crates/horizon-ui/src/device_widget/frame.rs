@@ -2,6 +2,7 @@ use egui::ColorImage;
 use vnc::{Rect, VncEvent};
 
 use super::session::ViewError;
+use crate::frame_budget::MAX_FRAME_PIXELS;
 
 #[derive(Default)]
 pub(super) struct Framebuffer {
@@ -53,7 +54,7 @@ impl Framebuffer {
     }
 
     fn resize(&mut self, width: usize, height: usize) -> Result<bool, ViewError> {
-        if width == 0 || height == 0 || width * height > 8_294_400 {
+        if width == 0 || height == 0 || width * height > MAX_FRAME_PIXELS as usize {
             return Err(ViewError::Frame("unsupported desktop size"));
         }
         self.width = width;

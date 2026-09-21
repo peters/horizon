@@ -23,6 +23,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   caller responsibilities. Future device adapters must advertise explicit
   capabilities; no viewer renderer or remote manager belongs in the library.
 
+### UI frame budget
+
+- `horizon-ui::frame_budget` owns the decoded-frame pixel ceiling shared by
+  browser viewport zoom and native Device frame allocation. Renderer-specific
+  side limits and standalone capture/recording policies remain with their owners.
+
 ### Native Device panels
 
 - `horizon-core::device` owns the validated local VNC target and panel state;

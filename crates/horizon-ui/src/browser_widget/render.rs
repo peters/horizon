@@ -7,14 +7,10 @@ use egui::{Color32, CornerRadius, Rect, Sense, StrokeKind, Ui, pos2, vec2};
 use horizon_core::browser::{BrowserPanelState, BrowserStatus, PageScrollState};
 
 use crate::browser_widget::BrowserUiState;
+use crate::frame_budget::{FRAME_BUDGET_SIZE, MAX_FRAME_PIXELS};
 
 /// Smallest viewport side `synchronize_viewport` accepts as a real layout.
 const MIN_STABLE_VIEWPORT_SIDE: f32 = 33.0;
-/// Frames arrive at the emulated viewport's size, are decoded to RGB and
-/// uploaded as one texture, so zooming out is bounded by a 4K-class pixel
-/// budget as well as the renderer's own side limit.
-const FRAME_BUDGET_SIZE: [u16; 2] = [3840, 2160];
-const MAX_FRAME_PIXELS: u32 = FRAME_BUDGET_SIZE[0] as u32 * FRAME_BUDGET_SIZE[1] as u32;
 
 pub struct BodyOutput {
     pub image_rect: Option<Rect>,
