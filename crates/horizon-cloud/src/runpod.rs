@@ -95,10 +95,32 @@ impl RunPod {
     /// # Errors
     /// Rejects invalid IDs and provider failures. HTTP 404 is a missing worker.
     pub fn inspect(&self, id: &str, cancel: &Cancellation) -> Result<Option<Worker>, CloudError> {
+        self.inspect_bounded(id, cancel, None)
+    }
+    /// # Errors
+    /// As `inspect`, with a caller budget covering response headers and body.
+    pub fn inspect_with_timeout(
+        &self,
+        id: &str,
+        cancel: &Cancellation,
+        timeout: Duration,
+    ) -> Result<Option<Worker>, CloudError> {
+        cancel.check()?;
+        if timeout.is_zero() {
+            return Err(CloudError::Transport);
+        }
+        self.inspect_bounded(id, cancel, Some(timeout.min(Duration::from_secs(30))))
+    }
+    fn inspect_bounded(
+        &self,
+        id: &str,
+        cancel: &Cancellation,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Worker>, CloudError> {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid worker ID"));
         }
-        match self.request("GET", &format!("/pods/{id}"), None, cancel) {
+        match self.request_with_timeout("GET", &format!("/pods/{id}"), None, cancel, timeout) {
             Err(CloudError::Http(404)) => Ok(None),
             result => {
                 let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
@@ -160,6 +182,16 @@ impl RunPod {
         body: Option<Value>,
         cancel: &Cancellation,
     ) -> Result<Value, CloudError> {
+        self.request_with_timeout(method, path, body, cancel, None)
+    }
+    fn request_with_timeout(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        cancel: &Cancellation,
+        timeout: Option<Duration>,
+    ) -> Result<Value, CloudError> {
         cancel.check()?;
         let url = format!("{}{path}", self.endpoint);
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
@@ -170,7 +202,14 @@ impl RunPod {
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or(Value::Null)),
             "DELETE" => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
-            _ => self.agent.get(&url).header("Authorization", auth.as_str()).call(),
+            _ => {
+                let request = self.agent.get(&url).header("Authorization", auth.as_str());
+                if let Some(timeout) = timeout {
+                    request.config().timeout_global(Some(timeout)).build().call()
+                } else {
+                    request.call()
+                }
+            }
         };
         let mut response = response.map_err(|_| CloudError::Transport)?;
         let status = response.status().as_u16();

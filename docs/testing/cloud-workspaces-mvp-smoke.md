@@ -585,3 +585,27 @@ native recording. No issue picker or remote-device picker belongs in this flow.
 Close the dialog, leave at least one ordinary frame, then reopen using its toolbar
 button. Repeat Tab traversal and click the backdrop over Fit all: dismiss the
 dialog without fitting the underlying canvas or activating other toolbar actions.
+
+
+## Arranged cloud drag regression
+
+Use a task-owned synthetic local cloud fixture with three real terminal panels and
+an independent sibling cloud. Preserve normal remote deployment scenarios separately.
+Record native 4K video while the live Device viewer reports displayed, advancing frames.
+For Rows, Cols and Grid, drag a panel title across a sibling slot at two canvas zooms:
+the preview follows the pointer, siblings exchange slots, and release clears the
+preview. The cloud retains its layout; its parent workspace may remain Default.
+Try a hidden member and a panel in another cloud: neither is a reorder target.
+Switch the cloud to Default and verify freeform movement. Reopen the isolated profile
+and assert the saved cloud member order and positions match the last arranged result.
+Decode representative recording frames and record the exact candidate hash.
+
+## Readiness retry and cancellation regression
+
+Keep configured readiness_seconds as one budget for provider headers/body, SSH and
+retry waits. A stalled endpoint must stop within that budget; a late successful
+probe must not become Ready. Cancel source snapshot and Git pack before revision
+resolution and verify no source artifact or worker allocation. Retry an unfinished
+Bound deployment through Ready and retain that successful attempt's duration.
+Reconnect a legacy Ready record with no duration, fail once, then retry: duration
+must remain unknown rather than presenting reconnect time as initial readiness.

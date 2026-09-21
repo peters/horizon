@@ -419,3 +419,33 @@ fn malformed_public_keys_are_rejected_before_provider_access() {
     spec.public_key.push('\n');
     assert!(spec.validate().is_err());
 }
+
+#[test]
+fn caller_inspection_budget_bounds_headers_and_body() {
+    for headers_first in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut input = [0; 4096];
+            assert!(stream.read(&mut input).unwrap() > 0);
+            if headers_first {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 200\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+            }
+            thread::sleep(Duration::from_millis(600));
+        });
+        let mut provider = RunPod::new(Credential::new("fixture".into()).unwrap());
+        provider.endpoint = format!("http://{address}");
+        let started = std::time::Instant::now();
+        assert!(
+            provider
+                .inspect_with_timeout("fixture", &Cancellation::default(), Duration::from_millis(100))
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        task.join().unwrap();
+    }
+}

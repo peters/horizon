@@ -49,7 +49,7 @@ pub(crate) fn is_commit_id(revision: &str) -> bool {
 /// # Errors
 /// Reports export/extraction failures. Local uncommitted files are never copied.
 pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
-    let sha = resolve(repository, revision)?;
+    let sha = resolve_with_runner(repository, revision, runner)?;
     let material = material::Material::collect(repository, &sha, runner)?;
     let path = root.join(format!("source-{sha}"));
     if path.exists() {
@@ -100,7 +100,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
 /// # Errors
 /// Packs only objects reachable from the selected commit; no branch mutation/push.
 pub fn pack(repository: &Path, revision: &str, output: &Path, runner: &Runner<'_>) -> Result<()> {
-    let sha = resolve(repository, revision)?;
+    let sha = resolve_with_runner(repository, revision, runner)?;
     let mut input = tempfile::NamedTempFile::new()?;
     writeln!(input, "{sha}")?;
     runner.to_file(

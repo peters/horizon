@@ -191,6 +191,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         sessions: Vec::new(),
         source_ready: false,
         ready_after_seconds: None,
+        ready_history: horizon_core::cloud_runtime::state::ReadyHistory::Unobserved,
         stop_requested: false,
         browserstack_released: false,
         browserstack_targets: std::collections::BTreeSet::new(),

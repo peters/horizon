@@ -74,13 +74,16 @@ impl Connection {
     }
     /// # Errors
     /// Checks the worker runtime through the existing OpenSSH transport.
-    pub fn ready(&self, runner: &Runner<'_>, capabilities: &horizon_cloud::Capabilities) -> Result<()> {
+    pub fn ready(
+        &self,
+        runner: &Runner<'_>,
+        capabilities: &horizon_cloud::Capabilities,
+        timeout: Duration,
+    ) -> Result<()> {
         let output = runner.run(
             "SSH readiness",
             &mut self.command(&worker_contract::readiness_command(capabilities)?),
-            // Modern images run the baseline and service checks, each with the
-            // original readiness budget.
-            Duration::from_secs(40),
+            timeout.min(Duration::from_secs(40)),
         )?;
         worker_contract::validate(&output, capabilities, false)
     }
@@ -158,4 +161,58 @@ impl Connection {
 }
 fn valid_revision(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use horizon_cloud::{Cancellation, Capabilities};
+    use std::{net::TcpListener, sync::mpsc, thread, time::Instant};
+
+    #[test]
+    fn readiness_budget_interrupts_a_stalled_ssh_handshake() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let connection = Connection {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            identity: root.path().join("missing-test-key"),
+            known_hosts: root.path().join("known-hosts"),
+            host_key_alias: "readiness-budget-fixture".into(),
+        };
+        let (accepted, connected) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                if let Ok((stream, _)) = listener.accept() {
+                    accepted.send(()).unwrap();
+                    let _ = wait.recv_timeout(Duration::from_secs(2));
+                    drop(stream);
+                    return;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let cancel = Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: vec![],
+        };
+        let started = Instant::now();
+        let result = connection.ready(&runner, &Capabilities::default(), Duration::from_millis(150));
+        let elapsed = started.elapsed();
+        let did_connect = connected.try_recv().is_ok();
+        let _ = release.send(());
+        server.join().unwrap();
+        assert!(did_connect, "SSH must reach the stalled handshake");
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "probe ignored its remaining budget: {elapsed:?}"
+        );
+        assert!(!connection.known_hosts.exists());
+    }
 }

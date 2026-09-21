@@ -15,6 +15,13 @@ pub struct Session {
     pub branch: String,
     pub worktree: String,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum ReadyHistory {
+    #[default]
+    Unobserved,
+    Observed,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Deployment {
     pub version: u32,
@@ -33,6 +40,9 @@ pub struct Deployment {
     /// Not a measurement of application startup or the first visible frame.
     #[serde(default)]
     pub ready_after_seconds: Option<u64>,
+    /// Retains unknown legacy readiness history through a failed reconnect.
+    #[serde(default)]
+    pub ready_history: ReadyHistory,
     #[serde(default)]
     pub stop_requested: bool,
     #[serde(default)]
@@ -88,9 +98,12 @@ impl Store {
         let path = self.root.join("deployment.json");
         match std::fs::read(path) {
             Ok(bytes) => {
-                let state: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
+                let mut state: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
                 if state.version != 1 {
                     return Err(Error::Invalid("Unsupported cloud state"));
+                }
+                if state.stage == Stage::Ready {
+                    state.ready_history = ReadyHistory::Observed;
                 }
                 Ok(Some(state))
             }

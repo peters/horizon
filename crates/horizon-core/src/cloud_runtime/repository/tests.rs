@@ -285,3 +285,26 @@ fn nested_non_utf8_files_and_directories_are_rejected_during_preflight() {
         ));
     }
 }
+
+#[test]
+fn cancelled_exports_stop_before_resolving_an_invalid_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let cancel = horizon_cloud::Cancellation::default();
+    cancel.cancel();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let missing = root.path().join("missing-repository");
+    for result in [
+        snapshot(&missing, "HEAD", root.path(), &runner).map(|_| ()),
+        pack(&missing, "HEAD", &root.path().join("objects.pack"), &runner),
+    ] {
+        assert!(matches!(
+            result,
+            Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+        ));
+    }
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}

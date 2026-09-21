@@ -1,4 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
+mod readiness;
+
 use super::{
     Error, Event, Result, Stage,
     command::Runner,
@@ -6,7 +8,7 @@ use super::{
     repository,
     settings::Settings,
     ssh::Connection,
-    state::{Deployment, Store},
+    state::{Deployment, ReadyHistory, Store},
 };
 use horizon_cloud::{Cancellation, CreateState, WorkerSpec, runpod::RunPod};
 use std::{
@@ -49,7 +51,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         secrets: Vec::new(),
     };
     let mut state = initial_state(request, &store)?;
-    let started = (state.operation == CreateState::Prepared && state.worker.is_none()).then_some(started);
+    let started = attempt_started(&state, started);
     let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
     let browser_auth = super::browser_auth::Prepared::for_repository(
         &request.settings.browserstack_credentials,
@@ -104,7 +106,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         |progress| emit(Event::Output(format!("{progress:?}"))),
     )?;
     state.worker = Some(worker);
-    let connection = readiness(request, &provider, &store, &runner, &mut state, &spec)?;
+    let connection = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
     if !state.source_ready {
         state.stage = Stage::Worktrees;
         store.save(&state)?;
@@ -143,6 +145,13 @@ fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -
     Ok(())
 }
 
+fn attempt_started(state: &Deployment, now: Instant) -> Option<Instant> {
+    (state.ready_after_seconds.is_none()
+        && state.ready_history == ReadyHistory::Unobserved
+        && state.stage != Stage::Ready)
+        .then_some(now)
+}
+
 fn finish_ready(
     mut state: Deployment,
     store: &Store,
@@ -150,6 +159,7 @@ fn finish_ready(
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
     state.stage = Stage::Ready;
+    state.ready_history = ReadyHistory::Observed;
     if let Some(started) = started {
         state
             .ready_after_seconds
@@ -268,6 +278,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             sessions: Vec::new(),
             source_ready: false,
             ready_after_seconds: None,
+            ready_history: ReadyHistory::Unobserved,
             stop_requested: false,
             browserstack_released: true,
             browserstack_targets: std::collections::BTreeSet::new(),
@@ -306,56 +317,6 @@ fn prepare_image(request: &Request, store: &Store, runner: &Runner<'_>, state: &
         data_centers: request.settings.data_centers.clone(),
     });
     store.save(state)
-}
-fn readiness(
-    request: &Request,
-    provider: &RunPod,
-    store: &Store,
-    runner: &Runner<'_>,
-    state: &mut Deployment,
-    spec: &WorkerSpec,
-) -> Result<Connection> {
-    state.stage = Stage::Readiness;
-    store.save(state)?;
-    (runner.emit)(Event::stage(state.stage));
-    let started = Instant::now();
-    loop {
-        runner.cancel.check()?;
-        let id = &state
-            .worker
-            .as_ref()
-            .ok_or(Error::Invalid("Missing worker identity"))?
-            .id;
-        let worker = provider
-            .inspect(id, runner.cancel)?
-            .ok_or(horizon_cloud::CloudError::WorkerLost)?;
-        worker.verify(spec)?;
-        worker.verify_resources(spec)?;
-        let connection = Connection::new(&worker, &request.settings, store.root());
-        state.worker = Some(worker);
-        store.save(state)?;
-        if let Ok(connection) = connection {
-            (runner.emit)(Event::Progress(super::progress::Progress::activity(
-                "Waiting for SSH and worker services",
-            )));
-            if connection.ready(runner, &state.profile.capabilities).is_ok() {
-                return Ok(connection);
-            }
-        } else {
-            (runner.emit)(Event::Progress(super::progress::Progress::activity(
-                "Waiting for the provider to publish an SSH endpoint",
-            )));
-        }
-        if started.elapsed() > Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds)) {
-            return Err(Error::Invalid(
-                "Worker readiness timed out; worker remains allocated for inspection or explicit deletion",
-            ));
-        }
-        for _ in 0..20 {
-            runner.cancel.check()?;
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
 }
 /// # Errors
 /// Terminates only the persisted, identity-checked worker; never called on UI drop.
@@ -558,5 +519,33 @@ mod tests {
             request.revision = revision.into();
             assert!(prepare(&request).is_err());
         }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn retry_timing_preserves_prior_ready_history_even_after_failed_reconnect() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let legacy: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"timing","repository":"/fixture","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"fixture"},"spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        assert!(attempt_started(&legacy, Instant::now()).is_none());
+        store.save(&legacy).unwrap();
+        let mut reconnect = store.load().unwrap().unwrap();
+        reconnect.stage = Stage::Readiness;
+        store.save(&reconnect).unwrap();
+        assert!(attempt_started(&store.load().unwrap().unwrap(), Instant::now()).is_none());
+        let mut unfinished = legacy;
+        for stage in [Stage::Validate, Stage::Readiness, Stage::Worktrees, Stage::Sessions] {
+            unfinished.stage = stage;
+            assert!(attempt_started(&unfinished, Instant::now()).is_some());
+        }
+        let started = Instant::now().checked_sub(Duration::from_secs(12)).unwrap();
+        let timed = finish_ready(unfinished, &store, Some(started), &|_| {}).unwrap();
+        assert_eq!(timed.ready_after_seconds, Some(12));
+        assert_eq!(timed.ready_history, ReadyHistory::Observed);
+        assert!(attempt_started(&timed, Instant::now()).is_none());
     }
 }

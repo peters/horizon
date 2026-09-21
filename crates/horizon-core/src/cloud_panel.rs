@@ -1,6 +1,7 @@
 //! Opt-in cloud-panel prototype: grouping of ordinary panels, not a new runtime.
 mod capabilities;
 mod fixture;
+mod reordering;
 
 pub use horizon_cloud::Connection as CloudConnection;
 use std::collections::HashMap;

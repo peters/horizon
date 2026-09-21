@@ -1177,3 +1177,22 @@ and platform-neutral validation remain covered.
 
 Windows cloud durability follow-up: #823. It retains ordinary local sessions and
 requires platform-native crash/restart qualification before enabling allocation.
+
+
+### Readiness and arranged-drag review corrections
+
+The current hosted pass found four acceptance bugs: previously unfinished deployments
+lost their Ready duration on retry, individual readiness probes could exceed the
+configured budget, source exports resolved revisions outside the cancellation token,
+and arranged cloud panels followed the parent workspace's freeform drag path.
+
+The corrections preserve observed readiness history across failed reconnects, use
+one deadline across provider headers/body, SSH and retry waits, propagate the active
+export cancellation, and persist sibling reordering inside each cloud. Regressions
+cover legacy unknown timing, Bound retries, stalled HTTP/SSH, cancelled exports,
+Rows/Cols/Grid, disabled capabilities, hidden/foreign members, persistence and drag
+release. Validation 49 exposed new test lint failures and is superseded by 50.
+Independent review found no further correctness issues. Fresh native motion evidence,
+current-head hosted review/CI, the post-review smoke and cleanup audit still gate merge.
+No new compute or feature scope is introduced. Epic #790 remains open for #812–#816,
+#820 and #823; acceptance of the local candidate is not final-image qualification.
