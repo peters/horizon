@@ -98,7 +98,7 @@ fn an_ambiguous_new_session_is_unknown_and_never_retried() {
         "{failure:?}"
     );
     assert!(failure.to_string().contains("not retried"));
-    std::thread::sleep(Duration::from_millis(1000));
+    std::thread::sleep(Duration::from_secs(1));
     assert_eq!(server.recorded().len(), 1, "exactly one New Session was ever sent");
 }
 

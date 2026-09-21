@@ -91,8 +91,8 @@ impl HorizonApp {
         if resize_response.drag_started() || resize_response.clicked() {
             outcome.request_focus();
         }
-        if !is_renaming && drag_response.clicked() && !drag_response.double_clicked() {
-            outcome.request_reveal();
+        if !is_renaming && drag_response.clicked() {
+            outcome.request_focus();
         }
         if !is_renaming && drag_response.drag_started() {
             outcome.request_focus();
@@ -116,10 +116,6 @@ impl HorizonApp {
         if !is_renaming && drag_response.double_clicked() {
             outcome.command = Some(PanelCommand::StartRename);
             outcome.request_focus();
-            outcome.clear_reveal();
-        }
-        if outcome.mic_clicked || matches!(outcome.command, Some(PanelCommand::Close)) {
-            outcome.clear_reveal();
         }
     }
 
@@ -308,7 +304,6 @@ impl HorizonApp {
             ctx.request_repaint();
         }
         match outcome.focus {
-            PanelFocusRequest::Reveal => self.reveal_selected_panel(ctx, panel_id),
             PanelFocusRequest::Focus => {
                 self.board.focus(panel_id);
             }
