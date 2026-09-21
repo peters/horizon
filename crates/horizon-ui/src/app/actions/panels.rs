@@ -17,7 +17,21 @@ fn normalize_new_panel_resume(options: &mut PanelOptions) {
 impl HorizonApp {
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
         let workspace_id = self.ensure_workspace_visible(ctx);
-        match self.create_panel_with_options(PanelOptions::default(), workspace_id) {
+        #[cfg(feature = "cloud-workspaces")]
+        let (workspace_id, options) =
+            self.fullscreen_cloud_target()
+                .map_or((workspace_id, PanelOptions::default()), |(workspace, position)| {
+                    (
+                        workspace,
+                        PanelOptions {
+                            position: Some(position),
+                            ..PanelOptions::default()
+                        },
+                    )
+                });
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let options = PanelOptions::default();
+        match self.create_panel_with_options(options, workspace_id) {
             Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
             Err(error) => tracing::error!("failed to create panel: {error}"),
         }
@@ -28,11 +42,26 @@ impl HorizonApp {
         mut options: PanelOptions,
         workspace_id: WorkspaceId,
     ) -> horizon_core::Result<PanelId> {
+        #[cfg(feature = "cloud-workspaces")]
+        let cloud_group = self.cloud_panel_launch_group(&mut options, workspace_id);
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(index) = cloud_group
+            && let Err(error) = self.prepare_cloud_remote_panel(index, &mut options)
+        {
+            self.cloud_prototype.error = Some(error.to_string());
+            return Err(error);
+        }
         let workspace_cwd = workspace_cwd(&self.board, workspace_id);
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
-        self.board.create_panel(options, workspace_id)
+        let id = self.board.create_panel(options, workspace_id)?;
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(index) = cloud_group {
+            self.cloud_panel_created(index, id);
+            self.cloud_prototype.error = None;
+        }
+        Ok(id)
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached
@@ -55,6 +84,14 @@ impl HorizonApp {
         workspace_id: WorkspaceId,
         panel_id: PanelId,
     ) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .board
+            .panel(panel_id)
+            .is_some_and(|p| !self.cloud_panel_is_in_view(&p.local_id))
+        {
+            self.exit_cloud_fullscreen(ctx);
+        }
         if self.focus_workspace_window(ctx, workspace_id) {
             self.board.focus(panel_id);
             return;
@@ -76,6 +113,10 @@ impl HorizonApp {
         &mut self,
         panel_id: PanelId,
     ) -> Option<horizon_core::browser::BrowserShutdownSignal> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.close_cloud_browser(panel_id) {
+            return None;
+        }
         self.refresh_remote_recovery_scope();
         let transcript = self
             .board
@@ -95,6 +136,26 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.board.workspace(workspace_id).is_some_and(|workspace| {
+            self.cloud_prototype
+                .groups
+                .0
+                .iter()
+                .any(|group| group.remote.is_some() && group.workspace == workspace.local_id)
+        }) {
+            let ids = self
+                .board
+                .workspace(workspace_id)
+                .map(|workspace| workspace.panels.clone())
+                .unwrap_or_default();
+            self.board.retain_workspace_when_empty(workspace_id);
+            for id in ids {
+                self.close_panel(id);
+            }
+            self.mark_runtime_dirty();
+            return;
+        }
         self.refresh_remote_recovery_scope();
         let panels_to_close: Vec<_> = self
             .board
@@ -163,9 +224,36 @@ impl HorizonApp {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     ) {
-        if workspace_cwd(&self.board, workspace_id).is_some() || !preset.requires_workspace_cwd() {
+        #[cfg(feature = "cloud-workspaces")]
+        let (workspace_id, canvas_pos) = self
+            .fullscreen_cloud_target()
+            .map_or((workspace_id, canvas_pos), |(workspace, position)| {
+                (workspace, Some(position))
+            });
+        let has_directory = workspace_cwd(&self.board, workspace_id).is_some();
+        #[cfg(feature = "cloud-workspaces")]
+        let has_directory = has_directory
+            || canvas_pos.is_some_and(|pos| {
+                self.cloud_prototype
+                    .groups
+                    .at_position(&self.board, workspace_id, pos)
+                    .is_some()
+            });
+        if has_directory || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options(&self.template_config.browser);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
+            #[cfg(feature = "cloud-workspaces")]
+            if canvas_pos.is_some_and(|pos| {
+                self.cloud_prototype
+                    .groups
+                    .at_position(&self.board, workspace_id, pos)
+                    .is_some()
+            }) {
+                options.position = canvas_pos;
+                if let Some(ws) = self.board.workspace_mut(workspace_id) {
+                    ws.layout = None;
+                }
+            }
             match self.create_panel_with_options(options, workspace_id) {
                 Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
                 Err(error) => tracing::error!("failed to create panel: {error}"),

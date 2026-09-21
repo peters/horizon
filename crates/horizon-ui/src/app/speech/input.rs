@@ -413,6 +413,7 @@ impl HorizonApp {
             .as_ref()
             .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
         let text_surface_active = self.settings.is_some()
+            || self.cloud_creation_open()
             || self.command_palette.is_some()
             || search_capturing
             || self.renaming_panel.is_some()
@@ -486,6 +487,7 @@ impl HorizonApp {
         // would disable every shortcut indefinitely.
         let (root_focused_now, horizon_focused, sink) = self.speech_focus_and_sink(ctx);
         let (text_surface_active, search_capturing) = self.speech_text_surface_active();
+        let cloud_creation_open = self.cloud_creation_open();
         self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, horizon_focused);
         self.install_speech_global_wake(ctx);
         if !root_focused_now {
@@ -532,11 +534,15 @@ impl HorizonApp {
                     .any(|(_, binding)| shortcuts::press_and_release_in_events(&input.events, *binding).0)
             });
             if gated_press {
-                let surface = gated_press_surface(
-                    self.settings.is_some(),
-                    self.command_palette.is_some(),
-                    search_capturing,
-                );
+                let surface = if cloud_creation_open {
+                    "the cloud creation dialog is open"
+                } else {
+                    gated_press_surface(
+                        self.settings.is_some(),
+                        self.command_palette.is_some(),
+                        search_capturing,
+                    )
+                };
                 events.push(SpeechEvent::Notice(format!("Push-to-talk press ignored: {surface}.")));
             }
         }

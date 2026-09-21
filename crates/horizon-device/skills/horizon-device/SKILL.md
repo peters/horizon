@@ -47,6 +47,30 @@ interpret a missing/default-zero counter as a failure. Set
 actual presentation. Never claim that a separate isolated viewer is visible to
 the user merely because its screenshot is available.
 
+Check this automatically; never ask a human to confirm visibility or advancing
+frames. Save at least three timestamped public inspections, two seconds apart.
+The current `frame_sequence` counts uploaded images, not independent transport
+heartbeats. An unchanged sequence on a static or unknown target does not prove a
+stalled connection. A displayed static image proves presentation only; changing
+target output and sequence advancement are needed for live-motion evidence.
+
+Recover only the task-owned viewer, with at most one visibility request when
+hidden and one reconnect when stopped or disconnected. Inspect again after each
+request; do not reconnect a healthy connection merely because its image is not
+displayed. Do not close/recreate viewers in a loop. Retain the attempt budget
+across retries for the same incident. A connected, visible, unpresented viewer
+requires `operation: "reveal"` on hosts advertising it. Reveal an owned viewer
+at most once, then inspect again; this changes the viewport without reconnecting
+or claiming live-image proof. When diagnostics are present, record connection
+generation, decoded-frame sequence and age, sampling pause, last displayed age
+and presentation reason. Current hosts keep reception active while hidden or off
+canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling
+pause proves a transport failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
+prove display. Older hosts may lack reveal or diagnostics: record
+`presentation_unverified` and the missing capability instead of asking the user
+to move or watch the panel. Continue non-interactive checks. Never restart the
+user's Horizon to upgrade these capabilities without authorization.
+
 `operation: "reconnect"` explicitly connects and acquires an unowned/restored
 viewer; do not take another owner's panel. Restored viewers stay stopped until
 reconnected. `operation: "close"` closes an owned viewer without terminating its

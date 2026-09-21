@@ -334,3 +334,18 @@ client. Relative paths resolve once at startup; an empty value is an error.
 Task-owned browser/agent subprocesses still use their dedicated private roots.
 The default remains `HOME/.horizon`; the override does not move Horizon's
 application configuration or terminal sessions.
+
+## Provider device discovery
+
+Use `browser_provider_devices` in a plan to discover any device/OS/browser
+combination offered by the configured account. For example:
+
+```json
+{"version":1,"steps":[{"id":"devices","tool":"browser_provider_devices","arguments":{"provider":"team_cloud","search":"iPhone 18"}}]}
+```
+
+Results contain up to 50 combinations, `total`, and `next_offset`. Pass a returned
+`target` to `browser_create` without `backend`. Existing named targets also work.
+Discovery does not allocate a device or reserve capacity. Account access and
+availability are verified when creating the session. Cloud workers use only their
+repository-declared, locally granted account and keep operating after disconnect.

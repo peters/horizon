@@ -2,7 +2,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use egui::{ColorImage, Context, ViewportId};
@@ -36,6 +36,7 @@ pub(super) enum Status {
 }
 
 pub(super) struct Updates {
+    pub stream: StreamEvidence,
     pub image: Option<ColorImage>,
     pub produced_with: Option<DeviceViewOptions>,
     pub status: Option<Status>,
@@ -45,6 +46,12 @@ pub(super) struct Updates {
     options: DeviceViewOptions,
     pub desktop: Option<[usize; 2]>,
     pub server_name: Option<String>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct StreamEvidence {
+    pub sequence: u64,
+    pub last_frame: Option<Instant>,
 }
 
 pub(super) struct Observation {
@@ -67,6 +74,7 @@ impl Session {
         options: DeviceViewOptions,
     ) -> Result<Self, ViewError> {
         let updates = Arc::new(Mutex::new(Updates {
+            stream: StreamEvidence::default(),
             image: None,
             produced_with: None,
             status: Some(Status::Connecting),
@@ -128,6 +136,10 @@ impl Session {
     pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
         Self {
             updates: Arc::new(Mutex::new(Updates {
+                stream: StreamEvidence {
+                    sequence: 1,
+                    last_frame: Some(Instant::now()),
+                },
                 image: Some(image),
                 produced_with: Some(produced_with),
                 status: Some(Status::Connected),
@@ -155,6 +167,7 @@ impl Session {
         let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.viewport = viewport;
         Updates {
+            stream: state.stream,
             image: state.image.take(),
             produced_with: state.produced_with,
             status: state.status.take(),
@@ -181,6 +194,11 @@ impl Session {
             status: state.status.take(),
             received_frame_sequence: state.received_frame_sequence,
         }
+    }
+
+    pub(super) fn stream_evidence(&self) -> (StreamEvidence, bool) {
+        let state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.stream, false)
     }
 }
 
@@ -273,6 +291,8 @@ async fn connection(
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
+                state.stream.sequence = state.stream.sequence.saturating_add(1);
+                state.stream.last_frame = Some(Instant::now());
                 state.produced_with = Some(options.for_desktop(framebuffer.size()));
                 state.desktop = Some(framebuffer.size());
                 state.received_frame_sequence = state.received_frame_sequence.saturating_add(1);

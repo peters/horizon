@@ -1,7 +1,7 @@
 use crate::{BrowserInput, BrowserVideoCaptureOverrides, BrowserVideoOperation};
 
 /// What a host asks a live browser driver to do.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BrowserCommand {
     Navigate(String),
     Reload,

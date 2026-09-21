@@ -38,6 +38,15 @@ impl Board {
                 let Some(other_panel) = self.panel(other_id) else {
                     continue;
                 };
+                #[cfg(feature = "cloud-workspaces")]
+                if self
+                    .cloud_groups
+                    .0
+                    .iter()
+                    .any(|group| group.panels.contains(&other_panel.local_id))
+                {
+                    continue;
+                }
                 let op = other_panel.layout.position;
                 let os = other_panel.layout.size;
                 let other_rect = [op[0], op[1], op[0] + os[0], op[1] + os[1]];
@@ -244,6 +253,19 @@ impl Board {
         true
     }
 
+    #[must_use]
+    pub fn workspace_accepts_panel_layout(&self, id: WorkspaceId) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            self.workspace(id)
+                .is_some_and(|workspace| !self.cloud_groups.contains_workspace(&workspace.local_id))
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        {
+            self.workspace(id).is_some()
+        }
+    }
+
     /// Compute the canvas position for the next workspace so it doesn't
     /// overlap with existing ones. Uses fixed-width slots so workspaces
     /// never collide even when fully populated (3 columns).
@@ -263,7 +285,9 @@ impl Board {
     }
 
     pub(super) fn workspace_layout_value(&self, id: WorkspaceId) -> Option<WorkspaceLayout> {
-        self.workspace(id).and_then(|workspace| workspace.layout)
+        self.workspace(id)
+            .filter(|_| self.workspace_accepts_panel_layout(id))
+            .and_then(|workspace| workspace.layout)
     }
 
     pub(super) fn set_workspace_layout(&mut self, id: WorkspaceId, layout: Option<WorkspaceLayout>) {
@@ -305,6 +329,10 @@ impl Board {
     }
 
     pub(super) fn apply_workspace_layout(&mut self, id: WorkspaceId, layout: WorkspaceLayout) {
+        if !self.workspace_accepts_panel_layout(id) {
+            self.set_workspace_layout(id, None);
+            return;
+        }
         let Some(count) = self.workspace(id).map(|workspace| {
             workspace
                 .panels
@@ -441,7 +469,7 @@ impl Board {
     }
 }
 
-fn arranged_panel_layout(
+pub(crate) fn arranged_panel_layout(
     origin: [f32; 2],
     layout: WorkspaceLayout,
     index: usize,

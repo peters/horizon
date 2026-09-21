@@ -142,6 +142,25 @@ fn send_pixel(stream: &mut std::net::TcpStream) -> Result<(), ViewError> {
     Ok(())
 }
 
+#[test]
+fn decoded_frame_evidence_survives_observation_without_consuming_pixels() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while session.stream_evidence().0.sequence == 0 {
+        assert!(Instant::now() < deadline, "decoder did not publish evidence");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let (before, paused) = session.stream_evidence();
+    assert!(!paused);
+    assert!(before.last_frame.is_some());
+    assert!(session.take_updates(ViewportId::ROOT).image.is_some());
+    assert_eq!(session.stream_evidence().0.sequence, before.sequence);
+    session.set_visible(false);
+    assert!(!session.stream_evidence().1, "offscreen sampling stays active");
+    Ok(())
+}
+
 fn wait_for_green_pixel(session: &Session, size: [usize; 2]) {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {

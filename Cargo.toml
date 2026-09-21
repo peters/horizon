@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/horizon-cloud-worker",
+    "crates/horizon-cloud",
     "crates/horizon-device",
     "crates/horizon-device-vnc",
     "crates/horizon-browser",

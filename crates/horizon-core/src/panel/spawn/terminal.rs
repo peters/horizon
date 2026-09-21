@@ -46,6 +46,20 @@ pub(in crate::panel) fn restore_failure_panel(
     error_message: &str,
 ) -> Result<Panel> {
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+    let visible = opts.visible;
+    let device_identity = (opts.kind == PanelKind::Device)
+        .then(|| opts.device_identity.clone())
+        .flatten();
+    let browser_profile = (opts.kind == PanelKind::Browser).then(|| crate::runtime_state::BrowserProfileState {
+        session_id: opts.browser_session_id.clone(),
+        root: opts
+            .browser_config
+            .as_ref()
+            .and_then(|config| config.profile_root.clone()),
+        backend: opts.browser_config.as_ref().map(|config| config.backend),
+        hidden: !visible,
+        remote_target: opts.remote_target.clone(),
+    });
     if opts.remote_workspace.is_some() {
         RemoteWorkspaceReference::validate_client_panel(
             &local_id,
@@ -99,7 +113,7 @@ pub(in crate::panel) fn restore_failure_panel(
         None
     };
 
-    Ok(build_terminal_panel(
+    let mut panel = build_terminal_panel(
         TerminalPanelBuildArgs {
             id,
             local_id,
@@ -121,7 +135,11 @@ pub(in crate::panel) fn restore_failure_panel(
         },
         terminal,
         ssh_status,
-    ))
+    );
+    panel.visible = visible;
+    panel.disconnected_browser_profile = browser_profile;
+    panel.disconnected_device_identity = device_identity;
+    Ok(panel)
 }
 
 pub(super) fn spawn_terminal(
@@ -130,6 +148,9 @@ pub(super) fn spawn_terminal(
     local_id: String,
     opts: PanelOptions,
 ) -> Result<Panel> {
+    let (transcript, replay_bytes, had_persisted_transcript_state) =
+        prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
+    let resolved_launch = resolve_spawn_launch(id, &opts, transcript.as_ref());
     let PanelOptions {
         name,
         name_is_custom,
@@ -144,33 +165,16 @@ pub(super) fn spawn_terminal(
         work_resume,
         position,
         size,
-        session_binding,
         template,
-        transcript_root,
         restore_as_disconnected_snapshot,
         is_restore,
         ..
     } = opts;
 
-    let (transcript, replay_bytes, had_persisted_transcript_state) =
-        prepare_transcript_restore(id, kind, transcript_root, &local_id);
     let saved_command = command.clone();
     let saved_args = args.clone();
     let saved_cwd = cwd.clone();
     let saved_ssh_connection = ssh_connection.clone();
-    let resolved_launch = resolve_terminal_launch(
-        id,
-        kind,
-        &resume,
-        name.as_deref(),
-        command,
-        args,
-        ssh_connection,
-        session_binding,
-        saved_cwd.as_ref(),
-        transcript.as_ref(),
-        is_restore,
-    );
     let ResolvedTerminalLaunch {
         session_binding,
         program,
@@ -229,6 +233,39 @@ pub(super) fn spawn_terminal(
     terminal.work_continuation = work_plan.state;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
     Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
+}
+
+fn resolve_spawn_launch(
+    id: PanelId,
+    opts: &PanelOptions,
+    transcript: Option<&PanelTranscript>,
+) -> ResolvedTerminalLaunch {
+    #[cfg(feature = "cloud-workspaces")]
+    if opts.cloud_connection.is_some() {
+        let program = opts.command.clone().unwrap_or_else(|| "ssh".into());
+        let (program, launch_args) = transcript.map_or_else(
+            || (program.clone(), opts.args.clone()),
+            |transcript| transcript.wrap_launch_command(program.clone(), opts.args.clone()),
+        );
+        return ResolvedTerminalLaunch {
+            session_binding: None,
+            program,
+            launch_args,
+        };
+    }
+    resolve_terminal_launch(
+        id,
+        opts.kind,
+        &opts.resume,
+        opts.name.as_deref(),
+        opts.command.clone(),
+        opts.args.clone(),
+        opts.ssh_connection.clone(),
+        opts.session_binding.clone(),
+        opts.cwd.as_ref(),
+        transcript,
+        opts.is_restore,
+    )
 }
 
 fn spawn_remote_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {
@@ -375,6 +412,8 @@ fn build_terminal_panel(
         visible: true,
         workspace_id,
         content: PanelContent::Terminal(terminal),
+        disconnected_browser_profile: None,
+        disconnected_device_identity: None,
         session_binding,
         template,
         launched_at_millis: current_unix_millis(),

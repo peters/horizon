@@ -10,6 +10,9 @@ mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud;
+pub mod remote_catalog;
 pub mod remote_profile;
 pub mod remote_recovery;
 pub mod remote_session;
@@ -20,6 +23,7 @@ pub mod teach;
 
 pub use horizon_browser::remote;
 pub use horizon_browser::{cdp, frames, input, process, session};
+pub use horizon_browser_protocol::cloud_view::{CloudViewResponse, CloudViewState};
 pub use remote_session::{RemoteRequestError, browser_family, build_remote_session_request};
 pub use teach::{ReviewRow, TeachMode};
 
@@ -94,6 +98,8 @@ pub struct BrowserPanelState {
     pub loading: bool,
     pub frame_slot: Arc<FrameSlot>,
     session: Option<Box<BrowserSession>>,
+    #[cfg(feature = "cloud-workspaces")]
+    cloud: Option<cloud::CloudView>,
     /// Outlives the session handle so a final driver-side navigation can be
     /// folded into persistence after browser teardown completes.
     committed_url: session::CommittedUrl,
@@ -158,6 +164,11 @@ impl BrowserPanelState {
     /// its driver is still recovering or waiting to relaunch.
     #[must_use]
     pub fn has_ended(&self) -> bool {
+        // Losing a presentation connection does not end the worker-owned browser.
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return false;
+        }
         !self.status.is_alive() && self.session.is_none() && self.pending_relaunch.is_none()
     }
 
@@ -172,6 +183,8 @@ impl BrowserPanelState {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
@@ -233,6 +246,8 @@ impl BrowserPanelState {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
@@ -264,6 +279,10 @@ impl BrowserPanelState {
     /// browser returns the user to where they were rather than the panel's
     /// initial URL.
     pub fn relaunch(&mut self) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return self.relaunch_cloud();
+        }
         self.launch_session(self.relaunch_target());
     }
 
@@ -317,6 +336,12 @@ impl BrowserPanelState {
 
     #[must_use]
     pub fn backend_capabilities(&self) -> BackendCapabilities {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            let mut capabilities = BackendKind::ChromiumCdp.capabilities();
+            capabilities.clipboard = false;
+            return capabilities;
+        }
         if self.is_remote() {
             BackendCapabilities::remote_session()
         } else {
@@ -357,6 +382,11 @@ impl BrowserPanelState {
     }
 
     fn launch_session(&mut self, initial_url: Option<String>) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            self.relaunch_cloud();
+            return;
+        }
         self.navigation_error = None;
         let Ok(remote) = self.take_remote_request() else {
             self.refuse_remote_relaunch();
@@ -461,10 +491,19 @@ impl BrowserPanelState {
 
     #[must_use]
     pub fn needs_event_waker(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.needs_waker();
+        }
         self.session.as_ref().is_some_and(|session| session.needs_event_waker())
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            cloud.set_waker(callback);
+            return;
+        }
         if let Some(session) = &self.session {
             session.set_event_waker(callback);
         }
@@ -473,6 +512,10 @@ impl BrowserPanelState {
     /// Queue a command only when the driver session currently exists.
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.send(command);
+        }
         // Chrome commands, and the input that can navigate from inside the
         // page (a click on a link, Enter in a form), count as user activity
         // that may take a pending startup navigation over, but only once the
@@ -529,11 +572,7 @@ impl BrowserPanelState {
     /// Tell the driver the user handed the panel back to the agent.
     pub fn hand_back(&mut self) {
         self.handoff_error = None;
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.send(BrowserCommand::HandoffDone))
-        {
+        if self.try_send(BrowserCommand::HandoffDone) {
             self.handoff_resolution_pending = true;
         } else {
             self.handoff_resolution_pending = false;
@@ -548,6 +587,12 @@ impl BrowserPanelState {
     /// over the stopping driver and undrained frame notifications are
     /// released.
     pub fn stop(&mut self) {
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            if let Some(cloud) = &self.cloud {
+                cloud.shutdown();
+            }
+        }
         self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
         // would otherwise relaunch Chrome after the caller stopped it.
@@ -564,6 +609,12 @@ impl BrowserPanelState {
     /// the app-shutdown paths join on it so exit cannot outrun the profile
     /// lock.
     pub fn request_shutdown(&mut self) {
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            if let Some(cloud) = &self.cloud {
+                cloud.shutdown();
+            }
+        }
         self.clear_remote_identity();
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
@@ -633,6 +684,10 @@ impl BrowserPanelState {
     /// Drain driver events into panel state, separating visible activity from
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return self.drain_cloud();
+        }
         let relaunched = self.continue_pending_relaunch();
         let config_changed = std::mem::take(&mut self.persisted_config_changed);
         let events = self
@@ -894,6 +949,8 @@ fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path
     true
 }
 
+pub use horizon_browser::provider_catalog;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +1036,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
@@ -1024,6 +1083,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: None,
@@ -1063,6 +1124,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: None,
@@ -1110,6 +1173,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: None,
@@ -1155,6 +1220,8 @@ mod tests {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: Some(Box::new(BrowserShutdownSignal::for_test(completion_rx))),
             pending_relaunch: Some(PendingRelaunch { initial_url: None }),
@@ -1234,6 +1301,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
@@ -1275,6 +1344,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url,
             teardown_signal: None,
             pending_relaunch: None,
@@ -1315,6 +1386,8 @@ mod tests {
             loading: true,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,
@@ -1358,6 +1431,8 @@ mod tests {
             loading: false,
             frame_slot: Arc::new(FrameSlot::new()),
             session: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud: None,
             committed_url: session::CommittedUrl::default(),
             teardown_signal: None,
             pending_relaunch: None,

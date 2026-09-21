@@ -1,0 +1,30 @@
+#!/bin/bash
+set -u
+id="$1"; agent="$2"
+export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
+export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"
+export HORIZON_DEVICE_ACTOR="horizon:cloud-$id"
+unset HORIZON
+export HORIZON_BROWSER_HOST_INSTANCE="$(cat "$HORIZON_BROWSER_ROOT/cloud-host-instance")"
+[ "$agent" != shell ] || agent=bash
+if [ "$agent" = claude ]; then
+    if [ -f /workspace/credentials/anthropic-api-key ]; then
+        ANTHROPIC_API_KEY="$(cat /workspace/credentials/anthropic-api-key)"
+        export ANTHROPIC_API_KEY
+    fi
+    if [ -f /workspace/credentials/anthropic-workspace ]; then
+        ANTHROPIC_WORKSPACE_ID="$(cat /workspace/credentials/anthropic-workspace)"
+        export ANTHROPIC_WORKSPACE_ID
+        export ANTHROPIC_CUSTOM_HEADERS="anthropic-workspace-id: $ANTHROPIC_WORKSPACE_ID"
+    fi
+    claude --mcp-config /workspace/agent-mcp.json
+elif [ "$agent" = grok ]; then
+    grok --no-leader
+else
+    "$agent"
+fi
+status=$?
+printf '%s\n' "$status" > "/workspace/sessions/$id/exit-status"
+printf '\nSession process exited with status %s. Reconnect preserves this result.\n' "$status"
+# Preserve terminal output and report process loss instead of silently restarting.
+exec sleep infinity

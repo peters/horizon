@@ -34,6 +34,10 @@ pub enum Operation {
         panel_id: String,
         visible: bool,
     },
+    /// Bring an owned viewer into view without reconnecting or claiming image readiness.
+    Reveal {
+        panel_id: String,
+    },
     /// Explicitly reconnect, acquiring an unowned (including restored) viewer.
     Reconnect {
         panel_id: String,
@@ -83,8 +87,40 @@ pub struct PanelState {
     pub owned_by_caller: bool,
     pub connection: Connection,
     pub connection_error: Option<String>,
+    /// Absent on older hosts; lack of diagnostics is not proof of a stalled stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Diagnostics>,
     #[serde(flatten)]
     pub image: ImageEvidence,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Presentation {
+    Stopped,
+    Connecting,
+    Disconnected,
+    Hidden,
+    NotRendered,
+    AwaitingFrame,
+    Clipped,
+    Displayed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Diagnostics {
+    pub observed_at_millis: i64,
+    pub connection_generation: u64,
+    pub presentation: Presentation,
+    /// Legacy pause signal. Current viewers keep sampling while hidden or off canvas.
+    pub sampling_paused: bool,
+    /// Decoded frames, independent of texture uploads and rendering.
+    pub decoded_frame_sequence: u64,
+    pub last_decoded_age_millis: Option<u64>,
+    /// Last received-frame texture submission; repainting retained pixels does not refresh it.
+    #[serde(default)]
+    pub last_uploaded_age_millis: Option<u64>,
+    pub last_displayed_age_millis: Option<u64>,
 }
 
 /// Reception, upload and completed-frame presentation evidence for one connection.
@@ -259,6 +295,17 @@ fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_diagnostics_do_not_imply_a_texture_upload_time() {
+        let diagnostics: Diagnostics = serde_json::from_value(serde_json::json!({
+            "observed_at_millis":0,"connection_generation":1,"presentation":"displayed",
+            "sampling_paused":false,"decoded_frame_sequence":1,
+            "last_decoded_age_millis":10,"last_displayed_age_millis":0
+        }))
+        .unwrap();
+        assert!(diagnostics.last_uploaded_age_millis.is_none());
+    }
 
     #[test]
     fn reception_evidence_is_additive_and_round_trips_without_display() {

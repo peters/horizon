@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+"""Install worker-local tool bindings without copying account authentication."""
+import json
+import subprocess
+from pathlib import Path
+home = Path('/workspace/home')
+subprocess.run(['git', 'lfs', 'install', '--skip-repo'], check=True)
+subprocess.run(['git', 'config', '--global', 'lfs.storage', '/workspace/source/lfs'], check=True)
+capabilities = json.loads(Path('/workspace/capabilities.json').read_text())
+servers = {}
+if capabilities.get('browsers', []) or capabilities.get('browserstack') is not None:
+    servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
+if capabilities.get('desktop', False):
+    servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', '/workspace/device.json', 'mcp']}
+Path('/workspace/agent-mcp.json').write_text(json.dumps({'mcpServers': servers}))
+if capabilities.get('desktop', False):
+    Path('/workspace/device.json').write_text(json.dumps({'id': 'cloud-desktop', 'endpoint': {'kind': 'local_x11', 'display': ':99'}}))
+for agent in ['codex', 'grok']:
+    root = home / ('.' + agent)
+    config = root / 'config.toml'
+    if agent not in capabilities.get('agents', []) and not config.exists():
+        continue
+    root.mkdir(parents=True, exist_ok=True)
+    original = config.read_text() if config.exists() else ''
+    addition = ''
+    enabled = servers if agent in capabilities.get('agents', []) else {}
+    for name, server in enabled.items():
+        addition += '\n[mcp_servers.' + name + ']\ncommand = ' + json.dumps(server['command'])
+        addition += '\nargs = ' + json.dumps(server['args']) + '\ntool_timeout_sec = 3660\n'
+        if agent == 'codex':
+            addition += 'env_vars = ["HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE", "HORIZON_BROWSER_ROOT", "HORIZON_DEVICE_ACTOR"]\n'
+        else:
+            addition += '[mcp_servers.' + name + '.env]\n'
+            for var in ['HORIZON_BROWSER_ACTOR','HORIZON_BROWSER_HOST_INSTANCE','HORIZON_BROWSER_ROOT','HORIZON_DEVICE_ACTOR']:
+                addition += var + ' = "${' + var + ':-}"\n'
+    result = subprocess.run(['horizon-cloud-worker', 'configure-agent-tools'],
+                            input=json.dumps({'original': original, 'managed': addition}),
+                            text=True, capture_output=True, check=True)
+    pending = config.with_suffix('.new')
+    pending.write_text(result.stdout)
+    pending.chmod(0o600)
+    pending.replace(config)
