@@ -27,6 +27,13 @@ pub const ATTACHMENT_RETENTION: Duration = Duration::from_hours(24);
 pub const MAX_RETAINED_ATTACHMENT_ACTIONS: usize = 32;
 /// Most staged bytes one panel keeps at a time.
 pub const MAX_RETAINED_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Marker inside an action's staging directory from staging until the
+/// action's result is consumed: queued, dispatched and in-flight actions
+/// all carry it, and pruning never evicts a marked action within retention.
+const PENDING_MARKER: &str = ".pending";
+/// Stamp written at staging and never touched again: its modification time
+/// is the action's age, unaffected by the marker being cleared later.
+const STAGED_STAMP: &str = ".staged";
 
 /// Horizon's work-root variable; kept in sync with `horizon_core::agent_work::WORK_ROOT_ENV`.
 pub const WORK_ROOT_ENV: &str = "HORIZON_WORK_ROOT";
@@ -242,6 +249,12 @@ fn action_directory(attachments_dir: &Path, panel_local_id: &str, action_id: &st
 
 fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
     create_private_dir(directory)?;
+    for marker in [STAGED_STAMP, PENDING_MARKER] {
+        std::fs::write(directory.join(marker), b"").map_err(|error| AttachmentPolicyError::Staging {
+            path: directory.display().to_string(),
+            reason: error.kind().to_string(),
+        })?;
+    }
     files
         .iter()
         .enumerate()
@@ -304,6 +317,17 @@ fn create_private_dir(directory: &Path) -> Result<(), AttachmentPolicyError> {
     Ok(())
 }
 
+/// The action's result was consumed: its staging is no longer pending and
+/// may be pruned by retention like any other; a missing marker is fine.
+pub fn settle_attachments(attachments_dir: &Path, panel_local_id: &str, action_id: &str) {
+    let marker = action_directory(attachments_dir, panel_local_id, action_id).join(PENDING_MARKER);
+    if let Err(error) = std::fs::remove_file(&marker)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(target: "browser", path = %marker.display(), "failed to settle staged attachments: {error}");
+    }
+}
+
 /// Remove the staged copies of one action; a missing directory is fine.
 pub fn release_attachments(attachments_dir: &Path, panel_local_id: &str, action_id: &str) {
     let directory = action_directory(attachments_dir, panel_local_id, action_id);
@@ -331,20 +355,22 @@ pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u6
 }
 
 /// Make room for one more attachment action on `panel_local_id`: every
-/// panel's actions older than `retention` go (a closed panel's staging
-/// ages out this way), and the panel keeps at most `max_actions - 1`
-/// newer actions within `max_bytes` less the `reserved_bytes` the incoming
-/// action needs, so the new one fits inside the budget. Actions listed in
-/// `protected` are still queued for the engine and are never evicted; when
-/// they alone leave no room, or a required eviction fails, the new action
-/// is refused rather than staged over the limit.
+/// panel's settled actions older than `retention` go (a closed panel's
+/// staging ages out this way), and the panel keeps at most
+/// `max_actions - 1` newer actions within `max_bytes` less the
+/// `reserved_bytes` the incoming action needs, so the new one fits inside
+/// the budget. Actions still pending (queued, dispatched or in flight,
+/// marked until their result is consumed) are never evicted within
+/// retention; when they alone leave no room, or a required eviction fails,
+/// the new action is refused rather than staged over the limit. A stale
+/// eviction that fails on this panel stays counted so it cannot admit a
+/// newcomer past the limits.
 ///
 /// # Errors
 /// Returns `StagingFull` when the room cannot be made.
 pub fn prune_attachments(
     attachments_dir: &Path,
     panel_local_id: &str,
-    protected: &[String],
     retention: Duration,
     max_actions: usize,
     max_bytes: u64,
@@ -357,10 +383,6 @@ pub fn prune_attachments(
         return Ok(());
     };
     let current = crate::paths::safe_local_id(panel_local_id);
-    let protected = protected
-        .iter()
-        .map(|action_id| crate::paths::safe_local_id(action_id))
-        .collect::<Vec<_>>();
     for panel in panels.flatten() {
         let Ok(actions) = std::fs::read_dir(panel.path()) else {
             continue;
@@ -368,25 +390,31 @@ pub fn prune_attachments(
         let is_current = panel.file_name().to_string_lossy() == current;
         let mut retained = Vec::new();
         for action in actions.flatten() {
-            let Ok(modified) = action.metadata().and_then(|metadata| metadata.modified()) else {
+            let Ok(modified) = std::fs::metadata(action.path().join(STAGED_STAMP))
+                .or_else(|_| action.metadata())
+                .and_then(|metadata| metadata.modified())
+            else {
                 continue;
             };
-            let queued = is_current && protected.iter().any(|id| action.file_name().to_string_lossy() == *id);
-            if modified < stale_before && !queued {
-                remove_action_dir_lenient(&action.path());
-            } else if is_current {
-                retained.push((modified, directory_bytes(&action.path()), action.path(), queued));
+            let pending = action.path().join(PENDING_MARKER).exists();
+            if modified < stale_before || (!pending && !is_current) {
+                if modified < stale_before && std::fs::remove_dir_all(action.path()).is_err() && is_current {
+                    // Still on disk, so still counted below.
+                    retained.push((modified, directory_bytes(&action.path()), action.path(), false));
+                }
+            } else {
+                retained.push((modified, directory_bytes(&action.path()), action.path(), pending));
             }
         }
         if !is_current {
             continue;
         }
-        // Queued actions are kept whatever their age or size; the newest
-        // unqueued ones then fill what room the budget leaves for them.
+        // Pending actions are kept whatever their size; the newest settled
+        // ones then fill what room the budget leaves for them.
         let budget = max_bytes.saturating_sub(reserved_bytes);
-        let (queued_actions, unqueued): (Vec<_>, Vec<_>) = retained.into_iter().partition(|entry| entry.3);
-        let mut kept_actions = queued_actions.len();
-        let mut kept_bytes = queued_actions
+        let (pending_actions, settled): (Vec<_>, Vec<_>) = retained.into_iter().partition(|entry| entry.3);
+        let mut kept_actions = pending_actions.len();
+        let mut kept_bytes = pending_actions
             .iter()
             .fold(0u64, |total, entry| total.saturating_add(entry.1));
         if kept_actions + 1 > max_actions || kept_bytes > budget {
@@ -395,9 +423,9 @@ pub fn prune_attachments(
                 limit_bytes: max_bytes,
             });
         }
-        let mut unqueued = unqueued;
-        unqueued.sort_by_key(|(modified, _, _, _)| std::cmp::Reverse(*modified));
-        for (_, bytes, path, _) in unqueued {
+        let mut settled = settled;
+        settled.sort_by_key(|(modified, _, _, _)| std::cmp::Reverse(*modified));
+        for (_, bytes, path, _) in settled {
             if kept_actions + 1 < max_actions && kept_bytes.saturating_add(bytes) <= budget {
                 kept_actions += 1;
                 kept_bytes = kept_bytes.saturating_add(bytes);
@@ -410,12 +438,6 @@ pub fn prune_attachments(
         }
     }
     Ok(())
-}
-
-fn remove_action_dir_lenient(path: &Path) {
-    if let Err(error) = std::fs::remove_dir_all(path) {
-        tracing::warn!(target: "browser", path = %path.display(), "failed to prune stale staged attachments: {error}");
-    }
 }
 
 fn directory_bytes(path: &Path) -> u64 {
@@ -517,14 +539,22 @@ mod tests {
         std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "panel", "second", &authorized).expect("second");
         stage_attachments(&attachments, "panel", "third", &authorized).expect("third");
+        for (panel, action) in [
+            ("other", "old"),
+            ("panel", "first"),
+            ("panel", "second"),
+            ("panel", "third"),
+        ] {
+            settle_attachments(&attachments, panel, action);
+        }
         // Age: the other panel's old action and this panel's first go.
-        prune_attachments(&attachments, "panel", &[], Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
         assert!(!action_directory(&attachments, "other", "old").exists());
         assert!(!action_directory(&attachments, "panel", "first").exists());
         assert!(action_directory(&attachments, "panel", "second").exists());
         assert!(action_directory(&attachments, "panel", "third").exists());
         // Count: room for one more means only the newest of the two stays.
-        prune_attachments(&attachments, "panel", &[], Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -533,7 +563,7 @@ mod tests {
         );
         // Bytes: a 12-byte budget with 7 reserved for the newcomer leaves
         // less than one 6-byte action, so the panel is cleared.
-        prune_attachments(&attachments, "panel", &[], Duration::from_hours(1), 8, 12, 7).expect("room");
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -612,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_actions_are_never_evicted_and_refuse_the_newcomer_instead() {
+    fn pending_actions_are_never_evicted_for_room_and_refuse_the_newcomer_instead() {
         let root = tempfile::tempdir().expect("root");
         let source = root.path().join("a.txt");
         std::fs::write(&source, b"abcdef").expect("write");
@@ -620,32 +650,44 @@ mod tests {
         let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
             .authorize(std::slice::from_ref(&source))
             .expect("authorized");
-        stage_attachments(&attachments, "panel", "queued", &authorized).expect("queued");
+        stage_attachments(&attachments, "panel", "older", &authorized).expect("older");
         std::thread::sleep(Duration::from_millis(600));
-        stage_attachments(&attachments, "panel", "newer", &authorized).expect("newer");
-        let queued = vec!["queued".to_string()];
-        // Age would remove the older one, but it is still queued.
-        prune_attachments(
-            &attachments,
-            "panel",
-            &queued,
-            Duration::from_millis(300),
-            8,
-            u64::MAX,
-            0,
-        )
-        .expect("room");
-        assert!(action_directory(&attachments, "panel", "queued").exists());
-        // Count: the queued action stays and the unqueued newer one goes.
-        prune_attachments(&attachments, "panel", &queued, Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
-        assert!(action_directory(&attachments, "panel", "queued").exists());
-        assert!(!action_directory(&attachments, "panel", "newer").exists());
-        // Bytes: the queued action alone exceeds the room, so the newcomer is refused.
-        let error =
-            prune_attachments(&attachments, "panel", &queued, Duration::from_hours(1), 8, 12, 7).expect_err("no room");
+        stage_attachments(&attachments, "panel", "pending", &authorized).expect("pending");
+        settle_attachments(&attachments, "panel", "older");
+        // Age only removes settled history; the fresh pending action stays.
+        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        assert!(!action_directory(&attachments, "panel", "older").exists());
+        assert!(action_directory(&attachments, "panel", "pending").exists());
+        stage_attachments(&attachments, "panel", "settled", &authorized).expect("settled");
+        settle_attachments(&attachments, "panel", "settled");
+        // Count: the pending action stays and the settled newer one goes.
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
+        assert!(action_directory(&attachments, "panel", "pending").exists());
+        assert!(!action_directory(&attachments, "panel", "settled").exists());
+        // Bytes: the pending action alone exceeds the room, so the newcomer is refused.
+        let error = prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect_err("no room");
         assert!(matches!(error, AttachmentPolicyError::StagingFull { .. }), "{error}");
         assert_eq!(error.io_kind(), std::io::ErrorKind::WouldBlock);
-        assert!(action_directory(&attachments, "panel", "queued").exists());
+        assert!(action_directory(&attachments, "panel", "pending").exists());
+        // Settled, it is ordinary retained history again.
+        settle_attachments(&attachments, "panel", "pending");
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect("room");
+        assert!(!action_directory(&attachments, "panel", "pending").exists());
+    }
+
+    #[test]
+    fn a_pending_action_past_retention_is_aged_out_as_crash_safety() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let attachments = root.path().join("attachments");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "panel", "abandoned", &authorized).expect("abandoned");
+        std::thread::sleep(Duration::from_millis(600));
+        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        assert!(!action_directory(&attachments, "panel", "abandoned").exists());
     }
 
     #[test]

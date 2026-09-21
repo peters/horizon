@@ -125,9 +125,9 @@ shell commands, files, or other MCP servers.
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
   at most 32 actions and 4 GiB, pruned when the next attachment is staged;
-  staging for actions the engine has not drained yet is never pruned, and
-  when those alone leave no room the new request is refused (would block)
-  until the queue drains. One request whose files alone exceed that 4 GiB
+  staging for actions whose result has not been consumed yet (queued,
+  dispatched or in flight) is never pruned for room, and when those alone
+  leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
   is refused before any copy is made. `accept` extension tokens match the end of the file name,
   so compound tokens such as `.tar.gz` work. Copies live under the runtime root, or on
   Linux under `~/Horizon/browser-attachments` when the runtime root is a
