@@ -83,7 +83,7 @@ reply with the matching `id` arrives.
 | `browser_audit` | `set_files` entries carry the resolved `paths` and target; no file contents anywhere |
 
 After the run, the staging directory (`<runtime root>/runtime/browser-attachments/`,
-or `~/Horizon/browser-attachments/` on Linux when the runtime root is a
+or `~/Horizon/browser-attachments/<encoded runtime root>/` on Linux when the runtime root is a
 hidden directory beneath `HOME`) holds one directory per panel with the
 staged copies of its attachment actions; they are retained for the page's
 lazy reads and pruned by age, count and size on the next attachment.

@@ -136,9 +136,10 @@ shell commands, files, or other MCP servers.
   times out while staging reports so, and the staging may still finish and
   queue the action afterwards. `accept` extension tokens match the end of the file name,
   so compound tokens such as `.tar.gz` and dotfiles such as `.env` work. Copies live under the runtime root, or on
-  Linux under `~/Horizon/browser-attachments` when the runtime root is a
+  Linux under `~/Horizon/browser-attachments/<encoded runtime root>` when the runtime root is a
   hidden directory beneath the home directory, which a Snap-confined browser
-  cannot open. The readback opens every attached file's first and last byte
+  cannot open; that visible directory is namespaced by the runtime root so
+  two hidden roots under one home never share it. The readback opens every attached file's first and last byte
   in the page, so a browser that lists a file it cannot read fails with
   `attachment_unreadable` instead of uploading nothing. An attachment
   replaces the input's current selection on every backend. The input's

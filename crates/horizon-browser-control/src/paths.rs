@@ -96,12 +96,17 @@ impl BrowserRuntimePaths {
     /// browser cannot open hidden directories directly beneath the home
     /// directory, so a runtime root such as `~/.horizon` stages under the
     /// visible `~/Horizon` directory the Snap profile root already uses.
-    /// The path is absolute even when the runtime root is the relative
-    /// fallback, because queued attachment paths must be absolute.
+    /// That visible directory is namespaced by the runtime root, so two
+    /// hidden roots under one home (say `~/.horizon` and `~/.horizon-dev`)
+    /// never share staging or sweep each other's. The path is absolute even
+    /// when the runtime root is the relative fallback, because queued
+    /// attachment paths must be absolute.
     #[must_use]
     pub fn browser_attachments_dir(&self) -> PathBuf {
         let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
-        browser_visible_attachments_dir(&root).unwrap_or_else(|| root.join("runtime").join("browser-attachments"))
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        browser_visible_attachments_dir(&root, home.as_deref())
+            .unwrap_or_else(|| root.join("runtime").join("browser-attachments"))
     }
 
     #[must_use]
@@ -110,19 +115,23 @@ impl BrowserRuntimePaths {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn browser_visible_attachments_dir(root: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+#[cfg(any(target_os = "linux", test))]
+fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let home = home?;
     let hidden_beneath_home = root
-        .strip_prefix(&home)
+        .strip_prefix(home)
         .ok()
         .and_then(|relative| relative.components().next())
         .is_some_and(|component| component.as_os_str().to_string_lossy().starts_with('.'));
-    hidden_beneath_home.then(|| home.join("Horizon").join("browser-attachments"))
+    hidden_beneath_home.then(|| {
+        home.join("Horizon")
+            .join("browser-attachments")
+            .join(safe_local_id(&root.to_string_lossy()))
+    })
 }
 
-#[cfg(not(target_os = "linux"))]
-fn browser_visible_attachments_dir(_root: &Path) -> Option<PathBuf> {
+#[cfg(not(any(target_os = "linux", test)))]
+fn browser_visible_attachments_dir(_root: &Path, _home: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
@@ -140,4 +149,18 @@ pub fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hidden_runtime_roots_under_one_home_stage_in_separate_visible_directories() {
+        let home = std::path::Path::new("/home/someone");
+        let first = super::browser_visible_attachments_dir(&home.join(".horizon"), Some(home)).expect("hidden");
+        let second = super::browser_visible_attachments_dir(&home.join(".horizon-dev"), Some(home)).expect("hidden");
+        assert!(first.starts_with(home.join("Horizon").join("browser-attachments")));
+        assert_ne!(first, second, "two hidden roots never share staging");
+        assert!(super::browser_visible_attachments_dir(&home.join("Horizon"), Some(home)).is_none());
+        assert!(super::browser_visible_attachments_dir(&home.join(".horizon"), None).is_none());
+    }
 }

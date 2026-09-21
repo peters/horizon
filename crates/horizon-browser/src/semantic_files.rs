@@ -78,11 +78,16 @@ pub(crate) fn check_attachment_request(probe: &FileInputProbe, paths: &[PathBuf]
         ));
     }
     if let Some(rejected) = paths.iter().find(|path| !accept_allows(&probe.accept, path)) {
+        // Only the file name is reported: at this point the paths are the
+        // private staged copies, which stay internal.
         return Err(BrowserControlFailure::new(
             "accept_mismatch",
             format!(
                 "{} is outside the input's accept list ({})",
-                rejected.display(),
+                rejected
+                    .file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default(),
                 probe.accept.trim()
             ),
         ));
