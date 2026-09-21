@@ -156,7 +156,7 @@ Zoom is a visible, motion-sensitive change, so lanes B, C and D each require
 artifacts captured from the isolated desktop (never from the developer's
 screen):
 
-- A screenshot after launch, and one at each zoom stop the lane names.
+- A screenshot after launch, and one at every zoom level listed in the lane.
 - One short video per interactive lane covering the gesture itself — the
   percentage changing and the content scaling under the pointer. Verify the
   recording has usable frames before accepting it; if recording is

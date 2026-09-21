@@ -84,7 +84,7 @@ impl SshUploadFlow {
             !memory.areas().visible_last_frame(&layer)
                 || self
                     .painted_zoom_rect
-                    .is_none_or(|rect| point.is_some_and(|point| rect.contains(point)))
+                    .is_none_or(|rect| point.is_none_or(|point| rect.contains(point)))
         })
     }
 
@@ -533,6 +533,45 @@ mod tests {
             upload_handle: None,
             upload_snapshot: None,
             upload_started_at: None,
+        }
+    }
+
+    #[test]
+    fn a_painted_upload_reserves_zoom_without_a_pointer_position() {
+        use crate::app::device_tests::device_app;
+        use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+        for fullscreen in [false, true] {
+            for wheel in [false, true] {
+                let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+                app.fullscreen_panel = fullscreen.then_some(panel);
+                app.ssh_upload_flow = Some(upload_flow(egui::ViewportId::ROOT));
+                for _ in 0..3 {
+                    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+                }
+                let before = app.canvas_view;
+                let mut input = raw_input([1400.0, 900.0], None);
+                input.events.push(egui::Event::PointerGone);
+                input.events.push(if wheel {
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 40.0),
+                        modifiers: egui::Modifiers::CTRL,
+                        phase: egui::TouchPhase::Move,
+                    }
+                } else {
+                    egui::Event::Zoom(1.25)
+                });
+                run_app_frame_with_input(&ctx, &mut app, input);
+                assert!(ctx.input(|input| input.pointer.hover_pos().is_none()));
+                let flow = app.ssh_upload_flow.as_mut().expect("upload");
+                assert!(flow.painted_zoom_rect.is_some());
+                assert!(flow.blocks_zoom_at(&ctx), "fullscreen={fullscreen}, wheel={wheel}");
+                flow.target_viewport_id = egui::ViewportId::from_hash_of("other viewport");
+                assert!(!flow.blocks_zoom_at(&ctx), "another viewport stays independent");
+                assert_eq!(app.canvas_view, before);
+                assert!((app.panel_render_caches.device_ui_state[&panel].zoom_factor() - 1.0).abs() < f32::EPSILON);
+            }
         }
     }
 
