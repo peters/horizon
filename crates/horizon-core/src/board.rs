@@ -90,8 +90,7 @@ pub enum WorkspaceDockSide {
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
-    #[cfg(feature = "cloud-workspaces")]
-    pub cloud_groups: crate::cloud_panel::CloudGroups,
+    pub cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState,
     pub attention: Vec<AttentionItem>,
     panel_attention_signals: HashMap<PanelId, String>,
     /// Browser panels already removed from the board whose exact Chrome
@@ -135,8 +134,7 @@ impl Board {
         Self {
             panels: Vec::new(),
             workspaces: Vec::new(),
-            #[cfg(feature = "cloud-workspaces")]
-            cloud_groups: crate::cloud_panel::CloudGroups::default(),
+            cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState::default(),
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
             retired_browser_shutdown_signals: Vec::new(),
@@ -196,17 +194,15 @@ impl Board {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
                 let options = panel_restore_options(panel_state, transcript_root, &state.browser);
-                #[cfg(feature = "cloud-workspaces")]
-                if state
-                    .cloud_groups
-                    .0
-                    .iter()
-                    .any(|g| g.remote.is_some() && g.panels.contains(&panel_state.local_id))
-                {
+                if crate::runtime_state::cloud_groups::managed_member(&state.cloud_groups, &panel_state.local_id) {
                     board.create_failed_restore_panel(
                         options,
                         ws_id,
-                        "Reconnecting cloud; remote processes continue independently",
+                        if cfg!(feature = "cloud-workspaces") {
+                            "Reconnecting cloud; remote processes continue independently"
+                        } else {
+                            "Cloud support is disabled; remote processes continue independently"
+                        },
                     )?;
                     continue;
                 }
@@ -242,13 +238,10 @@ impl Board {
             board.focused = board.panels.iter().find(|panel| panel.visible).map(|panel| panel.id);
         }
 
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            board.cloud_groups = state.cloud_groups.clone();
-            for group in &state.cloud_groups.0 {
-                if let Some(workspace) = board.workspace_id_by_local_id(&group.workspace) {
-                    board.retained_empty_workspaces.insert(workspace);
-                }
+        board.cloud_groups = state.cloud_groups.clone();
+        for local_id in crate::runtime_state::cloud_groups::workspace_ids(&state.cloud_groups) {
+            if let Some(workspace) = board.workspace_id_by_local_id(local_id) {
+                board.retained_empty_workspaces.insert(workspace);
             }
         }
         Ok(board)
@@ -310,13 +303,9 @@ impl Board {
     ///
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart_panel(&mut self, id: PanelId) -> Result<()> {
-        #[cfg(feature = "cloud-workspaces")]
-        if self
-            .cloud_groups
-            .0
-            .iter()
-            .any(|g| g.remote.is_some() && self.panel(id).is_some_and(|p| g.panels.contains(&p.local_id)))
-        {
+        if self.panel(id).is_some_and(|panel| {
+            crate::runtime_state::cloud_groups::managed_member(&self.cloud_groups, &panel.local_id)
+        }) {
             return Err(Error::Config(
                 "Reconnect the cloud to attach to its existing remote session".into(),
             ));

@@ -9,7 +9,7 @@ ARG HORIZON_BROWSERS=
 ARG HORIZON_DESKTOP=false
 ARG HORIZON_BROWSERSTACK=false
 # Only final stripped helpers belong in bin/. Unselected helpers stay in this stage.
-COPY bin/ /input/
+COPY bin/horizon-cloud-worker bin/horizon-browser bin/horizon-device /input/
 RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdirSync(out,{recursive:true}); const copy=n=>fs.copyFileSync("/input/"+n,out+"/"+n); copy("horizon-cloud-worker"); if(process.env.HORIZON_BROWSERS || process.env.HORIZON_BROWSERSTACK==="true")copy("horizon-browser"); if(process.env.HORIZON_DESKTOP==="true")copy("horizon-device"); fs.mkdirSync("/output/etc/horizon-worker",{recursive:true});fs.writeFileSync("/output/etc/horizon-worker/capabilities.json",JSON.stringify({agents:process.env.HORIZON_AGENTS.split(",").filter(Boolean),browsers:process.env.HORIZON_BROWSERS.split(",").filter(Boolean),desktop:process.env.HORIZON_DESKTOP==="true",...(process.env.HORIZON_BROWSERSTACK==="true"?{browserstack:{targets:[],local_ports:[]}}:{})}));'
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
@@ -49,7 +49,15 @@ RUN if [ "$HORIZON_BROWSERSTACK" = true ]; then \
     && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/browserstack.zip").extract("BrowserStackLocal", "/usr/local/bin")' \
     && chmod 755 /usr/local/bin/BrowserStackLocal && rm /tmp/browserstack.zip; fi
 COPY --from=selected /output/ /
-COPY horizon-worker-* /usr/local/bin/
+COPY horizon-worker-start \
+    horizon-worker-check \
+    horizon-worker-configure \
+    horizon-worker-run \
+    horizon-worker-session \
+    horizon-worker-source \
+    horizon-worker-import \
+    horizon-worker-git-auth \
+    horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \
     && ln -s /usr/local/bin/horizon-worker-git-auth /usr/local/bin/gh \
     && mkdir -p /run/sshd /workspace \

@@ -1132,3 +1132,19 @@ stale sessions, detached destinations, error recovery and committed revision
 pinning. Full validation 43, independent review and new frozen native evidence
 will gate the next push. Final immutable-image qualification remains in #813;
 this local correction does not claim new cloud acceptance or allocate compute.
+
+### Final compatibility and build-input review corrections
+
+The subsequent review identified three additional merge blockers. Feature-disabled
+builds now retain opaque cloud metadata through board restore and autosave, preserve
+empty cloud workspaces, and restore cloud members as inert views. Worker Docker
+inputs use the same explicit allowlist as generated contexts; similarly named
+local artifacts cannot enter a standalone build. Deployment preparation now
+accepts only the immutable revision already resolved by creation, avoiding a
+second Git process on the UI thread; background tree validation remains required
+before allocation. Main's updated native VNC dependency is integrated.
+
+Retained regressions cover disabled-feature round trips, inert panel restoration,
+standalone Docker input parity, and preparation without an accessible repository.
+Full validation 46, independent review, fresh native proof and hosted checks gate
+publication. Qualification follow-ups remain open; no new compute is allocated.

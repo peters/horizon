@@ -16,13 +16,15 @@ use std::{
 pub struct Request {
     pub cloud_id: String,
     pub repository: PathBuf,
+    /// Immutable commit ID resolved by the caller before preparation.
     pub revision: String,
     pub profile: horizon_cloud::Profile,
     pub state_root: PathBuf,
     pub settings: Settings,
 }
 /// # Errors
-/// Saves an initial retryable record before the UI persists deployment intent.
+/// Saves a retryable record for an already resolved commit before persisting deployment intent.
+/// Does not invoke Git; deployment validates the committed tree before allocation.
 pub fn prepare(request: &Request) -> Result<()> {
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
@@ -236,6 +238,11 @@ fn configure_agent_auth(
     Ok(())
 }
 fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
+    if !repository::is_commit_id(&request.revision) {
+        return Err(Error::Invalid(
+            "Resolve a committed revision before preparing deployment",
+        ));
+    }
     let state = if let Some(state) = store.load()? {
         if state.cloud_id != request.cloud_id
             || state.revision != request.revision
@@ -252,7 +259,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             version: 1,
             cloud_id: request.cloud_id.clone(),
             repository: request.repository.clone(),
-            revision: repository::resolve(&request.repository, &request.revision)?,
+            revision: request.revision.clone(),
             profile: request.profile.clone(),
             stage: Stage::Validate,
             operation: CreateState::Prepared,
@@ -516,5 +523,36 @@ mod tests {
                 .unwrap()
                 .requires_browserstack_release()
         );
+    }
+    #[test]
+    fn preparation_preserves_pinned_revision_without_reading_a_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = Request {
+            cloud_id: "pinned-fixture".into(),
+            repository: root.path().join("repository-is-not-mounted"),
+            revision: "a".repeat(40),
+            profile: serde_json::from_value(
+                serde_json::json!({"provider":"runpod","image":"registry.example.com/worker","cpu":4,"memory_gb":8}),
+            )
+            .unwrap(),
+            state_root: root.path().join("state"),
+            settings: serde_json::from_value(
+                serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]}),
+            )
+            .unwrap(),
+        };
+        prepare(&request).unwrap();
+        let saved = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
+        assert_eq!(saved.revision, request.revision);
+        assert_eq!(saved.operation, CreateState::Prepared);
+        assert!(saved.worker.is_none());
+        assert!(
+            !saved.source_ready,
+            "background preallocation tree validation is still required"
+        );
+        for revision in ["HEAD", "main", "abc123", "z".repeat(40).as_str()] {
+            request.revision = revision.into();
+            assert!(prepare(&request).is_err());
+        }
     }
 }

@@ -38,10 +38,13 @@ pub fn resolve_with_runner(repository: &Path, revision: &str, runner: &Runner<'_
         Duration::from_secs(30),
     )?;
     let sha = output.trim().to_owned();
-    if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_commit_id(&sha) {
         return Err(Error::Invalid("Cannot resolve the selected committed revision"));
     }
     Ok(sha)
+}
+pub(crate) fn is_commit_id(revision: &str) -> bool {
+    matches!(revision.len(), 40 | 64) && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 /// # Errors
 /// Reports export/extraction failures. Local uncommitted files are never copied.

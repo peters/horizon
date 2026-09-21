@@ -138,3 +138,17 @@ Creation responsiveness and cancellation regression:
 - Close before the first cloud preparation frame, and immediately after switching
   sessions: existing saved groups must survive. Removing the last initialized
   cloud must still persist an empty group list.
+
+Compatibility and standalone build regressions:
+
+- Run `cargo test -p horizon-core --no-default-features` as well as the normal
+  feature-enabled matrix. Restore a cloud session with cloud support disabled,
+  autosave and restore again: opaque metadata, stable panel identities and empty
+  cloud workspaces survive, and cloud commands are never launched locally,
+  including attempts to restart the inert panel.
+- Run the worker Python suite. Dockerfile COPY inputs and .dockerignore exceptions
+  must exactly match the context-generator allowlist; similarly named backup or
+  credential files are excluded.
+- Preparation with an already pinned commit must not inspect Git or the repository
+  mount on the UI thread. Invalid/unresolved revisions are rejected; background
+  deployment still validates the committed tree before allocating compute.

@@ -13,6 +13,40 @@ loader.exec_module(context)
 
 
 class WorkerContextTests(unittest.TestCase):
+    def test_standalone_recipe_and_ignore_rules_admit_only_declared_inputs(self):
+        import fnmatch
+        import shlex
+        source = Path(context.__file__).parent
+        recipe = (source / 'Dockerfile').read_text().replace('\\\n', ' ')
+        copies = [shlex.split(line)[1:-1] for line in recipe.splitlines()
+                  if line.startswith('COPY horizon-worker-')]
+        self.assertEqual(copies, [list(context.WORKER_SCRIPTS)])
+        rules = (source / '.dockerignore').read_text().splitlines()
+        admitted = {line[1:] for line in rules if line.startswith('!')}
+        self.assertEqual(admitted, {'Dockerfile', 'Dockerfile.gpu', 'bin/'}
+                         | set(context.WORKER_SCRIPTS)
+                         | {'bin/' + name for name in context.HELPERS})
+        helper_copies = [shlex.split(line)[1:-1] for line in recipe.splitlines()
+                         if line.startswith('COPY bin/')]
+        self.assertEqual(helper_copies, [['bin/' + name for name in context.HELPERS]])
+        # Docker matches both the path and its parent directories, last rule wins.
+        def included(name):
+            paths = [name] + [str(p) for p in Path(name).parents if str(p) != '.']
+            result = True
+            for rule in rules:
+                pattern = rule.lstrip('!').rstrip('/')
+                if any(fnmatch.fnmatchcase(path, pattern) for path in paths):
+                    result = rule.startswith('!')
+            return result
+        for name in ['horizon-worker-credentials', 'horizon-worker-start.backup',
+                     'bin/private-setting', 'bin/subdir/private-setting',
+                     'bin/horizon-cloud-worker.old']:
+            self.assertFalse(included(name), name)
+        for name in context.WORKER_SCRIPTS:
+            self.assertTrue(included(name), name)
+        for name in context.HELPERS:
+            self.assertTrue(included('bin/' + name), name)
+
     def test_gpu_context_contains_a_standalone_pinned_recipe_and_only_allowed_inputs(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

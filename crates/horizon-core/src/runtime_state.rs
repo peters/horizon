@@ -1,6 +1,7 @@
 mod agent_sessions;
 mod binding_bootstrap;
 mod claude_live_sessions;
+pub(crate) mod cloud_groups;
 mod models;
 mod versioning;
 
@@ -53,8 +54,7 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
-    #[cfg(feature = "cloud-workspaces")]
-    pub cloud_groups: crate::cloud_panel::CloudGroups,
+    pub cloud_groups: cloud_groups::CloudGroupsState,
     /// Browser config injected by the app before restore. Core-only board
     /// snapshots store a default placeholder because a [`Board`] does not
     /// own the config that created it.
@@ -86,8 +86,7 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
-            #[cfg(feature = "cloud-workspaces")]
-            cloud_groups: crate::cloud_panel::CloudGroups::default(),
+            cloud_groups: cloud_groups::CloudGroupsState::default(),
             browser: config.browser.clone(),
         }
     }
@@ -380,7 +379,6 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
-            #[cfg(feature = "cloud-workspaces")]
             cloud_groups: board.cloud_groups.clone(),
             // Save-path placeholder: the app refreshes this field with the
             // current config before any restore uses it.
@@ -404,8 +402,7 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
-            #[cfg(feature = "cloud-workspaces")]
-            cloud_groups: crate::cloud_panel::CloudGroups::default(),
+            cloud_groups: cloud_groups::CloudGroupsState::default(),
             browser: crate::browser::BrowserConfig::default(),
         }
     }
