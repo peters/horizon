@@ -161,6 +161,10 @@ pub(crate) enum ControlError {
         "browser handoff failed (unsupported_backend): manual steering is not supported for remote browser sessions; use browser_act for supported actions and verify their outcomes"
     )]
     RemoteHandoffUnsupported,
+    #[error(
+        "browser set_files failed (unsupported_backend): file attachment is unavailable for remote browser sessions; the files live on this host and no transfer to the remote browser exists"
+    )]
+    RemoteAttachmentUnsupported,
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -503,10 +507,24 @@ impl BrowserController {
         timeout_millis: Option<u64>,
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
+        self.refuse_remote_attachments(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
         let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
             .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
         self.wait_for_result(panel_id, action_id, timeout_millis).await
+    }
+
+    /// A `set_files` action on a remote panel is refused here, before any
+    /// path is opened or staged, since the engine would refuse it anyway.
+    pub(crate) fn refuse_remote_attachments(
+        &self,
+        panel_id: &str,
+        action: &BrowserControlAction,
+    ) -> Result<(), ControlError> {
+        if matches!(action, BrowserControlAction::SetFiles { .. }) {
+            require_local_attachment_target(&self.authorized_manifest(panel_id)?)?;
+        }
+        Ok(())
     }
 
     /// Execute an action whose bound the engine enforces itself (navigation
@@ -652,6 +670,7 @@ impl ControlError {
             io::ErrorKind::NotFound => "browser panel is not live",
             io::ErrorKind::InvalidInput => "invalid browser control input",
             io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
+            io::ErrorKind::Unsupported => "the browser panel backend does not support this action",
             io::ErrorKind::TimedOut => "host coordination timed out",
             _ => "internal host coordination error",
         };
@@ -719,6 +738,13 @@ fn finish_repolled_result(
     finish_polled_result(result, || Err(refresh_error))
 }
 
+fn require_local_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
+    if panel.remote_target.is_some() {
+        return Err(ControlError::RemoteAttachmentUnsupported);
+    }
+    Ok(())
+}
+
 fn outcome(result: AgentActionResult) -> Result<ActionReceipt, ControlError> {
     match result.outcome {
         BrowserActionOutcome::Completed { value } => Ok(ActionReceipt {
@@ -777,6 +803,18 @@ pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) ->
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn remote_panels_refuse_attachments_before_any_staging() {
+        let remote = manifest::BrowserManifest {
+            remote_target: Some("phone".into()),
+            ..manifest::BrowserManifest::default()
+        };
+        let error = require_local_attachment_target(&remote).expect_err("remote attachment unavailable");
+        assert!(matches!(error, ControlError::RemoteAttachmentUnsupported));
+        assert!(error.to_string().contains("unsupported_backend"));
+        require_local_attachment_target(&manifest::BrowserManifest::default()).expect("local panel");
+    }
 
     #[test]
     fn timeout_is_bounded() {

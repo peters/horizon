@@ -293,7 +293,11 @@ impl HorizonBrowserMcp {
         description = "Click (including trusted double-click with count=2), fill, scroll, reload, go back, go forward, or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
-        let action = authorize_attachment_paths(input.build_action()?)?;
+        let action = input.build_action()?;
+        self.controller
+            .refuse_remote_attachments(&input.panel_id, &action)
+            .map_err(|error| error.to_string())?;
+        let action = authorize_attachment_paths(action)?;
         let action_kind = input.action;
         let receipt = self
             .controller

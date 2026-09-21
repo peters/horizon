@@ -227,7 +227,12 @@ fn check_enqueue_eligibility(
     let manifest = super::read(panel_local_id)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
     let now = now_millis();
-    let refusal = if !manifest.permits(identity) {
+    let refusal = if manifest.remote_target.is_some() {
+        Some((
+            std::io::ErrorKind::Unsupported,
+            "file attachment is unavailable for remote device sessions",
+        ))
+    } else if !manifest.permits(identity) {
         Some((std::io::ErrorKind::PermissionDenied, OUTSIDE_WORKSPACE_MESSAGE))
     } else if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
         Some((
