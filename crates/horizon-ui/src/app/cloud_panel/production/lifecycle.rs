@@ -61,13 +61,14 @@ impl Runtime {
                     self.recovery_worker_id.clear();
                 }
                 self.state_unavailable = false;
-                self.error = None;
+                self.error = recovered
+                    .report
+                    .outcome
+                    .needs_attention()
+                    .then(|| recovered.report.outcome.explanation().into());
                 self.logs.push_back(recovered.report.outcome.explanation().into());
                 while self.logs.len() > 150 {
                     self.logs.pop_front();
-                }
-                if self.state.as_ref().is_some_and(Self::needs_provider_check) {
-                    self.error = Some(recovered.report.outcome.explanation().into());
                 }
             }
             Err(error) => self.error = Some(error.to_string()),

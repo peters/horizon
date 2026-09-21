@@ -17,10 +17,20 @@ pub enum Outcome {
 
 impl Outcome {
     #[must_use]
+    pub const fn needs_attention(&self) -> bool {
+        match self {
+            Self::Prepared | Self::Found { .. } | Self::Terminated { .. } => false,
+            Self::Inactive { .. } | Self::Unresolved | Self::Conflicting { .. } | Self::Missing { .. } => true,
+        }
+    }
+
+    #[must_use]
     pub const fn explanation(&self) -> &'static str {
         match self {
             Self::Prepared => "No creation request is outstanding. Deployment requires a separate explicit action.",
-            Self::Found { .. } => "The provider confirmed the existing worker. Reconnect continues on that worker.",
+            Self::Found { .. } => {
+                "The provider confirmed the existing worker. Reconnect explicitly to continue on that worker; this check did not start sessions."
+            }
             Self::Inactive { .. } => {
                 "The provider confirmed this worker's identity but does not report it running. It may be stopped or pending termination; cleanup is not confirmed. Check again or explicitly delete the existing worker. This operation will not allocate a replacement."
             }

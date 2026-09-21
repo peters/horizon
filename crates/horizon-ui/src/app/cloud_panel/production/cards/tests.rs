@@ -219,3 +219,51 @@ fn restored_bound_records_can_check_provider_after_failed_reconnect() {
             .discard_textures();
     }
 }
+
+#[test]
+fn missing_worker_recovery_keeps_the_warning_despite_cached_running_status() {
+    use horizon_core::cloud_runtime::{self, lifecycle::ReconciledDeployment};
+    for worker in [
+        serde_json::Value::Null,
+        serde_json::json!({
+            "id":"worker1","name":"recovery-fixture","imageName":"registry.example/worker","desiredStatus":"RUNNING"
+        }),
+    ] {
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"recovery-fixture","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":null,"worker":worker,"sessions":[]
+        }))
+        .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut runtime = super::super::Runtime {
+            recovery_receiver: Some(rx),
+            ..Default::default()
+        };
+        tx.send(Ok(ReconciledDeployment {
+            state,
+            report: serde_json::from_value(serde_json::json!({
+                "operation_id":"recovery-fixture","outcome":{"status":"missing","worker_id":"worker1"}
+            }))
+            .unwrap(),
+        }))
+        .unwrap();
+        runtime.poll_recovery();
+        assert!(
+            runtime
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("no longer returned by the provider")
+        );
+        assert_eq!(
+            runtime.state.as_ref().unwrap().operation,
+            cloud_runtime::CreateState::Bound {
+                worker_id: "worker1".into()
+            }
+        );
+        assert!(!runtime.needs_attach);
+        assert!(runtime.receiver.is_none());
+    }
+}
