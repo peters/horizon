@@ -29,7 +29,8 @@ against the exact PR head, on a task-owned isolated desktop.
 
 ```bash
 git fetch origin
-git worktree add /tmp/horizon-macos-zoom-smoke <exact-pr-sha>
+pr_sha='REPLACE_WITH_EXACT_PR_SHA'
+git worktree add /tmp/horizon-macos-zoom-smoke "$pr_sha"
 cd /tmp/horizon-macos-zoom-smoke
 git rev-parse HEAD && git status --short
 sw_vers && uname -m && rustc --version
@@ -45,13 +46,38 @@ process tree and prove it is the candidate: resolve its executable and hash
 it, rather than trusting the process name or the build output.
 
 ```bash
-horizon_pid=<child pid from the fixture's process tree>
-exe=$(ps -o comm= -p "$horizon_pid")
-shasum -a 256 "$exe"          # must equal SHA256SUMS
+horizon_pid=12345  # replace with the fixture's actual Horizon child PID
+python3 - "$horizon_pid" "$smoke_bin" <<'PY'
+import ctypes
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+pid = int(sys.argv[1])
+frozen = Path(sys.argv[2]) / "horizon"
+expected = (frozen.parent / "SHA256SUMS").read_text().split()[0]
+libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+libproc.proc_pidpath.restype = ctypes.c_int
+buffer = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+if libproc.proc_pidpath(pid, buffer, len(buffer)) <= 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error))
+exe = Path(os.fsdecode(buffer.value))
+if not exe.is_absolute() or not exe.samefile(frozen):
+    raise SystemExit(f"PID {pid} is not running the frozen candidate: {exe}")
+digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+if digest != expected:
+    raise SystemExit(f"Executable hash mismatch: {digest} != {expected}")
+print(f"PID={pid} executable={exe} SHA256={digest}")
+PY
 ```
 
-Record the PID and hash with the evidence; a mismatch invalidates every lane
-below.
+This requires Python 3 and uses macOS
+[`proc_pidpath`](https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.h).
+Stop on any lookup, path or digest failure. Record the PID and hash with the
+evidence; a mismatch invalidates every lane below.
 
 ## 2. Lane A — unit tiers
 
@@ -81,8 +107,10 @@ it, then:
 3. **Command+wheel.** With a mouse (or two-finger scroll), hold Command and
    scroll over the image: same result as pinch. Release Command and scroll:
    the zoomed image pans instead of zooming.
-4. **Isolation.** `horizon-device doctor` (or the VNC server's own reporting)
-   shows the target desktop geometry unchanged by every step above.
+4. **Isolation.** Record the task-owned VNC server's desktop geometry before
+   and after every step above; it must remain unchanged. The current
+   `horizon-device` input backend supports local Linux X11 only, so its
+   `doctor` command cannot qualify this macOS desktop.
 5. **Retained frame.** Stop the VNC server. With the panel Disconnected, the
    dropdown and gestures must still rescale the last desktop image.
 
@@ -134,8 +162,15 @@ synthetic fixture content is eligible.
 | D | Panels own the gesture over their body; empty canvas and panel titlebars still zoom the board |
 
 A lane passes only with the artifacts from section 6 attached; without them
-it is reported as blocked, not done. The report ends with `SMOKE-TEST: DONE`
-plus the tested SHA, the verified child PID and executable hash, the macOS
-version, and the architecture. Lanes B, C and D require a real trackpad or
-mouse on a task-owned isolated desktop; a headless runner and the developer's
-own desktop are both unacceptable substitutes.
+it is reported as blocked, not done. Include the tested SHA, verified child
+PID and executable hash, macOS version, architecture, and each lane's result
+before the completion marker. Only after every requested lane passes, end the
+report with this exact final line, with no text after it:
+
+```text
+SMOKE-TEST: DONE
+```
+
+Lanes B, C and D require a real trackpad or mouse on a task-owned isolated
+desktop; a headless runner and the developer's own desktop are both
+unacceptable substitutes.
