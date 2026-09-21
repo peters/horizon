@@ -120,3 +120,21 @@ Attempt to move an ordinary panel into a cloud workspace through both the sideba
 and minimap. Membership and layout must remain unchanged. Removing an ordinary
 workspace must select another compatible ordinary workspace or leave it intact if
 only cloud destinations remain; no panel may become orphaned.
+
+
+Creation responsiveness and cancellation regression:
+
+- Select a committed local repository/profile, create a cloud, and verify the
+  resulting undeployed card retains the selected profile and committed revision.
+  Creating the card must not allocate compute.
+- During a slow repository check, verify the modal keeps painting, inputs and
+  duplicate Create are disabled, and Cancel/Escape remain usable. A result queued
+  in the cancellation frame must not create a card afterward.
+- Retry after cancellation. Only one filesystem/Git inspection may remain active;
+  a still-stopping check gives a retryable explanation. Git inspection is bounded
+  to 30 seconds and cancels its task-owned process group.
+- Switch sessions or remove/detach the captured workspace before completion: no
+  late result may create a cloud in a different workspace/session.
+- Close before the first cloud preparation frame, and immediately after switching
+  sessions: existing saved groups must survive. Removing the last initialized
+  cloud must still persist an empty group list.

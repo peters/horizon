@@ -1112,3 +1112,23 @@ review is clear (manifest
 Full validation 40, new frozen native proof and fresh hosted review are required.
 No final-image cloud qualification or new compute is claimed; #812–#816 remain
 separate follow-ups. Merge authorization remains active; no release is authorized.
+
+
+### Final review corrections, 21 September 14:30 UTC
+
+Integrated head `77477000` passed all hosted checks. Three new review findings are
+fixed before merge: uninitialized or stale-session presentation state no longer
+overwrites saved cloud groups; rejected or absent browser image data is not
+acknowledged; and Create resolves its captured repository/revision asynchronously.
+Cancellation wins over a success queued in the same UI frame. Git inspection uses
+the existing bounded, cancellable command runner, and one outstanding job permit
+prevents abandoned checks accumulating when filesystem canonicalization stalls.
+The captured workspace must still exist in the main window at completion. Creation
+pins a committed revision and never allocates a worker by itself.
+
+Regression coverage includes restart-save preservation, legitimate removal of the
+last cloud, static-frame retry, modal input cancellation, captured profile/workspace,
+stale sessions, detached destinations, error recovery and committed revision
+pinning. Full validation 43, independent review and new frozen native evidence
+will gate the next push. Final immutable-image qualification remains in #813;
+this local correction does not claim new cloud acceptance or allocate compute.

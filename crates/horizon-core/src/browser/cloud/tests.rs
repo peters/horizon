@@ -202,3 +202,65 @@ fn discovered_lost_browser_reports_process_loss_and_preserves_engine() {
     assert_eq!(panel.backend(), super::super::BackendKind::FirefoxBidi);
     assert!(panel.session.is_none());
 }
+
+#[test]
+fn polling_retries_missing_or_rejected_pixels_until_a_frame_is_stored() {
+    let frames = FrameSlot::new();
+    let (sender, responses) = mpsc::channel();
+    let (_commands, receiver) = mpsc::sync_channel(1);
+    for (png, lost) in [
+        (Some("not a PNG".to_owned()), false),
+        (None, false),
+        (
+            Some(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                    .to_owned(),
+            ),
+            false,
+        ),
+        (None, true),
+    ] {
+        sender
+            .send(CloudViewResponse {
+                browsers: vec![CloudViewState {
+                    id: "fixture".into(),
+                    sequence: 7,
+                    png,
+                    lost,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let mut requests = Vec::new();
+    pump(
+        &mut requests,
+        &responses,
+        &receiver,
+        &frames,
+        &Latest::default(),
+        &Waker::default(),
+        &AtomicBool::new(false),
+        CloudViewRequest::Open {
+            id: "fixture".into(),
+            url: None,
+            backend: None,
+            target: None,
+        },
+    )
+    .unwrap();
+    let requests: Vec<CloudViewRequest> = String::from_utf8(requests)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let acknowledgments: Vec<u64> = requests
+        .into_iter()
+        .filter_map(|request| match request {
+            CloudViewRequest::Poll { after, .. } => Some(after),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acknowledgments, [0, 0, 7]);
+}

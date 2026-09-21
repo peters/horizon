@@ -94,7 +94,25 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
     assert!(app.cloud_creation_open());
     assert_eq!(app.cloud_prototype.production.selected_profile, "prebuilt");
     click(&ctx, &mut app, create.center());
+    finish_creation(&ctx, &mut app);
     assert!(!app.cloud_creation_open());
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        app.cloud_prototype
+            .groups
+            .0
+            .last()
+            .unwrap()
+            .remote
+            .as_ref()
+            .unwrap()
+            .revision,
+        String::from_utf8(commit.stdout).unwrap().trim()
+    );
     assert_eq!(
         app.cloud_prototype
             .groups
@@ -164,6 +182,7 @@ fn cloud_creation_requires_the_selected_workspace_in_the_main_window() {
     app.reattach_workspace(&ctx, workspace);
     app.process_pending_detached_reattach(&ctx);
     app.create_production_cloud(&ctx).unwrap();
+    finish_creation(&ctx, &mut app);
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
 }
 
@@ -176,7 +195,9 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
         prepare(&mut app, &ctx, temp.path());
         let workspace = app.board.ensure_workspace();
         app.board.workspace_mut(workspace).unwrap().position = origin;
+        app.cloud_prototype.production.creating = true;
         app.create_production_cloud(&ctx).unwrap();
+        finish_creation(&ctx, &mut app);
         assert_position(
             app.cloud_prototype.groups.0[0].position,
             [origin[0] + 24.0, origin[1] + 128.0],
@@ -185,7 +206,9 @@ fn new_cloud_placement_is_relative_to_translated_workspace() {
         app.cloud_prototype.groups.reconcile(&mut app.board);
         app.cloud_overview(&ctx);
         assert_eq!(app.canvas_view, initial_view);
+        app.cloud_prototype.production.creating = true;
         app.create_production_cloud(&ctx).unwrap();
+        finish_creation(&ctx, &mut app);
         let first = &app.cloud_prototype.groups.0[0];
         let second = &app.cloud_prototype.groups.0[1];
         assert_position(first.position, [origin[0] + 24.0, origin[1] + 128.0]);
@@ -213,4 +236,14 @@ fn assert_position(actual: [f32; 2], expected: [f32; 2]) {
         actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.001),
         "{actual:?} != {expected:?}"
     );
+}
+
+fn finish_creation(ctx: &egui::Context, app: &mut HorizonApp) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.cloud_prototype.production.pending_creation.is_some() {
+        assert!(Instant::now() < deadline, "repository validation did not complete");
+        dialog_frame(ctx, app, Vec::new());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
 }

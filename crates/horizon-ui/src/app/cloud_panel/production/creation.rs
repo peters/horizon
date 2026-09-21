@@ -48,14 +48,16 @@ impl HorizonApp {
                     .id_salt("cloud-creation-body")
                     .max_height(body_height)
                     .show(ui, |ui| {
-                        if fields(ui, &mut self.cloud_prototype.production) {
-                            actions.repository = RepositoryAction::Load;
-                        }
-                        if self.cloud_prototype.production.profiles.is_none()
-                            && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
-                        {
-                            actions.repository = RepositoryAction::Setup;
-                        }
+                        ui.add_enabled_ui(self.cloud_prototype.production.pending_creation.is_none(), |ui| {
+                            if fields(ui, &mut self.cloud_prototype.production) {
+                                actions.repository = RepositoryAction::Load;
+                            }
+                            if self.cloud_prototype.production.profiles.is_none()
+                                && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
+                            {
+                                actions.repository = RepositoryAction::Setup;
+                            }
+                        });
                         if let Some(error) = &self.cloud_prototype.error {
                             ui.add_space(8.0);
                             ui.colored_label(theme::PALETTE_RED(), error);
@@ -79,6 +81,7 @@ impl HorizonApp {
         }
         if dismissed || actions.cancel {
             self.cloud_prototype.production.creating = false;
+            self.cloud_prototype.production.pending_creation = None;
             return;
         }
         match actions.repository {
@@ -91,6 +94,7 @@ impl HorizonApp {
         {
             self.cloud_prototype.error = Some(error.to_string());
         }
+        self.poll_cloud_creation(ctx);
     }
 
     pub(super) fn read_cloud_profiles(&mut self) {
@@ -235,12 +239,20 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
         |ui| {
             actions.create = ui
                 .add_enabled(
-                    !form.title.trim().is_empty() && form.profiles.is_some(),
-                    Button::new(RichText::new("Create cloud").size(14.0).strong())
-                        .min_size(Vec2::new(136.0, 40.0))
-                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
-                        .stroke(Stroke::new(1.0, theme::ACCENT()))
-                        .corner_radius(10),
+                    !form.title.trim().is_empty() && form.profiles.is_some() && form.pending_creation.is_none(),
+                    Button::new(
+                        RichText::new(if form.pending_creation.is_some() {
+                            "Checking repository…"
+                        } else {
+                            "Create cloud"
+                        })
+                        .size(14.0)
+                        .strong(),
+                    )
+                    .min_size(Vec2::new(136.0, 40.0))
+                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
+                    .stroke(Stroke::new(1.0, theme::ACCENT()))
+                    .corner_radius(10),
                 )
                 .clicked();
             actions.cancel = ui

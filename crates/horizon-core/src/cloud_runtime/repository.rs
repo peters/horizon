@@ -11,21 +11,34 @@ use std::{
 /// # Errors
 /// Rejects non-commit revisions and unsafe/missing repositories.
 pub fn resolve(repository: &Path, revision: &str) -> Result<String> {
+    resolve_with_runner(
+        repository,
+        revision,
+        &Runner {
+            cancel: &super::Cancellation::default(),
+            emit: &|_| {},
+            secrets: Vec::new(),
+        },
+    )
+}
+/// # Errors
+/// Rejects invalid revisions and bounds or cancels repository inspection.
+pub fn resolve_with_runner(repository: &Path, revision: &str, runner: &Runner<'_>) -> Result<String> {
     if revision.is_empty() || revision.starts_with('-') || revision.contains(['\n', '\0']) {
         return Err(Error::Invalid("Select a committed Git revision"));
     }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args([
+    let output = runner.run(
+        "Resolve committed revision",
+        Command::new("git").arg("-C").arg(repository).args([
             "rev-parse",
             "--verify",
             "--end-of-options",
             &format!("{revision}^{{commit}}"),
-        ])
-        .output()?;
-    let sha = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if !output.status.success() || !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        ]),
+        Duration::from_secs(30),
+    )?;
+    let sha = output.trim().to_owned();
+    if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Error::Invalid("Cannot resolve the selected committed revision"));
     }
     Ok(sha)

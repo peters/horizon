@@ -2,6 +2,7 @@
 mod capabilities;
 mod cards;
 mod creation;
+mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
 mod lifecycle;
@@ -33,6 +34,8 @@ use std::{
 pub(super) struct Production {
     pub(super) setup: setup::State,
     pub creating: bool,
+    pending_creation: Option<creation_job::Pending>,
+    creation_busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(super) focus_title_on_open: bool,
     title: String,
     repository: String,
@@ -226,10 +229,15 @@ impl HorizonApp {
             }
         }
     }
+    pub(super) fn cloud_state_matches_session(&self) -> bool {
+        self.cloud_prototype.production.session_id == self.active_session.as_ref().map(|s| s.session_id.clone())
+    }
+
     fn restore_cloud_state(&mut self, ctx: &egui::Context) {
         let session = self.active_session.as_ref().map(|s| s.session_id.clone());
         if !self.cloud_prototype.initialized || self.cloud_prototype.production.session_id != session {
             self.cloud_prototype.initialized = true;
+            self.cloud_prototype.production.pending_creation = None;
             self.cloud_prototype.production.session_id = session;
             self.cloud_prototype.root = Some(horizon_core::HorizonHome::resolve().root().join("cloud"));
             self.cloud_prototype.groups = self.board.cloud_groups.clone();
@@ -284,68 +292,6 @@ impl HorizonApp {
                 self.start_production_deployment(id, ctx);
             }
         }
-    }
-    fn create_production_cloud(&mut self, ctx: &egui::Context) -> cloud_runtime::Result<()> {
-        let form = &self.cloud_prototype.production;
-        let repo = PathBuf::from(&form.repository).canonicalize()?;
-        let revision = cloud_runtime::repository::resolve(
-            &repo,
-            if form.revision.is_empty() {
-                "HEAD"
-            } else {
-                &form.revision
-            },
-        )?;
-        let profile = form
-            .profiles
-            .as_ref()
-            .and_then(|config| config.profiles.get(&form.selected_profile))
-            .cloned()
-            .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
-        let launch = CloudLaunch {
-            deployment_started: false,
-            id: horizon_core::cloud_runtime::new_id(),
-            revision,
-            profile_name: form.selected_profile.clone(),
-            profile,
-        };
-        let title = form.title.trim().to_owned();
-        let ws = self.board.ensure_workspace();
-        if self.workspace_is_detached(ws) {
-            return Err(cloud_runtime::Error::Invalid(
-                "Move this workspace to the main window before creating a cloud",
-            ));
-        }
-        let workspace = self
-            .board
-            .workspace(ws)
-            .map(|w| w.local_id.clone())
-            .ok_or(cloud_runtime::Error::Invalid("No workspace selected"))?;
-        let id = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .map(|g| g.issue)
-            .max()
-            .unwrap_or(100)
-            .checked_add(1)
-            .ok_or(cloud_runtime::Error::Invalid("Too many clouds"))?;
-        let position = self.cloud_prototype.groups.next_position(&workspace);
-        let mut group = CloudGroup::new(id, title, workspace, repo, position);
-        group.environment.id.clone_from(&launch.id);
-        group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
-        group.environment.provider = Some("runpod".into());
-        group.environment.profile = Some(launch.profile_name.clone());
-        group.environment.image.clone_from(&launch.profile.image);
-        group.remote = Some(launch);
-        group.reconcile(&mut self.board);
-        self.cloud_prototype.groups.0.push(group);
-        self.cloud_prototype.production.creating = false;
-        self.cloud_prototype.error = None;
-        self.save_cloud_prototype();
-        self.cloud_overview(ctx);
-        Ok(())
     }
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|g| g.issue == id) else {

@@ -192,12 +192,16 @@ impl HorizonApp {
     }
 
     pub(super) fn save_cloud_prototype(&mut self) {
-        self.board.cloud_groups = self.cloud_prototype.groups.clone();
-        if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
-            self.mark_runtime_dirty();
+        let mock = std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some();
+        if !self.cloud_prototype.initialized
+            || !self.cloud_prototype.ready
+            || (!mock && !self.cloud_state_matches_session())
+        {
             return;
         }
-        if !self.cloud_prototype.ready {
+        self.board.cloud_groups = self.cloud_prototype.groups.clone();
+        if !mock {
+            self.mark_runtime_dirty();
             return;
         }
         let Some(root) = self.cloud_prototype.root.as_ref() else {

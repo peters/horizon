@@ -178,6 +178,7 @@ fn pump(
         CloudViewRequest::Open { id, .. } => id.clone(),
         _ => return Ok(()),
     };
+    let mut after = 0;
     while !stop.load(Ordering::Acquire) {
         serde_json::to_writer(&mut input, &request)?;
         input.write_all(b"\n")?;
@@ -205,10 +206,11 @@ fn pump(
             .into_iter()
             .find(|s| s.id == id)
             .ok_or_else(|| io::Error::other("Worker browser identity mismatch"))?;
-        let after = state.sequence;
         let lost = state.lost;
-        if let Some(png) = state.png.take() {
-            let _ = frames.store_base64_png(&png);
+        if let Some(png) = state.png.take()
+            && frames.store_base64_png(&png).is_some()
+        {
+            after = state.sequence;
         }
         *latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state);
         wake(waker);

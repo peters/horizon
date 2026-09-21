@@ -62,6 +62,7 @@ impl HorizonApp {
             .clone()
             .unwrap_or_else(|| horizon_core::HorizonHome::resolve().root().join("cloud"));
         self.cloud_prototype.production.creating = false;
+        self.cloud_prototype.production.pending_creation = None;
         let (sender, receiver) = channel();
         self.cloud_prototype.production.setup = State {
             open: true,
