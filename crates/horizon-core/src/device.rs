@@ -258,4 +258,45 @@ mod tests {
         blank.ip_addresses = vec!["192.0.2.1".parse().unwrap(); 17];
         assert!(super::DevicePanelState::normalize_identity(&mut blank).is_err());
     }
+    #[test]
+    fn creator_identity_survives_restore_without_reconnecting() -> crate::Result<()> {
+        use crate::browser::manifest::device::DeviceIdentity;
+        let mut board = Board::new();
+        let workspace = board.create_workspace("identity fixture");
+        let identity = DeviceIdentity {
+            machine_name: Some("Lab workstation".into()),
+            hostname: Some("lab-host".into()),
+            ip_addresses: vec!["192.0.2.10".parse().unwrap(), "2001:db8::10".parse().unwrap()],
+            tailscale_name: Some("lab-host.example.ts.net".into()),
+        };
+        board.create_panel(
+            PanelOptions {
+                kind: PanelKind::Device,
+                command: Some("127.0.0.1:5900".into()),
+                device_identity: Some(identity.clone()),
+                ..Default::default()
+            },
+            workspace,
+        )?;
+        let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let yaml = saved.to_yaml()?;
+        let restored: RuntimeState = serde_yaml::from_str(&yaml).unwrap();
+        let panel = Panel::spawn(
+            PanelId(2),
+            workspace,
+            restored.workspaces[0].panels[0].to_panel_options(&crate::browser::BrowserConfig::default()),
+        )?;
+        let device = panel.device().unwrap();
+        assert_eq!(device.identity.as_ref(), Some(&identity));
+        assert!(!device.connect_on_start);
+        let legacy: crate::PanelState = serde_yaml::from_str("kind: device\ncommand: '127.0.0.1:5900'\n").unwrap();
+        assert!(legacy.device_identity.is_none());
+        assert!(
+            legacy
+                .to_panel_options(&crate::browser::BrowserConfig::default())
+                .device_identity
+                .is_none()
+        );
+        Ok(())
+    }
 }

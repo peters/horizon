@@ -272,6 +272,8 @@ numeric IPv4/IPv6 addresses are accepted. Empty labels become absent values. Cre
 list and inspect return the supplied identity separately from the local VNC
 endpoint. These labels are not verified by VNC and never change routing or
 initiate host discovery. Existing endpoint-only callers remain supported.
+Supplied identity persists with the panel. Restored viewers remain stopped until
+explicitly reconnected; saved labels do not verify the machine now behind a reused port.
 The standalone device CLI controls an explicitly configured target; viewer
 creation and identity are exposed through `device_panel` on the browser MCP.
 
