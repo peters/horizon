@@ -13,7 +13,8 @@ const MIN_STABLE_VIEWPORT_SIDE: f32 = 33.0;
 /// Frames arrive at the emulated viewport's size, are decoded to RGB and
 /// uploaded as one texture, so zooming out is bounded by a 4K-class pixel
 /// budget as well as the renderer's own side limit.
-const MAX_FRAME_PIXELS: f32 = 8_294_400.0;
+const FRAME_BUDGET_SIZE: [u16; 2] = [3840, 2160];
+const MAX_FRAME_PIXELS: u32 = FRAME_BUDGET_SIZE[0] as u32 * FRAME_BUDGET_SIZE[1] as u32;
 
 pub struct BodyOutput {
     pub image_rect: Option<Rect>,
@@ -176,7 +177,17 @@ fn zoomed_viewport(available: egui::Vec2, zoom: f32, max_texture_side: usize) ->
     let side_limit = side_limit(max_texture_side);
     let width = (available.x / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
     let height = (available.y / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
-    rounded_viewport(vec2(width, height))
+    let (mut width, mut height) = rounded_viewport(vec2(width, height));
+    // Independent axis rounding can exceed the float clamp's pixel budget.
+    // Trimming the longer axis removes the fewest pixels at this boundary.
+    if u64::from(width) * u64::from(height) > u64::from(MAX_FRAME_PIXELS) {
+        if width >= height {
+            width = MAX_FRAME_PIXELS / height;
+        } else {
+            height = MAX_FRAME_PIXELS / width;
+        }
+    }
+    (width, height)
 }
 
 // egui layout sizes are finite and non-negative.
@@ -222,9 +233,10 @@ fn frame_scale(available: egui::Vec2, frame_size: egui::Vec2, responsive: bool) 
 /// shows what is really on screen.
 fn effective_zoom(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> f32 {
     let side_limit = side_limit(max_texture_side);
+    let pixel_budget = f32::from(FRAME_BUDGET_SIZE[0]) * f32::from(FRAME_BUDGET_SIZE[1]);
     let floor = (available.x / side_limit)
         .max(available.y / side_limit)
-        .max((available.x * available.y / MAX_FRAME_PIXELS).sqrt())
+        .max((available.x * available.y / pixel_budget).sqrt())
         .max(crate::panel_zoom::MIN_ZOOM);
     let ceiling = (available.min_elem() / MIN_STABLE_VIEWPORT_SIDE).max(floor);
     zoom.clamp(floor, ceiling)
@@ -403,7 +415,7 @@ mod tests {
         let (wide, high) = zoomed_viewport(egui::vec2(3000.0, 2000.0), 0.25, limit);
         assert!(wide <= 8192 && high <= 8192, "{wide}x{high} passes the texture limit");
         assert!(
-            f64::from(wide) * f64::from(high) <= f64::from(MAX_FRAME_PIXELS) * 1.01,
+            u64::from(wide) * u64::from(high) <= u64::from(MAX_FRAME_PIXELS),
             "{wide}x{high} passes the pixel budget"
         );
         let (narrow, _) = zoomed_viewport(egui::vec2(3000.0, 200.0), 0.25, 2048);
@@ -422,6 +434,34 @@ mod tests {
             f32::from(u16::try_from(height).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE
                 && f32::from(u16::try_from(width).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE,
             "{width}x{height} is below the stable viewport floor"
+        );
+    }
+
+    #[test]
+    fn rounded_viewports_stay_within_the_pixel_budget() {
+        for size in [
+            egui::vec2(254.0, 2041.0),
+            egui::vec2(2041.0, 254.0),
+            egui::vec2(960.0, 540.0),
+            egui::vec2(3000.0, 2000.0),
+        ] {
+            for zoom in [0.25, 1.0, 4.0] {
+                for side_limit in [2048, 4096, 16_384] {
+                    let (width, height) = super::zoomed_viewport(size, zoom, side_limit);
+                    assert!(width >= 33 && height >= 33);
+                    let limit = u32::try_from(side_limit).expect("small texture limit");
+                    assert!(width <= limit && height <= limit);
+                    assert!(
+                        u64::from(width) * u64::from(height) <= u64::from(super::MAX_FRAME_PIXELS),
+                        "{size:?} at {zoom} with side limit {side_limit} produced {width}x{height}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            super::zoomed_viewport(egui::vec2(960.0, 540.0), 0.25, 16_384),
+            (3840, 2160),
+            "a viewport exactly at the budget must remain unchanged"
         );
     }
 
@@ -445,7 +485,7 @@ mod tests {
                     let scale = super::frame_scale(available, frame, true);
                     assert!(scale <= crate::panel_zoom::MAX_ZOOM);
                     assert!((scale - state.effective_zoom.factor()).abs() < 0.001);
-                    assert!(f64::from(viewport.0) * f64::from(viewport.1) <= f64::from(super::MAX_FRAME_PIXELS));
+                    assert!(u64::from(viewport.0) * u64::from(viewport.1) <= u64::from(super::MAX_FRAME_PIXELS));
                     assert!(frame.x * scale <= available.x && frame.y * scale <= available.y);
                 })
                 .discard_textures();
