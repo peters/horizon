@@ -142,9 +142,10 @@ Worker readiness checks the selected active capability set, the control service,
 and the supervisor's recorded process identities. Profiles with desktop also
 require a responding X display, the owned Openbox window manager's live root
 registration, and a responding VNC server. A listening VNC socket alone cannot
-make a worker ready. The supervisor watches every required service before,
-during and after tool configuration; any service exit fails the worker and
-stops its owned process groups without replacing them. Stale readiness records
+make a worker ready. The supervisor watches desktop services throughout tool
+configuration, then starts and watches the control and SSH services. Once a
+required service has started, its exit fails the worker and stops its owned
+process groups without replacing them. Stale readiness records
 are rejected after a restart or PID reuse. The `x11-utils` desktop dependency
 provides the bounded X display and window-manager probes. Display startup has a
 30-second deadline and tool configuration has a 120-second deadline; failure
