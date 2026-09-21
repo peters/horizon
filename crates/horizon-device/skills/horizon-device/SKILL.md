@@ -32,9 +32,17 @@ actual target machine; never substitute the local tunnel endpoint or the
 viewer's own hostname. Omit unknown fields. Inspect/list return these labels.
 
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
-verify `connection: "connected"`, `image_received`, `image_displayed` and an
-advancing `frame_sequence` while target output changes. `visible` is only a
-presentation setting; an image can be off canvas or clipped. Set
+check `connection: "connected"`. For a visible, on-screen viewer, also verify
+`image_received`, `image_displayed` and an advancing `frame_sequence` while target
+output changes. `visible` is only a presentation setting; an image can be off
+canvas or clipped. For hidden or off-canvas viewers, use an advancing
+`received_frame_sequence` while target output changes to verify reception;
+uploads and display may remain absent or unchanged. This counter tracks received
+image updates independently of the uploaded-image `frame_sequence`. Background
+reception does not satisfy the live-view requirement for interactive testing.
+Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
+is not a connection failure. Older hosts may omit reception progress; do not
+interpret a missing/default-zero counter as a failure. Set
 `operation: "visibility", visible: true` for a hidden owned viewer, then verify
 actual presentation. Never claim that a separate isolated viewer is visible to
 the user merely because its screenshot is available.

@@ -87,7 +87,7 @@ pub struct PanelState {
     pub image: ImageEvidence,
 }
 
-/// Uploaded image and completed-frame presentation evidence for one connection.
+/// Reception, upload and completed-frame presentation evidence for one connection.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ImageEvidence {
     /// A decoded image was uploaded in this connection; may be stale after disconnect.
@@ -95,6 +95,9 @@ pub struct ImageEvidence {
     /// The most recent completed UI frame painted the connected image.
     pub image_displayed: bool,
     pub frame_sequence: u64,
+    /// Worker-published image updates, including while hidden; not a heartbeat.
+    #[serde(default)]
+    pub received_frame_sequence: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
@@ -256,6 +259,20 @@ fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reception_evidence_is_additive_and_round_trips_without_display() {
+        let legacy = r#"{"panel_id":"viewer","endpoint":"127.0.0.1:5900","visible":false,"owned_by_caller":true,"connection":"connected","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
+        let mut panel: PanelState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(panel.image.received_frame_sequence, 0);
+        panel.image.received_frame_sequence = 7;
+        let encoded = serde_json::to_value(panel).unwrap();
+        assert_eq!(encoded["received_frame_sequence"], 7);
+        let decoded: PanelState = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.image.received_frame_sequence, 7);
+        assert_eq!(decoded.image.frame_sequence, 0);
+        assert!(!decoded.image.image_received && !decoded.image.image_displayed);
+    }
 
     #[test]
     fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {

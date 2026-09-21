@@ -33,6 +33,7 @@ pub(crate) struct DeviceUiState {
 #[derive(Default)]
 struct ImageDisplay {
     sequence: u64,
+    received_sequence: u64,
     displayed: bool,
     previous_displayed: bool,
     /// This connection has uploaded a frame. A retained texture is not evidence.
@@ -72,6 +73,7 @@ impl DeviceUiState {
             (updates, full)
         });
         if let Some((updates, full)) = incoming {
+            self.image.received_sequence = updates.received_frame_sequence;
             if let Some(desktop) = updates.desktop {
                 self.desktop = Some(desktop);
                 self.server.desktop_size = Some(desktop);
@@ -264,7 +266,9 @@ impl DeviceUiState {
         // Observe worker failures even when the panel is hidden or off canvas.
         // Retain pending pixels for show(); only rendering may assert display.
         if let Some(session) = &self.session {
-            if let Some(status) = session.take_status() {
+            let observation = session.observation();
+            self.image.received_sequence = observation.received_frame_sequence;
+            if let Some(status) = observation.status {
                 self.status = status;
             }
             let details = session.take_server_details();
@@ -295,6 +299,7 @@ impl DeviceUiState {
                     && self.image.previous_displayed
                     && connection == Connection::Connected,
                 frame_sequence: self.image.sequence,
+                received_frame_sequence: self.image.received_sequence,
             },
             connection,
             connection_error,
