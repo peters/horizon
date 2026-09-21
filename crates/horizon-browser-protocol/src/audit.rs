@@ -268,9 +268,14 @@ impl BrowserAuditAction {
                 delta_x: *delta_x,
                 delta_y: *delta_y,
             },
-            BrowserControlAction::SetFiles { target, paths } => Self::SetFiles {
+            BrowserControlAction::SetFiles { target, paths, sources } => Self::SetFiles {
                 target: audit_target(target),
-                paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+                // A host queue that staged private copies audits the
+                // authorized sources, in every lifecycle record.
+                paths: if sources.is_empty() { paths } else { sources }
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
             },
             BrowserControlAction::Evaluate { expression } => Self::Evaluate {
                 expression_characters: expression.chars().count(),
@@ -620,7 +625,8 @@ mod tests {
             target: crate::BrowserTarget::Ref {
                 reference: "g1s1e4".to_string(),
             },
-            paths: vec![std::path::PathBuf::from("/work/uploads/secret-name.pdf")],
+            paths: vec![std::path::PathBuf::from("/private/staging/0/secret-name.pdf")],
+            sources: vec![std::path::PathBuf::from("/work/uploads/secret-name.pdf")],
         });
         assert_eq!(
             attach,
@@ -628,7 +634,7 @@ mod tests {
                 target: "g1s1e4".to_string(),
                 paths: vec!["/work/uploads/secret-name.pdf".to_string()],
             },
-            "attachments audit the host path, never file contents"
+            "attachments audit the authorized source path, never a staged copy or file contents"
         );
         let json = serde_json::to_string(&[query, fill, evaluate]).unwrap_or_default();
 

@@ -193,7 +193,7 @@ fn authorize_attachments(
     panel_local_id: &str,
     action_id: &str,
 ) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
-    let BrowserControlAction::SetFiles { target, paths } = action else {
+    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
         let summary = BrowserAuditAction::from_control(&action);
         return Ok((action, summary, None));
     };
@@ -201,9 +201,14 @@ fn authorize_attachments(
     let authorized = crate::AttachmentPolicy::from_environment()
         .authorize(&paths)
         .map_err(refused)?;
+    let sources = authorized
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect::<Vec<_>>();
     let summary = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
         target: target.clone(),
-        paths: authorized.iter().map(|file| file.path().to_path_buf()).collect(),
+        paths: sources.clone(),
+        sources: Vec::new(),
     });
     let reserved_bytes =
         crate::attachments::check_panel_budget(&authorized, crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES)
@@ -224,9 +229,15 @@ fn authorize_attachments(
         &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
         STAGING_LOCK_WAIT,
     )?;
+    let manifests = crate::BrowserRuntimePaths::resolve().browsers_manifest_dir();
     crate::attachments::prune_attachments(
         &attachments_dir,
         panel_local_id,
+        |panel| {
+            let mut manifest = std::ffi::OsString::from(panel);
+            manifest.push(".json");
+            manifests.join(manifest).exists()
+        },
         crate::attachments::ATTACHMENT_RETENTION,
         crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
         crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES,
@@ -242,7 +253,8 @@ fn authorize_attachments(
     };
     let paths = crate::attachments::stage_attachments(&attachments_dir, panel_local_id, action_id, &authorized)
         .map_err(refused)?;
-    let action = BrowserControlAction::SetFiles { target, paths };
+    // Engines read the staged copies; every audit record shows the sources.
+    let action = BrowserControlAction::SetFiles { target, paths, sources };
     action
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;

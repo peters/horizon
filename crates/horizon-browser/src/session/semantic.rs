@@ -80,7 +80,7 @@ impl DriverState {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(link, event_tx, frame_slot, target.as_ref(), *delta_x, *delta_y),
-            BrowserControlAction::SetFiles { target, paths } => {
+            BrowserControlAction::SetFiles { target, paths, .. } => {
                 self.semantic_set_files(link, event_tx, frame_slot, target, paths)
             }
             BrowserControlAction::Evaluate { expression } => {

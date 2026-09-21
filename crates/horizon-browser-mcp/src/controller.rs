@@ -230,6 +230,8 @@ impl BrowserController {
     /// Live panels the calling identity may control: for a Horizon agent,
     /// exactly the panels its host placed in the agent's current workspace.
     pub(crate) fn list_panels(&self) -> Result<Vec<BrowserPanel>, ControlError> {
+        // Discovery runs often, so dead panels' staging goes here as well.
+        sweep_stale_attachments();
         self.require_host_instance()?;
         let mut panels = self
             .workspace_manifests()
@@ -846,7 +848,7 @@ fn authorize_and_enqueue_attachments(
     action: BrowserControlAction,
 ) -> Result<String, AttachmentEnqueueError> {
     action.validate().map_err(AttachmentEnqueueError::Invalid)?;
-    let BrowserControlAction::SetFiles { target, paths } = action else {
+    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
         return manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), action)
             .map_err(AttachmentEnqueueError::Queue);
     };
@@ -859,7 +861,11 @@ fn authorize_and_enqueue_attachments(
     manifest::enqueue_action(
         panel_id,
         AgentIdentity::new(actor, host_instance),
-        BrowserControlAction::SetFiles { target, paths },
+        BrowserControlAction::SetFiles {
+            target,
+            paths,
+            sources: Vec::new(),
+        },
     )
     .map_err(AttachmentEnqueueError::Queue)
 }

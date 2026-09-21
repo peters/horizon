@@ -154,6 +154,11 @@ pub enum BrowserControlAction {
     SetFiles {
         target: BrowserTarget,
         paths: Vec<std::path::PathBuf>,
+        /// The authorized source paths when `paths` are private staged
+        /// copies made by a host queue; audit records show these, engines
+        /// ignore them. Empty when `paths` are the caller's own.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<std::path::PathBuf>,
     },
     /// Evaluate JavaScript in the current top-level document and return JSON.
     Evaluate {
@@ -248,9 +253,14 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
-            Self::SetFiles { target, paths } => {
+            Self::SetFiles { target, paths, sources } => {
                 validate_target(target)?;
-                validate_attachment_paths(paths)
+                validate_attachment_paths(paths)?;
+                if sources.is_empty() {
+                    Ok(())
+                } else {
+                    validate_attachment_paths(sources)
+                }
             }
             Self::Evaluate { expression } => validate_expression(expression),
             Self::Network { operation, options } => match operation {
@@ -762,6 +772,7 @@ mod tests {
         let action = BrowserControlAction::SetFiles {
             target: target.clone(),
             paths: vec![std::path::PathBuf::from(absolute)],
+            sources: Vec::new(),
         };
         assert!(action.validate().is_ok());
         assert!(
@@ -778,6 +789,7 @@ mod tests {
             BrowserControlAction::SetFiles {
                 target: target.clone(),
                 paths: paths.into_iter().map(std::path::PathBuf::from).collect(),
+                sources: Vec::new(),
             }
             .validate()
         };
@@ -805,6 +817,7 @@ mod tests {
                 paths: vec![std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
                     b"/uploads/\xff.pdf",
                 ))],
+                sources: Vec::new(),
             };
             assert_eq!(action.validate(), Err("attachment path must be valid UTF-8"));
         }

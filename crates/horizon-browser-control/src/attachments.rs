@@ -437,8 +437,9 @@ pub fn sweep_stale_attachments(
 }
 
 /// Make room for one more attachment action on `panel_local_id`: every
-/// panel's settled actions older than `retention` go (a closed panel's
-/// staging ages out this way), and the panel keeps at most
+/// panel's settled actions older than `retention` go, panels that are no
+/// longer live (`panel_is_live` answers false for the sanitized directory
+/// name) lose all their staging however they closed, and the panel keeps at most
 /// `max_actions - 1` newer actions within `max_bytes` less the
 /// `reserved_bytes` the incoming action needs, so the new one fits inside
 /// the budget. Actions still pending (queued, dispatched or in flight,
@@ -453,6 +454,7 @@ pub fn sweep_stale_attachments(
 pub fn prune_attachments(
     attachments_dir: &Path,
     panel_local_id: &str,
+    panel_is_live: impl Fn(&std::ffi::OsStr) -> bool,
     retention: Duration,
     max_actions: usize,
     max_bytes: u64,
@@ -477,6 +479,12 @@ pub fn prune_attachments(
         // on a best-effort basis.
         let panel = panel.map_err(|error| scan_failure(attachments_dir, error))?;
         let is_current = panel.file_name().to_string_lossy() == current;
+        if !is_current && !panel_is_live(&panel.file_name()) {
+            if let Err(error) = std::fs::remove_dir_all(panel.path()) {
+                tracing::warn!(target: "browser", path = %panel.path().display(), "failed to release a closed panel's staged attachments: {error}");
+            }
+            continue;
+        }
         let actions = match std::fs::read_dir(panel.path()) {
             Ok(actions) => actions,
             Err(error) if is_current => return Err(scan_failure(&panel.path(), error)),
@@ -649,13 +657,22 @@ mod tests {
             settle_attachments(&attachments, panel, action);
         }
         // Age: the other panel's old action and this panel's first go.
-        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        prune_attachments(
+            &attachments,
+            "panel",
+            |_| true,
+            Duration::from_millis(300),
+            8,
+            u64::MAX,
+            0,
+        )
+        .expect("room");
         assert!(!action_directory(&attachments, "other", "old").exists());
         assert!(!action_directory(&attachments, "panel", "first").exists());
         assert!(action_directory(&attachments, "panel", "second").exists());
         assert!(action_directory(&attachments, "panel", "third").exists());
         // Count: room for one more means only the newest of the two stays.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
+        prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -664,7 +681,7 @@ mod tests {
         );
         // Bytes: a 12-byte budget with 7 reserved for the newcomer leaves
         // less than one 6-byte action, so the panel is cleared.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect("room");
+        prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 8, 12, 7).expect("room");
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -756,23 +773,33 @@ mod tests {
         stage_attachments(&attachments, "panel", "pending", &authorized).expect("pending");
         settle_attachments(&attachments, "panel", "older");
         // Age only removes settled history; the fresh pending action stays.
-        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        prune_attachments(
+            &attachments,
+            "panel",
+            |_| true,
+            Duration::from_millis(300),
+            8,
+            u64::MAX,
+            0,
+        )
+        .expect("room");
         assert!(!action_directory(&attachments, "panel", "older").exists());
         assert!(action_directory(&attachments, "panel", "pending").exists());
         stage_attachments(&attachments, "panel", "settled", &authorized).expect("settled");
         settle_attachments(&attachments, "panel", "settled");
         // Count: the pending action stays and the settled newer one goes.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
+        prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 2, u64::MAX, 0).expect("room");
         assert!(action_directory(&attachments, "panel", "pending").exists());
         assert!(!action_directory(&attachments, "panel", "settled").exists());
         // Bytes: the pending action alone exceeds the room, so the newcomer is refused.
-        let error = prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect_err("no room");
+        let error =
+            prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 8, 12, 7).expect_err("no room");
         assert!(matches!(error, AttachmentPolicyError::StagingFull { .. }), "{error}");
         assert_eq!(error.io_kind(), std::io::ErrorKind::WouldBlock);
         assert!(action_directory(&attachments, "panel", "pending").exists());
         // Settled, it is ordinary retained history again.
         settle_attachments(&attachments, "panel", "pending");
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7).expect("room");
+        prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 8, 12, 7).expect("room");
         assert!(!action_directory(&attachments, "panel", "pending").exists());
     }
 
@@ -791,10 +818,25 @@ mod tests {
             stage_attachments(&attachments, "panel", action, &authorized).expect(action);
             settle_attachments(&attachments, "panel", action);
         }
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, 6, 0).expect("room");
+        prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 2, 6, 0).expect("room");
         assert!(
             action_directory(&attachments, "other", "fresh").exists(),
             "count and byte limits apply to the current panel only"
+        );
+        let only_panel = crate::paths::safe_local_id("panel");
+        prune_attachments(
+            &attachments,
+            "panel",
+            |name| name == only_panel.as_str(),
+            Duration::from_hours(1),
+            8,
+            u64::MAX,
+            0,
+        )
+        .expect("room");
+        assert!(
+            !attachments.join(crate::paths::safe_local_id("other")).exists(),
+            "a panel that is no longer live loses all its staging at the next attachment"
         );
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
@@ -842,13 +884,13 @@ mod tests {
         stage_attachments(&attachments, "panel", "hidden", &authorized).expect("hidden");
         let panel_dir = attachments.join(crate::paths::safe_local_id("panel"));
         std::fs::set_permissions(&panel_dir, std::fs::Permissions::from_mode(0o300)).expect("unreadable");
-        let refused = prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, u64::MAX, 0);
+        let refused = prune_attachments(&attachments, "panel", |_| true, Duration::from_hours(1), 8, u64::MAX, 0);
         std::fs::set_permissions(&panel_dir, std::fs::Permissions::from_mode(0o700)).expect("restore");
         assert!(
             matches!(refused, Err(AttachmentPolicyError::Staging { .. })),
             "{refused:?}"
         );
-        prune_attachments(&attachments, "other", Duration::from_hours(1), 8, u64::MAX, 0)
+        prune_attachments(&attachments, "other", |_| true, Duration::from_hours(1), 8, u64::MAX, 0)
             .expect("an unreadable other panel is skipped");
     }
 
@@ -892,7 +934,16 @@ mod tests {
             .expect("authorized");
         stage_attachments(&attachments, "panel", "abandoned", &authorized).expect("abandoned");
         std::thread::sleep(Duration::from_millis(600));
-        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0).expect("room");
+        prune_attachments(
+            &attachments,
+            "panel",
+            |_| true,
+            Duration::from_millis(300),
+            8,
+            u64::MAX,
+            0,
+        )
+        .expect("room");
         assert!(!action_directory(&attachments, "panel", "abandoned").exists());
     }
 

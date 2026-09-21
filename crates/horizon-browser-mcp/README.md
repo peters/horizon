@@ -125,8 +125,9 @@ shell commands, files, or other MCP servers.
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
   at most 32 actions and 4 GiB, pruned when the next attachment is staged
-  and swept when an MCP server starts or a panel is closed, which also
-  drops all staging of panels whose manifest is gone however they closed;
+  and swept when an MCP server starts, lists panels or closes one, and at
+  every attachment, which also drops all staging of panels whose manifest
+  is gone however they closed;
   staging for actions whose result has not been consumed yet (queued,
   dispatched or in flight) is never pruned for room, and when those alone
   leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
@@ -154,7 +155,8 @@ shell commands, files, or other MCP servers.
   does not hold exactly the requested files by name and size fails with
   `attachment_mismatch`.
   Remote device sessions return `unsupported_backend` because the files live
-  on this host. Audit records keep the paths, never the contents. Snapshot
+  on this host. Every audit record for the action keeps the authorized source
+  paths, never the private staged copies or the contents. Snapshot
   and query nodes carry `file_input` (`accept`, `multiple`, `files`) for
   file inputs so the attachment can be verified without `browser_evaluate`.
 - `browser_http_auth` is how a user supplies a username and password for HTTP

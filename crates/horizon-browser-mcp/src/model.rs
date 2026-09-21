@@ -586,6 +586,7 @@ impl ActInput {
                 Ok(BrowserControlAction::SetFiles {
                     target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
                     paths,
+                    sources: Vec::new(),
                 })
             }
             ActKind::Reload => no_target_or_value(self, BrowserControlAction::Reload),
@@ -1076,7 +1077,7 @@ mod tests {
         attach.selector = Some("input[type=file]".to_string());
         assert!(matches!(
             attach.build_action(),
-            Ok(horizon_browser::BrowserControlAction::SetFiles { target: BrowserTarget::Selector { .. }, paths })
+            Ok(horizon_browser::BrowserControlAction::SetFiles { target: BrowserTarget::Selector { .. }, paths, .. })
                 if paths == vec![std::path::PathBuf::from(absolute)]
         ));
         attach.value = Some("text".to_string());

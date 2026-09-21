@@ -217,7 +217,7 @@ impl Driver {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
-            BrowserControlAction::SetFiles { target, paths } => self.semantic_set_files(target, paths),
+            BrowserControlAction::SetFiles { target, paths, .. } => self.semantic_set_files(target, paths),
             BrowserControlAction::Evaluate { expression } => self.semantic_evaluate(expression),
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(request, *operation, options.clone(), event_tx)
