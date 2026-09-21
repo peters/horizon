@@ -205,11 +205,36 @@ fn fresh_latch(ctx: &Context, now: f64) -> Option<GestureLatch> {
         .filter(|latch| now - latch.last_seen <= GESTURE_IDLE_SECONDS)
 }
 
-/// Reserve new gestures for foreground controls such as menus. Known panel
-/// layers are excluded because their previous-frame hit geometry may be stale.
-pub(crate) fn blocking_layer(ctx: &Context, mut panel_layers: impl Iterator<Item = Id>) -> Option<Id> {
+/// Reserve foreground controls using retained geometry, except app dialogs
+/// whose current interactive coverage is already resolved by their owner.
+pub(crate) fn blocking_layer(
+    ctx: &Context,
+    mut panel_layers: impl Iterator<Item = Id>,
+    ignore_layer: impl Fn(Id) -> bool,
+) -> Option<Id> {
     let pointer = ctx.input(|input| input.pointer.hover_pos())?;
-    let layer = ctx.layer_id_at(pointer)?;
+    let mut layer = ctx.layer_id_at(pointer)?;
+    if ignore_layer(layer.id) {
+        // A retired backdrop may cover an unrelated live menu. Search below it,
+        // stopping at the first real hit (including a panel covering a menu).
+        let layers = ctx.memory(|memory| {
+            memory
+                .layer_ids()
+                .filter(|layer| memory.areas().is_visible(layer))
+                .collect::<Vec<_>>()
+        });
+        layer = layers.into_iter().rev().find_map(|layer| {
+            if ignore_layer(layer.id) {
+                return None;
+            }
+            let area = egui::AreaState::load(ctx, layer.id)?;
+            let rect = area.rect();
+            let rect = ctx
+                .layer_transform_to_global(layer)
+                .map_or(rect, |transform| transform * rect);
+            (area.interactable && rect.contains(pointer)).then_some(layer)
+        })?;
+    }
     (layer.order >= egui::Order::Foreground && !panel_layers.any(|id| id == layer.id)).then_some(layer.id)
 }
 
@@ -458,6 +483,67 @@ mod tests {
         assert_eq!(owner_at(9.0, true, Some(other)), Some(other));
         // With no gesture in flight the pointer's own answer is returned.
         assert_eq!(owner_at(9.02, false, Some(panel)), Some(panel));
+    }
+
+    #[test]
+    fn retired_dialog_hit_testing_keeps_underlying_popups_and_panel_occlusion() {
+        for panel_above in [false, true] {
+            for offset in [0.0, 300.0] {
+                let ctx = egui::Context::default();
+                let popup = egui::Id::new("live-popup");
+                let panel = egui::Id::new("panel");
+                let retired = egui::Id::new("retired-dialog");
+                for frame in 0..4 {
+                    let _ = ctx
+                        .run_ui(
+                            egui::RawInput {
+                                events: vec![egui::Event::PointerMoved(egui::pos2(100.0 + offset, 100.0))],
+                                ..Default::default()
+                            },
+                            |ui| {
+                                for (id, order) in [
+                                    (popup, egui::Order::Foreground),
+                                    (
+                                        panel,
+                                        if panel_above {
+                                            egui::Order::Foreground
+                                        } else {
+                                            egui::Order::Middle
+                                        },
+                                    ),
+                                    (retired, egui::Order::Debug),
+                                ] {
+                                    let layer = egui::LayerId::new(order, id);
+                                    ui.ctx().set_transform_layer(
+                                        layer,
+                                        egui::emath::TSTransform::from_translation(egui::vec2(offset, 0.0)),
+                                    );
+                                    egui::Area::new(id)
+                                        .order(order)
+                                        .fixed_pos(egui::pos2(40.0, 40.0))
+                                        .constrain(false)
+                                        .show(ui.ctx(), |ui| {
+                                            ui.set_min_size(egui::vec2(200.0, 200.0));
+                                        });
+                                }
+                                if frame == 3 {
+                                    assert_eq!(
+                                        ui.ctx()
+                                            .layer_id_at(egui::pos2(100.0 + offset, 100.0))
+                                            .map(|layer| layer.id),
+                                        Some(retired)
+                                    );
+                                    assert_eq!(
+                                        super::blocking_layer(ui.ctx(), std::iter::once(panel), |id| id == retired),
+                                        (!panel_above).then_some(popup)
+                                    );
+                                }
+                            },
+                        )
+                        .discard_textures();
+                }
+            }
+        }
     }
 
     #[test]

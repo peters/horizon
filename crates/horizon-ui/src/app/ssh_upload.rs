@@ -575,6 +575,7 @@ mod tests {
                     app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some(),
                     "unpainted dialog"
                 );
+                assert!(app.zoom_gesture_blocker(&ctx).is_some(), "unpainted board dialog");
                 for _ in 0..3 {
                     run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
                 }
@@ -613,6 +614,10 @@ mod tests {
                 assert!(
                     app.fullscreen_zoom_gesture_blocker(&ctx, true).is_some(),
                     "replacement flow must not reuse the preceding flow's painted bounds"
+                );
+                assert!(
+                    app.zoom_gesture_blocker(&ctx).is_some(),
+                    "replacement outside fullscreen entry"
                 );
                 let flow = app.ssh_upload_flow.as_mut().expect("upload flow");
                 flow.target_viewport_id = egui::ViewportId::from_hash_of("other viewport");

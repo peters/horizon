@@ -311,6 +311,73 @@ fn fullscreen_entry_discards_hidden_sidebar_gesture_hits() {
 }
 
 #[test]
+fn dialog_open_and_close_route_the_first_gesture_without_a_view_change() {
+    for fullscreen in [false, true] {
+        for wheel in [false, true] {
+            let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+            app.fullscreen_panel = fullscreen.then_some(panel);
+            for _ in 0..3 {
+                render(&ctx, &mut app);
+            }
+            let point = if fullscreen {
+                egui::pos2(700.0, 250.0)
+            } else {
+                app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)
+                    .into_iter()
+                    .find(|(id, _)| *id == panel)
+                    .and_then(|(_, geometry)| geometry.zoom_body)
+                    .expect("device body")
+                    .center()
+            };
+            let before = app.canvas_view;
+            app.open_command_palette();
+            for (time, open) in [(1.0, true), (2.0, false)] {
+                if !open {
+                    app.command_palette = None;
+                }
+                let mut input = raw_input([1400.0, 900.0], None);
+                input.time = Some(time);
+                input.events = vec![
+                    egui::Event::PointerMoved(point),
+                    if wheel {
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, 40.0),
+                            modifiers: egui::Modifiers::CTRL,
+                            phase: egui::TouchPhase::Move,
+                        }
+                    } else {
+                        egui::Event::Zoom(1.25)
+                    },
+                ];
+                run_app_frame_with_input(&ctx, &mut app, input);
+                let zoom = app.panel_render_caches.device_ui_state[&panel].zoom_factor();
+                assert_eq!(zoom > 1.0, !open, "fullscreen={fullscreen} wheel={wheel} open={open}");
+                assert_eq!(app.canvas_view, before);
+            }
+        }
+    }
+}
+
+#[test]
+fn root_dialog_does_not_block_a_detached_viewport() {
+    use crate::test_egui::DiscardTextures;
+    let (_temp, ctx, mut app, _) = device_app(Some("127.0.0.1:5903"));
+    app.open_command_palette();
+    assert!(app.zoom_gesture_blocker(&ctx).is_some());
+    let viewport_id = egui::ViewportId::from_hash_of("detached");
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.viewport_id = viewport_id;
+    input.viewports.insert(viewport_id, egui::ViewportInfo::default());
+    let _ = ctx
+        .run_ui(input, |ui| {
+            assert_eq!(ui.ctx().viewport_id(), viewport_id);
+            assert!(app.zoom_gesture_blocker(ui.ctx()).is_none());
+        })
+        .discard_textures();
+}
+
+#[test]
 fn fullscreen_entry_preserves_an_open_command_palette_gesture_blocker() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
     app.open_command_palette();

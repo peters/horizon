@@ -14,6 +14,27 @@ use super::super::shortcuts::{
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
 
+// These layers are covered by current dialog state, never their retained hit map.
+fn is_state_owned_dialog_layer(id: egui::Id) -> bool {
+    [
+        "palette_backdrop",
+        "palette_modal",
+        "remote_hosts_backdrop",
+        "remote_hosts_modal",
+        "session_manager_backdrop",
+        "session_manager_modal",
+        "ssh_upload_backdrop",
+        "ssh_upload_modal",
+    ]
+    .into_iter()
+    .any(|name| id == egui::Id::new(name))
+        || ["dir_picker", "ssh_upload_destination_picker"].into_iter().any(|name| {
+            ["backdrop", "modal"]
+                .into_iter()
+                .any(|part| id == egui::Id::new((name, part)))
+        })
+}
+
 impl CanvasPanSpaceKeyState {
     fn filter_terminal_events(
         &mut self,
@@ -248,6 +269,9 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn zoom_gesture_blocker(&self, ctx: &Context) -> Option<egui::Id> {
+        if let Some(dialog) = self.current_dialog_zoom_blocker(ctx) {
+            return Some(dialog);
+        }
         crate::panel_zoom::blocking_layer(
             ctx,
             self.board
@@ -255,6 +279,7 @@ impl HorizonApp {
                 .iter()
                 .map(|panel| panel_layer_salt(panel.id))
                 .chain(self.panel_screen_order.iter().copied().map(panel_layer_salt)),
+            is_state_owned_dialog_layer,
         )
     }
 
@@ -266,17 +291,23 @@ impl HorizonApp {
         if !view_changed {
             return self.zoom_gesture_blocker(ctx);
         }
-        // These dialogs retain an interactive backdrop over the whole viewport.
-        // A hidden board layer may still sort above that backdrop on this frame.
-        let dialog_blocks = self.command_palette.is_some()
-            || self.dir_picker.is_some()
-            || self.remote_hosts_overlay.is_some()
-            || self.session_manager.is_some()
+        self.current_dialog_zoom_blocker(ctx)
+    }
+
+    fn current_dialog_zoom_blocker(&self, ctx: &Context) -> Option<egui::Id> {
+        // Root dialogs have interactive backdrops; uploads belong to one viewport.
+        // Current state is authoritative even before a new dialog has painted.
+        let root_dialog = ctx.viewport_id() == egui::ViewportId::ROOT
+            && (self.command_palette.is_some()
+                || self.dir_picker.is_some()
+                || self.remote_hosts_overlay.is_some()
+                || self.session_manager.is_some());
+        let dialog_blocks = root_dialog
             || self
                 .ssh_upload_flow
                 .as_ref()
                 .is_some_and(|flow| flow.blocks_zoom_at(ctx));
-        dialog_blocks.then(|| egui::Id::new("fullscreen_dialog_zoom"))
+        dialog_blocks.then(|| egui::Id::new("active_dialog_zoom"))
     }
 
     pub(in crate::app) fn panel_zoom_owner(&self, panel_id: PanelId, layer: egui::Id) -> egui::Id {
