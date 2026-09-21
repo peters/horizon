@@ -19,19 +19,17 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
     let checker = root.path().join("horizon-worker-check");
     let observed = root.path().join("capabilities");
     let ready = root.path().join("ready");
-    let path = std::env::join_paths(
-        std::iter::once(root.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-    )
-    .unwrap();
+    // No system utilities: marker recognition must use only shell built-ins.
+    let path = root.path();
     let legacy = "#!/bin/sh\n[ $# -eq 0 ] || exit 77\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\n'\n";
-    let modern = "#!/bin/sh\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nif [ $# -gt 0 ]; then\n [ \"$1\" = --ready ] || exit 78\n printf ready > \"$READY\"\n [ \"$READY_FAIL\" != 1 ] || exit 79\nfi\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\nhorizon-capabilities-contract=1\\n'\n";
+    let modern = "#!/bin/sh\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nif [ $# -gt 0 ]; then\n [ \"$1\" = --ready ] || exit 78\n printf ready > \"$READY\"\n [ \"$READY_FAIL\" != 1 ] || exit 79\nfi\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\nhorizon-capabilities-contract=1\\nhorizon-extra-contract=1\\n'\n";
     for script in [legacy, modern] {
         std::fs::write(&checker, script).unwrap();
         std::fs::set_permissions(&checker, std::fs::Permissions::from_mode(0o700)).unwrap();
         for capabilities in [Capabilities::default(), serde_json::from_str("{}").unwrap()] {
-            let output = Command::new("sh")
+            let output = Command::new("/bin/sh")
                 .args(["-c", &readiness_command(&capabilities).unwrap()])
-                .env("PATH", &path)
+                .env("PATH", path)
                 .env("OBSERVED", &observed)
                 .env("READY", &ready)
                 .env_remove("READY_FAIL")
@@ -49,7 +47,7 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
             );
         }
     }
-    let failed = Command::new("sh")
+    let failed = Command::new("/bin/sh")
         .args(["-c", &readiness_command(&Capabilities::default()).unwrap()])
         .env("PATH", path)
         .env("OBSERVED", observed)
@@ -58,4 +56,29 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
         .status()
         .unwrap();
     assert!(!failed.success(), "modern service failures must reach the coordinator");
+}
+
+#[cfg(unix)]
+#[test]
+fn incidental_capability_marker_does_not_enable_modern_readiness() {
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+    let root = tempfile::tempdir().unwrap();
+    let checker = root.path().join("horizon-worker-check");
+    for marker in [
+        "prefix-horizon-capabilities-contract=1",
+        "horizon-capabilities-contract=1-suffix",
+    ] {
+        std::fs::write(
+            &checker,
+            format!("#!/bin/sh\n[ $# -eq 0 ] || exit 99\nprintf '%s\\n' '{marker}'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&checker, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = Command::new("/bin/sh")
+            .args(["-c", &readiness_command(&Capabilities::default()).unwrap()])
+            .env("PATH", root.path())
+            .status()
+            .unwrap();
+        assert!(result.success());
+    }
 }

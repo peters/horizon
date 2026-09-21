@@ -40,8 +40,9 @@ pub(super) fn readiness_command(capabilities: &Capabilities) -> Result<String> {
     // no readiness flag. Exact marker matching avoids accepting incidental output.
     Ok(format!(
         "export '{environment}'; contract=$(horizon-worker-check) || exit $?; \
-         if printf '%s\\n' \"$contract\" | grep -qx '{CAPABILITIES_MARKER}'; then \
-         exec horizon-worker-check --ready; else printf '%s\\n' \"$contract\"; fi"
+         newline='\n'; case \"$newline$contract$newline\" in \
+         *\"${{newline}}{CAPABILITIES_MARKER}${{newline}}\"*) exec horizon-worker-check --ready ;; \
+         *) printf '%s\\n' \"$contract\" ;; esac"
     ))
 }
 

@@ -46,6 +46,41 @@ class WorkerContextTests(unittest.TestCase):
                     context.prepare_context(Path(root), output, base)
                 self.assertFalse(output.exists())
 
+    def test_unknown_matching_files_are_excluded_and_symlink_inputs_are_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            source, binaries = root / 'source', root / 'bin'
+            source.mkdir()
+            binaries.mkdir()
+            original = Path(context.__file__).parent
+            for name in context.CONTEXT_FILES:
+                (source / name).write_bytes((original / name).read_bytes())
+            for name in context.HELPERS:
+                (binaries / name).write_bytes(b'synthetic-helper')
+            secret = root / 'private-runtime-setting'
+            secret.write_text('synthetic-secret-must-not-enter-context')
+            (source / 'horizon-worker-history').write_bytes(secret.read_bytes())
+            (source / 'horizon-worker-local-link').symlink_to(secret)
+            with mock.patch.object(context, '__file__', str(source / 'prepare-context.py')), \
+                    mock.patch.object(context.subprocess, 'run'):
+                output = root / 'allowed'
+                context.prepare_context(binaries, output)
+                self.assertEqual({p.name for p in output.iterdir()},
+                                 set(context.CONTEXT_FILES) | {'bin', 'manifest.json'})
+                for path in output.rglob('*'):
+                    if path.is_file():
+                        self.assertNotIn(secret.read_bytes(), path.read_bytes())
+                for selected in [source / context.WORKER_SCRIPTS[0], binaries / context.HELPERS[0]]:
+                    original_bytes = selected.read_bytes()
+                    selected.unlink()
+                    selected.symlink_to(secret)
+                    rejected = root / 'rejected'
+                    with self.assertRaises(ValueError):
+                        context.prepare_context(binaries, rejected)
+                    self.assertFalse(rejected.exists())
+                    selected.unlink()
+                    selected.write_bytes(original_bytes)
+
 
 if __name__ == '__main__':
     unittest.main()

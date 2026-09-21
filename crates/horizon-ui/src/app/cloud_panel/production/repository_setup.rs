@@ -34,7 +34,7 @@ impl HorizonApp {
                 return;
             }
         };
-        let workspace = self.board.ensure_workspace();
+        let workspace = self.board.ensure_local_workspace("Cloud setup");
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
             PanelOptions {
@@ -71,5 +71,37 @@ mod tests {
         assert!(!text.contains("agents [codex"));
         assert!(text.contains("Preserve existing repository profile choices"));
         assert!(!text.contains("settings.json"));
+    }
+
+    #[test]
+    fn setup_from_a_cloud_uses_a_separate_local_workspace() {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        let cloud = app.board.create_workspace("Cloud");
+        let local = app.board.workspace(cloud).unwrap().local_id.clone();
+        let group =
+            horizon_core::cloud_panel::CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+        app.board.cloud_groups.0.push(group.clone());
+        app.cloud_prototype.groups.0.push(group);
+        app.board.active_workspace = Some(cloud);
+        app.cloud_prototype.production.repository = temp.path().display().to_string();
+        // A non-process panel exercises placement without invoking a real login in unit tests.
+        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
+        app.start_cloud_repository_setup(&ctx);
+        assert!(app.cloud_prototype.error.is_none());
+        let panel = app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.title == "Cloud repository setup")
+            .unwrap();
+        assert_ne!(panel.workspace_id, cloud);
+        assert!(panel.remote_workspace().is_none());
+        assert!(!app.board.cloud_groups.contains_panel(&app.board, panel.id));
+        let workspace = panel.workspace_id;
+        app.board.active_workspace = Some(cloud);
+        assert_eq!(app.board.ensure_local_workspace("Cloud setup"), workspace);
     }
 }

@@ -105,3 +105,18 @@ loaded the resulting YAML; malformed YAML cleared the profile and disabled Creat
 and restoring the file recovered loading. The image was a labelled placeholder;
 no build or deployment is implied. Private local agent auth was removed. Final
 remote authentication, cloud/session persistence and post-review smoke remain open.
+
+
+### Setup from an existing cloud workspace
+
+With a cloud workspace active, open Cloud > New cloud, select a local repository
+without YAML and choose Open setup agent. Verify the real setup panel opens in an
+ordinary local workspace, has the selected repository as its working directory,
+and is not a child of the existing cloud. Repeat with a local workspace already
+available: it should be reused. A legacy remote workspace must never be selected.
+The setup action must not allocate compute or inherit remote credentials.
+
+Attempt to move an ordinary panel into a cloud workspace through both the sidebar
+and minimap. Membership and layout must remain unchanged. Removing an ordinary
+workspace must select another compatible ordinary workspace or leave it intact if
+only cloud destinations remain; no panel may become orphaned.

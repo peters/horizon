@@ -1081,3 +1081,34 @@ immutable-image qualification and application timing, #814 desktop startup healt
 #815 private registry setup/rotation, and #816 per-agent credential isolation.
 Existing #805 covers shared CPU workers and #741 covers additional native platforms.
 Keep epic #790 open as the qualification umbrella after implementation merge.
+
+
+### Hosted review corrections, 21 September 12:49 UTC
+
+Integrated head `5986c25d` passed hosted CI on merge tree `72965898`, including
+the newer base's Device identity persistence. The fresh review identified five
+bounded in-scope findings. They are addressed together before the authorized merge:
+
+- Worker context generation uses an explicit runtime-script allowlist and rejects
+  symlink/nonregular script and helper inputs; unknown historical/prefix files are
+  excluded from the fresh context.
+- Ordinary panel moves reject cloud destinations. Workspace removal chooses a
+  compatible non-cloud destination before removing the source, preventing orphaned
+  panels when all remaining destinations are clouds.
+- Readiness recognizes exact marker lines using shell built-ins without an
+  undeclared grep dependency. A missing utility could previously skip modern
+  service checks. Tests isolate PATH, cover markers before later lines and reject
+  prefix/suffix near-matches.
+- Repository preparation selects an ordinary local workspace, creating one only
+  when needed; active cloud or legacy remote workspaces are excluded.
+- Reveal immediately synchronizes expanded cloud state for persistence, while an
+  unrelated early Reveal preserves unprepared saved groups. The old close-path
+  explanation was overstated: close already synchronizes before saving. The
+  correction establishes an immediate snapshot invariant.
+
+Focused security/readiness/setup/persistence tests pass. Independent eight-file
+review is clear (manifest
+`806d37e763a65ab1d9c2097e2633c9cd88262d73e928651bd3d47d7724a8d62b`).
+Full validation 40, new frozen native proof and fresh hosted review are required.
+No final-image cloud qualification or new compute is claimed; #812–#816 remain
+separate follow-ups. Merge authorization remains active; no release is authorized.

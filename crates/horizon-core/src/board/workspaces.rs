@@ -62,6 +62,25 @@ impl Board {
         self.create_workspace(&name)
     }
 
+    /// Select an ordinary local workspace for preparation that must not inherit a remote environment.
+    pub fn ensure_local_workspace(&mut self, fallback_name: &str) -> WorkspaceId {
+        let eligible = |workspace: &&Workspace| {
+            #[cfg(feature = "cloud-workspaces")]
+            if self.cloud_groups.contains_workspace(&workspace.local_id) {
+                return false;
+            }
+            workspace.remote_workspace.is_none()
+        };
+        if let Some(workspace) = self
+            .active_workspace
+            .and_then(|id| self.workspace(id).filter(eligible))
+            .or_else(|| self.workspaces.iter().find(eligible))
+        {
+            return workspace.id;
+        }
+        self.create_workspace(fallback_name)
+    }
+
     /// Create a panel inside a workspace.
     ///
     /// # Errors
@@ -310,6 +329,13 @@ impl Board {
             .iter()
             .find(|ws| {
                 ws.id != id
+                    && {
+                        #[cfg(feature = "cloud-workspaces")]
+                        if self.cloud_groups.contains_workspace(&ws.local_id) {
+                            return false;
+                        }
+                        true
+                    }
                     && self
                         .panels
                         .iter()
@@ -343,7 +369,11 @@ impl Board {
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_groups.contains_panel(self, panel_id) {
+        if self.cloud_groups.contains_panel(self, panel_id)
+            || self
+                .workspace(workspace_id)
+                .is_some_and(|workspace| self.cloud_groups.contains_workspace(&workspace.local_id))
+        {
             return;
         }
         self.reconcile_panel_workspace(panel_id, workspace_id);

@@ -9,6 +9,26 @@ import shutil
 import subprocess
 
 
+WORKER_SCRIPTS = (
+    'horizon-worker-start', 'horizon-worker-check', 'horizon-worker-configure',
+    'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-source',
+    'horizon-worker-import', 'horizon-worker-git-auth', 'horizon-worker-browserstack',
+)
+CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)
+HELPERS = ('horizon-cloud-worker', 'horizon-browser', 'horizon-device')
+
+
+def require_regular(path):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('Worker context input must be a regular file: ' + path.name)
+
+
+def copy_regular(source, destination):
+    require_regular(source)
+    shutil.copy2(source, destination, follow_symlinks=False)
+    require_regular(destination)
+
+
 def gpu_recipe(recipe, base):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9./:_-]*@sha256:[0-9a-f]{64}', base) or len(base) > 512:
         raise ValueError('GPU base must be a credential-free image pinned by SHA-256 digest')
@@ -22,20 +42,21 @@ def gpu_recipe(recipe, base):
 
 def prepare_context(bin_dir, output, gpu_base=None):
     source = Path(__file__).resolve().parent
+    for path in [*(source / name for name in CONTEXT_FILES), *(bin_dir / name for name in HELPERS)]:
+        require_regular(path)
     gpu = gpu_recipe((source / 'Dockerfile').read_text(), gpu_base) if gpu_base is not None else None
     if output.exists():
         raise ValueError('output must be a new directory to exclude historical or credential files')
     output.mkdir(parents=True)
-    for path in source.iterdir():
-        if path.name in ('Dockerfile', '.dockerignore') or path.name.startswith('horizon-worker-'):
-            shutil.copy2(path, output / path.name)
+    for name in CONTEXT_FILES:
+        copy_regular(source / name, output / name)
     if gpu is not None:
         (output / 'Dockerfile.gpu').write_text(gpu)
     (output / 'bin').mkdir()
     manifest = {}
-    for name in ['horizon-cloud-worker', 'horizon-browser', 'horizon-device']:
+    for name in HELPERS:
         target = output / 'bin' / name
-        shutil.copy2(bin_dir / name, target)
+        copy_regular(bin_dir / name, target)
         subprocess.run(['strip', '--strip-unneeded', str(target)], check=True)
         manifest[name] = {'bytes': target.stat().st_size, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
