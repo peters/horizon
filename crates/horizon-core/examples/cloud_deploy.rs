@@ -15,11 +15,25 @@ fn run() -> cloud_runtime::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack SETTINGS STATE_ROOT",
+            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack SETTINGS STATE_ROOT | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
     let cancel = Cancellation::default();
+    if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
+        let recovered = cloud_runtime::lifecycle::reconcile(
+            &PathBuf::from(&args[2]),
+            &settings,
+            args.get(3).map(String::as_str),
+            &cancel,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string(&recovered.report).map_err(|_| cloud_runtime::Error::Json)?
+        );
+        println!("{}", recovered.report.outcome.explanation());
+        return Ok(());
+    }
     if args[0] == "delete" && args.len() == 3 {
         return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel);
     }

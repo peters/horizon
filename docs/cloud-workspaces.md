@@ -123,6 +123,26 @@ starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any
 retry; Horizon never allocates a replacement for a missing worker automatically.
+
+When creation needs confirmation, choose **Check provider** on the cloud card.
+This action queries the original operation without building images, preparing
+source, transferring agent credentials or changing provider resources. If the
+provider supplies a worker ID, enter it under **Provider-confirmed worker ID**;
+Horizon verifies its cloud identity and immutable image before adopting it.
+Conflicting matches remain blocked. A missing ID, an empty listing, a lookup
+authorization failure and elapsed time do not prove that creation failed.
+Keep the operation record and ask provider support for an authoritative outcome
+when lookup cannot resolve it. There is no force-reset or replacement action.
+
+The [provider create API](https://docs.runpod.io/api-reference/pods/POST/pods)
+documents no creation idempotency key or request-status lookup. Its
+[billing history](https://docs.runpod.io/api-reference/billing/GET/billing/pods)
+identifies worker IDs, not Horizon operation IDs; an absent billing record is
+not proof that no worker was created. A definitive rejection received from the
+original create request permits another explicit deployment attempt. Lookup
+errors cannot provide that permission. A previously bound worker that disappears
+is reported as missing. Confirmed termination retains its identity permanently.
+
 After a worker-service crash, a private journal that durably confirms a remote
 device was released can be cleaned up without the old provider credentials.
 Unreleased, malformed or mismatched identities remain blocked until their exact
@@ -146,8 +166,14 @@ It does not substitute a browser viewer or depend on the laptop for device input
 
 The development example `cargo run -p horizon-core --example cloud_deploy -- ...`
 uses the same coordinator. Run it without arguments for its command synopsis.
-It supports image preparation without allocation, deployment, stop, resume and
-deletion. This example is an integration harness, not an installed user command.
+It supports image preparation without allocation, deployment, stop, resume,
+deletion and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
+structured outcome without worker environment or credentials and an explanation;
+the UI and this harness use the same locked coordinator and provider policy.
+An unresolved outcome is a successful check, not permission to deploy again.
+Cloud provisioning/reconciliation has no public MCP operation yet; the worker's
+browser/device MCP tools do not allocate or reconcile compute. This example is
+an integration harness, not an installed user command.
 
 ### Deployment progress
 

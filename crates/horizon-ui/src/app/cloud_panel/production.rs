@@ -57,6 +57,8 @@ pub(super) enum Confirmation {
 #[derive(Default)]
 pub(super) struct Runtime {
     receiver: Option<Receiver<Event>>,
+    recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
+    recovery_worker_id: String,
     remote_release: Option<Receiver<cloud_runtime::Result<Deployment>>>,
     remote_release_error: Option<String>,
     repaint_context: Option<egui::Context>,
@@ -81,8 +83,29 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    fn start_deployment(&mut self, request: Request, ctx: &egui::Context) {
+        if self.receiver.is_some() && self.stage != Some(Stage::Ready) {
+            return;
+        }
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+        self.desktop = None;
+        self.progress.reset();
+        let (tx, rx) = channel();
+        let cancel = cloud_runtime::Cancellation::default();
+        self.cancel = Some(cancel.clone());
+        self.receiver = Some(rx);
+        self.sender = Some(tx.clone());
+        self.error = None;
+        self.state_unavailable = false;
+        let ctx = ctx.clone();
+        std::thread::spawn(move || run_deployment(&request, &cancel, &tx, &ctx));
+    }
+
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
+        self.poll_recovery();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -90,6 +113,7 @@ impl Runtime {
 
     fn needs_repaint(&self) -> bool {
         self.remote_release.is_some()
+            || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.needs_attach
             || self.needs_desktop
@@ -280,11 +304,8 @@ impl HorizonApp {
                             ..Runtime::default()
                         },
                     );
-                    (matches!(
-                        state.operation,
-                        horizon_core::cloud_runtime::CreateState::Bound { .. }
-                            | horizon_core::cloud_runtime::CreateState::Requested
-                    ) && !state.stop_requested)
+                    (matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. })
+                        && !state.stop_requested)
                         .then_some(group.issue)
                 })
                 .collect();
@@ -294,6 +315,15 @@ impl HorizonApp {
         }
     }
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
+        if self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&id)
+            .is_some_and(|runtime| runtime.recovery_receiver.is_some())
+        {
+            return;
+        }
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|g| g.issue == id) else {
             return;
         };
@@ -376,24 +406,12 @@ impl HorizonApp {
                 return;
             }
         }
-        let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
-            return;
-        }
-        if let Some(cancel) = runtime.cancel.take() {
-            cancel.cancel();
-        }
-        runtime.desktop = None;
-        runtime.progress.reset();
-        let (tx, rx) = channel();
-        let cancel = cloud_runtime::Cancellation::default();
-        runtime.cancel = Some(cancel.clone());
-        runtime.receiver = Some(rx);
-        runtime.sender = Some(tx.clone());
-        runtime.error = None;
-        runtime.state_unavailable = false;
-        let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment(&request, &cancel, &tx, &ctx));
+        self.cloud_prototype
+            .production
+            .runtimes
+            .entry(id)
+            .or_default()
+            .start_deployment(request, ctx);
     }
 
     pub(in crate::app) fn prepare_cloud_remote_panel(
