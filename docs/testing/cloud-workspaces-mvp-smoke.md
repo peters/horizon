@@ -317,6 +317,9 @@ login as part of task-copy cleanup.
 | R07 | End one disposable remote agent process, then reconnect | Lost process is reported; no silent fresh session under the old identity |
 | R08 | Restart during build/push/readiness | Reconcile persisted phase safely; no compute before remote image availability |
 | R09 | Restore ordinary local workspace and cloud state | No migration damage, phantom memberships or automatic stopped-viewer connections |
+| R10 | Open the sidebar context menu for a workspace containing clouds; attempt direct detachment | Open in New Window is disabled with an explanation; the central action also refuses detachment |
+| R11 | Restore an older state containing a detached cloud workspace and an ordinary detached workspace | Cloud and all members restore together in the main window; ordinary workspace remains detached |
+| R12 | Select an ordinary detached workspace and attempt cloud creation | Clear instruction to move it to the main window; no cloud, worker or sessions allocated; creation succeeds after reattachment |
 
 Preserve both before/after process records, operation journals and fresh provider
 inventories. Do not destroy the retained user-acceptance worker to exercise failures;

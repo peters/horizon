@@ -306,6 +306,11 @@ impl HorizonApp {
         };
         let title = form.title.trim().to_owned();
         let ws = self.board.ensure_workspace();
+        if self.workspace_is_detached(ws) {
+            return Err(cloud_runtime::Error::Invalid(
+                "Move this workspace to the main window before creating a cloud",
+            ));
+        }
         let workspace = self
             .board
             .workspace(ws)

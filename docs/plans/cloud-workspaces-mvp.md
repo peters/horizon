@@ -528,3 +528,52 @@ complete speech workspace tier passed 2,375 tests. Frozen native candidate
 its actual isolated application PID and hash were verified. It restored existing
 cloud membership/lost-process presentation and created a fresh agent through the
 normal in-cloud picker. Hosted review/CI and post-review final smoke remain pending.
+
+Frozen-head review pass, 2026-09-20: all applicable hosted checks passed on
+`fffa92b892f7d61c84cd537505da230c5ae87af1`. The review returned two comments.
+Independent inspection retained automatic desktop-tunnel retry as a follow-up:
+the documented explicit Reconnect action already retries its setup. Sidebar
+detachment of cloud workspaces is a confirmed in-scope defect. Its correction is
+local and uncommitted while the user-requested PR head freeze remains active.
+It guards detachment centrally and in the sidebar, restores older detached-cloud
+states into the main window, and refuses cloud creation in a detached workspace.
+Focused cloud UI regressions passed 46 tests; full validation and native regression
+of this local correction are tracked separately from the frozen candidate.
+
+The frozen candidate preserved two agent process trees, separate worktree files,
+branches and tmux identities through a clean 90-second client disconnect. An agent
+also completed a bounded file assertion and public browser inspection while the
+client was absent. The same browser returned and the selected Grid layout survived.
+The private clean reconnect video contains 2,400 decoded 3840x2160 frames across
+four minutes. A preceding test-launcher failure interrupted its local fixture and
+recording; those artifacts are retained separately and are not counted as the clean
+recording. The launcher was corrected without changing the candidate binary.
+Current-head review closure, post-correction smoke and task-resource cleanup remain
+open. No new compute was allocated during this pass; no merge or release occurred.
+
+The local detachment correction passed `final-validation-25/`: 2,334 workspace
+tests (15 ignored), 794 speech-feature UI tests (zero ignored), the worker and
+device suites, formatting, maintainability, and blocking/strict/advisory lint
+tiers. The additional full workspace speech command passed 2,379 tests with zero
+failures and 15 ignored. A build without default features also passed. Independent review of the
+final seven-file source manifest is clear:
+`e18bf69fd8f1bfb66203c735a4fa7ab098032a6e6d3258bb7d743670af0673c1`.
+
+Frozen local candidate `development-64/` has SHA-256
+`7758345f405765adf794681af5bddd890538d4bd7085a693869724c95d700a78`.
+The native Device panel displayed advancing frames during the regression pass.
+A real saved detached-cloud state restored into one main window, the disabled
+sidebar action could not detach it, ordinary workspace detachment and reattachment
+still worked, and resize plus cloud fullscreen passed. Creation in a detached
+workspace was covered by the regression test, not an interactive deployment.
+Two private 4K recordings contain 1,800 and 600 decoded frames; representative
+frames were inspected. Receipts, checksums, source hashes and the exact application
+PID are retained in `development-64/`. These captures include operational details
+and are not approved public evidence.
+
+Both local and hosted PR heads remain `fffa92b8`. The correction is implemented
+and locally verified, but uncommitted and unpublished under the user's head
+freeze. Its hosted review thread stays open until the correction reaches the PR.
+The next step requires permission to advance that head, followed by hosted review,
+affected final smoke and verified task-resource cleanup. The queued onboarding
+phase has not started.

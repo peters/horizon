@@ -274,6 +274,11 @@ impl CloudGroup {
 }
 
 impl CloudGroups {
+    #[must_use]
+    pub fn contains_workspace(&self, local_id: &str) -> bool {
+        self.0.iter().any(|group| group.workspace == local_id)
+    }
+
     pub fn reconcile(&mut self, board: &mut Board) {
         for index in 0..self.0.len() {
             let before = self.0[index].size;

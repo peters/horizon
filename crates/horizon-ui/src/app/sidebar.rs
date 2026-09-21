@@ -23,6 +23,7 @@ struct WorkspaceSidebarEntry {
     color: Color32,
     is_active: bool,
     detached: bool,
+    can_detach: bool,
     panels: Vec<SidebarPanelEntry>,
     attention_count: usize,
 }
@@ -152,6 +153,7 @@ impl HorizonApp {
                     color: theme::workspace_accent(workspace.color_idx),
                     is_active: self.board.active_workspace == Some(workspace.id),
                     detached: self.workspace_is_detached(workspace.id),
+                    can_detach: self.workspace_can_detach(workspace.id),
                     panels,
                     attention_count,
                 }
@@ -409,7 +411,11 @@ impl HorizonApp {
                 "Open in New Window"
             };
             if ui
-                .add(Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false))
+                .add_enabled(
+                    workspace.detached || workspace.can_detach,
+                    Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false),
+                )
+                .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.")
                 .clicked()
             {
                 if workspace.detached {
@@ -898,6 +904,36 @@ mod tests {
         sidebar_workspace_insert_dock_side, sidebar_workspace_name_width, sidebar_workspace_shows_panels,
     };
     use horizon_core::WorkspaceDockSide;
+
+    #[test]
+    #[cfg(feature = "cloud-workspaces")]
+    fn sidebar_cannot_detach_a_cloud_but_keeps_ordinary_workspace_actions() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let cloud = app.board.create_workspace("cloud");
+        let ordinary = app.board.create_workspace("ordinary");
+        let local = app.board.workspace(cloud).unwrap().local_id.clone();
+        app.cloud_prototype
+            .groups
+            .0
+            .push(horizon_core::cloud_panel::CloudGroup::new(
+                1,
+                "Cloud".into(),
+                local,
+                temp.path().into(),
+                [0.0; 2],
+            ));
+        let rows = app.sidebar_workspace_data();
+        assert!(!rows.iter().find(|row| row.id == cloud).unwrap().can_detach);
+        assert!(rows.iter().find(|row| row.id == ordinary).unwrap().can_detach);
+        app.apply_sidebar_actions(
+            &egui::Context::default(),
+            &super::SidebarActions {
+                detach_workspace: Some(cloud),
+                ..super::SidebarActions::default()
+            },
+        );
+        assert!(!app.workspace_is_detached(cloud));
+    }
 
     #[test]
     #[cfg(feature = "cloud-workspaces")]

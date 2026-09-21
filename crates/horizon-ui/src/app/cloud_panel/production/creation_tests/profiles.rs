@@ -146,3 +146,23 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
     dialog_frame(&ctx, &mut app, Vec::new());
     assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::new("cloud-title")));
 }
+
+#[test]
+fn cloud_creation_requires_the_selected_workspace_in_the_main_window() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let workspace = app.board.ensure_workspace();
+    app.detach_workspace(workspace);
+    assert!(app.workspace_is_detached(workspace));
+    let error = app.create_production_cloud(&ctx).unwrap_err();
+    assert!(error.to_string().contains("main window"));
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(app.cloud_prototype.production.runtimes.is_empty());
+    assert!(app.cloud_creation_open());
+    app.reattach_workspace(&ctx, workspace);
+    app.process_pending_detached_reattach(&ctx);
+    app.create_production_cloud(&ctx).unwrap();
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+}

@@ -69,6 +69,12 @@ and Escape returns through the previous views. The shared canvas supports zoomin
 out to 5%; Fit reserves space for the overview controls and minimap on smaller
 windows, and saved views use the same zoom limits as manual zoom.
 
+Cloud workspaces stay in the main window so their frames, runtime controls and
+child panels remain together. Use cloud Full screen for a focused view. Move an
+ordinary detached workspace back to the main window before creating a cloud in
+it. Older saved detached-cloud entries restore in the main window, retaining
+their cloud and panel identities.
+
 ## Sessions and lifecycle
 
 Each agent has a stable tmux session, branch and worktree. Worktree isolation

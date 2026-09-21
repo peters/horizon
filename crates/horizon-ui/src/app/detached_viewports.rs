@@ -65,13 +65,26 @@ impl HorizonApp {
         )
     }
 
+    pub(super) fn workspace_can_detach(&self, workspace_id: WorkspaceId) -> bool {
+        let Some(workspace) = self.board.workspace(workspace_id) else {
+            return false;
+        };
+        #[cfg(feature = "cloud-workspaces")]
+        if self.board.cloud_groups.contains_workspace(&workspace.local_id)
+            || self.cloud_prototype.groups.contains_workspace(&workspace.local_id)
+        {
+            return false;
+        }
+        !self.detached_workspaces.contains_key(&workspace.local_id)
+    }
+
     pub(super) fn detach_workspace(&mut self, workspace_id: WorkspaceId) {
+        if !self.workspace_can_detach(workspace_id) {
+            return;
+        }
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return;
         };
-        if self.detached_workspaces.contains_key(&workspace.local_id) {
-            return;
-        }
 
         self.detached_workspaces.insert(
             workspace.local_id.clone(),
@@ -581,6 +594,9 @@ fn detached_viewport_builder(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cloud-workspaces")]
+    mod cloud;
+
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
