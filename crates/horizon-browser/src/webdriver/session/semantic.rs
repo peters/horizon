@@ -6,6 +6,10 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
+use crate::semantic_files::{
+    attached_files_expression, check_attachment_request, check_local_files, file_input_probe_expression,
+    parse_attached_files, parse_file_input_probe, verify_attached,
+};
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
 };
@@ -82,6 +86,31 @@ fn send_keys_through(
     if webdriver_value(&response).and_then(Value::as_bool) != Some(true) {
         return Err("remote fill did not retain the requested value; native input may be unsupported or the page may have changed the field".to_string());
     }
+    Ok(())
+}
+
+/// Attach host files to the file input `selector` matches through the W3C
+/// Find Element and Element Send Keys commands under `session`: for an
+/// `input[type=file]`, Send Keys takes newline-separated host paths instead
+/// of typing them. The first failing command ends the sequence.
+fn set_files_through(
+    transport: &dyn ClassicTransport,
+    session: &str,
+    selector: &str,
+    paths: &[std::path::PathBuf],
+) -> Result<(), String> {
+    let post = |suffix: &str, body: &Value| {
+        transport
+            .post(&format!("{session}/{suffix}"), body)
+            .map_err(|error| error.to_string())
+    };
+    let element = find_element_segment(&post, selector)?;
+    let text = paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
     Ok(())
 }
 
@@ -180,6 +209,7 @@ impl Driver {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
+            BrowserControlAction::SetFiles { target, paths } => self.semantic_set_files(target, paths),
             BrowserControlAction::Evaluate { expression } => self.semantic_evaluate(expression),
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(request, *operation, options.clone(), event_tx)
@@ -370,6 +400,40 @@ impl Driver {
         Ok(BrowserControlValue::Accepted)
     }
 
+    /// Attach host files through Element Send Keys on the file input. A
+    /// remote device runs on another host, where the paths mean nothing and
+    /// no file transfer exists, so it is refused as unsupported rather than
+    /// attempted.
+    fn semantic_set_files(
+        &mut self,
+        target: &crate::BrowserTarget,
+        paths: &[std::path::PathBuf],
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        if self.host.is_remote() {
+            return Err(BrowserControlFailure::new(
+                "unsupported_backend",
+                "file attachment is unavailable for remote device sessions: the files live on this host and no transfer to the remote browser exists",
+            ));
+        }
+        let selector = self.semantic.resolve(target)?;
+        check_local_files(paths)?;
+        let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
+        check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+        self.capture_teach_fingerprint(None)?;
+        let result = set_files_through(
+            self.host.transport(),
+            &format!("/session/{}", self.session_id),
+            &selector,
+            paths,
+        );
+        self.frames.demand();
+        result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        let readback = self.evaluate_json(&attached_files_expression(&selector))?;
+        let attached = parse_attached_files(&readback)?;
+        verify_attached(&attached, paths)?;
+        Ok(BrowserControlValue::Files { files: attached })
+    }
+
     fn classic_send_keys(&self, selector: &str, text: &str) -> Result<(), String> {
         send_keys_through(
             self.host.transport(),
@@ -516,7 +580,7 @@ mod tests {
 
     use super::super::super::http::HttpError;
     use super::super::super::transport::ClassicTransport;
-    use super::{click_through, element_reference, send_keys_through};
+    use super::{click_through, element_reference, send_keys_through, set_files_through};
 
     /// Answers each command with the next scripted reply and records what
     /// was sent.
@@ -598,6 +662,7 @@ mod tests {
     }
 
     mod fill;
+    mod set_files;
 
     #[test]
     fn a_click_finds_the_element_and_clicks_it_through_the_driver() {

@@ -22,6 +22,7 @@ mod paths;
 pub mod process;
 mod profile;
 mod semantic;
+mod semantic_files;
 mod semantic_fingerprint;
 pub mod session;
 #[cfg(feature = "video-capture")]
@@ -46,10 +47,10 @@ pub use horizon_browser_protocol::{
     BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
     BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL,
     DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery,
-    MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL,
-    MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS,
-    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, NavigationWait, SecretString,
-    normalize_navigation_target,
+    MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
+    MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY,
+    MAX_WAIT_TIMEOUT_MILLIS, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY,
+    NavigationWait, SecretString, normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use native_select::{NativeSelectOption, NativeSelectPopup};
@@ -61,8 +62,9 @@ pub use network::{
 };
 pub use page_scroll::VerticalScrollbarOverlay;
 pub use semantic::{
-    AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
+    AgentActionResult, BrowserActionOutcome, BrowserAttachedFile, BrowserBounds, BrowserControlFailure,
+    BrowserControlValue, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget, NavigationOutcome,
+    NavigationState, SelectorState, WaitOutcome,
 };
 pub use semantic_fingerprint::{
     ElementObservation, FrameContext as TeachFrameContext, FrameLink as TeachFrameLink, RankedCandidate,

@@ -114,6 +114,24 @@ shell commands, files, or other MCP servers.
   native-picker interaction. No JavaScript value-assignment fallback is used
   for remote fill. Native date/time controls may reject a fill; inspect the
   resulting field after a failure because clearing may already have occurred.
+  `set_files` attaches host files to an `input[type=file]`: target the input
+  itself (query it by selector when a styled button hides it) and pass
+  `files` as absolute paths, at most 32. Each path must resolve to a regular
+  file under the agent work root (`HORIZON_WORK_ROOT`, else the server's
+  working directory) or a root listed in `HORIZON_BROWSER_ATTACHMENT_ROOTS`;
+  symlinks are judged by where they resolve. The input's `multiple` and
+  `accept` attributes are checked first (`multiple_not_allowed`,
+  `accept_mismatch`), a target that is not a file input returns
+  `not_file_input`, and a refused path returns `attachment_policy` with no
+  side effects. Chromium attaches through `DOM.setFileInputFiles`, which
+  fires the page's `input` and `change` handlers; local Firefox and Safari
+  use Element Send Keys with the paths. The result's `files` lists the
+  names, sizes, and MIME types read back from the input, and a readback that
+  does not hold exactly the requested files fails with `attachment_mismatch`.
+  Remote device sessions return `unsupported_backend` because the files live
+  on this host. Audit records keep the paths, never the contents. Snapshot
+  and query nodes carry `file_input` (`accept`, `multiple`, `files`) for
+  file inputs so the attachment can be verified without `browser_evaluate`.
 - `browser_http_auth` is how a user supplies a username and password for HTTP
   Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).
   Call `operation: set` with the credentials the user provided. Pass `origin`

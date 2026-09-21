@@ -10,8 +10,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub use horizon_browser_protocol::{
-    AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
+    AgentActionResult, BrowserActionOutcome, BrowserAttachedFile, BrowserBounds, BrowserControlFailure,
+    BrowserControlValue, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget, NavigationOutcome,
+    NavigationState, SelectorState, WaitOutcome,
 };
 
 const MAX_CONTROL_RESULT_BYTES: usize = 1024 * 1024;
@@ -123,6 +124,7 @@ impl SemanticState {
                 visible: scanned.visible,
                 enabled: scanned.enabled,
                 bounds: scanned.bounds.filter(valid_bounds),
+                file_input: scanned.file_input,
             })
             .collect();
         Ok(PeekedScan {
@@ -156,6 +158,7 @@ impl SemanticState {
                 visible: scanned.visible,
                 enabled: scanned.enabled,
                 bounds: scanned.bounds.filter(valid_bounds),
+                file_input: scanned.file_input,
             });
         }
         Ok((self.generation, self.revision, nodes))
@@ -220,6 +223,8 @@ struct ScannedNode {
     enabled: bool,
     #[serde(default)]
     bounds: Option<BrowserBounds>,
+    #[serde(default, rename = "fileInput")]
+    file_input: Option<crate::BrowserFileInput>,
 }
 
 const fn default_true() -> bool {
@@ -409,10 +414,16 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         const text = leafText ? compact(element.textContent) : '';
         const interactive = Boolean(role) || element.tabIndex >= 0 || element.hasAttribute('onclick');
         if (semanticOnly && (!visible || (!interactive && !text))) continue;
+        const fileInput = tag === 'input' && element.type === 'file' ? {
+            accept: compact(element.getAttribute('accept'), 2048),
+            multiple: element.hasAttribute('multiple'),
+            files: element.files ? element.files.length : 0,
+        } : undefined;
         nodes.push({
             selector: cssPath(element), role, name, text, visible,
             enabled: !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true',
             bounds: visible ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+            fileInput,
         });
     }
     return countMatches

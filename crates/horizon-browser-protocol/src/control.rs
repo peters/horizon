@@ -18,6 +18,9 @@ pub const MAX_SNAPSHOT_NODES: u32 = 1_000;
 pub const MAX_QUERY_RESULTS: u32 = 250;
 pub const DEFAULT_CLICK_COUNT: u32 = 1;
 pub const MAX_CLICK_COUNT: u32 = 3;
+/// Most host files one `set_files` action attaches.
+pub const MAX_ATTACHMENT_FILES: usize = 32;
+const MAX_ATTACHMENT_PATH_BYTES: usize = 4 * 1024;
 /// Longest bounded wait an engine performs for one navigation action.
 pub const MAX_NAVIGATION_TIMEOUT_MILLIS: u64 = 60_000;
 /// Wait applied when a navigation action does not carry its own bound.
@@ -146,6 +149,12 @@ pub enum BrowserControlAction {
         delta_x: f64,
         delta_y: f64,
     },
+    /// Attach host-local files to an `input[type=file]` through the backend's
+    /// file-chooser bypass. The paths are audited; file contents never are.
+    SetFiles {
+        target: BrowserTarget,
+        paths: Vec<std::path::PathBuf>,
+    },
     /// Evaluate JavaScript in the current top-level document and return JSON.
     Evaluate {
         expression: String,
@@ -239,6 +248,10 @@ impl BrowserControlAction {
                 }
                 Ok(())
             }
+            Self::SetFiles { target, paths } => {
+                validate_target(target)?;
+                validate_attachment_paths(paths)
+            }
             Self::Evaluate { expression } => validate_expression(expression),
             Self::Network { operation, options } => match operation {
                 BrowserNetworkOperation::Start => options.clone().unwrap_or_default().validate(),
@@ -287,6 +300,7 @@ impl BrowserControlAction {
             | Self::Click { .. }
             | Self::Fill { .. }
             | Self::Scroll { .. }
+            | Self::SetFiles { .. }
             | Self::Evaluate { .. }
             | Self::Network { .. }
             | Self::Video { .. }
@@ -367,6 +381,31 @@ fn validate_selector(selector: &str) -> Result<(), &'static str> {
     }
     if selector.chars().any(char::is_control) {
         return Err("selector contains control characters");
+    }
+    Ok(())
+}
+
+fn validate_attachment_paths(paths: &[std::path::PathBuf]) -> Result<(), &'static str> {
+    if paths.is_empty() {
+        return Err("set_files requires at least one file path");
+    }
+    if paths.len() > MAX_ATTACHMENT_FILES {
+        return Err("set_files accepts at most 32 file paths");
+    }
+    for path in paths {
+        let text = path.to_string_lossy();
+        if text.trim().is_empty() {
+            return Err("attachment path must not be empty");
+        }
+        if text.len() > MAX_ATTACHMENT_PATH_BYTES {
+            return Err("attachment path is too long");
+        }
+        if text.chars().any(char::is_control) {
+            return Err("attachment path contains control characters");
+        }
+        if !path.is_absolute() {
+            return Err("attachment path must be absolute");
+        }
     }
     Ok(())
 }
@@ -706,6 +745,56 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn set_files_validates_paths_and_stays_semantic() {
+        let target = BrowserTarget::Selector {
+            selector: "input[type=file]".to_string(),
+        };
+        let absolute = if cfg!(windows) {
+            "C:\\uploads\\doc.pdf"
+        } else {
+            "/uploads/doc.pdf"
+        };
+        let action = BrowserControlAction::SetFiles {
+            target: target.clone(),
+            paths: vec![std::path::PathBuf::from(absolute)],
+        };
+        assert!(action.validate().is_ok());
+        assert!(
+            action.to_command().is_none(),
+            "attachments run in the engine's semantic path"
+        );
+        let encoded = serde_json::to_value(&action).expect("encode");
+        assert_eq!(encoded["type"], "set_files");
+        assert_eq!(encoded["paths"], serde_json::json!([absolute]));
+        let decoded: BrowserControlAction = serde_json::from_value(encoded).expect("decode");
+        assert_eq!(decoded, action);
+
+        let invalid = |paths: Vec<&str>| {
+            BrowserControlAction::SetFiles {
+                target: target.clone(),
+                paths: paths.into_iter().map(std::path::PathBuf::from).collect(),
+            }
+            .validate()
+        };
+        assert_eq!(invalid(vec![]), Err("set_files requires at least one file path"));
+        assert_eq!(
+            invalid(vec![absolute; MAX_ATTACHMENT_FILES + 1]),
+            Err("set_files accepts at most 32 file paths")
+        );
+        assert_eq!(
+            invalid(vec!["relative/doc.pdf"]),
+            Err("attachment path must be absolute")
+        );
+        assert_eq!(invalid(vec![" "]), Err("attachment path must not be empty"));
+        assert_eq!(
+            invalid(vec!["/uploads/doc\n.pdf"]),
+            Err("attachment path contains control characters")
+        );
+        let long = format!("/{}", "x".repeat(MAX_ATTACHMENT_PATH_BYTES));
+        assert_eq!(invalid(vec![long.as_str()]), Err("attachment path is too long"));
     }
 
     #[test]

@@ -180,6 +180,19 @@ pub fn request_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, reason
     Ok(request_id)
 }
 
+/// A `set_files` action is queued with its paths resolved and confirmed
+/// under the attachment roots of this process; every other action passes
+/// through unchanged.
+fn authorize_attachments(action: BrowserControlAction) -> std::io::Result<BrowserControlAction> {
+    let BrowserControlAction::SetFiles { target, paths } = action else {
+        return Ok(action);
+    };
+    let paths = crate::AttachmentPolicy::from_environment()
+        .authorize(&paths)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.to_string()))?;
+    Ok(BrowserControlAction::SetFiles { target, paths })
+}
+
 /// Queue one validated backend-neutral action for the live owner.
 ///
 /// The queue refuses input while the user is actively steering or a handoff
@@ -199,6 +212,7 @@ pub fn enqueue_action(
     action
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+    let action = authorize_attachments(action)?;
     let action_id = new_action_id();
     let summary = BrowserAuditAction::from_control(&action);
     let request = AgentAction {

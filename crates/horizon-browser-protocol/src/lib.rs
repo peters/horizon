@@ -21,8 +21,8 @@ pub use audit::{
 pub use command::BrowserCommand;
 pub use control::{
     AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
-    DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
-    MAX_WAIT_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
+    DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS,
+    MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_WAIT_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
 };
 pub use http_auth::{
     BrowserHttpAuthOperation, MAX_HTTP_AUTH_ORIGIN_BYTES, MAX_HTTP_AUTH_PASSWORD_BYTES, MAX_HTTP_AUTH_USERNAME_BYTES,
@@ -36,8 +36,9 @@ pub use network::{
     DEFAULT_NETWORK_MAX_PAYLOAD_BYTES, MAX_NETWORK_FILE_BYTES, MAX_NETWORK_PAYLOAD_BYTES, MAX_NETWORK_URL_PATTERNS,
 };
 pub use semantic::{
-    AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
+    AgentActionResult, BrowserActionOutcome, BrowserAttachedFile, BrowserBounds, BrowserControlFailure,
+    BrowserControlValue, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget, NavigationOutcome,
+    NavigationState, SelectorState, WaitOutcome,
 };
 pub use video::{
     BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
