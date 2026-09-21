@@ -470,6 +470,11 @@ pub(super) fn take_ready_actions(manifest: &mut BrowserManifest) -> (Vec<AgentAc
 }
 
 pub(super) fn append_rejected_actions(panel_local_id: &str, actions: Vec<AgentAction>) -> std::io::Result<()> {
+    release_rejected_attachments(
+        &crate::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+        panel_local_id,
+        &actions,
+    );
     for request in actions {
         super::audit::append(
             &BrowserAuditEntry::new(
@@ -482,6 +487,16 @@ pub(super) fn append_rejected_actions(panel_local_id: &str, actions: Vec<AgentAc
         )?;
     }
     Ok(())
+}
+
+fn release_rejected_attachments(attachments_dir: &Path, panel_local_id: &str, actions: &[AgentAction]) {
+    // All of these actions left the queue without reaching a driver. Release
+    // every staging directory even if recording an audit entry later fails.
+    for request in actions {
+        if matches!(request.action, BrowserControlAction::SetFiles { .. }) {
+            crate::attachments::release_attachments(attachments_dir, panel_local_id, &request.action_id);
+        }
+    }
 }
 
 fn set_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) {
@@ -549,6 +564,55 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn ownership_rejection_releases_only_the_rejected_attachment_staging() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("notes.txt");
+        std::fs::write(&source, "fixture").expect("source");
+        let authorized = crate::AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(&[source])
+            .expect("authorize");
+        let staging = root.path().join("staging");
+        let mut manifest = BrowserManifest {
+            panel_local_id: "panel".into(),
+            owner: Some(ManifestOwner {
+                name: "current".into(),
+                tty: None,
+                updated_at: now_millis(),
+            }),
+            ..BrowserManifest::default()
+        };
+        for (id, actor) in [("keep", "current"), ("reject", "previous")] {
+            let paths = crate::attachments::stage_attachments(&staging, "panel", id, &authorized).expect("stage");
+            manifest.actions.push(AgentAction {
+                action_id: id.into(),
+                actor: actor.into(),
+                requested_at_millis: now_millis(),
+                action: BrowserControlAction::SetFiles {
+                    target: horizon_browser::BrowserTarget::Selector {
+                        selector: "#file".into(),
+                    },
+                    paths,
+                    sources: Vec::new(),
+                },
+            });
+        }
+        let kept_path = match &manifest.actions[0].action {
+            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
+            _ => unreachable!(),
+        };
+        let rejected_path = match &manifest.actions[1].action {
+            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
+            _ => unreachable!(),
+        };
+        let (ready, rejected) = take_ready_actions(&mut manifest);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(rejected.len(), 1);
+        release_rejected_attachments(&staging, "panel", &rejected);
+        assert!(kept_path.exists());
+        assert!(!rejected_path.exists());
     }
 
     #[test]

@@ -52,21 +52,22 @@ impl Transfer {
                 return Err(too_large());
             }
         }
+        let contents = read_batch(paths)?;
         let deadline = Instant::now() + TRANSFER_TIMEOUT;
         let batch = uuid::Uuid::new_v4();
         paths
             .iter()
+            .zip(&contents)
             .enumerate()
-            .map(|(index, path)| {
+            .map(|(index, (path, bytes))| {
                 let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(failed)?;
-                let bytes = read_bounded(path)?;
                 let (suffix, payload) = match self {
-                    Self::Selenium => ("se/file", json!({"file": STANDARD.encode(zip_file(name, &bytes)?)})),
+                    Self::Selenium => ("se/file", json!({"file": STANDARD.encode(zip_file(name, bytes)?)})),
                     Self::Android => (
                         "appium/device/push_file",
                         json!({
                             "path": format!("/data/local/tmp/horizon-{batch}/{index}/{name}"),
-                            "data": STANDARD.encode(&bytes),
+                            "data": STANDARD.encode(bytes),
                         }),
                     ),
                 };
@@ -118,14 +119,26 @@ fn post(
     transport.post_with_read_timeout(&format!("/session/{session}/{suffix}"), payload, remaining)
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>, BrowserControlFailure> {
+fn read_batch(paths: &[PathBuf]) -> Result<Vec<Vec<u8>>, BrowserControlFailure> {
+    let mut remaining = MAX_REQUEST_BYTES;
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = read_bounded(path, MAX_FILE_BYTES.min(remaining))?;
+            remaining -= bytes.len() as u64;
+            Ok(bytes)
+        })
+        .collect()
+}
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, BrowserControlFailure> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .map_err(|_| failed())?
-        .take(MAX_FILE_BYTES + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| failed())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    if bytes.len() as u64 > limit {
         return Err(too_large());
     }
     Ok(bytes)
@@ -260,6 +273,44 @@ mod tests {
         );
         assert!(transport.calls.lock().expect("calls").is_empty());
     }
+    #[test]
+    fn actual_reads_enforce_the_batch_limit_after_files_grow() {
+        let root = tempfile::tempdir().expect("root");
+        let paths = (0..3)
+            .map(|index| root.path().join(format!("{index}.txt")))
+            .collect::<Vec<_>>();
+        for path in &paths {
+            std::fs::File::create(path)
+                .expect("file")
+                .set_len(8 * 1024 * 1024)
+                .expect("initial length");
+        }
+        let initial: u64 = paths.iter().map(|path| path.metadata().expect("metadata").len()).sum();
+        assert!(initial < MAX_REQUEST_BYTES);
+        for path in &paths {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("file")
+                .set_len(12 * 1024 * 1024)
+                .expect("grown length");
+        }
+        assert_eq!(
+            read_batch(&paths)
+                .expect_err("grown batch refused before transfer")
+                .code,
+            "file_too_large"
+        );
+        assert_eq!(
+            read_batch(&paths[..2])
+                .expect("bounded batch")
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+            24 * 1024 * 1024
+        );
+    }
+
     struct RefusingTransport {
         calls: Mutex<Vec<String>>,
         ambiguous: bool,
