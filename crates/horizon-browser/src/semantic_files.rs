@@ -26,27 +26,6 @@ pub(crate) struct FileInputProbe {
 /// Longest `accept` attribute the probe carries and judges in full.
 pub(crate) const MAX_ACCEPT_CHARACTERS: usize = 8192;
 
-/// JavaScript that qualifies the selector's element as an enabled
-/// `input[type=file]` and reports its `accept` and `multiple` attributes.
-/// Hidden inputs qualify: pages routinely hide the input behind a styled
-/// button, so visibility is not required.
-pub(crate) fn file_input_probe_expression(selector: &str) -> String {
-    format!("({FILE_INPUT_PROBE_FUNCTION})({})", json_string(selector))
-}
-
-/// JavaScript that drops the selector's current file selection, so a
-/// backend whose Send Keys appends to a `multiple` input replaces the
-/// selection like the Chromium primitive does. Programmatic clearing fires
-/// no events; the attachment that follows does.
-pub(crate) fn reset_file_input_expression(selector: &str) -> String {
-    format!("({RESET_FILE_INPUT_FUNCTION})({})", json_string(selector))
-}
-
-/// JavaScript that lists the files the selector's input currently holds.
-pub(crate) fn attached_files_expression(selector: &str) -> String {
-    format!("({ATTACHED_FILES_FUNCTION})({})", json_string(selector))
-}
-
 /// JavaScript whose value is the selector's element itself, for backends
 /// that attach through an element handle rather than a script value.
 pub(crate) fn element_handle_expression(selector: &str) -> String {
@@ -283,20 +262,16 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-const RESET_FILE_INPUT_FUNCTION: &str = r"function(selector) {
-    let element;
-    try { element = document.querySelector(selector); }
-    catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
+pub(crate) const RESET_FILE_INPUT_FUNCTION: &str = r"function(element) {
+    if (!element || !element.isConnected) return { error: { code: 'no_such_element', message: 'the original file input is no longer in the document' } };
     if (!(element instanceof HTMLInputElement) || element.type !== 'file')
         return { error: { code: 'no_such_element', message: 'the file input is no longer in the document' } };
     if (element.files && element.files.length > 0) element.value = '';
     return { cleared: true };
 }";
 
-const FILE_INPUT_PROBE_FUNCTION: &str = r"function(selector) {
-    let element;
-    try { element = document.querySelector(selector); }
-    catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
+pub(crate) const FILE_INPUT_PROBE_FUNCTION: &str = r"function(element) {
+    if (!element || !element.isConnected) return { error: { code: 'no_such_element', message: 'the original file input is no longer in the document' } };
     if (!element) return { error: { code: 'no_such_element', message: 'no element matched the target' } };
     if (!(element instanceof HTMLInputElement) || element.type !== 'file')
         return { error: { code: 'not_file_input', message: 'target element is not an input[type=file]; target the file input itself, not the button that opens the chooser' } };
@@ -310,10 +285,8 @@ const FILE_INPUT_PROBE_FUNCTION: &str = r"function(selector) {
 // can list a file it was handed and still be unable to open it (a Snap
 // confined browser and a hidden directory, for instance), and that must be
 // a failure here rather than an empty upload later.
-const ATTACHED_FILES_FUNCTION: &str = r"function(selector) {
-    let element;
-    try { element = document.querySelector(selector); }
-    catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
+pub(crate) const ATTACHED_FILES_FUNCTION: &str = r"function(element) {
+    if (!element || !element.isConnected) return { error: { code: 'no_such_element', message: 'the original file input is no longer in the document' } };
     if (!(element instanceof HTMLInputElement) || element.type !== 'file')
         return { error: { code: 'no_such_element', message: 'the file input is no longer in the document' } };
     const files = Array.from(element.files || []);
@@ -517,9 +490,6 @@ mod tests {
 
     #[test]
     fn page_expressions_quote_the_selector() {
-        assert!(file_input_probe_expression("input[name=\"doc\"]").contains("(\"input[name=\\\"doc\\\"]\")"));
-        assert!(attached_files_expression("#doc").ends_with("(\"#doc\")"));
-        assert!(reset_file_input_expression("#doc").ends_with("(\"#doc\")"));
         assert_eq!(element_handle_expression("#doc"), "document.querySelector(\"#doc\")");
     }
 }

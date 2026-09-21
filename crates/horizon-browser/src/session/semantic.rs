@@ -11,7 +11,7 @@ use crate::semantic::{
     target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
-    attached_files_expression, check_attachment_request, element_handle_expression, file_input_probe_expression,
+    ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, check_attachment_request, element_handle_expression,
     local_file_facts, parse_attached_files, parse_file_input_probe, verify_attached,
 };
 use crate::semantic_fingerprint::{
@@ -277,24 +277,29 @@ impl DriverState {
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
         let expected = local_file_facts(paths)?;
-        let probe = self.evaluate_json(link, event_tx, frame_slot, &file_input_probe_expression(&selector))?;
-        check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
-        self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
-        self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
         let object_id = self.file_input_object_id(link, event_tx, frame_slot, &selector)?;
-        let files = paths
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        let attached = self
-            .send_page_command(
+        let result = (|| {
+            let probe = self.file_input_value(link, event_tx, frame_slot, &object_id, FILE_INPUT_PROBE_FUNCTION)?;
+            check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+            self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
+            self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
+            let files = paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            self.send_page_command(
                 link,
                 event_tx,
                 frame_slot,
                 "DOM.setFileInputFiles",
                 &json!({ "objectId": object_id, "files": files }),
             )
-            .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()));
+            .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
+            let readback = self.file_input_value(link, event_tx, frame_slot, &object_id, ATTACHED_FILES_FUNCTION)?;
+            let attached = parse_attached_files(&readback)?;
+            verify_attached(&attached, &expected)?;
+            Ok(BrowserControlValue::Files { files: attached })
+        })();
         let _ = self.send_page_command(
             link,
             event_tx,
@@ -302,11 +307,44 @@ impl DriverState {
             "Runtime.releaseObject",
             &json!({ "objectId": object_id }),
         );
-        attached?;
-        let readback = self.evaluate_json(link, event_tx, frame_slot, &attached_files_expression(&selector))?;
-        let attached = parse_attached_files(&readback)?;
-        verify_attached(&attached, &expected)?;
-        Ok(BrowserControlValue::Files { files: attached })
+        result
+    }
+
+    fn file_input_value(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        object_id: &str,
+        function: &str,
+    ) -> Result<Value, BrowserControlFailure> {
+        let result = self
+            .send_page_command(
+                link,
+                event_tx,
+                frame_slot,
+                "Runtime.callFunctionOn",
+                &json!({
+                    "objectId": object_id,
+                    "functionDeclaration": format!("function() {{ return ({function})(this); }}"),
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "userGesture": true,
+                }),
+            )
+            .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
+        if result.get("exceptionDetails").is_some() {
+            return Err(BrowserControlFailure::new(
+                "javascript_error",
+                "the original file input could not be inspected",
+            ));
+        }
+        bounded_control_value(
+            result
+                .pointer("/result/value")
+                .cloned()
+                .ok_or_else(|| BrowserControlFailure::new("invalid_result", "CDP returned no file input value"))?,
+        )
     }
 
     /// A remote object handle for the selector's element, as

@@ -7,8 +7,8 @@ use crate::semantic::{
     target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
-    attached_files_expression, check_attachment_request, file_input_probe_expression, local_file_facts,
-    parse_attached_files, parse_file_input_probe, reset_file_input_expression, verify_attached,
+    ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, RESET_FILE_INPUT_FUNCTION, check_attachment_request,
+    local_file_facts, parse_attached_files, parse_file_input_probe, verify_attached,
 };
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
@@ -89,15 +89,15 @@ fn send_keys_through(
     Ok(())
 }
 
-/// Attach host files to the file input `selector` matches through the W3C
-/// Find Element and Element Send Keys commands under `session`: for an
+/// Attach host files to one already resolved file input through the W3C
+/// Element Send Keys command under `session`: for an
 /// `input[type=file]`, Send Keys takes newline-separated host paths instead
 /// of typing them. Safari may temporarily normalize a universal accept hint;
 /// its restoration is attempted even when selection fails.
 fn set_files_through(
     transport: &dyn ClassicTransport,
     session: &str,
-    selector: &str,
+    element_id: &str,
     paths: &[std::path::PathBuf],
     safari: bool,
 ) -> Result<(), String> {
@@ -119,8 +119,7 @@ fn set_files_through(
         })
         .collect::<Result<Vec<_>, _>>()?
         .join("\n");
-    let element_id = find_element_id(&post, selector)?;
-    let element = encode_path_segment(&element_id);
+    let element = encode_path_segment(element_id);
     let reference = json!({ELEMENT_KEY: element_id});
     // Safari's native picker rejects */* even though our complete accept
     // check permits every file. Restore the exact element after either result.
@@ -446,7 +445,9 @@ impl Driver {
         }
         let selector = self.semantic.resolve(target)?;
         let expected = local_file_facts(paths)?;
-        let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
+        let element_id = find_element_id(&|suffix, body| self.classic_post(suffix, body), &selector)
+            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        let probe = self.file_input_value(&element_id, FILE_INPUT_PROBE_FUNCTION)?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(None)?;
         let transferred = match self
@@ -464,20 +465,39 @@ impl Driver {
         let paths = transferred.as_deref().unwrap_or(paths);
         // Classic Send Keys appends to a `multiple` input's selection; the
         // action replaces it, as the Chromium primitive does.
-        check_script_error(&self.evaluate_json(&reset_file_input_expression(&selector))?)?;
+        let probe = self.file_input_value(&element_id, FILE_INPUT_PROBE_FUNCTION)?;
+        check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+        check_script_error(&self.file_input_value(&element_id, RESET_FILE_INPUT_FUNCTION)?)?;
         let result = set_files_through(
             self.host.transport(),
             &format!("/session/{}", self.session_id),
-            &selector,
+            &element_id,
             paths,
             self.config.browser.backend == BackendKind::SafariWebDriver,
         );
         self.frames.demand();
         result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
-        let readback = self.evaluate_json(&attached_files_expression(&selector))?;
+        let readback = self.file_input_value(&element_id, ATTACHED_FILES_FUNCTION)?;
         let attached = parse_attached_files(&readback)?;
         verify_attached(&attached, &expected)?;
         Ok(BrowserControlValue::Files { files: attached })
+    }
+
+    fn file_input_value(&self, element_id: &str, function: &str) -> Result<Value, BrowserControlFailure> {
+        let response = self
+            .classic_post(
+                "execute/sync",
+                &json!({
+                    "script": format!("return ({function})(arguments[0]);"),
+                    "args": [{ELEMENT_KEY: element_id}],
+                }),
+            )
+            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        bounded_control_value(
+            webdriver_value(&response).cloned().ok_or_else(|| {
+                BrowserControlFailure::new("invalid_result", "WebDriver returned no file input value")
+            })?,
+        )
     }
 
     fn classic_send_keys(&self, selector: &str, text: &str) -> Result<(), String> {

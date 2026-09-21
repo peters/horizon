@@ -3,84 +3,62 @@ use std::path::PathBuf;
 use super::{Scripted, json, set_files_through};
 
 #[test]
-fn set_files_finds_the_input_and_sends_newline_separated_paths() {
-    let transport = Scripted::new(vec![
-        Ok(json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "file 1"}})),
-        Ok(json!({"value": null})),
-    ]);
+fn set_files_uses_the_resolved_element_without_querying_the_selector_again() {
+    let transport = Scripted::new(vec![Ok(json!({"value": null}))]);
     set_files_through(
         &transport,
         "/session/s1",
-        "input[type=file]",
+        "file 1",
         &[PathBuf::from("/uploads/a.pdf"), PathBuf::from("/uploads/b.png")],
         false,
     )
     .expect("attach");
     assert_eq!(
         transport.sent(),
-        vec![
-            (
-                "POST".to_string(),
-                "/session/s1/element".to_string(),
-                json!({"using": "css selector", "value": "input[type=file]"})
-            ),
-            (
-                "POST".to_string(),
-                "/session/s1/element/file%201/value".to_string(),
-                json!({"text": "/uploads/a.pdf\n/uploads/b.png"})
-            ),
-        ],
-        "the input is never cleared and the paths travel as one Send Keys text"
+        vec![(
+            "POST".to_string(),
+            "/session/s1/element/file%201/value".to_string(),
+            json!({"text": "/uploads/a.pdf\n/uploads/b.png"})
+        )],
+        "the original element reference is used even if the page replaces its selector"
     );
 }
 
 #[test]
-fn a_failing_command_ends_the_attachment_sequence() {
-    let transport = Scripted::new(vec![Err("no such element".into())]);
+fn a_stale_element_ends_the_attachment_without_finding_a_replacement() {
+    let transport = Scripted::new(vec![Err("stale element reference".into())]);
     let error = set_files_through(
         &transport,
         "/session/s1",
-        "#missing",
+        "old-file",
         &[PathBuf::from("/uploads/a.pdf")],
         false,
     )
-    .expect_err("not found");
-    assert!(error.contains("no such element"), "{error}");
-    assert_eq!(transport.sent().len(), 1, "nothing follows a failed Find Element");
-
-    let transport = Scripted::new(vec![Ok(json!({"value": {"ELEMENT": "a/b"}}))]);
-    let error = set_files_through(
-        &transport,
-        "/session/s1",
-        "#doc",
-        &[PathBuf::from("/uploads/a.pdf")],
-        false,
-    )
-    .expect_err("unroutable");
-    assert!(error.contains("cannot form a route"), "{error}");
+    .expect_err("stale element");
+    assert!(error.contains("stale element reference"), "{error}");
     assert_eq!(transport.sent().len(), 1);
-
-    let transport = Scripted::new(vec![]);
-    let error = set_files_through(
-        &transport,
-        "/session/s1",
-        "#doc",
-        &[PathBuf::from("/uploads/a\n.pdf")],
-        false,
-    )
-    .expect_err("line break");
-    assert!(error.contains("line break"), "{error}");
-    assert!(
-        transport.sent().is_empty(),
-        "a path that would split into two uploads never reaches the driver"
-    );
 }
 
 #[test]
-fn safari_restores_universal_accept_after_success_or_failure() {
+fn file_paths_with_line_breaks_never_reach_the_driver() {
+    let transport = Scripted::new(vec![]);
+    assert!(
+        set_files_through(
+            &transport,
+            "/session/s1",
+            "file",
+            &[PathBuf::from("/uploads/a\n.pdf")],
+            false
+        )
+        .is_err()
+    );
+    assert!(transport.sent().is_empty());
+}
+
+#[test]
+fn safari_restores_universal_accept_on_the_same_element_after_success_or_failure() {
     for succeeds in [true, false] {
         let transport = Scripted::new(vec![
-            Ok(json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "file 1"}})),
             Ok(json!({"value": "*/*,.pdf"})),
             if succeeds {
                 Ok(json!({"value": null}))
@@ -92,17 +70,21 @@ fn safari_restores_universal_accept_after_success_or_failure() {
         let result = set_files_through(
             &transport,
             "/session/s1",
-            "#doc",
+            "file 1",
             &[PathBuf::from("/uploads/unknown.ext")],
             true,
         );
         assert_eq!(result.is_ok(), succeeds);
         let sent = transport.sent();
-        assert_eq!(sent.len(), 4);
-        assert_eq!(sent[2].1, "/session/s1/element/file%201/value");
-        assert_eq!(sent[3].1, "/session/s1/execute/sync");
+        assert_eq!(sent.len(), 3);
         assert_eq!(
-            sent[3].2["args"],
+            sent[0].2["args"],
+            json!([{"element-6066-11e4-a52e-4f735466cecf": "file 1"}])
+        );
+        assert_eq!(sent[1].1, "/session/s1/element/file%201/value");
+        assert_eq!(sent[2].1, "/session/s1/execute/sync");
+        assert_eq!(
+            sent[2].2["args"],
             json!([{"element-6066-11e4-a52e-4f735466cecf": "file 1"}, "*/*,.pdf"])
         );
     }
