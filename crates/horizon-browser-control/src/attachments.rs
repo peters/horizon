@@ -45,6 +45,8 @@ pub enum AttachmentPolicyError {
     OutsideRoots { path: String, roots: String },
     #[error("attachment exceeds {limit} bytes: {path}")]
     TooLarge { path: String, limit: u64 },
+    #[error("attachments total {requested} bytes, above the {limit} byte budget one panel may keep staged")]
+    OverBudget { requested: u64, limit: u64 },
     #[error("attachment could not be staged ({reason}): {path}")]
     Staging { path: String, reason: String },
 }
@@ -87,7 +89,7 @@ impl AttachmentPolicyError {
         match self {
             Self::NoRoots | Self::OutsideRoots { .. } => std::io::ErrorKind::PermissionDenied,
             Self::Unresolvable { .. } | Self::NotAFile { .. } => std::io::ErrorKind::InvalidInput,
-            Self::TooLarge { .. } => std::io::ErrorKind::FileTooLarge,
+            Self::TooLarge { .. } | Self::OverBudget { .. } => std::io::ErrorKind::FileTooLarge,
             Self::Staging { .. } => std::io::ErrorKind::Other,
         }
     }
@@ -300,16 +302,34 @@ pub fn release_attachments(attachments_dir: &Path, panel_local_id: &str, action_
     }
 }
 
+/// The aggregate size of one request, refused when it alone would exceed
+/// what a panel may keep staged.
+///
+/// # Errors
+/// Returns `OverBudget` with the requested total and the limit.
+pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u64, AttachmentPolicyError> {
+    let requested = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
+    if requested > max_bytes {
+        return Err(AttachmentPolicyError::OverBudget {
+            requested,
+            limit: max_bytes,
+        });
+    }
+    Ok(requested)
+}
+
 /// Make room for one more attachment action on `panel_local_id`: every
 /// panel's actions older than `retention` go (a closed panel's staging
 /// ages out this way), and the panel keeps at most `max_actions - 1`
-/// newer actions within `max_bytes` so the new one fits.
+/// newer actions within `max_bytes` less the `reserved_bytes` the incoming
+/// action needs, so the new one fits inside the budget.
 pub fn prune_attachments(
     attachments_dir: &Path,
     panel_local_id: &str,
     retention: Duration,
     max_actions: usize,
     max_bytes: u64,
+    reserved_bytes: u64,
 ) {
     let stale_before = std::time::SystemTime::now()
         .checked_sub(retention)
@@ -334,10 +354,11 @@ pub fn prune_attachments(
             }
         }
         retained.sort_by_key(|(modified, _, _)| std::cmp::Reverse(*modified));
+        let budget = max_bytes.saturating_sub(reserved_bytes);
         let mut kept_bytes = 0u64;
         for (index, (_, bytes, path)) in retained.into_iter().enumerate() {
             kept_bytes = kept_bytes.saturating_add(bytes);
-            if index + 1 >= max_actions || kept_bytes > max_bytes {
+            if index + 1 >= max_actions || kept_bytes > budget {
                 remove_action_dir(&path);
             }
         }
@@ -450,21 +471,22 @@ mod tests {
         stage_attachments(&attachments, "panel", "second", &authorized).expect("second");
         stage_attachments(&attachments, "panel", "third", &authorized).expect("third");
         // Age: the other panel's old action and this panel's first go.
-        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX);
+        prune_attachments(&attachments, "panel", Duration::from_millis(300), 8, u64::MAX, 0);
         assert!(!action_directory(&attachments, "other", "old").exists());
         assert!(!action_directory(&attachments, "panel", "first").exists());
         assert!(action_directory(&attachments, "panel", "second").exists());
         assert!(action_directory(&attachments, "panel", "third").exists());
         // Count: room for one more means only the newest of the two stays.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX);
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 2, u64::MAX, 0);
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
                 .count(),
             1
         );
-        // Bytes: a budget below one action's size clears the panel.
-        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 5);
+        // Bytes: a 12-byte budget with 7 reserved for the newcomer leaves
+        // less than one 6-byte action, so the panel is cleared.
+        prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, 12, 7);
         assert_eq!(
             std::fs::read_dir(attachments.join(crate::paths::safe_local_id("panel")))
                 .expect("panel dir")
@@ -540,6 +562,26 @@ mod tests {
             policy.authorize(&[link]),
             Err(AttachmentPolicyError::OutsideRoots { .. })
         ));
+    }
+
+    #[test]
+    fn a_request_above_the_panel_budget_is_refused_before_staging() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(&[source.clone(), source])
+            .expect("authorized");
+        assert_eq!(check_panel_budget(&authorized, 12).expect("within budget"), 12);
+        let error = check_panel_budget(&authorized, 11).expect_err("over budget");
+        assert!(matches!(
+            error,
+            AttachmentPolicyError::OverBudget {
+                requested: 12,
+                limit: 11
+            }
+        ));
+        assert_eq!(error.io_kind(), std::io::ErrorKind::FileTooLarge);
     }
 
     #[test]

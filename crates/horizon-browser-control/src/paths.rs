@@ -89,8 +89,10 @@ impl BrowserRuntimePaths {
     }
 
     /// Private copies of files an agent attaches through `set_files`, one
-    /// directory per action, removed when the action result is consumed.
-    /// The browser must be able to read them: on Linux a Snap-confined
+    /// directory per panel and action. They stay while the panel's page may
+    /// still read them lazily and are pruned by age, count and size when the
+    /// panel's next attachment is staged. The browser must be able to read
+    /// them: on Linux a Snap-confined
     /// browser cannot open hidden directories directly beneath the home
     /// directory, so a runtime root such as `~/.horizon` stages under the
     /// visible `~/Horizon` directory the Snap profile root already uses.

@@ -205,19 +205,39 @@ fn authorize_attachments(
         target: target.clone(),
         paths: authorized.iter().map(|file| file.path().to_path_buf()).collect(),
     });
+    let reserved_bytes =
+        crate::attachments::check_panel_budget(&authorized, crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES)
+            .map_err(refused)?;
     let attachments_dir = crate::BrowserRuntimePaths::resolve().browser_attachments_dir();
+    // One panel stages one action at a time, so pruning for the reserved
+    // size and copying happen under the same lock and concurrent enqueues
+    // cannot both fit their files into the same budget. The lock is a
+    // sibling of the panel's staging directory, not the manifest lock, so
+    // a long copy never blocks the engine.
+    std::fs::create_dir_all(&attachments_dir).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not prepare the attachment staging directory: {error}"),
+        )
+    })?;
+    let lock = super::ManifestLock::acquire_with_timeout(
+        &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
+        STAGING_LOCK_WAIT,
+    )?;
     crate::attachments::prune_attachments(
         &attachments_dir,
         panel_local_id,
         crate::attachments::ATTACHMENT_RETENTION,
         crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
         crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES,
+        reserved_bytes,
     );
     let staged = StagedAttachments {
         attachments_dir: attachments_dir.clone(),
         panel_local_id: panel_local_id.to_string(),
         action_id: action_id.to_string(),
         keep: false,
+        _lock: lock,
     };
     let paths = crate::attachments::stage_attachments(&attachments_dir, panel_local_id, action_id, &authorized)
         .map_err(refused)?;
@@ -260,12 +280,18 @@ fn check_enqueue_eligibility(
     refusal.map_or(Ok(()), |(kind, message)| Err(std::io::Error::new(kind, message)))
 }
 
-/// Staged copies that are removed unless the action reached the queue.
+/// Longest a `set_files` enqueue waits for the panel's staging lock while
+/// another attachment on the same panel is being copied.
+const STAGING_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Staged copies that are removed unless the action reached the queue; the
+/// panel's staging lock is held until the action is queued or released.
 struct StagedAttachments {
     attachments_dir: std::path::PathBuf,
     panel_local_id: String,
     action_id: String,
     keep: bool,
+    _lock: super::ManifestLock,
 }
 
 impl Drop for StagedAttachments {

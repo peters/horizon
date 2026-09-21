@@ -148,10 +148,11 @@ pub(crate) fn verify_attached(
     }
 }
 
-/// Whether an HTML `accept` list admits `path`, judged by its extension:
-/// `.ext` tokens match the extension directly, `type/subtype` and `type/*`
-/// tokens match the MIME type derived from the extension. A file whose
-/// extension is unknown is refused by a MIME-only list rather than guessed.
+/// Whether an HTML `accept` list admits `path`, judged by its name: `.ext`
+/// tokens (including compound ones such as `.tar.gz`) match the end of the
+/// file name, `type/subtype` and `type/*` tokens match the MIME type derived
+/// from the final extension. A file whose extension is unknown is refused
+/// by a MIME-only list rather than guessed.
 pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
     let tokens = accept
         .split(',')
@@ -161,13 +162,17 @@ pub(crate) fn accept_allows(accept: &str, path: &Path) -> bool {
     if tokens.is_empty() {
         return true;
     }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     let extension = path
         .extension()
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
     let mime = extension.as_deref().and_then(mime_for_extension);
     tokens.iter().any(|token| {
-        if let Some(wanted) = token.strip_prefix('.') {
-            extension.as_deref() == Some(wanted)
+        if token.starts_with('.') {
+            name.len() > token.len() && name.ends_with(token.as_str())
         } else if let Some(family) = token.strip_suffix("/*") {
             mime.is_some_and(|mime| mime.split('/').next() == Some(family))
         } else {
@@ -295,6 +300,13 @@ mod tests {
         assert!(!accept_allows("image/*", Path::new("/uploads/photo.unknownext")));
         assert!(accept_allows(".unknownext", Path::new("/uploads/photo.unknownext")));
         assert!(!accept_allows(".pdf", Path::new("/uploads/no-extension")));
+        assert!(accept_allows(".tar.gz", Path::new("/uploads/archive.TAR.GZ")));
+        assert!(!accept_allows(".tar.gz", Path::new("/uploads/archive.gz")));
+        assert!(
+            !accept_allows(".tar.gz", Path::new("/uploads/.tar.gz")),
+            "a bare suffix is not a name"
+        );
+        assert!(accept_allows("application/gzip", Path::new("/uploads/archive.tar.gz")));
     }
 
     #[test]

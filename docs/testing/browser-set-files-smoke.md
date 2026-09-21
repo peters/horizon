@@ -40,8 +40,9 @@ with these entries:
 - `uploads/looks-inside.txt`: a symlink to a file outside the fixture root.
 - A file outside the fixture root, for example `../outside/secret.txt`.
 
-Run every MCP client with `HORIZON_WORK_ROOT=<fixture root>` and the
-`HORIZON*` and `CLAUDE_CODE*` variables scrubbed from its environment.
+Run every MCP client with the inherited `HORIZON*` and `CLAUDE_CODE*`
+variables scrubbed from its environment first, then `HORIZON_WORK_ROOT`
+set to the fixture root for that client.
 
 ## Driving the MCP server
 

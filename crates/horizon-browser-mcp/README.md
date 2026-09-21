@@ -124,7 +124,10 @@ shell commands, files, or other MCP servers.
   so a pathname re-pointed after the check cannot reach the browser. The
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
-  at most 32 actions and 4 GiB, pruned when the next attachment is staged. Copies live under the runtime root, or on
+  at most 32 actions and 4 GiB, pruned when the next attachment is staged;
+  one request whose files alone exceed that 4 GiB is refused before any
+  copy is made. `accept` extension tokens match the end of the file name,
+  so compound tokens such as `.tar.gz` work. Copies live under the runtime root, or on
   Linux under `~/Horizon/browser-attachments` when the runtime root is a
   hidden directory beneath the home directory, which a Snap-confined browser
   cannot open. The readback opens every attached file's first and last byte
