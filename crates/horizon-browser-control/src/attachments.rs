@@ -260,16 +260,23 @@ fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>
                 .open(&target)
                 .map_err(staging)?;
             // The copy starts at the file's beginning whatever was read from
-            // the handle before. The size was checked on metadata; a file
-            // that grows afterwards is cut off at the limit and refused
-            // rather than staged whole.
+            // the handle before, and is bounded by the size that was checked
+            // and reserved in the panel budget: a file that grew since is
+            // refused rather than staged past its reservation, and one that
+            // shrank is refused as changed.
             std::io::Seek::seek(&mut &authorized.file, std::io::SeekFrom::Start(0)).map_err(staging)?;
-            let mut source = std::io::Read::take(&authorized.file, MAX_ATTACHMENT_BYTES + 1);
+            let mut source = std::io::Read::take(&authorized.file, authorized.size + 1);
             let copied = std::io::copy(&mut source, &mut copy).map_err(staging)?;
-            if copied > MAX_ATTACHMENT_BYTES {
+            if copied > authorized.size {
                 return Err(AttachmentPolicyError::TooLarge {
                     path: display,
-                    limit: MAX_ATTACHMENT_BYTES,
+                    limit: authorized.size,
+                });
+            }
+            if copied < authorized.size {
+                return Err(AttachmentPolicyError::Staging {
+                    path: display,
+                    reason: "the file changed while it was being staged".to_string(),
                 });
             }
             copy.flush().map_err(staging)?;
@@ -562,6 +569,30 @@ mod tests {
             policy.authorize(&[link]),
             Err(AttachmentPolicyError::OutsideRoots { .. })
         ));
+    }
+
+    #[test]
+    fn a_copy_is_bounded_by_the_reserved_size() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("grow.txt");
+        std::fs::write(&source, b"small").expect("write");
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let grown = policy.authorize(std::slice::from_ref(&source)).expect("authorized");
+        std::fs::write(&source, b"grown past the reservation").expect("grow");
+        let error = stage_attachments(&root.path().join("attachments"), "panel", "grow", &grown).expect_err("grew");
+        assert!(
+            matches!(error, AttachmentPolicyError::TooLarge { limit: 5, .. }),
+            "{error}"
+        );
+
+        let shrunk = policy.authorize(std::slice::from_ref(&source)).expect("authorized");
+        std::fs::write(&source, b"x").expect("shrink");
+        let error =
+            stage_attachments(&root.path().join("attachments"), "panel", "shrink", &shrunk).expect_err("shrank");
+        assert!(matches!(error, AttachmentPolicyError::Staging { .. }), "{error}");
+        for action in ["grow", "shrink"] {
+            assert!(!action_directory(&root.path().join("attachments"), "panel", action).exists());
+        }
     }
 
     #[test]
