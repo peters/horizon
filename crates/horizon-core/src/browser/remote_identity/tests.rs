@@ -9,6 +9,7 @@ use crate::browser::{BrowserConfig, BrowserPanelState};
 
 fn requested() -> RemoteIdentityDisplay {
     RemoteIdentityDisplay::requested(&RemoteSessionRequest {
+        adapter: horizon_browser::remote::RemoteAdapterKind::Webdriver,
         recovery: horizon_browser::RemoteAllocation::default(),
         endpoint: "https://example.test".into(),
         authorization: None,

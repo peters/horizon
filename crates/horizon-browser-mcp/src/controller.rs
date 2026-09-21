@@ -124,6 +124,16 @@ pub(crate) enum ControlError {
     #[error("browser action {action_id} timed out after {timeout_millis} ms; inspect browser_audit before retrying")]
     Timeout { action_id: String, timeout_millis: u64 },
     #[error(
+        "browser set_files timed out after {timeout_millis} ms while its files were being staged; the staging may still finish and queue the action, so inspect browser_audit before retrying"
+    )]
+    StagingTimeout { timeout_millis: u64 },
+    #[error("browser set_files refused (invalid_input): {message}")]
+    InvalidAttachmentRequest { message: String },
+    #[error("browser set_files refused (attachment_policy): {message}")]
+    AttachmentRefused { message: String },
+    #[error("browser set_files refused (file_too_large): {message}")]
+    AttachmentTooLarge { message: String },
+    #[error(
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
     )]
     CreateTimeout { action_id: String, timeout_millis: u64 },
@@ -161,6 +171,10 @@ pub(crate) enum ControlError {
         "browser handoff failed (unsupported_backend): manual steering is not supported for remote browser sessions; use browser_act for supported actions and verify their outcomes"
     )]
     RemoteHandoffUnsupported,
+    #[error(
+        "browser set_files failed (unsupported_backend): this remote session does not support transferring host files; iOS native file pickers are not supported"
+    )]
+    RemoteAttachmentUnsupported,
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -171,6 +185,7 @@ pub(crate) enum ControlError {
 
 impl BrowserController {
     pub(crate) fn from_environment() -> Self {
+        sweep_stale_attachments();
         let fallback = format!("horizon-mcp:{}", std::process::id());
         let actor = std::env::var("HORIZON_BROWSER_ACTOR")
             .ok()
@@ -217,6 +232,8 @@ impl BrowserController {
     /// Live panels the calling identity may control: for a Horizon agent,
     /// exactly the panels its host placed in the agent's current workspace.
     pub(crate) fn list_panels(&self) -> Result<Vec<BrowserPanel>, ControlError> {
+        // Discovery runs often, so dead panels' staging goes here as well.
+        sweep_stale_attachments();
         self.require_host_instance()?;
         let mut panels = self
             .workspace_manifests()
@@ -460,6 +477,9 @@ impl BrowserController {
         if !is_horizon_actor(&self.actor) {
             return Err(ControlError::CloseUnavailable);
         }
+        // A closing panel is the natural moment to age out staged
+        // attachments that no later attachment would otherwise prune.
+        sweep_stale_attachments();
         let timeout_millis = bounded_timeout(timeout_millis);
         self.ensure_claim(panel_id)?;
         let action_id = manifest::enqueue_close(self.identity(), panel_id, Duration::from_millis(timeout_millis))
@@ -470,10 +490,18 @@ impl BrowserController {
                 .map_err(|source| ControlError::internal_io("could not read browser close result", source))?
             {
                 return match result.outcome {
-                    BrowserCloseOutcome::Closed => Ok(CloseReceipt {
-                        action_id,
-                        panel_id: panel_id.to_string(),
-                    }),
+                    BrowserCloseOutcome::Closed => {
+                        // The page is gone, so nothing it could still read
+                        // lazily needs to stay staged.
+                        horizon_browser_control::attachments::release_panel_attachments(
+                            &horizon_browser_control::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+                            panel_id,
+                        );
+                        Ok(CloseReceipt {
+                            action_id,
+                            panel_id: panel_id.to_string(),
+                        })
+                    }
                     BrowserCloseOutcome::Failed { code, message } => Err(ControlError::Browser {
                         action_id,
                         code,
@@ -503,10 +531,99 @@ impl BrowserController {
         timeout_millis: Option<u64>,
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
+        let deadline = Instant::now() + Duration::from_millis(timeout_millis);
+        self.validate_attachment_target(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
-        let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
-            .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
-        self.wait_for_result(panel_id, action_id, timeout_millis).await
+        let action_id = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(ControlError::StagingTimeout { timeout_millis })?;
+            self.enqueue_attachments(panel_id, action, remaining).await?
+        } else {
+            manifest::enqueue_action(panel_id, self.identity(), action)
+                .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?
+        };
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ControlError::Timeout {
+                action_id: action_id.clone(),
+                timeout_millis,
+            })?;
+        let remaining_millis = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX).max(1);
+        self.wait_for_result(panel_id, action_id, remaining_millis).await
+    }
+
+    /// Queue a `set_files` action off the async runtime: validating the
+    /// caller's paths, authorizing them, waiting for the panel's staging
+    /// lock and copying the files all touch the filesystem, so they run on
+    /// a blocking thread under what is left of the caller's deadline while
+    /// this task keeps the ownership lease alive. On timeout the copy may
+    /// still finish and queue the action afterwards, like a queued action
+    /// whose result is never read; the locked enqueue still checks
+    /// ownership, so a lease lost meanwhile releases the staging instead.
+    async fn enqueue_attachments(
+        &self,
+        panel_id: &str,
+        action: BrowserControlAction,
+        remaining: Duration,
+    ) -> Result<String, ControlError> {
+        let panel = panel_id.to_string();
+        let actor = self.actor.clone();
+        let host_instance = self.host_instance.clone();
+        let mut task = tokio::task::spawn_blocking(move || {
+            authorize_and_enqueue_attachments(&panel, &actor, host_instance.as_deref(), action)
+        });
+        let deadline = Instant::now() + remaining;
+        let joined = loop {
+            let Some(left) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+            else {
+                return Err(ControlError::StagingTimeout {
+                    timeout_millis: u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX),
+                });
+            };
+            match tokio::time::timeout(left.min(HEARTBEAT_INTERVAL), &mut task).await {
+                Ok(joined) => break joined,
+                Err(_) => self.refresh_claim(panel_id)?,
+            }
+        };
+        match joined {
+            Ok(Ok(action_id)) => Ok(action_id),
+            Ok(Err(AttachmentEnqueueError::Invalid(message))) => {
+                Err(ControlError::InvalidAttachmentRequest { message })
+            }
+            Ok(Err(AttachmentEnqueueError::Policy(error))) => Err(attachment_policy_error(&error)),
+            Ok(Err(AttachmentEnqueueError::Queue(source))) => {
+                // The queue's own authorization pass is authoritative; a
+                // refusal there keeps its typed classification.
+                if let Some(policy) = source
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<horizon_browser_control::AttachmentPolicyError>())
+                {
+                    return Err(attachment_policy_error(policy));
+                }
+                Err(self.denied(panel_id, "could not queue browser action", source))
+            }
+            Err(join) => Err(ControlError::internal_io(
+                "could not queue browser action",
+                io::Error::other(join.to_string()),
+            )),
+        }
+    }
+
+    /// Refuse unsupported remote platforms before opening or staging files.
+    pub(crate) fn validate_attachment_target(
+        &self,
+        panel_id: &str,
+        action: &BrowserControlAction,
+    ) -> Result<(), ControlError> {
+        if matches!(action, BrowserControlAction::SetFiles { .. }) {
+            require_attachment_target(&self.authorized_manifest(panel_id)?)?;
+        }
+        Ok(())
     }
 
     /// Execute an action whose bound the engine enforces itself (navigation
@@ -647,10 +764,14 @@ impl ControlError {
     fn internal_io(operation: &'static str, source: io::Error) -> Self {
         tracing::warn!(operation, error = %source, "browser MCP host coordination failed");
         let reason = match source.kind() {
-            io::ErrorKind::WouldBlock => "would block while the user is steering or the action queue is full",
+            io::ErrorKind::WouldBlock => {
+                "would block while the user is steering, the action queue is full, or queued attachments leave no staging room"
+            }
             io::ErrorKind::PermissionDenied => "permission denied because browser panel ownership changed",
             io::ErrorKind::NotFound => "browser panel is not live",
             io::ErrorKind::InvalidInput => "invalid browser control input",
+            io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
+            io::ErrorKind::Unsupported => "the browser panel backend does not support this action",
             io::ErrorKind::TimedOut => "host coordination timed out",
             _ => "internal host coordination error",
         };
@@ -718,6 +839,110 @@ fn finish_repolled_result(
     finish_polled_result(result, || Err(refresh_error))
 }
 
+enum AttachmentEnqueueError {
+    Invalid(String),
+    Policy(horizon_browser_control::AttachmentPolicyError),
+    Queue(io::Error),
+}
+
+/// The blocking half of a `set_files` enqueue: the caller's own paths must
+/// satisfy the protocol before resolution could turn an offending name into
+/// a clean canonical one, the policy then resolves and opens them so a
+/// refusal is reported with its typed message before anything is staged,
+/// and the queue stages and validates the rebuilt action.
+fn authorize_and_enqueue_attachments(
+    panel_id: &str,
+    actor: &str,
+    host_instance: Option<&str>,
+    action: BrowserControlAction,
+) -> Result<String, AttachmentEnqueueError> {
+    action
+        .validate()
+        .map_err(|message| AttachmentEnqueueError::Invalid(message.to_string()))?;
+    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
+        return manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), action)
+            .map_err(AttachmentEnqueueError::Queue);
+    };
+    let paths = horizon_browser_control::AttachmentPolicy::from_environment()
+        .authorize(&paths)
+        .map_err(AttachmentEnqueueError::Policy)?
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect();
+    manifest::enqueue_action(
+        panel_id,
+        AgentIdentity::new(actor, host_instance),
+        BrowserControlAction::SetFiles {
+            target,
+            paths,
+            sources: Vec::new(),
+        },
+    )
+    .map_err(AttachmentEnqueueError::Queue)
+}
+
+/// How often a running server sweeps staged attachments on its own, so the
+/// retention bound holds for a server that receives no further calls.
+const ATTACHMENT_SWEEP_INTERVAL: Duration = Duration::from_hours(1);
+
+/// Sweep staged attachments every hour for as long as the server runs, in
+/// addition to the sweeps at startup, listing and close. A server built
+/// outside a Tokio runtime (unit tests) gets no timer.
+pub(crate) fn spawn_attachment_janitor() {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async {
+        let mut ticks = tokio::time::interval(ATTACHMENT_SWEEP_INTERVAL);
+        ticks.tick().await;
+        loop {
+            ticks.tick().await;
+            let _ = tokio::task::spawn_blocking(sweep_stale_attachments).await;
+        }
+    });
+}
+
+/// Age out staged attachments past retention across every panel and drop
+/// the staging of panels whose manifest is gone (closed from the UI, the
+/// CLI or a crashed host), so the retention bound holds even when no
+/// further attachment follows and a dead panel keeps nothing.
+fn sweep_stale_attachments() {
+    let paths = horizon_browser_control::BrowserRuntimePaths::resolve();
+    let manifests = paths.browsers_manifest_dir();
+    horizon_browser_control::attachments::sweep_stale_attachments(
+        &paths.browser_attachments_dir(),
+        horizon_browser_control::attachments::ATTACHMENT_RETENTION,
+        |panel| {
+            let mut manifest = std::ffi::OsString::from(panel);
+            manifest.push(".json");
+            // A liveness check that cannot be answered keeps the staging;
+            // the next sweep asks again.
+            manifests.join(manifest).try_exists().unwrap_or(true)
+        },
+    );
+}
+
+/// A policy error keeps its classification through the preflight: a root
+/// refusal is an `attachment_policy` error, a malformed path is
+/// `invalid_input`, an oversized file is `file_too_large`, and a staging
+/// failure is an internal error.
+fn attachment_policy_error(error: &horizon_browser_control::AttachmentPolicyError) -> ControlError {
+    let message = error.to_string();
+    match error.io_kind() {
+        io::ErrorKind::PermissionDenied => ControlError::AttachmentRefused { message },
+        io::ErrorKind::InvalidInput => ControlError::InvalidAttachmentRequest { message },
+        io::ErrorKind::FileTooLarge => ControlError::AttachmentTooLarge { message },
+        kind => ControlError::internal_io("could not stage browser attachments", io::Error::new(kind, message)),
+    }
+}
+
+fn require_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
+    if panel.remote_target.is_some() && !panel.remote_file_upload {
+        return Err(ControlError::RemoteAttachmentUnsupported);
+    }
+    Ok(())
+}
+
 fn outcome(result: AgentActionResult) -> Result<ActionReceipt, ControlError> {
     match result.outcome {
         BrowserActionOutcome::Completed { value } => Ok(ActionReceipt {
@@ -776,6 +1001,23 @@ pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) ->
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn remote_panels_refuse_attachments_before_any_staging() {
+        let remote = manifest::BrowserManifest {
+            remote_target: Some("phone".into()),
+            ..manifest::BrowserManifest::default()
+        };
+        let error = require_attachment_target(&remote).expect_err("remote attachment unavailable");
+        assert!(matches!(error, ControlError::RemoteAttachmentUnsupported));
+        assert!(error.to_string().contains("unsupported_backend"));
+        require_attachment_target(&manifest::BrowserManifest::default()).expect("local panel");
+        require_attachment_target(&manifest::BrowserManifest {
+            remote_file_upload: true,
+            ..remote
+        })
+        .expect("supported remote upload");
+    }
 
     #[test]
     fn timeout_is_bounded() {

@@ -295,6 +295,7 @@ mod tests {
         // a process. The real Firefox resize and event paths run below; remote
         // capability admission is intentionally not part of this fixture.
         let request = crate::RemoteSessionRequest {
+            adapter: horizon_browser_protocol::remote::RemoteAdapterKind::Webdriver,
             recovery: crate::RemoteAllocation::default(),
             endpoint: classic.endpoint(""),
             authorization: None,
@@ -343,6 +344,7 @@ mod tests {
             remote_release,
             remote_device,
             remote_android_chromium: false,
+            file_transfer: None,
             session_id,
             bidi,
             automation_ws,

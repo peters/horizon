@@ -54,6 +54,8 @@ png = "0.18.1"
 # CI and developer machines do not need NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 base64 = "0.23.1"
+# Selenium remote file transfer uses a one-file ZIP envelope.
+zip = { version = "8.6.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -70,6 +72,8 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Used by the macOS keychain adapter to classify locked-keychain OSStatus values.
 security-framework = "3.7.0"
 windows-native-keyring-store = "1.1.0"
+same-file = "1.0"
+mime_guess = "2.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }

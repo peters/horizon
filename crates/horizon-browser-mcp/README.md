@@ -114,6 +114,68 @@ shell commands, files, or other MCP servers.
   native-picker interaction. No JavaScript value-assignment fallback is used
   for remote fill. Native date/time controls may reject a fill; inspect the
   resulting field after a failure because clearing may already have occurred.
+  `set_files` attaches host files to an `input[type=file]`: target the input
+  itself (query it by selector when a styled button hides it) and pass
+  `files` as absolute paths, at most 32. Each path must resolve to a regular
+  file under the agent work root (`HORIZON_WORK_ROOT`, else the server's
+  working directory) or a root listed in `HORIZON_BROWSER_ATTACHMENT_ROOTS`;
+  symlinks are judged by where they resolve, and the queue stages a private
+  copy of each checked file (at most 512 MiB each) for the browser to read,
+  so a pathname re-pointed after the check cannot reach the browser. The
+  page reads an attached file lazily, often only on submit, so the copies
+  stay for the panel: each panel keeps its attachment actions for 24 hours,
+  at most 32 actions and 4 GiB, pruned when the next attachment is staged
+  and swept when an MCP server starts, every hour while it runs, when it
+  lists panels or closes one, and at every attachment, which also drops all
+  staging of panels whose manifest is gone however they closed;
+  staging for actions whose result has not been consumed yet (queued,
+  dispatched or in flight) is never pruned for room, and when those alone
+  leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB
+  is refused before any copy is made. Path validation, authorization and
+  staging run on a blocking thread and count against the call's
+  `timeout_millis` while the ownership lease is kept alive; a call that
+  times out while staging reports so, and the staging may still finish and
+  queue the action afterwards. `accept` extension tokens match the end of the file name,
+  so compound tokens such as `.tar.gz` and dotfiles such as `.env` work. Copies live under the runtime root, or on
+  Linux under `~/Horizon/browser-attachments/<digest of the runtime root>` when the runtime root is a
+  hidden directory beneath the home directory, which a Snap-confined browser
+  cannot open; that visible directory is namespaced by the runtime root so
+  two hidden roots under one home never share it. The readback opens every attached file's first and last byte
+  in the page, so a browser that lists a file it cannot read fails with
+  `attachment_unreadable` instead of uploading nothing. An attachment
+  replaces the input's current selection on every backend. The input's
+  `multiple` and
+  `accept` attributes are checked first (`multiple_not_allowed`,
+  `accept_mismatch`; an `accept` attribute longer than 8192 characters is
+  refused as `accept_unsupported` rather than judged in part), a target
+  that is not a file input returns
+  `not_file_input`, a path outside the roots returns `attachment_policy`, a
+  malformed path `invalid_input`, a missing path `invalid_input` as well,
+  and a file over the limit `file_too_large`, all with no side effects. The
+  request's shape (count, absolute, UTF-8, length, control characters) is
+  checked before any backend or panel state, so it fails the same way on
+  every backend; an unsupported remote platform is then refused with `unsupported_backend`
+  before the paths are opened, so a missing path on an unsupported remote panel reports
+  `unsupported_backend`.
+  BrowserStack desktop sessions transfer a single-file ZIP through the Selenium
+  upload endpoint before selection; BrowserStack Android sessions use Appium Push File.
+  Each remote request is limited to 16 MiB per file and 32 MiB total.
+  Generic WebDriver grids and unsupported platforms (including iOS native pickers) omit `set_files` from
+  capabilities and return `unsupported_backend`. Transfer failures return
+  `attachment_transfer_failed` without including provider responses or file
+  contents. Transferred files remain in the provider session for lazy page
+  reads and are released with that session. `accept`
+  tokens that are neither an extension nor a MIME type are ignored, as
+  browsers ignore them. Chromium attaches through `DOM.setFileInputFiles`, which
+  fires the page's `input` and `change` handlers; local Firefox and Safari
+  use Element Send Keys with the paths. The result's `files` lists the
+  names, sizes, and MIME types read back from the input, and a readback that
+  does not hold exactly the requested files by name and size fails with
+  `attachment_mismatch`.
+  Every audit record for the action keeps the authorized source
+  paths, never the private staged copies or the contents. Snapshot
+  and query nodes carry `file_input` (`accept`, `accept_truncated`, `multiple`, `files`) for
+  file inputs so the attachment can be verified without `browser_evaluate`.
 - `browser_http_auth` is how a user supplies a username and password for HTTP
   Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).
   Call `operation: set` with the credentials the user provided. Pass `origin`

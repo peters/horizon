@@ -16,6 +16,31 @@ pub struct BrowserBounds {
     pub height: f64,
 }
 
+/// What a scan reports about an `input[type=file]` so an agent can pick the
+/// attachment target and verify an attachment without evaluating script.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BrowserFileInput {
+    /// The element's unnormalized `accept` attribute, up to 8192 UTF-16 code units.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accept: String,
+    /// True when `accept` exceeds 8192 UTF-16 code units and is only a prefix.
+    #[serde(default)]
+    pub accept_truncated: bool,
+    pub multiple: bool,
+    /// Number of files currently attached.
+    pub files: u32,
+}
+
+/// One file the browser reports attached after a `set_files` action.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BrowserAttachedFile {
+    pub name: String,
+    pub size: u64,
+    /// MIME type the browser derived for the file; empty when unknown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mime: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct BrowserNode {
     #[serde(rename = "ref")]
@@ -28,6 +53,9 @@ pub struct BrowserNode {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<BrowserBounds>,
+    /// Present only for `input[type=file]` elements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_input: Option<BrowserFileInput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -145,6 +173,10 @@ pub enum BrowserControlValue {
     },
     Json {
         value: Value,
+    },
+    /// Files the target input holds after a `set_files` action.
+    Files {
+        files: Vec<BrowserAttachedFile>,
     },
     Network {
         capture: crate::BrowserNetworkCapture,

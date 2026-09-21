@@ -13,6 +13,7 @@ use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
 
 pub(super) fn request(endpoint: &str) -> RemoteSessionRequest {
     RemoteSessionRequest {
+        adapter: horizon_browser_protocol::remote::RemoteAdapterKind::Webdriver,
         recovery: crate::RemoteAllocation::default(),
         endpoint: endpoint.to_string(),
         authorization: Some(Arc::new(

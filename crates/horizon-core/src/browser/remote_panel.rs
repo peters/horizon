@@ -263,6 +263,7 @@ impl BrowserPanelState {
         let mut state = Self::inert();
         state.status = BrowserStatus::Ready;
         state.remote = Some(RemoteLifecycle::live(RemoteSessionRequest {
+            adapter: horizon_browser::remote::RemoteAdapterKind::Webdriver,
             recovery: horizon_browser::RemoteAllocation::default(),
             endpoint: "https://grid.example.net/wd/hub".to_string(),
             authorization: None,
