@@ -733,7 +733,8 @@ fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
 /// past the sidebar edge.
 fn sidebar_workspace_name_width(available_width: f32, detached: bool, accordion: bool) -> f32 {
     let count_reserve = if accordion { 28.0 } else { 0.0 };
-    let detached_reserve = if detached { 62.0 } else { 0.0 };
+    // Badge text plus the explicit 4px gap and egui's item spacing before it.
+    let detached_reserve = if detached { 76.0 } else { 0.0 };
     (available_width - count_reserve - detached_reserve - 10.0).max(0.0)
 }
 
@@ -949,14 +950,14 @@ mod tests {
         // 168px sidebar minus 14+3+8 leading chrome leaves 143px for name + badges.
         let width = sidebar_workspace_name_width(143.0, true, true);
         assert!(width < 48.0);
-        assert!((width - 43.0).abs() <= f32::EPSILON);
+        assert!((width - 29.0).abs() <= f32::EPSILON);
     }
 
     #[test]
     fn flat_name_width_reserves_only_the_detached_badge() {
         // Flat rows draw no panel count, so the name keeps that room.
         assert!((sidebar_workspace_name_width(143.0, false, false) - 133.0).abs() <= f32::EPSILON);
-        assert!((sidebar_workspace_name_width(143.0, true, false) - 71.0).abs() <= f32::EPSILON);
+        assert!((sidebar_workspace_name_width(143.0, true, false) - 57.0).abs() <= f32::EPSILON);
     }
 
     #[test]

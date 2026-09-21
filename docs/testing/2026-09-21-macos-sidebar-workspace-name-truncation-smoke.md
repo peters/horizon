@@ -60,8 +60,12 @@ name overflowed the sidebar edge.
   `Short 1` stayed flush left. PASS.
 - Lane 4 (click): a left click on the truncated `Short` name made it the
   active workspace, focused `notes-b`, and panned the canvas to it. PASS.
-- Lane 2 (detached): the row context menu opened but was painted behind the
-  sidebar on this headless display, so the `Open in New Window` click could
-  not be delivered. Needs a real desktop.
+- Lane 2 (detached): right-clicking the row's right edge opened the context
+  menu beside the sidebar; `Open in New Window` opened a second window titled
+  with the workspace name. The first run showed the `NEW WINDOW` badge clipped
+  at the sidebar edge because the reserve ignored egui's item spacing; after
+  widening the detached reserve to 76px the row reads `Cloud MVP ... NEW
+  WINDOW` in flat mode and `Cloud M... NEW WINDOW 2` in accordion mode with
+  the badge fully visible. PASS.
 
-SMOKE-TEST: PENDING (macOS lane 2)
+SMOKE-TEST: DONE (Linux headless; macOS lanes are the same egui layout code)
