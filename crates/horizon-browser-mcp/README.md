@@ -125,7 +125,8 @@ shell commands, files, or other MCP servers.
   page reads an attached file lazily, often only on submit, so the copies
   stay for the panel: each panel keeps its attachment actions for 24 hours,
   at most 32 actions and 4 GiB, pruned when the next attachment is staged
-  and swept for age when an MCP server starts or a panel is closed;
+  and swept when an MCP server starts or a panel is closed, which also
+  drops all staging of panels whose manifest is gone however they closed;
   staging for actions whose result has not been consumed yet (queued,
   dispatched or in flight) is never pruned for room, and when those alone
   leave no room the new request is refused (would block) until they settle. One request whose files alone exceed that 4 GiB

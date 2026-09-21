@@ -486,10 +486,18 @@ impl BrowserController {
                 .map_err(|source| ControlError::internal_io("could not read browser close result", source))?
             {
                 return match result.outcome {
-                    BrowserCloseOutcome::Closed => Ok(CloseReceipt {
-                        action_id,
-                        panel_id: panel_id.to_string(),
-                    }),
+                    BrowserCloseOutcome::Closed => {
+                        // The page is gone, so nothing it could still read
+                        // lazily needs to stay staged.
+                        horizon_browser_control::attachments::release_panel_attachments(
+                            &horizon_browser_control::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+                            panel_id,
+                        );
+                        Ok(CloseReceipt {
+                            action_id,
+                            panel_id: panel_id.to_string(),
+                        })
+                    }
                     BrowserCloseOutcome::Failed { code, message } => Err(ControlError::Browser {
                         action_id,
                         code,
@@ -856,12 +864,21 @@ fn authorize_and_enqueue_attachments(
     .map_err(AttachmentEnqueueError::Queue)
 }
 
-/// Age out staged attachments past retention across every panel, so the
-/// retention bound holds even when no further attachment follows.
+/// Age out staged attachments past retention across every panel and drop
+/// the staging of panels whose manifest is gone (closed from the UI, the
+/// CLI or a crashed host), so the retention bound holds even when no
+/// further attachment follows and a dead panel keeps nothing.
 fn sweep_stale_attachments() {
+    let paths = horizon_browser_control::BrowserRuntimePaths::resolve();
+    let manifests = paths.browsers_manifest_dir();
     horizon_browser_control::attachments::sweep_stale_attachments(
-        &horizon_browser_control::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+        &paths.browser_attachments_dir(),
         horizon_browser_control::attachments::ATTACHMENT_RETENTION,
+        |panel| {
+            let mut manifest = std::ffi::OsString::from(panel);
+            manifest.push(".json");
+            manifests.join(manifest).exists()
+        },
     );
 }
 

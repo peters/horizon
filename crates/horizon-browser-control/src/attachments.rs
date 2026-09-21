@@ -360,6 +360,17 @@ pub fn settle_attachments(attachments_dir: &Path, panel_local_id: &str, action_i
     }
 }
 
+/// Remove every staged copy of one panel after its teardown; a missing
+/// directory is fine.
+pub fn release_panel_attachments(attachments_dir: &Path, panel_local_id: &str) {
+    let directory = attachments_dir.join(crate::paths::safe_local_id(panel_local_id));
+    if let Err(error) = std::fs::remove_dir_all(&directory)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(target: "browser", path = %directory.display(), "failed to release a panel's staged attachments: {error}");
+    }
+}
+
 /// Remove the staged copies of one action; a missing directory is fine.
 pub fn release_attachments(attachments_dir: &Path, panel_local_id: &str, action_id: &str) {
     let directory = action_directory(attachments_dir, panel_local_id, action_id);
@@ -386,10 +397,17 @@ pub fn check_panel_budget(files: &[AuthorizedFile], max_bytes: u64) -> Result<u6
     Ok(requested)
 }
 
-/// Remove every panel's staged actions older than `retention`, best
-/// effort: the enforcement that does not wait for another attachment, run
-/// when an MCP server starts and when a panel is closed.
-pub fn sweep_stale_attachments(attachments_dir: &Path, retention: Duration) {
+/// Remove every panel's staged actions older than `retention`, and all
+/// staging of panels that are gone (`panel_is_live` answers false for the
+/// sanitized panel directory name), best effort: the enforcement that does
+/// not wait for another attachment, run when an MCP server starts and when
+/// a panel is closed, so a page that no longer exists keeps nothing staged
+/// however it was closed.
+pub fn sweep_stale_attachments(
+    attachments_dir: &Path,
+    retention: Duration,
+    panel_is_live: impl Fn(&std::ffi::OsStr) -> bool,
+) {
     let stale_before = std::time::SystemTime::now()
         .checked_sub(retention)
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -397,6 +415,12 @@ pub fn sweep_stale_attachments(attachments_dir: &Path, retention: Duration) {
         return;
     };
     for panel in panels.flatten() {
+        if !panel_is_live(&panel.file_name()) {
+            if let Err(error) = std::fs::remove_dir_all(panel.path()) {
+                tracing::warn!(target: "browser", path = %panel.path().display(), "failed to release a closed panel's staged attachments: {error}");
+            }
+            continue;
+        }
         let Ok(actions) = std::fs::read_dir(panel.path()) else {
             continue;
         };
@@ -838,11 +862,23 @@ mod tests {
             .authorize(std::slice::from_ref(&source))
             .expect("authorized");
         stage_attachments(&attachments, "closed", "old", &authorized).expect("old");
+        stage_attachments(&attachments, "gone", "fresh-but-dead", &authorized).expect("dead panel");
         std::thread::sleep(Duration::from_millis(600));
         stage_attachments(&attachments, "live", "fresh", &authorized).expect("fresh");
-        sweep_stale_attachments(&attachments, Duration::from_millis(300));
+        let live = crate::paths::safe_local_id("live");
+        let closed = crate::paths::safe_local_id("closed");
+        sweep_stale_attachments(&attachments, Duration::from_millis(300), |panel| {
+            panel == live.as_str() || panel == closed.as_str()
+        });
         assert!(!action_directory(&attachments, "closed", "old").exists());
+        assert!(
+            !attachments.join(crate::paths::safe_local_id("gone")).exists(),
+            "a panel without a manifest keeps nothing staged, whatever the age"
+        );
         assert!(action_directory(&attachments, "live", "fresh").exists());
+        release_panel_attachments(&attachments, "live");
+        assert!(!attachments.join(&live).exists());
+        release_panel_attachments(&attachments, "live");
     }
 
     #[test]
