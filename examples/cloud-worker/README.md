@@ -138,8 +138,17 @@ disabled agents and runtime drift, then removes only its own temporary container
 Use `--capabilities '{}'` for minimal and both agent/browser lists plus desktop
 for full. This is a local service integration check, not a live UI or cloud pass.
 
-Worker readiness checks the selected active capability set and the control service;
-profiles with desktop also require a responding VNC server. Application readiness
+Worker readiness checks the selected active capability set, the control service,
+and the supervisor's recorded process identities. Profiles with desktop also
+require a responding X display, the owned Openbox window manager's live root
+registration, and a responding VNC server. A listening VNC socket alone cannot
+make a worker ready. The supervisor watches every required service before,
+during and after tool configuration; any service exit fails the worker and
+stops its owned process groups without replacing them. Stale readiness records
+are rejected after a restart or PID reuse. The `x11-utils` desktop dependency
+provides the bounded X display and window-manager probes. Display startup has a
+30-second deadline and tool configuration has a 120-second deadline; failure
+invalidates readiness and ends the worker. Application readiness
 and the first displayed frame are separate measurements. Record first and cached
 build/push durations with cache conditions, compressed manifest layer sizes, exact
 digests, fresh worker Ready, app readiness/first frame and same-worker reconnect.

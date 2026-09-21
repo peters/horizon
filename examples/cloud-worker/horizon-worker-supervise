@@ -1,0 +1,216 @@
+#!/usr/bin/python3
+"""Own required worker services throughout bootstrap and their entire lifetime."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+
+RUNTIME = Path('/run/horizon-worker')
+WORKSPACE = Path('/workspace')
+DESKTOP = {'xvfb', 'openbox', 'vnc'}
+SERVICES = {'control', 'sshd'}
+
+
+def process_identity(pid):
+    fields = Path('/proc', str(pid), 'stat').read_text().rsplit(') ', 1)[1].split()
+    if fields[0] in {'Z', 'X'}:
+        raise ValueError('Required worker process exited')
+    return {'pid': pid, 'start': fields[19]}
+
+
+def probe(command):
+    return subprocess.run(command, check=True, timeout=2, capture_output=True, text=True).stdout
+
+
+def desktop_ready(window_manager, display=':99'):
+    try:
+        probe(['xdpyinfo', '-display', display])
+        root = probe(['xprop', '-display', display, '-root', '_NET_SUPPORTING_WM_CHECK', '_OPENBOX_PID'])
+        window = re.search(r'window id # (0x[0-9a-fA-F]+)', root)
+        if not window:
+            return False
+        properties = probe(['xprop', '-display', display, '-id', window[1], '_NET_SUPPORTING_WM_CHECK'])
+        owner = re.search(r'_OPENBOX_PID\(CARDINAL\) = (\d+)', root)
+        own_window = re.search(r'window id # (0x[0-9a-fA-F]+)', properties)
+        return bool(owner and int(owner[1]) == window_manager and own_window and own_window[1] == window[1])
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def display_ready():
+    try:
+        probe(['xdpyinfo', '-display', ':99'])
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def vnc_ready():
+    try:
+        with socket.create_connection(('127.0.0.1', 5900), timeout=1) as connection:
+            with connection.makefile('rb') as stream:
+                return stream.read(12).startswith(b'RFB ')
+    except OSError:
+        return False
+
+
+def check_ready(runtime=RUNTIME, workspace=WORKSPACE):
+    selected = json.loads((workspace / 'capabilities.json').read_text())
+    state = json.loads((runtime / 'services.json').read_text())
+    expected = SERVICES | (DESKTOP if selected.get('desktop', False) else set())
+    if set(state['services']) != expected:
+        raise ValueError('Required worker service ownership is incomplete')
+    for identity in [state['supervisor'], *state['services'].values()]:
+        if process_identity(identity['pid']) != identity:
+            raise ValueError('Required worker service identity changed')
+    if 'openbox' in state['services'] and not desktop_ready(state['services']['openbox']['pid']):
+        raise ValueError('Worker window manager is not ready')
+
+
+def stop_groups(children):
+    for child in children:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 3
+    while any(child.poll() is None for child in children) and time.monotonic() < deadline:
+        time.sleep(.05)
+    for child in children:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+
+
+class Supervisor:
+    def __init__(self, workspace=WORKSPACE, runtime=RUNTIME):
+        self.workspace = workspace
+        self.runtime = runtime
+        self.children = {}
+        self.identities = {}
+        self.stopping = False
+
+    def start(self, name, command):
+        with (self.workspace / (name + '.log')).open('ab') as log:
+            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        self.children[name] = child
+        self.identities[name] = process_identity(child.pid)
+        self.assert_running()
+        return child
+
+    def assert_running(self, configuring=False):
+        if self.stopping:
+            raise ValueError('Worker shutdown requested')
+        for name, child in self.children.items():
+            if configuring and name == 'configure':
+                continue
+            if child.poll() is not None:
+                raise ValueError('Required worker service exited: ' + name)
+
+    def wait_until(self, predicate, message, timeout=30, configuring=False):
+        deadline = time.monotonic() + timeout
+        while True:
+            self.assert_running(configuring)
+            done = predicate()
+            self.assert_running(configuring)
+            if done:
+                return
+            if time.monotonic() >= deadline:
+                raise ValueError(message)
+            time.sleep(.1)
+
+    def configure(self, command):
+        # Even a successful, short-lived configuration command is retained until
+        # its exit status and every concurrently running service are checked.
+        with (self.workspace / 'configure.log').open('ab') as log:
+            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        self.children['configure'] = child
+        self.wait_until(lambda: child.poll() is not None, 'Worker configuration timed out',
+                        timeout=120, configuring=True)
+        if child.returncode != 0:
+            raise ValueError('Worker configuration failed')
+        # Configuration must leave no background work. Retiring the group now
+        # also prevents a later shutdown from targeting a reused bootstrap PID.
+        stop_groups([child])
+        del self.children['configure']
+
+    def publish(self, desktop):
+        self.assert_running(configuring=True)
+        names = SERVICES | (DESKTOP if desktop else set())
+        state = {'supervisor': process_identity(os.getpid()),
+                 'services': {name: self.identities[name] for name in sorted(names)}}
+        pending = self.runtime / 'services.new'
+        pending.write_text(json.dumps(state))
+        pending.chmod(0o600)
+        pending.replace(self.runtime / 'services.json')
+
+    def run(self, desktop):
+        if desktop:
+            self.start('xvfb', ['Xvfb', ':99', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'])
+            self.wait_until(display_ready, 'Worker display did not become ready')
+            manager = self.start('openbox', ['openbox'])
+            self.wait_until(lambda: desktop_ready(manager.pid), 'Worker window manager did not become ready')
+            self.start('vnc', ['x11vnc', '-display', ':99', '-localhost', '-rfbport', '5900',
+                               '-forever', '-shared', '-viewonly', '-nopw'])
+            self.wait_until(vnc_ready, 'Worker desktop transport did not become ready')
+        self.configure(['horizon-worker-configure'])
+        self.start('control', ['horizon-cloud-worker', 'serve'])
+        self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
+        self.publish(desktop)
+        next_desktop_check = 0
+        while True:
+            self.assert_running(configuring=True)
+            if desktop and time.monotonic() >= next_desktop_check:
+                if not desktop_ready(self.children['openbox'].pid):
+                    raise ValueError('Worker window manager stopped responding')
+                next_desktop_check = time.monotonic() + 1
+            time.sleep(.2)
+
+    def close(self):
+        (self.runtime / 'services.json').unlink(missing_ok=True)
+        # Each child has its own session. Terminate only groups created here,
+        # including descendants of a service whose leader has already exited.
+        stop_groups(list(self.children.values()))
+        self.children.clear()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check', action='store_true')
+    args = parser.parse_args()
+    try:
+        if args.check:
+            check_ready()
+            return 0
+        os.umask(0o077)
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        with (RUNTIME / 'supervisor.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            (RUNTIME / 'services.json').unlink(missing_ok=True)
+            supervisor = Supervisor()
+            def stop(_signum, _frame):
+                supervisor.stopping = True
+            signal.signal(signal.SIGTERM, stop)
+            signal.signal(signal.SIGINT, stop)
+            try:
+                selected = json.loads((WORKSPACE / 'capabilities.json').read_text())
+                supervisor.run(selected.get('desktop', False))
+            finally:
+                supervisor.close()
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
+        print('Worker supervision failed: ' + str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
