@@ -546,7 +546,10 @@ fn authorize_attachment_paths(action: BrowserControlAction) -> Result<BrowserCon
     };
     let paths = horizon_browser_control::AttachmentPolicy::from_environment()
         .authorize(&paths)
-        .map_err(|error| format!("browser set_files refused (attachment_policy): {error}"))?;
+        .map_err(|error| format!("browser set_files refused (attachment_policy): {error}"))?
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect();
     Ok(BrowserControlAction::SetFiles { target, paths })
 }
 

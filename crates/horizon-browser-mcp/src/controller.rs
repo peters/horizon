@@ -651,6 +651,7 @@ impl ControlError {
             io::ErrorKind::PermissionDenied => "permission denied because browser panel ownership changed",
             io::ErrorKind::NotFound => "browser panel is not live",
             io::ErrorKind::InvalidInput => "invalid browser control input",
+            io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
             io::ErrorKind::TimedOut => "host coordination timed out",
             _ => "internal host coordination error",
         };

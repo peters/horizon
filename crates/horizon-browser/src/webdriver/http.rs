@@ -181,12 +181,15 @@ pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpErro
         }
     };
     let payload = value.get("value").cloned().unwrap_or_else(|| value.clone());
-    // A W3C error envelope carries a string `error`; a script value whose
-    // object happens to have an `error` member (the semantic probes report
-    // page-side refusals that way) is an ordinary 2xx value.
-    let envelope_error = payload.get("error").and_then(Value::as_str);
-    if !(200..300).contains(&status) || envelope_error.is_some() {
-        let error = envelope_error.unwrap_or("http error").to_string();
+    // Only the status says whether this is a W3C error envelope: a 2xx
+    // script value whose object has an `error` member (the semantic probes
+    // report page-side refusals that way) belongs to the page.
+    if !(200..300).contains(&status) {
+        let error = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("http error")
+            .to_string();
         let message = payload
             .get("message")
             .and_then(Value::as_str)
@@ -265,10 +268,14 @@ mod tests {
 
     #[test]
     fn script_values_with_an_error_member_are_not_error_envelopes() {
-        let body = b"{\"value\":{\"error\":{\"code\":\"not_file_input\",\"message\":\"no\"}}}";
-        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
-        let value = parse_response(&[response, body.to_vec()].concat()).expect("script value");
-        assert_eq!(value["value"]["error"]["code"], "not_file_input");
+        for body in [
+            &b"{\"value\":{\"error\":{\"code\":\"not_file_input\",\"message\":\"no\"}}}"[..],
+            b"{\"value\":{\"error\":\"validation message\"}}",
+        ] {
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+            let value = parse_response(&[response, body.to_vec()].concat()).expect("script value");
+            assert!(value["value"]["error"].is_object() || value["value"]["error"].is_string());
+        }
     }
 
     #[test]

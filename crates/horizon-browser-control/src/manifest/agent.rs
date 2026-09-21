@@ -194,15 +194,13 @@ fn authorize_attachments(
         let summary = BrowserAuditAction::from_control(&action);
         return Ok((action, summary, None));
     };
-    let denied = |error: crate::AttachmentPolicyError| {
-        std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.to_string())
-    };
-    let resolved = crate::AttachmentPolicy::from_environment()
+    let refused = |error: crate::AttachmentPolicyError| std::io::Error::new(error.io_kind(), error.to_string());
+    let authorized = crate::AttachmentPolicy::from_environment()
         .authorize(&paths)
-        .map_err(denied)?;
+        .map_err(refused)?;
     let summary = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
         target: target.clone(),
-        paths: resolved.clone(),
+        paths: authorized.iter().map(|file| file.path().to_path_buf()).collect(),
     });
     let attachments_dir = crate::BrowserRuntimePaths::resolve().browser_attachments_dir();
     crate::attachments::prune_stale_attachments(&attachments_dir, crate::attachments::STALE_ATTACHMENT_AGE);
@@ -211,7 +209,7 @@ fn authorize_attachments(
         action_id: action_id.to_string(),
         keep: false,
     };
-    let paths = crate::attachments::stage_attachments(&attachments_dir, action_id, &resolved).map_err(denied)?;
+    let paths = crate::attachments::stage_attachments(&attachments_dir, action_id, &authorized).map_err(refused)?;
     let action = BrowserControlAction::SetFiles { target, paths };
     action
         .validate()

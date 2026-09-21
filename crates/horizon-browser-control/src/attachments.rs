@@ -48,6 +48,44 @@ pub struct AttachmentPolicy {
     roots: Vec<PathBuf>,
 }
 
+/// One attachment that passed the root check, held open so the staged copy
+/// is read from this very handle and the pathname can no longer matter.
+#[derive(Debug)]
+pub struct AuthorizedFile {
+    path: PathBuf,
+    file: std::fs::File,
+    size: u64,
+}
+
+impl AuthorizedFile {
+    /// Where the open handle resolved to when it was checked.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+impl AttachmentPolicyError {
+    /// The I/O classification a queue reports for this refusal: policy
+    /// refusals are permission errors, malformed requests are invalid
+    /// input, an oversized file is a size error, and a staging failure is
+    /// an internal error.
+    #[must_use]
+    pub fn io_kind(&self) -> std::io::ErrorKind {
+        match self {
+            Self::NoRoots | Self::OutsideRoots { .. } => std::io::ErrorKind::PermissionDenied,
+            Self::Unresolvable { .. } | Self::NotAFile { .. } => std::io::ErrorKind::InvalidInput,
+            Self::TooLarge { .. } => std::io::ErrorKind::FileTooLarge,
+            Self::Staging { .. } => std::io::ErrorKind::Other,
+        }
+    }
+}
+
 impl AttachmentPolicy {
     /// Roots that resolve on this host; roots that do not exist are dropped.
     #[must_use]
@@ -80,34 +118,47 @@ impl AttachmentPolicy {
         &self.roots
     }
 
-    /// Resolve every path and confirm it is a regular file under a root.
-    /// Returns the resolved paths in request order; the first refusal ends
-    /// the check, so nothing is authorized when any path is refused.
+    /// Open every path and confirm that the opened handle is a regular file
+    /// within the size limit whose current location lies under a root. The
+    /// root check is made on the handle's own location, not on the
+    /// pathname that was opened, so a path re-pointed between the two steps
+    /// is caught. Returns the open files in request order; the first
+    /// refusal ends the check, so nothing is authorized when any path is
+    /// refused.
     ///
     /// # Errors
     /// Returns which path was refused and why, never file contents.
-    pub fn authorize(&self, paths: &[PathBuf]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
+    pub fn authorize(&self, paths: &[PathBuf]) -> Result<Vec<AuthorizedFile>, AttachmentPolicyError> {
         if self.roots.is_empty() {
             return Err(AttachmentPolicyError::NoRoots);
         }
         paths.iter().map(|path| self.authorize_one(path)).collect()
     }
 
-    fn authorize_one(&self, path: &Path) -> Result<PathBuf, AttachmentPolicyError> {
+    fn authorize_one(&self, path: &Path) -> Result<AuthorizedFile, AttachmentPolicyError> {
         let display = path.display().to_string();
-        let resolved = std::fs::canonicalize(path).map_err(|error| AttachmentPolicyError::Unresolvable {
+        let unresolvable = |error: std::io::Error| AttachmentPolicyError::Unresolvable {
             path: display.clone(),
             reason: error.kind().to_string(),
-        })?;
-        let metadata = std::fs::metadata(&resolved).map_err(|error| AttachmentPolicyError::Unresolvable {
-            path: display.clone(),
-            reason: error.kind().to_string(),
-        })?;
+        };
+        let file = std::fs::File::open(path).map_err(unresolvable)?;
+        let metadata = file.metadata().map_err(unresolvable)?;
         if !metadata.is_file() {
             return Err(AttachmentPolicyError::NotAFile { path: display });
         }
-        if self.roots.iter().any(|root| resolved.starts_with(root)) {
-            Ok(resolved)
+        if metadata.len() > MAX_ATTACHMENT_BYTES {
+            return Err(AttachmentPolicyError::TooLarge {
+                path: display,
+                limit: MAX_ATTACHMENT_BYTES,
+            });
+        }
+        let location = handle_location(&file, path).map_err(unresolvable)?;
+        if self.roots.iter().any(|root| location.starts_with(root)) {
+            Ok(AuthorizedFile {
+                path: location,
+                file,
+                size: metadata.len(),
+            })
         } else {
             Err(AttachmentPolicyError::OutsideRoots {
                 path: display,
@@ -122,50 +173,71 @@ impl AttachmentPolicy {
     }
 }
 
+/// The resolved location of an open file. Linux answers from the handle
+/// itself; elsewhere the pathname is resolved again and accepted only when
+/// it still names the same file the handle holds.
+#[cfg(target_os = "linux")]
+fn handle_location(file: &std::fs::File, _requested: &Path) -> std::io::Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn handle_location(file: &std::fs::File, requested: &Path) -> std::io::Result<PathBuf> {
+    let resolved = std::fs::canonicalize(requested)?;
+    if same_file(&file.metadata()?, &std::fs::metadata(&resolved)?) {
+        Ok(resolved)
+    } else {
+        Err(std::io::Error::other(
+            "the attachment changed while it was being checked",
+        ))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn same_file(opened: &std::fs::Metadata, resolved: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == resolved.dev() && opened.ino() == resolved.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(opened: &std::fs::Metadata, resolved: &std::fs::Metadata) -> bool {
+    opened.len() == resolved.len() && opened.modified().ok() == resolved.modified().ok()
+}
+
 /// Copy each authorized file into `<root>/runtime/browser-attachments/<action>/<index>/<name>`
-/// from an open handle, so the bytes the browser reads are the bytes that
+/// from its open handle, so the bytes the browser reads are the bytes that
 /// were checked. Returns the staged paths in request order; any failure
 /// removes the whole staging directory.
 ///
 /// # Errors
-/// Returns the first file that is not a regular file, is too large, or
-/// could not be copied.
+/// Returns the first file that could not be copied.
 pub fn stage_attachments(
     attachments_dir: &Path,
     action_id: &str,
-    paths: &[PathBuf],
+    files: &[AuthorizedFile],
 ) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
     let directory = attachments_dir.join(crate::paths::safe_local_id(action_id));
-    let staged = stage_into(&directory, paths);
+    let staged = stage_into(&directory, files);
     if staged.is_err() {
         release_attachments(attachments_dir, action_id);
     }
     staged
 }
 
-fn stage_into(directory: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
+fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>, AttachmentPolicyError> {
     create_private_dir(directory)?;
-    paths
+    files
         .iter()
         .enumerate()
-        .map(|(index, path)| {
-            let display = path.display().to_string();
+        .map(|(index, authorized)| {
+            let display = authorized.path.display().to_string();
             let staging = |error: std::io::Error| AttachmentPolicyError::Staging {
                 path: display.clone(),
                 reason: error.kind().to_string(),
             };
-            let mut source = std::fs::File::open(path).map_err(staging)?;
-            let metadata = source.metadata().map_err(staging)?;
-            if !metadata.is_file() {
-                return Err(AttachmentPolicyError::NotAFile { path: display });
-            }
-            if metadata.len() > MAX_ATTACHMENT_BYTES {
-                return Err(AttachmentPolicyError::TooLarge {
-                    path: display,
-                    limit: MAX_ATTACHMENT_BYTES,
-                });
-            }
-            let name = path
+            let name = authorized
+                .path
                 .file_name()
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| AttachmentPolicyError::NotAFile { path: display.clone() })?;
@@ -177,6 +249,7 @@ fn stage_into(directory: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Attac
                 .create_new(true)
                 .open(&target)
                 .map_err(staging)?;
+            let mut source = &authorized.file;
             std::io::copy(&mut source, &mut copy).map_err(staging)?;
             copy.flush().map_err(staging)?;
             Ok(target)
@@ -237,7 +310,9 @@ mod tests {
         let source = root.path().join("claim.pdf");
         std::fs::write(&source, b"%PDF").expect("write");
         let attachments = root.path().join("attachments");
-        let staged = stage_attachments(&attachments, "action-1", &[source.clone(), source.clone()]).expect("staged");
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let authorized = policy.authorize(&[source.clone(), source.clone()]).expect("authorized");
+        let staged = stage_attachments(&attachments, "action-1", &authorized).expect("staged");
         assert_eq!(staged.len(), 2);
         assert_ne!(staged[0], staged[1], "each slot keeps its own copy of a repeated file");
         assert!(
@@ -256,22 +331,36 @@ mod tests {
     }
 
     #[test]
-    fn staging_refuses_directories_and_cleans_up_after_a_failure() {
+    fn a_failed_staging_leaves_nothing_behind() {
         let root = tempfile::tempdir().expect("root");
         let good = root.path().join("ok.txt");
         std::fs::write(&good, b"ok").expect("write");
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let authorized = policy.authorize(std::slice::from_ref(&good)).expect("authorized");
         let attachments = root.path().join("attachments");
-        let error =
-            stage_attachments(&attachments, "action-2", &[good, root.path().to_path_buf()]).expect_err("directory");
-        assert!(matches!(error, AttachmentPolicyError::NotAFile { .. }), "{error}");
-        assert!(
-            !attachments.join(crate::paths::safe_local_id("action-2")).exists(),
-            "a failed staging leaves nothing behind"
-        );
-        assert!(matches!(
-            stage_attachments(&attachments, "action-3", &[root.path().join("missing")]),
-            Err(AttachmentPolicyError::Staging { .. })
-        ));
+        std::fs::write(&attachments, b"not a directory").expect("block the staging root");
+        let error = stage_attachments(&attachments, "action-2", &authorized).expect_err("cannot stage");
+        assert!(matches!(error, AttachmentPolicyError::Staging { .. }), "{error}");
+        assert!(!attachments.is_dir(), "nothing was created in place of the blocker");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authorization_judges_the_opened_handle_not_the_pathname() {
+        let root = tempfile::tempdir().expect("root");
+        let inside = root.path().join("inside.txt");
+        std::fs::write(&inside, b"inside").expect("write");
+        let policy = AttachmentPolicy::new([root.path().to_path_buf()]);
+        let authorized = policy.authorize(std::slice::from_ref(&inside)).expect("authorized");
+        // Re-pointing the pathname after authorization changes nothing:
+        // the staged bytes come from the handle that was checked.
+        let outside = tempfile::tempdir().expect("outside");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").expect("write");
+        std::fs::remove_file(&inside).expect("remove");
+        std::os::unix::fs::symlink(&secret, &inside).expect("re-point");
+        let staged = stage_attachments(&root.path().join("attachments"), "swap", &authorized).expect("staged");
+        assert_eq!(std::fs::read(&staged[0]).expect("read"), b"inside");
     }
 
     #[test]
@@ -280,9 +369,12 @@ mod tests {
         let source = root.path().join("a.txt");
         std::fs::write(&source, b"a").expect("write");
         let attachments = root.path().join("attachments");
-        stage_attachments(&attachments, "old", std::slice::from_ref(&source)).expect("old");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "old", &authorized).expect("old");
         std::thread::sleep(Duration::from_millis(600));
-        stage_attachments(&attachments, "fresh", std::slice::from_ref(&source)).expect("fresh");
+        stage_attachments(&attachments, "fresh", &authorized).expect("fresh");
         prune_stale_attachments(&attachments, Duration::from_millis(300));
         assert!(!attachments.join(crate::paths::safe_local_id("old")).exists());
         assert!(attachments.join(crate::paths::safe_local_id("fresh")).exists());
@@ -299,10 +391,11 @@ mod tests {
         let unresolved = nested.join("..").join("uploads").join("doc.pdf");
         let authorized = policy.authorize(&[unresolved]).expect("inside root");
         assert_eq!(
-            authorized,
+            authorized.iter().map(AuthorizedFile::path).collect::<Vec<_>>(),
             vec![std::fs::canonicalize(&file).expect("canonical")],
-            "the engine receives the resolved path"
+            "the handle's resolved location is what gets staged"
         );
+        assert_eq!(authorized[0].size(), 4);
     }
 
     #[test]
@@ -318,16 +411,26 @@ mod tests {
         assert!(matches!(error, AttachmentPolicyError::OutsideRoots { .. }), "{error}");
         assert!(error.to_string().contains("secret.txt"));
         assert!(!error.to_string().contains("secret\""));
-        assert_eq!(
+        assert!(matches!(
             policy.authorize(&[root.path().to_path_buf()]),
-            Err(AttachmentPolicyError::NotAFile {
-                path: root.path().display().to_string()
-            })
-        );
+            Err(AttachmentPolicyError::NotAFile { .. })
+        ));
         assert!(matches!(
             policy.authorize(&[root.path().join("missing.txt")]),
             Err(AttachmentPolicyError::Unresolvable { .. })
         ));
+        assert_eq!(
+            AttachmentPolicyError::NoRoots.io_kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            AttachmentPolicyError::TooLarge {
+                path: String::new(),
+                limit: 1
+            }
+            .io_kind(),
+            std::io::ErrorKind::FileTooLarge
+        );
     }
 
     #[cfg(unix)]
@@ -351,9 +454,9 @@ mod tests {
         let root = tempfile::tempdir().expect("root");
         let policy = AttachmentPolicy::new([root.path().join("absent"), PathBuf::new()]);
         assert!(policy.roots().is_empty());
-        assert_eq!(
+        assert!(matches!(
             policy.authorize(&[root.path().join("any.txt")]),
             Err(AttachmentPolicyError::NoRoots)
-        );
+        ));
     }
 }
