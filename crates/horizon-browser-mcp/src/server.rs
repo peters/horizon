@@ -297,7 +297,6 @@ impl HorizonBrowserMcp {
         self.controller
             .refuse_remote_attachments(&input.panel_id, &action)
             .map_err(|error| error.to_string())?;
-        let action = authorize_attachment_paths(action)?;
         let action_kind = input.action;
         let receipt = self
             .controller
@@ -539,30 +538,6 @@ const MIN_NAVIGATION_TIMEOUT_MILLIS: u64 = 1_000;
 /// waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer for the typed report.
 fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
     crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
-}
-
-/// Resolve `set_files` paths under this server's attachment roots before the
-/// action is queued, so a refused path is reported as a typed error with no
-/// side effects; every other action passes through.
-fn authorize_attachment_paths(action: BrowserControlAction) -> Result<BrowserControlAction, String> {
-    let BrowserControlAction::SetFiles { target, paths } = action else {
-        return Ok(action);
-    };
-    // The caller's own paths must satisfy the protocol before resolution
-    // could turn an offending name into a clean canonical one.
-    BrowserControlAction::SetFiles {
-        target: target.clone(),
-        paths: paths.clone(),
-    }
-    .validate()
-    .map_err(|message| format!("browser set_files refused (invalid_input): {message}"))?;
-    let paths = horizon_browser_control::AttachmentPolicy::from_environment()
-        .authorize(&paths)
-        .map_err(|error| format!("browser set_files refused (attachment_policy): {error}"))?
-        .iter()
-        .map(|file| file.path().to_path_buf())
-        .collect();
-    Ok(BrowserControlAction::SetFiles { target, paths })
 }
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {

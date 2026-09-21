@@ -127,6 +127,10 @@ pub(crate) enum ControlError {
         "browser set_files timed out after {timeout_millis} ms while its files were being staged; the staging may still finish and queue the action, so inspect browser_audit before retrying"
     )]
     StagingTimeout { timeout_millis: u64 },
+    #[error("browser set_files refused (invalid_input): {message}")]
+    InvalidAttachmentRequest { message: &'static str },
+    #[error("browser set_files refused (attachment_policy): {message}")]
+    AttachmentRefused { message: String },
     #[error(
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
     )]
@@ -511,44 +515,78 @@ impl BrowserController {
         timeout_millis: Option<u64>,
     ) -> Result<ActionReceipt, ControlError> {
         let timeout_millis = bounded_timeout(timeout_millis);
-        let started = Instant::now();
+        let deadline = Instant::now() + Duration::from_millis(timeout_millis);
         self.refuse_remote_attachments(panel_id, &action)?;
         self.ensure_claim(panel_id)?;
         let action_id = if matches!(action, BrowserControlAction::SetFiles { .. }) {
-            self.enqueue_attachments(panel_id, action, timeout_millis).await?
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(ControlError::StagingTimeout { timeout_millis })?;
+            self.enqueue_attachments(panel_id, action, remaining).await?
         } else {
             manifest::enqueue_action(panel_id, self.identity(), action)
                 .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?
         };
-        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.wait_for_result(panel_id, action_id, timeout_millis.saturating_sub(elapsed).max(1))
-            .await
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ControlError::Timeout {
+                action_id: action_id.clone(),
+                timeout_millis,
+            })?;
+        let remaining_millis = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX).max(1);
+        self.wait_for_result(panel_id, action_id, remaining_millis).await
     }
 
-    /// Queue a `set_files` action off the async runtime: staging copies
-    /// files and may wait for the panel's staging lock, so it runs on a
-    /// blocking thread and counts against the caller's deadline. On
-    /// timeout the copy may still finish and queue the action afterwards,
-    /// like a queued action whose result is never read.
+    /// Queue a `set_files` action off the async runtime: validating the
+    /// caller's paths, authorizing them, waiting for the panel's staging
+    /// lock and copying the files all touch the filesystem, so they run on
+    /// a blocking thread under what is left of the caller's deadline while
+    /// this task keeps the ownership lease alive. On timeout the copy may
+    /// still finish and queue the action afterwards, like a queued action
+    /// whose result is never read; the locked enqueue still checks
+    /// ownership, so a lease lost meanwhile releases the staging instead.
     async fn enqueue_attachments(
         &self,
         panel_id: &str,
         action: BrowserControlAction,
-        timeout_millis: u64,
+        remaining: Duration,
     ) -> Result<String, ControlError> {
         let panel = panel_id.to_string();
         let actor = self.actor.clone();
         let host_instance = self.host_instance.clone();
-        let enqueue = tokio::task::spawn_blocking(move || {
-            manifest::enqueue_action(&panel, AgentIdentity::new(&actor, host_instance.as_deref()), action)
+        let mut task = tokio::task::spawn_blocking(move || {
+            authorize_and_enqueue_attachments(&panel, &actor, host_instance.as_deref(), action)
         });
-        match tokio::time::timeout(Duration::from_millis(timeout_millis), enqueue).await {
-            Ok(Ok(queued)) => queued.map_err(|source| self.denied(panel_id, "could not queue browser action", source)),
-            Ok(Err(join)) => Err(ControlError::internal_io(
+        let deadline = Instant::now() + remaining;
+        let joined = loop {
+            let Some(left) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+            else {
+                return Err(ControlError::StagingTimeout {
+                    timeout_millis: u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX),
+                });
+            };
+            match tokio::time::timeout(left.min(HEARTBEAT_INTERVAL), &mut task).await {
+                Ok(joined) => break joined,
+                Err(_) => self.refresh_claim(panel_id)?,
+            }
+        };
+        match joined {
+            Ok(Ok(action_id)) => Ok(action_id),
+            Ok(Err(AttachmentEnqueueError::Invalid(message))) => {
+                Err(ControlError::InvalidAttachmentRequest { message })
+            }
+            Ok(Err(AttachmentEnqueueError::Refused(message))) => Err(ControlError::AttachmentRefused { message }),
+            Ok(Err(AttachmentEnqueueError::Queue(source))) => {
+                Err(self.denied(panel_id, "could not queue browser action", source))
+            }
+            Err(join) => Err(ControlError::internal_io(
                 "could not queue browser action",
                 io::Error::other(join.to_string()),
             )),
-            Err(_) => Err(ControlError::StagingTimeout { timeout_millis }),
         }
     }
 
@@ -776,6 +814,42 @@ fn finish_repolled_result(
         return Err(refresh_error);
     };
     finish_polled_result(result, || Err(refresh_error))
+}
+
+enum AttachmentEnqueueError {
+    Invalid(&'static str),
+    Refused(String),
+    Queue(io::Error),
+}
+
+/// The blocking half of a `set_files` enqueue: the caller's own paths must
+/// satisfy the protocol before resolution could turn an offending name into
+/// a clean canonical one, the policy then resolves and opens them so a
+/// refusal is reported with its typed message before anything is staged,
+/// and the queue stages and validates the rebuilt action.
+fn authorize_and_enqueue_attachments(
+    panel_id: &str,
+    actor: &str,
+    host_instance: Option<&str>,
+    action: BrowserControlAction,
+) -> Result<String, AttachmentEnqueueError> {
+    action.validate().map_err(AttachmentEnqueueError::Invalid)?;
+    let BrowserControlAction::SetFiles { target, paths } = action else {
+        return manifest::enqueue_action(panel_id, AgentIdentity::new(actor, host_instance), action)
+            .map_err(AttachmentEnqueueError::Queue);
+    };
+    let paths = horizon_browser_control::AttachmentPolicy::from_environment()
+        .authorize(&paths)
+        .map_err(|error| AttachmentEnqueueError::Refused(error.to_string()))?
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect();
+    manifest::enqueue_action(
+        panel_id,
+        AgentIdentity::new(actor, host_instance),
+        BrowserControlAction::SetFiles { target, paths },
+    )
+    .map_err(AttachmentEnqueueError::Queue)
 }
 
 fn require_local_attachment_target(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {

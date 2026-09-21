@@ -8,7 +8,7 @@ use crate::semantic::{
 };
 use crate::semantic_files::{
     attached_files_expression, check_attachment_request, file_input_probe_expression, local_file_facts,
-    parse_attached_files, parse_file_input_probe, verify_attached,
+    parse_attached_files, parse_file_input_probe, reset_file_input_expression, verify_attached,
 };
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
@@ -428,6 +428,9 @@ impl Driver {
         let probe = self.evaluate_json(&file_input_probe_expression(&selector))?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         self.capture_teach_fingerprint(None)?;
+        // Classic Send Keys appends to a `multiple` input's selection; the
+        // action replaces it, as the Chromium primitive does.
+        check_script_error(&self.evaluate_json(&reset_file_input_expression(&selector))?)?;
         let result = set_files_through(
             self.host.transport(),
             &format!("/session/{}", self.session_id),

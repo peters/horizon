@@ -402,22 +402,41 @@ pub fn prune_attachments(
     let stale_before = std::time::SystemTime::now()
         .checked_sub(retention)
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-    let Ok(panels) = std::fs::read_dir(attachments_dir) else {
-        return Ok(());
+    let scan_failure = |path: &Path, error: std::io::Error| AttachmentPolicyError::Staging {
+        path: path.display().to_string(),
+        reason: format!("could not scan staged attachments: {}", error.kind()),
+    };
+    let panels = match std::fs::read_dir(attachments_dir) {
+        Ok(panels) => panels,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(scan_failure(attachments_dir, error)),
     };
     let current = crate::paths::safe_local_id(panel_local_id);
-    for panel in panels.flatten() {
-        let Ok(actions) = std::fs::read_dir(panel.path()) else {
-            continue;
-        };
+    for panel in panels {
+        // The current panel's staging must be fully accounted for, so any
+        // scan error there refuses the newcomer; other panels are cleaned
+        // on a best-effort basis.
+        let panel = panel.map_err(|error| scan_failure(attachments_dir, error))?;
         let is_current = panel.file_name().to_string_lossy() == current;
+        let actions = match std::fs::read_dir(panel.path()) {
+            Ok(actions) => actions,
+            Err(error) if is_current => return Err(scan_failure(&panel.path(), error)),
+            Err(_) => continue,
+        };
         let mut retained = Vec::new();
-        for action in actions.flatten() {
-            let Ok(modified) = std::fs::metadata(action.path().join(STAGED_STAMP))
+        for action in actions {
+            let action = match action {
+                Ok(action) => action,
+                Err(error) if is_current => return Err(scan_failure(&panel.path(), error)),
+                Err(_) => continue,
+            };
+            let modified = match std::fs::metadata(action.path().join(STAGED_STAMP))
                 .or_else(|_| action.metadata())
                 .and_then(|metadata| metadata.modified())
-            else {
-                continue;
+            {
+                Ok(modified) => modified,
+                Err(error) if is_current => return Err(scan_failure(&action.path(), error)),
+                Err(_) => continue,
             };
             let pending = action.path().join(PENDING_MARKER).exists();
             if modified < stale_before {
@@ -425,10 +444,12 @@ pub fn prune_attachments(
                 // still be read lazily by their own pages.
                 if std::fs::remove_dir_all(action.path()).is_err() && is_current {
                     // Still on disk, so still counted below.
-                    retained.push((modified, directory_bytes(&action.path()), action.path(), false));
+                    let bytes = directory_bytes(&action.path()).map_err(|error| scan_failure(&action.path(), error))?;
+                    retained.push((modified, bytes, action.path(), false));
                 }
             } else if is_current {
-                retained.push((modified, directory_bytes(&action.path()), action.path(), pending));
+                let bytes = directory_bytes(&action.path()).map_err(|error| scan_failure(&action.path(), error))?;
+                retained.push((modified, bytes, action.path(), pending));
             }
         }
         if !is_current {
@@ -465,17 +486,13 @@ pub fn prune_attachments(
     Ok(())
 }
 
-fn directory_bytes(path: &Path) -> u64 {
+fn directory_bytes(path: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
     let mut pending = vec![path.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
             if metadata.is_dir() {
                 pending.push(entry.path());
             } else {
@@ -483,7 +500,7 @@ fn directory_bytes(path: &Path) -> u64 {
             }
         }
     }
-    total
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -750,6 +767,30 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "the FIFO open must not wait for a writer"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_current_panel_refuses_the_newcomer() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("a.txt");
+        std::fs::write(&source, b"abcdef").expect("write");
+        let attachments = root.path().join("attachments");
+        let authorized = AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(std::slice::from_ref(&source))
+            .expect("authorized");
+        stage_attachments(&attachments, "panel", "hidden", &authorized).expect("hidden");
+        let panel_dir = attachments.join(crate::paths::safe_local_id("panel"));
+        std::fs::set_permissions(&panel_dir, std::fs::Permissions::from_mode(0o300)).expect("unreadable");
+        let refused = prune_attachments(&attachments, "panel", Duration::from_hours(1), 8, u64::MAX, 0);
+        std::fs::set_permissions(&panel_dir, std::fs::Permissions::from_mode(0o700)).expect("restore");
+        assert!(
+            matches!(refused, Err(AttachmentPolicyError::Staging { .. })),
+            "{refused:?}"
+        );
+        prune_attachments(&attachments, "other", Duration::from_hours(1), 8, u64::MAX, 0)
+            .expect("an unreadable other panel is skipped");
     }
 
     #[test]
