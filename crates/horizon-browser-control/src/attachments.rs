@@ -173,9 +173,11 @@ impl AttachmentPolicy {
     }
 }
 
-/// The resolved location of an open file. Linux answers from the handle
-/// itself; elsewhere the pathname is resolved again and accepted only when
-/// it still names the same file the handle holds.
+/// The resolved location of an open file. Linux reads it from the handle
+/// itself through `/proc`; elsewhere the pathname is resolved again and
+/// accepted only when the file it names now is the very file the handle
+/// holds (device and inode on Unix, volume and file index on Windows), so
+/// a pathname re-pointed between the two steps is refused.
 #[cfg(target_os = "linux")]
 fn handle_location(file: &std::fs::File, _requested: &Path) -> std::io::Result<PathBuf> {
     use std::os::fd::AsRawFd;
@@ -185,24 +187,15 @@ fn handle_location(file: &std::fs::File, _requested: &Path) -> std::io::Result<P
 #[cfg(not(target_os = "linux"))]
 fn handle_location(file: &std::fs::File, requested: &Path) -> std::io::Result<PathBuf> {
     let resolved = std::fs::canonicalize(requested)?;
-    if same_file(&file.metadata()?, &std::fs::metadata(&resolved)?) {
+    let opened = same_file::Handle::from_file(file.try_clone()?)?;
+    let named = same_file::Handle::from_path(&resolved)?;
+    if opened == named {
         Ok(resolved)
     } else {
         Err(std::io::Error::other(
             "the attachment changed while it was being checked",
         ))
     }
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn same_file(opened: &std::fs::Metadata, resolved: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == resolved.dev() && opened.ino() == resolved.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file(opened: &std::fs::Metadata, resolved: &std::fs::Metadata) -> bool {
-    opened.len() == resolved.len() && opened.modified().ok() == resolved.modified().ok()
 }
 
 /// Copy each authorized file into `<root>/runtime/browser-attachments/<action>/<index>/<name>`
@@ -249,8 +242,16 @@ fn stage_into(directory: &Path, files: &[AuthorizedFile]) -> Result<Vec<PathBuf>
                 .create_new(true)
                 .open(&target)
                 .map_err(staging)?;
-            let mut source = &authorized.file;
-            std::io::copy(&mut source, &mut copy).map_err(staging)?;
+            // The size was checked on metadata; a file that grows afterwards
+            // is cut off at the limit and refused rather than staged whole.
+            let mut source = std::io::Read::take(&authorized.file, MAX_ATTACHMENT_BYTES + 1);
+            let copied = std::io::copy(&mut source, &mut copy).map_err(staging)?;
+            if copied > MAX_ATTACHMENT_BYTES {
+                return Err(AttachmentPolicyError::TooLarge {
+                    path: display,
+                    limit: MAX_ATTACHMENT_BYTES,
+                });
+            }
             copy.flush().map_err(staging)?;
             Ok(target)
         })
@@ -321,7 +322,7 @@ mod tests {
                 .all(|path| path.starts_with(&attachments) && path.ends_with("claim.pdf"))
         );
         assert_eq!(std::fs::read(&staged[0]).expect("read"), b"%PDF");
-        // Re-pointing the source afterwards does not change the staged copy.
+        // The staged copies are independent of the source from here on.
         std::fs::write(&source, b"swapped").expect("rewrite");
         assert_eq!(std::fs::read(&staged[1]).expect("read"), b"%PDF");
         assert!(attachments.join(crate::paths::safe_local_id("action-1")).is_dir());

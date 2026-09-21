@@ -22,5 +22,8 @@ tracing.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+same-file.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

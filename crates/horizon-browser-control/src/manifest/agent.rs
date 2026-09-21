@@ -217,6 +217,33 @@ fn authorize_attachments(
     Ok((action, summary, Some(staged)))
 }
 
+/// The same eligibility the locked enqueue applies, read without the lock:
+/// a cheap refusal for callers whose action would be rejected anyway.
+fn check_enqueue_eligibility(
+    panel_local_id: &str,
+    identity: AgentIdentity<'_>,
+    agent_name: &str,
+) -> std::io::Result<()> {
+    let manifest = super::read(panel_local_id)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
+    let now = now_millis();
+    let refusal = if !manifest.permits(identity) {
+        Some((std::io::ErrorKind::PermissionDenied, OUTSIDE_WORKSPACE_MESSAGE))
+    } else if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
+        Some((
+            std::io::ErrorKind::PermissionDenied,
+            "agent does not have a live ownership claim",
+        ))
+    } else if manifest.user_is_active(now) || manifest.handoff_pending().is_some() {
+        Some((std::io::ErrorKind::WouldBlock, "user is steering this browser panel"))
+    } else if manifest.actions.len() >= MAX_PENDING_ACTIONS {
+        Some((std::io::ErrorKind::WouldBlock, "browser action queue is full"))
+    } else {
+        None
+    };
+    refusal.map_or(Ok(()), |(kind, message)| Err(std::io::Error::new(kind, message)))
+}
+
 /// Staged copies that are removed unless the action reached the queue.
 struct StagedAttachments {
     attachments_dir: std::path::PathBuf,
@@ -252,6 +279,11 @@ pub fn enqueue_action(
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     let action_id = new_action_id();
+    if matches!(action, BrowserControlAction::SetFiles { .. }) {
+        // Staging can copy gigabytes; refuse a caller the locked check
+        // below would reject anyway before any of that work.
+        check_enqueue_eligibility(panel_local_id, identity, agent_name)?;
+    }
     let (action, summary, mut staged) = authorize_attachments(action, &action_id)?;
     let request = AgentAction {
         action_id: action_id.clone(),

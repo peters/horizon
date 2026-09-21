@@ -68,6 +68,7 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Used by the macOS keychain adapter to classify locked-keychain OSStatus values.
 security-framework = "3.7.0"
 windows-native-keyring-store = "1.1.0"
+same-file = "1.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }
