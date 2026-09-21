@@ -274,8 +274,11 @@ const ATTACHED_FILES_FUNCTION: &str = r"function(selector) {
     if (!(element instanceof HTMLInputElement) || element.type !== 'file')
         return { error: { code: 'no_such_element', message: 'the file input is no longer in the document' } };
     const files = Array.from(element.files || []);
+    // Every file is really read, an empty one in full (an empty buffer)
+    // and any other at its first and last byte, so a confined browser that
+    // lists a file it cannot open fails here.
     const readable = (file) => file.size === 0
-        ? Promise.resolve()
+        ? file.arrayBuffer()
         : Promise.all([file.slice(0, 1).arrayBuffer(), file.slice(file.size - 1, file.size).arrayBuffer()]);
     return Promise.all(files.map((file) => readable(file).then(() => null, (error) => String(error?.message || error).slice(0, 256))))
         .then((failures) => {
