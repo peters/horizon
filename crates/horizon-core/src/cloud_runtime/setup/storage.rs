@@ -12,7 +12,7 @@ pub(super) struct Transaction {
     created: Vec<PathBuf>,
     directories: Vec<PathBuf>,
     committed: bool,
-    _lock: File,
+    lock: File,
 }
 
 impl Transaction {
@@ -31,7 +31,7 @@ impl Transaction {
             created: Vec::new(),
             directories: Vec::new(),
             committed: false,
-            _lock: lock,
+            lock,
         })
     }
 
@@ -120,6 +120,9 @@ impl Drop for Transaction {
                 let _ = std::fs::remove_dir_all(path);
             }
         }
+        // A concurrently forked child can retain the open file description.
+        // Release our transaction lock explicitly, after rollback is complete.
+        let _ = self.lock.unlock();
     }
 }
 
@@ -139,4 +142,26 @@ fn sync_directory(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_transaction_releases_lock_while_a_duplicate_handle_remains() {
+        for committed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut transaction = Transaction::new(root.path()).unwrap();
+            let secret = transaction.secret("compute", "synthetic-key").unwrap();
+            transaction.committed = committed;
+            let duplicate = transaction.lock.try_clone().unwrap();
+            assert!(Transaction::new(root.path()).is_err());
+            drop(transaction);
+            assert_eq!(secret.exists(), committed);
+            let next = Transaction::new(root.path()).unwrap();
+            drop(next);
+            drop(duplicate);
+        }
+    }
 }

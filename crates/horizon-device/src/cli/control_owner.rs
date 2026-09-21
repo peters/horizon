@@ -55,7 +55,7 @@ impl ControlOwner {
                 .as_ref()
                 .and_then(|value| value["last_actor"].as_str().or_else(|| value["actor"].as_str()))
         };
-        let value = serde_json::json!({"actor":self.actor,"last_actor":last,"active":active,"pid":std::process::id(),"updated":time});
+        let value = serde_json::json!({"actor":self.actor,"last_actor":last,"active":active,"pid":std::process::id(),"process_identity":process_identity(),"updated":time});
         let temporary = self.path.with_extension(format!("{}.tmp", std::process::id()));
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
@@ -69,6 +69,13 @@ impl ControlOwner {
         file.flush()?;
         std::fs::rename(temporary, &self.path)
     }
+}
+
+fn process_identity() -> Option<String> {
+    let record = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let start = record.rsplit_once(") ")?.1.split_whitespace().nth(19)?;
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    Some(format!("{}:{start}", boot.trim()))
 }
 impl Drop for ControlOwner {
     fn drop(&mut self) {
@@ -101,6 +108,11 @@ mod tests {
             let active: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
             assert_eq!(active["actor"], actor);
             assert_eq!(active["active"], true);
+            #[cfg(target_os = "linux")]
+            {
+                let identity = process_identity().ok_or_else(|| std::io::Error::other("Missing process identity"))?;
+                assert_eq!(active["process_identity"].as_str(), Some(identity.as_str()));
+            }
             owner.complete();
             drop(owner);
             let completed: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;

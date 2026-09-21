@@ -34,17 +34,17 @@ impl Allocations {
                 continue;
             };
             if allocation.reference() == journal.reference {
-                restored.push((id.clone(), journal.provider.clone(), journal.owner.clone(), allocation));
+                restored.push((id.clone(), journal.provider.clone(), allocation));
             }
         }
-        for (id, provider, owner, allocation) in restored {
+        for (id, provider, allocation) in restored {
             self.orphans.remove(&id);
             self.held.insert(
                 allocation.reference().into(),
                 Held {
                     id,
                     provider,
-                    owner: owner.unwrap_or_default(),
+                    owner: String::new(),
                     allocation,
                     restored: true,
                 },
@@ -54,7 +54,9 @@ impl Allocations {
     fn restore_with(&mut self, config: &Configuration) {
         let mut restored = Vec::new();
         for (id, journal) in &self.orphans {
-            let Some(owner) = &journal.owner else { continue };
+            if journal.owner.is_none() {
+                continue;
+            }
             let result = (|| -> io::Result<_> {
                 let provider = config
                     .remote
@@ -93,17 +95,19 @@ impl Allocations {
             if allocation.reference() != journal.reference {
                 continue;
             }
-            allocation.record_admission(horizon_browser_control::manifest::host_instance(), owner, "cloud");
-            restored.push((id.clone(), journal.provider.clone(), owner.clone(), allocation));
+            // The admission actor may have transferred ownership before the crash.
+            // Without durable final ownership, only the authenticated host may reconcile.
+            allocation.record_admission(horizon_browser_control::manifest::host_instance(), "", "cloud");
+            restored.push((id.clone(), journal.provider.clone(), allocation));
         }
-        for (id, provider, owner, allocation) in restored {
+        for (id, provider, allocation) in restored {
             self.orphans.remove(&id);
             self.held.insert(
                 allocation.reference().into(),
                 Held {
                     id,
                     provider,
-                    owner,
+                    owner: String::new(),
                     allocation,
                     restored: true,
                 },
@@ -226,12 +230,13 @@ mod tests {
         let held = &allocations.held["reference"];
         let host = horizon_browser_control::manifest::host_instance();
         assert!(!held.allocation.reconcile_for(host, "other-owner", "cloud", false));
-        if owner.is_empty() {
-            assert!(!held.allocation.reconcile_for(host, "agent", "cloud", false));
-            allocations.reconcile_restored();
-        } else {
-            assert!(held.allocation.reconcile_for(host, "owner", "cloud", true));
-        }
+        assert!(!held.allocation.reconcile_for(host, "agent", "cloud", false));
+        assert!(
+            held.owner.is_empty(),
+            "A stale admission owner must not regain authority"
+        );
+        assert!(!held.allocation.reconcile_for(host, "owner", "cloud", false));
+        allocations.reconcile_restored();
         let deadline = Instant::now() + Duration::from_secs(3);
         while !held.allocation.is_released() {
             assert!(Instant::now() < deadline);

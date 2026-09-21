@@ -89,6 +89,9 @@ one-cloud container. Treat that container as the trust boundary: do not reuse
 it across unrelated repositories/accounts. The browser service and VNC endpoint
 listen only on worker loopback; presentation uses authenticated SSH. Browser
 and device MCP processes run on the worker and retain their injected agent identity.
+Private credential files protect against accidental inclusion in source, images
+and logs; they do not isolate agents from other root processes in the same cloud.
+Per-agent operating-system isolation requires a separate security architecture.
 
 ## Optional Git credentials
 

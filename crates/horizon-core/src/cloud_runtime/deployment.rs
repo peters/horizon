@@ -111,9 +111,8 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         if let Some(auxiliary) = auxiliary {
             connection.transfer_material(&auxiliary, &runner)?;
         }
-        state.source_ready = true;
     }
-    emit(Event::stage(Stage::Sessions));
+    begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
     if let Some(git_auth) = git_auth {
         git_auth.install(&connection, &runner)?;
@@ -132,6 +131,14 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         browser_auth.install(&connection, &runner)?;
     }
     finish_ready(state, &store, started, emit)
+}
+
+fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
+    state.source_ready = true;
+    state.stage = Stage::Sessions;
+    store.save(state)?;
+    emit(Event::stage(state.stage));
+    Ok(())
 }
 
 fn finish_ready(
@@ -192,6 +199,18 @@ fn configure_agent_auth(
     capabilities: &horizon_cloud::Capabilities,
     runner: &Runner<'_>,
 ) -> Result<()> {
+    let clear = format!(
+        "python3 - {} {} {} <<'HORIZON_AUTH_CLEANUP'\n{}\nHORIZON_AUTH_CLEANUP",
+        u8::from(!capabilities.permits_agent("claude") || settings.anthropic_api_key_file.is_none()),
+        u8::from(!capabilities.permits_agent("codex") || settings.openai_api_key_file.is_none()),
+        u8::from(!capabilities.permits_agent("claude") || settings.anthropic_workspace_id.is_none()),
+        include_str!("deployment/clear_agent_auth.py"),
+    );
+    runner.run(
+        "Removed agent credential bindings",
+        &mut connection.command(&clear),
+        Duration::from_secs(20),
+    )?;
     if capabilities.permits_agent("claude")
         && let Some(path) = &settings.anthropic_api_key_file
     {
@@ -387,6 +406,28 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_source_is_durable_before_session_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"source","repository":"/fixture","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Worktrees","operation":{"state":"requested"},"spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        begin_sessions(&mut state, &store, &|event| {
+            assert!(matches!(event, Event::Stage(Stage::Sessions, _)));
+            let saved = store.load().unwrap().unwrap();
+            assert!(saved.source_ready);
+            assert_eq!(saved.stage, Stage::Sessions);
+        })
+        .unwrap();
+        drop(store);
+        let restored = Store::lock(root.path()).unwrap().load().unwrap().unwrap();
+        assert!(restored.source_ready);
+        assert_eq!(restored.stage, Stage::Sessions);
+    }
     #[test]
     fn selected_agent_credentials_must_be_nonempty_before_deployment() {
         let file = tempfile::NamedTempFile::new().unwrap();

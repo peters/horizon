@@ -46,6 +46,10 @@ agent CLI's supported `login --with-api-key` command with SSH stdin; credentials
 and login output are never included in command arguments or progress logs.
 Agent login state stays on the worker. Workspaces
 and profile names do not create separate credential sets.
+Reconnect removes unbound API-key files, including interrupted-upload staging
+files, while retaining supported subscription login state. Existing agent
+processes can retain authentication already loaded into memory or their
+environment; start a new session to apply the changed authentication choice.
 
 Optional repository Git authentication uses explicit `git_credentials` bindings.
 See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
@@ -116,6 +120,10 @@ After a worker-service crash, a private journal that durably confirms a remote
 device was released can be cleaned up without the old provider credentials.
 Unreleased, malformed or mismatched identities remain blocked until their exact
 release can be verified.
+Recovery after worker-service loss is host-only: the journal records the original
+requester, which may no longer own a transferred allocation. Agents cannot reclaim
+that historical ownership. Use Horizon's explicit remote-device release action
+to reconcile the exact retained allocation through the authenticated host.
 If saving confirmed release fails, the allocation keeps its exact identity and
 blocks cleanup. Reconcile after restoring writable storage to retry that save;
 the live process retains the provider's release result and need not query it again.

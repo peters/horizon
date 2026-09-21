@@ -2,6 +2,7 @@
 mod browser;
 mod catalog;
 mod configuration;
+mod controller;
 mod queues;
 mod remote;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse};
@@ -87,21 +88,7 @@ fn serve() -> io::Result<()> {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok((request, reply)) => {
                 let mut response = host.request(request);
-                if let Ok(bytes) = std::fs::read("/workspace/device.json.controller.json")
-                    && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-                {
-                    response.desktop_last_input = value
-                        .get("last_actor")
-                        .unwrap_or(&value["actor"])
-                        .as_str()
-                        .map(str::to_owned);
-                    let alive = value["pid"]
-                        .as_u64()
-                        .is_some_and(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists());
-                    if alive && value["active"].as_bool() == Some(true) {
-                        response.desktop_controller = value["actor"].as_str().map(str::to_owned);
-                    }
-                }
+                controller::observe(&mut response);
                 let _ = reply.send(response);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}

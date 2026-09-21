@@ -29,6 +29,8 @@ pub enum Error {
     Command(&'static str),
     #[error("Another controller owns this cloud operation")]
     Busy,
+    #[error("{primary}; cleanup also failed: {cleanup}")]
+    Cleanup { primary: Box<Self>, cleanup: Box<Self> },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]

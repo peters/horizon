@@ -527,6 +527,10 @@ No profile may export credentials solely because repository YAML requests them.
 
 ### Worker container restart and private tunnel recovery
 
+- After service loss, verify that both the original requester and another agent
+  are denied access to retained allocations, including ones transferred before
+  the crash. The authenticated host must still reconcile their exact identities.
+  Do not restore ownership from the historical requester recorded in the journal.
 - Retain an owned hosted-device allocation, record worker/container identity, and
   restart only that task worker. Verify that vanished agent and browser processes
   are reported as lost; reconnect must never respawn them under their old identity.

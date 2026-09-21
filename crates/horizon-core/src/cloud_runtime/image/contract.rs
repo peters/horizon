@@ -22,11 +22,11 @@ impl Images<'_> {
         let name = format!("horizon-contract-{operation_id}");
         // The durable operation identity also recovers an interrupted previous check.
         self.remove_contract(&name)?;
-        let result = self.run_contract(image, &name, capabilities, git_auth);
+        let result = self
+            .run_contract(image, &name, capabilities, git_auth)
+            .and_then(|output| worker_contract::validate(&output, capabilities, git_auth));
         // Killing a Docker client does not stop its daemon-owned container.
-        self.remove_contract(&name)?;
-        let output = result?;
-        worker_contract::validate(&output, capabilities, git_auth)
+        finish_contract(result, self.remove_contract(&name))
     }
 
     fn run_contract(&self, image: &str, name: &str, capabilities: &Capabilities, git_auth: bool) -> Result<String> {
@@ -86,10 +86,35 @@ impl Images<'_> {
     }
 }
 
+fn finish_contract(result: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (result, cleanup) {
+        (Err(primary), Err(cleanup)) => Err(Error::Cleanup {
+            primary: Box::new(primary),
+            cleanup: Box::new(cleanup),
+        }),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cloud_runtime::Event;
+
+    #[test]
+    fn contract_rejection_and_cleanup_failure_remain_distinct() {
+        let error = finish_contract(
+            Err(Error::Invalid("missing agent")),
+            Err(Error::Invalid("cleanup pending")),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Cleanup { .. }));
+        assert_eq!(error.to_string(), "missing agent; cleanup also failed: cleanup pending");
+        assert!(finish_contract(Ok(()), Err(Error::Invalid("cleanup pending"))).is_err());
+        assert!(finish_contract(Err(Error::Invalid("missing agent")), Ok(())).is_err());
+        assert!(finish_contract(Ok(()), Ok(())).is_ok());
+    }
 
     #[test]
     #[ignore = "requires a task-owned Docker daemon and HORIZON_TEST_CONTRACT_IMAGE whose check prints contract-running then sleeps"]

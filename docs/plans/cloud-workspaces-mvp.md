@@ -940,3 +940,68 @@ publication. Final-image cloud qualification remains blocked by the uncertain
 provider create: read-only reconciliation at 09:59 found no matching worker, and
 no replacement request bypassed that fence. Known task-compute and temporary
 registry credential cleanup is verified; protected workers remain untouched.
+
+
+### Hosted-review correction, 21 September 10:50 UTC
+
+Published candidate `ca230e07a8532b8ed9c3d84be3121e3eceab55cb` received its
+current-head hosted review. Linux CI exposed a settings transaction lock that
+could remain held by a duplicated/inherited handle. A deterministic regression
+reproduced that lifetime defect; dropping the transaction now explicitly unlocks
+only after its rollback cleanup. Validation 34 passed all ten lanes for this
+lock-only correction, including concurrent setup tests and two native saves.
+
+The bounded review correction also removes unbound worker API authentication
+(including interrupted-upload staging files), persists completed source transfer
+before session setup, retains both image-contract and cleanup errors, and checks
+boot/process-start identity before attributing desktop input. Retained hosted-device
+allocations recover through the authenticated host after worker-service loss;
+the historical requester cannot regain ownership that may have been transferred.
+Subscription login state remains intact. Running agents can retain previously
+loaded authentication, so a new session is needed to apply an authentication change.
+
+Independent review is clear for the settings lock, recovery ownership and the
+remaining eight-file correction; manifests are retained in private evidence.
+Validation 35 caught strict lint errors in a new assertion and two local variable
+names. These are corrected. That run also had five browser-CLI deadline failures
+while recording and testing concurrently; the speech suite passed. Validation 36
+repeats the full final-source matrix with the recorder stopped. No timeout is
+silently waived and the original failure logs remain available.
+
+Two hosted observations have explicit scope dispositions. Per-agent root-user
+isolation is a separate security architecture; the accepted one-container trust
+boundary is documented and private files are not claimed to isolate root agents.
+The desktop entrypoint already supervises background desktop processes with
+bare `wait -n`. A narrower startup race, where a process exits before synchronous
+configuration finishes, remains a follow-up: readiness currently proves the VNC
+handshake, not window-manager liveness. Do not represent that as full desktop
+application-readiness evidence.
+
+The frozen native UI is private `development-74/horizon`, SHA-256
+`28e2f4cb5bd2c631e34892b2cf9d0db80f990a52cf297e00549269c785eaa578`.
+Final lint edits leave that executable unchanged; updated device/worker helpers
+are frozen separately in `development-75/`. The original Horizon and ephemeral
+viewer remain unchanged. Live viewer samples confirm displayed, advancing frames.
+An older task window was exposed during candidate replacement; those initial
+captures are excluded from acceptance, and subsequent actions use the verified
+candidate PID. Current-head hosted checks/review and post-review smoke remain open.
+
+Read-only provider reconciliation at 10:50 found no matching worker for the
+uncertain create and confirmed protected workers remain present. No repeat create
+or replacement UUID bypasses that fence. Final immutable-image cloud qualification
+remains incomplete; local tests and worker Ready timing are not end-to-end proof.
+The 10:44 progress email was sent. No merge, release or playground is performed.
+
+
+Validation 36 passed all required lanes after the final formatting check:
+2,369 workspace tests and 2,414 speech tests passed (15 ignored in each), plus
+worker/auth regressions, device CLI tests and all lint tiers. The earlier browser
+CLI timeouts did not reproduce with the recorder stopped. The final-source
+manifest, initial failures and rerun receipts remain distinct. Independent final
+documentation/lint review is clear; no further runtime behavior changed.
+
+Two repeated native settings saves passed on the final frozen UI; private bindings
+remained byte-identical and the settings timestamp advanced twice. The current
+4K capture has 329 continuously captured frames over 90.16 wall-clock seconds.
+Representative frames are decoded for inspection; encoding time is not used as a
+deployment benchmark. Initial captures with an older task window are excluded.
