@@ -56,6 +56,7 @@ impl DeviceUiState {
                 sampling_paused: paused,
                 decoded_frame_sequence: stream.sequence,
                 last_decoded_age_millis: age(stream.last_frame),
+                last_uploaded_age_millis: age(self.image.last_uploaded),
                 last_displayed_age_millis: age(self.image.last_displayed),
             }),
             connection,

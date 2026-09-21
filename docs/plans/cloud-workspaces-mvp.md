@@ -1005,3 +1005,48 @@ remained byte-identical and the settings timestamp advanced twice. The current
 4K capture has 329 continuously captured frames over 90.16 wall-clock seconds.
 Representative frames are decoded for inspection; encoding time is not used as a
 deployment benchmark. Initial captures with an older task window are excluded.
+
+
+### Independent upload freshness, 21 September 11:16 UTC
+
+Candidate `8df7be3f175d29754ff980de2d5cc060a41deb2e` passed every applicable
+hosted CI lane. The fresh hosted review accepted all seven prior dispositions,
+but its review summary identified an additional explicit #801 acceptance gap:
+received-frame texture submission had a sequence but no independent timestamp.
+The correction adds optional `last_uploaded_age_millis` to Device diagnostics.
+Only an accepted received frame refreshes it; repainting or locally cropping a
+retained image does not. Reconnect clears it with the connection's image evidence.
+This is submission freshness, not GPU completion or a transport heartbeat.
+
+The five-file runtime/test/guidance correction has clear independent review
+(manifest `8f2e341a7afc3d67060c34b147ff9c76fcc5533c0f3fae49cf3f7eef37f79574`).
+All twelve focused viewer tests pass. Old wire responses remain compatible;
+pending or rejected uploads have no timestamp. Full validation 37 and live
+static/moving native verification are required before the next push. No broader
+UI, provider or allocation feature was added.
+
+The new frozen UI is private `development-77/horizon`, SHA-256
+`a081bbc07e98d38cd9d2822c8cb084e86d116c3adce875432e36cf5a54d44465`.
+Its actual child, original Horizon and ephemeral viewer were verified separately.
+Read-only audits at 10:59 confirmed all 24 known task workers absent; all three
+registry pull bindings and both scoped registry tokens/scope maps also remain
+absent. The uncertain-create operation remains fenced and final-image cloud
+qualification remains blocked. No merge or release is authorized.
+
+
+Validation 37 passes all ten required lanes: 2,371 workspace tests and 2,416
+speech tests (15 ignored each), worker and device suites, formatting and all lint
+tiers. The workspace rerun used one test thread after unchanged browser CLI
+startup/deadline tests failed under concurrency. The failure logs are retained;
+test deadlines were not widened. A checked timestamp subtraction in the new test
+also passed the repeated lint lanes; runtime bytes did not change.
+
+Live native verification passed on the frozen candidate. During static content,
+upload sequence stayed at 8 while upload age grew from 2,209 to 5,620 ms; display
+age stayed about 300 ms. Motion then resumed with advancing frames. The pass also
+verified ownership refusal, paused hidden sampling, Reveal on the same connection,
+reconnect clearing the upload timestamp, fresh frames at 800x600 and 4K, and another
+settings save preserving synthetic bindings. Both the original Horizon and its
+separate ephemeral viewer remained intact. Native 4K recording and receipts are
+private in `pre-review-78/`; this is pre-push proof, not the required post-review
+pass. The synthetic nested target and its viewer were closed afterward.

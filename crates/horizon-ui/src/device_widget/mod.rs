@@ -35,6 +35,7 @@ struct ImageDisplay {
     previous_displayed: bool,
     /// This connection has uploaded a frame. A retained texture is not evidence.
     received: bool,
+    last_uploaded: Option<std::time::Instant>,
     last_displayed: Option<std::time::Instant>,
 }
 
@@ -197,6 +198,7 @@ impl DeviceUiState {
     fn record_received_frame(&mut self) {
         self.image.received = true;
         self.image.sequence = self.image.sequence.saturating_add(1);
+        self.image.last_uploaded = Some(std::time::Instant::now());
     }
 
     fn refresh_presentation(&mut self, ui: &Ui) -> bool {

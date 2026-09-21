@@ -134,6 +134,10 @@ decisions and attempted operations with the task's private smoke evidence.
    failure. `awaiting_frame` and `clipped` identify different presentation gaps.
    A decoded frame is not an uploaded or displayed image. Missing diagnostics
    mean an older host, not a healthy or failed connection.
+   `last_uploaded_age_millis` independently dates the last received-frame texture
+   submission, matching `frame_sequence`; it is not a GPU completion timestamp.
+   Repainting or cropping retained pixels does not refresh this age. Reconnect
+   clears it even if an old texture remains visible. Older hosts can omit it.
 4. Report the strongest evidence actually observed. Connected plus received plus
    displayed with an advancing sequence during known changing output establishes
    live presentation for that observation window. Displayed static content

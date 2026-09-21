@@ -92,6 +92,9 @@ pub struct Diagnostics {
     /// Decoded frames, independent of texture uploads and rendering.
     pub decoded_frame_sequence: u64,
     pub last_decoded_age_millis: Option<u64>,
+    /// Last received-frame texture submission; repainting retained pixels does not refresh it.
+    #[serde(default)]
+    pub last_uploaded_age_millis: Option<u64>,
     pub last_displayed_age_millis: Option<u64>,
 }
 
@@ -264,6 +267,17 @@ fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_diagnostics_do_not_imply_a_texture_upload_time() {
+        let diagnostics: Diagnostics = serde_json::from_value(serde_json::json!({
+            "observed_at_millis":0,"connection_generation":1,"presentation":"displayed",
+            "sampling_paused":false,"decoded_frame_sequence":1,
+            "last_decoded_age_millis":10,"last_displayed_age_millis":0
+        }))
+        .unwrap();
+        assert!(diagnostics.last_uploaded_age_millis.is_none());
+    }
 
     #[test]
     fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {

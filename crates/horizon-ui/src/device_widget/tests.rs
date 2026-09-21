@@ -106,6 +106,7 @@ fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
     assert!(state.texture.is_none());
     assert!(matches!(state.status, Status::Disconnected(_)));
     assert_eq!(state.image.sequence, 0, "rejected images are not uploaded frames");
+    assert!(state.image.last_uploaded.is_none());
 }
 
 #[test]
@@ -394,6 +395,7 @@ fn diagnostics_distinguish_paused_offscreen_and_pending_pixels() {
     assert!(diagnostics.sampling_paused);
     assert_eq!(diagnostics.decoded_frame_sequence, 1);
     assert!(diagnostics.last_decoded_age_millis.is_some());
+    assert!(diagnostics.last_uploaded_age_millis.is_none());
     assert!(!observed.image.image_received && !observed.image.image_displayed);
     assert!(
         state
@@ -409,4 +411,35 @@ fn diagnostics_distinguish_paused_offscreen_and_pending_pixels() {
     assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::AwaitingFrame);
     let observed = state.observation("panel".into(), &device, false, "agent");
     assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::Hidden);
+}
+
+#[test]
+fn repainting_and_cropping_retained_pixels_preserve_upload_age() {
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.status = Status::Connected;
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    assert!(state.image.last_uploaded.is_some());
+    let uploaded = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap();
+    state.image.last_uploaded = Some(uploaded);
+    let sequence = state.image.sequence;
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    let previous = state.controls.options;
+    state.controls.options.max_width = 4;
+    assert!(state.apply_view_options(previous));
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    state.begin_frame();
+    let diagnostics = state
+        .observation("panel".into(), &device, true, "agent")
+        .diagnostics
+        .unwrap();
+    assert_eq!(state.image.last_uploaded, Some(uploaded));
+    assert_eq!(state.image.sequence, sequence);
+    assert!(diagnostics.last_uploaded_age_millis.unwrap() >= 60_000);
+    assert!(diagnostics.last_displayed_age_millis.unwrap() < diagnostics.last_uploaded_age_millis.unwrap());
+    state.reconnect(&ctx, &device);
+    assert!(state.texture.is_some());
+    assert!(state.image.last_uploaded.is_none());
+    assert_eq!(state.image.sequence, 0);
 }
