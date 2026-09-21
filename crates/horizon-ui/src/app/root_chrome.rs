@@ -22,18 +22,26 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 pub(super) enum ToolbarAction {
     QuickNav,
     RemoteHosts,
+    #[cfg(feature = "cloud-workspaces")]
+    Cloud,
     Sessions,
     Update,
     Settings,
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 1] = [Self::RemoteHosts];
+    const SECONDARY: &'static [Self] = &[
+        Self::RemoteHosts,
+        #[cfg(feature = "cloud-workspaces")]
+        Self::Cloud,
+    ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::QuickNav => "Quick Nav",
             Self::RemoteHosts => "Remote Hosts",
+            #[cfg(feature = "cloud-workspaces")]
+            Self::Cloud => "Cloud",
             Self::Sessions => "Sessions",
             Self::Update => "Update",
             Self::Settings => "Settings",
@@ -262,7 +270,7 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(layout.overflow_actions, ToolbarAction::SECONDARY);
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
@@ -300,7 +308,7 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Update))
         );
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(layout.overflow_actions, ToolbarAction::SECONDARY);
     }
 
     #[test]
@@ -310,6 +318,8 @@ mod tests {
                 let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)), update);
                 for action in [
                     ToolbarAction::RemoteHosts,
+                    #[cfg(feature = "cloud-workspaces")]
+                    ToolbarAction::Cloud,
                     ToolbarAction::Sessions,
                     ToolbarAction::Settings,
                 ] {

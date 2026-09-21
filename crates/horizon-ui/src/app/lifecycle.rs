@@ -311,6 +311,8 @@ impl HorizonApp {
             // viewport that is not shown during a pass, so they must keep
             // rendering while a panel is fullscreen in the root window.
             self.render_detached_viewports(ui);
+            #[cfg(feature = "cloud-workspaces")]
+            self.render_cloud_dialogs(ui.ctx());
             return;
         }
 
@@ -323,6 +325,7 @@ impl HorizonApp {
         #[cfg(feature = "cloud-workspaces")]
         if self.render_fullscreen_cloud(ui) {
             self.render_detached_viewports(ui);
+            self.render_cloud_dialogs(ui.ctx());
             return;
         }
         let mut workspace_bounds = self.board.workspace_bounds_map();

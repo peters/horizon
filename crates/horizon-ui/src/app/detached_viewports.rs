@@ -221,6 +221,7 @@ impl HorizonApp {
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
+        self.apply_pending_device_reveal(workspace_local_id, canvas_rect);
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan_in_rect(ctx, canvas_rect, Some(workspace_id));
         self.render_canvas(ui);

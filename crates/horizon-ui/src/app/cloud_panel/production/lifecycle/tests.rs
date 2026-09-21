@@ -189,6 +189,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         worker: None,
         sessions: Vec::new(),
         source_ready: false,
+        ready_after_seconds: None,
         stop_requested: false,
         browserstack_released: false,
         browserstack_targets: std::collections::BTreeSet::new(),

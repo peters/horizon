@@ -23,6 +23,8 @@ and excludes private qualification and account-operation records.
 | Optional repository Git credentials | Yes | Yes | Remote publication smoke | Yes |
 | Per-step timing and measured transfer progress | Yes | Tests and native upload | Private push | Yes |
 | Capability-selected clean images | Yes | Minimal/full/selected profiles | Yes | Yes |
+| Guided cloud accounts and missing-config setup | Yes | Native settings, resize, real setup agent and YAML reload | Pending final candidate | Pending |
+| Automatic native viewer recovery | Yes | Native recovery, ownership and reconnect | Not a compute feature | Pending |
 | Public PR, current-head CI/review, final smoke and cleanup | In progress | Pending final publication | Pending final cleanup | Separate gates |
 
 ## Future issue body: scope and behavior
@@ -685,3 +687,256 @@ interval. This is headless cloud evidence, not native UI presentation or evidenc
 for the later worker correction. Browser control leases expire after inactivity;
 an idle owner value must not be mistaken for lost cloud or panel membership.
 The later correction still needs hosted review and affected final smoke.
+
+The current candidate is `c9526b933dbefdf1f868b57f9029f3f8ae3b1918`.
+All applicable hosted checks passed and the current-head review arrived with no
+inline findings; all review threads are resolved. Its additional startup-I/O
+observation was independently triaged: journal loading can delay a first frame,
+but lock contention is nonblocking, explicit Deploy/Reconnect retries the load,
+and missing or unreadable records remain fenced before allocation. Background
+loading and bounded retry are retained as a separate responsiveness follow-up.
+
+At the user's request, the repository and installed native-device skill now
+prohibit human visibility-confirmation prompts. The shared smoke procedure uses
+timestamped public inspections, distinguishes static content from a proven stall,
+limits recovery to the task-owned viewer, and carries recovery budgets across
+resumed turns. Three further public inspections retained the
+`presentation_unverified` outcome. No reconnect loop, desktop automation or host
+restart was used. The missing runtime telemetry/reveal operation remains open in
+#801; these instructions do not implement that product behavior. The latest
+documentation changes are local, and the reviewed PR head remains unchanged.
+Final native smoke, final-image cloud qualification and cleanup remain pending.
+
+### Approved continuation, 21 September
+
+The user approved cleanup first, requested the automatic VNC product fix last,
+and removed playground preparation. The active Horizon instance remains intact;
+no merge or release is authorized. The hosted head remains `c9526b93`; subsequent
+setup changes are local and require a new complete validation/review pass.
+
+Resource reconciliation confirms 23 of the original 24 task workers removed,
+with all five protected baseline workers preserved. One legacy task worker is
+retained because its hosted-device release remains unresolved. One retirement
+required a narrowly scoped operator cleanup after public device-release proof
+and verification that the recorded tunnel process was absent; this is not proof
+that the latest product lifecycle passed. Private receipts are retained under
+`../cloud-workspaces-evidence/final-delivery/retired-workers-20260921/`.
+
+A fresh deployment of the final immutable worker image reached provider create
+and received HTTP 500. Its durable operation remains Requested. Subsequent
+read-only reconciliation found no matching worker; that does not establish that
+the request was never applied and does not authorize another create request.
+The original operation identity is preserved. Logs and reconciliation receipts
+are under `../cloud-workspaces-evidence/development-68/`.
+
+Local implementation now includes a Cloud toolbar menu, private account setup
+with selected agents and API/subscription modes, dedicated SSH identity creation,
+and a missing-YAML route through a real local agent. That local setup terminal
+uses its existing local authentication; remote API bindings are not silently
+exported into arbitrary local processes. Saved agent preferences are passed as
+nonsecret setup context, while existing YAML profiles remain authoritative.
+Failed YAML reloads invalidate stale profile selections. Readiness records the
+successful attempt duration separately from application-visible startup and
+reconnect; no speculative full-deployment ETA is promised.
+
+Seven focused core setup tests pass, including actual SSH key generation,
+private credential storage, rollback, stale saves and intervening external edits.
+Toolbar layout tests and menu/modal reopening pass. Independent review identified
+durability, Windows file-handle, Escape-gesture and preference-propagation issues;
+corrections and affected regression tests are in progress. The retained first-use
+plan is `docs/testing/cloud-first-use-smoke.md`. Native visual acceptance, final
+immutable-image cloud scenarios, the complete matrix, current-head hosted review
+and final cleanup are still pending. No new screenshots or final pass are claimed.
+
+### Local candidate verification, 21 September 07:20 UTC
+
+The setup, readiness and automatic native-view changes pass all ten lanes in
+`../cloud-workspaces-evidence/final-validation-32/`: 2,362 workspace tests and
+2,407 speech-feature tests, with 15 ignored in each tier; format, maintainability,
+worker capability/auth checks, device CLI checks and all three lint tiers pass.
+The additional build without default features also passes. Independent review is
+clear for the unchanged 32-file Rust manifest
+`4aa940891a5cecda7ba7eb789dce38dee09b9b736afc229179c792e0f63c9b23`.
+The validation source manifest was rechecked before this documentation update.
+
+Automatic native-view support is now implemented locally, superseding the earlier
+unimplemented status: owner-scoped Reveal restores presentation without taking
+keyboard focus or changing active workspace, including detached viewports.
+Independent decoded-frame and presentation diagnostics distinguish paused sampling,
+clipping, missing frames and disconnection. Legacy hosts remain compatible.
+The retained regression plan is `docs/testing/device-automatic-presentation-smoke.md`.
+
+The frozen candidate is in private `development-69/`, based on `c9526b93` plus
+the reviewed local changes. Its application SHA-256 is
+`564a404b43090e4000b22075ee0ce504dcf6055f0e22a1898d756a866118f673`.
+Its actual child executable was verified on the existing task-owned desktop.
+A 4K startup diagnostic capture shows the Cloud toolbar entry and independently
+changing terminal heartbeat. This capture is not interactive acceptance evidence.
+The user's current viewer host lacks Reveal/diagnostics; timestamped public
+observations still do not establish live presentation. Native interaction and
+final video remain blocked without changing or restarting that user instance.
+No repeated reconnect or human visibility-confirmation prompt is used.
+
+Read-only reconciliation at 07:17 UTC still found no worker for the uncertain
+create operation, and all five protected workers remained present. The original
+Requested operation is retained; an empty list is not permission to create again.
+The remaining legacy worker's hosted-device report is terminal, but the initial
+correlation sample was insufficient for complete cleanup proof. A paginated,
+read-only reporting audit is in progress; product release journals remain intact.
+Final-image cloud qualification, native acceptance, new-head hosted review/checks,
+and final resource/credential cleanup remain open. Nothing is merged or released.
+
+### Cleanup checkpoint, 21 September 07:23 UTC
+
+All 24 known task workers are now absent. The provider inventory contains only
+the five protected pre-existing workers. The last legacy worker was retired by
+an explicitly recorded operator action after paginated provider reporting proved
+its sole correlated hosted-device session terminal; independent review accepted
+that bounded evidence. The old unsupported release response and journal remain
+unchanged. This is cleanup proof, not a successful product lifecycle test.
+
+All three task registry pull bindings, both temporary repository-scoped registry
+tokens and their scope maps are revoked and verified absent. Registry images are
+preserved. Receipts are in private `final-delivery/registry-cleanup-receipts.json`
+and `final-delivery/retired-workers-20260921/`. Resumed cloud testing will require
+fresh expiring registry credentials; existing deleted bindings must not be reused.
+
+The uncertain create still has no matching worker. Its operation remains fenced
+and is not reported resolved merely because the current inventory is empty.
+Native acceptance still needs the running viewer host to load the new automatic
+presentation support. The user was asked for explicit permission for one
+controlled host restart because the prior instruction preserves that instance.
+Until answered, neither the host nor its sessions will be restarted. The public
+PR head is unchanged; the reviewed setup/viewer changes remain local, with no
+merge or release. The playground remains out of scope.
+
+### Ephemeral viewer established, 21 September 07:35 UTC
+
+The user selected a separate ephemeral instance instead of restarting the main
+host. The frozen reviewed candidate now runs on the user's display with a clean
+private home/config and `--ephemeral`. Its workspace is named
+`Cloud MVP — temporary viewer`. The main host's PID and process start identity
+are verified unchanged. No account credentials or saved sessions were imported.
+
+A clearly labelled verification controller in the new workspace uses public MCP
+to create and Reveal the native VNC viewer for the existing isolated test desktop.
+Six timestamped observations confirm connected, received and displayed frames;
+uploaded frame sequences advance 5, 11, 16, 22, 27, 33. New diagnostics independently
+report decoded progress and displayed presentation. Actual child executable/hash
+matches the frozen candidate. Receipts are in private `ephemeral-viewer-70/`.
+The controller is a test harness, not evidence of a coding-agent login.
+
+This supersedes the old-host live-view blocker without restarting that host.
+It establishes the viewing prerequisite; first-use UI, layout, persistence,
+reconnect and video acceptance remain to be executed in the isolated target.
+
+### Native first-use and resize checkpoint, 21 September 09:15 UTC
+
+The separate ephemeral viewer now establishes live presentation automatically;
+main-host restart and human visibility confirmation are no longer prerequisites.
+Public observations show connected, received and displayed frames advancing on
+the same connection generation. Both the main host and viewer process identities
+remain unchanged while only the isolated candidate window is replaced normally.
+
+Native first-use checks passed for missing-account routing, cancellation without
+writes, masked synthetic credential entry, individual API/subscription choices,
+continuation to New cloud, blank replacement fields preserving saved bindings,
+and missing-YAML guidance. Private credential files are mode 0600. Synthetic
+markers are absent from settings JSON and logs. These checks allocate no compute
+and do not establish actual agent authentication or repository bootstrap.
+
+The native 800x600 resize exposed clipped Cloud settings. A regression reproduced
+it, and review identified the same footer sizing pattern in New cloud. Both
+footers now request a bounded height; the creation body reserves sufficient room
+for its heading and actions. Full-app regressions cover shrink from 4K through
+900x700 to 800x600, scroll-saturated content, whole-dialog containment and unclipped
+footer labels. All 41 focused production tests passed, as did the strengthened
+settings regression. Independent review found no further actionable issue in the
+four-file correction (manifest `37b058f6be231364bfc413e918736a3e5c1b77f4912d375531f5e263c16faa8e`).
+
+The corrected frozen native candidate is private `development-71/horizon`, SHA-256
+`2a1411c736376304964614b7c448e9681c0631526a18c987b0b0d41c13971200`.
+Its actual application child and private profile were verified. Validation 33
+supersedes validation 32 for these source changes. Initial workspace/speech runs
+were denied loopback mock-server binds by the restricted sandbox; their logs are
+retained and both suites are rerunning with local socket access. Other lanes pass.
+No commit or push has occurred during this correction.
+
+The initial X11-grab recorder stalled and its empty files are not evidence.
+A continuous native X11 frame recorder produces valid 3840x2160 video. The first
+settings clip contains 559 frames; the pre-fix resize clip contains 598. Decoded
+frames were inspected. Capture timestamps are retained separately: constant-frame
+encoding is not a wall-clock deployment benchmark. All captures remain private.
+Corrected native resize, remaining UI/provider acceptance, final review/checks and
+final smoke remain open. No merge, release or playground preparation is performed.
+
+### Corrected native candidate, 21 September 09:35 UTC
+
+Validation 33 now passes all ten required lanes. The network-enabled reruns pass
+2,364 workspace tests and 2,409 speech tests (15 ignored in each); initial socket
+permission failures remain recorded separately. Rust source hashes still match
+the frozen validation manifest. Native screenshots confirm both corrected dialogs
+fit at 800x600, New cloud survives the 4K/900x700/800x600 shrink sequence, scrolling
+keeps the footer visible, Escape restores the overview, and toolbar overflow keeps
+Cloud accessible. Normal restart preserves settings and both synthetic credential
+bindings byte-for-byte. This is synthetic first-use proof, not remote login proof.
+
+The automatic native-view lane now has live public-MCP evidence on the corrected
+candidate, viewed through the separate ephemeral native panel:
+
+- A different agent's mutation is refused with `not_owner`.
+- Hidden and off-canvas viewers report paused sampling and the correct reason;
+  one Reveal restores displayed, advancing frames on the original connection.
+- Reveal exits an obstructing panel fullscreen without taking panel focus.
+- Detached off-canvas Reveal restores fresh frames while the separate root window
+  keeps OS focus; both native window geometries remain unchanged.
+- Stopping the owned synthetic VNC target reports disconnected and no displayed
+  image. One explicit reconnect starts generation 2 with zero sequences and no
+  received/displayed flags, then reports genuinely new advancing frames.
+
+Private receipts and continuous 4K video are in `development-71/`; representative
+video frames were decoded and inspected. The native test controllers are labelled
+harnesses using real Horizon identities and public MCP, not coding-agent sessions.
+Cloud-group collapse, cross-workspace active selection and restored-viewer ownership
+have headless coverage but are not claimed as new native passes here. Known cloud
+compute and registry cleanup receipts remain unchanged. Read-only provider
+reconciliation at 09:21 still finds no worker for the uncertain create; no second
+POST or replacement operation is issued. Main Horizon remains untouched.
+
+Cross-workspace native follow-up also passed: selecting a second workspace,
+revealing the first workspace's Device panel, and creating a terminal placed that
+terminal under the second workspace. The nested viewer was closed through public
+MCP; all synthetic target processes from that pass are verified absent. The outer
+live viewer remains open. The 09:43 private progress email includes a 4K Horizon
+capture. Final independent local source review is clear for Rust manifest
+`85b900984d4b703adbbe3d101158f8a5a67aff96fa0df399ed0d4e5cdceed7f6`.
+The actual missing-config setup-agent smoke is now underway in a disposable
+repository, using private runtime authentication and no image build or allocation.
+
+### Real repository bootstrap, 21 September 10:11 UTC
+
+The missing-config action launched the actual selected local agent in a disposable
+repository. API authentication succeeded. The agent inspected the supplied worker
+references, created an explicit two-agent/no-browser/no-desktop CPU profile, copied
+the required worker helpers, documented stripped-binary prerequisites, and passed
+the repository unit test plus offline YAML, copy-integrity and syntax checks.
+New cloud loaded its `development` profile through the real schema. Replacing the
+fixture YAML with malformed content cleared the profile and disabled creation;
+restoring the original file allowed it to load again.
+
+This proves local onboarding and configuration reload, not deployment: the image
+was an explicitly labelled placeholder, and no image build, push, commit or worker
+allocation occurred. The private agent install needed its matching tool-host
+executable; nested sandbox creation was unavailable, so individual bounded fixture
+commands were approved inside the existing outer isolation. Temporary local agent
+authentication was removed afterward. Generated YAML, private receipts and native
+4K recordings are retained separately from the original prototype evidence.
+
+All runtime source still matches validation 33 and its independent review. User
+documentation now describes guided accounts, missing-config preparation and the
+distinction between per-attempt timing and persistent worker-readiness duration.
+Current-head hosted checks, review and post-review smoke must be repeated after
+publication. Final-image cloud qualification remains blocked by the uncertain
+provider create: read-only reconciliation at 09:59 found no matching worker, and
+no replacement request bypassed that fence. Known task-compute and temporary
+registry credential cleanup is verified; protected workers remain untouched.

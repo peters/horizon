@@ -371,3 +371,42 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
         }
     }
 }
+
+#[test]
+fn diagnostics_distinguish_paused_offscreen_and_pending_pixels() {
+    use horizon_core::browser::manifest::device::Presentation;
+    let device = fixture_device();
+    let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        session: Some(Session::pending_frame(
+            image.clone(),
+            image,
+            DeviceViewOptions::default(),
+        )),
+        ..Default::default()
+    };
+    state.session.as_ref().unwrap().set_visible(false);
+    let observed = state.observation("panel".into(), &device, true, "agent");
+    let diagnostics = observed.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::NotRendered);
+    assert!(diagnostics.sampling_paused);
+    assert_eq!(diagnostics.decoded_frame_sequence, 1);
+    assert!(diagnostics.last_decoded_age_millis.is_some());
+    assert!(!observed.image.image_received && !observed.image.image_displayed);
+    assert!(
+        state
+            .session
+            .as_ref()
+            .unwrap()
+            .take_updates(egui::ViewportId::ROOT)
+            .image
+            .is_some()
+    );
+    state.previous_rendered = true;
+    let observed = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::AwaitingFrame);
+    let observed = state.observation("panel".into(), &device, false, "agent");
+    assert_eq!(observed.diagnostics.unwrap().presentation, Presentation::Hidden);
+}

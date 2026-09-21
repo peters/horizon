@@ -5,9 +5,17 @@ use egui::{Align, Button, Context, Frame, Id, Layout, RichText, Stroke, TextEdit
 
 #[derive(Default)]
 struct Actions {
-    load: bool,
+    repository: RepositoryAction,
     create: bool,
     cancel: bool,
+}
+
+#[derive(Default)]
+enum RepositoryAction {
+    #[default]
+    None,
+    Load,
+    Setup,
 }
 
 impl HorizonApp {
@@ -17,7 +25,7 @@ impl HorizonApp {
         }
         let viewport = ctx.content_rect();
         let width = (viewport.width() - 64.0).clamp(240.0, 640.0);
-        let body_height = (viewport.height() - 210.0).max(100.0);
+        let body_height = (viewport.height() - 240.0).max(100.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let id = Id::new("cloud-creation");
@@ -40,7 +48,14 @@ impl HorizonApp {
                     .id_salt("cloud-creation-body")
                     .max_height(body_height)
                     .show(ui, |ui| {
-                        actions.load = fields(ui, &mut self.cloud_prototype.production);
+                        if fields(ui, &mut self.cloud_prototype.production) {
+                            actions.repository = RepositoryAction::Load;
+                        }
+                        if self.cloud_prototype.production.profiles.is_none()
+                            && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
+                        {
+                            actions.repository = RepositoryAction::Setup;
+                        }
                         if let Some(error) = &self.cloud_prototype.error {
                             ui.add_space(8.0);
                             ui.colored_label(theme::PALETTE_RED(), error);
@@ -66,8 +81,10 @@ impl HorizonApp {
             self.cloud_prototype.production.creating = false;
             return;
         }
-        if actions.load {
-            self.read_cloud_profiles();
+        match actions.repository {
+            RepositoryAction::Load => self.read_cloud_profiles(),
+            RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
+            RepositoryAction::None => {}
         }
         if actions.create
             && let Err(error) = self.create_production_cloud(ctx)
@@ -76,7 +93,7 @@ impl HorizonApp {
         }
     }
 
-    fn read_cloud_profiles(&mut self) {
+    pub(super) fn read_cloud_profiles(&mut self) {
         let form = &mut self.cloud_prototype.production;
         let result = std::fs::read_to_string(PathBuf::from(&form.repository).join(".horizon/cloud.yml"))
             .map_err(|_| "Cannot read .horizon/cloud.yml".to_owned())
@@ -87,7 +104,11 @@ impl HorizonApp {
                 form.profiles = Some(config);
                 self.cloud_prototype.error = None;
             }
-            Err(error) => self.cloud_prototype.error = Some(error),
+            Err(error) => {
+                form.profiles = None;
+                form.selected_profile.clear();
+                self.cloud_prototype.error = Some(error);
+            }
         }
     }
 }
@@ -208,23 +229,27 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
 }
 
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        actions.create = ui
-            .add_enabled(
-                !form.title.trim().is_empty() && form.profiles.is_some(),
-                Button::new(RichText::new("Create cloud").size(14.0).strong())
-                    .min_size(Vec2::new(136.0, 40.0))
-                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
-                    .stroke(Stroke::new(1.0, theme::ACCENT()))
-                    .corner_radius(10),
-            )
-            .clicked();
-        actions.cancel = ui
-            .add(
-                Button::new(RichText::new("Cancel").size(14.0))
-                    .min_size(Vec2::new(88.0, 40.0))
-                    .corner_radius(10),
-            )
-            .clicked();
-    });
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), 40.0),
+        Layout::right_to_left(Align::Center),
+        |ui| {
+            actions.create = ui
+                .add_enabled(
+                    !form.title.trim().is_empty() && form.profiles.is_some(),
+                    Button::new(RichText::new("Create cloud").size(14.0).strong())
+                        .min_size(Vec2::new(136.0, 40.0))
+                        .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
+                        .stroke(Stroke::new(1.0, theme::ACCENT()))
+                        .corner_radius(10),
+                )
+                .clicked();
+            actions.cancel = ui
+                .add(
+                    Button::new(RichText::new("Cancel").size(14.0))
+                        .min_size(Vec2::new(88.0, 40.0))
+                        .corner_radius(10),
+                )
+                .clicked();
+        },
+    );
 }

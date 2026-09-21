@@ -7,14 +7,23 @@ fixtures.
 
 ## One-time machine setup
 
+Open **Cloud > New cloud**. On first use, Horizon opens **Cloud settings**:
+enter the compute API key, select coding agents, and choose API-key or subscription
+authentication for each. Saving creates a dedicated SSH identity when needed and
+stores keys in private machine-local files. Blank replacement fields preserve
+saved keys; choosing subscription login removes that agent's API-key binding.
+Subscription login happens through the actual agent on the worker. Saving settings
+does not allocate compute or verify account access. Reopen **Cloud > Cloud settings**
+to change these choices. On narrow windows, Cloud appears in the toolbar overflow.
+
 Install Git (and Git LFS for repositories that use it), OpenSSH, and Docker with BuildKit/buildx. Configure Docker registry
 authentication in a private configuration directory using `docker login` with
 `--password-stdin`. Use separate repository-scoped push and pull credentials;
 give the provider only the pull binding. Build the generic image using
 [`examples/cloud-worker`](../examples/cloud-worker/README.md).
 
-Create an Ed25519 SSH identity and store the provider API key in a private file
-(0600 on Unix). Put bindings in `~/.horizon/cloud/settings.json`; all file paths
+For manual setup, create an Ed25519 SSH identity and store the provider API key in a
+private file (0600 on Unix). Put bindings in `~/.horizon/cloud/settings.json`; all file paths
 are absolute. This file contains paths and references, never literal API keys:
 
 ```json
@@ -43,6 +52,16 @@ See the [worker credential setup](../examples/cloud-worker/README.md#optional-gi
 for private file permissions, repository matching, removal and token-scope limits.
 
 ## Repository setup and deployment
+
+If the repository has no `.horizon/cloud.yml`, enter its directory in
+**Cloud > New cloud**, expand **No cloud configuration yet?**, and open a setup
+agent. This is a normal local agent panel using its existing local login; remote
+worker API-key bindings are not automatically exported to it. The agent inspects
+repository requirements and proposes the selected capabilities before preparing
+files. Review its changes and prerequisites, run the repository's checks, and
+commit the setup. Return to New cloud and choose **Read .horizon/cloud.yml**.
+Changing the repository or encountering invalid YAML clears previously loaded
+profiles, so a stale profile cannot be deployed accidentally.
 
 Commit `.horizon/cloud.yml` using the [example](../crates/horizon-cloud/examples/cloud.yml).
 Image-only profiles omit `build`. Repository Dockerfiles build from the selected
@@ -122,5 +141,9 @@ stages. Image push/download and source upload expose measured progress, bytes pe
 second and an approximate remaining time when a total and a stable rate exist.
 BuildKit reports completed/discovered build steps. Provisioning and readiness show
 current activity and elapsed time because the provider supplies no reliable ETA.
+Ready shows the measured time to worker readiness for a successfully timed
+deployment. It does not claim application-visible startup time or invent a time
+for older records without measurements.
 Cached image layers are excluded from transfer speed. Expand verbose output for
-command details. Timing describes the current attempt and resets on retry.
+command details. Per-stage timing resets on retry. The recorded worker-readiness
+duration survives reconnect.

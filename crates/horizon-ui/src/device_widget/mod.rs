@@ -1,13 +1,11 @@
 //! Read-only native VNC rendering; device actions stay in the CLI/MCP crate.
 mod controls;
 mod frame;
+mod observation;
 mod session;
 
 use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
-use horizon_core::{
-    DevicePanelState, DeviceViewOptions,
-    browser::manifest::device::{Connection, ImageEvidence, PanelState},
-};
+use horizon_core::{DevicePanelState, DeviceViewOptions};
 
 use frame::present_image;
 use session::{Session, Status};
@@ -18,6 +16,8 @@ pub(crate) struct DeviceUiState {
     image: ImageDisplay,
     initialized: bool,
     rendered: bool,
+    previous_rendered: bool,
+    connection_generation: u64,
     session: Option<Session>,
     /// Last full desktop from the worker. View controls crop/scale this locally.
     source: Option<ColorImage>,
@@ -35,6 +35,7 @@ struct ImageDisplay {
     previous_displayed: bool,
     /// This connection has uploaded a frame. A retained texture is not evidence.
     received: bool,
+    last_displayed: Option<std::time::Instant>,
 }
 
 impl DeviceUiState {
@@ -45,6 +46,7 @@ impl DeviceUiState {
 
     pub(crate) fn begin_frame(&mut self) {
         self.image.previous_displayed = self.image.displayed;
+        self.previous_rendered = self.rendered;
         self.image.displayed = false;
         self.rendered = false;
     }
@@ -137,6 +139,9 @@ impl DeviceUiState {
                 visible_image(ui, texture, size * scale)
             };
             self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
+            if self.image.displayed {
+                self.image.last_displayed = Some(std::time::Instant::now());
+            }
         } else {
             ui.label("The device desktop appears here after connection.");
         }
@@ -244,6 +249,7 @@ impl DeviceUiState {
 
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
         self.initialized = true;
+        self.connection_generation = self.connection_generation.saturating_add(1);
         self.image = ImageDisplay::default();
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
@@ -260,42 +266,6 @@ impl DeviceUiState {
                 self.status = Status::Connecting;
             }
             Err(error) => self.status = Status::Disconnected(error.to_string()),
-        }
-    }
-
-    pub(crate) fn observation(
-        &mut self,
-        panel_id: String,
-        device: &DevicePanelState,
-        visible: bool,
-        actor: &str,
-    ) -> PanelState {
-        // Observe worker failures even when the panel is hidden or off canvas.
-        // Retain pending pixels for show(); only rendering may assert display.
-        if let Some(status) = self.session.as_ref().and_then(Session::take_status) {
-            self.status = status;
-        }
-        let (connection, connection_error) = match &self.status {
-            Status::Stopped => (Connection::Stopped, None),
-            Status::Connecting => (Connection::Connecting, None),
-            Status::Connected => (Connection::Connected, None),
-            Status::Disconnected(error) => (Connection::Disconnected, Some(error.clone())),
-        };
-        PanelState {
-            panel_id,
-            endpoint: device.target.address().to_string(),
-            visible,
-            owned_by_caller: self.owner.as_deref() == Some(actor),
-            image: ImageEvidence {
-                image_received: self.image.received,
-                image_displayed: visible
-                    && self.image.received
-                    && self.image.previous_displayed
-                    && connection == Connection::Connected,
-                frame_sequence: self.image.sequence,
-            },
-            connection,
-            connection_error,
         }
     }
 }

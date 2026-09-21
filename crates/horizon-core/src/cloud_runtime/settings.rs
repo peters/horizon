@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    /// Starting selection for repository setup; existing profiles keep their own capabilities.
+    #[serde(default = "default_agents")]
+    pub default_agents: Vec<horizon_cloud::Agent>,
     pub runpod_key_file: PathBuf,
     pub ssh_identity_file: PathBuf,
     pub docker_config: PathBuf,
@@ -29,6 +32,10 @@ pub struct Settings {
     pub git_credentials: Vec<super::git_auth::Binding>,
     #[serde(default)]
     pub browserstack_credentials: Vec<super::browser_auth::Binding>,
+}
+#[must_use]
+pub fn default_agents() -> Vec<horizon_cloud::Agent> {
+    vec![horizon_cloud::Agent::Codex, horizon_cloud::Agent::Claude]
 }
 impl Settings {
     /// # Errors

@@ -29,6 +29,10 @@ pub struct Deployment {
     pub sessions: Vec<Session>,
     #[serde(default)]
     pub source_ready: bool,
+    /// Successful attempt through worker/session readiness, excluding earlier failed attempts.
+    /// Not a measurement of application startup or the first visible frame.
+    #[serde(default)]
+    pub ready_after_seconds: Option<u64>,
     #[serde(default)]
     pub stop_requested: bool,
     #[serde(default)]

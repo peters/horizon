@@ -33,6 +33,7 @@ pub fn prepare(request: &Request) -> Result<()> {
 /// # Errors
 /// Records any uncertain allocation durably and never deletes workers on disconnect.
 pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
+    let started = Instant::now();
     emit(Event::stage(Stage::Validate));
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
@@ -46,6 +47,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         secrets: Vec::new(),
     };
     let mut state = initial_state(request, &store)?;
+    let started = (state.operation == CreateState::Prepared && state.worker.is_none()).then_some(started);
     let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
     let browser_auth = super::browser_auth::Prepared::for_repository(
         &request.settings.browserstack_credentials,
@@ -129,7 +131,21 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         store.arm_browserstack(&mut state)?;
         browser_auth.install(&connection, &runner)?;
     }
+    finish_ready(state, &store, started, emit)
+}
+
+fn finish_ready(
+    mut state: Deployment,
+    store: &Store,
+    started: Option<Instant>,
+    emit: &dyn Fn(Event),
+) -> Result<Deployment> {
     state.stage = Stage::Ready;
+    if let Some(started) = started {
+        state
+            .ready_after_seconds
+            .get_or_insert_with(|| started.elapsed().as_secs());
+    }
     store.save(&state)?;
     emit(Event::ready(Box::new(state.clone())));
     Ok(state)
@@ -225,6 +241,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             worker: None,
             sessions: Vec::new(),
             source_ready: false,
+            ready_after_seconds: None,
             stop_requested: false,
             browserstack_released: true,
             browserstack_targets: std::collections::BTreeSet::new(),
@@ -393,6 +410,26 @@ mod tests {
                 assert!(validate_agent_auth(&settings, &disabled).is_ok());
             }
         }
+    }
+
+    #[test]
+    fn ready_timing_preserves_unknown_legacy_history_and_survives_reconnect() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let legacy: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"timing","repository":"/fixture","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Ready","operation":{"state":"requested"},"spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        let unknown = finish_ready(legacy.clone(), &store, None, &|_| {}).unwrap();
+        assert!(unknown.ready_after_seconds.is_none());
+        let start = Instant::now().checked_sub(Duration::from_secs(420)).unwrap();
+        let measured = finish_ready(legacy, &store, Some(start), &|_| {}).unwrap();
+        assert_eq!(measured.ready_after_seconds, Some(420));
+        let restored = store.load().unwrap().unwrap();
+        let reconnected = finish_ready(restored, &store, None, &|_| {}).unwrap();
+        assert_eq!(reconnected.ready_after_seconds, measured.ready_after_seconds);
     }
 
     #[test]

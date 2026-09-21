@@ -9,6 +9,7 @@ pub mod lifecycle;
 pub mod progress;
 pub mod repository;
 pub mod settings;
+pub mod setup;
 pub mod ssh;
 pub mod state;
 pub mod tunnel;

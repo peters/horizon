@@ -1,5 +1,5 @@
 use egui::{Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
-use horizon_core::cloud_panel::{CLOUDS, CloudGroup, HEADER};
+use horizon_core::cloud_panel::{CloudGroup, HEADER};
 
 use super::super::HorizonApp;
 use crate::app::view::canvas_scene_transform;
@@ -190,65 +190,12 @@ impl HorizonApp {
         } else {
             self.render_production_runtimes(ctx);
         }
-        let canvas = self.canvas_rect(ctx);
-        let mut overview = false;
-        let mut create = false;
-        egui::Area::new(Id::new("cloud-controls"))
-            .order(Order::Tooltip)
-            .fixed_pos(canvas.min + Vec2::new(24.0, 20.0))
-            .show(ctx, |ui| {
-                if !self.cloud_creation_open() {
-                    ctx.move_to_top(ui.layer_id());
-                }
-                egui::Frame::new()
-                    .fill(theme::BG_ELEVATED())
-                    .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
-                    .corner_radius(12)
-                    .inner_margin(14)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Clouds").size(18.0).strong());
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new(if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() {
-                                    "Design fixtures"
-                                } else {
-                                    "RunPod"
-                                })
-                                .size(12.0)
-                                .color(theme::FG_DIM()),
-                            );
-                            ui.add_space(18.0);
-                            create = ui
-                                .add_enabled(
-                                    self.cloud_prototype.ready
-                                        && (std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none()
-                                            || self.cloud_prototype.groups.0.len() < CLOUDS.len()),
-                                    egui::Button::new("New cloud").fill(theme::blend(
-                                        theme::PANEL_BG(),
-                                        theme::ACCENT(),
-                                        0.16,
-                                    )),
-                                )
-                                .on_hover_text("Create a cloud in this workspace.")
-                                .clicked();
-                            overview = ui.button("Fit all").clicked();
-                        });
-                        if let Some(error) = &self.cloud_prototype.error {
-                            ui.colored_label(Color32::LIGHT_RED, error);
-                        }
-                        if self.cloud_prototype.setup.is_some() {
-                            ui.label("Preparing cloud worktrees…");
-                        }
-                    });
-            });
-        if create {
-            self.add_mock_cloud(ctx);
-        }
-        if overview {
-            self.cloud_overview(ctx);
-        }
+        self.render_cloud_dialogs(ctx);
+    }
+
+    pub(in crate::app) fn render_cloud_dialogs(&mut self, ctx: &egui::Context) {
         self.render_cloud_creation(ctx);
+        self.render_cloud_accounts(ctx);
     }
 }
 

@@ -35,7 +35,7 @@ pub(super) struct CloudPrototype {
 
 impl CloudPrototype {
     pub(super) fn creation_open(&self) -> bool {
-        self.production.creating
+        self.production.creating || self.production.setup.open
     }
 }
 

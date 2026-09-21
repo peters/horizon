@@ -274,6 +274,17 @@ fn progress_output(ui: &mut egui::Ui, runtime: &super::Runtime) {
                 }),
         );
     }
+    if runtime.stage == Some(Stage::Ready)
+        && let Some(seconds) = runtime.state.as_ref().and_then(|state| state.ready_after_seconds)
+    {
+        ui.small(format!(
+            "Worker ready in {}",
+            horizon_core::cloud_runtime::progress::duration(std::time::Duration::from_secs(seconds))
+        ))
+        .on_hover_text(
+            "Time for the successful deployment attempt. Application startup and reconnect are measured separately.",
+        );
+    }
     runtime.progress.render(ui);
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);

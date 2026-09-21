@@ -7,7 +7,9 @@ mod creation_tests;
 mod lifecycle;
 mod presentation;
 mod progress;
+mod repository_setup;
 mod sessions;
+mod setup;
 use super::HorizonApp;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
@@ -29,6 +31,7 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Production {
+    pub(super) setup: setup::State,
     pub creating: bool,
     pub(super) focus_title_on_open: bool,
     title: String,
@@ -36,6 +39,8 @@ pub(super) struct Production {
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,
+    setup_agent: Option<PanelKind>,
+    setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
 }
