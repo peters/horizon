@@ -405,6 +405,98 @@ mod tests {
     }
 
     #[test]
+    fn native_select_menus_reserve_new_zoom_gestures() {
+        use super::super::select_popup;
+        use crate::test_egui::DiscardTextures;
+        use egui::{Ui, vec2};
+        use horizon_core::browser::{BrowserBounds, BrowserPanelState, NativeSelectOption, NativeSelectPopup};
+        let popup = NativeSelectPopup {
+            css_path: "#menu".into(),
+            name: "menu".into(),
+            selected_index: 0,
+            bounds: BrowserBounds {
+                x: 20.0,
+                y: 40.0,
+                width: 80.0,
+                height: 22.0,
+            },
+            options: (0..10)
+                .map(|index| NativeSelectOption {
+                    index,
+                    value: index.to_string(),
+                    label: format!("Item {index}"),
+                    group: None,
+                    disabled: false,
+                    selected: index == 0,
+                })
+                .collect(),
+        };
+        for fullscreen in [false, true] {
+            let ctx = egui::Context::default();
+            let browser = BrowserPanelState::inert();
+            let mut state = BrowserUiState::default();
+            let panel = egui::Id::new("browser-panel");
+            let mut open = None;
+            select_popup::sync_ui_state(&mut open, Some(&popup));
+            for index in 0..4 {
+                let active = index == 3;
+                let pointer = pos2(80.0, 100.0);
+                let mut events = vec![egui::Event::PointerMoved(pointer)];
+                if active {
+                    events.push(egui::Event::Zoom(1.25));
+                }
+                let _ = ctx
+                    .run_ui(
+                        egui::RawInput {
+                            time: Some(f64::from(index)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let layer = if fullscreen { ui.layer_id().id } else { panel };
+                            if active {
+                                let owner = crate::panel_zoom::content_owner(layer, open.is_some());
+                                assert!(crate::panel_zoom::gesture_owner(ui.ctx(), Some(owner)).is_some());
+                            }
+                            let mut draw = |ui: &mut Ui| {
+                                ui.set_min_size(vec2(400.0, 400.0));
+                                let menu = select_popup::show(
+                                    ui,
+                                    &browser,
+                                    Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)),
+                                    [400.0, 400.0],
+                                    &popup,
+                                    open.as_mut().expect("open menu"),
+                                )
+                                .expect("menu is rendered");
+                                if active {
+                                    assert!(menu.contains(pointer));
+                                }
+                                super::apply_zoom_gesture(
+                                    ui,
+                                    &browser,
+                                    &mut state,
+                                    crate::panel_zoom::owns_gesture(ui),
+                                );
+                            };
+                            if fullscreen {
+                                draw(ui);
+                            } else {
+                                egui::Area::new(panel)
+                                    .fixed_pos(egui::Pos2::ZERO)
+                                    .constrain(false)
+                                    .order(egui::Order::Middle)
+                                    .show(ui.ctx(), draw);
+                            }
+                        },
+                    )
+                    .discard_textures();
+            }
+            assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::ONE);
+        }
+    }
+
+    #[test]
     fn a_zoomed_viewport_stays_above_the_size_the_backend_sync_accepts() {
         use super::{MAX_FRAME_PIXELS, MIN_STABLE_VIEWPORT_SIDE, zoomed_viewport};
         let limit = 8192;

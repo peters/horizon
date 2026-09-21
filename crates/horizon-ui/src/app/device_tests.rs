@@ -173,6 +173,57 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
 }
 
 #[test]
+fn fixed_browser_pinches_zoom_the_canvas_while_wheels_remain_panel_owned() {
+    for responsive in [false, true] {
+        let (_temp, ctx, mut app, panel_id) = device_app(None);
+        let browser = if responsive {
+            horizon_core::browser::BrowserPanelState::inert()
+        } else {
+            horizon_core::browser::BrowserPanelState::inert_remote("target", "provider")
+        };
+        let panel = app.board.panel_mut(panel_id).expect("panel");
+        panel.kind = PanelKind::Browser;
+        panel.content = horizon_core::PanelContent::Browser(Box::new(browser));
+        render(&ctx, &mut app);
+        for (index, pinch) in [false, true, false].into_iter().enumerate() {
+            let body = app
+                .visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)
+                .into_iter()
+                .find(|(id, _)| *id == panel_id)
+                .and_then(|(_, geometry)| geometry.zoom_body)
+                .expect("browser body");
+            let before = app.canvas_view.zoom;
+            let mut input = raw_input([1400.0, 900.0], None);
+            input.time = Some(1.0 + f64::from(u32::try_from(index).expect("small index")) * 0.02);
+            input.events.push(egui::Event::PointerMoved(body.center()));
+            if pinch {
+                input.events.push(egui::Event::Zoom(1.25));
+            } else {
+                input
+                    .events
+                    .extend(
+                        [egui::TouchPhase::Start, egui::TouchPhase::Move].map(|phase| egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, 20.0),
+                            phase,
+                            modifiers: egui::Modifiers::CTRL,
+                        }),
+                    );
+            }
+            run_app_frame_with_input(&ctx, &mut app, input);
+            if pinch && !responsive {
+                assert!(app.canvas_view.zoom > before, "fixed browser swallowed native pinch");
+            } else {
+                assert!(
+                    (app.canvas_view.zoom - before).abs() <= f32::EPSILON,
+                    "panel-owned input leaked to canvas"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_zoom_gesture_continues_when_the_device_enters_fullscreen() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5902"));
     render(&ctx, &mut app);

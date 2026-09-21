@@ -130,6 +130,14 @@ button click.
 5. Release Command and scroll: the page scrolls normally.
 6. Resize the panel at a non-100% zoom: the emulated viewport follows the new
    body size at the same scale, and pointer input stays aligned.
+7. On the board, pin a viewport through the public browser MCP. The selector
+   shows disabled `Fit`: a native pinch over the page zooms the canvas, while
+   Command+scroll reaches the page without changing the canvas. Switch between
+   these inputs rapidly and confirm each keeps its own behavior. Clear the pin
+   and confirm responsive panel zoom returns.
+8. Open a native select menu in a responsive or pinned browser. New pinch and
+   Command+scroll gestures over its body must move neither page nor canvas;
+   ordinary menu scrolling must still work. Repeat in fullscreen.
 
 ## 5. Lane D — canvas interaction
 

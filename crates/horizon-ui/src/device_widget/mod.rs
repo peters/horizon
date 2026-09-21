@@ -13,6 +13,8 @@ use crate::panel_zoom::{self, PanelZoom};
 use frame::present_image;
 use session::{Session, Status};
 
+const IMAGE_SCROLL_ID: &str = "device_image";
+
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
     pub(crate) owner: Option<String>,
@@ -32,6 +34,7 @@ pub(crate) struct DeviceUiState {
     zoom_anchor: Option<ZoomAnchor>,
     /// Anchors and pending offsets belong to this viewport and rendering layer.
     zoom_layer: Option<(egui::ViewportId, egui::Id)>,
+    image_body: Option<egui::Rect>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
@@ -41,6 +44,7 @@ pub(crate) struct DeviceUiState {
 #[derive(Clone, Copy)]
 struct ZoomAnchor {
     captured_at: f64,
+    native_pinch: bool,
     pointer: egui::Pos2,
     /// Pixel of the displayed image under the pointer when the gesture started.
     content: egui::Vec2,
@@ -127,34 +131,38 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Read-only");
-            ui.monospace(device.target.address().to_string());
-            if ui.add_enabled(interactive, egui::Button::new("Reconnect")).clicked() {
-                self.reconnect(ui.ctx(), device);
-            }
-            match &self.status {
-                Status::Stopped => {
-                    ui.label("Stopped — select Reconnect");
+        let zoom_changed = ui
+            .horizontal_wrapped(|ui| {
+                ui.label("Read-only");
+                ui.monospace(device.target.address().to_string());
+                if ui.add_enabled(interactive, egui::Button::new("Reconnect")).clicked() {
+                    self.reconnect(ui.ctx(), device);
                 }
-                Status::Connecting => {
-                    ui.spinner();
-                    ui.label("Connecting…");
+                match &self.status {
+                    Status::Stopped => {
+                        ui.label("Stopped — select Reconnect");
+                    }
+                    Status::Connecting => {
+                        ui.spinner();
+                        ui.label("Connecting…");
+                    }
+                    Status::Connected => {
+                        ui.label("Connected");
+                    }
+                    Status::Disconnected(error) => {
+                        ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
+                    }
                 }
-                Status::Connected => {
-                    ui.label("Connected");
-                }
-                Status::Disconnected(error) => {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
-                }
-            }
-            if self.controls.zoom_dropdown(ui, interactive) {
-                // A chosen scale starts fresh: an offset or anchor computed for
-                // the previous one would jump the image.
-                self.pending_scroll = None;
-                self.zoom_anchor = None;
-            }
-        });
+                self.controls.zoom_dropdown(ui, interactive)
+            })
+            .inner;
+        if zoom_changed {
+            // A chosen scale starts fresh, including stored pan and momentum.
+            self.pending_scroll = None;
+            self.zoom_anchor = None;
+            egui::scroll_area::State::default()
+                .store(ui.ctx(), ui.make_persistent_id(egui::IdSalt::new(IMAGE_SCROLL_ID)));
+        }
         let previous = self.controls.options;
         let changed = ui
             .add_enabled_ui(interactive, |ui| {
@@ -179,9 +187,14 @@ impl DeviceUiState {
     /// Paint the presented desktop at the selected scale. Returns what was
     /// painted, which a pointer-anchored zoom needs.
     fn show_image(&mut self, ui: &mut Ui) -> Option<ImageView> {
+        let body = ui.available_rect_before_wrap();
+        if self.image_body.is_some_and(|previous| previous != body) {
+            self.pending_scroll = None;
+            self.zoom_anchor = None;
+        }
+        self.image_body = Some(body);
         let texture = self.texture.as_ref()?;
         let size = texture.size_vec2();
-        let body = ui.available_rect_before_wrap();
         let available = body.size().max(egui::Vec2::ZERO);
         // Fit letterboxes the whole image; a zoom paints the presented pixels
         // at that scale and scrolls for whatever no longer fits.
@@ -190,7 +203,9 @@ impl DeviceUiState {
             .zoom
             .map_or_else(|| (available.x / size.x).min(available.y / size.y), PanelZoom::factor);
         let (image_visible, image_rect) = if self.controls.zoom.is_some() {
-            let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+            let mut area = egui::ScrollArea::both()
+                .id_salt(IMAGE_SCROLL_ID)
+                .auto_shrink([false, false]);
             if let Some(offset) = self.pending_scroll.take() {
                 area = area.scroll_offset(offset);
             }
@@ -240,15 +255,19 @@ impl DeviceUiState {
             return;
         };
         let now = ui.input(|input| input.time);
+        let native_pinch = panel_zoom::is_native_pinch(ui.ctx());
         let anchor = self
             .zoom_anchor
-            .filter(|anchor| now - anchor.captured_at <= panel_zoom::GESTURE_IDLE_SECONDS)
+            .filter(|anchor| {
+                anchor.native_pinch == native_pinch && now - anchor.captured_at <= panel_zoom::GESTURE_IDLE_SECONDS
+            })
             .or_else(|| {
                 let pointer = panel_zoom::local_pointer(ui)?;
                 // A degenerate layout has no image pixel to anchor on; the new
                 // scale still applies.
                 (view.scale.is_finite() && view.scale > 0.0 && view.body.contains(pointer)).then(|| ZoomAnchor {
                     captured_at: now,
+                    native_pinch,
                     pointer,
                     content: (pointer - view.image_rect.min) / view.scale,
                 })

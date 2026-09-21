@@ -226,6 +226,21 @@ impl HorizonApp {
                 })
                 .map(|(_, panel)| panel)
         })?;
+        // Fixed browsers forward modifier-wheel input, but have no handler
+        // for native pinch. Keep that gesture on the canvas, without routing
+        // through this topmost panel to content underneath it.
+        if crate::panel_zoom::is_native_pinch(ctx)
+            && self
+                .board
+                .panel(*topmost)
+                .and_then(|panel| panel.browser())
+                .is_some_and(|browser| {
+                    !crate::browser_widget::supports_panel_zoom(browser)
+                        && browser.frame_slot.native_select_popup().is_none()
+                })
+        {
+            return None;
+        }
         geometry
             .zoom_body
             .is_some_and(|body| body.contains(pointer))
@@ -241,6 +256,15 @@ impl HorizonApp {
                 .map(|panel| panel_layer_salt(panel.id))
                 .chain(self.panel_screen_order.iter().copied().map(panel_layer_salt)),
         )
+    }
+
+    pub(in crate::app) fn panel_zoom_owner(&self, panel_id: PanelId, layer: egui::Id) -> egui::Id {
+        let menu_open = self
+            .board
+            .panel(panel_id)
+            .and_then(|panel| panel.browser())
+            .is_some_and(|browser| browser.frame_slot.native_select_popup().is_some());
+        crate::panel_zoom::content_owner(layer, menu_open)
     }
 
     #[profiling::function]
@@ -331,7 +355,7 @@ impl HorizonApp {
         let pointer_over_panel_zoom = zooming && {
             let candidate = self.zoom_gesture_blocker(ctx).or_else(|| {
                 self.zoom_gesture_panel(ctx, visible_workspace, &panel_geometry, pointer_position)
-                    .map(panel_layer_salt)
+                    .map(|panel_id| self.panel_zoom_owner(panel_id, panel_layer_salt(panel_id)))
             });
             crate::panel_zoom::gesture_owner(ctx, candidate).is_some()
         };

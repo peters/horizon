@@ -123,7 +123,7 @@ fn show(
 pub(crate) const GESTURE_IDLE_SECONDS: f64 = 0.15;
 
 /// Owner of the zoom gesture in progress, and when it was last seen. egui
-/// keeps smoothing a wheel or pinch for several frames after the input stops,
+/// keeps smoothing wheel zoom for several frames after the input stops,
 /// and the pointer can leave the panel it started on, so one gesture must
 /// keep one owner instead of splitting between a panel and the canvas.
 #[derive(Clone, Copy)]
@@ -131,6 +131,32 @@ struct GestureLatch {
     /// The panel layer that owns it, or `None` for the canvas.
     owner: Option<Id>,
     last_seen: f64,
+    kind: GestureKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GestureKind {
+    NativePinch,
+    Wheel,
+}
+
+impl GestureKind {
+    fn from_input(input: &egui::InputState) -> Self {
+        if input.multi_touch().is_some()
+            || input.raw.events.iter().any(|event| {
+                matches!(event, egui::Event::Zoom(delta) if delta.is_finite() && (delta - 1.0).abs() > f32::EPSILON)
+            })
+        {
+            Self::NativePinch
+        } else {
+            // egui smooths wheel zoom only; native zoom resets each pass.
+            Self::Wheel
+        }
+    }
+}
+
+pub(crate) fn is_native_pinch(ctx: &Context) -> bool {
+    ctx.input(|input| GestureKind::from_input(input) == GestureKind::NativePinch)
 }
 
 fn latch_id(ctx: &Context) -> Id {
@@ -164,17 +190,42 @@ pub(crate) fn blocking_layer(ctx: &Context, mut panel_layers: impl Iterator<Item
     (layer.order >= egui::Order::Foreground && !panel_layers.any(|id| id == layer.id)).then_some(layer.id)
 }
 
+/// A host-painted content menu shares its panel's layer. Give new gestures
+/// a separate owner while it is open so neither content nor canvas moves.
+pub(crate) fn content_owner(layer: Id, menu_open: bool) -> Id {
+    if menu_open {
+        layer.with("content_menu_zoom")
+    } else {
+        layer
+    }
+}
+
 /// Latch who owns the gesture in progress. `candidate` is what the pointer
-/// says right now; the first answer of a gesture wins until it goes idle.
+/// says right now; the first answer wins until idle or an input-kind change.
 pub(crate) fn gesture_owner(ctx: &Context, candidate: Option<Id>) -> Option<Id> {
-    let (active, now) = ctx.input(|input| ((input.zoom_delta() - 1.0).abs() > f32::EPSILON, input.time));
+    let (active, now, kind) = ctx.input(|input| {
+        (
+            (input.zoom_delta() - 1.0).abs() > f32::EPSILON,
+            input.time,
+            GestureKind::from_input(input),
+        )
+    });
     if !active {
         return candidate;
     }
-    let owner = fresh_latch(ctx, now).map_or(candidate, |latch| latch.owner);
+    let owner = fresh_latch(ctx, now)
+        .filter(|latch| latch.kind == kind)
+        .map_or(candidate, |latch| latch.owner);
     let id = latch_id(ctx);
     ctx.data_mut(|data| {
-        data.insert_temp(id, GestureLatch { owner, last_seen: now });
+        data.insert_temp(
+            id,
+            GestureLatch {
+                owner,
+                last_seen: now,
+                kind,
+            },
+        );
     });
     owner
 }
@@ -281,6 +332,48 @@ mod tests {
         assert_eq!(owner_at(9.0, true, Some(other)), Some(other));
         // With no gesture in flight the pointer's own answer is returned.
         assert_eq!(owner_at(9.02, false, Some(panel)), Some(panel));
+    }
+
+    #[test]
+    fn wheel_and_native_pinch_claim_separate_gestures() {
+        let ctx = egui::Context::default();
+        let panel = egui::Id::new("fixed-browser");
+        let other = egui::Id::new("another-panel");
+        let wheel = || {
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 4.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::CTRL,
+            }]
+        };
+        let mut mixed = wheel();
+        mixed.push(egui::Event::Zoom(1.25));
+        for (index, (events, candidate, expected)) in [
+            (wheel(), Some(panel), Some(panel)),
+            (Vec::new(), Some(other), Some(panel)),
+            (vec![egui::Event::Zoom(1.25)], None, None),
+            (Vec::new(), Some(panel), Some(panel)),
+            (mixed, None, None),
+            (wheel(), Some(panel), Some(panel)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(1.0 + f64::from(u32::try_from(index).expect("small index")) * 0.02),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(ui.input(|input| (input.zoom_delta() - 1.0).abs() > f32::EPSILON));
+                        assert_eq!(super::gesture_owner(ui.ctx(), candidate), expected, "frame {index}");
+                    },
+                )
+                .discard_textures();
+        }
     }
 
     #[test]

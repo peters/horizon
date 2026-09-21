@@ -539,6 +539,48 @@ fn a_latched_gesture_keeps_its_anchor_after_the_pointer_leaves() {
 }
 
 #[test]
+fn switching_zoom_input_kind_captures_a_new_device_anchor() {
+    let ctx = egui::Context::default();
+    let mut state = DeviceUiState::default();
+    state.controls.zoom = Some(PanelZoom::ONE);
+    let first = egui::pos2(100.0, 100.0);
+    let second = egui::pos2(300.0, 250.0);
+    for (index, pointer) in [first, second, egui::pos2(200.0, 180.0)].into_iter().enumerate() {
+        let event = if index == 1 {
+            egui::Event::Zoom(1.25)
+        } else {
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 4.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::CTRL,
+            }
+        };
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    time: Some(1.0 + f64::from(u32::try_from(index).expect("small index")) * 0.02),
+                    events: vec![egui::Event::PointerMoved(pointer), event],
+                    ..Default::default()
+                },
+                |ui| {
+                    panel_zoom::gesture_owner(ui.ctx(), Some(ui.layer_id().id));
+                    state.handle_zoom_gesture(
+                        ui,
+                        Some(ImageView {
+                            scale: state.controls.zoom.expect("explicit scale").factor(),
+                            image_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 1000.0)),
+                            body: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0)),
+                        }),
+                    );
+                },
+            )
+            .discard_textures();
+        assert_eq!(state.zoom_anchor.expect("active gesture").pointer, pointer);
+    }
+}
+
+#[test]
 fn changing_render_layers_discards_the_old_zoom_anchor() {
     let (ctx, device, mut state) = disconnected_viewer();
     state.controls.zoom = Some(PanelZoom::new(2.0));
@@ -572,18 +614,88 @@ fn choosing_a_zoom_abandons_the_previous_gesture_state() {
     // A pending offset or anchor belongs to the scale it was computed for.
     let (ctx, device, mut state) = disconnected_viewer();
     state.controls.zoom = Some(PanelZoom::new(2.0));
-    show_viewer(&ctx, &mut state, &device, Vec::new());
+    state.source = Some(ColorImage::filled([1600, 1000], egui::Color32::WHITE));
+    let render = |state: &mut DeviceUiState| {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, true),
+        )
+        .discard_textures()
+    };
+    let origin = painted_image_rect(&render(&mut state)).expect("initial image").min;
     state.pending_scroll = Some(egui::vec2(120.0, 90.0));
+    let scrolled = painted_image_rect(&render(&mut state)).expect("scrolled image").min;
+    assert!((origin - scrolled - egui::vec2(120.0, 90.0)).length() < 1.0);
     state.zoom_anchor = Some(ZoomAnchor {
         captured_at: 0.0,
+        native_pinch: false,
         pointer: egui::pos2(600.0, 500.0),
         content: egui::vec2(4.0, 2.0),
     });
     click_label(&ctx, &mut state, &device, "200%");
+    click_label(&ctx, &mut state, &device, "300%");
+    assert_eq!(state.controls.zoom, Some(PanelZoom::new(3.0)));
+    assert!(state.pending_scroll.is_none());
+    assert!(state.zoom_anchor.is_none());
+    let selected = painted_image_rect(&render(&mut state)).expect("selected image").min;
+    assert!(
+        (selected - origin).length() < 1.0,
+        "persisted scroll survived selection: {origin:?} -> {selected:?}"
+    );
+    click_label(&ctx, &mut state, &device, "300%");
     click_label(&ctx, &mut state, &device, "Fit");
     assert_eq!(state.controls.zoom, None);
     assert!(state.pending_scroll.is_none(), "a stale offset survived the selection");
     assert!(state.zoom_anchor.is_none(), "a stale anchor survived the selection");
+}
+
+#[test]
+fn changing_image_body_discards_pending_scroll_and_anchor_before_painting() {
+    for next_body in [
+        egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(600.0, 400.0)),
+        egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 300.0)),
+    ] {
+        let ctx = egui::Context::default();
+        let mut state = DeviceUiState::default();
+        state.controls.zoom = Some(PanelZoom::ONE);
+        let original = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(600.0, 400.0));
+        for (index, body) in [original, original, next_body].into_iter().enumerate() {
+            if index > 0 {
+                state.pending_scroll = Some(if index == 1 {
+                    egui::vec2(120.0, 90.0)
+                } else {
+                    egui::vec2(300.0, 200.0)
+                });
+                state.zoom_anchor = Some(ZoomAnchor {
+                    captured_at: 1.0,
+                    native_pinch: false,
+                    pointer: egui::pos2(100.0, 100.0),
+                    content: egui::vec2(80.0, 80.0),
+                });
+            }
+            let _ = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+                        if state.texture.is_none() {
+                            state.update_texture(ui, ColorImage::filled([1600, 1000], egui::Color32::WHITE));
+                        }
+                        let view = state.show_image(ui).expect("image");
+                        if index == 2 {
+                            assert!(state.zoom_anchor.is_none(), "anchor outlived body geometry");
+                            let offset = view.body.min - view.image_rect.min;
+                            assert!(
+                                (offset - egui::vec2(120.0, 90.0)).length() < 1.0,
+                                "stale offset applied"
+                            );
+                        }
+                    });
+                })
+                .discard_textures();
+        }
+    }
 }
 
 #[test]
@@ -598,6 +710,7 @@ fn changing_viewports_with_the_same_layer_discards_the_old_zoom_anchor() {
     {
         state.zoom_anchor = Some(ZoomAnchor {
             captured_at: 1.0,
+            native_pinch: false,
             pointer: egui::pos2(100.0, 100.0),
             content: egui::vec2(50.0, 50.0),
         });
@@ -683,6 +796,7 @@ fn presentation_changes_discard_anchors_but_ordinary_frames_and_fps_do_not() {
     let seed_anchor = |state: &mut DeviceUiState| {
         state.zoom_anchor = Some(ZoomAnchor {
             captured_at: 1.0,
+            native_pinch: false,
             pointer: egui::pos2(50.0, 40.0),
             content: egui::vec2(25.0, 20.0),
         });

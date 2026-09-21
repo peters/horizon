@@ -29,9 +29,8 @@ pub(super) use interaction::ArrangedPanelDrag;
 pub(in crate::app) struct PanelScreenGeometry {
     pub(in crate::app) screen_rect: Rect,
     pub(in crate::app) terminal_body: Option<Rect>,
-    /// Body of a panel that zooms its own content. Browser and device widgets
-    /// consume pinch and zoom-modifier wheel over exactly this rectangle, so
-    /// the canvas must leave the gesture alone there — and only there.
+    /// Body where a panel can own zoom input. Fixed browsers forward modifier
+    /// wheels to the page; their native pinches stay with the canvas.
     pub(in crate::app) zoom_body: Option<Rect>,
 }
 
@@ -435,7 +434,7 @@ impl HorizonApp {
                             let zoom_owner = self.zoom_gesture_blocker(ui.ctx()).or_else(|| {
                                 crate::panel_zoom::local_pointer(ui)
                                     .filter(|pointer| ui.max_rect().contains(*pointer))
-                                    .map(|_| ui.layer_id().id)
+                                    .map(|_| self.panel_zoom_owner(panel_id, ui.layer_id().id))
                             });
                             crate::panel_zoom::gesture_owner(ui.ctx(), zoom_owner);
                         }
