@@ -24,7 +24,7 @@ RUN case ",$HORIZON_AGENTS," in *,claude,*) npm install -g @anthropic-ai/claude-
 RUN case ",$HORIZON_AGENTS," in *,grok,*) npm install -g @xai-official/grok && npm cache clean --force;; esac
 ARG HORIZON_DESKTOP=false
 RUN if [ "$HORIZON_DESKTOP" = true ]; then apt-get update \
-    && apt-get install -y --no-install-recommends xvfb openbox x11vnc xauth libxtst6 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends xvfb openbox x11vnc xauth x11-utils libxtst6 fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*; fi
 ARG HORIZON_BROWSERS=
 RUN case ",$HORIZON_BROWSERS," in *,chromium,*) \
@@ -52,6 +52,7 @@ COPY --from=selected /output/ /
 COPY horizon-worker-start \
     horizon-worker-check \
     horizon-worker-configure \
+    horizon-worker-supervise \
     horizon-worker-run \
     horizon-worker-session \
     horizon-worker-source \

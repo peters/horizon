@@ -85,7 +85,7 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(self.run_check(missing=(name,))[0], 1)
 
     def test_missing_requested_agent_or_desktop_fails(self):
-        for binary in ['codex', 'claude', 'Xvfb', 'horizon-device']:
+        for binary in ['codex', 'claude', 'Xvfb', 'xprop', 'xdpyinfo', 'horizon-device', 'horizon-worker-supervise']:
             status, _, _ = self.run_check(missing=(binary,))
             self.assertEqual(status, 1, binary)
 
@@ -142,8 +142,10 @@ class CapabilitiesTests(unittest.TestCase):
             stream.readline.return_value = b'{"browsers":[],"error":null}\n'
             stream.read.return_value = b'RFB 003.008\n'
             with mock.patch('socket.create_connection', return_value=connection) as connect:
-                status, output, _ = self.run_check('--ready')
+                status, output, commands = self.run_check('--ready')
             self.assertEqual(status, 0, output)
+            self.assertIn(mock.call(['horizon-worker-supervise', '--check'], check=True, timeout=20,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), commands)
             self.assertEqual([call.args[0][1] for call in connect.call_args_list], expected)
             stream.readline.return_value = b'{"error":"not ready"}\n'
             with mock.patch('socket.create_connection', return_value=connection):

@@ -53,6 +53,7 @@ def probe(command):
     subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def services_ready(selected):
+    probe(['horizon-worker-supervise', '--check'])
     with socket.create_connection(('127.0.0.1', 47280), timeout=5) as connection:
         connection.sendall(b'{"operation":"list"}\n')
         with connection.makefile('rb') as stream:
@@ -81,7 +82,7 @@ try:
         if args.agent != 'shell' and args.agent not in selected['agents']:
             raise ValueError('Agent is disabled by this cloud profile')
         sys.exit(0)
-    for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source']:
+    for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
         require(binary)
     probe(['git', 'lfs', 'version'])
     for agent in selected['agents']:
@@ -104,7 +105,7 @@ try:
             require('firefox'); require('geckodriver')
             probe(['firefox', '--version']); probe(['geckodriver', '--version'])
     if selected['desktop']:
-        for binary in ['Xvfb', 'openbox', 'x11vnc', 'horizon-device']:
+        for binary in ['Xvfb', 'openbox', 'x11vnc', 'xdpyinfo', 'xprop', 'horizon-device']:
             require(binary)
         probe(['horizon-device', '--help'])
     if args.git_auth:

@@ -17,15 +17,4 @@ done
 printf 'HostKey /run/sshd/horizon-host-keys/ed25519\nHostKey /run/sshd/horizon-host-keys/rsa\n' > /etc/ssh/sshd_config.d/horizon-host-keys.conf
 export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
 horizon-worker-check --write-runtime
-if python3 -c 'import json; exit(not json.load(open("/workspace/capabilities.json"))["desktop"])'; then
-    Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > /workspace/xvfb.log 2>&1 &
-    for attempt in $(seq 1 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep .1; done
-    openbox > /workspace/openbox.log 2>&1 &
-    x11vnc -display :99 -localhost -rfbport 5900 -forever -shared -viewonly -nopw > /workspace/vnc.log 2>&1 &
-fi
-horizon-worker-configure
-horizon-cloud-worker serve > /workspace/control-service.log 2>&1 &
-/usr/sbin/sshd -D -e &
-# Any lost required service makes the worker unhealthy; never silently replace sessions.
-wait -n
-exit 1
+exec horizon-worker-supervise
