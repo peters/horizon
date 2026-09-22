@@ -30,6 +30,8 @@ use std::{
     sync::mpsc::{Receiver, channel},
 };
 
+const DELETED_RESOURCES_MESSAGE: &str = "Worker deleted; managed workspace storage cleanup is complete. Any separately attached network volumes retain their files and credentials and remain billable until deleted.";
+
 #[derive(Default)]
 pub(super) struct Production {
     pub(super) setup: setup::State,
@@ -188,7 +190,7 @@ impl HorizonApp {
                         runtime.progress.stage(Stage::Deleted, std::time::Instant::now());
                         runtime.stage = Some(Stage::Deleted);
                         runtime.desktop = None;
-                        runtime.error = Some("Worker deleted; its processes and files are no longer available".into());
+                        runtime.error = Some(DELETED_RESOURCES_MESSAGE.into());
                         finished.push(id);
                     }
                     Event::Stage(stage, at) => {
