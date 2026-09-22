@@ -39,6 +39,11 @@ A successful CUDA build
 does not establish inference accuracy or hardware graphics rendering; those
 require the corresponding live workload and adapter evidence.
 
+The GPU validation helper uses `cargo rustc --locked -p horizon-ui --bin horizon
+--features speech-cuda -- -l nccl`. This links the NCCL library already supplied
+by the GPU base, working around missing link metadata in the speech dependency.
+It does not fix plain `cargo build --features speech-cuda` on that base.
+
 For native smoke, freeze the candidate binary, launch with a private application
 home and config, unset `HORIZON`, and use the task-owned worker display through a
 loopback SSH forward and a native Device panel in the current client workspace.

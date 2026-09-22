@@ -24,5 +24,5 @@ cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warn
 cargo clippy --locked --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --locked --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 if [ "$mode" = gpu ]; then
-    cargo build --locked -p horizon-ui --features speech-cuda
+    cargo rustc --locked -p horizon-ui --bin horizon --features speech-cuda -- -l nccl
 fi
