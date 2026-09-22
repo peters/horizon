@@ -163,6 +163,17 @@ impl Driver {
         event_tx: &BrowserEventSender,
         stop_requested: &AtomicBool,
     ) {
+        if self.panel_slot.file_chooser().blocks(&request.action) {
+            self.audit_agent_action(request, BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new(
+                    "file_chooser_pending",
+                    "Select or cancel files in the Horizon dialog before changing the page",
+                )),
+            );
+            return;
+        }
         if let Err(message) = request.action.validate() {
             self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
             self.complete_agent_action(
@@ -252,6 +263,7 @@ impl Driver {
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
             remote_device: self.remote_device.clone(),
             remote_file_upload: self.file_transfer.is_some(),
+            file_chooser: self.config.frame_slot.file_chooser().status(),
         }
     }
 

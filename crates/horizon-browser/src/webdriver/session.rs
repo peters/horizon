@@ -17,6 +17,7 @@ use super::host::DriverHost;
 
 mod bidi;
 mod coordination;
+mod file_chooser;
 mod frames;
 pub(super) mod handshake;
 mod http_auth;
@@ -118,6 +119,7 @@ struct Driver {
     pending_http_bodies: VecDeque<(String, Option<String>)>,
     panel_slot: Arc<FrameSlot>,
     native_select: native_select::NativeSelectState,
+    file_chooser: file_chooser::ChooserState,
 }
 
 struct PendingHistoryStart {
@@ -215,6 +217,7 @@ pub(crate) fn run_webdriver(
             }
             driver.disable_optional_bidi(frame_slot, event_tx);
         }
+        driver.tick_file_chooser(event_tx);
         driver.tick_firefox_http_response_bodies(event_tx);
         if let Some(message) = driver.challenge_loop.take_rejection() {
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
@@ -241,6 +244,7 @@ pub(crate) fn run_webdriver(
 
 impl Driver {
     fn prepare_ready(&mut self, config: &BrowserSessionConfig, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
         }
@@ -380,6 +384,7 @@ impl Driver {
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
             native_select: native_select::NativeSelectState::default(),
+            file_chooser: file_chooser::ChooserState::default(),
         })
     }
 
@@ -549,6 +554,8 @@ impl Driver {
     }
 
     fn advance_generation(&mut self) {
+        self.panel_slot.file_chooser().invalidate();
+        self.file_chooser = file_chooser::ChooserState::default();
         self.generation = self.generation.wrapping_add(1);
         self.scrollbar.reset(&self.config.frame_slot);
         let _ = self.panel_slot.clear_native_select_popup();

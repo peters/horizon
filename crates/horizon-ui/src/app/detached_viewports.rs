@@ -217,7 +217,9 @@ impl HorizonApp {
         // one-shot frame keyboard metadata twice and re-run the stateful
         // speech filter (leaking an orphan hotkey key-up).
         self.filter_held_navigation_keys(ctx);
-        self.handle_detached_shortcuts(ctx, workspace_id);
+        if !self.host_dialog_open() {
+            self.handle_detached_shortcuts(ctx, workspace_id);
+        }
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
@@ -236,8 +238,11 @@ impl HorizonApp {
             canvas_rect,
             egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
         );
-        self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
+        if !self.host_dialog_open() {
+            self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
+        }
         self.render_ssh_upload_flow(ctx);
+        self.render_browser_file_chooser(ctx, Some(workspace_id));
         if self.pan_target.is_some() {
             ctx.request_repaint();
         }

@@ -53,6 +53,10 @@ pub(crate) struct BrowserPanel {
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
     pub(crate) agent_state: BrowserPanelAgentState,
+    /// Host file dialog support for manual page upload controls.
+    pub(crate) manual_file_chooser: bool,
+    /// A human must select or cancel files in the Horizon dialog.
+    pub(crate) file_chooser_pending: bool,
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
     pub(crate) video_capture: VideoCaptureCapability,
@@ -94,6 +98,8 @@ impl BrowserPanel {
                 user_active,
                 handoff_pending,
             },
+            manual_file_chooser: value.file_chooser.supported(),
+            file_chooser_pending: value.file_chooser.pending(),
             capabilities: semantic_capabilities(value.backend, remote, value.remote_file_upload),
             network_capture: NetworkCaptureCapability::for_backend(value.backend, remote),
             video_capture: VideoCaptureCapability::for_backend(),

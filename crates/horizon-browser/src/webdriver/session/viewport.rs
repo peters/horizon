@@ -387,6 +387,7 @@ mod tests {
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
             native_select: super::super::native_select::NativeSelectState::default(),
+            file_chooser: super::super::file_chooser::ChooserState::default(),
         }
     }
 

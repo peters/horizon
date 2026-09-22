@@ -310,7 +310,7 @@ impl DriverState {
         result
     }
 
-    fn file_input_value(
+    pub(super) fn file_input_value(
         &mut self,
         link: &mut crate::cdp::CdpLink,
         event_tx: &BrowserEventSender,

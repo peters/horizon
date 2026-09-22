@@ -12,6 +12,7 @@ mod remote_panel;
 pub use remote_panel::RemoteFailure;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;
+pub mod file_chooser;
 pub mod remote_catalog;
 pub mod remote_profile;
 pub mod remote_recovery;

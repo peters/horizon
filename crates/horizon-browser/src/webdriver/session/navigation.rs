@@ -423,6 +423,8 @@ impl Driver {
     /// Reset per-navigation state when the driver starts or observes a
     /// document navigation.
     pub(super) fn begin_navigation(&mut self) {
+        self.panel_slot.file_chooser().invalidate();
+        self.file_chooser = super::file_chooser::ChooserState::default();
         self.challenge_loop.document_navigation_started();
         self.pending_classic_history_start = None;
         self.semantic.invalidate();

@@ -23,6 +23,7 @@ pub struct CoordinationState {
     pub remote_device: Option<String>,
     /// Whether this remote session supports transferring host files.
     pub remote_file_upload: bool,
+    pub file_chooser: crate::FileChooserStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

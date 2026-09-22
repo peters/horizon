@@ -55,6 +55,17 @@ impl DriverState {
         chrome: &mut DriverProcess,
     ) -> bool {
         for request in actions {
+            if frame_slot.file_chooser().blocks(&request.action) {
+                self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
+                self.complete_agent_action(
+                    &request,
+                    Err(BrowserControlFailure::new(
+                        "file_chooser_pending",
+                        "Select or cancel files in the Horizon dialog before changing the page",
+                    )),
+                );
+                continue;
+            }
             // A blocking action later in the batch must not delay the typed
             // timeout of a navigation or wait dispatched earlier in it.
             self.tick_pending_navigation();

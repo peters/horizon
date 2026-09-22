@@ -413,7 +413,7 @@ impl HorizonApp {
             .as_ref()
             .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
         let text_surface_active = self.settings.is_some()
-            || self.cloud_creation_open()
+            || self.host_dialog_open()
             || self.command_palette.is_some()
             || search_capturing
             || self.renaming_panel.is_some()

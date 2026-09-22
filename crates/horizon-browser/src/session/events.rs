@@ -203,6 +203,7 @@ impl DriverState {
             return;
         }
         match event.method {
+            "Page.fileChooserOpened" => self.note_file_chooser(&event),
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
                     self.attach_http_auth_iframe(link, event_tx, frame_slot, &event);
@@ -348,6 +349,7 @@ impl DriverState {
         }
         self.invalidate_scrollbar_layout(event_tx);
         self.semantic.invalidate();
+        self.config.frame_slot.file_chooser().invalidate();
         self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(unreachable_url) = frame

@@ -421,6 +421,7 @@ impl HorizonApp {
                     |ui| {
                         let mut reconnect_requested = false;
                         let claim_editor_focus = !self.speech_text_surface_active().0;
+                        let interactive = !self.host_dialog_open();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -443,7 +444,7 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 claim_editor_focus,
-                                true,
+                                interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     browser_events: &browser_events,
@@ -629,7 +630,7 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed && !self.cloud_creation_open();
+        let interactive = !self.canvas_pan_input_claimed && !self.host_dialog_open();
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
         // Browser input suppresses app shortcuts that this viewport actually
