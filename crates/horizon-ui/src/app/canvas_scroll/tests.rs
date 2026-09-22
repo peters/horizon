@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use super::super::HorizonApp;
 use super::super::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use super::{ScrollGesture, ScrollTarget, WheelStep, route_canvas_scroll};
+use super::{ScrollGesture, ScrollTarget, WheelStep, canvas_zoom_delta, route_canvas_scroll};
 use crate::test_egui::DiscardTextures;
 
 /// The gesture only needs to know whether a panel is under the pointer, so the
@@ -748,4 +748,78 @@ fn zoom_modified_wheels_are_judged_per_event() {
         assert!(routing.claimed_wheels.is_empty());
         assert!(!routing.pans_canvas);
     }
+}
+
+#[test]
+fn a_frame_mixing_plain_and_zoom_wheels_pans_and_zooms_in_either_order() {
+    let plain = wheel(Vec2::new(0.0, -5.0), TouchPhase::Move);
+    let zoom = Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -5.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::COMMAND,
+    };
+    let pointer = Pos2::new(1200.0, 700.0);
+    let frame = |time: f64, wheels: Vec<Event>| {
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(time);
+        input.events = std::iter::once(Event::PointerMoved(pointer)).chain(wheels).collect();
+        input
+    };
+    // Reference: the zoom step and the plain step in frames of their own.
+    let (_temp, ctx, mut reference) = app_fixture();
+    let before = (reference.canvas_view.zoom, reference.canvas_view.pan_offset);
+    let _ = run_app_frame_with_input(&ctx, &mut reference, frame(1.0, vec![zoom.clone()]));
+    let _ = run_app_frame_with_input(&ctx, &mut reference, frame(1.3, vec![plain.clone()]));
+    assert!(reference.canvas_view.zoom < before.0, "the Ctrl/Cmd wheel zooms out");
+    for wheels in [vec![plain.clone(), zoom.clone()], vec![zoom.clone(), plain.clone()]] {
+        let (_temp, ctx, mut app) = app_fixture();
+        let _ = run_app_frame_with_input(&ctx, &mut app, frame(1.0, wheels));
+        assert!((app.canvas_view.zoom - reference.canvas_view.zoom).abs() < 1e-5);
+        assert_offset(app.canvas_view.pan_offset, reference.canvas_view.pan_offset);
+    }
+}
+
+#[test]
+fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
+    let options = InputOptions::default();
+    let ctx = Context::default();
+    let notch = Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::COMMAND,
+    };
+    let zoom_at = |time: f64, events: Vec<Event>| {
+        let mut zoom = 1.0;
+        let input = RawInput {
+            time: Some(time),
+            events,
+            ..RawInput::default()
+        };
+        let _ = ctx
+            .run_ui(input, |ui| zoom = canvas_zoom_delta(ui.ctx()))
+            .discard_textures();
+        zoom
+    };
+    let first = zoom_at(1.0, vec![notch]);
+    let target = (options.scroll_zoom_speed * -options.line_scroll_speed).exp();
+    assert!(first < 1.0 && first > target, "eased, not applied at once: {first}");
+    let mut total = first;
+    for frame in 1..60 {
+        total *= zoom_at(1.0 + f64::from(frame) / 60.0, Vec::new());
+    }
+    assert!((total - target).abs() < 1e-4, "{total} vs {target}");
+    // Plain wheels never zoom the canvas.
+    assert!((zoom_at(3.0, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]) - 1.0).abs() < f32::EPSILON);
+    // The router skips Ctrl and Cmd wheels alike as zoom steps, so a lone
+    // Ctrl, which is not `command` on macOS, must zoom here too.
+    let ctrl = Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -5.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::CTRL,
+    };
+    let expected = (options.scroll_zoom_speed * -5.0).exp();
+    assert!((zoom_at(4.0, vec![ctrl]) - expected).abs() < 1e-6);
 }

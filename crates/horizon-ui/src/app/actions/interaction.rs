@@ -6,7 +6,7 @@ use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::super::input::{GridPoint, TerminalInputEvent, WheelAction, terminal_input_events, wheel_action};
 use super::super::canvas_drag::canvas_drag_delta;
-use super::super::canvas_scroll::{ScrollTarget, WheelStep, route_canvas_scroll};
+use super::super::canvas_scroll::{ScrollTarget, WheelStep, canvas_zoom_delta, route_canvas_scroll};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_key_may_emit_text, shortcut_pressed, take_captured_clipboard_event,
@@ -185,7 +185,7 @@ impl HorizonApp {
             self.frame_keyboard_events.remove(&ctx.viewport_id());
             return;
         }
-        let (events, pointer_position, middle_down, primary_down, space_down, modifiers, pointer_delta, zoom_delta) =
+        let (events, pointer_position, middle_down, primary_down, space_down, modifiers, pointer_delta) =
             ctx.input(|input| {
                 (
                     input.events.clone(),
@@ -195,9 +195,9 @@ impl HorizonApp {
                     input.key_down(egui::Key::Space),
                     input.modifiers,
                     input.pointer.delta(),
-                    input.zoom_delta(),
                 )
             });
+        let zoom_delta = canvas_zoom_delta(ctx);
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
@@ -244,15 +244,14 @@ impl HorizonApp {
         );
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
+        // Zoom and pan come from different wheel events, so a frame can do
+        // both: plain wheels still route below.
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, ScrollTarget::Canvas, false, |_, _| false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
             }
             self.canvas_pan_input_claimed = false;
-            self.is_panning = false;
-            return;
         }
 
         let drag_panning = self.canvas_pan_input_claimed;

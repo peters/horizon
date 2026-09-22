@@ -219,6 +219,75 @@ pub(super) fn route_canvas_scroll(
     routing
 }
 
+/// Ctrl/Cmd wheel zoom still being eased in, and whether a phased wheel
+/// gesture is in progress.
+#[derive(Clone, Copy, Default)]
+struct WheelZoom {
+    backlog: f32,
+    in_touch: bool,
+}
+
+/// Canvas zoom from this frame's input. egui sums a frame's wheel deltas and
+/// classifies the total as all zoom or all scroll, so a frame mixing a plain
+/// and a Ctrl/Cmd wheel would misroute one of them. Zoom-modified wheels are
+/// taken here one event at a time instead, converted and eased exactly as
+/// egui zooms with them, while native pinch and multi-touch pass through as
+/// egui reports them. Plain wheels are left to [`route_canvas_scroll`].
+pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
+    let id = Id::new(("canvas_wheel_zoom", ctx.viewport_id()));
+    let mut state = ctx.data_mut(|data| data.get_temp::<WheelZoom>(id).unwrap_or_default());
+    let options = ctx.options(|options| options.input_options);
+    let zoom = ctx.input(|input| {
+        let mut factor = 1.0;
+        let mut immediate = 0.0;
+        for event in &input.raw.events {
+            match event {
+                Event::Zoom(delta) if delta.is_finite() => factor *= *delta,
+                Event::MouseWheel {
+                    unit,
+                    delta,
+                    phase,
+                    modifiers,
+                } => match phase {
+                    TouchPhase::Start => state.in_touch = true,
+                    TouchPhase::End | TouchPhase::Cancel => {
+                        immediate += std::mem::take(&mut state.backlog);
+                        state.in_touch = false;
+                    }
+                    TouchPhase::Move if modifiers.matches_any(options.zoom_modifier) => {
+                        let points = match unit {
+                            MouseWheelUnit::Point => *delta,
+                            MouseWheelUnit::Line => options.line_scroll_speed * *delta,
+                            MouseWheelUnit::Page => input.viewport_rect().height() * *delta,
+                        };
+                        if state.in_touch || (*unit == MouseWheelUnit::Point && points.length() < 8.0) {
+                            immediate += points.x + points.y;
+                        } else {
+                            state.backlog += points.x + points.y;
+                        }
+                    }
+                    TouchPhase::Move => {}
+                },
+                _ => {}
+            }
+        }
+        let t = egui::emath::exponential_smooth_factor(0.90, 0.1, input.stable_dt.min(0.1));
+        let eased = if state.backlog.abs() < 1.0 {
+            state.backlog
+        } else {
+            t * state.backlog
+        };
+        state.backlog -= eased;
+        let wheel = (options.scroll_zoom_speed * (immediate + eased)).exp();
+        input.multi_touch().map_or(factor * wheel, |touch| touch.zoom_delta)
+    });
+    if state.backlog != 0.0 {
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|data| data.insert_temp(id, state));
+    zoom
+}
+
 impl ScrollRouting {
     pub(super) fn consume(&self, ctx: &Context, terminal_events: &mut Vec<TerminalInputEvent>) {
         ctx.input_mut(|input| {
