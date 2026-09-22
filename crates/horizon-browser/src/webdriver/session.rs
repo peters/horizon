@@ -488,7 +488,7 @@ impl Driver {
     }
 
     fn set_viewport(&mut self, width: u32, height: u32, event_tx: &BrowserEventSender) {
-        self.advance_generation();
+        self.advance_viewport_generation();
         if self.host.is_remote() {
             // A physical device is never resized because its panel was; the
             // panel maps the device's own viewport instead.
@@ -565,7 +565,13 @@ impl Driver {
         self.panel_slot.file_chooser().invalidate();
         self.coordination_dirty = true;
         self.file_chooser = file_chooser::ChooserState::default();
+        self.advance_viewport_generation();
+    }
+
+    fn advance_viewport_generation(&mut self) {
+        self.coordination_dirty = true;
         self.generation = self.generation.wrapping_add(1);
+        self.file_chooser.retain_after_viewport_change(self.generation);
         self.scrollbar.reset(&self.config.frame_slot);
         let _ = self.panel_slot.clear_native_select_popup();
         self.native_select = native_select::NativeSelectState::default();

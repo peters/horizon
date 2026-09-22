@@ -18,6 +18,16 @@ pub(super) struct ChooserState {
     target: Option<Target>,
 }
 
+impl ChooserState {
+    pub(super) fn retain_after_viewport_change(&mut self, generation: u64) {
+        // Viewport changes invalidate semantic refs, but retain the original
+        // document-bound file input and any pending user selection.
+        for target in self.incoming.iter_mut().chain(self.target.iter_mut()) {
+            target.generation = generation;
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Target {
     request: u64,
