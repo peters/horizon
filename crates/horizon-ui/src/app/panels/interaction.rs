@@ -275,13 +275,14 @@ impl HorizonApp {
         workspace_collision_ids: &[WorkspaceId],
     ) {
         #[cfg(feature = "cloud-workspaces")]
-        if self
+        if !self
             .cloud_prototype
             .groups
             .resize_panel(&mut self.board, panel_id, size)
         {
-            return;
+            self.resize_ordinary_panel(panel_id, size, workspace_collision_ids);
         }
+        #[cfg(not(feature = "cloud-workspaces"))]
         let _ = self
             .board
             .resize_panel_with_workspace_scope(panel_id, size, workspace_collision_ids);
@@ -723,5 +724,51 @@ mod tests {
             "expected the panel to move by [30, 20], got {moved:?} from {original:?}"
         );
         assert!(app.arranged_panel_drag.is_none());
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    #[test]
+    fn ordinary_panel_resize_pushes_the_live_cloud_frame() {
+        use horizon_core::cloud_panel::{CloudGroup, CloudGroups};
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace_at("Cloud fixture", [0.0, 0.0]);
+        let panel = app
+            .board
+            .create_panel(
+                PanelOptions {
+                    position: Some([60.0, 120.0]),
+                    size: Some([480.0, 360.0]),
+                    ..editor_panel_options()
+                },
+                workspace,
+            )
+            .unwrap();
+        let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+        let group = CloudGroup::new(101, "Fixture".into(), local_id, "/fixture".into(), [610.0, 120.0]);
+        app.board.cloud_groups = CloudGroups(vec![group]);
+        let ctx = Context::default();
+        app.prepare_cloud_prototype(&ctx);
+        // Only the live copy moves, so resolving against the board's stale copy would push the cloud.
+        app.cloud_prototype.groups.0[0].translate(&mut app.board, [400.0, 0.0]);
+
+        app.resize_panel_in_environment(panel, [760.0, 360.0], &[workspace]);
+        assert_eq!(
+            Pos2::from(app.cloud_prototype.groups.0[0].position),
+            Pos2::new(1010.0, 120.0)
+        );
+
+        app.resize_panel_in_environment(panel, [1000.0, 360.0], &[workspace]);
+        app.prepare_cloud_prototype(&ctx);
+
+        let cloud = &app.cloud_prototype.groups.0[0];
+        assert!(
+            cloud.overview_bounds().0[0] >= 60.0 + 1000.0,
+            "cloud frame still overlaps the grown panel at {:?}",
+            cloud.position
+        );
+        assert_eq!(
+            Pos2::from(app.board.cloud_groups.0[0].position),
+            Pos2::from(cloud.position)
+        );
     }
 }

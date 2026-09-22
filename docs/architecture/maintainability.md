@@ -137,7 +137,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   attention flows, agent working-status detection, workspace and panel
   membership changes, arrangement/collision logic, geometry queries, and
   shutdown state. Preset slot collision and swapping lives in
-  `board/arrangement/reordering.rs`.
+  `board/arrangement/reordering.rs`; the panel resize collision cascade, which
+  pushes sibling panels and whole cloud frames, lives in
+  `board/arrangement/panel_collisions.rs`.
 - Large board test surfaces should live in `board/tests/` topic files so
   `board.rs` can stay focused on production orchestration.
 - `panel.rs` owns panel models and content access; explicit restart logic lives

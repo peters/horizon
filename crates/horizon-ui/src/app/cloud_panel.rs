@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use horizon_core::cloud_panel::{self, CHILD_SIZE, CLOUDS, CloudGroup, CloudGroups, PrototypeSnapshot};
-use horizon_core::{Board, PanelKind, PanelOptions, PanelResume, RuntimeState};
+use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PanelResume, RuntimeState, WorkspaceId};
 
 use super::HorizonApp;
 
@@ -191,14 +191,37 @@ impl HorizonApp {
         }
     }
 
+    /// Whether `cloud_prototype.groups`, rather than the board's copy, holds this session's clouds.
+    fn cloud_state_is_live(&self) -> bool {
+        self.cloud_prototype.initialized
+            && self.cloud_prototype.ready
+            && (std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() || self.cloud_state_matches_session())
+    }
+
+    /// Resize a panel outside every cloud; its growth pushes whole cloud frames like sibling panels.
+    pub(super) fn resize_ordinary_panel(
+        &mut self,
+        id: PanelId,
+        size: [f32; 2],
+        workspace_collision_ids: &[WorkspaceId],
+    ) {
+        let live = self.cloud_state_is_live();
+        if live {
+            std::mem::swap(&mut self.board.cloud_groups, &mut self.cloud_prototype.groups);
+        }
+        let _ = self
+            .board
+            .resize_panel_with_workspace_scope(id, size, workspace_collision_ids);
+        if live {
+            self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
+        }
+    }
+
     pub(super) fn save_cloud_prototype(&mut self) {
-        let mock = std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some();
-        if !self.cloud_prototype.initialized
-            || !self.cloud_prototype.ready
-            || (!mock && !self.cloud_state_matches_session())
-        {
+        if !self.cloud_state_is_live() {
             return;
         }
+        let mock = std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some();
         self.board.cloud_groups = self.cloud_prototype.groups.clone();
         if !mock {
             self.mark_runtime_dirty();
