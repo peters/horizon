@@ -52,6 +52,13 @@ impl HorizonApp {
                     Err(error) => tracing::error!("failed to create panel: {error}"),
                 }
             }
+            #[cfg(feature = "cloud-workspaces")]
+            DirPickerPurpose::CloudRepository => {
+                if let Some(path) = path {
+                    self.set_cloud_repository(path);
+                }
+                return;
+            }
         }
         self.mark_runtime_dirty();
     }

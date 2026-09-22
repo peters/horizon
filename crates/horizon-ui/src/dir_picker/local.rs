@@ -22,6 +22,8 @@ pub enum DirPickerPurpose {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     },
+    #[cfg(feature = "cloud-workspaces")]
+    CloudRepository,
 }
 
 pub struct DirPicker {
@@ -80,7 +82,7 @@ impl DirPicker {
                 hint_text: "Type a path or search...",
                 status_text: None,
                 empty_state,
-                footer_action_label: Some("Skip (use default)"),
+                footer_action_label: self.footer_action_label(),
             },
             &self.results,
             |ui, width, index, path, is_selected| render_result_row(ui, width, index, path.as_path(), is_selected),
@@ -102,7 +104,17 @@ impl DirPicker {
     fn heading(&self) -> &'static str {
         match &self.selected_purpose {
             Some(DirPickerPurpose::NewWorkspace { .. }) => "Select workspace directory",
+            #[cfg(feature = "cloud-workspaces")]
+            Some(DirPickerPurpose::CloudRepository) => "Select repository directory",
             Some(DirPickerPurpose::AddPanel { .. }) | None => "Select terminal directory",
+        }
+    }
+
+    fn footer_action_label(&self) -> Option<&'static str> {
+        match &self.selected_purpose {
+            #[cfg(feature = "cloud-workspaces")]
+            Some(DirPickerPurpose::CloudRepository) => None,
+            _ => Some("Skip (use default)"),
         }
     }
 
@@ -142,9 +154,8 @@ impl DirPicker {
     }
 
     fn confirm_selection(&mut self) -> DirPickerAction {
-        let expanded = expand_tilde_simple(self.modal.query());
-        if !self.modal.query().is_empty() && expanded.is_dir() {
-            return self.select(Some(expanded));
+        if let Some(typed) = dir_search::resolve_query_path(self.modal.query()).filter(|path| path.is_dir()) {
+            return self.select(Some(typed));
         }
 
         if let Some(path) = self.results.get(self.modal.selected_index()).cloned() {
@@ -237,19 +248,6 @@ fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, i
     }
 
     clicked
-}
-
-fn expand_tilde_simple(input: &str) -> PathBuf {
-    if let Some(rest) = input.strip_prefix('~') {
-        let home: PathBuf = std::env::var("HOME").map_or_else(|_| PathBuf::from("/"), PathBuf::from);
-        if rest.is_empty() {
-            home
-        } else {
-            home.join(rest.strip_prefix('/').unwrap_or(rest))
-        }
-    } else {
-        PathBuf::from(input)
-    }
 }
 
 fn seed_query(path: Option<&Path>) -> String {

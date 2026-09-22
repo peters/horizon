@@ -1,7 +1,10 @@
 //! Presentation of the existing repository-backed cloud creation flow.
 use super::{CloudConfig, HorizonApp, PathBuf, Production};
+use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
-use egui::{Align, Button, Context, Frame, Id, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
+use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
+use horizon_core::dir_search;
+use std::path::Path;
 
 #[derive(Default)]
 struct Actions {
@@ -14,6 +17,7 @@ struct Actions {
 enum RepositoryAction {
     #[default]
     None,
+    Choose,
     Load,
     Setup,
 }
@@ -28,6 +32,9 @@ impl HorizonApp {
         let body_height = (viewport.height() - 240.0).max(100.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let picking = self.dir_picker.is_some();
+        // Focus returns to the field when its picker closes, whether or not a directory was chosen.
+        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
         let id = Id::new("cloud-creation");
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
@@ -41,6 +48,9 @@ impl HorizonApp {
             )
             .show(ctx, |ui| {
                 ui.set_width(width);
+                if picking {
+                    ui.disable();
+                }
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
                 heading(ui);
                 ui.add_space(16.0);
@@ -49,9 +59,7 @@ impl HorizonApp {
                     .max_height(body_height)
                     .show(ui, |ui| {
                         ui.add_enabled_ui(self.cloud_prototype.production.pending_creation.is_none(), |ui| {
-                            if fields(ui, &mut self.cloud_prototype.production) {
-                                actions.repository = RepositoryAction::Load;
-                            }
+                            actions.repository = fields(ui, &mut self.cloud_prototype.production, refocus_repository);
                             if self.cloud_prototype.production.profiles.is_none()
                                 && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
                             {
@@ -69,7 +77,15 @@ impl HorizonApp {
                 footer(ui, &self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
-        let dismissed = response.should_close();
+        // The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
+        let dismissed = if picking {
+            if response.backdrop_response.clicked() {
+                self.dir_picker = None;
+            }
+            false
+        } else {
+            response.should_close()
+        };
         if dismissed && escape {
             self.consume_navigation_key(
                 ctx,
@@ -85,6 +101,7 @@ impl HorizonApp {
             return;
         }
         match actions.repository {
+            RepositoryAction::Choose => self.choose_cloud_repository(),
             RepositoryAction::Load => self.read_cloud_profiles(),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
             RepositoryAction::None => {}
@@ -95,6 +112,22 @@ impl HorizonApp {
             self.cloud_prototype.error = Some(error.to_string());
         }
         self.poll_cloud_creation(ctx);
+    }
+
+    fn choose_cloud_repository(&mut self) {
+        let form = &mut self.cloud_prototype.production;
+        form.choosing_repository = true;
+        let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
+        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
+    }
+
+    pub(in crate::app) fn set_cloud_repository(&mut self, path: &Path) {
+        let form = &mut self.cloud_prototype.production;
+        let repository = path.to_string_lossy();
+        if form.repository != repository {
+            form.repository = repository.into_owned();
+            form.profiles = None;
+        }
     }
 
     pub(super) fn read_cloud_profiles(&mut self) {
@@ -149,7 +182,27 @@ fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> 
     )
 }
 
-fn fields(ui: &mut Ui, form: &mut Production) -> bool {
+fn repository_field(ui: &mut Ui, repository: &str) -> egui::Response {
+    ui.label(RichText::new("Repository").size(14.0).strong().color(theme::FG()));
+    let path = if repository.trim().is_empty() {
+        RichText::new("Choose a local repository").color(theme::FG_DIM())
+    } else {
+        RichText::new(dir_search::abbreviate_home(Path::new(repository))).color(theme::FG())
+    };
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = Vec2::new(12.0, 10.0);
+        ui.add(
+            Button::new(path.size(15.0))
+                .right_text(RichText::new("Browse…").size(13.0).color(theme::FG_SOFT()))
+                .truncate()
+                .fill(ui.visuals().text_edit_bg_color())
+                .min_size(Vec2::new(ui.available_width(), 38.0)),
+        )
+    })
+    .inner
+}
+
+fn fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool) -> RepositoryAction {
     let title = field(
         ui,
         "Cloud title",
@@ -161,16 +214,25 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
         title.request_focus();
     }
     ui.add_space(8.0);
-    if field(
-        ui,
-        "Repository",
-        "cloud-repository",
-        &mut form.repository,
-        "/path/to/repository",
-    )
-    .changed()
-    {
-        form.profiles = None;
+    let repository = repository_field(ui, &form.repository);
+    if refocus_repository {
+        repository.request_focus();
+    }
+    let choose = repository.clicked();
+    if choose {
+        // Keyboard activation (Enter with any modifiers) must not also confirm the picker opening this frame.
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                )
+            });
+        });
     }
     ui.add_space(8.0);
     field(
@@ -229,7 +291,13 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
                 .color(theme::FG_SOFT()),
         );
     }
-    load
+    if choose {
+        RepositoryAction::Choose
+    } else if load {
+        RepositoryAction::Load
+    } else {
+        RepositoryAction::None
+    }
 }
 
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {

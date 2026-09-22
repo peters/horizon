@@ -1,35 +1,4 @@
 use super::*;
-use egui::{PointerButton, Pos2, Rect, epaint::Shape};
-
-fn label_position(output: &egui::FullOutput, label: &str) -> Pos2 {
-    output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == label => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("Missing visible label: {label}"))
-}
-
-fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
-    frame(ctx, app, vec![Event::PointerMoved(position)], Modifiers::NONE);
-    for pressed in [true, false] {
-        frame(
-            ctx,
-            app,
-            vec![Event::PointerButton {
-                pos: position,
-                button: PointerButton::Primary,
-                pressed,
-                modifiers: Modifiers::NONE,
-            }],
-            Modifiers::NONE,
-        );
-    }
-}
 
 #[test]
 fn reopening_keeps_cloud_controls_below_the_modal() {
