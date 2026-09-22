@@ -314,21 +314,40 @@ fn snapshots_keep_committed_line_endings_under_windows_checkout_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     init(&repo);
+    let module = repo.join("module");
+    init(&module);
+    std::fs::write(module.join(".gitattributes"), "* text=auto\n").unwrap();
+    std::fs::write(module.join("module.sh"), "echo module\n").unwrap();
+    git(&module, &["add", "."]);
+    git(&module, &["commit", "-m", "Create module fixture"]);
+    let module_sha = git(&module, &["rev-parse", "HEAD"]);
     std::fs::write(repo.join(".gitattributes"), "* text=auto\n*.bat text eol=crlf\n").unwrap();
     std::fs::write(repo.join("build.sh"), "echo committed\n").unwrap();
     std::fs::write(repo.join("setup.bat"), "echo windows\r\n").unwrap();
-    git(&repo, &["add", "."]);
+    git(&repo, &["add", ".gitattributes", "build.sh", "setup.bat"]);
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{module_sha},module"),
+        ],
+    );
     git(&repo, &["commit", "-m", "Create source fixture"]);
-    // Git for Windows checks text out with CRLF through either setting.
-    git(&repo, &["config", "core.eol", "crlf"]);
     let cancel = horizon_cloud::Cancellation::default();
     let runner = Runner {
         cancel: &cancel,
         emit: &|_| {},
         secrets: Vec::new(),
     };
+    // Git for Windows checks text out with CRLF through either setting, in
+    // the repository and in each submodule.
     for autocrlf in ["false", "true"] {
-        git(&repo, &["config", "core.autocrlf", autocrlf]);
+        for checkout in [&repo, &module] {
+            git(checkout, &["config", "core.eol", "crlf"]);
+            git(checkout, &["config", "core.autocrlf", autocrlf]);
+        }
         let root = temp.path().join(format!("autocrlf-{autocrlf}"));
         std::fs::create_dir(&root).unwrap();
         let export = snapshot(&repo, "HEAD", &root, &runner).unwrap();
@@ -339,6 +358,10 @@ fn snapshots_keep_committed_line_endings_under_windows_checkout_defaults() {
         assert_eq!(
             std::fs::read_to_string(export.join("setup.bat")).unwrap(),
             "echo windows\r\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(export.join("module/module.sh")).unwrap(),
+            "echo module\n"
         );
     }
 }
