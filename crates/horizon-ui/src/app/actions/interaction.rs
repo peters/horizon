@@ -286,12 +286,10 @@ impl HorizonApp {
         };
         let cell_size = crate::terminal_widget::wheel_cell_size(ctx);
         let mut pending_scrollback = None;
-        let scroll_routing = route_canvas_scroll(
-            ctx,
-            scroll_target,
-            pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
-            |panel, step| self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback),
-        );
+        let scroll_routing =
+            route_canvas_scroll(ctx, scroll_target, pointer_in_canvas && !drag_panning, |panel, step| {
+                self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback)
+            });
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
         } else if scroll_routing.pans_canvas {

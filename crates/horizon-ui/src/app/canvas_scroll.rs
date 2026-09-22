@@ -136,6 +136,12 @@ impl ScrollGesture {
             })
             .enumerate()
         {
+            // A Ctrl/Cmd wheel is a zoom step, exactly as the terminal treats
+            // it: it neither starts, continues nor chains a pan, and stays in
+            // the stream. Judged per event, since one frame can mix both.
+            if phase == TouchPhase::Move && (step.modifiers.ctrl || step.modifiers.command) {
+                continue;
+            }
             let delta = step.delta;
             match phase {
                 TouchPhase::Start => {

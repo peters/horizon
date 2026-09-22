@@ -711,3 +711,41 @@ fn a_move_batched_with_its_end_still_pans_in_full() {
         assert_eq!(gesture.canvas_owned, None, "ownership ends with the gesture");
     }
 }
+
+#[test]
+fn zoom_modified_wheels_are_judged_per_event() {
+    // One frame can carry a plain wheel and a Ctrl/Cmd one. The plain event
+    // pans; the modified one is a zoom step and stays in the stream.
+    // `COMMAND` is what egui reports for Cmd on macOS and Ctrl elsewhere.
+    for zoom_modifier in [Modifiers::CTRL, Modifiers::COMMAND] {
+        let zoom_wheel = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -5.0),
+            phase: TouchPhase::Move,
+            modifiers: zoom_modifier,
+        };
+        let mut gesture = ScrollGesture::default();
+        let routing = gesture.route(
+            &pass(
+                1.0,
+                vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move), zoom_wheel.clone()],
+            ),
+            &InputOptions::default(),
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert_eq!(routing.claimed_wheels, vec![0]);
+        assert_eq!(routing.pan, Vec2::new(0.0, -5.0));
+        // A lone modified wheel never pans, whoever owns the gesture.
+        let routing = gesture.route(
+            &pass(1.016, vec![zoom_wheel]),
+            &InputOptions::default(),
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert!(routing.claimed_wheels.is_empty());
+        assert!(!routing.pans_canvas);
+    }
+}
