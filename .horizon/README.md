@@ -14,7 +14,7 @@ private registry access is needed to build them. The context contains only
 recipes, the installer and notices. Runtime source, package caches, account
 authentication and application state are transferred separately.
 
-Both images use Ubuntu 24.04. Chromium is the pinned Debian build, installed
+Both images use Ubuntu 24.04. Chromium comes from the signed Debian snapshot dated 2026-09-22, installed
 with two uniquely named compatibility libraries and Ubuntu-resolved dependencies;
 no foreign apt repository or core-library downgrade is used. Preserve the
 component licenses described in [THIRD-PARTY.md](THIRD-PARTY.md). The GPU image

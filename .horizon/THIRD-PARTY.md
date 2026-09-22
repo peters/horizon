@@ -25,7 +25,7 @@ copyright notices when redistributing the image.
   Preserve these archives with the binaries; the voice libraries remain separate
   replaceable shared objects. Other component terms continue to apply.
 - Chromium, its common files and sandbox, libdav1d6 and libjpeg62-turbo come
-  from the signed Debian package repositories. The exact versions are pinned
+  from signed Debian and security snapshots dated 2026-09-22. The exact versions are pinned
   in the recipes; their copyright and source information remain under
   `/usr/share/doc/<package>/copyright`. Source packages and distribution metadata
   are available at https://sources.debian.org/src/chromium/ ,
