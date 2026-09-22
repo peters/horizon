@@ -18,9 +18,7 @@ pub(super) struct FilePicker {
 
 impl FilePicker {
     fn new(request: &FileChooserRequest, ctx: &egui::Context) -> Self {
-        let directory = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map_or_else(|| PathBuf::from("/"), PathBuf::from);
+        let directory = horizon_core::user_home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let mut picker = Self {
             id: request.id,
             path: directory.display().to_string(),
@@ -105,7 +103,7 @@ impl FilePicker {
                     }
                 }
                 if listing.truncated {
-                    ui.label("Showing the first 2,000 entries. Enter a narrower directory.");
+                    ui.label("Directory has more than 2,000 entries. Enter a narrower directory.");
                 }
             }
         });

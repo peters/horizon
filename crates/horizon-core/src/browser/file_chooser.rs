@@ -29,8 +29,8 @@ pub fn read_directory(
             let directory = std::fs::read_dir(path).map_err(|error| error.to_string())?;
             let mut entries = Vec::new();
             let mut truncated = false;
-            for entry in directory.take(2_001) {
-                if entries.len() == 2_000 {
+            for (index, entry) in directory.take(2_001).enumerate() {
+                if index == 2_000 {
                     truncated = true;
                     break;
                 }
@@ -58,6 +58,26 @@ pub fn read_directory(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[cfg(unix)]
+    #[test]
+    fn skipped_entries_still_count_toward_the_directory_limit() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        for index in 0..2_001 {
+            std::os::unix::fs::symlink("missing-target", root.path().join(index.to_string())).expect("symlink");
+        }
+        for truncated in [true, false] {
+            let listing = read_directory(root.path().to_path_buf(), || {})
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker")
+                .expect("listing");
+            assert!(listing.entries.is_empty());
+            assert_eq!(listing.truncated, truncated);
+            if truncated {
+                std::fs::remove_file(root.path().join("2000")).expect("remove extra entry");
+            }
+        }
+    }
 
     #[test]
     fn listing_orders_directories_first_and_reports_missing_directories() {
