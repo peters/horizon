@@ -37,10 +37,11 @@ pub(super) fn wait(
         deadline.remaining(runner.cancel)?;
         let worker = inspected?.ok_or(horizon_cloud::CloudError::WorkerLost)?;
         worker.verify(spec)?;
-        worker.verify_resources(spec)?;
+        let resources = worker.verify_resources(spec);
         let connection = Connection::new(&worker, &request.settings, store.root());
         state.worker = Some(worker);
         store.save(state)?;
+        resources?;
         if let Ok(connection) = connection {
             (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
                 "Waiting for SSH and worker services",
