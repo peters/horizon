@@ -75,10 +75,13 @@ impl Settings {
         }
         let mut volumes = std::collections::BTreeSet::new();
         for (cloud_id, binding) in &self.network_volumes {
-            if !horizon_cloud::valid_id(cloud_id) || !volumes.insert(&binding.id) {
-                return Err(Error::Invalid("Network volumes require unique explicit cloud bindings"));
+            if !horizon_cloud::valid_id(cloud_id) {
+                return Err(Error::Invalid("Invalid cloud ID in network volume binding"));
             }
             binding.validate()?;
+            if !volumes.insert(&binding.id) {
+                return Err(Error::Invalid("Network volumes require unique explicit cloud bindings"));
+            }
         }
         for binding in &self.browserstack_credentials {
             binding.validate()?;
@@ -157,11 +160,17 @@ mod tests {
         settings.validate().unwrap();
         assert!(!settings.network_volumes.contains_key("new-cloud"));
         settings.network_volumes.insert("cloud2".into(), binding.clone());
-        assert!(settings.validate().is_err());
+        assert!(matches!(
+            settings.validate(),
+            Err(Error::Invalid("Network volumes require unique explicit cloud bindings"))
+        ));
         settings.network_volumes.get_mut("cloud2").unwrap().id = "volume2".into();
         settings.validate().unwrap();
         settings.network_volumes.insert("../invalid".into(), binding);
-        assert!(settings.validate().is_err());
+        assert!(matches!(
+            settings.validate(),
+            Err(Error::Invalid("Invalid cloud ID in network volume binding"))
+        ));
     }
 
     #[test]

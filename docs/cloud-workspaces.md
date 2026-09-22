@@ -54,11 +54,14 @@ the flavor with the least memory per vCPU and price that does. For example, an
 8 vCPU, 32 GB profile uses `cpu3g` when only `cpu3c` is preferred. A size no
 flavor offers fails validation before the image is built.
 
-For an existing network volume, bind it to one cloud ID in this machine-local file:
+For an existing network volume, merge this object into the machine-local settings
+file to bind it to one cloud ID:
 
 ```json
-"network_volumes": {
-  "your-cloud-id": { "id": "your-volume-id", "data_center_id": "EU-RO-1" }
+{
+  "network_volumes": {
+    "your-cloud-id": { "id": "your-volume-id", "data_center_id": "EU-RO-1" }
+  }
 }
 ```
 
