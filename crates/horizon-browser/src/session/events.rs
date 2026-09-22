@@ -444,6 +444,7 @@ impl DriverState {
         event: CdpEvent<'_>,
         on_page_session: bool,
     ) {
+        self.handle_file_chooser_event(&event, event_tx);
         if !on_page_session {
             return;
         }
@@ -666,6 +667,27 @@ mod tests {
                 assert_eq!(handle.status().pending(), frame == "sibling");
             }
             assert!(state.manifest_dirty);
+            assert!(state.url.is_empty());
+            state.note_file_chooser(&CdpEvent {
+                method: "Page.fileChooserOpened",
+                session_id: Some(session),
+                params: &serde_json::json!({"backendNodeId":2,"frameId":"child"}),
+            });
+            handle.open(false, String::new(), "https://files.test".into());
+            state.manifest_dirty = false;
+            for frame in ["sibling", "child"] {
+                state.handle_same_document_navigation(
+                    &events,
+                    CdpEvent {
+                        method: "Page.navigatedWithinDocument",
+                        session_id: Some(session),
+                        params: &serde_json::json!({"frameId":frame,"url":"https://files.test/#changed"}),
+                    },
+                    session == "session",
+                );
+                assert_eq!(handle.status().pending(), frame == "sibling");
+                assert_eq!(state.manifest_dirty, frame == "child");
+            }
             assert!(state.url.is_empty());
             state.note_file_chooser(&CdpEvent {
                 method: "Page.fileChooserOpened",
