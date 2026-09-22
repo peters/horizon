@@ -87,7 +87,7 @@ pub fn show(
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
         && !browser.frame_slot.file_chooser().supported()
     {
-        ui.label(RichText::new("Manual upload selection is unavailable in this browser. Use a local Chromium or Firefox panel to choose files.").size(10.5).color(theme::PALETTE_YELLOW()));
+        ui.label(RichText::new("Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support.").size(10.5).color(theme::PALETTE_YELLOW()));
     }
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
