@@ -47,6 +47,8 @@ pub(crate) struct DeviceUiState {
 struct ZoomAnchor {
     captured_at: f64,
     native_pinch: bool,
+    /// The wheel gesture it was captured in; a new one re-anchors.
+    generation: u64,
     pointer: egui::Pos2,
     /// Pixel of the displayed image under the pointer when the gesture started.
     content: egui::Vec2,
@@ -254,10 +256,13 @@ impl DeviceUiState {
         };
         let now = ui.input(|input| input.time);
         let native_pinch = panel_zoom::is_native_pinch(ui.ctx());
+        let generation = panel_zoom::gesture_generation(ui.ctx());
         let anchor = self
             .zoom_anchor
             .filter(|anchor| {
-                anchor.native_pinch == native_pinch && now - anchor.captured_at <= panel_zoom::GESTURE_IDLE_SECONDS
+                anchor.native_pinch == native_pinch
+                    && anchor.generation == generation
+                    && now - anchor.captured_at <= panel_zoom::GESTURE_IDLE_SECONDS
             })
             .or_else(|| {
                 let pointer = panel_zoom::local_pointer(ui)?;
@@ -266,6 +271,7 @@ impl DeviceUiState {
                 (view.scale.is_finite() && view.scale > 0.0 && view.body.contains(pointer)).then(|| ZoomAnchor {
                     captured_at: now,
                     native_pinch,
+                    generation,
                     pointer,
                     content: (pointer - view.image_rect.min) / view.scale,
                 })

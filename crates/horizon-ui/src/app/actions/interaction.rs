@@ -338,6 +338,9 @@ impl HorizonApp {
         canvas_rect: Rect,
         visible_workspace: Option<WorkspaceId>,
     ) {
+        // Every frame's wheel phases count, including frames where nothing
+        // zooms, or a gesture's end could be missed before the next starts.
+        crate::panel_zoom::gesture_generation(ctx);
         if self.browser_file_chooser_open() {
             self.terminal_keyboard_events.clear();
             self.frame_keyboard_events.remove(&ctx.viewport_id());

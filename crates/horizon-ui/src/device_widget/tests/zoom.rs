@@ -217,6 +217,7 @@ fn choosing_a_zoom_abandons_the_previous_gesture_state() {
     state.zoom_anchor = Some(ZoomAnchor {
         captured_at: 0.0,
         native_pinch: false,
+        generation: 0,
         pointer: egui::pos2(600.0, 500.0),
         content: egui::vec2(4.0, 2.0),
     });
@@ -257,6 +258,7 @@ fn changing_image_body_discards_pending_scroll_and_anchor_before_painting() {
                 state.zoom_anchor = Some(ZoomAnchor {
                     captured_at: 1.0,
                     native_pinch: false,
+                    generation: 0,
                     pointer: egui::pos2(100.0, 100.0),
                     content: egui::vec2(80.0, 80.0),
                 });
@@ -296,6 +298,7 @@ fn changing_viewports_with_the_same_layer_discards_the_old_zoom_anchor() {
         state.zoom_anchor = Some(ZoomAnchor {
             captured_at: 1.0,
             native_pinch: false,
+            generation: 0,
             pointer: egui::pos2(100.0, 100.0),
             content: egui::vec2(50.0, 50.0),
         });
@@ -382,6 +385,7 @@ fn presentation_changes_discard_anchors_but_ordinary_frames_and_fps_do_not() {
         state.zoom_anchor = Some(ZoomAnchor {
             captured_at: 1.0,
             native_pinch: false,
+            generation: 0,
             pointer: egui::pos2(50.0, 40.0),
             content: egui::vec2(25.0, 20.0),
         });
@@ -424,4 +428,37 @@ fn presentation_changes_discard_anchors_but_ordinary_frames_and_fps_do_not() {
             assert!(state.pending_scroll.is_none());
         })
         .discard_textures();
+}
+
+#[test]
+fn a_new_wheel_gesture_captures_its_own_device_anchor() {
+    use egui::TouchPhase::{End, Move, Start};
+    let wheel = |phase, dy: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, dy),
+        phase,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.controls.zoom = Some(PanelZoom::new(2.0));
+    let first = egui::pos2(300.0, 300.0);
+    let second = egui::pos2(700.0, 550.0);
+    show_viewer(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(first)]);
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::PointerMoved(first), wheel(Start, 0.0), wheel(Move, 4.0)],
+    );
+    assert_eq!(state.zoom_anchor.map(|anchor| anchor.pointer), Some(first));
+    show_viewer(&ctx, &mut state, &device, vec![wheel(End, 0.0)]);
+    // Well inside the idle gap, but an explicit new gesture: it anchors where
+    // it starts instead of inheriting the finished gesture's pixel.
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::PointerMoved(second), wheel(Start, 0.0), wheel(Move, 4.0)],
+    );
+    assert_eq!(state.zoom_anchor.map(|anchor| anchor.pointer), Some(second));
 }

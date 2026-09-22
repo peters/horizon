@@ -152,6 +152,19 @@ struct GestureLatch {
     owner: Option<Id>,
     last_seen: f64,
     kind: GestureKind,
+    /// The wheel gesture it belongs to; see [`gesture_generation`].
+    generation: u64,
+}
+
+/// Wheel phases seen so far, in the order they arrived.
+#[derive(Clone, Copy, Default)]
+struct WheelPhases {
+    /// The frame `sample` was computed for.
+    frame: Option<u64>,
+    /// The gesture this frame's zoom sample belongs to.
+    sample: u64,
+    /// The gesture current once all of this frame's phases are applied.
+    settled: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -201,8 +214,50 @@ pub(crate) fn synchronize_fullscreen(ctx: &Context, fullscreen_panel: Option<Id>
 }
 
 fn fresh_latch(ctx: &Context, now: f64) -> Option<GestureLatch> {
+    let generation = gesture_generation(ctx);
     ctx.data(|data| data.get_temp::<GestureLatch>(latch_id(ctx)))
-        .filter(|latch| now - latch.last_seen <= GESTURE_IDLE_SECONDS)
+        .filter(|latch| latch.generation == generation && now - latch.last_seen <= GESTURE_IDLE_SECONDS)
+}
+
+/// The wheel gesture this frame's zoom sample belongs to. Explicit
+/// `Start`/`End`/`Cancel` phases bound a gesture exactly, so a new gesture
+/// never inherits the previous one's owner or anchor however soon it starts;
+/// the idle gap remains the boundary for phase-less wheels and native pinch.
+/// Phases are applied in arrival order, so a frame that ends one gesture and
+/// starts another samples under the new one, while a final move batched with
+/// its own end still belongs to the gesture it ends.
+pub(crate) fn gesture_generation(ctx: &Context) -> u64 {
+    let id = Id::new(("panel_zoom_wheel_phases", ctx.viewport_id()));
+    let frame = ctx.cumulative_frame_nr();
+    let phases = ctx.data(|data| data.get_temp::<WheelPhases>(id)).unwrap_or_default();
+    if phases.frame == Some(frame) {
+        return phases.sample;
+    }
+    let mut settled = phases.settled;
+    let mut sample = None;
+    ctx.input(|input| {
+        for event in &input.raw.events {
+            if let egui::Event::MouseWheel { phase, delta, .. } = event {
+                match phase {
+                    egui::TouchPhase::Start | egui::TouchPhase::End | egui::TouchPhase::Cancel => settled += 1,
+                    egui::TouchPhase::Move if *delta != egui::Vec2::ZERO => sample = Some(settled),
+                    egui::TouchPhase::Move => {}
+                }
+            }
+        }
+    });
+    let sample = sample.unwrap_or(settled);
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            id,
+            WheelPhases {
+                frame: Some(frame),
+                sample,
+                settled,
+            },
+        );
+    });
+    sample
 }
 
 /// Reserve foreground controls using retained geometry, except app dialogs
@@ -319,6 +374,7 @@ pub(crate) fn gesture_owner(ctx: &Context, candidate: Option<Id>) -> Option<Id> 
         .filter(|latch| latch.kind == kind)
         .map_or(candidate, |latch| latch.owner);
     let id = latch_id(ctx);
+    let generation = gesture_generation(ctx);
     ctx.data_mut(|data| {
         data.insert_temp(
             id,
@@ -326,6 +382,7 @@ pub(crate) fn gesture_owner(ctx: &Context, candidate: Option<Id>) -> Option<Id> 
                 owner,
                 last_seen: now,
                 kind,
+                generation,
             },
         );
     });

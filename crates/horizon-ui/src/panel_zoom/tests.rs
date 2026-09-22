@@ -118,6 +118,60 @@ fn one_gesture_keeps_one_owner_until_it_goes_idle() {
 }
 
 #[test]
+fn explicit_wheel_boundaries_end_the_latch_before_the_idle_gap() {
+    use super::{gesture_generation, gesture_owner};
+    use egui::TouchPhase::{End, Move, Start};
+    let ctx = egui::Context::default();
+    let panel = egui::Id::new("panel-a");
+    let other = egui::Id::new("panel-b");
+    let wheel = |phase, dy: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, dy),
+        phase,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let owner_at = |time: f64, events: Vec<egui::Event>, candidate: Option<egui::Id>| {
+        let mut owner = None;
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // The app records every frame's phases, zooming or not.
+                    gesture_generation(ui.ctx());
+                    owner = gesture_owner(ui.ctx(), candidate);
+                },
+            )
+            .discard_textures();
+        owner
+    };
+    // A modifier-wheel gesture latches to the panel it starts on.
+    assert_eq!(
+        owner_at(1.0, vec![wheel(Start, 0.0), wheel(Move, 4.0)], Some(panel)),
+        Some(panel)
+    );
+    assert_eq!(owner_at(1.02, vec![wheel(Move, 4.0)], Some(other)), Some(panel));
+    // Its end, then a new start well inside the idle gap, is a new gesture.
+    let _ = owner_at(1.04, vec![wheel(End, 0.0)], Some(panel));
+    assert_eq!(
+        owner_at(1.06, vec![wheel(Start, 0.0), wheel(Move, 4.0)], Some(other)),
+        Some(other)
+    );
+    // So is an end and a restart batched into one frame.
+    assert_eq!(
+        owner_at(
+            1.08,
+            vec![wheel(End, 0.0), wheel(Start, 0.0), wheel(Move, 4.0)],
+            Some(panel)
+        ),
+        Some(panel)
+    );
+}
+
+#[test]
 fn retired_dialog_hit_testing_keeps_underlying_popups_and_panel_occlusion() {
     for panel_above in [false, true] {
         for offset in [0.0, 300.0] {
