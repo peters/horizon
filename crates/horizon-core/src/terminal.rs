@@ -258,8 +258,13 @@ mod tests {
 
     #[test]
     fn shutdown_with_timeout_waits_for_pty_exit() {
+        let program = if cfg!(windows) {
+            "cmd.exe".to_string()
+        } else {
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        };
         let mut terminal = Terminal::spawn(TerminalSpawnOptions {
-            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
+            program,
             args: Vec::new(),
             cwd: None,
             rows: 24,
@@ -348,12 +353,13 @@ mod tests {
     }
 
     fn spawn_test_terminal() -> Terminal {
+        // These tests only exercise local event handling, so use a
+        // short-lived child process instead of an interactive shell.
+        // That keeps PTY teardown deterministic on macOS runners.
+        let (program, args) = exiting_command();
         Terminal::spawn(TerminalSpawnOptions {
-            // These tests only exercise local event handling, so use a
-            // short-lived child process instead of an interactive shell.
-            // That keeps PTY teardown deterministic on macOS runners.
-            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-            args: vec!["-c".to_string(), "exit".to_string()],
+            program,
+            args,
             cwd: None,
             rows: 24,
             cols: 80,
@@ -366,6 +372,20 @@ mod tests {
             kitty_keyboard: true,
         })
         .expect("terminal should spawn")
+    }
+
+    fn exiting_command() -> (String, Vec<String>) {
+        if cfg!(windows) {
+            (
+                "cmd.exe".to_string(),
+                vec!["/D".to_string(), "/C".to_string(), "exit".to_string()],
+            )
+        } else {
+            (
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+                vec!["-c".to_string(), "exit".to_string()],
+            )
+        }
     }
 
     #[test]

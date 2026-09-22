@@ -4,7 +4,7 @@ use crate::attention::{AttentionSeverity, AttentionState};
 use crate::panel::{PanelKind, PanelOptions};
 
 use super::super::*;
-use super::editor_panel_options;
+use super::{editor_panel_options, shell_panel_options};
 
 #[test]
 fn rename_workspace_updates_matching_workspace() {
@@ -200,13 +200,13 @@ fn shutdown_terminal_panels_waits_for_shell_and_command_panels() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("shutdown");
     let shell_panel = board
-        .create_panel(PanelOptions::default(), workspace_id)
+        .create_panel(shell_panel_options(), workspace_id)
         .expect("shell panel should spawn");
     let command_panel = board
         .create_panel(
             PanelOptions {
                 kind: PanelKind::Command,
-                ..PanelOptions::default()
+                ..shell_panel_options()
             },
             workspace_id,
         )
@@ -233,13 +233,13 @@ fn begin_async_shutdown_completes_for_shell_and_command_panels() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace("shutdown");
     board
-        .create_panel(PanelOptions::default(), workspace_id)
+        .create_panel(shell_panel_options(), workspace_id)
         .expect("shell panel should spawn");
     board
         .create_panel(
             PanelOptions {
                 kind: PanelKind::Command,
-                ..PanelOptions::default()
+                ..shell_panel_options()
             },
             workspace_id,
         )
