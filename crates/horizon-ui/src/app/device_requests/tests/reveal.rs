@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn expired_root_reveal_uses_the_available_window_geometry() {
+    let (_temp, ctx, mut app) = app();
+    let create = request(
+        &app,
+        Operation::Create {
+            identity: None,
+            endpoint: "127.0.0.1:5900".into(),
+        },
+    );
+    let initial = one(app.apply_device_request(&create, &ctx));
+    let id = app.board.panel_id_by_local_id(&initial.panel_id).unwrap();
+    app.board.panel_mut(id).unwrap().layout.position = [100_000.0, 5000.0];
+    let focused = app.board.focused;
+    let initial_view = app.canvas_view;
+    for fullscreen in [false, true] {
+        app.canvas_view = initial_view;
+        app.panel_render_caches.pending_device_reveal = Some(PendingDeviceReveal {
+            id,
+            restored_fullscreen: Some(WindowRestore {
+                fullscreen: false,
+                size: egui::vec2(1400.0, 900.0),
+            }),
+            deadline: Instant::now(),
+        });
+        let mut input = crate::app::test_support::raw_input([1000.0, 700.0], None);
+        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().fullscreen = Some(fullscreen);
+        let mut output = ctx.run_ui(input, |ui| {
+            app.apply_pending_root_device_reveal(ui.ctx());
+            let canvas = app.canvas_rect(ui.ctx());
+            let panel = app.board.panel(id).unwrap();
+            let rect = egui::Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into());
+            assert!(canvas.contains_rect(crate::app::view::canvas_scene_transform(canvas, app.canvas_view) * rect));
+            assert!(app.panel_render_caches.pending_device_reveal.is_none());
+            assert_eq!(app.board.focused, focused);
+        });
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
 fn root_reveal_waits_for_smaller_restored_window() {
     let (_temp, ctx, mut app) = app();
     let create = request(

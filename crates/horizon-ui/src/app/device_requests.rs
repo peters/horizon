@@ -282,16 +282,15 @@ impl HorizonApp {
             if Instant::now() < pending.deadline {
                 self.panel_render_caches.pending_device_reveal = Some(pending);
                 ctx.request_repaint_after(Duration::from_millis(16));
-            } else {
-                tracing::warn!(
-                    panel_id = pending.id.0,
-                    "Device reveal timed out waiting for restored window geometry"
-                );
+                return;
             }
-            return;
+            tracing::warn!(
+                panel_id = pending.id.0,
+                "Device reveal restoration timed out; using current window geometry"
+            );
         }
-        // Layout reconciliation and native fullscreen restoration precede this
-        // fit, so neither can move the target away again in the same frame.
+        // Fit after layout and the bounded restoration wait. The window manager
+        // may constrain the restored size, so expiry uses the available canvas.
         self.reveal_device_in_rect(pending.id, self.canvas_rect(ctx));
     }
 
