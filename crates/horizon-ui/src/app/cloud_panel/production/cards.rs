@@ -147,16 +147,16 @@ fn profile_details(ui: &mut egui::Ui, launch: &horizon_core::cloud_panel::CloudL
 fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
+    if runtime.stage == Some(Stage::Deleted) {
+        ui.label("Worker and workspace storage deleted.");
+        return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+    }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(
             state.operation,
             horizon_core::cloud_runtime::CreateState::Terminated { .. }
         )
     }) {
-        if runtime.stage == Some(Stage::Deleted) {
-            ui.label("Worker and workspace storage deleted.");
-            return ui.button("Remove cloud").clicked().then_some(Action::Remove);
-        }
         progress_output(ui, runtime);
         ui.label("Worker deleted. Finish workspace storage cleanup to stop storage charges.");
         return if runtime.receiver.is_some() {
