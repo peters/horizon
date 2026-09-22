@@ -275,6 +275,7 @@ When cutting a new release, generate concise release notes from the commits sinc
 - Unit tests close to code (`#[cfg(test)]`)
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
+- CI runs the whole test suite on Linux, macOS and Windows. The Windows job still skips a list of known failures, grouped by cause in `.github/workflows/ci.yml` (#841); do not add to that list. When a test genuinely needs a Unix shell, PTY semantics or Unix paths, mark it `#[cfg_attr(windows, ignore = "<reason>")]`, or `#[cfg(unix)]` with a comment stating the reason when it cannot compile on Windows. Fix a real Windows bug instead, or file an issue for it.
 - For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
 - Unless release-specific behavior is the thing under test, prefer `target/debug/horizon` for smoke testing so iteration stays fast while validating UI and interaction correctness
 - For any UI-related change, always create an extensive temporary smoke-test plan under `docs/testing/` that another agent or machine can execute without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
