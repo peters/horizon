@@ -299,6 +299,9 @@ jobs:
       - run: cargo test --locked --workspace --no-run
       - name: Execute durable publication regression
         run: cargo test --locked -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
+      # Runs the Windows-only drive-letter and backslash cases; see #841 for the full suite.
+      - name: Execute directory picker path resolution
+        run: cargo test --locked -p horizon-core --lib dir_search
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Compiling the
       # vendored C++ tree here is the point — tests are not run. horizon-ui
