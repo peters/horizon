@@ -69,7 +69,11 @@ fn serverless_attachment_prevents_owned_volume_deletion() {
             (
                 200,
                 if request.contains("includeWorkers=true") {
-                    json!([attached])
+                    let mut listed = attached.clone();
+                    if !request.contains("includeNetworkVolume=true") {
+                        listed["networkVolume"] = Value::Null;
+                    }
+                    json!([listed])
                 } else {
                     json!([])
                 },
