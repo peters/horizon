@@ -125,7 +125,7 @@ fn opposite_deltas_still_belong_to_the_canvas_gesture() {
 }
 
 #[test]
-fn ending_gestures_consume_their_tail_without_stealing_a_new_contact() {
+fn ending_gestures_apply_their_tail_without_stealing_a_new_contact() {
     for phase in [TouchPhase::End, TouchPhase::Cancel] {
         for restart_on_panel in [false, true] {
             let (_temp, ctx, mut app) = app_fixture();
@@ -151,8 +151,9 @@ fn ending_gestures_consume_their_tail_without_stealing_a_new_contact() {
             };
             input.events.extend(expected_wheels.clone());
             let _ = run_app_frame_with_input(&ctx, &mut app, input);
-            assert_offset(app.canvas_view.pan_offset, before);
-            assert!(!app.canvas_pan_input_claimed);
+            // The claimed move batched with its end still pans, once.
+            assert_offset(app.canvas_view.pan_offset, [before[0], before[1] - 5.0]);
+            assert!(app.canvas_pan_input_claimed);
             let wheels = ctx.input(|input| {
                 input
                     .events
@@ -681,4 +682,32 @@ fn a_terminal_is_judged_where_the_frames_earlier_events_leave_it() {
     assert!(!exhausted(lines(-2.0)));
     // Back at the bottom, the next downward event is at the extent.
     assert!(exhausted(lines(-1.0)));
+}
+
+#[test]
+fn a_move_batched_with_its_end_still_pans_in_full() {
+    let options = InputOptions::default();
+    let notch = |phase| Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, if phase == TouchPhase::Move { -1.0 } else { 0.0 }),
+        phase,
+        modifiers: Modifiers::NONE,
+    };
+    for end in [TouchPhase::End, TouchPhase::Cancel] {
+        let mut gesture = ScrollGesture::default();
+        let routing = gesture.route(
+            &pass(1.0, vec![notch(TouchPhase::Move), notch(end)]),
+            &options,
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert!(routing.pans_canvas);
+        assert!(
+            (routing.pan.y + options.line_scroll_speed).abs() < 0.001,
+            "{:?}",
+            routing.pan
+        );
+        assert_eq!(gesture.canvas_owned, None, "ownership ends with the gesture");
+    }
 }

@@ -176,9 +176,10 @@ impl ScrollGesture {
                 }
             }
             if matches!(phase, TouchPhase::End | TouchPhase::Cancel) {
-                // egui drops a lifted gesture's pending scroll too.
+                // The lifted gesture's claimed motion still lands, in full;
+                // only its ownership ends with it.
+                routing.pan += self.pan_backlog;
                 *self = Self::default();
-                routing.pan = Vec2::ZERO;
             }
         }
 
@@ -186,7 +187,7 @@ impl ScrollGesture {
         if routing.owns_smooth_scroll {
             routing.pan += self.ease_backlog(input.stable_dt);
         }
-        routing.pans_canvas = routing.owns_smooth_scroll && (has_canvas_motion || routing.pan != Vec2::ZERO);
+        routing.pans_canvas = has_canvas_motion || routing.pan != Vec2::ZERO;
         routing
     }
 }
