@@ -423,13 +423,16 @@ and credential logic must not be copied into either transport or UI rendering.
 
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
-caller supplied. It must not depend on core/UI, terminal, browser, device, Git,
+caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
+fencing, attachment verification and deletion. It must not depend on core/UI, terminal, browser, device, Git,
 settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
-separate. `worker_contract` shares capability transport and contract validation
+separate. `deployment::storage` persists a separate volume journal under the same
+per-cloud lock; explicit cleanup and local removal account for both resources.
+`worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace

@@ -36,7 +36,16 @@ pub(super) fn wait(
             .id;
         let inspected = provider.inspect_with_timeout(id, runner.cancel, deadline.remaining(runner.cancel)?);
         deadline.remaining(runner.cancel)?;
-        let worker = inspected?.ok_or(horizon_cloud::CloudError::WorkerLost)?;
+        let mut worker = inspected?.ok_or(horizon_cloud::CloudError::WorkerLost)?;
+        if let Some(volume) = super::storage::expected(store, spec)? {
+            provider.confirm_workspace_mount(
+                &mut worker,
+                &volume,
+                runner.cancel,
+                deadline.remaining(runner.cancel)?,
+            )?;
+            deadline.remaining(runner.cancel)?;
+        }
         with_verified_worker(worker, spec, store, state, |worker| {
             if let Ok(connection) = Connection::new(worker, &request.settings, store.root()) {
                 (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
@@ -69,7 +78,7 @@ fn with_verified_worker<T>(
     state.worker = Some(worker);
     store.save(state)?;
     let worker = state.worker.as_ref().ok_or(Error::Invalid("Missing worker identity"))?;
-    worker.verify_resources(spec)?;
+    worker.verify_resources_with_volume(spec, super::storage::expected(store, spec)?.as_ref())?;
     ready(worker)
 }
 
