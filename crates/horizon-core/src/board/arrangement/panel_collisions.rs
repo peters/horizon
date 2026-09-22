@@ -17,7 +17,7 @@ enum Body {
 trait CollisionFrames {
     fn frame_of(&self, board: &Board, panel: PanelId) -> Option<usize>;
     fn frames_in(&self, board: &Board, workspace: WorkspaceId) -> Vec<usize>;
-    fn frame_rect(&self, frame: usize) -> Option<[f32; 4]>;
+    fn frame_rect(&self, board: &Board, frame: usize) -> Option<[f32; 4]>;
     fn translate_frame(&mut self, board: &mut Board, frame: usize, delta: [f32; 2]);
 }
 
@@ -118,7 +118,7 @@ impl Board {
                 let [width, height] = panel.layout.size;
                 [x, y, x + width, y + height]
             }),
-            Body::Frame(frame) => frames.frame_rect(frame),
+            Body::Frame(frame) => frames.frame_rect(self, frame),
         }
     }
 }
@@ -140,8 +140,8 @@ impl CollisionFrames for crate::cloud_panel::CloudGroups {
     }
 
     /// The runtime card beside a frame moves with it, so it collides too.
-    fn frame_rect(&self, frame: usize) -> Option<[f32; 4]> {
-        let (min, max) = self.0.get(frame)?.overview_bounds();
+    fn frame_rect(&self, board: &Board, frame: usize) -> Option<[f32; 4]> {
+        let (min, max) = self.0.get(frame)?.placed_overview_bounds(board);
         Some([min[0], min[1], max[0], max[1]])
     }
 
@@ -165,7 +165,7 @@ impl CollisionFrames for NoFrames {
         Vec::new()
     }
 
-    fn frame_rect(&self, _frame: usize) -> Option<[f32; 4]> {
+    fn frame_rect(&self, _board: &Board, _frame: usize) -> Option<[f32; 4]> {
         None
     }
 

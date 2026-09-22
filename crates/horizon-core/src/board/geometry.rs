@@ -36,6 +36,17 @@ impl Board {
         Some((min, max))
     }
 
+    /// Bounds that neighbouring workspaces must clear: the panels plus any
+    /// cloud frames and runtime cards, matching the frame the canvas draws.
+    pub(super) fn workspace_collision_bounds(&self, id: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
+        let panels = self.workspace_bounds(id);
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(clouds) = self.cloud_groups.workspace_extent(self, id) {
+            return Some(panels.map_or(clouds, |panels| crate::layout::union_bounds(panels, clouds)));
+        }
+        panels
+    }
+
     /// Computes bounds for every non-empty workspace in one pass over panels.
     #[must_use]
     pub fn workspace_bounds_map(&self) -> HashMap<WorkspaceId, ([f32; 2], [f32; 2])> {

@@ -184,6 +184,27 @@ impl CloudGroup {
         (min, max)
     }
 
+    /// Overview bounds where the cloud is drawn. A cloud follows its
+    /// workspace's moves on its next reconcile, so a move it has not been
+    /// reconciled with yet still applies.
+    #[must_use]
+    pub fn placed_overview_bounds(&self, board: &Board) -> ([f32; 2], [f32; 2]) {
+        let (min, max) = self.overview_bounds();
+        let shift = board
+            .workspace_id_by_local_id(&self.workspace)
+            .and_then(|id| board.workspace(id))
+            .map_or([0.0, 0.0], |workspace| {
+                [
+                    workspace.position[0] - self.workspace_position[0],
+                    workspace.position[1] - self.workspace_position[1],
+                ]
+            });
+        (
+            [min[0] + shift[0], min[1] + shift[1]],
+            [max[0] + shift[0], max[1] + shift[1]],
+        )
+    }
+
     pub fn set_layout(&mut self, board: &mut Board, layout: Option<WorkspaceLayout>) {
         self.layout = layout;
         if layout.is_some() {
@@ -451,17 +472,27 @@ impl CloudGroups {
         }
     }
 
+    /// Extent of a workspace's clouds and their runtime cards, where they are drawn.
+    #[must_use]
+    pub(crate) fn workspace_extent(&self, board: &Board, workspace: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
+        let local_id = &board.workspace(workspace)?.local_id;
+        self.0
+            .iter()
+            .filter(|group| &group.workspace == local_id)
+            .map(|group| group.placed_overview_bounds(board))
+            .reduce(crate::layout::union_bounds)
+    }
+
     pub fn extend_workspace_bounds(&self, board: &Board, bounds: &mut HashMap<WorkspaceId, ([f32; 2], [f32; 2])>) {
         for group in &self.0 {
             let Some(id) = board.workspace_id_by_local_id(&group.workspace) else {
                 continue;
             };
-            let (min, max) = group.overview_bounds();
-            let entry = bounds.entry(id).or_insert((min, max));
-            for axis in 0..2 {
-                entry.0[axis] = entry.0[axis].min(min[axis]);
-                entry.1[axis] = entry.1[axis].max(max[axis]);
-            }
+            let placed = group.placed_overview_bounds(board);
+            bounds
+                .entry(id)
+                .and_modify(|entry| *entry = crate::layout::union_bounds(*entry, placed))
+                .or_insert(placed);
         }
     }
 }
