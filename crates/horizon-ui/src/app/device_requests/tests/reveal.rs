@@ -1,5 +1,72 @@
 use super::*;
 
+#[cfg(feature = "cloud-workspaces")]
+#[test]
+fn repeated_root_reveal_keeps_the_restore_deadline_and_latest_target() {
+    use horizon_core::cloud_panel::CloudGroup;
+    let (temp, ctx, mut app) = app();
+    let mut viewers = Vec::new();
+    for x in [100_000.0, 200_000.0] {
+        let create = request(
+            &app,
+            Operation::Create {
+                identity: None,
+                endpoint: "127.0.0.1:5900".into(),
+            },
+        );
+        let initial = one(app.apply_device_request(&create, &ctx));
+        let id = app.board.panel_id_by_local_id(&initial.panel_id).unwrap();
+        app.board.panel_mut(id).unwrap().layout.position = [x, 5000.0];
+        viewers.push(initial.panel_id);
+    }
+    let workspace = app.board.panels[0].workspace_id;
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    app.cloud_prototype.groups.0.push(CloudGroup::new(
+        1,
+        "Fixture".into(),
+        local,
+        temp.path().into(),
+        [0.0, 0.0],
+    ));
+    let mut output = ctx.run_ui(crate::app::test_support::raw_input([1400.0, 900.0], None), |ui| {
+        app.toggle_cloud_fullscreen(ui.ctx(), 1);
+    });
+    output.textures_delta.clear();
+    let mut deadline = None;
+    for local_id in [&viewers[0], &viewers[0], &viewers[1]] {
+        let reveal = request(
+            &app,
+            Operation::Reveal {
+                panel_id: local_id.clone(),
+            },
+        );
+        one(app.apply_device_request(&reveal, &ctx));
+        let pending = app.panel_render_caches.pending_device_reveal.as_ref().unwrap();
+        assert!(pending.restored_fullscreen.is_some());
+        assert_eq!(pending.deadline, *deadline.get_or_insert(pending.deadline));
+    }
+    let before = app.canvas_view;
+    let id = app.board.panel_id_by_local_id(&viewers[1]).unwrap();
+    for fullscreen in [true, false] {
+        let mut input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().fullscreen = Some(fullscreen);
+        let mut output = ctx.run_ui(input, |ui| {
+            app.apply_pending_root_device_reveal(ui.ctx());
+            if fullscreen {
+                assert_eq!(app.canvas_view, before);
+                assert!(app.panel_render_caches.pending_device_reveal.is_some());
+            } else {
+                let canvas = app.canvas_rect(ui.ctx());
+                let panel = app.board.panel(id).unwrap();
+                let rect = egui::Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into());
+                assert!(canvas.contains_rect(crate::app::view::canvas_scene_transform(canvas, app.canvas_view) * rect));
+                assert!(app.panel_render_caches.pending_device_reveal.is_none());
+            }
+        });
+        output.textures_delta.clear();
+    }
+}
+
 #[test]
 fn expired_root_reveal_uses_the_available_window_geometry() {
     let (_temp, ctx, mut app) = app();

@@ -254,11 +254,21 @@ impl HorizonApp {
             let restored_fullscreen = self.exit_cloud_for_device_reveal(ctx);
             #[cfg(not(feature = "cloud-workspaces"))]
             let restored_fullscreen = None;
-            self.panel_render_caches.pending_device_reveal = Some(PendingDeviceReveal {
-                id,
+            let pending = match (
                 restored_fullscreen,
-                deadline: Instant::now() + Duration::from_secs(2),
-            });
+                self.panel_render_caches.pending_device_reveal.take(),
+            ) {
+                (None, Some(mut pending)) => {
+                    pending.id = id;
+                    pending
+                }
+                (restored_fullscreen, _) => PendingDeviceReveal {
+                    id,
+                    restored_fullscreen,
+                    deadline: Instant::now() + Duration::from_secs(2),
+                },
+            };
+            self.panel_render_caches.pending_device_reveal = Some(pending);
         }
         self.board.focused = focused;
         self.board.active_workspace = active_workspace;
