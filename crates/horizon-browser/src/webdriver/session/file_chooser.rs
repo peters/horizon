@@ -1,6 +1,8 @@
 use serde_json::{Value, json};
 
-use crate::file_chooser::{ChooserBinding, FileChooserAnswer, audit_choice, wire_paths};
+use crate::file_chooser::{
+    ChooserBinding, FileChooserAnswer, audit_choice, manual_readback_function, manual_readback_result, wire_paths,
+};
 use crate::semantic_files::{
     FILE_INPUT_PROBE_FUNCTION, check_attachment_request, local_file_facts, parse_file_input_probe,
 };
@@ -196,7 +198,7 @@ impl Driver {
         events: &BrowserEventSender,
     ) -> Result<(), BrowserControlFailure> {
         let files = wire_paths(paths)?;
-        let _ = local_file_facts(paths)?;
+        let expected = local_file_facts(paths)?;
         let probe = self.chooser_value(target, FILE_INPUT_PROBE_FUNCTION, events)?;
         check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
         if target.generation != self.generation || !self.file_chooser.binding.current(target.revision) {
@@ -208,7 +210,6 @@ impl Driver {
             events,
         )
         .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
-        // Change handlers may consume and clear the input before this returns.
-        Ok(())
+        manual_readback_result(self.chooser_value(target, &manual_readback_function(&expected), events))
     }
 }

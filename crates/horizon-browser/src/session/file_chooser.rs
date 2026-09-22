@@ -3,7 +3,9 @@ use std::sync::Arc;
 use serde_json::json;
 
 use crate::cdp::{CdpEvent, CdpLink};
-use crate::file_chooser::{ChooserBinding, FileChooserAnswer, audit_choice, wire_paths};
+use crate::file_chooser::{
+    ChooserBinding, FileChooserAnswer, audit_choice, manual_readback_function, manual_readback_result, wire_paths,
+};
 use crate::frames::FrameSlot;
 use crate::semantic_files::{
     FILE_INPUT_PROBE_FUNCTION, check_attachment_request, local_file_facts, parse_file_input_probe,
@@ -291,7 +293,7 @@ impl DriverState {
         paths: &[std::path::PathBuf],
     ) -> Result<(), BrowserControlFailure> {
         let files = wire_paths(paths)?;
-        let _ = local_file_facts(paths)?;
+        let expected = local_file_facts(paths)?;
         let value = self.file_input_value_in_session(
             link,
             events,
@@ -318,8 +320,15 @@ impl DriverState {
             Some(&target.session),
         )
         .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
-        // Native attachment dispatches change handlers, which may immediately
-        // consume and clear the input. Never retry an already delivered choice.
-        Ok(())
+        manual_readback_result(self.file_input_value_in_session(
+            link,
+            events,
+            slot,
+            FileInputTarget {
+                object: &target.object,
+                session: &target.session,
+            },
+            &manual_readback_function(&expected),
+        ))
     }
 }

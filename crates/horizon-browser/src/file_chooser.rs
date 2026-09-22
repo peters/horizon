@@ -74,6 +74,11 @@ impl FileChooserHandle {
                     | crate::BrowserControlAction::Scroll { .. }
                     | crate::BrowserControlAction::SetFiles { .. }
                     | crate::BrowserControlAction::Evaluate { .. }
+                    | crate::BrowserControlAction::Navigate { .. }
+                    | crate::BrowserControlAction::Reload
+                    | crate::BrowserControlAction::Back
+                    | crate::BrowserControlAction::Forward
+                    | crate::BrowserControlAction::Resize { .. }
             )
     }
 
@@ -230,6 +235,31 @@ pub(crate) fn wire_paths(paths: &[PathBuf]) -> Result<Vec<&str>, crate::BrowserC
         .collect()
 }
 
+pub(crate) fn manual_readback_function(expected: &[crate::semantic_files::ExpectedFile]) -> String {
+    let expected = serde_json::json!(expected.iter().map(|file| &file.name).collect::<Vec<_>>());
+    let read = crate::semantic_files::ATTACHED_FILES_FUNCTION;
+    format!(
+        "element => {{
+            if (!element?.isConnected || element.type !== 'file') return {{files:[]}};
+            const files = Array.from(element.files || []);
+            const actual = files.map(file => file.name).sort();
+            if (JSON.stringify(actual) !== JSON.stringify({expected}.sort())) return {{files:[]}};
+            return ({read})(element);
+        }}"
+    )
+}
+
+pub(crate) fn manual_readback_result(
+    readback: Result<serde_json::Value, crate::BrowserControlFailure>,
+) -> Result<(), crate::BrowserControlFailure> {
+    // Native dispatch already delivered the choice. A handler may consume the
+    // files or navigate; retry only a confirmed browser-side readability failure.
+    match readback.and_then(|value| crate::semantic::check_script_error(&value)) {
+        Err(error) if error.code == "attachment_unreadable" => Err(error),
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn audit_choice(config: &crate::BrowserSessionConfig, paths: &[PathBuf], status: crate::BrowserAuditStatus) {
     if let Some(coordination) = &config.coordination {
         let entry = crate::BrowserAuditEntry::new(
@@ -307,6 +337,13 @@ mod tests {
         assert!(handle.blocks(&crate::BrowserControlAction::Evaluate {
             expression: "document.body.remove()".into()
         }));
+        for action in [
+            crate::BrowserControlAction::Reload,
+            crate::BrowserControlAction::Back,
+            crate::BrowserControlAction::Forward,
+        ] {
+            assert!(handle.blocks(&action));
+        }
         assert!(!handle.blocks(&crate::BrowserControlAction::Query {
             selector: "input".into(),
             max_results: 1
@@ -331,5 +368,22 @@ mod tests {
         handle.retry(first, "Late error".into());
         assert!(handle.take_error().is_none());
         assert!(handle.respond(second, FileChooserAnswer::Cancel));
+    }
+
+    #[test]
+    fn manual_readback_retries_unreadable_files_but_not_consumed_choices() {
+        let unreadable = serde_json::json!({"error":{"code":"attachment_unreadable","message":"Denied"}});
+        assert_eq!(
+            manual_readback_result(Ok(unreadable)).unwrap_err().code,
+            "attachment_unreadable"
+        );
+        assert!(manual_readback_result(Ok(serde_json::json!({"files":[]}))).is_ok());
+        assert!(
+            manual_readback_result(Err(crate::BrowserControlFailure::new(
+                "no_such_element",
+                "The change handler removed the input"
+            )))
+            .is_ok()
+        );
     }
 }

@@ -956,6 +956,7 @@ mod tests {
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
+        assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
 
         let visible = new_session_capabilities(
             &BrowserConfig {

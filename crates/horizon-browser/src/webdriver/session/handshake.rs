@@ -72,6 +72,7 @@ pub(super) fn new_session_capabilities(
                 json!({
                     "widget.gtk.overlay-scrollbars.enabled": false,
                     "ui.useOverlayScrollbars": 0,
+                    "remote.bidi.dismiss_file_pickers.enabled": true,
                 }),
             );
             if let Some(command) = &config.firefox_command {

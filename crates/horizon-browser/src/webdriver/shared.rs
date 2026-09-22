@@ -602,8 +602,12 @@ impl ClassicTransport for SharedFirefoxPage {
 fn page_command(method: &str, suffix: &str) -> bool {
     matches!(
         (method, suffix),
-        ("GET", "url" | "title" | "screenshot") | ("POST", "execute/sync" | "back" | "forward")
-    )
+        ("GET", "url" | "title" | "screenshot") | ("POST", "execute/sync" | "back" | "forward" | "element")
+    ) || (method == "POST"
+        && suffix
+            .strip_prefix("element/")
+            .and_then(|path| path.strip_suffix("/value"))
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')))
 }
 
 fn context_absent(tree: &Value, target: &str) -> bool {
@@ -714,6 +718,25 @@ mod tests {
     }
 
     #[test]
+    fn file_upload_commands_are_scoped_to_the_owning_page() {
+        let server = Server::start((0..4).map(|_| Reply::json(200, &json!({"value": null}))).collect());
+        let (page, _) = page(SharedFirefoxSession::new("profile".into()), server.port, "upload");
+        for route in ["element", "element/file-123/value"] {
+            assert!(page.post(&format!("/session/session/{route}"), &json!({})).is_ok());
+        }
+        let requests = server.recorded();
+        for index in [0, 2] {
+            assert_eq!(requests[index].path, "/session/session/window");
+            assert_eq!(
+                serde_json::from_str::<Value>(&requests[index].body).unwrap()["handle"],
+                "upload"
+            );
+        }
+        assert_eq!(requests[1].path, "/session/session/element");
+        assert_eq!(requests[3].path, "/session/session/element/file-123/value");
+    }
+
+    #[test]
     fn forbidden_routes_cannot_mutate_session_global_state() {
         let (page, _) = page(SharedFirefoxSession::new("profile".into()), 1, "page");
         for (method, path) in [
@@ -723,6 +746,9 @@ mod tests {
             ("POST", "/session/session/window"),
             ("POST", "/session/session/frame"),
             ("GET", "/session/other/title"),
+            ("POST", "/session/session/element/file/../value"),
+            ("GET", "/session/session/element/file/value"),
+            ("POST", "/session/session/element/file/click"),
         ] {
             assert!(matches!(
                 page.request(method, path, None, Duration::from_secs(1)),
