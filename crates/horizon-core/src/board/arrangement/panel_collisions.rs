@@ -50,13 +50,16 @@ impl Board {
         resize_delta: [f32; 2],
     ) {
         let bodies = self.collision_bodies(frames, workspace_id);
-        let mut queue = vec![Body::Panel(source)];
-        // A member growing inside its cloud must not push that cloud away.
-        let mut settled: Vec<Body> = queue
-            .iter()
-            .copied()
+        // The resized panel stays put, and a member growing inside its cloud
+        // must not push that cloud away. Everything else may be pushed again
+        // when a later push lands on it.
+        let fixed: Vec<Body> = std::iter::once(Body::Panel(source))
             .chain(frames.frame_of(self, source).map(Body::Frame))
             .collect();
+        let mut queue = vec![Body::Panel(source)];
+        // Pushes only move bodies forward along the growth axis, so the
+        // cascade settles; the budget only guards against float drift.
+        let mut budget = (bodies.len() + 1).pow(2);
 
         while let Some(check) = queue.pop() {
             let Some(check_rect) = self.body_rect(frames, check) else {
@@ -64,7 +67,7 @@ impl Board {
             };
 
             for &other in &bodies {
-                if settled.contains(&other) {
+                if other == check || fixed.contains(&other) {
                     continue;
                 }
                 let Some(other_rect) = self.body_rect(frames, other) else {
@@ -73,6 +76,10 @@ impl Board {
 
                 let push = resize_collision_push(check_rect, other_rect, resize_delta, TILE_GAP);
                 if push[0] != 0.0 || push[1] != 0.0 {
+                    if budget == 0 {
+                        return;
+                    }
+                    budget -= 1;
                     match other {
                         Body::Panel(id) => {
                             if let Some(panel) = self.panel_mut(id) {
@@ -82,8 +89,9 @@ impl Board {
                         }
                         Body::Frame(frame) => frames.translate_frame(self, frame, push),
                     }
-                    settled.push(other);
-                    queue.push(other);
+                    if !queue.contains(&other) {
+                        queue.push(other);
+                    }
                 }
             }
         }

@@ -89,3 +89,26 @@ fn pushed_cloud_carries_its_members_and_pushes_panels_beyond_it() {
     assert!(board.resize_panel(member, [CHILD_SIZE[0] + 40.0, CHILD_SIZE[1]]));
     assert!(vec2_eq(board.cloud_groups.0[0].position, cloud_before));
 }
+
+#[test]
+fn bodies_pushed_onto_each_other_are_separated() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace_at("desk", [0.0, 0.0]);
+    let growing = panel_at(&mut board, workspace, [60.0, 120.0], [480.0, 360.0]);
+    let panel = panel_at(&mut board, workspace, [560.0, 140.0], [300.0, 200.0]);
+    let cloud = cloud_at(&board, workspace, [900.0, 300.0]);
+    board.cloud_groups.0.push(cloud);
+
+    assert!(board.resize_panel(growing, [900.0, 360.0]));
+
+    let (min, max) = board.cloud_groups.0[0].overview_bounds();
+    let cloud = rect(min, max);
+    let growing = panel_rect(&board, growing);
+    let panel = panel_rect(&board, panel);
+    assert!(!overlaps(growing, cloud));
+    assert!(!overlaps(growing, panel));
+    assert!(
+        !overlaps(panel, cloud),
+        "panel {panel:?} still overlaps cloud {cloud:?}"
+    );
+}
