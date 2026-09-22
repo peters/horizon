@@ -347,7 +347,9 @@ mod tests {
             name: "shell".to_string(),
             alias: None,
             kind: PanelKind::Shell,
-            command: None,
+            // The default shell is `/bin/bash` when `SHELL` is unset (#688), so
+            // Windows runs `cmd.exe`.
+            command: cfg!(windows).then(|| "cmd.exe".to_string()),
             args: Vec::new(),
             resume: PanelResume::Fresh,
             ssh_connection: None,

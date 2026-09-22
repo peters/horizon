@@ -365,6 +365,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_claimed_close_removes_the_owned_panel_and_returns_focus_only_when_it_held_it() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");
@@ -413,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn refusals_keep_the_panel_and_name_the_reason() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");

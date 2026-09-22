@@ -27,6 +27,7 @@ fn collect_dynamic_binding_updates_scopes_reserved_ids_by_provider() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn rebind_allows_equal_session_ids_from_different_providers() {
     let (_temp, mut app) = test_app();
     let workspace_id = app.board.create_workspace("test");

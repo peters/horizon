@@ -356,30 +356,6 @@ jobs:
             cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
             cloud_runtime::repository::tests::selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files
 
-            # horizon-ui test fixtures.
-            # Shell panels rely on the default shell, which is /bin/bash when
-            # SHELL is unset, and agent panels always launch through a POSIX
-            # login shell (#688, closed as not planned).
-            app::actions::panels::tests::navigation_reveals_panel_after_the_view_is_panned_away
-            app::actions::panels::tests::new_panel_reveals_it_when_the_view_is_panned_away
-            app::actions::panels::tests::panel_body_click_focuses_without_revealing
-            app::actions::panels::tests::reveal_selected_panel_does_not_pan_the_root_canvas_for_detached_workspaces
-            app::browser_close_requests::tests::a_claimed_close_removes_the_owned_panel_and_returns_focus_only_when_it_held_it
-            app::browser_close_requests::tests::refusals_keep_the_panel_and_name_the_reason
-            app::browser_provider_usage::tests::authorized_agents_can_query_multiple_profiles_without_allocating_or_opening_settings
-            app::browser_recovery::tests::host_dispatch_authorizes_waits_and_completes_exact_recovery
-            app::browser_requests::tests::a_placement_change_restamps_before_the_next_poll_tick
-            app::browser_requests::tests::placement_fingerprint_follows_membership_not_unrelated_panels
-            app::browser_requests::tests::restamping_rewrites_a_live_manifest_for_the_new_membership
-            app::browser_requests::tests::workspace_stamp_follows_agent_panel_membership
-            app::cloud_panel::tests::cloud_launch_defaults_precede_workspace_cwd_and_binding_is_unique
-            app::cloud_panel::tests::one_cloud_accepts_multiple_instances_of_each_agent
-            app::session::tests::provider_scoping::rebind_allows_equal_session_ids_from_different_providers
-            app::session::tests::rebind_and_restart_updates_the_binding_and_queues_the_panel
-            app::session::tests::rebind_rejects_a_session_used_by_another_panel
-            # XDG fixtures use Unix paths, which are not absolute on Windows.
-            linux_desktop::tests::packaged_data_dirs_use_xdg_data_dirs_then_defaults
-
             # horizon-browser-control audit rotation truncates through an append
             # handle, which Windows opens without write-data access.
             manifest::audit::tests::audit_rotation_bounds_storage_and_keeps_the_newest_segments

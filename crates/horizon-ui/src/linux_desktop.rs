@@ -353,6 +353,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "XDG data directories are Unix paths, which are not absolute on Windows"
+    )]
     fn packaged_data_dirs_use_xdg_data_dirs_then_defaults() {
         assert_eq!(
             packaged_data_dirs(None),
