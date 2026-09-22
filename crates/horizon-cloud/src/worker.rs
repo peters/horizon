@@ -89,19 +89,26 @@ impl WorkerSpec {
                 "Select an explicit CPU flavor or GPU type in machine settings",
             ));
         }
+        Ok(())
+    }
+    /// # Errors
+    /// Also rejects CPU flavors that cannot offer the profile. Only new requests
+    /// are checked, so saved workers stay reconcilable when flavor limits change.
+    pub fn validate_request(&self) -> Result<(), CloudError> {
+        self.validate()?;
         if !self.profile.gpu
             && self.cpu_flavors.iter().any(|flavor| {
-                let per_cpu = match flavor.as_str() {
-                    "cpu3c" | "cpu5c" => 2,
-                    "cpu3g" | "cpu5g" => 4,
-                    "cpu3m" | "cpu5m" => 8,
-                    _ => 0,
-                };
-                u32::from(self.profile.cpu) * per_cpu < u32::from(self.profile.memory_gb)
+                !crate::runpod::flavors::Flavor::get(flavor).is_some_and(|flavor| {
+                    flavor.fits(
+                        self.profile.cpu,
+                        self.profile.memory_gb,
+                        self.profile.storage.container_gb,
+                    )
+                })
             })
         {
             return Err(CloudError::Invalid(
-                "Selected CPU flavors cannot meet the profile memory requirement",
+                "Selected CPU flavors cannot offer the profile's vCPU, memory and container disk",
             ));
         }
         Ok(())

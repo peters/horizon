@@ -45,6 +45,15 @@ are absolute. This file contains paths and references, never literal API keys:
 }
 ```
 
+`cpu_flavors` lists preferred CPU flavors. RunPod CPU pods take 2, 4, 8, 16 or
+32 vCPU. The flavor fixes memory per vCPU (2 GB for `cpu3c`/`cpu5c`, 4 GB for
+`cpu3g`/`cpu5g`, 8 GB for `cpu3m`/`cpu5m`) and limits container disk per vCPU
+(10 GB for `cpu3*`, 15 GB for `cpu5*`). Horizon sends the preferred flavors that
+offer the profile's vCPU count, memory and container disk; when none do, it uses
+the flavor with the least memory per vCPU and price that does. For example, an
+8 vCPU, 32 GB profile uses `cpu3g` when only `cpu3c` is preferred. A size no
+flavor offers fails validation before the image is built.
+
 For rootless Docker, set `docker_host` to its Unix socket URI. Public images can
 use a null `registry_pull_auth_id`. Optional `anthropic_api_key_file`,
 `anthropic_workspace_id` and `openai_api_key_file` bind explicit API authentication;
@@ -91,6 +100,14 @@ compute. It resolves an immutable digest and checks the worker contract. Keep th
 computer online until image/source upload and readiness complete. Expand verbose
 output for build and push progress. Failures retain a retryable card and the
 persisted operation identity.
+
+Until a worker is requested, including after a failed attempt or a definite
+provider rejection, the cloud card offers vCPU and memory drop-downs for CPU
+profiles, listing only sizes RunPod offers with the profile's container disk.
+The next attempt reuses the built image and applies the new size and the current
+`cpu_flavors`, `gpu_types` and `data_centers` settings. Once a worker is
+requested the size is fixed: RunPod cannot change an existing pod's vCPU or
+memory, so create a new cloud for a different size.
 
 Add normal panels inside the cloud using the existing panel picker. Choose
 Default, Rows, Cols or Grid independently for each cloud. Cloud and workspace

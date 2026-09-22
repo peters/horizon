@@ -375,9 +375,42 @@ fn unsuitable_cpu_memory_fails_before_provider_io() {
     let mut spec = spec();
     spec.profile.memory_gb = 32;
     spec.cpu_flavors = vec!["cpu3g".into()];
-    assert!(spec.validate().is_err());
+    assert!(spec.validate_request().is_err());
+    let (provider, requests, task) = server(Vec::new());
+    let mut state = CreateState::Prepared;
+    assert!(
+        provider
+            .ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+            .is_err()
+    );
+    assert_eq!(state, CreateState::Prepared);
+    task.join().unwrap();
+    assert!(requests.lock().unwrap().is_empty());
     spec.cpu_flavors = vec!["cpu3m".into()];
-    assert!(spec.validate().is_ok());
+    assert!(spec.validate_request().is_ok());
+    // A container disk above 10 GB per vCPU needs a fifth-generation flavor.
+    spec.profile.storage.container_gb = 41;
+    assert!(spec.validate_request().is_err());
+    spec.cpu_flavors = vec!["cpu5m".into()];
+    assert!(spec.validate_request().is_ok());
+    spec.profile.cpu = 3;
+    assert!(spec.validate_request().is_err());
+}
+#[test]
+fn saved_workers_stay_reconcilable_when_flavor_limits_change() {
+    let mut spec = spec();
+    spec.profile.memory_gb = 32;
+    spec.cpu_flavors = vec!["cpu3c".into()];
+    assert!(spec.validate().is_ok() && spec.validate_request().is_err());
+    let (provider, _, task) = server(vec![(200, worker(&spec).to_string())]);
+    let mut state = CreateState::Bound {
+        worker_id: "worker1".into(),
+    };
+    let found = provider
+        .ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    assert_eq!(found.id, "worker1");
+    task.join().unwrap();
 }
 
 #[test]

@@ -55,6 +55,12 @@ impl Deployment {
     pub fn requires_browserstack_release(&self) -> bool {
         self.profile.capabilities.browserstack.is_some() && !self.browserstack_released
     }
+    /// No worker is requested or bound, so CPU and memory can still change.
+    /// `RunPod` cannot resize an existing pod.
+    #[must_use]
+    pub fn resizable(&self) -> bool {
+        self.operation == CreateState::Prepared && self.worker.is_none()
+    }
 }
 
 pub struct Store {
