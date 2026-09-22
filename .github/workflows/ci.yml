@@ -351,11 +351,6 @@ jobs:
             runtime_state::agent_sessions::tests::parse_pi_session_uses_header_metadata_and_latest_user_message
             runtime_state::agent_sessions::tests::provider_scoping::bootstrap_allows_equal_session_ids_from_different_providers
 
-            # horizon-core build snapshots inherit core.autocrlf, so git archive
-            # writes CRLF text.
-            cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
-            cloud_runtime::repository::tests::selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files
-
             # horizon-ui test fixtures.
             # Shell panels rely on the default shell, which is /bin/bash when
             # SHELL is unset, and agent panels always launch through a POSIX
