@@ -65,6 +65,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         ));
     }
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
+    refresh_allocation(request, &store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;
     let pack = pack_root.path().join("source.pack");
     let mut auxiliary = None;
@@ -253,15 +254,29 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             "Resolve a committed revision before preparing deployment",
         ));
     }
-    let state = if let Some(state) = store.load()? {
+    let state = if let Some(mut state) = store.load()? {
+        // CPU and memory may change until a worker is requested; the image does not depend on them.
+        let mut resized = state.profile.clone();
+        resized.cpu = request.profile.cpu;
+        resized.memory_gb = request.profile.memory_gb;
         if state.cloud_id != request.cloud_id
             || state.revision != request.revision
             || state.repository != request.repository
-            || state.profile != request.profile
+            || resized != request.profile
+            || (state.profile != resized && !state.resizable())
         {
             return Err(Error::Invalid(
                 "Cloud is permanently bound to its repository, revision and profile",
             ));
+        }
+        if state.profile != resized {
+            // Reject an unoffered size before saving, and keep the spec's identity in step.
+            let cpu_flavors = cpu_flavors(&resized, &request.settings)?;
+            if let Some(spec) = &mut state.spec {
+                spec.profile.clone_from(&resized);
+                spec.cpu_flavors = cpu_flavors;
+            }
+            state.profile = resized;
         }
         state
     } else {
@@ -313,10 +328,35 @@ fn prepare_image(request: &Request, store: &Store, runner: &Runner<'_>, state: &
         public_key,
         registry_auth_id: request.settings.registry_pull_auth_id.clone(),
         gpu_types: request.settings.gpu_types.clone(),
-        cpu_flavors: request.settings.cpu_flavors.clone(),
+        cpu_flavors: cpu_flavors(&state.profile, &request.settings)?,
         data_centers: request.settings.data_centers.clone(),
     });
     store.save(state)
+}
+/// Size and machine settings apply until a worker is requested. Flavors are
+/// chosen before the image build so an unavailable size fails in seconds.
+fn refresh_allocation(request: &Request, store: &Store, state: &mut Deployment) -> Result<()> {
+    if !state.resizable() {
+        return Ok(());
+    }
+    let cpu_flavors = cpu_flavors(&state.profile, &request.settings)?;
+    if let Some(spec) = &mut state.spec {
+        spec.profile.clone_from(&state.profile);
+        spec.cpu_flavors = cpu_flavors;
+        spec.gpu_types.clone_from(&request.settings.gpu_types);
+        spec.data_centers.clone_from(&request.settings.data_centers);
+        store.save(state)?;
+    }
+    Ok(())
+}
+fn cpu_flavors(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<Vec<String>> {
+    if profile.gpu {
+        return Ok(settings.cpu_flavors.clone());
+    }
+    Ok(horizon_cloud::runpod::flavors::for_profile(
+        profile,
+        &settings.cpu_flavors,
+    )?)
 }
 /// # Errors
 /// Terminates only the persisted, identity-checked worker; never called on UI drop.
@@ -547,5 +587,84 @@ mod tests {
         assert_eq!(timed.ready_after_seconds, Some(12));
         assert_eq!(timed.ready_history, ReadyHistory::Observed);
         assert!(attempt_started(&timed, Instant::now()).is_none());
+    }
+    #[test]
+    #[cfg(unix)]
+    fn size_changes_apply_until_a_worker_is_requested() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = Request {
+            cloud_id: "resize".into(),
+            repository: root.path().join("repository-is-not-mounted"),
+            revision: "a".repeat(40),
+            profile: serde_json::from_value(
+                serde_json::json!({"provider":"runpod","image":"registry.example.com/worker","cpu":8,"memory_gb":32}),
+            )
+            .unwrap(),
+            state_root: root.path().join("state"),
+            settings: serde_json::from_value(
+                serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":["cpu3c"],"gpu_types":[]}),
+            )
+            .unwrap(),
+        };
+        let store = Store::lock(&request.state_root).unwrap();
+        let mut state = initial_state(&request, &store).unwrap();
+        // A definite provider rejection keeps the built image's spec with its old size.
+        state.spec = Some(WorkerSpec {
+            operation_id: "resize".into(),
+            image_digest: format!("registry.example.com/worker@sha256:{}", "a".repeat(64)),
+            profile: state.profile.clone(),
+            public_key: String::new(),
+            registry_auth_id: None,
+            gpu_types: Vec::new(),
+            cpu_flavors: vec!["cpu3c".into()],
+            data_centers: Vec::new(),
+        });
+        store.save(&state).unwrap();
+        request.profile.cpu = 1;
+        request.profile.memory_gb = 16;
+        assert!(initial_state(&request, &store).is_err());
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!((saved.profile.cpu, saved.profile.memory_gb), (8, 32));
+        request.profile.cpu = 4;
+        initial_state(&request, &store).unwrap();
+        let saved = store.load().unwrap().unwrap();
+        let spec = saved.spec.as_ref().unwrap();
+        assert_eq!((saved.profile.cpu, saved.profile.memory_gb), (4, 16));
+        assert_eq!(spec.profile, saved.profile);
+        assert_eq!(spec.cpu_flavors, ["cpu3g"]);
+        // Machine settings changed after a rejection apply to the next attempt.
+        request.settings.cpu_flavors = vec!["cpu5g".into()];
+        request.settings.gpu_types = vec!["fixture-gpu".into()];
+        let mut state = initial_state(&request, &store).unwrap();
+        refresh_allocation(&request, &store, &mut state).unwrap();
+        let spec = store.load().unwrap().unwrap().spec.unwrap();
+        assert_eq!(spec.cpu_flavors, ["cpu5g"]);
+        assert_eq!(spec.gpu_types, ["fixture-gpu"]);
+        request.profile.storage.volume_gb += 1;
+        assert!(initial_state(&request, &store).is_err());
+        request.profile.storage.volume_gb -= 1;
+        // A requested worker fixes its size and saved spec.
+        state.operation = CreateState::Requested;
+        store.save(&state).unwrap();
+        request.settings.cpu_flavors = vec!["cpu3g".into()];
+        refresh_allocation(&request, &store, &mut state).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().spec.unwrap().cpu_flavors, ["cpu5g"]);
+        request.profile.cpu = 8;
+        assert!(initial_state(&request, &store).is_err());
+        request.profile.cpu = 4;
+        assert!(initial_state(&request, &store).is_ok());
+    }
+    #[test]
+    fn gpu_profiles_keep_configured_cpu_flavors() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"unused", "ssh_identity_file":"unused", "docker_config":"unused",
+            "registry_pull_auth_id":null, "cpu_flavors":["cpu3c"], "gpu_types":["fixture-gpu"]
+        }))
+        .unwrap();
+        let profile: horizon_cloud::Profile = serde_json::from_value(serde_json::json!({
+            "provider":"runpod","image":"registry.example.com/worker","cpu":3,"memory_gb":100,"gpu":true
+        }))
+        .unwrap();
+        assert_eq!(cpu_flavors(&profile, &settings).unwrap(), ["cpu3c"]);
     }
 }

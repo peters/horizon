@@ -1,4 +1,4 @@
-use super::{Confirmation, HorizonApp, Stage, lifecycle::Action};
+use super::{Confirmation, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
@@ -13,6 +13,7 @@ impl HorizonApp {
         let mut action = None;
         let mut fullscreen = None;
         let mut layout = None;
+        let mut resize = None;
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
             if self
@@ -33,7 +34,9 @@ impl HorizonApp {
                     ui.set_clip_rect(clip);
                     runtime_frame(ui, group.issue, |ui| {
                         super::super::runtime::runtime_heading(ui, group, self.cloud_prototype.provider_logo.as_ref());
-                        profile_details(ui, launch);
+                        if let Some(size) = profile_details(ui, group.issue, launch, runtime) {
+                            resize = Some((group.issue, size));
+                        }
                         ui.add_space(10.0);
                         ui.label("Panel layout");
                         let mut selected = group.layout;
@@ -81,6 +84,9 @@ impl HorizonApp {
         if let Some(id) = fullscreen {
             self.toggle_cloud_fullscreen(ctx, id);
         }
+        if let Some((id, size)) = resize {
+            self.resize_production_cloud(id, size);
+        }
         if let Some((id, layout)) = layout
             && let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == id)
         {
@@ -88,6 +94,47 @@ impl HorizonApp {
             self.cloud_prototype.groups.make_room(&mut self.board, index);
             self.save_cloud_prototype();
         }
+    }
+
+    /// The next deployment attempt adopts the size. The saved record, not the
+    /// cached snapshot, decides whether a worker may already be requested.
+    fn resize_production_cloud(&mut self, id: u32, (cpu, memory_gb): (u16, u16)) {
+        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
+            return;
+        };
+        let Some(launch) = self.cloud_prototype.groups.0[index].remote.clone() else {
+            return;
+        };
+        let Some(root) = self.cloud_prototype.root.clone() else {
+            return;
+        };
+        let loaded = cloud_runtime::state::cloud_directory(&root, &launch.id)
+            .and_then(|path| Store::lock(&path))
+            .and_then(|store| store.load());
+        let allowed = match loaded {
+            Ok(Some(state)) if !state.resizable() => {
+                let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
+                runtime.stage = Some(state.stage);
+                runtime.state = Some(state);
+                false
+            }
+            Ok(Some(_)) => true,
+            Ok(None) => !launch.deployment_started,
+            Err(error) => {
+                self.cloud_prototype.error = Some(error.to_string());
+                return;
+            }
+        };
+        if !allowed {
+            self.cloud_prototype.error =
+                Some("A worker was requested for this cloud; its size can no longer change".into());
+            return;
+        }
+        if let Some(launch) = self.cloud_prototype.groups.0[index].remote.as_mut() {
+            launch.profile.cpu = cpu;
+            launch.profile.memory_gb = memory_gb;
+        }
+        self.save_cloud_prototype();
     }
 }
 
@@ -109,14 +156,14 @@ fn runtime_frame(ui: &mut egui::Ui, id: u32, contents: impl FnOnce(&mut egui::Ui
     })
 }
 
-fn profile_details(ui: &mut egui::Ui, launch: &horizon_core::cloud_panel::CloudLaunch) {
+fn profile_details(
+    ui: &mut egui::Ui,
+    id: u32,
+    launch: &horizon_core::cloud_panel::CloudLaunch,
+    runtime: &super::Runtime,
+) -> Option<(u16, u16)> {
     ui.label(RichText::new(&launch.profile_name).size(15.0).color(theme::FG_DIM()));
-    ui.label(format!(
-        "{} vCPU · {} GB · {}",
-        launch.profile.cpu,
-        launch.profile.memory_gb,
-        if launch.profile.gpu { "GPU" } else { "CPU only" }
-    ));
+    let resize = machine_size(ui, id, launch, runtime);
     ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
     ui.small(format!(
         "Agents: {}",
@@ -142,6 +189,80 @@ fn profile_details(ui: &mut egui::Ui, launch: &horizon_core::cloud_panel::CloudL
     } else {
         "Desktop: disabled"
     });
+    resize
+}
+
+/// CPU and memory can change until a worker is requested; `RunPod` cannot resize an existing pod.
+fn machine_size(
+    ui: &mut egui::Ui,
+    id: u32,
+    launch: &horizon_core::cloud_panel::CloudLaunch,
+    runtime: &super::Runtime,
+) -> Option<(u16, u16)> {
+    use horizon_core::cloud_runtime::flavors::{memory_options, offered, resize_vcpu, vcpu_options};
+    let profile = &launch.profile;
+    let kind = if profile.gpu { "GPU" } else { "CPU only" };
+    let idle = runtime.receiver.is_none() && runtime.recovery_receiver.is_none() && !runtime.state_unavailable;
+    if profile.gpu
+        || !idle
+        || !runtime
+            .state
+            .as_ref()
+            .is_none_or(horizon_core::cloud_runtime::state::Deployment::resizable)
+    {
+        // A requested worker's saved size is authoritative.
+        let fixed = runtime.state.as_ref().filter(|state| !state.resizable());
+        let shown = fixed.map_or(profile, |state| &state.profile);
+        let label = ui.label(format!("{} vCPU · {} GB · {kind}", shown.cpu, shown.memory_gb));
+        if fixed.is_some() {
+            label.on_hover_text("RunPod cannot resize a requested worker. Create a new cloud for a different size.");
+        }
+        return None;
+    }
+    let hint = format!(
+        "CPU-only RunPod worker. Only sizes offered with this cloud's {} GB container disk are listed.",
+        profile.storage.container_gb
+    );
+    let mut size = None;
+    // Top alignment keeps equally tall drop-downs level when the theme pads them above row height.
+    ui.horizontal_top(|ui| {
+        egui::ComboBox::from_id_salt(("cloud-vcpu", id))
+            .selected_text(format!("{} vCPU", profile.cpu))
+            .show_ui(ui, |ui| {
+                for cpu in vcpu_options(profile.storage.container_gb) {
+                    if ui.selectable_label(cpu == profile.cpu, format!("{cpu} vCPU")).clicked() && cpu != profile.cpu {
+                        size = resize_vcpu(profile, cpu);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(&hint);
+        egui::ComboBox::from_id_salt(("cloud-memory", id))
+            .selected_text(format!("{} GB", profile.memory_gb))
+            .show_ui(ui, |ui| {
+                for (memory, family) in memory_options(profile.cpu, profile.storage.container_gb) {
+                    if ui
+                        .selectable_label(memory == profile.memory_gb, format!("{memory} GB · {family}"))
+                        .clicked()
+                        && memory != profile.memory_gb
+                    {
+                        size = Some((profile.cpu, memory));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(&hint);
+    });
+    if !offered(profile) {
+        ui.colored_label(
+            egui::Color32::LIGHT_RED,
+            format!(
+                "RunPod offers no CPU worker with this size and {} GB container disk",
+                profile.storage.container_gb
+            ),
+        );
+    }
+    size
 }
 
 fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {

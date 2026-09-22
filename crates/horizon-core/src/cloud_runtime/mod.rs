@@ -1,5 +1,5 @@
 //! Horizon coordination around the portable cloud provider. No work happens on the UI thread.
-pub use horizon_cloud::{Cancellation, CreateState};
+pub use horizon_cloud::{Cancellation, CreateState, runpod::flavors};
 pub mod browser_auth;
 pub mod command;
 pub mod deployment;

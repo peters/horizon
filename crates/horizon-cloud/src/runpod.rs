@@ -3,6 +3,7 @@ use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Worker,
 use serde_json::{Value, json};
 use std::time::Duration;
 
+pub mod flavors;
 pub mod recovery;
 
 #[cfg(test)]
@@ -73,6 +74,7 @@ impl RunPod {
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),
             CreateState::Prepared | CreateState::Requested => {}
         }
+        spec.validate_request()?;
         let workers: Vec<Worker> = self
             .list(cancel)?
             .into_iter()
