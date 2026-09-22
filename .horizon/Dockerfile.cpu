@@ -28,7 +28,7 @@ ENV RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/
     PATH="/usr/local/cargo/bin:${PATH}"
 ENV LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan
 RUN bash /usr/local/lib/horizon/install-build-tools.sh cpu
-ENV LANG=C.UTF-8
+ENV LANG=C.UTF-8 PATH="${CARGO_HOME}/bin:${PATH}"
 LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
     org.opencontainers.image.description="Cloud development environment with isolated workspaces" \
     io.horizon.worker.contract="1" io.horizon.worker.capabilities="1"
