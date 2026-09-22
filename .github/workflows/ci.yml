@@ -309,6 +309,7 @@ jobs:
         shell: bash
         run: |
           pending=(
+
             # horizon-core session fixtures keep Unix paths that loaders would
             # normalize to `\repo` on Windows.
             runtime_state::agent_sessions::tests::bootstrap_assigns_distinct_sessions_per_group
