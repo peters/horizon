@@ -117,15 +117,21 @@ Stable-release packaging assumes:
 - the stable release uploads the four raw assets plus the four installer assets before the tap update runs
 - the canonical `peters/horizon` repo publishes Surge storage to the dedicated GitHub Release tag `surge` in `peters/horizon-updates`
 - `snap/snapcraft.yaml` remains available for the classic `horizon-ui` snap, but the release job is currently paused
-- `SURGE_STORAGE_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/horizon-updates`
+- the private `Horizon Release Automation` GitHub App is installed only on `peters/horizon-updates`, `peters/homebrew-horizon`, and `peters/winget-pkgs`, with Contents write permission
 - `SNAPCRAFT_STORE_CREDENTIALS` is not currently required while Snap Store publication is paused
-- `HOMEBREW_TAP_TOKEN` is configured in the `peters/horizon` repository secrets with write access to `peters/homebrew-horizon`
-- `WINGET_PKGS_TOKEN` is configured in the `peters/horizon` repository secrets with write access to the `peters/winget-pkgs` fork
+- the protected `release-automation` environment contains `RELEASE_AUTOMATION_APP_ID` (variable) and `RELEASE_AUTOMATION_PRIVATE_KEY` (secret); permit the trusted `main` branch and release tags only
+- `WINGET_PUBLIC_PR_TOKEN` in that environment is a separate expiring classic PAT with only `public_repo`, used only to query/create upstream WinGet PRs; it has no private-repository, workflow, or package scope
 - `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
+
+Run **Verify Release Credentials** after rotating either credential. It checks protected-environment access, one-repository App token scope and the public PR token owner/scope/expiry without writing release content. The initial migration also verified disposable branch writes, a draft storage asset upload/download, a controlled public PR, cleanup and token revocation.
+
+Each release job mints a short-lived installation token restricted to its one destination repository. Storage authentication is minted after the toolchain build, immediately before upload, to avoid spending token lifetime compiling. The token action revokes installation tokens when the job ends. The App does not have workflow-write permission.
+
+The upstream WinGet repository belongs to Microsoft. A token scoped only to the fork cannot create its upstream PR, so the dedicated public-only PAT remains an explicit exception. Rotate it before its recorded expiry. Do not reuse it for repository checkout, package access, or private repositories.
 
 WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
 
-If a stable release is missing one of those assets, the Surge storage token, the tap token secret, the WinGet token secret, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
+If a stable release is missing one of those assets, the release App credentials, the WinGet public PR token, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew, Surge, or WinGet update.
 
 ## Cross-Platform Installer And Update Smoke
 
