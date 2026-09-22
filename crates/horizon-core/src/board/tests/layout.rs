@@ -40,6 +40,8 @@ fn parent_presets_and_reflow_preserve_cloud_layouts() {
         assert_eq!(geometry(&board), before);
         assert_eq!(groups.0[0].layout, layout);
         assert_eq!(board.workspace(workspace).unwrap().layout, None);
+        // Growing a panel that overlaps the cloud pushes it; keep this resize about reflow only.
+        board.move_panel(added, [0.0, 4000.0]);
         let size = board.panel(added).unwrap().layout.size;
         board.workspace_mut(workspace).unwrap().layout = Some(WorkspaceLayout::Grid);
         board.resize_panel(added, [size[0] + 25.0, size[1] + 25.0]);

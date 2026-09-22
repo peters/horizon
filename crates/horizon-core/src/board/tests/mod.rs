@@ -1,6 +1,8 @@
 use crate::panel::{PanelKind, PanelOptions};
 
 mod alignment;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud_collisions;
 mod core;
 mod layout;
 mod reordering;

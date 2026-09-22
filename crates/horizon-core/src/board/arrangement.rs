@@ -8,61 +8,12 @@ use crate::workspace::{Workspace, WorkspaceId};
 use super::{Board, WorkspaceLayout, vec2_eq};
 
 mod alignment;
+mod panel_collisions;
 mod reordering;
 
 pub use alignment::WorkspaceAlignment;
 
 impl Board {
-    /// After a panel is resized, push every overlapping sibling panel
-    /// within the same workspace along the dominant resize-growth axis,
-    /// cascading until nothing overlaps.
-    fn resolve_panel_collisions(&mut self, source: PanelId, workspace_id: WorkspaceId, resize_delta: [f32; 2]) {
-        let Some(sibling_ids) = self.workspace(workspace_id).map(|ws| ws.panels.clone()) else {
-            return;
-        };
-
-        let mut queue = vec![source];
-        let mut settled = vec![source];
-
-        while let Some(check_id) = queue.pop() {
-            let Some(check_panel) = self.panel(check_id) else {
-                continue;
-            };
-            let cp = check_panel.layout.position;
-            let cs = check_panel.layout.size;
-            let check_rect = [cp[0], cp[1], cp[0] + cs[0], cp[1] + cs[1]];
-
-            let candidates: Vec<PanelId> = sibling_ids.iter().copied().filter(|id| !settled.contains(id)).collect();
-
-            for other_id in candidates {
-                let Some(other_panel) = self.panel(other_id) else {
-                    continue;
-                };
-                #[cfg(feature = "cloud-workspaces")]
-                if self
-                    .cloud_groups
-                    .0
-                    .iter()
-                    .any(|group| group.panels.contains(&other_panel.local_id))
-                {
-                    continue;
-                }
-                let op = other_panel.layout.position;
-                let os = other_panel.layout.size;
-                let other_rect = [op[0], op[1], op[0] + os[0], op[1] + os[1]];
-
-                let push = resize_collision_push(check_rect, other_rect, resize_delta, TILE_GAP);
-                if push[0] != 0.0 || push[1] != 0.0 {
-                    if let Some(panel) = self.panel_mut(other_id) {
-                        panel.move_to([op[0] + push[0], op[1] + push[1]]);
-                    }
-                    settled.push(other_id);
-                    queue.push(other_id);
-                }
-            }
-        }
-    }
-
     /// After the workspace `source` was moved, push every overlapping
     /// workspace along `drag_dir`, cascading until nothing overlaps.
     pub(super) fn resolve_workspace_collisions(&mut self, source: WorkspaceId, drag_dir: [f32; 2]) {
