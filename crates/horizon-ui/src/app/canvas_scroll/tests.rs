@@ -242,7 +242,9 @@ fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Ev
         1.0,
         egui::InputOptions::default(),
     );
-    gesture.route(&input, panel(on_canvas), true, &|_| false).pans_canvas
+    gesture
+        .route(&input, panel(on_canvas), true, &|_, _, _| false)
+        .pans_canvas
 }
 
 #[test]
@@ -330,7 +332,11 @@ fn focus_loss_and_disallowed_input_release_the_gesture() {
         ));
         let mut input = egui::InputState::default();
         input.focused = focused;
-        assert!(!gesture.route(&input, panel(false), !focused, &|_| false).pans_canvas);
+        assert!(
+            !gesture
+                .route(&input, panel(false), !focused, &|_, _, _| false)
+                .pans_canvas
+        );
         assert!(!claim(
             &mut gesture,
             1.016,
@@ -355,7 +361,7 @@ fn root_and_detached_viewports_have_separate_scroll_owners() {
         let _ = ctx
             .run_ui(input, |ui| {
                 assert_eq!(
-                    route_canvas_scroll(ui.ctx(), panel(starts_on_canvas), true, |_| false).pans_canvas,
+                    route_canvas_scroll(ui.ctx(), panel(starts_on_canvas), true, |_, _, _| false).pans_canvas,
                     expected
                 );
             })
@@ -374,7 +380,9 @@ fn route(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, chain: bool, e
         1.0,
         egui::InputOptions::default(),
     );
-    gesture.route(&input, panel(on_canvas), true, &|_| chain).pans_canvas
+    gesture
+        .route(&input, panel(on_canvas), true, &|_, _, _| chain)
+        .pans_canvas
 }
 
 #[test]
@@ -412,7 +420,7 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
     // panel the pointer drifted over happens to be exhausted.
     let mut gesture = ScrollGesture::default();
     let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
-    let only_other_is_exhausted = |id: horizon_core::PanelId| id == OTHER_PANEL;
+    let only_other_is_exhausted = |id: horizon_core::PanelId, _: Vec2, _: Modifiers| id == OTHER_PANEL;
 
     let input = |time: f64| {
         egui::InputState::default().begin_pass(
@@ -443,7 +451,7 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
     // Once the owner itself is exhausted, the gesture chains.
     assert!(
         gesture
-            .route(&input(1.032), Some(OTHER_PANEL), true, &|_| true)
+            .route(&input(1.032), Some(OTHER_PANEL), true, &|_, _, _| true)
             .pans_canvas
     );
 }
@@ -469,4 +477,32 @@ fn a_zero_delta_gesture_start_does_not_chain() {
         false,
         vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]
     ));
+}
+
+#[test]
+fn coalesced_opposing_wheels_are_judged_one_event_at_a_time() {
+    // A terminal in the middle of its scrollback can absorb either vertical
+    // direction; only a horizontal-only event finds it exhausted. egui can
+    // coalesce opposing events into a zero frame delta, which must not read as
+    // a horizontal swipe and chain the gesture away from the terminal.
+    let mid_history = |_: horizon_core::PanelId, delta: Vec2, _: Modifiers| delta.y == 0.0;
+    let input = egui::InputState::default().begin_pass(
+        RawInput {
+            time: Some(1.0),
+            events: vec![
+                wheel(Vec2::new(0.0, -5.0), TouchPhase::Move),
+                wheel(Vec2::new(0.0, 5.0), TouchPhase::Move),
+            ],
+            ..RawInput::default()
+        },
+        false,
+        1.0,
+        egui::InputOptions::default(),
+    );
+    assert_eq!(input.smooth_scroll_delta, Vec2::ZERO);
+    let mut gesture = ScrollGesture::default();
+    let routing = gesture.route(&input, Some(PANEL), true, &mid_history);
+    assert!(!routing.pans_canvas);
+    assert!(routing.claimed_wheels.is_empty());
+    assert_eq!(gesture.canvas_owned, Some(false));
 }

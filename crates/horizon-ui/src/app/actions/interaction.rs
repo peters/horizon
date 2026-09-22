@@ -249,7 +249,7 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, None, false, |_| false);
+            route_canvas_scroll(ctx, None, false, |_, _, _| false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
@@ -281,7 +281,7 @@ impl HorizonApp {
             ctx,
             panel_under_pointer,
             pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
-            |panel| self.panel_scroll_exhausted(panel, scroll, modifiers.shift),
+            |panel, delta, wheel_modifiers| self.panel_scroll_exhausted(panel, delta, wheel_modifiers.shift),
         );
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
@@ -308,11 +308,13 @@ impl HorizonApp {
         }
     }
 
-    /// Whether `panel` has run out of scroll to absorb. A latched gesture
-    /// chains to the canvas once its own panel cannot absorb any more, the way
-    /// a browser hands off at a scroll container's edge. Only terminals expose
-    /// a reliable extent; other panel kinds keep the gesture.
-    fn panel_scroll_exhausted(&self, panel: PanelId, scroll: Vec2, shift: bool) -> bool {
+    /// Whether `panel` has run out of scroll to absorb one wheel event's
+    /// `delta`. A latched gesture chains to the canvas once its own panel
+    /// cannot absorb any more, the way a browser hands off at a scroll
+    /// container's edge. Only terminals expose a reliable extent; other panel
+    /// kinds keep the gesture. Mirrors the terminal's own wheel handling, which
+    /// reads the raw event delta and modifiers.
+    fn panel_scroll_exhausted(&self, panel: PanelId, delta: Vec2, shift: bool) -> bool {
         let Some(terminal) = self
             .board
             .panels
@@ -329,9 +331,9 @@ impl HorizonApp {
         {
             return false;
         }
-        if scroll.y > 0.0 {
+        if delta.y > 0.0 {
             terminal.scrollback() >= terminal.history_size()
-        } else if scroll.y < 0.0 {
+        } else if delta.y < 0.0 {
             terminal.scrollback() == 0
         } else {
             // Horizontal-only swipes have nothing to absorb in the scrollback.

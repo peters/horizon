@@ -1,4 +1,4 @@
-use egui::{Context, Event, Id, InputState, TouchPhase, Vec2};
+use egui::{Context, Event, Id, InputState, Modifiers, TouchPhase, Vec2};
 use horizon_core::PanelId;
 
 use crate::input::TerminalInputEvent;
@@ -36,7 +36,7 @@ impl ScrollGesture {
         input: &InputState,
         panel: Option<PanelId>,
         allowed: bool,
-        exhausted: &impl Fn(PanelId) -> bool,
+        exhausted: &impl Fn(PanelId, Vec2, Modifiers) -> bool,
     ) -> ScrollRouting {
         if !allowed || !input.focused || input.pointer.any_pressed() {
             *self = Self::default();
@@ -45,11 +45,16 @@ impl ScrollGesture {
 
         let mut routing = ScrollRouting::default();
         let mut has_canvas_motion = false;
-        for (index, (delta, phase)) in input
+        for (index, (delta, phase, modifiers)) in input
             .events
             .iter()
             .filter_map(|event| match event {
-                Event::MouseWheel { delta, phase, .. } => Some((*delta, *phase)),
+                Event::MouseWheel {
+                    delta,
+                    phase,
+                    modifiers,
+                    ..
+                } => Some((*delta, *phase, *modifiers)),
                 _ => None,
             })
             .enumerate()
@@ -76,7 +81,12 @@ impl ScrollGesture {
             // drifts over some other panel mid-gesture changes nothing. Only
             // an event carrying motion can chain: a phased gesture opens with a
             // zero-delta `Start`, which has no direction to be exhausted in.
-            if delta != Vec2::ZERO && self.canvas_owned == Some(false) && self.owner.is_some_and(exhausted) {
+            // Each event is judged by its own delta, as the terminal applies
+            // it, never by the frame's sum, where opposing events cancel out.
+            if delta != Vec2::ZERO
+                && self.canvas_owned == Some(false)
+                && self.owner.is_some_and(|owner| exhausted(owner, delta, modifiers))
+            {
                 self.canvas_owned = Some(true);
             }
             if self.canvas_owned == Some(true) {
@@ -97,12 +107,13 @@ impl ScrollGesture {
 
 /// Route this frame's scroll. `panel` is the panel under the pointer, used only
 /// when a gesture latches; `exhausted` reports whether a panel can still absorb
-/// the scroll and is always asked about the gesture's own owner.
+/// one wheel event's delta and modifiers, and is always asked about the
+/// gesture's own owner.
 pub(super) fn route_canvas_scroll(
     ctx: &Context,
     panel: Option<PanelId>,
     allowed: bool,
-    exhausted: impl Fn(PanelId) -> bool,
+    exhausted: impl Fn(PanelId, Vec2, Modifiers) -> bool,
 ) -> ScrollRouting {
     let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
