@@ -231,4 +231,41 @@ mod tests {
         assert_eq!(expected(&store, &record().worker).unwrap(), None);
         assert!(!retained(&store, &record().worker).unwrap());
     }
+    #[test]
+    fn prepared_cleanup_recovers_when_storage_finished_before_deployment_save() {
+        for journal_deleted in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut record = record();
+            record.state = State::Deleted;
+            let deployment: Deployment = serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":record.worker.operation_id,"repository":"/synthetic","revision":"a",
+                "profile":record.worker.profile,"stage":"Provision","operation":{"state":"prepared"},
+                "spec":record.worker,"worker":null,"sessions":[]
+            }))
+            .unwrap();
+            {
+                let store = Store::lock(root.path()).unwrap();
+                store.save(&deployment).unwrap();
+                if journal_deleted {
+                    save(&store, &record).unwrap();
+                }
+            }
+            let mut key = tempfile::NamedTempFile::new().unwrap();
+            key.write_all(b"synthetic-test-key").unwrap();
+            let settings = serde_json::from_value(serde_json::json!({
+                "runpod_key_file":key.path(),"ssh_identity_file":root.path().join("ssh"),
+                "docker_config":root.path().join("docker"),"registry_pull_auth_id":null,
+                "cpu_flavors":[],"gpu_types":[]
+            }))
+            .unwrap();
+            for _ in 0..2 {
+                super::super::terminate(root.path(), &settings, &Cancellation::default()).unwrap();
+                let store = Store::lock(root.path()).unwrap();
+                let saved = store.load().unwrap().unwrap();
+                assert_eq!(saved.stage, crate::cloud_runtime::Stage::Deleted);
+                assert_eq!(saved.operation, CreateState::Prepared);
+                assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &saved).unwrap());
+            }
+        }
+    }
 }

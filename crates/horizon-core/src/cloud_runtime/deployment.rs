@@ -346,12 +346,10 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let provider = RunPod::new(settings.credential()?);
     let mut operation = state.operation.clone();
-    if state.stage == Stage::Deleted && operation == CreateState::Prepared && !storage::retained(&store, &spec)? {
-        return Ok(());
-    }
-    if operation == CreateState::Prepared && storage::retained(&store, &spec)? {
+    if operation == CreateState::Prepared {
         storage::terminate(&provider, &store, &spec, cancel)?;
         state.stage = Stage::Deleted;
+        state.worker = None;
         return store.save(&state);
     }
     if operation == CreateState::Requested {
