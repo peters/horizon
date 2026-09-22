@@ -83,6 +83,21 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    fn retains_network_volume(&self) -> bool {
+        self.state
+            .as_ref()
+            .and_then(|state| state.spec.as_ref())
+            .is_some_and(|spec| spec.network_volume.is_some())
+    }
+
+    fn deleted_message(&self) -> &'static str {
+        if self.retains_network_volume() {
+            "Worker deleted; its network volume, files and credentials remain and storage charges continue"
+        } else {
+            "Worker deleted; its processes and files are no longer available"
+        }
+    }
+
     fn needs_provider_check(state: &Deployment) -> bool {
         state.operation == cloud_runtime::CreateState::Requested
             || (matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
@@ -187,7 +202,7 @@ impl HorizonApp {
                         runtime.progress.stage(Stage::Deleted, std::time::Instant::now());
                         runtime.stage = Some(Stage::Deleted);
                         runtime.desktop = None;
-                        runtime.error = Some("Worker deleted; its processes and files are no longer available".into());
+                        runtime.error = Some(runtime.deleted_message().into());
                         finished.push(id);
                     }
                     Event::Stage(stage, at) => {

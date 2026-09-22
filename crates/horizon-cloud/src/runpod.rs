@@ -75,11 +75,14 @@ impl RunPod {
             CreateState::Prepared | CreateState::Requested => {}
         }
         spec.validate_request()?;
-        let workers: Vec<Worker> = self
-            .list(cancel)?
-            .into_iter()
-            .filter(|w| w.name == spec.name())
-            .collect();
+        let listed = self.list(cancel)?;
+        let volume_in_use = spec.network_volume.as_ref().is_some_and(|binding| {
+            listed.iter().any(|worker| {
+                worker.name != spec.name()
+                    && worker.network_volume.as_ref().and_then(|volume| volume.id.as_ref()) == Some(&binding.id)
+            })
+        });
+        let workers: Vec<Worker> = listed.into_iter().filter(|worker| worker.name == spec.name()).collect();
         if workers.len() > 1 {
             return Err(CloudError::DuplicateWorkers);
         }
@@ -88,6 +91,21 @@ impl RunPod {
             bind(state, &worker, &mut persist)?;
             progress(Progress::WorkerFound(worker.id.clone()));
             return Ok(worker);
+        }
+        if volume_in_use {
+            return Err(CloudError::Invalid(
+                "Network volume is attached to another worker; use a dedicated volume",
+            ));
+        }
+        if let Some(binding) = &spec.network_volume {
+            let volume: crate::NetworkVolume = serde_json::from_value(self.request(
+                "GET",
+                &format!("/networkvolumes/{}", binding.id),
+                None,
+                cancel,
+            )?)
+            .map_err(|_| CloudError::InvalidResponse)?;
+            volume.verify(binding, spec.profile.storage.volume_gb)?;
         }
         cancel.check()?;
         persist(&CreateState::Requested)?;
@@ -111,7 +129,13 @@ impl RunPod {
     /// # Errors
     /// Returns transport, authentication or response errors without response-body contents.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
-        serde_json::from_value(self.request("GET", "/pods", None, cancel)?).map_err(|_| CloudError::InvalidResponse)
+        serde_json::from_value(self.request(
+            "GET",
+            "/pods?includeNetworkVolume=true&includeWorkers=true",
+            None,
+            cancel,
+        )?)
+        .map_err(|_| CloudError::InvalidResponse)
     }
     /// # Errors
     /// Rejects invalid IDs and provider failures. HTTP 404 is a missing worker.
@@ -141,7 +165,13 @@ impl RunPod {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid worker ID"));
         }
-        match self.request_with_timeout("GET", &format!("/pods/{id}"), None, cancel, timeout) {
+        match self.request_with_timeout(
+            "GET",
+            &format!("/pods/{id}?includeNetworkVolume=true"),
+            None,
+            cancel,
+            timeout,
+        ) {
             Err(CloudError::Http(404)) => Ok(None),
             result => {
                 let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
@@ -288,6 +318,12 @@ fn create_body(spec: &WorkerSpec) -> Value {
     if !spec.data_centers.is_empty() {
         body["dataCenterIds"] = json!(spec.data_centers);
         body["dataCenterPriority"] = json!("custom");
+    }
+    if let Some(binding) = &spec.network_volume {
+        body["networkVolumeId"] = json!(binding.id);
+        body["dataCenterIds"] = json!([binding.data_center_id]);
+        body["dataCenterPriority"] = json!("custom");
+        body["volumeInGb"] = json!(0);
     }
     if let Some(id) = &spec.registry_auth_id {
         body["containerRegistryAuthId"] = json!(id);

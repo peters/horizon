@@ -169,6 +169,7 @@ fn defaults(root: &Path) -> Settings {
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: vec!["NVIDIA RTX A6000".into()],
         data_centers: Vec::new(),
+        network_volumes: std::collections::BTreeMap::new(),
         anthropic_api_key_file: None,
         openai_api_key_file: None,
         anthropic_workspace_id: None,

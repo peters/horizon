@@ -162,6 +162,9 @@ fn profile_details(
     launch: &horizon_core::cloud_panel::CloudLaunch,
     runtime: &super::Runtime,
 ) -> Option<(u16, u16)> {
+    if ui.small_button("Copy cloud ID").on_hover_text(&launch.id).clicked() {
+        ui.ctx().copy_text(launch.id.clone());
+    }
     ui.label(RichText::new(&launch.profile_name).size(15.0).color(theme::FG_DIM()));
     let resize = machine_size(ui, id, launch, runtime);
     ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
@@ -274,7 +277,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             horizon_core::cloud_runtime::CreateState::Terminated { .. }
         )
     }) {
-        ui.label("Worker deleted. Its processes and files are no longer available.");
+        ui.label(runtime.deleted_message());
         return ui.button("Remove cloud").clicked().then_some(Action::Remove);
     }
     progress_output(ui, runtime);
@@ -373,7 +376,11 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
-                "Delete this worker and its files? Running sessions cannot be recovered.",
+                if runtime.retains_network_volume() {
+                    "Delete this worker? Running sessions cannot be recovered. Its network volume, files and credentials remain and storage charges continue."
+                } else {
+                    "Delete this worker and its files? Running sessions cannot be recovered."
+                },
             );
             if ui.button("Delete worker permanently").clicked() {
                 return Some(Action::Delete);

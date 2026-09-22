@@ -17,6 +17,7 @@ fn spec() -> WorkerSpec {
         gpu_types: vec!["NVIDIA RTX A4000".into()],
         cpu_flavors: vec!["cpu3g".into()],
         data_centers: vec![],
+        network_volume: None,
     }
 }
 fn worker(spec: &WorkerSpec) -> Value {

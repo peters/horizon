@@ -54,6 +54,36 @@ the flavor with the least memory per vCPU and price that does. For example, an
 8 vCPU, 32 GB profile uses `cpu3g` when only `cpu3c` is preferred. A size no
 flavor offers fails validation before the image is built.
 
+For an existing network volume, bind it to one cloud ID in this machine-local file:
+
+```json
+"network_volumes": {
+  "your-cloud-id": { "id": "your-volume-id", "data_center_id": "EU-RO-1" }
+}
+```
+
+Create the cloud card first, use **Copy cloud ID**, then add the binding before its
+first deployment. The development CLI harness uses the same cloud identity and
+settings; public cloud provisioning MCP remains unsupported as described below.
+The volume must already exist, have at least the profile's `storage.volume_gb`,
+and be in an allowed data center when `data_centers` is configured. Horizon pins
+allocation to that volume's data center and verifies the actual attachment at
+`/workspace` before transferring source or credentials. Its size replaces the
+Pod-volume capacity requirement; container disk requirements still apply.
+
+Use a dedicated volume per cloud. Duplicate bindings in one settings file and
+volumes already attached to another Pod are rejected before allocation. These
+checks are not a cross-machine lease: do not race multiple controllers or attach
+unrelated workloads to the same volume. A volume can contain executable tools,
+source, SSH identity and credentials; select only a trusted, dedicated volume.
+
+The attachment is frozen in the saved worker specification. Editing settings does
+not change an existing deployment, including legacy specifications without a
+network-volume binding. Use a new cloud identity for a different attachment.
+Horizon does not create, resize or delete network volumes. Deleting a worker leaves
+its network volume, files and credentials intact and storage charges continue;
+manage eventual volume deletion explicitly at the provider.
+
 For rootless Docker, set `docker_host` to its Unix socket URI. Public images can
 use a null `registry_pull_auth_id`. Optional `anthropic_api_key_file`,
 `anthropic_workspace_id` and `openai_api_key_file` bind explicit API authentication;
@@ -138,8 +168,9 @@ views from their saved remote references.
 Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.
 Missing, undersized or differently mounted storage blocks source and agent-credential
-transfer. The current adapter requests Pod-local volumes; an unexpected network
-volume attachment is unsupported and also blocks readiness. The worker remains allocated and bound to its original operation for
+transfer. Without an explicit binding the adapter requests a Pod-local volume;
+an unrequested network volume also blocks readiness. With a binding, the provider
+must confirm its exact ID, data center and sufficient capacity. The worker remains allocated and bound to its original operation for
 inspection or explicit deletion; retry does not create a replacement. Old saved
 worker records without storage fields remain readable. Deployment and reconnect
 attempts that reach readiness inspect fresh provider data; this does not change

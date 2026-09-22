@@ -20,6 +20,9 @@ pub struct Settings {
     pub gpu_types: Vec<String>,
     #[serde(default)]
     pub data_centers: Vec<String>,
+    /// Explicit attachment per cloud identity; never inherited by a newly created cloud.
+    #[serde(default)]
+    pub network_volumes: std::collections::BTreeMap<String, horizon_cloud::NetworkVolumeBinding>,
     /// Optional explicit API authentication; otherwise the agent uses its normal login flow.
     #[serde(default)]
     pub anthropic_api_key_file: Option<PathBuf>,
@@ -69,6 +72,13 @@ impl Settings {
             !id.starts_with("wrkspc_") || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
         }) {
             return Err(Error::Invalid("Invalid agent API workspace binding"));
+        }
+        let mut volumes = std::collections::BTreeSet::new();
+        for (cloud_id, binding) in &self.network_volumes {
+            if !horizon_cloud::valid_id(cloud_id) || !volumes.insert(&binding.id) {
+                return Err(Error::Invalid("Network volumes require unique explicit cloud bindings"));
+            }
+            binding.validate()?;
         }
         for binding in &self.browserstack_credentials {
             binding.validate()?;
@@ -127,6 +137,32 @@ pub(super) fn validate_private_key_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_bindings_are_explicit_unique_and_legacy_settings_remain_unbound() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = serde_json::json!({
+            "runpod_key_file":root.path().join("key"), "ssh_identity_file":root.path().join("ssh"),
+            "docker_config":root.path().join("docker"), "registry_pull_auth_id":null,
+            "cpu_flavors":["cpu3g"], "gpu_types":[]
+        });
+        let mut settings: Settings = serde_json::from_value(legacy).unwrap();
+        settings.validate().unwrap();
+        assert!(settings.network_volumes.is_empty());
+        let binding = horizon_cloud::NetworkVolumeBinding {
+            id: "volume1".into(),
+            data_center_id: "region1".into(),
+        };
+        settings.network_volumes.insert("cloud1".into(), binding.clone());
+        settings.validate().unwrap();
+        assert!(!settings.network_volumes.contains_key("new-cloud"));
+        settings.network_volumes.insert("cloud2".into(), binding.clone());
+        assert!(settings.validate().is_err());
+        settings.network_volumes.get_mut("cloud2").unwrap().id = "volume2".into();
+        settings.validate().unwrap();
+        settings.network_volumes.insert("../invalid".into(), binding);
+        assert!(settings.validate().is_err());
+    }
 
     #[test]
     fn ssh_identity_requires_a_readable_nonempty_private_file() {

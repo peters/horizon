@@ -63,6 +63,8 @@ pub struct WorkerSpec {
     pub gpu_types: Vec<String>,
     pub cpu_flavors: Vec<String>,
     pub data_centers: Vec<String>,
+    #[serde(default)]
+    pub network_volume: Option<NetworkVolumeBinding>,
 }
 impl WorkerSpec {
     #[must_use]
@@ -88,6 +90,14 @@ impl WorkerSpec {
             return Err(CloudError::Invalid(
                 "Select an explicit CPU flavor or GPU type in machine settings",
             ));
+        }
+        if let Some(binding) = &self.network_volume {
+            binding.validate()?;
+            if !self.data_centers.is_empty() && !self.data_centers.contains(&binding.data_center_id) {
+                return Err(CloudError::Invalid(
+                    "Network volume is outside the selected data centers",
+                ));
+            }
         }
         Ok(())
     }
@@ -150,6 +160,24 @@ pub enum WorkerStatus {
     Stopped,
     Lost,
 }
+/// Explicit machine-local attachment; its lifecycle is independent of the worker.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkVolumeBinding {
+    pub id: String,
+    pub data_center_id: String,
+}
+impl NetworkVolumeBinding {
+    /// # Errors
+    /// Rejects malformed provider identifiers before any request.
+    pub fn validate(&self) -> Result<(), CloudError> {
+        if !valid_id(&self.id) || !valid_id(&self.data_center_id) {
+            return Err(CloudError::Invalid("Invalid network volume binding"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkVolume {
@@ -159,6 +187,22 @@ pub struct NetworkVolume {
     pub size: Option<u32>,
     #[serde(default)]
     pub data_center_id: Option<String>,
+}
+
+impl NetworkVolume {
+    /// # Errors
+    /// Requires provider-confirmed identity, location and sufficient persistent capacity.
+    pub fn verify(&self, binding: &NetworkVolumeBinding, minimum_gb: u16) -> Result<(), CloudError> {
+        if self.id.as_deref() != Some(&binding.id)
+            || self.data_center_id.as_deref() != Some(&binding.data_center_id)
+            || self.size.is_none_or(|size| size < u32::from(minimum_gb))
+        {
+            return Err(CloudError::Invalid(
+                "Network volume does not match the bound identity, location or capacity",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -241,27 +285,37 @@ impl Worker {
                 "Assigned worker does not meet the requested resource profile",
             ));
         }
-        if self.network_volume.is_some() {
-            return Err(CloudError::Invalid(
-                "Assigned worker has an unsupported network volume; inspect or explicitly delete the worker",
-            ));
-        }
-        if self.container_disk_in_gb.is_none() || self.volume_in_gb.is_none() || self.volume_mount_path.is_none() {
-            return Err(CloudError::Invalid(
-                "Provider has not confirmed the assigned worker storage; inspect or explicitly delete the worker",
-            ));
-        }
         if self
             .container_disk_in_gb
-            .is_some_and(|size| size < u32::from(spec.profile.storage.container_gb))
-            || self
-                .volume_in_gb
-                .is_some_and(|size| size < u32::from(spec.profile.storage.volume_gb))
+            .is_none_or(|size| size < u32::from(spec.profile.storage.container_gb))
             || self.volume_mount_path.as_deref() != Some("/workspace")
         {
             return Err(CloudError::Invalid(
                 "Assigned worker storage does not meet the requested profile; inspect or explicitly delete the worker",
             ));
+        }
+        match (&spec.network_volume, &self.network_volume) {
+            (Some(binding), Some(volume)) => volume.verify(binding, spec.profile.storage.volume_gb)?,
+            (Some(_), None) => {
+                return Err(CloudError::Invalid(
+                    "Provider has not confirmed the bound network volume attachment",
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(CloudError::Invalid(
+                    "Assigned worker has an unrequested network volume; inspect or explicitly delete the worker",
+                ));
+            }
+            (None, None) => {
+                if self
+                    .volume_in_gb
+                    .is_none_or(|size| size < u32::from(spec.profile.storage.volume_gb))
+                {
+                    return Err(CloudError::Invalid(
+                        "Assigned worker volume does not meet the requested profile; inspect or explicitly delete the worker",
+                    ));
+                }
+            }
         }
         Ok(())
     }

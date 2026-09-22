@@ -330,6 +330,7 @@ fn prepare_image(request: &Request, store: &Store, runner: &Runner<'_>, state: &
         gpu_types: request.settings.gpu_types.clone(),
         cpu_flavors: cpu_flavors(&state.profile, &request.settings)?,
         data_centers: request.settings.data_centers.clone(),
+        network_volume: request.settings.network_volumes.get(&state.cloud_id).cloned(),
     });
     store.save(state)
 }
@@ -562,6 +563,51 @@ mod tests {
     }
     #[test]
     #[cfg(unix)]
+    fn saved_attachment_is_not_replaced_by_later_machine_bindings() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = Request {
+            cloud_id: "pinned-storage".into(),
+            repository: root.path().join("repository"),
+            revision: "a".repeat(40),
+            profile: serde_json::from_value(serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8})).unwrap(),
+            state_root: root.path().join("state"),
+            settings: serde_json::from_value(serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]})).unwrap(),
+        };
+        let store = Store::lock(&request.state_root).unwrap();
+        let mut state = initial_state(&request, &store).unwrap();
+        let original = horizon_cloud::NetworkVolumeBinding {
+            id: "original-volume".into(),
+            data_center_id: "region1".into(),
+        };
+        request.settings.network_volumes.insert(
+            request.cloud_id.clone(),
+            horizon_cloud::NetworkVolumeBinding {
+                id: "replacement-volume".into(),
+                data_center_id: "region2".into(),
+            },
+        );
+        for binding in [None, Some(original)] {
+            state.spec = Some(WorkerSpec {
+                operation_id: request.cloud_id.clone(),
+                image_digest: request.profile.image.clone(),
+                profile: request.profile.clone(),
+                public_key: String::new(),
+                registry_auth_id: None,
+                gpu_types: Vec::new(),
+                cpu_flavors: Vec::new(),
+                data_centers: Vec::new(),
+                network_volume: binding.clone(),
+            });
+            state.operation = CreateState::Requested;
+            store.save(&state).unwrap();
+            let restored = initial_state(&request, &store).unwrap();
+            assert_eq!(restored.operation, CreateState::Requested);
+            assert_eq!(restored.spec.unwrap().network_volume, binding);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn retry_timing_preserves_prior_ready_history_even_after_failed_reconnect() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
@@ -618,6 +664,7 @@ mod tests {
             gpu_types: Vec::new(),
             cpu_flavors: vec!["cpu3c".into()],
             data_centers: Vec::new(),
+            network_volume: None,
         });
         store.save(&state).unwrap();
         request.profile.cpu = 1;
