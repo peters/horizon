@@ -885,8 +885,8 @@ mod tests {
         use crate::terminal::{Terminal, TerminalSpawnOptions};
 
         let mut terminal = Terminal::spawn(TerminalSpawnOptions {
-            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-            args: vec!["-c".to_string(), "exit".to_string()],
+            program: if cfg!(windows) { "cmd.exe".to_string() } else { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()) },
+            args: if cfg!(windows) { vec!["/D".to_string(), "/C".to_string(), "exit".to_string()] } else { vec!["-c".to_string(), "exit".to_string()] },
             cwd: None,
             rows: 24,
             cols: 80,

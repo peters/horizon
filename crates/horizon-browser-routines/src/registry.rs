@@ -123,6 +123,7 @@ impl RoutineRegistry {
         let lock = self.lock(routine_id)?;
         let staging = self.root.join(format!(".{routine_id}.deleting"));
         let rename = fs::rename(&dir, &staging);
+        if let Err(error) = &rename { eprintln!("DIAG delete rename while locked: {error:?}"); }
         drop(lock);
         match rename {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),

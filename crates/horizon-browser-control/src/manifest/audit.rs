@@ -264,7 +264,7 @@ fn write_entry(
         stage_drop_for_rotated_segment(path)?;
         write_rotation_marker(path)?;
         replace_file_atomically(path, &rotated_path(path))?;
-        file.set_len(0)?;
+        OpenOptions::new().write(true).open(path)?.set_len(0)?;
         clear_rotation_marker(path)?;
         settle_pending_drop(path)?;
     }
@@ -304,8 +304,7 @@ fn recover_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -
     }
     if live_segment_duplicates_rotated(path)? {
         match file {
-            Some(file) => file.set_len(0)?,
-            None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
+            Some(_) | None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
         }
     }
     clear_rotation_marker(path)

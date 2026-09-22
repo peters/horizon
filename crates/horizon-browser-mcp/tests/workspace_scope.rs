@@ -537,6 +537,7 @@ fn browser_handoff_returns_the_replacement_request_id() {
             "timeout_millis": 5000
         }),
     );
+    eprintln!("DIAG handoff response: {handoff}");
     worker.join().expect("replace handoff");
     assert_eq!(handoff["isError"], false, "{handoff}");
     assert_eq!(handoff["structuredContent"]["handoff_pending"], false);

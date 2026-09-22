@@ -497,6 +497,13 @@ fn panel_paths_preserve_identity_on_case_insensitive_filesystems() {
     ];
     let mut paths = std::collections::HashSet::new();
     for panel in &ids {
+        let rp = store.record_path(panel).expect("record path");
+        eprintln!("DIAG panel={panel} record_len={} record={}", rp.as_os_str().len(), rp.display());
+        let hp = store.health_path(panel, "owner").expect("health path");
+        eprintln!("DIAG health_len={} health={}", hp.as_os_str().len(), hp.display());
+        if let Err(error) = store.lock(panel) { eprintln!("DIAG lock error: {error:?}"); }
+        if let Err(error) = store.read_raw(panel) { eprintln!("DIAG read_raw error: {error:?}"); }
+        if let Err(error) = private_directory(hp.parent().expect("health parent")) { eprintln!("DIAG health dir error: {error:?}"); }
         store
             .register_owner(panel, PanelKind::Claude, "owner", None, directory.path())
             .expect("register");

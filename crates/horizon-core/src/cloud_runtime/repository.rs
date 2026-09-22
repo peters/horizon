@@ -62,6 +62,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     runner.run(
         "git archive",
         Command::new("git")
+            .args(["-c", "core.autocrlf=false"])
             .arg("-C")
             .arg(repository)
             .args(["archive", "--format=tar", "--output"])
@@ -81,6 +82,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
         runner.run(
             "Export committed submodule",
             Command::new("git")
+                .args(["-c", "core.autocrlf=false"])
                 .arg("-C")
                 .arg(&module.repository)
                 .args(["archive", "--format=tar", "--output"])

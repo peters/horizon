@@ -207,7 +207,11 @@ fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
         },
     )
     .expect("ordinary SSH command positive control");
-    assert!(control.wait_for_shutdown(Duration::from_secs(2)));
+    let shut = control.wait_for_shutdown(Duration::from_secs(2));
+    eprintln!("DIAG shutdown={shut} marker={} exists={}", marker.display(), marker.exists());
+    std::thread::sleep(Duration::from_secs(3));
+    eprintln!("DIAG after 3s exists={}", marker.exists());
+    assert!(shut);
     assert!(marker.exists(), "the same unguarded saved command really executes");
 }
 
