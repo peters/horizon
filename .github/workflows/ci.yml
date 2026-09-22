@@ -399,11 +399,22 @@ jobs:
             # the lock file inside it is open (#846).
             registry::tests::save_load_list_and_delete_round_trip
 
-            # Intermittent: replacing a manifest fails with access denied while another
-            # process has it open, and these tests poll the manifest the process under
-            # test rewrites (#847).
+            # Intermittent: replacing a manifest or job file fails with access denied
+            # while another process has it open (#847). These horizon-browser-cli and
+            # horizon-browser-mcp tests poll such a file while the process under test
+            # rewrites it; three have failed that way so far.
+            browser_handoff_resume_preserves_a_concurrent_hand_back
             browser_handoff_returns_the_replacement_request_id
+            browser_handoff_waits_until_the_user_hands_the_panel_back
+            interrupt_persists_cancelled_partial_report_and_exit_130
+            interrupt_terminates_blocked_report_finalization
+            resize_preserves_scope_user_control_and_measured_result_contract
+            resume_prunes_dead_hosts_without_a_sidecar
+            resume_refuses_a_dead_standalone_host
+            resume_refuses_an_uncertain_in_flight_step
+            resume_skip_runs_later_steps_without_replaying_or_succeeding
             run_deadline_persists_a_partial_report_and_stable_exit_code
+            run_waits_for_hand_back_before_finishing_a_handoff_step
           )
           skip_args=()
           for name in "${pending[@]}"; do
