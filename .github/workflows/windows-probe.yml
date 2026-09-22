@@ -30,35 +30,25 @@ jobs:
       - name: Report rust-cache status
         shell: bash
         run: echo "cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
-      - run: cargo test --locked --workspace --no-run
-      - name: Run workspace tests
+      - name: Stress manifest-polling tests
         shell: bash
         run: |
-          set -o pipefail
-          cargo test --locked --workspace --no-fail-fast 2>&1 | tee workspace-tests.log
-      - name: Diagnostics
-        if: always()
-        shell: bash
-        run: |
+          cargo test --locked -p horizon-browser-cli --test cli --no-run
+          cargo test --locked -p horizon-browser-mcp --test workspace_scope --no-run
           {
-            cargo test --locked -p horizon-core --lib agent_work::store::tests::panel_paths_preserve_identity_on_case_insensitive_filesystems -- --exact --nocapture || true
-            cargo test --locked -p horizon-core --lib runtime_state::tests::remote_references::remote_views_never_execute_saved_commands_on_restore_or_restart -- --exact --nocapture || true
-            cargo test --locked -p horizon-browser-routines --lib registry::tests::save_load_list_and_delete_round_trip -- --exact --nocapture || true
-            for attempt in 1 2 3; do
-              echo "== handoff attempt $attempt"
-              cargo test --locked -p horizon-browser-mcp --test workspace_scope browser_handoff -- --nocapture || true
+            for attempt in $(seq 1 15); do
+              echo "== cli attempt $attempt"
+              cargo test --locked -p horizon-browser-cli --test cli 2>&1 | grep -E "FAILED|panicked|DIAG|test result" || true
+              echo "== mcp attempt $attempt"
+              cargo test --locked -p horizon-browser-mcp --test workspace_scope -- --nocapture 2>&1 | grep -E "FAILED|panicked|DIAG|test result" || true
             done
-          } 2>&1 | tee diagnostics.log
-      - name: Summarize failures
+          } 2>&1 | tee stress.log
+      - name: Summarize
         if: always()
         shell: bash
-        run: |
-          grep -E '^test .* FAILED$|^test result:' workspace-tests.log || true
-          grep -E 'DIAG|panicked|test result' diagnostics.log || true
+        run: grep -E "FAILED|DIAG stderr|isError\":true|never appeared" stress.log | sort | uniq -c | sort -rn | head -40 || true
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-workspace-tests
-          path: |
-            workspace-tests.log
-            diagnostics.log
+          path: stress.log

@@ -1004,10 +1004,13 @@ fn wait_for_manifest_action(child: &mut Child, manifest_path: &std::path::Path) 
         {
             return;
         }
-        assert!(
-            child.try_wait().expect("poll browser job").is_none(),
-            "browser job exited before queueing its blocking action"
-        );
+        if child.try_wait().expect("poll browser job").is_some() {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+            }
+            panic!("browser job exited before queueing its blocking action; DIAG stderr: {stderr}");
+        }
         if Instant::now() >= deadline {
             child.kill().expect("kill stalled task-owned browser job");
             child.wait().expect("reap stalled task-owned browser job");
