@@ -208,6 +208,7 @@ fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state:
 pub(super) struct PanelRenderScope {
     /// Detached viewports dispatch only the fit/minimap toolbar shortcuts.
     pub(super) detached: bool,
+    pub(super) host_dialog_open: bool,
     /// The viewport's event slice carries a pointer-button press this frame.
     pub(super) frame_has_pointer_button: bool,
 }
@@ -421,6 +422,7 @@ impl HorizonApp {
                     |ui| {
                         let mut reconnect_requested = false;
                         let claim_editor_focus = !self.speech_text_surface_active().0;
+                        let interactive = !self.host_dialog_open();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -443,7 +445,7 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 claim_editor_focus,
-                                true,
+                                interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     browser_events: &browser_events,
@@ -530,6 +532,7 @@ impl HorizonApp {
             .iter()
             .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         let mut panels_to_close = Vec::new();
+        let host_dialog_open = self.host_dialog_open();
 
         for i in 0..self.panel_render_order.len() {
             let (panel_id, _fallback_index) = self.panel_render_order[i];
@@ -541,6 +544,7 @@ impl HorizonApp {
                 &browser_events,
                 PanelRenderScope {
                     detached: false,
+                    host_dialog_open,
                     frame_has_pointer_button,
                 },
             ) {
@@ -629,7 +633,7 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed && !self.cloud_creation_open();
+        let interactive = !self.canvas_pan_input_claimed && !scope.host_dialog_open;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
         // Browser input suppresses app shortcuts that this viewport actually

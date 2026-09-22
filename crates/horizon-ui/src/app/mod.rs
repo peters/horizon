@@ -5,6 +5,7 @@ mod browser_cleanup;
 mod browser_close_requests;
 mod browser_connectors;
 mod browser_duplicate;
+mod browser_file_chooser;
 mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;

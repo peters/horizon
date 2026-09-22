@@ -12,6 +12,7 @@ mod remote_panel;
 pub use remote_panel::RemoteFailure;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;
+pub mod file_chooser;
 pub mod remote_catalog;
 pub mod remote_profile;
 pub mod remote_recovery;
@@ -413,6 +414,7 @@ impl BrowserPanelState {
         let browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
         let capture_directory = self.capture_directory(&home);
+        self.frame_slot.file_chooser().register_consumer();
         let session_config = session::BrowserSessionConfig {
             browser,
             panel_local_id: self.panel_local_id.clone(),

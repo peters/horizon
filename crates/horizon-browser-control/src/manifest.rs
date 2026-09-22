@@ -134,6 +134,8 @@ pub struct BrowserManifest {
     /// Driver-confirmed remote file-transfer support; absent on older hosts.
     #[serde(default)]
     pub remote_file_upload: bool,
+    #[serde(default)]
+    pub file_chooser: horizon_browser::FileChooserStatus,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
     /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
@@ -738,6 +740,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
+            manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -756,6 +759,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
             manifest.remote_file_upload = state.remote_file_upload;
+            manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -946,6 +950,7 @@ mod tests {
             remote_target: None,
             remote_device: None,
             remote_file_upload: false,
+            file_chooser: horizon_browser::FileChooserStatus::Unsupported,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),

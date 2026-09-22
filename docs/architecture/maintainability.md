@@ -67,6 +67,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 ### `horizon-browser`
 
+- `file_chooser` owns manual upload requests and answers shared with the host.
+  The CDP and BiDi session leaf modules bind each request to its original input
+  and retire stale requests. `horizon-core::browser::file_chooser` performs bounded
+  directory reads off the render thread; `horizon-ui::browser_widget::file_chooser`
+  presents the host dialog. Public panel metadata reports support and pending
+  selection without exposing selected paths.
 - Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery,
   optional WebM page-pixel recording (`video/`, enabled by `video-capture`), and
   deterministic shutdown. Default builds omit the AV1 encoder; Horizon and its

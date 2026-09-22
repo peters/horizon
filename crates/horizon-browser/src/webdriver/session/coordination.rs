@@ -252,6 +252,7 @@ impl Driver {
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
             remote_device: self.remote_device.clone(),
             remote_file_upload: self.file_transfer.is_some(),
+            file_chooser: self.config.frame_slot.file_chooser().status(),
         }
     }
 

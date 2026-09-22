@@ -54,12 +54,12 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.filter_held_navigation_keys(ctx);
-        if !self.cloud_creation_open() {
+        if !self.host_dialog_open() {
             self.sync_panel_focus_from_pointer_press(ctx);
         }
         // Releases and asynchronous speech work must continue through dialogs.
         self.handle_speech_input(ctx);
-        if !self.cloud_creation_open() {
+        if !self.host_dialog_open() {
             #[cfg(feature = "cloud-workspaces")]
             self.handle_cloud_fullscreen_exit(ctx);
             self.handle_fullscreen_toggle(ctx);
@@ -334,7 +334,7 @@ impl HorizonApp {
             .groups
             .extend_workspace_bounds(&self.board, &mut workspace_bounds);
         let workspace_bounds = &mut workspace_bounds;
-        if !root_interaction_suppressed && !self.cloud_creation_open() {
+        if !root_interaction_suppressed && !self.host_dialog_open() {
             self.handle_canvas_pan(ui);
         }
         self.render_toolbar(ui);
@@ -347,7 +347,7 @@ impl HorizonApp {
         #[cfg(feature = "cloud-workspaces")]
         self.render_cloud_frames(ui.ctx());
         self.render_empty_state_card(ui);
-        if !self.cloud_creation_open() {
+        if !self.host_dialog_open() {
             self.handle_canvas_double_click(ui);
         }
         self.render_panels(ui);
@@ -386,6 +386,7 @@ impl HorizonApp {
         self.render_remote_hosts_overlay(ctx);
         self.render_session_manager(ctx);
         self.render_ssh_upload_flow(ctx);
+        self.render_browser_file_chooser(ctx, None);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 

@@ -162,7 +162,7 @@ impl Driver {
         // Events drained during the command may bind a different context.
         self.viewport_context = context;
         self.viewport_retry.succeeded();
-        self.advance_generation();
+        self.advance_viewport_generation();
         self.frames.demand();
         Ok(())
     }
@@ -258,7 +258,7 @@ mod tests {
         json!({"method":format!("browsingContext.{method}"),"params":{"context":context,"parent":parent}})
     }
 
-    fn bidi_fixture(refuse: bool) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
+    fn bidi_fixture(refuse: bool, chooser: bool) -> (JsonWsLink, std::thread::JoinHandle<Vec<Value>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}/", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -269,7 +269,7 @@ mod tests {
             while let Ok(Message::Text(text)) = socket.read() {
                 let command: Value = serde_json::from_str(&text).unwrap();
                 commands.push(command.clone());
-                if commands.len() == 2 {
+                if !chooser && commands.len() == 2 {
                     for notification in [
                         event("contextDestroyed", "second", &Value::Null),
                         event("contextCreated", "iframe", &json!("second")),
@@ -280,6 +280,17 @@ mod tests {
                 }
                 let response = if refuse {
                     json!({"id":command["id"],"type":"error","error":"unsupported operation","message":"refused"})
+                } else if command["method"] == "script.callFunction" {
+                    let value = if command["params"]["functionDeclaration"]
+                        .as_str()
+                        .unwrap()
+                        .contains("location.origin")
+                    {
+                        json!("https://files.test")
+                    } else {
+                        json!({"multiple":false,"accept":"","acceptLength":0})
+                    };
+                    json!({"id":command["id"],"type":"success","result":{"result":{"value":value.to_string()}}})
                 } else {
                     json!({"id":command["id"],"type":"success","result":{}})
                 };
@@ -387,6 +398,7 @@ mod tests {
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
             native_select: super::super::native_select::NativeSelectState::default(),
+            file_chooser: super::super::file_chooser::ChooserState::default(),
         }
     }
 
@@ -434,6 +446,123 @@ mod tests {
     }
 
     #[test]
+    fn child_navigation_and_failed_replacement_publish_chooser_invalidation() {
+        let classic = Server::start(vec![]);
+        let (link, worker) = bidi_fixture(false, false);
+        let mut state = fixture_driver(&classic, link);
+        let events = events();
+        let handle = state.panel_slot.file_chooser().clone();
+        handle.enable();
+        for method in ["navigationStarted", "fragmentNavigated", "contextDestroyed"] {
+            handle.open(false, String::new(), "https://files.test".into());
+            state.coordination_dirty = false;
+            state.note_file_chooser(&json!({"context":"child","element":{"sharedId":"node"}}));
+            assert!(state.coordination_dirty);
+            assert!(!handle.status().pending());
+            handle.open(false, String::new(), "https://files.test".into());
+            state.coordination_dirty = false;
+            state.handle_bidi_event(&event(method, "sibling", &json!("first")), &events);
+            assert!(handle.status().pending());
+            state.handle_bidi_event(&event(method, "child", &json!("first")), &events);
+            assert!(!handle.status().pending());
+            assert!(state.coordination_dirty);
+            assert_eq!(state.generation, 0);
+        }
+        handle.open(false, String::new(), "https://files.test".into());
+        state.service_browser_request(
+            &AgentAction {
+                action_id: "chooser-resize".into(),
+                actor: "agent".into(),
+                requested_at_millis: crate::navigation::now_millis(),
+                action: BrowserControlAction::Resize {
+                    viewport: Some([800, 600]),
+                    timeout_millis: 5000,
+                },
+            },
+            &events,
+            &AtomicBool::new(false),
+        );
+        assert!(state.pending_resize.is_none());
+        assert!(handle.status().pending());
+        state.coordination_dirty = false;
+        state.begin_navigation();
+        assert!(!handle.status().pending());
+        assert!(state.coordination_dirty);
+        drop(state);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn standalone_dialog_events_do_not_create_unanswerable_host_requests() {
+        let classic = Server::start(vec![]);
+        let (link, worker) = bidi_fixture(false, true);
+        let mut state = fixture_driver(&classic, link);
+        let events = events();
+        let event =
+            json!({"method":"input.fileDialogOpened","params":{"context":"first","element":{"sharedId":"node"}}});
+        assert!(state.handle_file_chooser_event(&event, &events));
+        state.tick_file_chooser(&events);
+        assert!(!state.panel_slot.file_chooser().status().supported());
+        state.panel_slot.file_chooser().register_consumer();
+        assert!(state.handle_file_chooser_event(&event, &events));
+        state.tick_file_chooser(&events);
+        assert!(state.panel_slot.file_chooser().status().pending());
+        drop(state);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn viewport_changes_preserve_incoming_and_open_choosers_until_navigation() {
+        let classic = Server::start(vec![]);
+        let (link, worker) = bidi_fixture(false, true);
+        let mut state = fixture_driver(&classic, link);
+        let events = events();
+        let handle = state.panel_slot.file_chooser().clone();
+        handle.enable();
+        state.note_file_chooser(&json!({"context":"first","element":{"sharedId":"node"}}));
+        state
+            .run_command(
+                crate::BrowserCommand::SetViewport {
+                    width: 800,
+                    height: 600,
+                },
+                &events,
+                true,
+            )
+            .unwrap();
+        state.tick_file_chooser(&events);
+        let request = handle.request().unwrap().id;
+        state
+            .apply_explicit_viewport([700, 500], Duration::from_secs(1), &events)
+            .unwrap();
+        state.tick_file_chooser(&events);
+        assert_eq!(handle.request().unwrap().id, request);
+        state
+            .run_command(
+                crate::BrowserCommand::SetViewport {
+                    width: 900,
+                    height: 700,
+                },
+                &events,
+                true,
+            )
+            .unwrap();
+        state.tick_file_chooser(&events);
+        assert_eq!(handle.request().unwrap().id, request);
+        assert!(handle.respond(request, crate::file_chooser::FileChooserAnswer::Cancel));
+        state.tick_file_chooser(&events);
+        assert!(!handle.status().pending());
+        state.note_file_chooser(&json!({"context":"first","element":{"sharedId":"next"}}));
+        state.tick_file_chooser(&events);
+        assert!(handle.status().pending());
+        state.begin_navigation();
+        state.tick_file_chooser(&events);
+        assert!(!handle.status().pending());
+        drop(state);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn firefox_restores_committed_pin_on_rebind_drains_events_and_reset_stops_restoration() {
         let classic = Server::start(
             [[390, 844], [390, 844], [900, 600], [900, 600]]
@@ -441,7 +570,7 @@ mod tests {
                 .map(|size| Reply::json(200, &json!({"value":size})))
                 .collect(),
         );
-        let (link, worker) = bidi_fixture(false);
+        let (link, worker) = bidi_fixture(false, false);
         let mut state = fixture_driver(&classic, link);
         let events = events();
         acknowledge(&mut state, Some([390, 844]), &events);
@@ -480,7 +609,7 @@ mod tests {
     #[test]
     fn firefox_protocol_refusal_does_not_commit_a_pin() {
         let classic = Server::start(vec![]);
-        let (link, worker) = bidi_fixture(true);
+        let (link, worker) = bidi_fixture(true, false);
         let mut state = fixture_driver(&classic, link);
         let mut pending = pending(&state, Some([390, 844]));
         let failure = state

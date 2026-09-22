@@ -17,6 +17,7 @@ use super::host::DriverHost;
 
 mod bidi;
 mod coordination;
+mod file_chooser;
 mod frames;
 pub(super) mod handshake;
 mod http_auth;
@@ -118,6 +119,7 @@ struct Driver {
     pending_http_bodies: VecDeque<(String, Option<String>)>,
     panel_slot: Arc<FrameSlot>,
     native_select: native_select::NativeSelectState,
+    file_chooser: file_chooser::ChooserState,
 }
 
 struct PendingHistoryStart {
@@ -174,7 +176,7 @@ pub(crate) fn run_webdriver(
     };
     driver.prepare_ready(config, frame_slot, event_tx);
 
-    while !stop_requested.load(Ordering::Acquire) {
+    'session: while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
         let batch = command_rx.drain(MAX_COMMAND_BURST);
         for command in batch.commands {
@@ -192,6 +194,9 @@ pub(crate) fn run_webdriver(
             return;
         }
         driver.tick_safari_input(event_tx);
+        if !driver.poll_bidi_events(frame_slot, event_tx) {
+            break;
+        }
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
             // timeout of a navigation or wait dispatched earlier in it, and a
@@ -202,18 +207,13 @@ pub(crate) fn run_webdriver(
             driver.tick_pending_wait(stop_requested);
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
+            if !driver.poll_bidi_events(frame_slot, event_tx) {
+                break 'session;
+            }
             driver.service_browser_request(&request, event_tx, stop_requested);
             if driver.finish_if_service_exited(event_tx) {
                 return;
             }
-        }
-        if let Err(error) = driver.drain_bidi_events(event_tx) {
-            tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
-            if driver.firefox_bidi() {
-                let _ = event_tx.send(BrowserEvent::Warning(format!("Firefox BiDi disconnected: {error}")));
-                break;
-            }
-            driver.disable_optional_bidi(frame_slot, event_tx);
         }
         driver.tick_firefox_http_response_bodies(event_tx);
         if let Some(message) = driver.challenge_loop.take_rejection() {
@@ -241,6 +241,7 @@ pub(crate) fn run_webdriver(
 
 impl Driver {
     fn prepare_ready(&mut self, config: &BrowserSessionConfig, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        self.enable_file_chooser(event_tx);
         if self.firefox_bidi() {
             self.set_viewport(config.width, config.height, event_tx);
         }
@@ -271,6 +272,17 @@ impl Driver {
         events: &BrowserEventSender,
         stop: &AtomicBool,
     ) {
+        if self.panel_slot.file_chooser().blocks(&request.action) {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new(
+                    "file_chooser_pending",
+                    "Select or cancel files in the Horizon dialog before changing the page",
+                )),
+            );
+            return;
+        }
         if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
             self.begin_resize(request);
         } else {
@@ -309,9 +321,13 @@ impl Driver {
             let (host, session) = if let Some(group) = group {
                 let mut shared_config = config.clone();
                 group.profile_id().clone_into(&mut shared_config.panel_local_id);
-                group.acquire(&shared_config.browser, process_control, stop_requested, |control| {
-                    start_local(&shared_config, control, stop_requested)
-                })?
+                group.acquire(
+                    &shared_config.browser,
+                    shared_config.frame_slot.file_chooser().has_consumer(),
+                    process_control,
+                    stop_requested,
+                    |control| start_local(&shared_config, control, stop_requested),
+                )?
             } else {
                 start_local(config, process_control, stop_requested)?
             };
@@ -380,6 +396,7 @@ impl Driver {
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
             native_select: native_select::NativeSelectState::default(),
+            file_chooser: file_chooser::ChooserState::default(),
         })
     }
 
@@ -475,7 +492,7 @@ impl Driver {
     }
 
     fn set_viewport(&mut self, width: u32, height: u32, event_tx: &BrowserEventSender) {
-        self.advance_generation();
+        self.advance_viewport_generation();
         if self.host.is_remote() {
             // A physical device is never resized because its panel was; the
             // panel maps the device's own viewport instead.
@@ -549,7 +566,16 @@ impl Driver {
     }
 
     fn advance_generation(&mut self) {
+        self.panel_slot.file_chooser().invalidate();
+        self.coordination_dirty = true;
+        self.file_chooser = file_chooser::ChooserState::default();
+        self.advance_viewport_generation();
+    }
+
+    fn advance_viewport_generation(&mut self) {
+        self.coordination_dirty = true;
         self.generation = self.generation.wrapping_add(1);
+        self.file_chooser.retain_after_viewport_change(self.generation);
         self.scrollbar.reset(&self.config.frame_slot);
         let _ = self.panel_slot.clear_native_select_popup();
         self.native_select = native_select::NativeSelectState::default();
@@ -942,12 +968,13 @@ mod tests {
             profile_root: Some(profile_root.path().to_path_buf()),
             ..BrowserConfig::default()
         };
-        let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+        let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
+        assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
 
         let visible = new_session_capabilities(
             &BrowserConfig {
@@ -956,8 +983,13 @@ mod tests {
             },
             "panel",
             true,
+            false,
         )
         .unwrap_or_default();
+        assert_eq!(
+            visible["moz:firefoxOptions"]["prefs"]["remote.bidi.dismiss_file_pickers.enabled"],
+            false
+        );
         assert!(
             visible["moz:firefoxOptions"]["args"]
                 .as_array()
@@ -971,8 +1003,8 @@ mod tests {
             backend: BackendKind::SafariWebDriver,
             ..BrowserConfig::default()
         };
-        let with_bidi = new_session_capabilities(&config, "panel", true).unwrap_or_default();
-        let classic = new_session_capabilities(&config, "panel", false).unwrap_or_default();
+        let with_bidi = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
+        let classic = new_session_capabilities(&config, "panel", false, false).unwrap_or_default();
 
         assert_eq!(with_bidi["webSocketUrl"], true);
         assert!(classic.get("webSocketUrl").is_none());
@@ -989,7 +1021,7 @@ mod tests {
                 profile_root: Some(profile_root.path().to_path_buf()),
                 ..BrowserConfig::default()
             };
-            let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+            let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
 
             assert_eq!(capabilities["timeouts"]["pageLoad"], PAGE_LOAD_TIMEOUT_MILLIS);
             if backend == BackendKind::FirefoxBidi {
