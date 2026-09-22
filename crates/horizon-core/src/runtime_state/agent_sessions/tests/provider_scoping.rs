@@ -10,12 +10,12 @@ fn bootstrap_allows_equal_session_ids_from_different_providers() {
                     local_id: "codex".to_string(),
                     name: "Codex".to_string(),
                     kind: PanelKind::Codex,
-                    cwd: Some("/repo".to_string()),
+                    cwd: stored_cwd("/repo"),
                     resume: PanelResume::Last,
                     session_binding: Some(AgentSessionBinding::new(
                         PanelKind::Codex,
                         shared_id.to_string(),
-                        Some("/repo".to_string()),
+                        stored_cwd("/repo"),
                         None,
                         None,
                     )),
@@ -25,7 +25,7 @@ fn bootstrap_allows_equal_session_ids_from_different_providers() {
                     local_id: "claude".to_string(),
                     name: "Claude".to_string(),
                     kind: PanelKind::Claude,
-                    cwd: Some("/repo".to_string()),
+                    cwd: stored_cwd("/repo"),
                     resume: PanelResume::Last,
                     ..PanelState::default()
                 },
@@ -38,7 +38,7 @@ fn bootstrap_allows_equal_session_ids_from_different_providers() {
         vec![AgentSessionRecord {
             kind: PanelKind::Claude,
             session_id: shared_id.to_string(),
-            cwd: Some("/repo".to_string()),
+            cwd: stored_cwd("/repo"),
             label: None,
             updated_at: 1,
             interactive: true,
@@ -66,7 +66,7 @@ fn bootstrap_deduplicates_equal_session_ids_within_a_provider() {
         session_binding: Some(AgentSessionBinding::new(
             PanelKind::OpenCode,
             duplicate_id.to_string(),
-            Some("/repo".to_string()),
+            stored_cwd("/repo"),
             None,
             None,
         )),

@@ -338,19 +338,6 @@ jobs:
             # A cmd.exe marker embeds quotes that terminal argument escaping breaks.
             runtime_state::tests::remote_references::remote_views_never_execute_saved_commands_on_restore_or_restart
 
-            # horizon-core session fixtures keep Unix paths that loaders would
-            # normalize to `\repo` on Windows.
-            runtime_state::agent_sessions::tests::bootstrap_assigns_distinct_sessions_per_group
-            runtime_state::agent_sessions::tests::bootstrap_assigns_scoped_groups_before_cwd_less_groups
-            runtime_state::agent_sessions::tests::bootstrap_does_not_duplicate_a_root_resume
-            runtime_state::agent_sessions::tests::bootstrap_never_assigns_sessions_open_in_other_processes
-            runtime_state::agent_sessions::tests::grok::load_grok_sessions_reads_sessions_from_search_index
-            runtime_state::agent_sessions::tests::load_claude_project_session_summary_reads_head_and_tail_metadata
-            runtime_state::agent_sessions::tests::load_opencode_sessions_reads_root_sessions_from_sqlite
-            runtime_state::agent_sessions::tests::parse_claude_project_session_uses_resumable_jsonl_session_id
-            runtime_state::agent_sessions::tests::parse_pi_session_uses_header_metadata_and_latest_user_message
-            runtime_state::agent_sessions::tests::provider_scoping::bootstrap_allows_equal_session_ids_from_different_providers
-
             # horizon-core build snapshots inherit core.autocrlf, so git archive
             # writes CRLF text.
             cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
