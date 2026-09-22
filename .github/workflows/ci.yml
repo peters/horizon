@@ -272,8 +272,11 @@ jobs:
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked -p horizon-ui --features speech
 
+  # Kept out of the rust-test matrix because its test step differs: it still
+  # skips the tests listed below. The job id and cache key predate the test
+  # run; renaming either would start the cache cold.
   windows-smoke:
-    name: Windows test build
+    name: Tests (Windows x64)
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
@@ -296,18 +299,101 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - run: cargo test --locked --workspace --no-run
-      - name: Execute durable publication regression
-        run: cargo test --locked -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
-      # Runs the Windows-only drive-letter and backslash cases; see #841 for the full suite.
-      - name: Execute directory picker path resolution
-        run: cargo test --locked -p horizon-core --lib dir_search
+      # These tests fail on Windows today, grouped by cause. Each follow-up
+      # that fixes a cause, or gates a test that genuinely needs Unix with
+      # `#[cfg_attr(windows, ignore = "<reason>")]`, removes its names here
+      # (#841). Skipping by exact name rather than excluding crates keeps the
+      # workspace's feature resolution, so the job builds once, caches one
+      # copy and still runs every test that passes.
+      - name: Run tests
+        shell: bash
+        run: |
+          pending=(
+            # Panels spawned through the default shell, which is /bin/bash when
+            # SHELL is unset, and agent panels, which always launch through a
+            # POSIX login shell (#688, closed as not planned).
+            app::actions::panels::tests::navigation_reveals_panel_after_the_view_is_panned_away
+            app::actions::panels::tests::new_panel_reveals_it_when_the_view_is_panned_away
+            app::actions::panels::tests::panel_body_click_focuses_without_revealing
+            app::actions::panels::tests::reveal_selected_panel_does_not_pan_the_root_canvas_for_detached_workspaces
+            app::browser_close_requests::tests::a_claimed_close_removes_the_owned_panel_and_returns_focus_only_when_it_held_it
+            app::browser_close_requests::tests::refusals_keep_the_panel_and_name_the_reason
+            app::browser_provider_usage::tests::authorized_agents_can_query_multiple_profiles_without_allocating_or_opening_settings
+            app::browser_recovery::tests::host_dispatch_authorizes_waits_and_completes_exact_recovery
+            app::browser_requests::tests::a_placement_change_restamps_before_the_next_poll_tick
+            app::browser_requests::tests::placement_fingerprint_follows_membership_not_unrelated_panels
+            app::browser_requests::tests::restamping_rewrites_a_live_manifest_for_the_new_membership
+            app::browser_requests::tests::workspace_stamp_follows_agent_panel_membership
+            app::cloud_panel::tests::cloud_launch_defaults_precede_workspace_cwd_and_binding_is_unique
+            app::cloud_panel::tests::one_cloud_accepts_multiple_instances_of_each_agent
+            app::session::tests::provider_scoping::rebind_allows_equal_session_ids_from_different_providers
+            app::session::tests::rebind_and_restart_updates_the_binding_and_queues_the_panel
+            app::session::tests::rebind_rejects_a_session_used_by_another_panel
+            board::tests::core::begin_async_shutdown_completes_for_shell_and_command_panels
+            board::tests::core::shutdown_terminal_panels_waits_for_shell_and_command_panels
+            runtime_state::tests::workspaces::from_board_persists_workspace_layout_selection
+            runtime_state::tests::workspaces::from_board_preserves_window_view_focus_and_bindings
+            workspace_bounds_map_matches_individual_workspace_bounds
+            # Terminal fixtures spawn $SHELL or /bin/sh instead of a Windows command.
+            panel::tests::process_output_copies_pinned_horizon_title_into_the_titlebar
+            terminal::tests::asynchronous_teardown_remains_observable_after_the_handle_is_taken
+            terminal::tests::clearing_horizon_title_allows_ordinary_titles_again
+            terminal::tests::clickable_at_point_returns_osc8_uri_for_labeled_text
+            terminal::tests::full_text_lines_preserve_unicode_matrix
+            terminal::tests::horizon_notify_does_not_unlock_horizon_title
+            terminal::tests::horizon_notify_event_sets_notification_without_overwriting_title
+            terminal::tests::horizon_title_clear_event_clears_existing_title
+            terminal::tests::horizon_title_replaces_ordinary_terminal_title
+            terminal::tests::horizon_title_set_event_updates_title_without_notification
+            terminal::tests::invalid_horizon_title_event_does_not_clobber_existing_title
+            terminal::tests::later_horizon_title_set_replaces_pinned_title
+            terminal::tests::line_selection_preserves_unicode_content
+            terminal::tests::malformed_horizon_notify_event_does_not_leak_into_visible_title
+            terminal::tests::ordinary_terminal_title_does_not_replace_horizon_title
+            terminal::tests::shutdown_with_timeout_waits_for_pty_exit
+            # Fixtures use Unix paths or `/` separators, which Windows parses
+            # differently.
+            linux_desktop::tests::packaged_data_dirs_use_xdg_data_dirs_then_defaults
+            run_persists_preflight_failure_before_any_browser_action
+            runtime_state::agent_sessions::tests::bootstrap_assigns_distinct_sessions_per_group
+            runtime_state::agent_sessions::tests::bootstrap_assigns_scoped_groups_before_cwd_less_groups
+            runtime_state::agent_sessions::tests::bootstrap_does_not_duplicate_a_root_resume
+            runtime_state::agent_sessions::tests::bootstrap_never_assigns_sessions_open_in_other_processes
+            runtime_state::agent_sessions::tests::grok::load_grok_sessions_reads_sessions_from_search_index
+            runtime_state::agent_sessions::tests::load_claude_project_session_summary_reads_head_and_tail_metadata
+            runtime_state::agent_sessions::tests::load_opencode_sessions_reads_root_sessions_from_sqlite
+            runtime_state::agent_sessions::tests::parse_claude_project_session_uses_resumable_jsonl_session_id
+            runtime_state::agent_sessions::tests::parse_pi_session_uses_header_metadata_and_latest_user_message
+            runtime_state::agent_sessions::tests::provider_scoping::bootstrap_allows_equal_session_ids_from_different_providers
+            # Build snapshots inherit core.autocrlf, so git archive writes CRLF text.
+            cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
+            cloud_runtime::repository::tests::selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files
+            # Audit rotation truncates through an append handle, which Windows opens
+            # without write-data access, so set_len is denied.
+            manifest::audit::tests::audit_rotation_bounds_storage_and_keeps_the_newest_segments
+            manifest::audit::tests::interrupted_copy_does_not_duplicate_event_ids_or_loop_pages
+            manifest::audit::tests::pending_drop_is_held_until_the_rotated_segment_is_replaced
+            manifest::audit::tests::rotation_counts_invalid_utf8_records_without_aborting
+            # Routine deletion renames the directory while its lock file is open.
+            registry::tests::save_load_list_and_delete_round_trip
+            # Not yet diagnosed.
+            agent_work::store::tests::panel_paths_preserve_identity_on_case_insensitive_filesystems
+            browser_handoff_returns_the_replacement_request_id
+            runtime_state::tests::remote_references::remote_views_never_execute_saved_commands_on_restore_or_restart
+          )
+          skip_args=()
+          for name in "${pending[@]}"; do
+            skip_args+=(--skip "$name")
+          done
+          cargo test --locked --workspace -- --exact "${skip_args[@]}"
       # The speech feature is advertised on Windows too (WASAPI capture via
-      # cpal); build it so a Windows-only break cannot pass CI. Compiling the
-      # vendored C++ tree here is the point — tests are not run. horizon-ui
-      # owns the feature, so the rest of the workspace is already built by the
-      # pass above.
-      - run: cargo test --locked -p horizon-ui --features speech --no-run
+      # cpal); build it so a Windows-only break cannot pass CI. Only the build
+      # is checked: the speech tests stay off here until horizon-ui runs clean
+      # without skips. horizon-ui owns the feature, so the rest of the
+      # workspace is already built by the pass above. `!cancelled()` keeps a
+      # test failure from hiding a speech build break.
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked -p horizon-ui --features speech --no-run
 
 
   snap-build:
