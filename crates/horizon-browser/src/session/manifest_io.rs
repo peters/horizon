@@ -235,6 +235,8 @@ impl DriverState {
             title: self.title.clone(),
             remote_target: None,
             remote_device: None,
+            remote_file_upload: false,
+            file_chooser: self.config.frame_slot.file_chooser().status(),
         }
     }
 }

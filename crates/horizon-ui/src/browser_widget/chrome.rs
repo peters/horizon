@@ -84,6 +84,11 @@ pub fn show(
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
     }
 
+    if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
+        && !browser.frame_slot.file_chooser().supported()
+    {
+        ui.label(RichText::new("Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support.").size(10.5).color(theme::PALETTE_YELLOW()));
+    }
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
         clicked |= handoff_banner(ui, browser, &reason, interactive);

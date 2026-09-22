@@ -133,6 +133,7 @@ impl Default for PanelLayout {
 }
 
 pub struct PanelOptions {
+    pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub name: Option<String>,
     /// Whether `name` was explicitly chosen by the user. `None` preserves
     /// the legacy behavior of treating every supplied name as custom.
@@ -159,6 +160,8 @@ pub struct PanelOptions {
     pub browser_config: Option<crate::browser::BrowserConfig>,
     /// Stable profile identity shared by explicitly duplicated browser pages.
     pub browser_session_id: Option<String>,
+    #[cfg(feature = "cloud-workspaces")]
+    pub cloud_connection: Option<crate::cloud_runtime::ssh::Connection>,
     /// Run the browser panel at a remote grid with this prepared request
     /// instead of launching a local browser.
     pub remote_session: Option<horizon_browser::RemoteSessionRequest>,
@@ -175,6 +178,7 @@ pub struct PanelOptions {
 impl Default for PanelOptions {
     fn default() -> Self {
         Self {
+            device_identity: None,
             name: None,
             name_is_custom: None,
             command: None,
@@ -195,6 +199,8 @@ impl Default for PanelOptions {
             template: None,
             browser_config: None,
             browser_session_id: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_connection: None,
             remote_session: None,
             remote_target: None,
             transcript_root: None,
@@ -217,6 +223,9 @@ pub struct Panel {
     pub visible: bool,
     pub workspace_id: WorkspaceId,
     pub content: PanelContent,
+    /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
+    pub(crate) disconnected_browser_profile: Option<crate::runtime_state::BrowserProfileState>,
+    pub(crate) disconnected_device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -313,6 +322,26 @@ impl Panel {
         self.content.browser()
     }
 
+    /// Preserve the selected engine even while a remote browser view is disconnected.
+    #[must_use]
+    pub fn browser_backend(&self) -> Option<crate::browser::BackendKind> {
+        self.browser()
+            .map(crate::browser::BrowserPanelState::backend)
+            .or_else(|| {
+                self.disconnected_browser_profile
+                    .as_ref()
+                    .and_then(|profile| profile.backend)
+            })
+    }
+
+    /// Preserve remote identity while the view is a disconnected snapshot.
+    #[must_use]
+    pub fn browser_remote_target(&self) -> Option<&str> {
+        self.browser()
+            .and_then(crate::browser::BrowserPanelState::remote_target)
+            .or_else(|| self.disconnected_browser_profile.as_ref()?.remote_target.as_deref())
+    }
+
     /// Mutable accessor for the browser content.
     pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
         self.content.browser_mut()
@@ -322,6 +351,14 @@ impl Panel {
     #[must_use]
     pub fn device(&self) -> Option<&crate::DevicePanelState> {
         self.content.device()
+    }
+
+    /// Supplied machine labels survive an inert cloud restore placeholder.
+    #[must_use]
+    pub fn device_identity(&self) -> Option<&crate::browser::manifest::device::DeviceIdentity> {
+        self.device()
+            .and_then(|device| device.identity.as_ref())
+            .or(self.disconnected_device_identity.as_ref())
     }
 
     /// Convenience accessor for the git changes content (if this panel holds one).
@@ -362,6 +399,8 @@ impl Panel {
             visible: true,
             workspace_id,
             content,
+            disconnected_browser_profile: None,
+            disconnected_device_identity: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -382,7 +421,7 @@ impl Panel {
     /// # Errors
     ///
     /// Returns an error if the placeholder terminal runtime cannot be created.
-    pub(crate) fn restore_failure(
+    pub fn restore_failure(
         id: PanelId,
         workspace_id: WorkspaceId,
         opts: PanelOptions,
@@ -507,7 +546,7 @@ impl Panel {
     }
 
     #[must_use]
-    pub(crate) fn name_is_custom(&self) -> bool {
+    pub fn name_is_custom(&self) -> bool {
         self.has_custom_name
     }
 
@@ -741,6 +780,8 @@ mod tests {
             visible: true,
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
+            disconnected_browser_profile: None,
+            disconnected_device_identity: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,

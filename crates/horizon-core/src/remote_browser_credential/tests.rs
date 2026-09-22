@@ -837,3 +837,43 @@ fn os_store_round_trip_smoke() {
     store.delete(&item).expect("delete");
     assert!(!store.contains(&item).expect("probe after delete"));
 }
+
+#[test]
+fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_reads() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
+    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+    let key = CredentialReference::from("key");
+    for value in [b"original".as_slice(), b"replacement".as_slice()] {
+        let before = workbench.generation();
+        workbench.set_session_value("grid", &profile, &key, value).unwrap();
+        assert_ne!(workbench.generation(), before);
+    }
+    let before = workbench.generation();
+    workbench.delete("grid", &profile, &key).unwrap();
+    assert_ne!(workbench.generation(), before);
+    workbench.set_session_value("grid", &profile, &key, b"session").unwrap();
+    let before = workbench.generation();
+    workbench.clear_session();
+    assert_ne!(workbench.generation(), before);
+    assert_eq!(workbench.session_value_count(), 0);
+    let user = CredentialReference::from("user");
+    for deleting in [false, true] {
+        let before = workbench.generation();
+        if deleting {
+            workbench.delete("grid", &profile, &user).unwrap();
+        } else {
+            workbench
+                .store_in_keychain("grid", &profile, &user, b"account")
+                .unwrap();
+        }
+        let queued = workbench.generation();
+        assert_ne!(queued, before, "invalidate before the asynchronous store mutation");
+        wait_until(&mut workbench, |w| !w.is_busy());
+        assert_ne!(
+            workbench.generation(),
+            queued,
+            "discard any fetch started while the store mutation was pending"
+        );
+    }
+}

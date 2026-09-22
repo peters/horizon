@@ -91,15 +91,24 @@ crates/
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 # `--features speech` is the widest runner-buildable set (GPU features need
-# machine toolchains and add no Rust surface; needs libasound2-dev on Linux)
+# machine toolchains and add no Rust surface; needs libasound2-dev on Linux).
+# horizon-ui declares the feature, so every other crate builds identically
+# with and without it and the feature pass only needs that crate.
 RUSTFLAGS="-D warnings" cargo test --workspace
-RUSTFLAGS="-D warnings" cargo test --workspace --features speech
+RUSTFLAGS="-D warnings" cargo test -p horizon-ui --features speech
 cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
 ```
 
 - Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
+
+### Cloud Development Profiles
+
+The repository's `.horizon/cloud.yml` defines CPU and GPU development profiles.
+Use [the cloud development guide](.horizon/README.md) for image prerequisites,
+isolated build caches, validation commands and native smoke requirements. The
+GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 
 ### Browser Interface Parity
 
@@ -161,6 +170,7 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 - Concise imperative messages, optionally scoped: `feat(board):`, `fix(render):`, `ci:`
 - One logical change per commit
+- No assistant attribution anywhere in repository history: never add a `Co-authored-by` trailer, a session link or a similar tool or vendor identifier to a commit message, PR body or squash-merge message, and strip an inherited one when amending, rebasing or squashing someone else's work
 - Always squash-merge pull requests; do not use merge commits or rebase merges for PRs
 - PRs include: purpose, behavior impact, test evidence
 - Fix Clippy warnings introduced or worsened by the PR and any warnings that block required tiers before committing; a commit must leave the blocking and strict CI tiers green in the exact branch/worktree that will be pushed for review
@@ -277,6 +287,7 @@ When cutting a new release, generate concise release notes from the commits sinc
 - Keep internal application names, workflows, screenshots, videos and operational details out of public issues, PRs, logs and attachments. Public demonstrations use generic synthetic fixtures only.
 - On Linux, use the [local Horizon smoke fixture](scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel) with `--native-view`: a separate Xvfb display and window manager, private application state and a loopback VNC server. The separate desktop and private state provide isolation; mirroring the developer's desktop does not satisfy this rule.
 - Use the public `device_panel` tool to create the viewer in the calling agent's current workspace using the fixture's `vnc_address`. Inspect `connection`, `image_received`, `image_displayed` and advancing `frame_sequence` during changing output before claiming a live view; creation or `visible: true` alone is insufficient. If the tool, supporting host or visible native panel is unavailable, report the blocked lane. Do not substitute noVNC, alter private runtime files, restart active sessions, or automate the developer's desktop.
+- Diagnose viewer liveness automatically; do not ask a human to confirm visibility or whether the image is updating. Follow the [bounded viewer health procedure](scripts/device-smoke/README.md#automatic-viewer-health-check) and retain timestamped observations. Distinguish a static target from a disconnected or unpresented viewer; recover only the task-owned viewer through public lifecycle operations. Recheck actual presentation after recovery: setting visibility or reconnecting does not guarantee that an off-screen panel is brought into view. If the public contract cannot establish live presentation, record the precise blocked lane and a deduplicated follow-up issue, then continue independent checks. Never restart the user's Horizon instance to repair test visibility. Track the missing presentation/freshness diagnostics in [issue #801](https://github.com/peters/horizon/issues/801).
 - Drive the isolated application through explicitly configured device CLI/MCP targets; native automation, when needed, must be scoped to the fixture display and exact PID. The Device panel is read-only. Browser-page interaction remains on the `horizon-browser` skill's public `browser_*` tools; native VNC Device panels use the `horizon-device` skill and `device_panel`.
 - For visible feature additions or behavior changes, capture a short video directly from the isolated test desktop, plus screenshots after launch and resize/fit. Use a recorder scoped to that display, start before the interaction, stop afterward, and play back or decode representative frames to verify the feature and movement were captured. A native Device panel does not itself record video. If recording is unavailable or stalls, report that lane as blocked; do not replace it with screenshots or noVNC. Keep finalized evidence private until publication is authorized, and record the candidate binary/commit and scenario with it.
 - On macOS or Windows, use a dedicated test machine, VM or isolated desktop session exposed through VNC and viewed in the same native Device panel. The current viewer accepts numeric loopback endpoints only; use an explicitly authorized forwarding arrangement when needed, as the viewer does not create tunnels. Platform-specific graphics/input checks must still run on the actual target OS. If a suitable isolated environment or native viewing path is unavailable, report the blocked lane.

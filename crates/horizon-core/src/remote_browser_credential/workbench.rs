@@ -134,6 +134,7 @@ struct KeychainLink {
 
 /// Session store plus a keychain worker, with a presence cache the UI reads.
 pub struct CredentialWorkbench {
+    generation: u64,
     session: SessionCredentialStore,
     environment: EnvironmentCredentialStore,
     keychain: Option<KeychainLink>,
@@ -148,6 +149,16 @@ pub struct CredentialWorkbench {
 }
 
 impl CredentialWorkbench {
+    /// Nonsecret invalidation version for cached account-bound discovery.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn credentials_changed(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     /// Open the platform store on a worker thread.
     #[must_use]
     pub fn spawn_platform() -> Self {
@@ -168,6 +179,7 @@ impl CredentialWorkbench {
             .spawn(move || worker(opener, &worker_store, &command_rx, &event_tx))
             .ok();
         Self {
+            generation: 0,
             session: SessionCredentialStore::new(),
             environment: EnvironmentCredentialStore::new(),
             keychain: Some(KeychainLink {
@@ -208,12 +220,14 @@ impl CredentialWorkbench {
                     self.cache_presence(&locator, state_from(&result));
                 }
                 Event::Stored(locator, result, row) => {
+                    self.credentials_changed();
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| true)));
                     self.notices
                         .push(WorkbenchNotice::new(&row, NoticeKind::StoredInKeychain, result));
                 }
                 Event::Deleted(locator, result, row) => {
+                    self.credentials_changed();
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| false)));
                     self.notices
@@ -306,6 +320,9 @@ impl CredentialWorkbench {
             self.session_rows.insert(row.clone(), locator.origin.clone());
             self.session.put(&locator, value)
         });
+        if result.is_ok() {
+            self.credentials_changed();
+        }
         self.notices
             .push(WorkbenchNotice::new(&row, NoticeKind::SessionValueSet, result.clone()));
         result
@@ -354,6 +371,7 @@ impl CredentialWorkbench {
             ))
             .map_err(|_| RemoteCredentialError::StoreUnavailable)?;
         self.in_flight += 1;
+        self.credentials_changed();
         Ok(())
     }
 
@@ -375,6 +393,9 @@ impl CredentialWorkbench {
         match binding.store {
             CredentialStoreKind::Session => {
                 let result = self.session.delete(&locator);
+                if result.is_ok() {
+                    self.credentials_changed();
+                }
                 self.notices.push(WorkbenchNotice::new(
                     &Row::new(provider, profile, reference),
                     NoticeKind::SessionValueCleared,
@@ -395,6 +416,7 @@ impl CredentialWorkbench {
                     });
                 if result.is_ok() {
                     self.in_flight += 1;
+                    self.credentials_changed();
                 }
                 if let Err(error) = &result {
                     self.notices.push(WorkbenchNotice::new(
@@ -411,6 +433,7 @@ impl CredentialWorkbench {
     /// Drop every session-only value, overwriting buffers first. Each
     /// reference that held one gets a cleared notice so its row agrees.
     pub fn clear_session(&mut self) {
+        self.credentials_changed();
         let cleared: Vec<Row> = self
             .session_rows
             .iter()

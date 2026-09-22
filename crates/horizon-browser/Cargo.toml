@@ -21,6 +21,7 @@ test-support = []
 workspace = true
 
 [dependencies]
+mime_guess.workspace = true
 horizon-browser-protocol.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -28,8 +29,11 @@ tungstenite.workspace = true
 zune-jpeg.workspace = true
 png.workspace = true
 base64.workspace = true
+zip.workspace = true
+uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 rav1e = { workspace = true, optional = true }
 ureq.workspace = true
 

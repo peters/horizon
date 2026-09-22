@@ -2,7 +2,15 @@ use crate::{DevicePanelState, DeviceViewTarget, Error, Result, editor::PanelCont
 
 use super::{Panel, PanelKind, StaticPanelSeed};
 
-pub(super) fn spawn_device(mut seed: StaticPanelSeed, command: Option<&str>, is_restore: bool) -> Result<Panel> {
+pub(super) fn spawn_device(
+    mut seed: StaticPanelSeed,
+    command: Option<&str>,
+    is_restore: bool,
+    mut identity: Option<crate::browser::manifest::device::DeviceIdentity>,
+) -> Result<Panel> {
+    if let Some(identity) = &mut identity {
+        DevicePanelState::normalize_identity(identity)?;
+    }
     let target =
         DeviceViewTarget::parse(command.ok_or_else(|| {
             Error::Config("Device panel requires an explicit numeric loopback address and port".into())
@@ -14,6 +22,7 @@ pub(super) fn spawn_device(mut seed: StaticPanelSeed, command: Option<&str>, is_
         PanelKind::Device,
         PanelContent::Device(DevicePanelState {
             target,
+            identity,
             connect_on_start: !is_restore,
         }),
         Some(address),

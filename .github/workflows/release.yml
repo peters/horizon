@@ -421,20 +421,11 @@ jobs:
 
   publish-surge-release-index:
     name: Publish Surge Update Storage
+    environment: release-automation
     if: ${{ needs.validate-release.outputs.release_prerelease == 'false' }}
     needs: [validate-release, build-artifacts]
     runs-on: ubuntu-latest
     steps:
-      - name: Validate Surge storage token
-        if: ${{ github.repository == 'peters/horizon' }}
-        env:
-          SURGE_STORAGE_TOKEN: ${{ secrets.SURGE_STORAGE_TOKEN }}
-        run: |
-          if [ -z "$SURGE_STORAGE_TOKEN" ]; then
-            echo "::error::SURGE_STORAGE_TOKEN secret is required for stable Surge storage publication."
-            exit 1
-          fi
-
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
@@ -517,10 +508,21 @@ jobs:
             fi
           done
 
+      - name: Mint scoped storage credential
+        if: ${{ github.repository == 'peters/horizon' }}
+        id: storage-credential
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_PRIVATE_KEY }}
+          owner: peters
+          repositories: horizon-updates
+          permission-contents: write
+
       - name: Push stable Surge releases to dedicated storage repo
         if: ${{ github.repository == 'peters/horizon' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.SURGE_STORAGE_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.storage-credential.outputs.token }}
         shell: bash
         run: |
           surge_bin="./.cache/surge-toolchain/linux-x64/surge"
@@ -604,19 +606,11 @@ jobs:
 
   update-homebrew-tap:
     name: Update Homebrew Tap
+    environment: release-automation
     if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets, publish-github-release]
     runs-on: ubuntu-latest
     steps:
-      - name: Validate Homebrew tap token
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN secret is required for stable release packaging."
-            exit 1
-          fi
-
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
@@ -627,11 +621,21 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
           git checkout "${{ github.workflow_sha }}" -- scripts
 
+      - name: Mint scoped homebrew credential
+        id: homebrew-credential
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_PRIVATE_KEY }}
+          owner: peters
+          repositories: homebrew-horizon
+          permission-contents: write
+
       - name: Checkout Homebrew tap repository
         uses: actions/checkout@v7
         with:
           repository: peters/homebrew-horizon
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ steps.homebrew-credential.outputs.token }}
           path: homebrew-horizon
 
       - name: Update Homebrew tap files
@@ -662,6 +666,7 @@ jobs:
 
   update-winget-pkgs:
     name: Update WinGet Package
+    environment: release-automation
     if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
     needs: [validate-release, upload-release-assets, publish-github-release]
     runs-on: ubuntu-latest
@@ -669,18 +674,41 @@ jobs:
       WINGET_PKGS_REPOSITORY: peters/winget-pkgs
       WINGET_PACKAGE_IDENTIFIER: Peters.Horizon
     steps:
-      - name: Validate WinGet token
+      - name: Validate WinGet public PR token before fork writes
         env:
-          WINGET_PKGS_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_PUBLIC_PR_TOKEN }}
+        shell: python
         run: |
-          if [ -z "$WINGET_PKGS_TOKEN" ]; then
-            echo "::error::WINGET_PKGS_TOKEN secret is required for stable release packaging."
-            exit 1
-          fi
+          import json, os, urllib.request
+          token = os.environ.get('GH_TOKEN', '')
+          assert token, 'WINGET_PUBLIC_PR_TOKEN is required for stable release packaging'
+          request = urllib.request.Request(
+              'https://api.github.com/user',
+              headers={'Authorization': 'Bearer ' + token,
+                       'User-Agent': 'release-credential-check'},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              identity = json.load(response)
+              scopes = response.headers.get('X-OAuth-Scopes', '')
+              expiry = response.headers.get('GitHub-Authentication-Token-Expiration', '')
+          assert identity['login'] == 'peters', 'Unexpected public PR identity'
+          assert scopes == 'public_repo', 'Unexpected public PR token scope'
+          assert expiry, 'Public PR token must expire'
+          print('Verified peters, public_repo only, expires ' + expiry)
+
+      - name: Mint scoped winget credential
+        id: winget-credential
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_PRIVATE_KEY }}
+          owner: peters
+          repositories: winget-pkgs
+          permission-contents: write
 
       - name: Validate WinGet fork
         env:
-          GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+          GH_TOKEN: ${{ steps.winget-credential.outputs.token }}
         run: |
           repo_json="$(gh api "repos/${WINGET_PKGS_REPOSITORY}")"
           is_fork="$(jq -r '.fork' <<<"$repo_json")"
@@ -705,7 +733,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ${{ env.WINGET_PKGS_REPOSITORY }}
-          token: ${{ secrets.WINGET_PKGS_TOKEN }}
+          token: ${{ steps.winget-credential.outputs.token }}
           path: winget-pkgs
 
       - name: Update WinGet manifests
@@ -750,7 +778,7 @@ jobs:
       - name: Open or reuse WinGet pull request
         working-directory: winget-pkgs
         env:
-          GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_PUBLIC_PR_TOKEN }}
           RELEASE_VERSION: ${{ needs.validate-release.outputs.release_version }}
           RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}
         run: |

@@ -244,10 +244,17 @@ fn take_action_result_at(
     let _manifest_lock = ManifestLock::acquire(&manifest_path)?;
     let path = action_result_path_for_root(root, panel_local_id, action_id);
     let result = take_at(&path, action_id)?;
-    if result.is_some()
-        && let Err(error) = remove_consumed_lock_at(&path)
-    {
-        tracing::warn!(target: "browser", path = %path.display(), "failed to remove consumed browser result lock: {error}");
+    if result.is_some() {
+        if let Err(error) = remove_consumed_lock_at(&path) {
+            tracing::warn!(target: "browser", path = %path.display(), "failed to remove consumed browser result lock: {error}");
+        }
+        // The action is no longer in flight: its staged attachments, if
+        // any, become ordinary retained history for the panel.
+        crate::attachments::settle_attachments(
+            &BrowserRuntimePaths::from_root(root.to_path_buf()).browser_attachments_dir(),
+            panel_local_id,
+            action_id,
+        );
     }
     Ok(result)
 }

@@ -29,6 +29,7 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 #[derive(Default)]
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
+    pub(super) catalog: super::browser_provider_catalog::CatalogHostState,
     pub(super) provider_usage: super::browser_provider_usage::UsageHostState,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     pending: Vec<PendingBrowserCreate>,
@@ -180,6 +181,7 @@ impl HorizonApp {
         // the cadence-based one by forgetting the last stamped placement.
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
+            changed |= self.close_ended_browser_panels();
             changed |= self.poll_host_requests();
             self.browser_create_host.stamped_placement = None;
         }
@@ -255,6 +257,7 @@ impl HorizonApp {
             | self.poll_browser_close_requests()
             | self.poll_remote_recovery()
             | self.poll_provider_usage()
+            | self.poll_provider_catalog()
     }
 
     fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -326,6 +329,8 @@ impl HorizonApp {
                 return;
             }
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.cloud_attach_agent_child(actor_panel.panel_id, panel_id);
         let Some(panel_local_id) = self.board.panel(panel_id).map(|panel| panel.local_id.clone()) else {
             tracing::error!(request_id = %request.request_id, "created browser panel disappeared before registration");
             complete_failure(
@@ -828,7 +833,7 @@ fn terminal_create_failure(browser: &horizon_core::browser::BrowserPanelState) -
             || match &browser.status {
                 BrowserStatus::Error { .. } => (
                     "backend_start_failed",
-                    "the selected browser backend did not start; inspect the visible panel or local logs",
+                    "the selected browser backend did not start; inspect the local logs",
                 ),
                 _ => (
                     "backend_stopped",

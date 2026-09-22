@@ -2,13 +2,20 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
-use crate::runtime_state::WorkspaceState;
+use crate::runtime_state::{WorkspaceState, cloud_groups};
 use crate::workspace::{Workspace, WorkspaceId};
 
 use super::arrangement::rects_overlap;
 use super::{Board, WorkspaceDockSide, vec2_eq};
 
 impl Board {
+    #[cfg(feature = "cloud-workspaces")]
+    pub fn retain_workspace_when_empty(&mut self, id: WorkspaceId) {
+        if self.workspace(id).is_some() {
+            self.retained_empty_workspaces.insert(id);
+        }
+    }
+
     #[must_use]
     pub fn create_workspace(&mut self, name: &str) -> WorkspaceId {
         let id = WorkspaceId(self.next_workspace_id);
@@ -53,6 +60,24 @@ impl Board {
         }
         let name = format!("Workspace {}", self.workspaces.len() + 1);
         self.create_workspace(&name)
+    }
+
+    /// Select an ordinary local workspace for preparation that must not inherit a remote environment.
+    pub fn ensure_local_workspace(&mut self, fallback_name: &str) -> WorkspaceId {
+        let eligible = |workspace: &&Workspace| {
+            if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
+                return false;
+            }
+            workspace.remote_workspace.is_none()
+        };
+        if let Some(workspace) = self
+            .active_workspace
+            .and_then(|id| self.workspace(id).filter(eligible))
+            .or_else(|| self.workspaces.iter().find(eligible))
+        {
+            return workspace.id;
+        }
+        self.create_workspace(fallback_name)
     }
 
     /// Create a panel inside a workspace.
@@ -182,6 +207,15 @@ impl Board {
         true
     }
 
+    /// Browser sessions that ended or failed, including stopped remote
+    /// placeholders restored from a previous run. Hidden live browsers and
+    /// page navigation errors do not end a session.
+    pub fn ended_browser_panels(&self) -> impl Iterator<Item = PanelId> + '_ {
+        self.panels
+            .iter()
+            .filter_map(|panel| panel.browser().filter(|browser| browser.has_ended()).map(|_| panel.id))
+    }
+
     pub fn close_panel(&mut self, id: PanelId) {
         if let Some(signal) = self.close_panel_returning_teardown(id) {
             self.retired_browser_shutdown_signals.push(signal);
@@ -275,6 +309,12 @@ impl Board {
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
+        if self
+            .workspace(id)
+            .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
+        {
+            return;
+        }
         // Never remove the last workspace.
         if self.workspaces.len() <= 1 {
             return;
@@ -285,6 +325,7 @@ impl Board {
             .iter()
             .find(|ws| {
                 ws.id != id
+                    && !cloud_groups::contains_workspace(&self.cloud_groups, &ws.local_id)
                     && self
                         .panels
                         .iter()
@@ -317,6 +358,20 @@ impl Board {
     /// Move a panel to a different workspace, physically relocating it to
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
+        if self
+            .panel(panel_id)
+            .is_some_and(|panel| cloud_groups::contains_panel(&self.cloud_groups, &panel.local_id))
+            || self
+                .workspace(workspace_id)
+                .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
+        {
+            return;
+        }
+        self.reconcile_panel_workspace(panel_id, workspace_id);
+    }
+
+    // Persistence repair may restore immutable membership; user moves use the guarded API above.
+    pub(crate) fn reconcile_panel_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
         let Some(source_workspace_id) = self.panel_workspace_id(panel_id) else {
             return;
         };

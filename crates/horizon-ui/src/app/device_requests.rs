@@ -15,6 +15,17 @@ use super::{
     browser_requests::{ActorPanel, actor_panel},
 };
 
+pub(super) struct PendingDeviceReveal {
+    id: PanelId,
+    restored_fullscreen: Option<WindowRestore>,
+    deadline: Instant,
+}
+
+pub(super) struct WindowRestore {
+    pub fullscreen: bool,
+    pub size: egui::Vec2,
+}
+
 impl HorizonApp {
     pub(super) fn poll_device_panel_requests(&mut self, ctx: &Context) -> bool {
         let now = Instant::now();
@@ -57,7 +68,9 @@ impl HorizonApp {
             );
         };
         match &request.operation {
-            Operation::Create { endpoint } => self.create_device_viewer(endpoint, actor, &request.actor, ctx),
+            Operation::Create { endpoint, identity } => {
+                self.create_device_viewer(endpoint, identity.clone(), actor, &request.actor, ctx)
+            }
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -77,9 +90,22 @@ impl HorizonApp {
         }
     }
 
-    fn create_device_viewer(&mut self, endpoint: &str, actor: ActorPanel, owner: &str, ctx: &Context) -> Outcome {
+    fn create_device_viewer(
+        &mut self,
+        endpoint: &str,
+        mut identity: Option<device::DeviceIdentity>,
+        actor: ActorPanel,
+        owner: &str,
+        ctx: &Context,
+    ) -> Outcome {
+        if let Some(identity) = &mut identity
+            && let Err(error) = horizon_core::DevicePanelState::normalize_identity(identity)
+        {
+            return Outcome::failed("invalid_identity", &error.to_string());
+        }
         let options = PanelOptions {
             kind: PanelKind::Device,
+            device_identity: identity,
             command: Some(endpoint.into()),
             ..PanelOptions::default()
         };
@@ -90,6 +116,8 @@ impl HorizonApp {
                 "Device viewer requires a numeric loopback address and nonzero port",
             );
         };
+        #[cfg(feature = "cloud-workspaces")]
+        self.cloud_attach_agent_child(actor.panel_id, id);
         // Creating a viewer must not steal keyboard input from the caller.
         if let Some(focused) = focused {
             self.board.focus(focused);
@@ -112,6 +140,7 @@ impl HorizonApp {
     ) -> Outcome {
         let (Operation::Inspect { panel_id }
         | Operation::Visibility { panel_id, .. }
+        | Operation::Reveal { panel_id }
         | Operation::Reconnect { panel_id }
         | Operation::Close { panel_id }) = operation
         else {
@@ -156,6 +185,9 @@ impl HorizonApp {
                 }
                 self.mark_runtime_dirty();
             }
+            Operation::Reveal { .. } => {
+                self.reveal_device_viewer(ctx, id, actor);
+            }
             Operation::Close { panel_id } => {
                 if self.fullscreen_panel == Some(id) {
                     self.fullscreen_panel = None;
@@ -184,6 +216,123 @@ impl HorizonApp {
         )
     }
 
+    fn reveal_device_viewer(&mut self, ctx: &Context, id: PanelId, actor: ActorPanel) {
+        let focused = self.board.focused;
+        let active_workspace = self.board.active_workspace;
+        self.board.set_panel_visible(id, true);
+        if let Some(workspace) = self.board.workspace_mut(actor.workspace_id) {
+            workspace.collapsed = false;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(local) = self.board.panel(id).map(|panel| panel.local_id.clone()) {
+            let mut expanded_cloud = false;
+            for group in &mut self.cloud_prototype.groups.0 {
+                if group.panels.contains(&local) {
+                    group.set_collapsed(&mut self.board, false);
+                    expanded_cloud = true;
+                }
+            }
+            if expanded_cloud {
+                self.board.cloud_groups = self.cloud_prototype.groups.clone();
+            }
+        }
+        let local = self
+            .board
+            .workspace(actor.workspace_id)
+            .map(|workspace| workspace.local_id.clone());
+        let focused = if let Some(state) = local.and_then(|local| self.detached_workspaces.get_mut(&local)) {
+            // The detached viewport applies this using its own geometry next frame.
+            // Never send an OS Focus command from an automated reveal.
+            state.pending_device_reveal = Some(id);
+            focused
+        } else {
+            if self.fullscreen_panel.is_some_and(|current| current != id) {
+                self.fullscreen_panel = None;
+            }
+            // Cloud fullscreen refits the entire group on every render pass,
+            // including when this viewer belongs to that group.
+            #[cfg(feature = "cloud-workspaces")]
+            let restored_fullscreen = self.exit_cloud_for_device_reveal(ctx);
+            #[cfg(not(feature = "cloud-workspaces"))]
+            let restored_fullscreen = None;
+            let focused = if restored_fullscreen.is_some() {
+                focused.or(self.board.focused)
+            } else {
+                focused
+            };
+            let pending = match (
+                restored_fullscreen,
+                self.panel_render_caches.pending_device_reveal.take(),
+            ) {
+                (None, Some(mut pending)) => {
+                    pending.id = id;
+                    pending
+                }
+                (restored_fullscreen, _) => PendingDeviceReveal {
+                    id,
+                    restored_fullscreen,
+                    deadline: Instant::now() + Duration::from_secs(2),
+                },
+            };
+            self.panel_render_caches.pending_device_reveal = Some(pending);
+            focused
+        };
+        self.board.focused = focused;
+        self.board.active_workspace = active_workspace;
+        self.mark_runtime_dirty();
+        ctx.request_repaint();
+    }
+
+    pub(super) fn apply_pending_root_device_reveal(&mut self, ctx: &Context) {
+        let Some(pending) = self.panel_render_caches.pending_device_reveal.take() else {
+            return;
+        };
+        if !self.board.panel(pending.id).is_some_and(|panel| {
+            panel.visible && panel.device().is_some() && !self.workspace_is_detached(panel.workspace_id)
+        }) {
+            return;
+        }
+        if pending.restored_fullscreen.as_ref().is_some_and(|expected| {
+            ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) != expected.fullscreen
+                || (!expected.fullscreen && (ctx.content_rect().size() - expected.size).abs().max_elem() > 2.0)
+        }) {
+            if Instant::now() < pending.deadline {
+                self.panel_render_caches.pending_device_reveal = Some(pending);
+                ctx.request_repaint_after(Duration::from_millis(16));
+                return;
+            }
+            tracing::warn!(
+                panel_id = pending.id.0,
+                "Device reveal restoration timed out; using current window geometry"
+            );
+        }
+        // Fit after layout and the bounded restoration wait. The window manager
+        // may constrain the restored size, so expiry uses the available canvas.
+        self.reveal_device_in_rect(pending.id, self.canvas_rect(ctx));
+    }
+
+    pub(super) fn apply_pending_device_reveal(&mut self, local: &str, canvas: egui::Rect) {
+        let pending = self
+            .detached_workspaces
+            .get_mut(local)
+            .and_then(|state| state.pending_device_reveal.take());
+        let Some(id) = pending else { return };
+        let valid = self.board.panel(id).is_some_and(|panel| {
+            panel.device().is_some()
+                && self
+                    .board
+                    .workspace(panel.workspace_id)
+                    .is_some_and(|workspace| workspace.local_id == local)
+        });
+        if valid {
+            let focused = self.board.focused;
+            let active_workspace = self.board.active_workspace;
+            self.reveal_device_in_rect(id, canvas);
+            self.board.focused = focused;
+            self.board.active_workspace = active_workspace;
+        }
+    }
+
     fn device_observation(&mut self, id: PanelId, owner: &str) -> Option<PanelState> {
         let panel = self.board.panel(id)?;
         Some(
@@ -198,6 +347,8 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
+    mod reveal;
+
     use super::*;
     use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
     use horizon_core::{RuntimeState, StartupDecision};
@@ -244,6 +395,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -277,6 +429,7 @@ mod tests {
             let create = request(
                 &app,
                 Operation::Create {
+                    identity: None,
                     endpoint: endpoint.into(),
                 },
             );
@@ -288,6 +441,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                identity: None,
                 endpoint: "127.0.0.1:5900".into(),
             },
         );
@@ -314,6 +468,104 @@ mod tests {
         };
         assert!(!one(app.apply_device_request(&close, &ctx)).owned_by_caller);
     }
+    #[test]
+    fn reveal_preserves_focus_and_connection_while_restoring_visibility() {
+        let (_temp, ctx, mut app) = app();
+        let create = request(
+            &app,
+            Operation::Create {
+                identity: None,
+                endpoint: "127.0.0.1:5900".into(),
+            },
+        );
+        let initial = one(app.apply_device_request(&create, &ctx));
+        let id = app.board.panel_id_by_local_id(&initial.panel_id).unwrap();
+        let caller = app.board.panels[0].id;
+        let workspace = app.board.panels[0].workspace_id;
+        app.board.set_panel_visible(id, false);
+        app.board.panel_mut(id).unwrap().layout.position = [5000.0, 5000.0];
+        app.board.workspace_mut(workspace).unwrap().collapsed = true;
+        app.board.focus(caller);
+        app.fullscreen_panel = Some(caller);
+        let before = app.canvas_view;
+        let reveal = request(
+            &app,
+            Operation::Reveal {
+                panel_id: initial.panel_id,
+            },
+        );
+        let observed = one(app.apply_device_request(&reveal, &ctx));
+        app.apply_pending_root_device_reveal(&ctx);
+        assert!(observed.visible);
+        assert!(!app.board.workspace(workspace).unwrap().collapsed);
+        assert_eq!(app.board.focused, Some(caller));
+        assert!(app.fullscreen_panel.is_none());
+        assert_ne!(app.canvas_view, before);
+        assert_eq!(
+            observed.diagnostics.unwrap().connection_generation,
+            initial.diagnostics.unwrap().connection_generation
+        );
+        assert!(
+            !observed.image.image_displayed,
+            "reveal must not fabricate a painted image"
+        );
+    }
+
+    #[test]
+    fn detached_reveal_queues_its_own_canvas_without_focusing_the_window() {
+        let (_temp, ctx, mut app) = app();
+        let create = request(
+            &app,
+            Operation::Create {
+                identity: None,
+                endpoint: "127.0.0.1:5900".into(),
+            },
+        );
+        let initial = one(app.apply_device_request(&create, &ctx));
+        let id = app.board.panel_id_by_local_id(&initial.panel_id).unwrap();
+        let workspace = app.board.panels[0].workspace_id;
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        app.detach_workspace(workspace);
+        app.board.panel_mut(id).unwrap().layout.position = [5000.0, 5000.0];
+        let caller = app.board.panels[1].id;
+        app.board.focus(caller);
+        let root_view = app.canvas_view;
+        let active_workspace = app.board.active_workspace;
+        let reveal = request(
+            &app,
+            Operation::Reveal {
+                panel_id: initial.panel_id,
+            },
+        );
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = one(app.apply_device_request(&reveal, ui.ctx()));
+        });
+        output.textures_delta.clear();
+        assert!(output.viewport_output.values().all(|viewport| {
+            !viewport
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::ViewportCommand::Focus))
+        }));
+        assert_eq!(app.canvas_view, root_view);
+        assert_eq!(app.board.focused, Some(caller));
+        assert_eq!(app.board.active_workspace, active_workspace);
+        assert_eq!(app.detached_workspaces[&local].pending_device_reveal, Some(id));
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        app.canvas_view = app.detached_workspaces[&local].canvas_view;
+        app.apply_pending_device_reveal(&local, canvas);
+        let panel = app.board.panel(id).unwrap();
+        let rect = egui::Rect::from_min_size(
+            egui::Pos2::from(panel.layout.position),
+            egui::Vec2::from(panel.layout.size),
+        );
+        let transform = crate::app::view::canvas_scene_transform(canvas, app.canvas_view);
+        assert!(canvas.intersects(transform * rect));
+        assert!(app.detached_workspaces[&local].pending_device_reveal.is_none());
+        assert_eq!(app.board.focused, Some(caller));
+        assert_eq!(app.board.active_workspace, active_workspace);
+    }
+
     #[test]
     fn restored_viewer_requires_explicit_reconnect_to_acquire_ownership() {
         let (_temp, ctx, mut app) = app();
@@ -353,5 +605,103 @@ mod tests {
         assert!(acquired.owned_by_caller);
         assert!(!acquired.image.image_received && !acquired.image.image_displayed);
         assert!(matches!(app.apply_device_request(&close, &ctx), Outcome::Closed { .. }));
+    }
+    #[test]
+    fn create_list_and_inspect_share_normalized_supplied_identity() {
+        let (_temp, ctx, mut app) = app();
+        let identity = device::DeviceIdentity {
+            machine_name: Some("  Lab workstation  ".into()),
+            hostname: Some("lab-host".into()),
+            ip_addresses: vec!["192.0.2.10".parse().unwrap()],
+            tailscale_name: Some("lab-host.example.ts.net".into()),
+        };
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: Some(identity),
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        assert_eq!(
+            created.identity.as_ref().unwrap().machine_name.as_deref(),
+            Some("Lab workstation")
+        );
+        for operation in [
+            Operation::List,
+            Operation::Inspect {
+                panel_id: created.panel_id,
+            },
+        ] {
+            let request = request(&app, operation);
+            let observed = one(app.apply_device_request(&request, &ctx));
+            assert_eq!(observed.identity, created.identity);
+        }
+        let count = app.board.panels.len();
+        let invalid = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: Some(device::DeviceIdentity {
+                    machine_name: Some("a".repeat(257)),
+                    ..Default::default()
+                }),
+            },
+        );
+        assert!(
+            matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_identity")
+        );
+        assert_eq!(app.board.panels.len(), count);
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    #[test]
+    fn reveal_saves_cloud_expansion_immediately_without_erasing_unprepared_groups() {
+        use horizon_core::{CanvasViewState, WindowConfig, cloud_panel::CloudGroup};
+        for belongs in [true, false] {
+            let (_temp, ctx, mut app) = app();
+            let create = request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:5900".into(),
+                    identity: None,
+                },
+            );
+            let viewer = one(app.apply_device_request(&create, &ctx));
+            let id = app.board.panel_id_by_local_id(&viewer.panel_id).unwrap();
+            let workspace = app.board.panels[0].workspace_id;
+            let local = app.board.workspace(workspace).unwrap().local_id.clone();
+            let mut group = CloudGroup::new(1, "Cloud".into(), local, std::path::PathBuf::new(), [0.0, 0.0]);
+            if belongs {
+                group.panels.push(viewer.panel_id.clone());
+                group.set_collapsed(&mut app.board, true);
+                app.cloud_prototype.groups.0.push(group.clone());
+            }
+            app.board.cloud_groups.0.push(group);
+            let reveal = request(
+                &app,
+                Operation::Reveal {
+                    panel_id: viewer.panel_id,
+                },
+            );
+            assert!(one(app.apply_device_request(&reveal, &ctx)).visible);
+            let saved = RuntimeState::from_board(&app.board, WindowConfig::default(), CanvasViewState::default());
+            assert_eq!(
+                saved.cloud_groups.0.len(),
+                1,
+                "unprepared saved groups must survive unrelated Reveal"
+            );
+            assert!(
+                !saved.cloud_groups.0[0].collapsed,
+                "expansion must persist before another render frame"
+            );
+            if belongs {
+                assert!(
+                    saved.cloud_groups.0[0]
+                        .panels
+                        .contains(&app.board.panel(id).unwrap().local_id)
+                );
+            }
+        }
     }
 }

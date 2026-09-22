@@ -22,6 +22,8 @@ impl HorizonApp {
 
         // Keep the viewport alive while we flush state and stop PTY-backed panels.
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        #[cfg(feature = "cloud-workspaces")]
+        self.save_cloud_prototype();
         self.begin_shutdown();
     }
 
@@ -51,19 +53,25 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
-        self.sync_panel_focus_from_pointer_press(ctx);
-        // Speech runs before the fullscreen handler so that Escape cancels an
-        // active recording instead of also exiting panel fullscreen.
+        self.filter_held_navigation_keys(ctx);
+        if !self.host_dialog_open() {
+            self.sync_panel_focus_from_pointer_press(ctx);
+        }
+        // Releases and asynchronous speech work must continue through dialogs.
         self.handle_speech_input(ctx);
-        self.handle_fullscreen_toggle(ctx);
-        self.handle_shortcuts(ctx);
-        self.handle_root_file_drop(ctx);
+        if !self.host_dialog_open() {
+            #[cfg(feature = "cloud-workspaces")]
+            self.handle_cloud_fullscreen_exit(ctx);
+            self.handle_fullscreen_toggle(ctx);
+            self.handle_shortcuts(ctx);
+            self.handle_root_file_drop(ctx);
+            self.poll_primary_selection_paste();
+        }
         let had_panel_output = self.drain_panel_output();
         let browser_create_activity = self.poll_browser_create_requests();
         let device_activity = self.poll_device_panel_requests(ctx);
 
         self.animate_pan(ctx);
-        self.poll_primary_selection_paste();
         self.maybe_refresh_session_catalog();
         self.poll_remote_hosts_refresh();
         self.poll_ssh_upload_flow();
@@ -73,6 +81,17 @@ impl HorizonApp {
         self.maybe_start_update_check();
 
         had_panel_output || browser_create_activity || device_activity
+    }
+
+    pub(super) fn cloud_creation_open(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            self.cloud_prototype.creation_open()
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        {
+            false
+        }
     }
 
     /// Drain terminal and browser events, promoting persistence-relevant
@@ -263,11 +282,19 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn apply_pending_workspace_changes(&mut self) {
         for panel_id in self.workspace_creates.drain(..) {
+            #[cfg(feature = "cloud-workspaces")]
+            if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
+                continue;
+            }
             let name = format!("Workspace {}", self.board.workspaces.len() + 1);
             let workspace_id = self.board.create_workspace(&name);
             self.board.assign_panel_to_workspace(panel_id, workspace_id);
         }
         for (panel_id, workspace_id) in self.workspace_assignments.drain(..) {
+            #[cfg(feature = "cloud-workspaces")]
+            if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
+                continue;
+            }
             self.board.assign_panel_to_workspace(panel_id, workspace_id);
         }
     }
@@ -275,6 +302,9 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         self.process_pending_detached_reattach(ui.ctx());
+        #[cfg(feature = "cloud-workspaces")]
+        self.prepare_cloud_prototype(ui.ctx());
+        self.apply_pending_root_device_reveal(ui.ctx());
 
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ui);
@@ -282,6 +312,8 @@ impl HorizonApp {
             // viewport that is not shown during a pass, so they must keep
             // rendering while a panel is fullscreen in the root window.
             self.render_detached_viewports(ui);
+            #[cfg(feature = "cloud-workspaces")]
+            self.render_cloud_dialogs(ui.ctx());
             return;
         }
 
@@ -291,8 +323,19 @@ impl HorizonApp {
             self.render_settings(ui);
         }
 
-        let workspace_bounds = self.board.workspace_bounds_map();
-        if !root_interaction_suppressed {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.render_fullscreen_cloud(ui) {
+            self.render_detached_viewports(ui);
+            self.render_cloud_dialogs(ui.ctx());
+            return;
+        }
+        let mut workspace_bounds = self.board.workspace_bounds_map();
+        #[cfg(feature = "cloud-workspaces")]
+        self.cloud_prototype
+            .groups
+            .extend_workspace_bounds(&self.board, &mut workspace_bounds);
+        let workspace_bounds = &mut workspace_bounds;
+        if !root_interaction_suppressed && !self.host_dialog_open() {
             self.handle_canvas_pan(ui);
         }
         self.render_toolbar(ui);
@@ -300,14 +343,20 @@ impl HorizonApp {
         self.render_sidebar(ui);
         self.render_canvas(ui);
         let overlay_zones = self.overlay_exclusion_zones(ui);
-        self.render_workspace_backgrounds(ui, &workspace_bounds, &overlay_zones);
+        self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
         self.render_browser_connector_lines(ui.ctx(), self.canvas_rect(ui.ctx()), None);
+        #[cfg(feature = "cloud-workspaces")]
+        self.render_cloud_frames(ui.ctx());
         self.render_empty_state_card(ui);
-        self.handle_canvas_double_click(ui);
+        if !self.host_dialog_open() {
+            self.handle_canvas_double_click(ui);
+        }
         self.render_panels(ui);
+        #[cfg(feature = "cloud-workspaces")]
+        self.render_cloud_ownership(ui.ctx());
         self.render_file_drop_highlight(ui);
         self.render_preset_picker(ui);
-        let minimap_height = self.render_minimap(ui, &workspace_bounds);
+        let minimap_height = self.render_minimap(ui, workspace_bounds);
         if self.fixed_overlays_visible() && self.template_config.features.attention_feed {
             let feed_result =
                 attention_feed::render_attention_feed(ui, &self.board, minimap_height, &self.template_config.overlays);
@@ -318,6 +367,8 @@ impl HorizonApp {
                 self.reveal_selected_panel(ui.ctx(), panel_id);
             }
         }
+        #[cfg(feature = "cloud-workspaces")]
+        self.render_cloud_controls(ui.ctx());
         self.render_canvas_hud(ui);
         self.render_detached_viewports(ui);
     }
@@ -336,6 +387,7 @@ impl HorizonApp {
         self.render_remote_hosts_overlay(ctx);
         self.render_session_manager(ctx);
         self.render_ssh_upload_flow(ctx);
+        self.render_browser_file_chooser(ctx, None);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
 

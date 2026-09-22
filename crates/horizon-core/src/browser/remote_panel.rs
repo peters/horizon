@@ -176,12 +176,20 @@ impl BrowserPanelState {
     /// Configured remote target name, when this panel runs (or ran) remotely.
     #[must_use]
     pub fn remote_target(&self) -> Option<&str> {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.target.as_deref();
+        }
         self.remote.as_ref().map(|remote| remote.target.as_str())
     }
 
     /// Whether this panel drives a remote session rather than a local browser.
     #[must_use]
     pub fn is_remote(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud.is_some() {
+            return true;
+        }
         self.remote.is_some()
     }
 
@@ -189,6 +197,10 @@ impl BrowserPanelState {
     /// verified; `None` before verification or for a local panel.
     #[must_use]
     pub fn remote_device(&self) -> Option<&str> {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.device.as_deref();
+        }
         self.remote.as_ref().and_then(|remote| remote.device.as_deref())
     }
 
@@ -251,6 +263,7 @@ impl BrowserPanelState {
         let mut state = Self::inert();
         state.status = BrowserStatus::Ready;
         state.remote = Some(RemoteLifecycle::live(RemoteSessionRequest {
+            adapter: horizon_browser::remote::RemoteAdapterKind::Webdriver,
             recovery: horizon_browser::RemoteAllocation::default(),
             endpoint: "https://grid.example.net/wd/hub".to_string(),
             authorization: None,
@@ -282,6 +295,10 @@ impl BrowserPanelState {
     /// duplicate a session the provider still holds.
     #[must_use]
     pub fn can_retry(&self) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return !cloud.process_lost;
+        }
         !self.is_remote()
     }
 

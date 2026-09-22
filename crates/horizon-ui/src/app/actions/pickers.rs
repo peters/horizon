@@ -87,7 +87,21 @@ impl HorizonApp {
             .iter()
             .find(|(_, rect)| rect.contains(screen_pos))
             .map(|(id, _)| *id);
-        self.pending_preset_pick = Some((hit_workspace, [canvas_pos.x, canvas_pos.y], std::time::Instant::now()));
+        let target = (hit_workspace, [canvas_pos.x, canvas_pos.y]);
+        #[cfg(feature = "cloud-workspaces")]
+        let target = self
+            .fullscreen_cloud_target()
+            .or_else(|| {
+                self.cloud_prototype.groups.0.iter().find_map(|group| {
+                    let (min, max) = group.bounds();
+                    (!group.collapsed && egui::Rect::from_min_max(min.into(), max.into()).contains(canvas_pos))
+                        .then(|| self.board.workspace_id_by_local_id(&group.workspace))
+                        .flatten()
+                        .map(|workspace| (workspace, [canvas_pos.x, canvas_pos.y]))
+                })
+            })
+            .map_or(target, |(workspace, position)| (Some(workspace), position));
+        self.pending_preset_pick = Some((target.0, target.1, std::time::Instant::now()));
     }
 
     pub(in crate::app) fn render_preset_picker(&mut self, ctx: &Context) {

@@ -16,6 +16,7 @@ const VIEWPORT_FRAME_TOLERANCE: f32 = 4.0;
 const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 12.0;
 
 mod chrome;
+mod file_chooser;
 mod ime;
 mod input;
 mod render;
@@ -29,6 +30,7 @@ use horizon_core::{AppShortcuts, Panel};
 use std::{sync::Arc, time::Duration};
 
 /// Per-panel UI state that must survive across frames.
+#[allow(clippy::struct_excessive_bools)] // independent per-concern panel flags
 #[derive(Default)]
 pub struct BrowserUiState {
     /// Backend whose session owns every cache below. A backend switch creates
@@ -85,9 +87,18 @@ pub struct BrowserUiState {
     select_popup: Option<select_popup::SelectPopupUi>,
     /// True after a blur dismiss was queued so we do not spam Escape.
     select_popup_dismissed: bool,
+    file_picker: Option<file_chooser::FilePicker>,
 }
 
 impl BrowserUiState {
+    pub(crate) fn show_file_chooser(
+        &mut self,
+        ctx: &egui::Context,
+        panel: horizon_core::PanelId,
+        handle: &horizon_core::browser::file_chooser::FileChooserHandle,
+    ) -> bool {
+        file_chooser::show(ctx, egui::Id::new(panel), handle, &mut self.file_picker)
+    }
     /// Reset render and input caches when a different backend takes ownership
     /// of this panel. Returns whether a reset occurred.
     fn synchronize_backend(&mut self, backend: BackendKind) -> bool {
@@ -151,21 +162,7 @@ impl<'a> BrowserView<'a> {
         }
         let state = &mut *self.ui_state;
         let panel_id = self.panel.id;
-        if let Some(browser) = self.panel.browser() {
-            state.synchronize_backend(browser.backend());
-        }
-        if let Some(browser) = self.panel.browser_mut()
-            && let Some(text) = browser.take_clipboard_text()
-        {
-            ui.ctx().copy_text(text);
-        }
-        if let Some(browser) = self.panel.browser_mut() {
-            if browser.needs_event_waker() {
-                let ctx = ui.ctx().clone();
-                browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
-            }
-            restore_host_focus(ui, state, browser.take_host_focus_request());
-        }
+        prepare_panel(ui, self.panel, state);
 
         let (url_focused, chrome_clicked) = {
             let Some(browser) = self.panel.browser_mut() else {
@@ -183,7 +180,13 @@ impl<'a> BrowserView<'a> {
             state.synchronize_backend(browser.backend());
             render::show_body(ui, panel_id, browser, state, interactive)
         };
-        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
+        let chooser_open = self
+            .panel
+            .browser()
+            .is_some_and(|browser| browser.frame_slot.file_chooser().request().is_some());
+        let chooser_open = chooser_open || ui.memory(|memory| memory.top_modal_layer().is_some());
+        let interactive = interactive && !chooser_open;
+        let window_focused = !chooser_open && ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
             .memory(egui::Memory::focused)
             .is_some_and(|focused| body.keyboard_focus_id != Some(focused));
@@ -259,6 +262,24 @@ impl<'a> BrowserView<'a> {
         // convention as the terminal body); an unconditional request would
         // steal focus from other panels every frame.
         chrome_clicked || body.body_clicked
+    }
+}
+
+fn prepare_panel(ui: &Ui, panel: &mut Panel, state: &mut BrowserUiState) {
+    if let Some(browser) = panel.browser() {
+        state.synchronize_backend(browser.backend());
+    }
+    if let Some(browser) = panel.browser_mut()
+        && let Some(text) = browser.take_clipboard_text()
+    {
+        ui.ctx().copy_text(text);
+    }
+    if let Some(browser) = panel.browser_mut() {
+        if browser.needs_event_waker() {
+            let ctx = ui.ctx().clone();
+            browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
+        }
+        restore_host_focus(ui, state, browser.take_host_focus_request());
     }
 }
 

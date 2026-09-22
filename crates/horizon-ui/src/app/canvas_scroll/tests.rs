@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use super::super::HorizonApp;
 use super::super::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use super::{ScrollGesture, route_canvas_scroll};
+use super::{ScrollGesture, ScrollTarget, route_canvas_scroll};
 use crate::test_egui::DiscardTextures;
 
 /// The gesture only needs to know whether a panel is under the pointer, so the
@@ -12,8 +12,12 @@ use crate::test_egui::DiscardTextures;
 const PANEL: horizon_core::PanelId = horizon_core::PanelId(1);
 const OTHER_PANEL: horizon_core::PanelId = horizon_core::PanelId(2);
 
-fn panel(on_canvas: bool) -> Option<horizon_core::PanelId> {
-    (!on_canvas).then_some(PANEL)
+fn panel(on_canvas: bool) -> ScrollTarget {
+    if on_canvas {
+        ScrollTarget::Canvas
+    } else {
+        ScrollTarget::Panel(PANEL)
+    }
 }
 
 fn assert_offset(actual: [f32; 2], expected: [f32; 2]) {
@@ -438,20 +442,25 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
     // Latches to PANEL, which can still scroll.
     assert!(
         !gesture
-            .route(&input(1.0), Some(PANEL), true, &only_other_is_exhausted)
+            .route(&input(1.0), ScrollTarget::Panel(PANEL), true, &only_other_is_exhausted)
             .pans_canvas
     );
     // The pointer moves over OTHER_PANEL, which is exhausted. The owner still
     // is not, so the gesture stays with its panel.
     assert!(
         !gesture
-            .route(&input(1.016), Some(OTHER_PANEL), true, &only_other_is_exhausted)
+            .route(
+                &input(1.016),
+                ScrollTarget::Panel(OTHER_PANEL),
+                true,
+                &only_other_is_exhausted
+            )
             .pans_canvas
     );
     // Once the owner itself is exhausted, the gesture chains.
     assert!(
         gesture
-            .route(&input(1.032), Some(OTHER_PANEL), true, &|_, _, _| true)
+            .route(&input(1.032), ScrollTarget::Panel(OTHER_PANEL), true, &|_, _, _| true)
             .pans_canvas
     );
 }
@@ -501,8 +510,28 @@ fn coalesced_opposing_wheels_are_judged_one_event_at_a_time() {
     );
     assert_eq!(input.smooth_scroll_delta, Vec2::ZERO);
     let mut gesture = ScrollGesture::default();
-    let routing = gesture.route(&input, Some(PANEL), true, &mid_history);
+    let routing = gesture.route(&input, ScrollTarget::Panel(PANEL), true, &mid_history);
     assert!(!routing.pans_canvas);
     assert!(routing.claimed_wheels.is_empty());
     assert_eq!(gesture.canvas_owned, Some(false));
+}
+
+#[test]
+fn a_surface_without_a_scroll_extent_keeps_its_gesture() {
+    // A canvas-drawn surface such as a cloud runtime card has no panel to ask
+    // about its extent, so a gesture it starts can never chain to the canvas.
+    let mut gesture = ScrollGesture::default();
+    let input = egui::InputState::default().begin_pass(
+        RawInput {
+            time: Some(1.0),
+            events: vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)],
+            ..RawInput::default()
+        },
+        false,
+        1.0,
+        egui::InputOptions::default(),
+    );
+    let routing = gesture.route(&input, ScrollTarget::Surface, true, &|_, _, _| true);
+    assert!(!routing.pans_canvas);
+    assert!(routing.claimed_wheels.is_empty());
 }

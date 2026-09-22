@@ -6,10 +6,10 @@ use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::canvas_drag::canvas_drag_delta;
-use super::super::canvas_scroll::route_canvas_scroll;
+use super::super::canvas_scroll::{ScrollTarget, route_canvas_scroll};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
-    shortcut_pressed, take_captured_clipboard_event,
+    shortcut_key_may_emit_text, shortcut_pressed, take_captured_clipboard_event,
 };
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::support::fullscreen_panel_is_renderable;
@@ -136,7 +136,7 @@ impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
         // trigger the shortcut it happens to match.
-        if super::super::shortcuts::hotkey_capture_active(ctx) {
+        if self.host_dialog_open() || super::super::shortcuts::hotkey_capture_active(ctx) {
             return;
         }
         let (panel_toggle, window_toggle, exit_fullscreen) = ctx.input(|input| {
@@ -148,15 +148,22 @@ impl HorizonApp {
         });
 
         if window_toggle {
+            self.consume_navigation_key(ctx, self.shortcuts.fullscreen_window);
             let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
         } else if panel_toggle {
+            self.consume_navigation_key(ctx, self.shortcuts.fullscreen_panel);
             self.fullscreen_panel = if self.fullscreen_panel.is_some() {
                 None
             } else {
                 self.board.focused
             };
-        } else if exit_fullscreen && self.fullscreen_panel.is_some() && !self.speech_escape_cancelled {
+        } else if exit_fullscreen
+            && self.fullscreen_panel.is_some()
+            && self.command_palette.is_none()
+            && !self.speech_escape_cancelled
+        {
+            self.consume_navigation_key(ctx, self.shortcuts.exit_fullscreen_panel);
             self.fullscreen_panel = None;
         }
 
@@ -179,6 +186,11 @@ impl HorizonApp {
         canvas_rect: Rect,
         visible_workspace: Option<WorkspaceId>,
     ) {
+        if self.browser_file_chooser_open() {
+            self.terminal_keyboard_events.clear();
+            self.frame_keyboard_events.remove(&ctx.viewport_id());
+            return;
+        }
         let (
             events,
             pointer_position,
@@ -249,7 +261,7 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, None, false, |_, _, _| false);
+            route_canvas_scroll(ctx, ScrollTarget::Canvas, false, |_, _, _| false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
@@ -277,9 +289,20 @@ impl HorizonApp {
                     .map(|(id, _)| *id)
             })
         });
+        // Cloud runtime cards paint after the panels, so they win an overlap.
+        #[cfg(feature = "cloud-workspaces")]
+        let over_cloud_runtime =
+            pointer_position.is_some_and(|position| self.pointer_over_cloud_runtime(ctx, position));
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let over_cloud_runtime = false;
+        let scroll_target = if over_cloud_runtime {
+            ScrollTarget::Surface
+        } else {
+            panel_under_pointer.map_or(ScrollTarget::Canvas, ScrollTarget::Panel)
+        };
         let scroll_routing = route_canvas_scroll(
             ctx,
-            panel_under_pointer,
+            scroll_target,
             pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
             |panel, delta, wheel_modifiers| self.panel_scroll_exhausted(panel, delta, wheel_modifiers.shift),
         );
@@ -694,17 +717,6 @@ fn arm_correlated_shift_text(binding: horizon_core::ShortcutBinding, pending: &m
     if binding.modifiers.shift() && shortcut_key_may_emit_text(binding.key) {
         *pending = true;
     }
-}
-
-fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
-    matches!(
-        key,
-        horizon_core::ShortcutKey::Letter(_)
-            | horizon_core::ShortcutKey::Digit(_)
-            | horizon_core::ShortcutKey::Comma
-            | horizon_core::ShortcutKey::Minus
-            | horizon_core::ShortcutKey::Plus
-    )
 }
 
 /// egui reports the `+`/`=` keycap as `Plus` on press but `Equals` on

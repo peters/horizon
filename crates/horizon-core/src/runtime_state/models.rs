@@ -196,6 +196,8 @@ impl WorkspaceState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PanelState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub local_id: String,
     #[serde(
         default,
@@ -325,6 +327,7 @@ impl PanelState {
                 cwd,
                 ssh_connection,
             }),
+            device_identity: None,
             editor_content: None,
             browser_profile: None,
             browser_url: None,
@@ -353,6 +356,7 @@ impl PanelState {
             self.command.clone()
         };
         PanelOptions {
+            device_identity: self.device_identity.clone(),
             name: if self.name.is_empty() {
                 None
             } else {
@@ -386,6 +390,8 @@ impl PanelState {
                 .as_ref()
                 .and_then(|profile| profile.remote_target.clone()),
             transcript_root: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_connection: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
         }
@@ -412,6 +418,7 @@ impl Default for PanelState {
             size: None,
             session_binding: None,
             template: None,
+            device_identity: None,
             editor_content: None,
             browser_profile: None,
             browser_url: None,

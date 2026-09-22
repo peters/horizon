@@ -9,6 +9,9 @@ description.workspace = true
 repository.workspace = true
 
 [features]
+default = ["cloud-workspaces"]
+cloud-workspaces = ["horizon-core/cloud-workspaces"]
+cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
 # Opt-in speech input (mic button + push-to-talk hotkey). CPU-only inference
 # by default; add one of the GPU variants below to compile a GPU backend in.
@@ -49,7 +52,7 @@ arboard.workspace = true
 tokio = { workspace = true, features = ["net", "sync"] }
 # Keep the Git tag here: Dependabot's workspace updater only updates versions,
 # so inheriting this pin produces lockfile-only bumps that fail with --locked.
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.61" }
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.62" }
 transcribe-cpp = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 

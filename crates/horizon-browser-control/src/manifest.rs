@@ -131,6 +131,11 @@ pub struct BrowserManifest {
     /// target before the panel became ready. Absent for a local browser.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_device: Option<String>,
+    /// Driver-confirmed remote file-transfer support; absent on older hosts.
+    #[serde(default)]
+    pub remote_file_upload: bool,
+    #[serde(default)]
+    pub file_chooser: horizon_browser::FileChooserStatus,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
     /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
@@ -734,6 +739,8 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.backend = state.backend;
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
+            manifest.remote_file_upload = state.remote_file_upload;
+            manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -751,6 +758,8 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.backend = state.backend;
             manifest.remote_target.clone_from(&state.remote_target);
             manifest.remote_device.clone_from(&state.remote_device);
+            manifest.remote_file_upload = state.remote_file_upload;
+            manifest.file_chooser = state.file_chooser;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -923,13 +932,15 @@ mod tests {
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    fn test_root() -> PathBuf {
+    /// The returned guard removes the directory when the test ends; bind it
+    /// for the whole test rather than letting it drop at the end of the
+    /// statement.
+    fn test_root() -> tempfile::TempDir {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("horizon-browser-mani{}", std::process::id()))
-            .join(format!("t{n}"));
-        let _ = std::fs::create_dir_all(&dir);
-        dir
+        tempfile::Builder::new()
+            .prefix(&format!("horizon-browser-mani-t{n}-"))
+            .tempdir()
+            .expect("create temp root")
     }
 
     fn sample(id: &str) -> BrowserManifest {
@@ -938,6 +949,8 @@ mod tests {
             backend: horizon_browser::BackendKind::ChromiumCdp,
             remote_target: None,
             remote_device: None,
+            remote_file_upload: false,
+            file_chooser: horizon_browser::FileChooserStatus::Unsupported,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),
@@ -958,7 +971,8 @@ mod tests {
 
     #[test]
     fn write_read_roundtrip() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "abc-123");
         let m = sample("abc-123");
         write_at(&path, &m).unwrap();
@@ -972,7 +986,8 @@ mod tests {
 
     #[test]
     fn teardown_removal_reuses_an_unlocked_coordination_file() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "orphaned-lock");
         write_at(&path, &sample("orphaned-lock")).unwrap();
         let lock_path = path.with_extension("json.lock");
@@ -987,7 +1002,8 @@ mod tests {
 
     #[test]
     fn teardown_removal_honors_the_callers_lock_deadline() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "bounded-removal");
         write_at(&path, &sample("bounded-removal")).unwrap();
         let lock = ManifestLock::acquire(&path).unwrap();
@@ -1005,7 +1021,8 @@ mod tests {
 
     #[test]
     fn path_is_sanitized() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "../evil");
         assert!(path.starts_with(&root));
         assert!(!path.to_string_lossy().contains(".."));
@@ -1015,7 +1032,8 @@ mod tests {
 
     #[test]
     fn distinct_unsafe_ids_have_distinct_manifest_paths() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
 
         assert_ne!(
             manifest_path_for_root(&root, "a/b"),
@@ -1031,7 +1049,8 @@ mod tests {
 
     #[test]
     fn unsafe_ids_list_as_the_original_id_and_reopen() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let manifest_dir = root.join("runtime").join("browsers");
         let original_id = "../unsafe panel";
         let path = manifest_path_for_root(&root, original_id);
@@ -1049,7 +1068,8 @@ mod tests {
 
     #[test]
     fn list_ignores_a_manifest_with_a_mismatched_filename() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let manifest_dir = root.join("runtime").join("browsers");
         let path = manifest_dir.join("wrong-id.json");
         write_at(&path, &sample("actual-id")).unwrap();
@@ -1060,7 +1080,8 @@ mod tests {
 
     #[test]
     fn owner_ttl_expires() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "p1");
         let mut m = sample("p1");
         let now = 1_000_000i64;
@@ -1094,7 +1115,8 @@ mod tests {
 
     #[test]
     fn concurrent_updates_preserve_independent_fields() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "race");
         write_at(&path, &sample("race")).unwrap();
 
@@ -1127,7 +1149,8 @@ mod tests {
 
     #[test]
     fn update_cannot_recreate_a_manifest_removed_while_waiting_for_its_lock() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "teardown-race");
         write_at(&path, &sample("teardown-race")).unwrap();
         let lock = ManifestLock::acquire(&path).unwrap();
@@ -1151,7 +1174,8 @@ mod tests {
 
     #[test]
     fn driver_initialization_is_the_explicit_create_boundary() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "initialize");
 
         let manifest = initialize_at(&path, "initialize", None, |manifest| {
@@ -1165,7 +1189,8 @@ mod tests {
 
     #[test]
     fn driver_lifetime_cleans_stale_and_new_manifests() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "lifetime");
         write_at(&path, &sample("lifetime")).unwrap();
 
@@ -1180,7 +1205,8 @@ mod tests {
 
     #[test]
     fn removing_a_missing_manifest_initializes_its_coordination_directory() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "missing");
 
         remove_at(&path).unwrap();
@@ -1192,7 +1218,8 @@ mod tests {
 
     #[test]
     fn handoff_lifecycle() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "p2");
         write_at(&path, &sample("p2")).unwrap();
         update_at(&path, "p2", |manifest| {
@@ -1220,7 +1247,8 @@ mod tests {
 
     #[test]
     fn a_superseded_driver_cannot_touch_or_remove_an_adopted_manifest() {
-        let root = test_root();
+        let root_dir = test_root();
+        let root = root_dir.path().to_path_buf();
         let path = manifest_path_for_root(&root, "adopted");
         let mut adopted = sample("adopted");
         adopted.host = Some("host-b".to_string());

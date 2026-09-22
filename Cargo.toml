@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/horizon-cloud-worker",
+    "crates/horizon-cloud",
     "crates/horizon-device",
     "crates/horizon-device-vnc",
     "crates/horizon-browser",
@@ -33,7 +35,7 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
-vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "43848a7baa39f852beaf52b28eeb58f7d56ad669" }
+vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "54b7faf0e58206d009ec681516f6a7e202155be4" }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
@@ -54,6 +56,8 @@ png = "0.18.1"
 # CI and developer machines do not need NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 base64 = "0.23.1"
+# Selenium remote file transfer uses a one-file ZIP envelope.
+zip = { version = "8.6.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -70,6 +74,8 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Used by the macOS keychain adapter to classify locked-keychain OSStatus values.
 security-framework = "3.7.0"
 windows-native-keyring-store = "1.1.0"
+same-file = "1.0"
+mime_guess = "2.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }

@@ -33,6 +33,19 @@ impl Driver {
         outcome.result.map_err(|error| error.to_string())
     }
 
+    pub(super) fn poll_bidi_events(&mut self, slot: &crate::frames::FrameSlot, events: &BrowserEventSender) -> bool {
+        if let Err(error) = self.drain_bidi_events(events) {
+            tracing::warn!(backend = ?self.config.browser.backend, "BiDi event pump failed: {error}");
+            if self.firefox_bidi() {
+                let _ = events.send(BrowserEvent::Warning(format!("Firefox BiDi disconnected: {error}")));
+                return false;
+            }
+            self.disable_optional_bidi(slot, events);
+        }
+        self.tick_file_chooser(events);
+        true
+    }
+
     pub(super) fn drain_bidi_events(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
         let Some(link) = self.bidi.as_mut() else {
             return Ok(());
@@ -59,7 +72,7 @@ impl Driver {
             return;
         }
         self.forget_completed_http_auth(event);
-        if self.handle_network_bidi_event(event) {
+        if self.handle_file_chooser_event(event, event_tx) || self.handle_network_bidi_event(event) {
             return;
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();

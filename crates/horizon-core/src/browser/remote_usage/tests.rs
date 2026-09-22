@@ -1,4 +1,5 @@
 use super::*;
+use horizon_browser::remote::RemoteAdapterKind;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 
@@ -129,7 +130,7 @@ fn errors_keep_the_last_sample_and_disconnected_workers_recover() {
         ..ProviderUsageMonitor::default()
     };
     let fetched_at = Instant::now()
-        .checked_sub(Duration::from_secs(120))
+        .checked_sub(Duration::from_mins(2))
         .expect("earlier fetch");
     sender.send(Ok((usage, fetched_at))).expect("success");
     monitor.poll_pending();

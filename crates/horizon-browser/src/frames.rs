@@ -142,6 +142,7 @@ pub struct FrameSlotInner {
 /// Lock-guarded handoff of the newest decoded frame.
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlot {
+    file_chooser: crate::FileChooserHandle,
     viewport_override: Arc<std::sync::Mutex<Option<[u32; 2]>>>,
     inner: Arc<std::sync::Mutex<FrameSlotInner>>,
     notification_pending: Arc<AtomicBool>,
@@ -160,6 +161,11 @@ pub enum TeachObservation {
 }
 
 impl FrameSlot {
+    #[must_use]
+    pub fn file_chooser(&self) -> &crate::FileChooserHandle {
+        &self.file_chooser
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -395,6 +401,7 @@ impl FrameSlot {
     /// Drop the stored frame (e.g. when the session stops) so the UI falls
     /// back to its placeholder instead of showing stale content.
     pub fn clear(&self) {
+        self.file_chooser.reset();
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(data) = inner.data.take() {
             retain_frame_buffer(&mut inner, data);

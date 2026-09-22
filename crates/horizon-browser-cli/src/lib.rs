@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use rmcp::{
     ClientHandler, ServiceExt as _,
-    model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation},
+    model::{CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -206,8 +206,8 @@ struct ActionWaitStopped {
 }
 
 impl ClientHandler for PlanClient {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("horizon-browser-cli", env!("CARGO_PKG_VERSION")),
         )

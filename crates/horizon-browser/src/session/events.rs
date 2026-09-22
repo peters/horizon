@@ -203,9 +203,11 @@ impl DriverState {
             return;
         }
         match event.method {
+            "Page.fileChooserOpened" | "Page.frameDetached" => self.handle_file_chooser_event(&event, event_tx),
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
                     self.attach_http_auth_iframe(link, event_tx, frame_slot, &event);
+                    self.attach_file_chooser_iframe(link, event_tx, frame_slot, &event);
                     return;
                 }
                 // Popups and agent-opened tabs must not steal the binding;
@@ -225,6 +227,7 @@ impl DriverState {
                 if let Some(session) = target_event_session_id(event.params, event.session_id) {
                     self.forget_http_auth_session(session);
                 }
+                self.retire_file_chooser_session(&event, event_tx);
                 self.note_clipboard_target_detachment(&event);
                 if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
                     self.retire_http_auth_session(link);
@@ -260,12 +263,10 @@ impl DriverState {
                     self.write_manifest(true);
                     // The page is gone (tab closed by another CDP client,
                     // navigation to a new target, …). Re-attach has
-                    // nothing to bind to: surface a retryable error
-                    // instead of silently ignoring input on a frozen frame.
+                    // nothing to bind to: end the driver and its page instead
+                    // of keeping an unusable panel and profile alive.
                     frame_slot.clear();
-                    let _ = event_tx.send(BrowserEvent::Warning(
-                        "the page target was destroyed; retry to reattach".to_string(),
-                    ));
+                    let _ = event_tx.send(BrowserEvent::Warning("the page target was destroyed".to_string()));
                 }
             }
             "Target.targetInfoChanged" => {
@@ -332,11 +333,19 @@ impl DriverState {
         self.pending_reattach = false;
         self.reset_runtime_enable_state();
         self.manifest_dirty = true;
+        self.stop_requested.store(true, std::sync::atomic::Ordering::Release);
         true
     }
 
     fn handle_frame_navigated(&mut self, event_tx: &BrowserEventSender, event: CdpEvent<'_>, on_page_session: bool) {
         if !on_page_session {
+            if event
+                .session_id
+                .is_some_and(|session| self.file_chooser_session_live(session))
+                && let Some(frame) = event.params.pointer("/frame/id").and_then(serde_json::Value::as_str)
+            {
+                self.invalidate_file_chooser_frame(Some(frame), event_tx);
+            }
             return;
         }
         // Subframe (iframe) navigations carry `frame.parentId`; only the top
@@ -345,10 +354,15 @@ impl DriverState {
             return;
         };
         if frame.get("parentId").is_some() {
+            if let Some(id) = frame.get("id").and_then(serde_json::Value::as_str) {
+                self.invalidate_file_chooser_frame(Some(id), event_tx);
+            }
             return;
         }
+        self.invalidate_file_chooser_frame(None, event_tx);
         self.invalidate_scrollbar_layout(event_tx);
         self.semantic.invalidate();
+        self.config.frame_slot.file_chooser().invalidate();
         self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(unreachable_url) = frame
@@ -430,6 +444,7 @@ impl DriverState {
         event: CdpEvent<'_>,
         on_page_session: bool,
     ) {
+        self.handle_file_chooser_event(&event, event_tx);
         if !on_page_session {
             return;
         }
@@ -613,6 +628,111 @@ mod tests {
     }
 
     #[test]
+    fn native_file_dialog_events_require_a_registered_host_consumer() {
+        let mut state = driver_state();
+        state.session_id = Some("session".into());
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let params = serde_json::json!({"backendNodeId":1,"frameId":"root"});
+        let event = CdpEvent {
+            method: "Page.fileChooserOpened",
+            session_id: Some("session"),
+            params: &params,
+        };
+        state.manifest_dirty = false;
+        state.handle_file_chooser_event(&event, &events);
+        assert!(!state.manifest_dirty);
+        assert!(!state.config.frame_slot.file_chooser().status().supported());
+        state.config.frame_slot.file_chooser().register_consumer();
+        state.handle_file_chooser_event(&event, &events);
+        assert!(state.manifest_dirty);
+    }
+
+    #[test]
+    fn iframe_navigation_retires_only_its_chooser_and_publishes_replacement_invalidation() {
+        for session in ["session", "child-session"] {
+            let mut state = driver_state();
+            state.clipboard.iframe_sessions.insert("child-session".into());
+            state.session_id = Some("session".into());
+            assert!(state.file_chooser_session_live(session));
+            assert!(!state.file_chooser_session_live("unrelated"));
+            let (tx, _rx) = mpsc::channel();
+            let events = BrowserEventSender {
+                tx,
+                wake: BrowserEventWake::default(),
+                committed_url: CommittedUrl::default(),
+            };
+            let handle = state.config.frame_slot.file_chooser().clone();
+            handle.enable();
+            handle.open(false, String::new(), "https://files.test".into());
+            state.manifest_dirty = false;
+            state.note_file_chooser(&CdpEvent {
+                method: "Page.fileChooserOpened",
+                session_id: Some(session),
+                params: &serde_json::json!({"backendNodeId":1,"frameId":"child"}),
+            });
+            assert!(state.manifest_dirty);
+            assert!(!handle.status().pending());
+            handle.open(false, String::new(), "https://files.test".into());
+            state.manifest_dirty = false;
+            for frame in ["sibling", "child"] {
+                state.handle_frame_navigated(
+                    &events,
+                    CdpEvent {
+                        method: "Page.frameNavigated",
+                        session_id: Some(session),
+                        params: &serde_json::json!({"frame":{"id":frame,"parentId":"root","url":"https://files.test/new"}}),
+                    },
+                    session == "session",
+                );
+                assert_eq!(handle.status().pending(), frame == "sibling");
+            }
+            assert!(state.manifest_dirty);
+            assert!(state.url.is_empty());
+            state.note_file_chooser(&CdpEvent {
+                method: "Page.fileChooserOpened",
+                session_id: Some(session),
+                params: &serde_json::json!({"backendNodeId":2,"frameId":"child"}),
+            });
+            handle.open(false, String::new(), "https://files.test".into());
+            state.manifest_dirty = false;
+            for frame in ["sibling", "child"] {
+                state.handle_same_document_navigation(
+                    &events,
+                    CdpEvent {
+                        method: "Page.navigatedWithinDocument",
+                        session_id: Some(session),
+                        params: &serde_json::json!({"frameId":frame,"url":"https://files.test/#changed"}),
+                    },
+                    session == "session",
+                );
+                assert_eq!(handle.status().pending(), frame == "sibling");
+                assert_eq!(state.manifest_dirty, frame == "child");
+            }
+            assert!(state.url.is_empty());
+            state.note_file_chooser(&CdpEvent {
+                method: "Page.fileChooserOpened",
+                session_id: Some(session),
+                params: &serde_json::json!({"backendNodeId":2,"frameId":"child"}),
+            });
+            handle.open(false, String::new(), "https://files.test".into());
+            state.retire_file_chooser_session(
+                &CdpEvent {
+                    method: "Target.detachedFromTarget",
+                    session_id: Some("session"),
+                    params: &serde_json::json!({"sessionId":session}),
+                },
+                &events,
+            );
+            assert!(!handle.status().pending());
+        }
+    }
+
+    #[test]
     fn target_title_updates_only_match_the_bound_page() {
         let params = serde_json::json!({
             "targetInfo": { "targetId": "bound", "type": "page", "title": "Updated" }
@@ -672,6 +792,7 @@ mod tests {
         ));
 
         assert!(!state.forget_destroyed_bound_target(Some("popup"), &events));
+        assert!(!state.stop_requested.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(state.target_id.as_deref(), Some("bound"));
         assert!(!state.manifest_dirty);
         assert_eq!(
@@ -682,6 +803,7 @@ mod tests {
         );
 
         assert!(state.forget_destroyed_bound_target(Some("bound"), &events));
+        assert!(state.stop_requested.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(state.target_id, None);
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);

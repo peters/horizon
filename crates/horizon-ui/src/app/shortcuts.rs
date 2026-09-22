@@ -3,6 +3,17 @@ use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 const CAPTURED_CLIPBOARD_EVENT_ID: &str = "speech_captured_clipboard_event";
 
+pub(crate) fn shortcut_key_may_emit_text(key: horizon_core::ShortcutKey) -> bool {
+    matches!(
+        key,
+        horizon_core::ShortcutKey::Letter(_)
+            | horizon_core::ShortcutKey::Digit(_)
+            | horizon_core::ShortcutKey::Comma
+            | horizon_core::ShortcutKey::Minus
+            | horizon_core::ShortcutKey::Plus
+    )
+}
+
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
     shortcut_pressed_in_events(&input.events, binding)
 }

@@ -6,6 +6,19 @@ use crate::input::TerminalInputEvent;
 // X11 scroll events have no start/end phases. An idle gap separates their gestures.
 const SCROLL_GESTURE_IDLE_SECONDS: f64 = 0.15;
 
+/// The surface under the pointer, which a scroll gesture starting now latches
+/// onto.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScrollTarget {
+    Canvas,
+    /// A board panel, which hands its gesture on to the canvas once it
+    /// reaches its scroll extent.
+    Panel(PanelId),
+    /// A canvas-drawn surface with no known scroll extent, such as a cloud
+    /// runtime card. It keeps every gesture it starts.
+    Surface,
+}
+
 #[derive(Clone, Default)]
 struct ScrollGesture {
     canvas_owned: Option<bool>,
@@ -24,17 +37,20 @@ pub(super) struct ScrollRouting {
 }
 
 impl ScrollGesture {
-    /// Bind the gesture to the surface it started over. A gesture with no
-    /// panel under the pointer belongs to the canvas outright.
-    fn latch(&mut self, panel: Option<PanelId>) {
-        self.canvas_owned = Some(panel.is_none());
-        self.owner = panel;
+    /// Bind the gesture to the surface it started over. A gesture that starts
+    /// over empty canvas belongs to the canvas outright.
+    fn latch(&mut self, target: ScrollTarget) {
+        self.canvas_owned = Some(target == ScrollTarget::Canvas);
+        self.owner = match target {
+            ScrollTarget::Panel(panel) => Some(panel),
+            ScrollTarget::Canvas | ScrollTarget::Surface => None,
+        };
     }
 
     fn route(
         &mut self,
         input: &InputState,
-        panel: Option<PanelId>,
+        target: ScrollTarget,
         allowed: bool,
         exhausted: &impl Fn(PanelId, Vec2, Modifiers) -> bool,
     ) -> ScrollRouting {
@@ -61,7 +77,7 @@ impl ScrollGesture {
         {
             match phase {
                 TouchPhase::Start => {
-                    self.latch(panel);
+                    self.latch(target);
                     self.last_motion_at = input.time;
                     self.has_touch_phase = true;
                 }
@@ -69,7 +85,7 @@ impl ScrollGesture {
                     if self.canvas_owned.is_none()
                         || (!self.has_touch_phase && input.time - self.last_motion_at > SCROLL_GESTURE_IDLE_SECONDS)
                     {
-                        self.latch(panel);
+                        self.latch(target);
                     }
                     self.last_motion_at = input.time;
                 }
@@ -105,19 +121,19 @@ impl ScrollGesture {
     }
 }
 
-/// Route this frame's scroll. `panel` is the panel under the pointer, used only
-/// when a gesture latches; `exhausted` reports whether a panel can still absorb
-/// one wheel event's delta and modifiers, and is always asked about the
+/// Route this frame's scroll. `target` is the surface under the pointer, used
+/// only when a gesture latches; `exhausted` reports whether a panel can still
+/// absorb one wheel event's delta and modifiers, and is always asked about the
 /// gesture's own owner.
 pub(super) fn route_canvas_scroll(
     ctx: &Context,
-    panel: Option<PanelId>,
+    target: ScrollTarget,
     allowed: bool,
     exhausted: impl Fn(PanelId, Vec2, Modifiers) -> bool,
 ) -> ScrollRouting {
     let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
-    let routing = ctx.input(|input| gesture.route(input, panel, allowed, &exhausted));
+    let routing = ctx.input(|input| gesture.route(input, target, allowed, &exhausted));
     ctx.data_mut(|data| data.insert_temp(id, gesture));
     routing
 }

@@ -9,7 +9,7 @@ use rmcp::{
     },
     model::{
         CallToolRequestParams, CallToolResponse, Implementation, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
     tool, tool_router,
@@ -17,11 +17,11 @@ use rmcp::{
 
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
-    ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CloseInput, CloseOutput, CreateInput,
-    CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, HttpAuthInput, HttpAuthOutput,
-    NavigateInput, NavigateOutput, NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput,
-    NodesOutput, PanelInput, QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput, VideoInput,
-    VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
+    ActInput, ActKind, ActionOutput, AttachedFileOutput, AuditInput, AuditOutput, BrowserListOutput, CloseInput,
+    CloseOutput, CreateInput, CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, HttpAuthInput,
+    HttpAuthOutput, NavigateInput, NavigateOutput, NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput,
+    NodeOutput, NodesOutput, PanelInput, QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput,
+    VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -44,6 +44,7 @@ impl HorizonBrowserMcp {
     }
 
     fn new(controller: BrowserController) -> Self {
+        crate::controller::spawn_attachment_janitor();
         Self {
             controller,
             network_watch: NetworkWatchState::default(),
@@ -56,7 +57,7 @@ impl HorizonBrowserMcp {
 impl HorizonBrowserMcp {
     #[tool(
         name = "device_panel",
-        description = "Manage read-only native Device viewers in the calling agent's current Horizon workspace. Operations: create(endpoint), list, inspect(panel_id), visibility(panel_id,visible), reconnect(panel_id), close(panel_id). Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Visible means host presentation state; image_displayed describes the latest completed UI frame. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
+        description = "Manage read-only native Device viewers in the calling agent's current Horizon workspace. Operations: create(endpoint,identity?), list, inspect(panel_id), visibility(panel_id,visible), reveal(panel_id), reconnect(panel_id), close(panel_id). Optional identity contains creator-supplied machine_name, hostname, numeric ip_addresses and tailscale_name, not verified identity. Inspect/list return identity and server details (name and desktop_size); server details are last-observed when disconnected and cleared on reconnect. Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Hidden and off-canvas viewers keep receiving: received_frame_sequence counts worker image updates independently of frame_sequence uploads. Both reset on reconnect; neither is a heartbeat, so an unchanged desktop is not a connection failure. Visible means host presentation state; image_displayed describes the latest completed UI frame. New hosts return diagnostics with decoded frames, sampling pause, frame ages and presentation reason. Static frames alone never prove a stalled stream. Reveal brings an owned viewer into view without reconnecting or stealing keyboard focus; inspect again afterward. Do not ask a human to verify visibility. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
     )]
     async fn device_panel(
         &self,
@@ -88,6 +89,17 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_provider_devices",
+        description = "Discover any browser, OS and device combination currently offered by a configured remote provider account, without allocating a session. Pass provider and optional search words and offset. Returns at most 50 combinations and next_offset; pass a returned target to browser_create with backend omitted. No preconfigured device target is needed. Availability in this catalog is not account entitlement, live capacity or a reservation. The host uses only its configured or explicitly granted credentials; never supply credentials, endpoints or raw capabilities."
+    )]
+    async fn browser_provider_devices(
+        &self,
+        Parameters(input): Parameters<crate::controller::provider_usage::ProviderDevicesInput>,
+    ) -> Result<Json<serde_json::Value>, String> {
+        self.controller.provider_devices(input).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_list",
         description = "List live Horizon browser panels with their safe capabilities. For an agent identity injected by Horizon, only panels in that agent's current workspace are listed; identities from outside Horizon keep unscoped discovery. A panel's visible field is host presentation state, not workspace membership. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
     )]
@@ -98,7 +110,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a reference returned by browser_provider_devices or a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
         // Matches the request normalization: a blank url is no navigation.
@@ -290,10 +302,20 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_act",
-        description = "Click (including trusted double-click with count=2), fill, scroll, reload, go back, or go forward. Prefer a fresh ref from browser_snapshot or browser_query over a selector."
+        description = "Click (including trusted double-click with count=2), fill, scroll, reload, go back, go forward, or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
-        let action = input.build_action()?;
+        // Request shape errors are backend-independent: the builder and the
+        // protocol check run before any backend or panel state is consulted.
+        let action = input
+            .build_action()
+            .map_err(|message| format!("browser action refused (invalid_input): {message}"))?;
+        action
+            .validate()
+            .map_err(|message| format!("browser action refused (invalid_input): {message}"))?;
+        self.controller
+            .validate_attachment_target(&input.panel_id, &action)
+            .map_err(|error| error.to_string())?;
         let action_kind = input.action;
         let receipt = self
             .controller
@@ -301,11 +323,11 @@ impl HorizonBrowserMcp {
             .await
             .map_err(|error| error.to_string())?;
         require_action_completed(action_kind, &receipt.value)?;
-        Ok(Json(ActionOutput {
-            panel_id: input.panel_id,
-            action_id: receipt.action_id,
-            completed: true,
-        }))
+        let mut output = ActionOutput::completed(input.panel_id, receipt.action_id);
+        if let BrowserControlValue::Files { files } = receipt.value {
+            output.files = Some(files.into_iter().map(AttachedFileOutput::from).collect());
+        }
+        Ok(Json(output))
     }
 
     #[tool(
@@ -492,11 +514,11 @@ impl HorizonBrowserMcp {
 }
 
 impl ServerHandler for HorizonBrowserMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel only when its capabilities include handoff. Remote sessions do not support manual steering and return unsupported_backend; report that limitation instead of requesting a handoff. Use the default human-wait timeout on supported local sessions. Keep the turn active and await any yielded invocation until Done — hand back to agent; a final waiting message cannot resume on hand-back. On handoff timeout, inspect browser_panel: renew the blocking wait with resume_request_id from the timeout and the default timeout while handoff_pending is true; otherwise resume from a fresh snapshot if handoff completed, or report closure, lost ownership, cancellation, or connection failure. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Use browser_provider_usage to inspect shared usage for all configured provider profiles or one named provider, without allocating a session. Usage is informational and does not reserve capacity. If remote capacity remains held after a panel disappears, use browser_remote_allocations list and then reconcile its safe reference. Reconciliation checks only the exact retired allocation at the original provider; uncertain results retain the hold. Inspect each panel's advertised capabilities before requesting navigation, DOM actions, handoff, audit, network, or video capture. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel only when its capabilities include handoff. Remote sessions do not support manual steering and return unsupported_backend; report that limitation instead of requesting a handoff. Use the default human-wait timeout on supported local sessions. Keep the turn active and await any yielded invocation until Done — hand back to agent; a final waiting message cannot resume on hand-back. On handoff timeout, inspect browser_panel: renew the blocking wait with resume_request_id from the timeout and the default timeout while handoff_pending is true; otherwise resume from a fresh snapshot if handoff completed, or report closure, lost ownership, cancellation, or connection failure. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use browser_provider_devices with a provider name and search words to discover any available device/OS/browser combination; pass its returned target to browser_create. Configured target names also remain supported; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Use browser_provider_usage to inspect shared usage for all configured provider profiles or one named provider, without allocating a session. Usage is informational and does not reserve capacity. If remote capacity remains held after a panel disappears, use browser_remote_allocations list and then reconcile its safe reference. Reconciliation checks only the exact retired allocation at the original provider; uncertain results retain the hold. Inspect each panel's advertised capabilities before requesting navigation, DOM actions, handoff, audit, network, or video capture. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. To upload a file, call browser_act set_files on the input[type=file] element itself (browser_query finds it even when a styled button hides it) with absolute host paths under your work root; the result reports the attached names and sizes, BrowserStack desktop and Android sessions transfer them before selection; iOS uploads remain unsupported. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -539,7 +561,11 @@ fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
     if matches!(value, BrowserControlValue::Accepted)
-        || matches!((action, value), (ActKind::Scroll, BrowserControlValue::Json { .. }))
+        || matches!(
+            (action, value),
+            (ActKind::Scroll, BrowserControlValue::Json { .. })
+                | (ActKind::SetFiles, BrowserControlValue::Files { .. })
+        )
     {
         Ok(())
     } else {
@@ -617,6 +643,7 @@ mod tests {
                 "browser_network",
                 "browser_network_watch",
                 "browser_panel",
+                "browser_provider_devices",
                 "browser_provider_usage",
                 "browser_query",
                 "browser_remote_allocations",

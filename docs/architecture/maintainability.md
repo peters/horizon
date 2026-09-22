@@ -26,9 +26,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 ### Native Device panels
 
 - `horizon-core::device` owns the validated local VNC target and panel state;
-  `panel::spawn::device` creates a panel without a PTY. Existing command metadata
+  `panel::spawn::device` creates a panel without a PTY. Creator-supplied identity
+  is normalized in core and persisted with panel state; VNC observations stay
+  connection-local. Existing command metadata
   persists the target. Restored panels require manual reconnect.
-- `horizon-ui::device_widget` owns only read-only presentation. `frame` validates
+- `horizon-ui::device_widget` owns only read-only presentation. `details` renders
+  labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
   worker and a single latest-frame slot. The completed UI pass reconciles root
   and detached viewer visibility; hidden workers pause frame requests and resume
@@ -84,6 +87,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 ### `horizon-browser`
 
+- `file_chooser` owns manual upload requests and answers shared with the host.
+  The CDP and BiDi session leaf modules bind each request to its original input
+  and retire stale requests. `horizon-core::browser::file_chooser` performs bounded
+  directory reads off the render thread; `horizon-ui::browser_widget::file_chooser`
+  presents the host dialog. Public panel metadata reports support and pending
+  selection without exposing selected paths.
 - Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery,
   optional WebM page-pixel recording (`video/`, enabled by `video-capture`), and
   deterministic shutdown. Default builds omit the AV1 encoder; Horizon and its
@@ -263,6 +272,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     host-owned workspace stamp that keeps MCP authorization current
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
+  - `browser_cleanup`: closes ended browser panels on the host polling cadence,
+    after pending creates report their failure; uses the core board's ended-session
+    query and existing close path so remote holds and teardown remain tracked
   - `browser_remote_create`: planning for a create that names a remote target:
     provider, capabilities and credentials resolved before any panel exists,
     typed refusals that carry no value, and the per-provider session limit
@@ -426,3 +438,37 @@ MCP and its owning host. `controller/provider_usage` is the MCP transport bounda
 `app/browser_provider_usage` performs host authorization and dispatch into the
 shared core model. The CLI plan runner invokes the same public tool. Provider API
 and credential logic must not be copied into either transport or UI rendering.
+
+## Cloud workspaces
+
+`horizon-cloud` owns portable repository configuration, typed worker identities,
+RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
+caller supplied. It must not depend on core/UI, terminal, browser, device, Git,
+settings storage or a provider CLI.
+
+`horizon-core::cloud_runtime` coordinates local image preparation, committed source
+transfer, durable deployment/session references and existing OpenSSH transport.
+Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
+separate. `worker_contract` shares capability transport and contract validation
+between local image checks and SSH readiness, including legacy full-image support.
+Disconnecting presentation never terminates compute or remote processes.
+Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
+layout calculations. UI modules render controls, consume progress and attach the
+ordinary panel types; worker/provider operations run outside the render thread.
+
+`horizon-cloud-worker` hosts the existing browser runtime and public MCP queues
+inside one container. The device CLI owns serialized native input and attribution.
+SSH carries presentation; agent tools and tmux remain on the worker. Image build
+scripts and runtime contract examples live in `examples/cloud-worker`.
+
+The default `cloud-workspaces` feature enables operational RunPod clouds.
+`cloud-panel-mock` additionally enables labelled design fixtures; simulated
+providers never authorize allocation. Original fixture details remain in
+[the prototype guide](../prototypes/cloud-panels.md).
+
+Cloud remote-browser deployment uses repository-scoped machine-local grants in
+`cloud_runtime::browser_auth`; portable profiles contain target names and selected
+worker-local ports only. `horizon-browser::remote_config` and `provider_usage`
+share provider adaptation and capacity policy across desktop and worker hosts.
+The worker retains remote allocation recovery and teardown ownership; disconnecting
+its presentation client never releases a hosted device or ends the private tunnel.

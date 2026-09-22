@@ -47,7 +47,18 @@ impl HorizonApp {
         );
         match action {
             PaletteAction::None => {}
-            PaletteAction::Cancelled => self.command_palette = None,
+            PaletteAction::Cancelled => {
+                self.command_palette = None;
+                if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    self.consume_navigation_key(
+                        ctx,
+                        horizon_core::ShortcutBinding::new(
+                            horizon_core::ShortcutModifiers::NONE,
+                            horizon_core::ShortcutKey::Escape,
+                        ),
+                    );
+                }
+            }
             PaletteAction::Execute(cmd) => {
                 self.command_palette = None;
                 self.execute_command(ctx, &cmd);

@@ -28,6 +28,7 @@ mod clipboard;
 mod command_queue;
 mod commands;
 mod events;
+mod file_chooser;
 mod handle;
 mod http_auth;
 mod http_bodies;
@@ -458,6 +459,8 @@ fn run_loop(
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         }
 
+        state.tick_file_chooser(link, event_tx, frame_slot);
+
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).
         state.write_manifest(false);
@@ -572,6 +575,7 @@ struct DriverState {
     screencast_request_id: Option<u64>,
     clipboard: ClipboardState,
     native_select: NativeSelectState,
+    file_chooser: file_chooser::ChooserState,
     url: String,
     title: String,
     initial_navigated: bool,
@@ -646,6 +650,7 @@ impl DriverState {
             screencast_request_id: None,
             clipboard: ClipboardState::default(),
             native_select: NativeSelectState::default(),
+            file_chooser: file_chooser::ChooserState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
             url: String::new(),

@@ -1,0 +1,40 @@
+FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS helpers
+COPY build-worker-tools.sh /build-worker-tools.sh
+RUN bash /build-worker-tools.sh
+COPY collect-helper-notices.py /collect-helper-notices.py
+RUN python3 /collect-helper-notices.py
+FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS browser-packages
+RUN sed -i \
+        -e 's|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/20260922T000000Z|' \
+        -e 's|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/20260922T000000Z|' \
+        -e '/^Signed-By:/a Check-Valid-Until: no' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o APT::Update::Error-Mode=any update && mkdir /packages && cd /packages \
+    && apt-get download chromium=153.0.8010.52-1~deb12u1 chromium-common=153.0.8010.52-1~deb12u1 \
+        chromium-sandbox=153.0.8010.52-1~deb12u1 libjpeg62-turbo=1:2.1.5-2 libdav1d6=1.0.0-2+deb12u1
+FROM node:22-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9 AS agent-runtime
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04@sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6
+COPY --from=helpers /output/ /usr/local/
+COPY --from=helpers /usr/local/cargo /usr/local/cargo
+COPY --from=helpers /usr/local/rustup /usr/local/rustup
+COPY --from=browser-packages /packages/ /tmp/browser-packages/
+COPY --from=agent-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=agent-runtime /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
+COPY --from=agent-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+COPY install-build-tools.sh retain-component-sources.py component-sources.json /usr/local/lib/horizon/
+COPY THIRD-PARTY.md /usr/local/share/licenses/horizon/THIRD-PARTY.md
+ENV RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo \
+    PATH="/usr/local/cargo/bin:${PATH}"
+ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display,video
+RUN bash /usr/local/lib/horizon/install-build-tools.sh gpu
+ENV LANG=C.UTF-8 PATH="${CARGO_HOME}/bin:${PATH}"
+RUN printf 'export RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH="%s"\n' "$PATH" \
+        > /etc/profile.d/horizon-development.sh \
+    && printf 'SetEnv RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH=%s\n' "$PATH" \
+        > /etc/ssh/sshd_config.d/horizon-development.conf
+LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
+    org.opencontainers.image.description="Cloud development environment with isolated workspaces" \
+    io.horizon.worker.contract="1" io.horizon.worker.capabilities="1"
+EXPOSE 22
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/horizon-worker-start"]

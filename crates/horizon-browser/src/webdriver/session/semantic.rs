@@ -6,6 +6,10 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
+use crate::semantic_files::{
+    ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, RESET_FILE_INPUT_FUNCTION, check_attachment_request,
+    local_file_facts, parse_attached_files, parse_file_input_probe, verify_attached,
+};
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
 };
@@ -65,7 +69,7 @@ fn send_keys_through(
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
-    let element = find_element_segment(&post, selector)?;
+    let element = encode_path_segment(&find_element_id(&post, selector)?);
     post(&format!("element/{element}/clear"), &json!({}))?;
     if !text.is_empty() {
         post(&format!("element/{element}/value"), &json!({ "text": text }))?;
@@ -85,6 +89,65 @@ fn send_keys_through(
     Ok(())
 }
 
+/// Attach host files to one already resolved file input through the W3C
+/// Element Send Keys command under `session`: for an
+/// `input[type=file]`, Send Keys takes newline-separated host paths instead
+/// of typing them. Safari may temporarily normalize a wildcard accept hint;
+/// its restoration is attempted even when selection fails.
+fn set_files_through(
+    transport: &dyn ClassicTransport,
+    session: &str,
+    element_id: &str,
+    paths: &[std::path::PathBuf],
+    safari: bool,
+) -> Result<(), String> {
+    let post = |suffix: &str, body: &Value| {
+        transport
+            .post(&format!("{session}/{suffix}"), body)
+            .map_err(|error| error.to_string())
+    };
+    let text = paths
+        .iter()
+        .map(|path| {
+            let text = path.to_string_lossy();
+            if text.contains(['\n', '\r']) {
+                // The separator is the newline; a path carrying one would
+                // split into other uploads.
+                return Err("attachment path contains a line break".to_string());
+            }
+            Ok(text.into_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    let element = encode_path_segment(element_id);
+    let reference = json!({ELEMENT_KEY: element_id});
+    // Safari's native picker handles wildcard hints inconsistently. The full
+    // accept policy has already passed; restore the element after either result.
+    let original_accept = if safari {
+        let response = post(
+            "execute/sync",
+            &json!({
+                "script": "const e = arguments[0], a = e.getAttribute('accept'); if (a !== null && a.includes('*')) { e.removeAttribute('accept'); return a; } return null;",
+                "args": [reference],
+            }),
+        )?;
+        webdriver_value(&response).and_then(Value::as_str).map(str::to_owned)
+    } else {
+        None
+    };
+    let result = post(&format!("element/{element}/value"), &json!({ "text": text }));
+    if let Some(accept) = original_accept {
+        post(
+            "execute/sync",
+            &json!({
+                "script": "const e = arguments[0]; if (!e.hasAttribute('accept')) e.setAttribute('accept', arguments[1]); return null;",
+                "args": [reference, accept],
+            }),
+        )?;
+    }
+    result.map(|_| ())
+}
+
 /// Click the element `selector` matches through the W3C Find Element and
 /// Element Click commands under `session`, so the driver, not a pointer
 /// action aimed at a viewport coordinate, decides where the tap lands. On
@@ -97,7 +160,7 @@ fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
-    let element = find_element_segment(&post, selector)?;
+    let element = encode_path_segment(&find_element_id(&post, selector)?);
     // Element Click may wait for a navigation the element triggers, so it
     // gets the navigation-sized read timeout rather than the command default.
     transport
@@ -110,13 +173,9 @@ fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str
     Ok(())
 }
 
-/// Find Element by CSS selector, returning the reference as one encoded
-/// route segment; a reference that cannot form a route is refused here
-/// rather than on the wire.
-fn find_element_segment(
-    post: &dyn Fn(&str, &Value) -> Result<Value, String>,
-    selector: &str,
-) -> Result<String, String> {
+/// Find Element by CSS selector, returning its raw reference after checking
+/// that it can be encoded as one route segment.
+fn find_element_id(post: &dyn Fn(&str, &Value) -> Result<Value, String>, selector: &str) -> Result<String, String> {
     let found = post("element", &json!({ "using": "css selector", "value": selector }))?;
     let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
     if element.contains(['/', '%', '\\']) || element == "." || element == ".." {
@@ -128,7 +187,7 @@ fn find_element_segment(
             element.len()
         ));
     }
-    Ok(encode_path_segment(element))
+    Ok(element.to_string())
 }
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
@@ -180,6 +239,7 @@ impl Driver {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(target.as_ref(), *delta_x, *delta_y),
+            BrowserControlAction::SetFiles { target, paths, .. } => self.semantic_set_files(target, paths),
             BrowserControlAction::Evaluate { expression } => self.semantic_evaluate(expression),
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(request, *operation, options.clone(), event_tx)
@@ -370,6 +430,76 @@ impl Driver {
         Ok(BrowserControlValue::Accepted)
     }
 
+    /// Transfer staged files when needed, then select them through Element
+    /// Send Keys and verify the page can read the resulting File objects.
+    fn semantic_set_files(
+        &mut self,
+        target: &crate::BrowserTarget,
+        paths: &[std::path::PathBuf],
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        if self.host.is_remote() && self.file_transfer.is_none() {
+            return Err(BrowserControlFailure::new(
+                "unsupported_backend",
+                "this remote platform has no supported file-transfer path; iOS native file pickers are not supported",
+            ));
+        }
+        let selector = self.semantic.resolve(target)?;
+        let expected = local_file_facts(paths)?;
+        let element_id = find_element_id(&|suffix, body| self.classic_post(suffix, body), &selector)
+            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        let probe = self.file_input_value(&element_id, FILE_INPUT_PROBE_FUNCTION)?;
+        check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+        self.capture_teach_fingerprint(None)?;
+        let transferred = match self
+            .file_transfer
+            .map(|transfer| transfer.upload(self.host.transport(), &self.session_id, paths))
+            .transpose()
+        {
+            Err(error) if error.code == "unsupported_backend" => {
+                self.file_transfer = None;
+                self.write_coordination(true);
+                return Err(error);
+            }
+            result => result?,
+        };
+        let paths = transferred.as_deref().unwrap_or(paths);
+        // Classic Send Keys appends to a `multiple` input's selection; the
+        // action replaces it, as the Chromium primitive does.
+        let probe = self.file_input_value(&element_id, FILE_INPUT_PROBE_FUNCTION)?;
+        check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+        check_script_error(&self.file_input_value(&element_id, RESET_FILE_INPUT_FUNCTION)?)?;
+        let result = set_files_through(
+            self.host.transport(),
+            &format!("/session/{}", self.session_id),
+            &element_id,
+            paths,
+            self.config.browser.backend == BackendKind::SafariWebDriver,
+        );
+        self.frames.demand();
+        result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        let readback = self.file_input_value(&element_id, ATTACHED_FILES_FUNCTION)?;
+        let attached = parse_attached_files(&readback)?;
+        verify_attached(&attached, &expected)?;
+        Ok(BrowserControlValue::Files { files: attached })
+    }
+
+    fn file_input_value(&self, element_id: &str, function: &str) -> Result<Value, BrowserControlFailure> {
+        let response = self
+            .classic_post(
+                "execute/sync",
+                &json!({
+                    "script": format!("return ({function})(arguments[0]);"),
+                    "args": [{ELEMENT_KEY: element_id}],
+                }),
+            )
+            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        bounded_control_value(
+            webdriver_value(&response).cloned().ok_or_else(|| {
+                BrowserControlFailure::new("invalid_result", "WebDriver returned no file input value")
+            })?,
+        )
+    }
+
     fn classic_send_keys(&self, selector: &str, text: &str) -> Result<(), String> {
         send_keys_through(
             self.host.transport(),
@@ -516,7 +646,7 @@ mod tests {
 
     use super::super::super::http::HttpError;
     use super::super::super::transport::ClassicTransport;
-    use super::{click_through, element_reference, send_keys_through};
+    use super::{click_through, element_reference, send_keys_through, set_files_through};
 
     /// Answers each command with the next scripted reply and records what
     /// was sent.
@@ -598,6 +728,7 @@ mod tests {
     }
 
     mod fill;
+    mod set_files;
 
     #[test]
     fn a_click_finds_the_element_and_clicks_it_through_the_driver() {

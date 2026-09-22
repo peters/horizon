@@ -145,6 +145,9 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_device_panel_contract(tools: &Value) {
     let device = listed_tool(tools, "device_panel").to_string();
+    for field in ["identity", "machine_name", "hostname", "ip_addresses", "tailscale_name"] {
+        assert!(device.contains(field), "missing Device identity field {field}");
+    }
     for operation in ["create", "list", "inspect", "visibility", "reconnect", "close"] {
         assert!(
             device.contains(operation),
@@ -155,7 +158,8 @@ fn assert_device_panel_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(22));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(23));
+    assert_catalog_contract(tools);
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());
     assert!(usage["inputSchema"]["properties"].get("credentials").is_none());
@@ -373,4 +377,10 @@ fn resize_result_fixture(
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     })
+}
+
+fn assert_catalog_contract(tools: &Value) {
+    let devices = listed_tool(tools, "browser_provider_devices");
+    assert!(devices["inputSchema"]["properties"]["provider"].is_object());
+    assert!(devices["inputSchema"]["properties"].get("credentials").is_none());
 }

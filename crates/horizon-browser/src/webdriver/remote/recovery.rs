@@ -1,4 +1,4 @@
-//! Private exact-allocation recovery; no provider identifiers are serialized.
+//! Exact-allocation recovery; provider identities stay in private host journals.
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::super::remote_http::RemoteHttpClient;
 use super::RemoteReleaseOutcome;
 
+mod journal;
 mod probe;
 use probe::SessionProbe;
 
@@ -22,6 +23,8 @@ pub enum RemoteRecoveryStatus {
     IdentityUnavailable,
     AuthenticationRequired,
     ProviderUnavailable,
+    /// Release is confirmed, but its durable journal commit must be retried.
+    PersistenceUnavailable,
     UnsupportedResponse,
 }
 
@@ -45,6 +48,9 @@ impl RemoteRecoveryStatus {
             }
             Self::ProviderUnavailable => {
                 "The provider gave no trustworthy session result; capacity remains held. Retry when the original provider is available."
+            }
+            Self::PersistenceUnavailable => {
+                "Release was confirmed but could not be saved; capacity remains held. Restore writable recovery storage and reconcile again."
             }
         }
     }
@@ -74,8 +80,35 @@ struct State {
     expected_workspace: Option<String>,
     scope: Option<RemoteAllocationScope>,
     identity: Option<SessionProbe>,
+    journal: Option<journal::Journal>,
     retired: bool,
     status: RemoteRecoveryStatus,
+}
+
+impl State {
+    fn release_confirmed(&self) -> bool {
+        matches!(
+            self.status,
+            RemoteRecoveryStatus::Released | RemoteRecoveryStatus::PersistenceUnavailable
+        )
+    }
+
+    fn reconciliation_unavailable(&mut self) {
+        if !self.release_confirmed() {
+            self.status = RemoteRecoveryStatus::ProviderUnavailable;
+        }
+    }
+
+    fn confirm_release(&mut self) {
+        if let Some(journal) = &mut self.journal
+            && journal.release().is_err()
+        {
+            self.status = RemoteRecoveryStatus::PersistenceUnavailable;
+            return;
+        }
+        self.status = RemoteRecoveryStatus::Released;
+        self.identity = None;
+    }
 }
 
 impl Default for RemoteAllocation {
@@ -123,11 +156,13 @@ impl RemoteAllocation {
     #[cfg(any(test, feature = "test-support"))]
     pub fn unresolved_for_test(endpoint: &str, session: &str) -> Result<Self, crate::WebDriverHttpError> {
         let allocation = Self::default();
-        allocation.identify(
-            Arc::new(RemoteHttpClient::new(endpoint, None)?),
-            session.to_string(),
-            None,
-        );
+        allocation
+            .identify(
+                Arc::new(RemoteHttpClient::new(endpoint, None)?),
+                session.to_string(),
+                None,
+            )
+            .map_err(|_| crate::WebDriverHttpError::InvalidResponse("Fixture journal failed".into()))?;
         allocation.finish(None);
         Ok(allocation)
     }
@@ -214,16 +249,22 @@ impl RemoteAllocation {
         transport: Arc<RemoteHttpClient>,
         session: String,
         report: Option<Arc<RemoteHttpClient>>,
-    ) {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .identity = Some(SessionProbe::new(transport, session, report));
+    ) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = state
+            .journal
+            .as_mut()
+            .map_or(Ok(()), |journal| journal.identify(&session));
+        state.identity = Some(SessionProbe::new(transport, session, report));
+        result
     }
 
     pub(crate) fn finish(&self, outcome: Option<&RemoteReleaseOutcome>) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.retired = true;
+        if state.status == RemoteRecoveryStatus::Released {
+            return;
+        }
         if matches!(
             outcome,
             Some(
@@ -232,9 +273,8 @@ impl RemoteAllocation {
                     | RemoteReleaseOutcome::NeverAllocated
             )
         ) {
-            state.status = RemoteRecoveryStatus::Released;
-            state.identity = None;
-        } else if state.status != RemoteRecoveryStatus::Released {
+            state.confirm_release();
+        } else if !state.release_confirmed() {
             state.status = if state.identity.is_some() {
                 RemoteRecoveryStatus::Unresolved
             } else {
@@ -268,6 +308,10 @@ impl RemoteAllocation {
             {
                 return true;
             }
+            if state.release_confirmed() {
+                state.confirm_release();
+                return true;
+            }
             let Some(identity) = state.identity.clone() else {
                 state.status = RemoteRecoveryStatus::IdentityUnavailable;
                 return true;
@@ -284,9 +328,13 @@ impl RemoteAllocation {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.status = status;
-                if status == RemoteRecoveryStatus::Released {
-                    state.identity = None;
+                if state.status == RemoteRecoveryStatus::Released {
+                    return;
+                }
+                if status == RemoteRecoveryStatus::Released || state.release_confirmed() {
+                    state.confirm_release();
+                } else {
+                    state.status = status;
                 }
             })
             .is_err()
@@ -294,7 +342,7 @@ impl RemoteAllocation {
             self.state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .status = RemoteRecoveryStatus::ProviderUnavailable;
+                .reconciliation_unavailable();
         }
         true
     }

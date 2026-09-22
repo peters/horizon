@@ -1,0 +1,38 @@
+version: 1
+default: cpu
+profiles:
+  cpu:
+    provider: runpod
+    image: ghcr.io/peters/horizon-development
+    build:
+      context: .horizon
+      dockerfile: .horizon/Dockerfile.cpu
+      platform: linux/amd64
+    capabilities: &capabilities
+      agents: [claude]
+      browsers: [chromium, firefox]
+      desktop: true
+    cpu: 8
+    memory_gb: 32
+    gpu: false
+    storage:
+      container_gb: 30
+      volume_gb: 80
+    bootstrap:
+      readiness_seconds: 1800
+  gpu:
+    provider: runpod
+    image: ghcr.io/peters/horizon-development
+    build:
+      context: .horizon
+      dockerfile: .horizon/Dockerfile.gpu
+      platform: linux/amd64
+    capabilities: *capabilities
+    cpu: 8
+    memory_gb: 32
+    gpu: true
+    storage:
+      container_gb: 50
+      volume_gb: 100
+    bootstrap:
+      readiness_seconds: 3600

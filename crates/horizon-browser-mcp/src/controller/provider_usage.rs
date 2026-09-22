@@ -40,3 +40,43 @@ impl BrowserController {
         }
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderDevicesInput {
+    /// Configured provider account. Credentials and endpoint are resolved by the host.
+    pub provider: String,
+    /// Optional words matching device, OS, OS version or browser (for example "iPhone 18").
+    #[serde(default)]
+    pub search: String,
+    /// Offset returned by the previous page. Each page contains at most 50 combinations.
+    #[serde(default)]
+    pub offset: usize,
+}
+impl BrowserController {
+    pub(crate) async fn provider_devices(&self, input: ProviderDevicesInput) -> Result<Value, String> {
+        let query = horizon_browser::provider_catalog::CatalogQuery {
+            provider: input.provider,
+            search: input.search,
+            offset: input.offset,
+        };
+        let id = provider_usage::enqueue_catalog(self.identity(), query).map_err(|_| {
+            "provider_catalog_invalid_request: discovery requires a live host and valid provider query".to_string()
+        })?;
+        let started = Instant::now();
+        loop {
+            if let Some(result) = provider_usage::take_provider_usage_result(self.identity(), &id)
+                .map_err(|_| "provider_catalog_result_unavailable".to_string())?
+            {
+                if let Some(error) = result.error {
+                    return Err(error);
+                }
+                return Ok(json!({"catalog":result.catalog, "capacity_reserved":false}));
+            }
+            if started.elapsed() >= Duration::from_secs(20) {
+                return Err("provider_catalog_timed_out".into());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}

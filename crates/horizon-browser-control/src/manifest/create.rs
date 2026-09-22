@@ -197,7 +197,7 @@ fn validate_target(target: Option<&str>, backend: Option<BackendKind>) -> std::i
         && target
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if !well_formed {
+    if !well_formed && horizon_browser::provider_catalog::target_provider(target).is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "remote target names use letters, digits, '.', '_' and '-' (at most 64 characters)",

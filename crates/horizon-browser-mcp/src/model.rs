@@ -13,7 +13,9 @@ pub(crate) use network::{
 };
 pub(crate) use video::{VideoInput, VideoOutput};
 
-use horizon_browser::{BackendKind, BrowserBounds, BrowserNode, BrowserSnapshot, BrowserTarget};
+use horizon_browser::{
+    BackendKind, BrowserAttachedFile, BrowserBounds, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget,
+};
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -51,6 +53,10 @@ pub(crate) struct BrowserPanel {
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
     pub(crate) agent_state: BrowserPanelAgentState,
+    /// Host file dialog support for manual page upload controls.
+    pub(crate) manual_file_chooser: bool,
+    /// A human must select or cancel files in the Horizon dialog.
+    pub(crate) file_chooser_pending: bool,
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
     pub(crate) video_capture: VideoCaptureCapability,
@@ -92,7 +98,9 @@ impl BrowserPanel {
                 user_active,
                 handoff_pending,
             },
-            capabilities: semantic_capabilities(value.backend, remote),
+            manual_file_chooser: value.file_chooser.supported(),
+            file_chooser_pending: value.file_chooser.pending(),
+            capabilities: semantic_capabilities(value.backend, remote, value.remote_file_upload),
             network_capture: NetworkCaptureCapability::for_backend(value.backend, remote),
             video_capture: VideoCaptureCapability::for_backend(),
         }
@@ -501,6 +509,8 @@ pub(crate) enum ActKind {
     Click,
     Fill,
     Scroll,
+    /// Attach host files to an `input[type=file]`.
+    SetFiles,
     Reload,
     Back,
     Forward,
@@ -524,6 +534,11 @@ pub(crate) struct ActInput {
     pub(crate) delta_y: Option<f64>,
     /// Consecutive trusted clicks for `click` (1-3, default 1).
     pub(crate) count: Option<u32>,
+    /// Absolute host paths for `set_files` (1-32). Each must resolve to a
+    /// regular file under the agent work root (`HORIZON_WORK_ROOT`, else the
+    /// server's working directory) or a root in
+    /// `HORIZON_BROWSER_ATTACHMENT_ROOTS`. Paths are audited; contents are not.
+    pub(crate) files: Option<Vec<String>>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
 }
@@ -534,6 +549,9 @@ impl ActInput {
 
         if !matches!(self.action, ActKind::Click) && self.count.is_some() {
             return Err("count is only accepted for click".to_string());
+        }
+        if !matches!(self.action, ActKind::SetFiles) && self.files.is_some() {
+            return Err("files is only accepted for set_files".to_string());
         }
         match self.action {
             ActKind::Click => {
@@ -555,6 +573,28 @@ impl ActInput {
                 delta_x: self.delta_x.unwrap_or(0.0),
                 delta_y: self.delta_y.unwrap_or(0.0),
             }),
+            ActKind::SetFiles => {
+                if self.value.is_some() || self.delta_x.is_some() || self.delta_y.is_some() {
+                    return Err("set_files does not accept value or deltas".to_string());
+                }
+                let files = self
+                    .files
+                    .as_deref()
+                    .filter(|files| !files.is_empty())
+                    .ok_or_else(|| "set_files requires files".to_string())?;
+                if files.len() > horizon_browser::MAX_ATTACHMENT_FILES {
+                    return Err("set_files accepts at most 32 files".to_string());
+                }
+                let paths = files.iter().map(std::path::PathBuf::from).collect::<Vec<_>>();
+                if paths.iter().any(|path| !path.is_absolute()) {
+                    return Err("set_files paths must be absolute".to_string());
+                }
+                Ok(BrowserControlAction::SetFiles {
+                    target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
+                    paths,
+                    sources: Vec::new(),
+                })
+            }
             ActKind::Reload => no_target_or_value(self, BrowserControlAction::Reload),
             ActKind::Back => no_target_or_value(self, BrowserControlAction::Back),
             ActKind::Forward => no_target_or_value(self, BrowserControlAction::Forward),
@@ -646,6 +686,62 @@ pub(crate) struct ActionOutput {
     pub(crate) panel_id: String,
     pub(crate) action_id: String,
     pub(crate) completed: bool,
+    /// For `set_files`: the files the input holds, read back after the
+    /// page's change handlers ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) files: Option<Vec<AttachedFileOutput>>,
+}
+
+impl ActionOutput {
+    pub(crate) fn completed(panel_id: String, action_id: String) -> Self {
+        Self {
+            panel_id,
+            action_id,
+            completed: true,
+            files: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct AttachedFileOutput {
+    pub(crate) name: String,
+    pub(crate) size: u64,
+    /// MIME type the browser derived; empty when unknown.
+    pub(crate) mime: String,
+}
+
+impl From<BrowserAttachedFile> for AttachedFileOutput {
+    fn from(value: BrowserAttachedFile) -> Self {
+        Self {
+            name: value.name,
+            size: value.size,
+            mime: value.mime,
+        }
+    }
+}
+
+/// `input[type=file]` details, present only on file inputs.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct FileInputOutput {
+    /// The element's `accept` attribute; empty when any type is accepted.
+    pub(crate) accept: String,
+    /// Whether `accept` is a prefix; oversized policies cannot be enforced.
+    pub(crate) accept_truncated: bool,
+    pub(crate) multiple: bool,
+    /// Number of files currently attached.
+    pub(crate) files: u32,
+}
+
+impl From<BrowserFileInput> for FileInputOutput {
+    fn from(value: BrowserFileInput) -> Self {
+        Self {
+            accept: value.accept,
+            accept_truncated: value.accept_truncated,
+            multiple: value.multiple,
+            files: value.files,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -666,6 +762,9 @@ pub(crate) struct NodeOutput {
     pub(crate) visible: bool,
     pub(crate) enabled: bool,
     pub(crate) bounds: Option<BoundsOutput>,
+    /// Present only for `input[type=file]` elements: the `set_files` target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file_input: Option<FileInputOutput>,
 }
 
 impl From<BrowserNode> for NodeOutput {
@@ -678,6 +777,7 @@ impl From<BrowserNode> for NodeOutput {
             visible: value.visible,
             enabled: value.enabled,
             bounds: value.bounds.map(BoundsOutput::from),
+            file_input: value.file_input.map(FileInputOutput::from),
         }
     }
 }
@@ -801,13 +901,25 @@ fn backend_name(backend: BackendKind) -> &'static str {
     }
 }
 
-fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
+fn semantic_capabilities(backend: BackendKind, remote: bool, remote_file_upload: bool) -> Vec<String> {
     let mut capabilities = [
-        "navigate", "snapshot", "query", "click", "fill", "scroll", "reload", "back", "forward", "evaluate", "wait",
-        "handoff", "audit",
+        "navigate",
+        "snapshot",
+        "query",
+        "click",
+        "fill",
+        "scroll",
+        "reload",
+        "back",
+        "forward",
+        "evaluate",
+        "wait",
+        "handoff",
+        "set_files",
+        "audit",
     ]
     .into_iter()
-    .filter(|capability| !remote || *capability != "handoff")
+    .filter(|capability| !remote || (*capability != "handoff" && (*capability != "set_files" || remote_file_upload)))
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
@@ -852,8 +964,9 @@ fn no_target_or_value(
         || input.delta_x.is_some()
         || input.delta_y.is_some()
         || input.count.is_some()
+        || input.files.is_some()
     {
-        Err("navigation-history actions do not accept target, value, deltas, or count".to_string())
+        Err("navigation-history actions do not accept target, value, deltas, count, or files".to_string())
     } else {
         Ok(action)
     }
@@ -873,6 +986,7 @@ mod tests {
             delta_x: None,
             delta_y: None,
             count: None,
+            files: None,
             timeout_millis: None,
         }
     }
@@ -891,17 +1005,32 @@ mod tests {
         assert_eq!(panel.protocol, ProtocolKind::WebDriver);
         assert!(!panel.network_capture.supported);
         assert!(panel.network_capture.workflow.contains("remote"));
-        assert!(
-            !panel
-                .capabilities
-                .iter()
-                .any(|capability| capability == "network_capture" || capability == "resize" || capability == "handoff")
-        );
+        assert!(!panel.capabilities.iter().any(|capability| {
+            matches!(
+                capability.as_str(),
+                "network_capture" | "resize" | "handoff" | "set_files"
+            )
+        }));
         assert!(panel.capabilities.iter().any(|capability| capability == "snapshot"));
         assert!(panel.video_capture.supported, "screenshot-based recording still works");
         let encoded = serde_json::to_string(&panel).expect("json");
         assert!(encoded.contains("\"remote_target\":\"android_phone\""));
         assert!(encoded.contains("\"remote_device\":\"Google Pixel 9, OS 16.0, physical device\""));
+
+        let supported = BrowserPanel::from_manifest(
+            BrowserManifest {
+                remote_target: Some("desktop".into()),
+                remote_file_upload: true,
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert!(
+            supported
+                .capabilities
+                .iter()
+                .any(|capability| capability == "set_files")
+        );
 
         let local = BrowserPanel::from_manifest(
             BrowserManifest {
@@ -915,6 +1044,7 @@ mod tests {
         assert_eq!(local.remote_target, None);
         assert_eq!(local.protocol, ProtocolKind::Cdp);
         assert!(local.network_capture.supported);
+        assert!(local.capabilities.iter().any(|capability| capability == "set_files"));
         let local_json = serde_json::to_string(&local).expect("json");
         assert!(!local_json.contains("remote_target") && !local_json.contains("remote_device"));
     }
@@ -950,6 +1080,49 @@ mod tests {
         let mut reload = act(ActKind::Reload);
         reload.delta_y = Some(1.0);
         assert!(reload.build_action().is_err());
+        let mut reload = act(ActKind::Reload);
+        reload.files = Some(vec!["/uploads/a.pdf".to_string()]);
+        assert!(reload.build_action().is_err());
+    }
+
+    #[test]
+    fn set_files_requires_a_target_and_absolute_paths_and_is_the_only_taker_of_files() {
+        let absolute = if cfg!(windows) {
+            "C:\\uploads\\a.pdf"
+        } else {
+            "/uploads/a.pdf"
+        };
+        let mut attach = act(ActKind::SetFiles);
+        assert_eq!(attach.build_action(), Err("set_files requires files".to_string()));
+        attach.files = Some(vec![]);
+        assert_eq!(attach.build_action(), Err("set_files requires files".to_string()));
+        attach.files = Some(vec![absolute.to_string()]);
+        assert!(attach.build_action().is_err(), "a target is required");
+        attach.selector = Some("input[type=file]".to_string());
+        assert!(matches!(
+            attach.build_action(),
+            Ok(horizon_browser::BrowserControlAction::SetFiles { target: BrowserTarget::Selector { .. }, paths, .. })
+                if paths == vec![std::path::PathBuf::from(absolute)]
+        ));
+        attach.value = Some("text".to_string());
+        assert!(attach.build_action().is_err(), "set_files takes no fill value");
+        attach.value = None;
+        attach.files = Some(vec!["relative/a.pdf".to_string()]);
+        assert_eq!(
+            attach.build_action(),
+            Err("set_files paths must be absolute".to_string())
+        );
+        attach.files = Some(vec![absolute.to_string(); horizon_browser::MAX_ATTACHMENT_FILES + 1]);
+        assert!(attach.build_action().is_err());
+
+        let mut fill = act(ActKind::Fill);
+        fill.selector = Some("#name".to_string());
+        fill.value = Some("x".to_string());
+        fill.files = Some(vec![absolute.to_string()]);
+        assert_eq!(
+            fill.build_action(),
+            Err("files is only accepted for set_files".to_string())
+        );
     }
 
     #[test]

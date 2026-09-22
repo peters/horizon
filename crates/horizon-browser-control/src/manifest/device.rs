@@ -22,6 +22,9 @@ pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
         endpoint: String,
+        /// Optional labels supplied by the session creator, not verified by VNC.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<DeviceIdentity>,
     },
     List,
     Inspect {
@@ -30,6 +33,10 @@ pub enum Operation {
     Visibility {
         panel_id: String,
         visible: bool,
+    },
+    /// Bring an owned viewer into view without reconnecting or claiming image readiness.
+    Reveal {
+        panel_id: String,
     },
     /// Explicitly reconnect, acquiring an unowned (including restored) viewer.
     Reconnect {
@@ -49,20 +56,74 @@ pub enum Connection {
     Disconnected,
 }
 
+/// Machine details supplied by the session creator; never inferred from loopback.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeviceIdentity {
+    pub machine_name: Option<String>,
+    pub hostname: Option<String>,
+    pub ip_addresses: Vec<std::net::IpAddr>,
+    pub tailscale_name: Option<String>,
+}
+
+/// Details observed on this VNC connection, not persisted machine identity.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct DeviceServerDetails {
+    pub name: Option<String>,
+    pub desktop_size: Option<[usize; 2]>,
+}
+
 /// Host observation, separate from request dispatch or VNC handshake success.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PanelState {
     pub panel_id: String,
     pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<DeviceIdentity>,
+    #[serde(default)]
+    pub server: DeviceServerDetails,
     pub visible: bool,
     pub owned_by_caller: bool,
     pub connection: Connection,
     pub connection_error: Option<String>,
+    /// Absent on older hosts; lack of diagnostics is not proof of a stalled stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Diagnostics>,
     #[serde(flatten)]
     pub image: ImageEvidence,
 }
 
-/// Uploaded image and completed-frame presentation evidence for one connection.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Presentation {
+    Stopped,
+    Connecting,
+    Disconnected,
+    Hidden,
+    NotRendered,
+    AwaitingFrame,
+    Clipped,
+    Displayed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Diagnostics {
+    pub observed_at_millis: i64,
+    pub connection_generation: u64,
+    pub presentation: Presentation,
+    /// Legacy pause signal. Current viewers keep sampling while hidden or off canvas.
+    pub sampling_paused: bool,
+    /// Decoded frames, independent of texture uploads and rendering.
+    pub decoded_frame_sequence: u64,
+    pub last_decoded_age_millis: Option<u64>,
+    /// Last received-frame texture submission; repainting retained pixels does not refresh it.
+    #[serde(default)]
+    pub last_uploaded_age_millis: Option<u64>,
+    pub last_displayed_age_millis: Option<u64>,
+}
+
+/// Reception, upload and completed-frame presentation evidence for one connection.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ImageEvidence {
     /// A decoded image was uploaded in this connection; may be stale after disconnect.
@@ -70,6 +131,9 @@ pub struct ImageEvidence {
     /// The most recent completed UI frame painted the connected image.
     pub image_displayed: bool,
     pub frame_sequence: u64,
+    /// Worker-published image updates, including while hidden; not a heartbeat.
+    #[serde(default)]
+    pub received_frame_sequence: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
@@ -233,6 +297,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn older_diagnostics_do_not_imply_a_texture_upload_time() {
+        let diagnostics: Diagnostics = serde_json::from_value(serde_json::json!({
+            "observed_at_millis":0,"connection_generation":1,"presentation":"displayed",
+            "sampling_paused":false,"decoded_frame_sequence":1,
+            "last_decoded_age_millis":10,"last_displayed_age_millis":0
+        }))
+        .unwrap();
+        assert!(diagnostics.last_uploaded_age_millis.is_none());
+    }
+
+    #[test]
+    fn reception_evidence_is_additive_and_round_trips_without_display() {
+        let legacy = r#"{"panel_id":"viewer","endpoint":"127.0.0.1:5900","visible":false,"owned_by_caller":true,"connection":"connected","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
+        let mut panel: PanelState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(panel.image.received_frame_sequence, 0);
+        panel.image.received_frame_sequence = 7;
+        let encoded = serde_json::to_value(panel).unwrap();
+        assert_eq!(encoded["received_frame_sequence"], 7);
+        let decoded: PanelState = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.image.received_frame_sequence, 7);
+        assert_eq!(decoded.image.frame_sequence, 0);
+        assert!(!decoded.image.image_received && !decoded.image.image_displayed);
+    }
+
+    #[test]
     fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {
         let root = tempfile::tempdir().unwrap();
         let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
@@ -267,5 +356,16 @@ mod tests {
                 .kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+    #[test]
+    fn endpoint_only_requests_remain_valid_and_identity_ips_are_typed() {
+        let legacy: Operation = serde_json::from_str(r#"{"operation":"create","endpoint":"127.0.0.1:5900"}"#).unwrap();
+        assert!(matches!(legacy, Operation::Create { identity: None, .. }));
+        let input = r#"{"operation":"create","endpoint":"127.0.0.1:5900","identity":{"hostname":"lab-host","ip_addresses":["192.0.2.1","2001:db8::1"]}}"#;
+        let request: Operation = serde_json::from_str(input).unwrap();
+        let encoded = serde_json::to_value(request).unwrap();
+        assert_eq!(encoded["identity"]["hostname"], "lab-host");
+        assert_eq!(encoded["identity"]["ip_addresses"][1], "2001:db8::1");
+        assert!(serde_json::from_str::<Operation>(&input.replace("192.0.2.1", "not-an-ip")).is_err());
     }
 }

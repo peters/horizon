@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+: "${PUBLIC_KEY:?SSH public key is required}"
+mkdir -p /workspace/home/.ssh /workspace/agents /workspace/sessions /run/sshd/horizon-host-keys
+chmod 700 /run/sshd/horizon-host-keys
+printf '%s\n' "$PUBLIC_KEY" > /run/sshd/horizon-authorized-keys
+chmod 600 /run/sshd/horizon-authorized-keys
+unset PUBLIC_KEY
+# Agent login state and host keys stay on the worker volume.
+for kind in ed25519 rsa; do
+    key="/workspace/ssh_host_${kind}_key"
+    if [ ! -f "$key" ]; then ssh-keygen -q -t "$kind" -N '' -f "$key"; fi
+    # Some provider volumes synthesize 0666 modes. SSH reads a protected local copy.
+    install -m 600 "$key" "/run/sshd/horizon-host-keys/$kind"
+done
+printf 'HostKey /run/sshd/horizon-host-keys/ed25519\nHostKey /run/sshd/horizon-host-keys/rsa\n' > /etc/ssh/sshd_config.d/horizon-host-keys.conf
+export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
+horizon-worker-check --write-runtime
+exec horizon-worker-supervise
