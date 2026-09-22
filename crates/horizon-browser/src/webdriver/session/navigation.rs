@@ -424,6 +424,7 @@ impl Driver {
     /// document navigation.
     pub(super) fn begin_navigation(&mut self) {
         self.panel_slot.file_chooser().invalidate();
+        self.coordination_dirty = true;
         self.file_chooser = super::file_chooser::ChooserState::default();
         self.challenge_loop.document_navigation_started();
         self.pending_classic_history_start = None;

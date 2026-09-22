@@ -68,6 +68,7 @@ impl DriverState {
             return false;
         }
         frame_slot.file_chooser().enable();
+        self.manifest_dirty = true;
         // Observe only top-level response metadata so a completed user
         // handoff can report a repeated Cloudflare challenge. The driver
         // receives response headers but never emits them or request bodies.

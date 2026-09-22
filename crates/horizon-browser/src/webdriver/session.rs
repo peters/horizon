@@ -555,6 +555,7 @@ impl Driver {
 
     fn advance_generation(&mut self) {
         self.panel_slot.file_chooser().invalidate();
+        self.coordination_dirty = true;
         self.file_chooser = file_chooser::ChooserState::default();
         self.generation = self.generation.wrapping_add(1);
         self.scrollbar.reset(&self.config.frame_slot);

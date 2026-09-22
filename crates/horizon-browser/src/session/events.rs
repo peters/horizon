@@ -203,7 +203,7 @@ impl DriverState {
             return;
         }
         match event.method {
-            "Page.fileChooserOpened" => self.note_file_chooser(&event),
+            "Page.fileChooserOpened" | "Page.frameDetached" => self.handle_file_chooser_event(&event, event_tx),
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
                     self.attach_http_auth_iframe(link, event_tx, frame_slot, &event);
@@ -345,8 +345,12 @@ impl DriverState {
             return;
         };
         if frame.get("parentId").is_some() {
+            if let Some(id) = frame.get("id").and_then(serde_json::Value::as_str) {
+                self.invalidate_file_chooser_frame(Some(id), event_tx);
+            }
             return;
         }
+        self.invalidate_file_chooser_frame(None, event_tx);
         self.invalidate_scrollbar_layout(event_tx);
         self.semantic.invalidate();
         self.config.frame_slot.file_chooser().invalidate();
@@ -611,6 +615,45 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
         )
+    }
+
+    #[test]
+    fn iframe_navigation_retires_only_its_chooser_and_publishes_replacement_invalidation() {
+        let mut state = driver_state();
+        state.session_id = Some("session".into());
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let handle = state.config.frame_slot.file_chooser().clone();
+        handle.enable();
+        handle.open(false, String::new(), "https://files.test".into());
+        state.manifest_dirty = false;
+        state.note_file_chooser(&CdpEvent {
+            method: "Page.fileChooserOpened",
+            session_id: Some("session"),
+            params: &serde_json::json!({"backendNodeId":1,"frameId":"child"}),
+        });
+        assert!(state.manifest_dirty);
+        assert!(!handle.status().pending());
+        handle.open(false, String::new(), "https://files.test".into());
+        state.manifest_dirty = false;
+        for frame in ["sibling", "child"] {
+            state.handle_frame_navigated(
+                &events,
+                CdpEvent {
+                    method: "Page.frameNavigated",
+                    session_id: Some("session"),
+                    params: &serde_json::json!({"frame":{"id":frame,"parentId":"root","url":"https://files.test/new"}}),
+                },
+                true,
+            );
+            assert_eq!(handle.status().pending(), frame == "sibling");
+        }
+        assert!(state.manifest_dirty);
+        assert!(state.url.is_empty());
     }
 
     #[test]

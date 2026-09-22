@@ -181,6 +181,55 @@ impl FileChooserHandle {
     }
 }
 
+/// A lifecycle token remains visible while a protocol call temporarily owns
+/// the target, so reentrant navigation cannot revive a stale dialog.
+#[derive(Debug, Default)]
+pub(crate) struct ChooserBinding {
+    context: Option<String>,
+    revision: u64,
+}
+
+impl ChooserBinding {
+    pub(crate) fn start(&mut self, context: String) -> u64 {
+        self.context = Some(context);
+        self.revision = self.revision.wrapping_add(1);
+        self.revision
+    }
+
+    pub(crate) fn current(&self, revision: u64) -> bool {
+        self.context.is_some() && self.revision == revision
+    }
+
+    pub(crate) fn invalidate(&mut self, context: Option<&str>) -> bool {
+        if self.context.is_none() || context.is_some_and(|context| self.context.as_deref() != Some(context)) {
+            return false;
+        }
+        self.context = None;
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+}
+
+pub(crate) fn wire_paths(paths: &[PathBuf]) -> Result<Vec<&str>, crate::BrowserControlFailure> {
+    if paths.is_empty() {
+        return Err(crate::BrowserControlFailure::new(
+            "invalid_input",
+            "No files were selected",
+        ));
+    }
+    paths
+        .iter()
+        .map(|path| {
+            path.to_str().ok_or_else(|| {
+                crate::BrowserControlFailure::new(
+                    "invalid_input",
+                    "The browser requires UTF-8 file paths; rename the file or its directory and try again",
+                )
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn audit_choice(config: &crate::BrowserSessionConfig, paths: &[PathBuf], status: crate::BrowserAuditStatus) {
     if let Some(coordination) = &config.coordination {
         let entry = crate::BrowserAuditEntry::new(
@@ -201,6 +250,34 @@ pub(crate) fn audit_choice(config: &crate::BrowserSessionConfig, paths: &[PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_invalidates_in_flight_choices_without_cancelling_sibling_frames() {
+        let mut binding = ChooserBinding::default();
+        let original = binding.start("child".into());
+        assert!(!binding.invalidate(Some("sibling")));
+        assert!(binding.current(original));
+        assert!(binding.invalidate(Some("child")));
+        assert!(!binding.current(original));
+        let replacement = binding.start("child".into());
+        assert!(!binding.current(original));
+        assert!(binding.current(replacement));
+        assert!(binding.invalidate(None));
+        assert!(!binding.current(replacement));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_manual_choices_return_an_error_before_protocol_serialization() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/file-\xff.txt".to_vec()));
+        assert_eq!(wire_paths(&[invalid]).unwrap_err().code, "invalid_input");
+        assert_eq!(wire_paths(&[]).unwrap_err().code, "invalid_input");
+        assert_eq!(
+            wire_paths(&[PathBuf::from("/tmp/valid.txt")]).unwrap(),
+            ["/tmp/valid.txt"]
+        );
+    }
 
     #[test]
     fn replaced_and_cancelled_requests_cannot_receive_old_choices() {

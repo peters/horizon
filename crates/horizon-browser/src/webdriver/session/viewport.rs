@@ -435,6 +435,38 @@ mod tests {
     }
 
     #[test]
+    fn child_navigation_and_failed_replacement_publish_chooser_invalidation() {
+        let classic = Server::start(vec![]);
+        let (link, worker) = bidi_fixture(false);
+        let mut state = fixture_driver(&classic, link);
+        let events = events();
+        let handle = state.panel_slot.file_chooser().clone();
+        handle.enable();
+        for method in ["navigationStarted", "contextDestroyed"] {
+            handle.open(false, String::new(), "https://files.test".into());
+            state.coordination_dirty = false;
+            state.note_file_chooser(&json!({"context":"child","element":{"sharedId":"node"}}));
+            assert!(state.coordination_dirty);
+            assert!(!handle.status().pending());
+            handle.open(false, String::new(), "https://files.test".into());
+            state.coordination_dirty = false;
+            state.handle_bidi_event(&event(method, "sibling", &json!("first")), &events);
+            assert!(handle.status().pending());
+            state.handle_bidi_event(&event(method, "child", &json!("first")), &events);
+            assert!(!handle.status().pending());
+            assert!(state.coordination_dirty);
+            assert_eq!(state.generation, 0);
+        }
+        handle.open(false, String::new(), "https://files.test".into());
+        state.coordination_dirty = false;
+        state.begin_navigation();
+        assert!(!handle.status().pending());
+        assert!(state.coordination_dirty);
+        drop(state);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn firefox_restores_committed_pin_on_rebind_drains_events_and_reset_stops_restoration() {
         let classic = Server::start(
             [[390, 844], [390, 844], [900, 600], [900, 600]]
