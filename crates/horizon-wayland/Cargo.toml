@@ -17,3 +17,7 @@ thiserror.workspace = true
 tracing.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+wayland-protocols = { workspace = true, features = ["server"] }
+wayland-server.workspace = true
