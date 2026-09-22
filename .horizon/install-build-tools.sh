@@ -13,7 +13,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh tini util-linux \
     build-essential pkg-config cmake clang libssl-dev \
-    libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev \
+    libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libxcb-render0-dev libxcb-shape0-dev \
     libxcb-xfixes0-dev libvulkan-dev libgl-dev libasound2-dev \
     mesa-vulkan-drivers vulkan-tools glslc \
     xvfb openbox x11vnc xauth x11-utils libxtst6 fonts-dejavu-core \
