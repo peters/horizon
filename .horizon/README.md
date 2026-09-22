@@ -3,8 +3,14 @@
 The `cpu` profile is the default for the standard validation matrix and software
 rendering. The `gpu` profile requires a GPU and includes the CUDA 13 toolchain
 for `speech-cuda` builds. It never falls back to a CPU allocation. Both profiles
-include Rust 1.98.1, formatting/lint tools, speech and graphics headers, both
-configured agents, both browser engines, and a private native desktop.
+include Rust 1.98.1, formatting/lint tools, speech and graphics headers, the
+configured agent, both browser engines, and a private native desktop.
+
+Both profiles enable only `claude`. The tested provider runtime denies the user
+namespaces required by `codex` protected execution, so that agent is intentionally
+excluded from the advertised capabilities even though its CLI remains installed
+in the tooling image. Enable it only after normal protected execution passes on
+a compatible runtime; broader agent qualification remains tracked in issue #813.
 
 The public images target `ghcr.io/peters/horizon-development`. Configure provider
 credentials, GPU selection and publishing credentials in machine-local settings.

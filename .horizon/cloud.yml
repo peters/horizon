@@ -9,7 +9,7 @@ profiles:
       dockerfile: .horizon/Dockerfile.cpu
       platform: linux/amd64
     capabilities: &capabilities
-      agents: [codex, claude]
+      agents: [claude]
       browsers: [chromium, firefox]
       desktop: true
     cpu: 8
