@@ -370,7 +370,7 @@ mod tests {
         {
             let workspace = app.board.workspace_mut(workspace_id).expect("workspace");
             workspace.position = [6000.0, 4000.0];
-            workspace.cwd = Some(std::path::PathBuf::from("/tmp"));
+            workspace.cwd = Some(std::env::temp_dir());
         }
         app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
 
@@ -563,7 +563,7 @@ mod tests {
         let workspace_id = app.board.create_workspace(name);
         {
             let workspace = app.board.workspace_mut(workspace_id).expect("workspace");
-            workspace.cwd = Some(std::path::PathBuf::from("/tmp"));
+            workspace.cwd = Some(std::env::temp_dir());
         }
         workspace_id
     }
