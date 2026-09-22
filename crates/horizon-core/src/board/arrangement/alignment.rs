@@ -1,4 +1,4 @@
-use crate::layout::{WORKSPACE_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA};
+use crate::layout::WORKSPACE_GAP;
 use crate::workspace::WorkspaceId;
 
 use super::super::Board;
@@ -61,29 +61,9 @@ impl Board {
             return None;
         }
 
-        let bounds_map = self.workspace_bounds_map();
         let entries: Vec<(WorkspaceId, [f32; 4])> = workspace_ids
             .iter()
-            .filter_map(|workspace_id| {
-                let workspace = self.workspace(*workspace_id)?;
-                let frame = if let Some((min, max)) = bounds_map.get(&workspace.id) {
-                    [
-                        min[0] - WS_FRAME_PAD,
-                        min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
-                        max[0] + WS_FRAME_PAD,
-                        max[1] + WS_FRAME_PAD,
-                    ]
-                } else {
-                    let position = workspace.position;
-                    [
-                        position[0],
-                        position[1],
-                        position[0] + WS_EMPTY_FRAME_SIZE[0],
-                        position[1] + WS_EMPTY_FRAME_SIZE[1],
-                    ]
-                };
-                Some((workspace.id, frame))
-            })
+            .filter_map(|workspace_id| Some((*workspace_id, self.workspace_frame_rect(*workspace_id)?)))
             .collect();
 
         if entries.len() < 2 {

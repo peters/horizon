@@ -198,6 +198,33 @@ impl HorizonApp {
             && (std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() || self.cloud_state_matches_session())
     }
 
+    /// Resize a cloud member; a cloud that grows pushes neighbouring workspaces like a growing panel.
+    pub(super) fn resize_cloud_member(
+        &mut self,
+        id: PanelId,
+        size: [f32; 2],
+        workspace_collision_ids: &[WorkspaceId],
+    ) -> bool {
+        if !self.cloud_prototype.groups.contains_panel(&self.board, id) {
+            return false;
+        }
+        let live = self.cloud_state_is_live();
+        let workspace = self.board.panel_workspace_id(id);
+        let mut before = None;
+        if live {
+            std::mem::swap(&mut self.board.cloud_groups, &mut self.cloud_prototype.groups);
+            before = workspace.and_then(|workspace| self.board.workspace_frame_rect(workspace));
+            std::mem::swap(&mut self.board.cloud_groups, &mut self.cloud_prototype.groups);
+        }
+        self.cloud_prototype.groups.resize_panel(&mut self.board, id, size);
+        if live && let Some(workspace) = workspace {
+            self.board.cloud_groups.clone_from(&self.cloud_prototype.groups);
+            self.board
+                .resolve_workspace_frame_growth_in_scope(workspace, before, workspace_collision_ids);
+        }
+        true
+    }
+
     /// Resize a panel outside every cloud; its growth pushes whole cloud frames like sibling panels.
     pub(super) fn resize_ordinary_panel(
         &mut self,

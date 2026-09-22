@@ -258,6 +258,18 @@ impl Board {
         id: WorkspaceId,
         previous_frame: Option<[f32; 4]>,
     ) {
+        let workspace_ids: Vec<_> = self.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.resolve_workspace_frame_growth_in_scope(id, previous_frame, &workspace_ids);
+    }
+
+    /// Push workspaces in `workspace_ids` away from every edge of `id`'s frame
+    /// that grew since `previous_frame` (from [`Self::workspace_frame_rect`]).
+    pub fn resolve_workspace_frame_growth_in_scope(
+        &mut self,
+        id: WorkspaceId,
+        previous_frame: Option<[f32; 4]>,
+        workspace_ids: &[WorkspaceId],
+    ) {
         let Some(before) = previous_frame else {
             return;
         };
@@ -266,16 +278,16 @@ impl Board {
         };
 
         if after[0] < before[0] - f32::EPSILON {
-            self.resolve_workspace_collisions(id, [-1.0, 0.0]);
+            self.resolve_workspace_collisions_in_scope(id, [-1.0, 0.0], workspace_ids);
         }
         if after[1] < before[1] - f32::EPSILON {
-            self.resolve_workspace_collisions(id, [0.0, -1.0]);
+            self.resolve_workspace_collisions_in_scope(id, [0.0, -1.0], workspace_ids);
         }
         if after[2] > before[2] + f32::EPSILON {
-            self.resolve_workspace_collisions(id, [1.0, 0.0]);
+            self.resolve_workspace_collisions_in_scope(id, [1.0, 0.0], workspace_ids);
         }
         if after[3] > before[3] + f32::EPSILON {
-            self.resolve_workspace_collisions(id, [0.0, 1.0]);
+            self.resolve_workspace_collisions_in_scope(id, [0.0, 1.0], workspace_ids);
         }
     }
 
@@ -403,10 +415,11 @@ impl Board {
     }
 
     /// Returns the visual frame rect `[min_x, min_y, max_x, max_y]` for a
-    /// workspace, including the title area and background padding.
-    pub(super) fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
+    /// workspace, including its clouds, the title area and background padding.
+    #[must_use]
+    pub fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
         let workspace = self.workspace(id)?;
-        if let Some((min, max)) = self.workspace_bounds(id) {
+        if let Some((min, max)) = self.workspace_collision_bounds(id) {
             Some([
                 min[0] - WS_FRAME_PAD,
                 min[1] - WS_FRAME_PAD - WS_FRAME_TOP_EXTRA,
