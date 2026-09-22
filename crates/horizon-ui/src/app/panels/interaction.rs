@@ -57,7 +57,12 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn arranged_panel_position(&self, panel_id: PanelId, workspace_id: WorkspaceId, fallback: Pos2) -> Pos2 {
+    pub(in crate::app) fn arranged_panel_position(
+        &self,
+        panel_id: PanelId,
+        workspace_id: WorkspaceId,
+        fallback: Pos2,
+    ) -> Pos2 {
         let Some(preview_position) = self
             .arranged_panel_drag
             .and_then(|drag| drag.preview_for(panel_id, workspace_id))

@@ -271,8 +271,7 @@ fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> bool
             .fit_to_exact_size(size)
             .sense(egui::Sense::hover()),
     );
-    let painted = response.rect.intersect(ui.clip_rect());
-    painted.width() > 0.0 && painted.height() > 0.0
+    ui.is_rect_visible(response.rect) && response.rect.intersect(ui.clip_rect()).is_positive()
 }
 
 #[cfg(test)]

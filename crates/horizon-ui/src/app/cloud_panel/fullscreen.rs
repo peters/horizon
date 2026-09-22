@@ -10,10 +10,27 @@ pub(in crate::app) struct CloudFullscreen {
     pub previous_view: CanvasViewState,
     previous_focus: Option<PanelId>,
     previous_window_fullscreen: bool,
+    previous_window_size: Vec2,
 }
 
 impl HorizonApp {
-    pub(super) fn toggle_cloud_fullscreen(&mut self, ctx: &Context, id: u32) {
+    pub(in crate::app) fn exit_cloud_for_device_reveal(
+        &mut self,
+        ctx: &Context,
+    ) -> Option<crate::app::device_requests::WindowRestore> {
+        let expected =
+            self.cloud_prototype
+                .fullscreen
+                .as_ref()
+                .map(|view| crate::app::device_requests::WindowRestore {
+                    fullscreen: view.previous_window_fullscreen,
+                    size: view.previous_window_size,
+                });
+        self.exit_cloud_fullscreen(ctx);
+        expected
+    }
+
+    pub(in crate::app) fn toggle_cloud_fullscreen(&mut self, ctx: &Context, id: u32) {
         if self.cloud_prototype.fullscreen.is_some() {
             self.exit_cloud_fullscreen(ctx);
             return;
@@ -36,6 +53,7 @@ impl HorizonApp {
             previous_view: self.canvas_view,
             previous_focus,
             previous_window_fullscreen: ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)),
+            previous_window_size: ctx.content_rect().size(),
         });
         self.pan_target = None;
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));

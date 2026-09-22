@@ -231,6 +231,25 @@ impl HorizonApp {
         self.mark_runtime_dirty();
     }
 
+    /// Recovery must bring the device itself into view even when its workspace
+    /// is too wide to fit at the minimum zoom. It must not move keyboard focus.
+    pub(super) fn reveal_device_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return;
+        };
+        let position = self.arranged_panel_position(panel_id, panel.workspace_id, panel.layout.position.into());
+        let (position, size) = panel_focus_frame(position.into(), panel.layout.size);
+        let zoom = self
+            .canvas_view
+            .zoom
+            .min(fit_zoom_for_frame(canvas_rect.size(), size, Vec2::splat(REVEAL_MARGIN)));
+        let pan = aligned_pan_offset(canvas_rect, position, size, zoom, false);
+        self.pan_target = None;
+        self.canvas_view.set_zoom(zoom);
+        self.canvas_view.set_pan_offset(pan.into());
+        self.mark_runtime_dirty();
+    }
+
     /// The revealed panel's frame plus the left edge of the workspace it
     /// belongs to (falling back to the panel's own left edge when the
     /// workspace cannot be resolved).

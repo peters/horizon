@@ -304,6 +304,7 @@ impl HorizonApp {
         self.process_pending_detached_reattach(ui.ctx());
         #[cfg(feature = "cloud-workspaces")]
         self.prepare_cloud_prototype(ui.ctx());
+        self.apply_pending_root_device_reveal(ui.ctx());
 
         if self.fullscreen_panel.is_some() {
             self.render_fullscreen_panel(ui);

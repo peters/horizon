@@ -2,6 +2,8 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 use horizon_core::browser::manifest::device::Connection;
 
+mod presentation;
+
 fn fixture_device() -> DevicePanelState {
     DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
