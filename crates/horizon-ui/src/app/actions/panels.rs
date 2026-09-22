@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_click_reveals_panel_the_same_way_as_sidebar() {
+    fn navigation_reveals_panel_after_the_view_is_panned_away() {
         use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -427,15 +427,66 @@ mod tests {
         app.canvas_view
             .set_pan_offset([reveal_pan[0] + 120.0, reveal_pan[1] + 80.0]);
         run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
-        let titlebar = titlebar_click_pos(&app, panel_id);
-        click_screen_pos(&ctx, &mut app, viewport, titlebar);
+        app.reveal_selected_panel(&ctx, panel_id);
 
         assert_eq!(app.board.focused, Some(panel_id));
         assert_pan_near(
             app.canvas_view.pan_offset,
             reveal_pan,
-            "titlebar click should restore the sidebar reveal pan",
+            "navigation should restore the reveal pan",
         );
+    }
+
+    #[test]
+    fn titlebar_clicks_focus_and_rename_without_changing_the_view() {
+        use crate::app::test_support::{
+            editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+        };
+
+        for zoom in [0.75, 1.0, 1.5] {
+            let mut workspace = editor_workspace_state("header-click", [0.0, 0.0]);
+            workspace.panels[0].size = Some([2200.0, 1400.0]);
+            let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState {
+                    workspaces: vec![workspace],
+                    ..RuntimeState::default()
+                }),
+            });
+            let viewport = [1600.0, 1000.0];
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            let panel_id = app.board.workspaces[0].panels[0];
+            app.board.focused = None;
+            app.canvas_view.set_zoom(zoom);
+            app.canvas_view.set_pan_offset([140.0, 100.0]);
+            app.pan_target = None;
+            let view = app.canvas_view;
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            let titlebar = titlebar_click_pos(&app, panel_id);
+
+            click_screen_pos(&ctx, &mut app, viewport, titlebar);
+            assert_eq!(app.board.focused, Some(panel_id));
+            assert_eq!(app.canvas_view, view, "first click must preserve the view");
+            assert_eq!(app.renaming_panel, None);
+
+            click_screen_pos(&ctx, &mut app, viewport, titlebar);
+            assert_eq!(app.renaming_panel, Some(panel_id));
+            assert_eq!(app.canvas_view, view, "double-click must preserve the view");
+
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            "Renamed panel".clone_into(&mut app.panel_rename_buffer);
+            let mut enter = raw_input(viewport, Some([0.0, 0.0]));
+            enter.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            run_app_frame_with_input(&ctx, &mut app, enter);
+            assert_eq!(app.board.panel(panel_id).expect("panel").title, "Renamed panel");
+            assert_eq!(app.renaming_panel, None);
+            assert_eq!(app.canvas_view, view, "committing the name must preserve the view");
+        }
     }
 
     #[test]

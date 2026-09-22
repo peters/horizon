@@ -62,7 +62,6 @@ enum PanelFocusRequest {
     #[default]
     None,
     Focus,
-    Reveal,
 }
 
 #[derive(Default)]
@@ -82,16 +81,6 @@ struct PanelUiOutcome {
 impl PanelUiOutcome {
     fn request_focus(&mut self) {
         if self.focus == PanelFocusRequest::None {
-            self.focus = PanelFocusRequest::Focus;
-        }
-    }
-
-    fn request_reveal(&mut self) {
-        self.focus = PanelFocusRequest::Reveal;
-    }
-
-    fn clear_reveal(&mut self) {
-        if self.focus == PanelFocusRequest::Reveal {
             self.focus = PanelFocusRequest::Focus;
         }
     }
