@@ -153,8 +153,18 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             horizon_core::cloud_runtime::CreateState::Terminated { .. }
         )
     }) {
-        ui.label("Worker deleted. Its processes and files are no longer available.");
-        return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+        if runtime.stage == Some(Stage::Deleted) {
+            ui.label("Worker and workspace storage deleted.");
+            return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+        }
+        progress_output(ui, runtime);
+        ui.label("Worker deleted. Finish workspace storage cleanup to stop storage charges.");
+        return if runtime.receiver.is_some() {
+            ui.spinner();
+            None
+        } else {
+            deletion_action(ui, runtime)
+        };
     }
     progress_output(ui, runtime);
     ui.add_space(8.0);
@@ -252,15 +262,15 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
-                "Delete this worker and its files? Running sessions cannot be recovered.",
+                "Delete this worker and workspace storage? Running sessions and files cannot be recovered.",
             );
-            if ui.button("Delete worker permanently").clicked() {
+            if ui.button("Delete resources permanently").clicked() {
                 return Some(Action::Delete);
             }
-            if ui.button("Keep worker").clicked() {
+            if ui.button("Keep resources").clicked() {
                 runtime.confirmation = Confirmation::None;
             }
-        } else if ui.button("Delete worker…").clicked() {
+        } else if ui.button("Delete cloud resources…").clicked() {
             runtime.confirmation = Confirmation::Delete;
         }
     }

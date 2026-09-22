@@ -121,8 +121,17 @@ views from their saved remote references.
 Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.
 Missing, undersized or differently mounted storage blocks source and agent-credential
-transfer. The current adapter requests Pod-local volumes; an unexpected network
-volume attachment is unsupported and also blocks readiness. The worker remains allocated and bound to its original operation for
+transfer. New CPU clouds allocate an owned standard network volume in a data center
+with compatible CPU capacity, honoring configured location preferences, and attach
+it at worker creation. GPU clouds and existing deployments retain their Pod-local
+storage contract. Unexpected volume identities, locations or capacities block
+readiness. CPU mount verification uses the current provider API because the legacy
+worker response omits CPU network attachments. Deletion checks current mounts on
+all listed workers before removing storage. Network storage remains billable when the worker is stopped or deleted;
+explicit cloud deletion removes the worker first, then confirms volume deletion.
+Failed cleanup keeps the cloud available for retry and prevents local removal.
+Allocation and deletion are journaled so uncertain responses never create a second
+volume or adopt an unrelated one. The worker remains allocated and bound to its original operation for
 inspection or explicit deletion; retry does not create a replacement. Old saved
 worker records without storage fields remain readable. Deployment and reconnect
 attempts that reach readiness inspect fresh provider data; this does not change

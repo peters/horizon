@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub mod recovery;
+pub mod volumes;
 
 #[cfg(test)]
 mod tests;
@@ -12,6 +13,8 @@ pub struct RunPod {
     agent: ureq::Agent,
     credential: Credential,
     endpoint: String,
+    catalog_endpoint: String,
+    api_endpoint: String,
 }
 impl RunPod {
     #[must_use]
@@ -25,6 +28,8 @@ impl RunPod {
             agent: ureq::Agent::new_with_config(config),
             credential,
             endpoint: "https://rest.runpod.io/v1".into(),
+            catalog_endpoint: "https://api.runpod.io/v2/catalog".into(),
+            api_endpoint: "https://api.runpod.io/v2".into(),
         }
     }
 
@@ -38,10 +43,28 @@ impl RunPod {
         spec: &WorkerSpec,
         state: &mut CreateState,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        progress: impl FnMut(Progress),
+    ) -> Result<Worker, CloudError> {
+        self.ensure_with_volume(spec, state, None, cancel, persist, progress)
+    }
+
+    /// As `ensure`, with an explicitly owned and verified workspace volume.
+    /// # Errors
+    /// Refuses incompatible storage and retains uncertain worker creation fences.
+    pub fn ensure_with_volume(
+        &self,
+        spec: &WorkerSpec,
+        state: &mut CreateState,
+        volume: Option<&volumes::Volume>,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
     ) -> Result<Worker, CloudError> {
         spec.validate()?;
+        if let Some(volume) = volume {
+            volume.verify_worker_spec(spec)?;
+        }
         cancel.check()?;
         progress(Progress::Reconciling);
         if *state == CreateState::Requested {
@@ -91,7 +114,14 @@ impl RunPod {
         persist(&CreateState::Requested)?;
         *state = CreateState::Requested;
         progress(Progress::Requesting);
-        let value = match self.request("POST", "/pods", Some(create_body(spec)), cancel) {
+        let mut body = create_body(spec);
+        if let Some(volume) = volume {
+            body["networkVolumeId"] = json!(volume.id);
+            body["volumeInGb"] = json!(0);
+            body["dataCenterIds"] = json!([volume.data_center_id]);
+            body["dataCenterPriority"] = json!("custom");
+        }
+        let value = match self.request("POST", "/pods", Some(body), cancel) {
             Ok(value) => value,
             Err(error @ (CloudError::Unauthorized | CloudError::Rejected | CloudError::Cancelled)) => {
                 persist(&CreateState::Prepared)?;
@@ -213,16 +243,27 @@ impl RunPod {
     ) -> Result<Value, CloudError> {
         cancel.check()?;
         let url = format!("{}{path}", self.endpoint);
+        self.request_url(method, &url, body, cancel, timeout)
+    }
+    fn request_url(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<Value>,
+        cancel: &Cancellation,
+        timeout: Option<Duration>,
+    ) -> Result<Value, CloudError> {
+        cancel.check()?;
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
         let response = match method {
             "POST" => self
                 .agent
-                .post(&url)
+                .post(url)
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or(Value::Null)),
-            "DELETE" => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
+            "DELETE" => self.agent.delete(url).header("Authorization", auth.as_str()).call(),
             _ => {
-                let request = self.agent.get(&url).header("Authorization", auth.as_str());
+                let request = self.agent.get(url).header("Authorization", auth.as_str());
                 if let Some(timeout) = timeout {
                     request.config().timeout_global(Some(timeout)).build().call()
                 } else {
@@ -239,7 +280,7 @@ impl RunPod {
             400 | 422 => return Err(CloudError::Rejected),
             _ => return Err(CloudError::Http(status)),
         }
-        if method == "DELETE" || path.ends_with("/stop") || path.ends_with("/start") {
+        if method == "DELETE" || url.ends_with("/stop") || url.ends_with("/start") {
             return Ok(Value::Null);
         }
         response
