@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CANVAS_ZOOM: f32 = 1.0;
-pub const MIN_CANVAS_ZOOM: f32 = 0.25;
+pub const MIN_CANVAS_ZOOM: f32 = 0.05;
 pub const MAX_CANVAS_ZOOM: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

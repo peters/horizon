@@ -70,7 +70,6 @@ enum PanelFocusRequest {
     #[default]
     None,
     Focus,
-    Reveal,
 }
 
 #[derive(Default)]
@@ -90,16 +89,6 @@ struct PanelUiOutcome {
 impl PanelUiOutcome {
     fn request_focus(&mut self) {
         if self.focus == PanelFocusRequest::None {
-            self.focus = PanelFocusRequest::Focus;
-        }
-    }
-
-    fn request_reveal(&mut self) {
-        self.focus = PanelFocusRequest::Reveal;
-    }
-
-    fn clear_reveal(&mut self) {
-        if self.focus == PanelFocusRequest::Reveal {
             self.focus = PanelFocusRequest::Focus;
         }
     }
@@ -227,6 +216,7 @@ fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state:
 pub(super) struct PanelRenderScope {
     /// Detached viewports dispatch only the fit/minimap toolbar shortcuts.
     pub(super) detached: bool,
+    pub(super) host_dialog_open: bool,
     /// The viewport's event slice carries a pointer-button press this frame.
     pub(super) frame_has_pointer_button: bool,
 }
@@ -335,7 +325,13 @@ impl HorizonApp {
         self.board
             .panels
             .iter()
-            .filter(|panel| panel.visible)
+            .filter(|panel| {
+                #[cfg(feature = "cloud-workspaces")]
+                if visible_workspace.is_none() && !self.cloud_panel_is_in_view(&panel.local_id) {
+                    return false;
+                }
+                panel.visible
+            })
             .filter(|panel| match visible_workspace {
                 Some(workspace_id) => panel.workspace_id == workspace_id,
                 None => !self.workspace_is_detached(panel.workspace_id),
@@ -391,7 +387,13 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
-        if !self.board.panel(panel_id).is_some_and(|panel| panel.visible) {
+        if !self.board.panel(panel_id).is_some_and(|panel| {
+            #[cfg(feature = "cloud-workspaces")]
+            if !self.cloud_panel_is_in_view(&panel.local_id) {
+                return false;
+            }
+            panel.visible
+        }) {
             self.fullscreen_panel = None;
             return;
         }
@@ -417,7 +419,12 @@ impl HorizonApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
             .show(ui, |ui| {
-                let rect = ui.max_rect();
+                #[cfg(feature = "cloud-workspaces")]
+                if let Some(label) = self.cloud_ownership_label(panel_id) {
+                    ui.label(egui::RichText::new(label).color(theme::PALETTE_CYAN()));
+                    ui.add_space(4.0);
+                }
+                let rect = ui.available_rect_before_wrap();
                 let body_rect = Rect::from_min_max(
                     Pos2::new(rect.min.x + PANEL_PADDING, rect.min.y + PANEL_PADDING),
                     Pos2::new(rect.max.x - PANEL_PADDING, rect.max.y - PANEL_PADDING),
@@ -442,6 +449,7 @@ impl HorizonApp {
                         }
                         let mut reconnect_requested = false;
                         let claim_editor_focus = !self.speech_text_surface_active().0;
+                        let interactive = !self.host_dialog_open();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -464,7 +472,7 @@ impl HorizonApp {
                                 ui,
                                 panel,
                                 claim_editor_focus,
-                                true,
+                                interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
                                     browser_events: &browser_events,
@@ -518,7 +526,13 @@ impl HorizonApp {
             self.board
                 .panels
                 .iter()
-                .filter(|panel| panel.visible && !self.workspace_is_detached(panel.workspace_id))
+                .filter(|panel| {
+                    #[cfg(feature = "cloud-workspaces")]
+                    if !self.cloud_panel_is_in_view(&panel.local_id) {
+                        return false;
+                    }
+                    panel.visible && !self.workspace_is_detached(panel.workspace_id)
+                })
                 .enumerate()
                 .map(|(index, panel)| (panel.id, index)),
         );
@@ -545,6 +559,7 @@ impl HorizonApp {
             .iter()
             .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         let mut panels_to_close = Vec::new();
+        let host_dialog_open = self.host_dialog_open();
 
         for i in 0..self.panel_render_order.len() {
             let (panel_id, _fallback_index) = self.panel_render_order[i];
@@ -556,6 +571,7 @@ impl HorizonApp {
                 &browser_events,
                 PanelRenderScope {
                     detached: false,
+                    host_dialog_open,
                     frame_has_pointer_button,
                 },
             ) {
@@ -644,7 +660,7 @@ impl HorizonApp {
         scope: PanelRenderScope,
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
-        let interactive = !self.canvas_pan_input_claimed;
+        let interactive = !self.canvas_pan_input_claimed && !scope.host_dialog_open;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
         // Browser input suppresses app shortcuts that this viewport actually

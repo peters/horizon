@@ -142,6 +142,11 @@ pub enum BrowserAuditAction {
         delta_x: f64,
         delta_y: f64,
     },
+    /// File attachment: the host paths are recorded, the contents never are.
+    SetFiles {
+        target: String,
+        paths: Vec<String>,
+    },
     Evaluate {
         expression_characters: usize,
     },
@@ -262,6 +267,15 @@ impl BrowserAuditAction {
                 target: target.as_ref().map(audit_target),
                 delta_x: *delta_x,
                 delta_y: *delta_y,
+            },
+            BrowserControlAction::SetFiles { target, paths, sources } => Self::SetFiles {
+                target: audit_target(target),
+                // A host queue that staged private copies audits the
+                // authorized sources, in every lifecycle record.
+                paths: if sources.is_empty() { paths } else { sources }
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
             },
             BrowserControlAction::Evaluate { expression } => Self::Evaluate {
                 expression_characters: expression.chars().count(),
@@ -607,6 +621,21 @@ mod tests {
         let evaluate = BrowserAuditAction::from_control(&BrowserControlAction::Evaluate {
             expression: "document.cookie".to_string(),
         });
+        let attach = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
+            target: crate::BrowserTarget::Ref {
+                reference: "g1s1e4".to_string(),
+            },
+            paths: vec![std::path::PathBuf::from("/private/staging/0/secret-name.pdf")],
+            sources: vec![std::path::PathBuf::from("/work/uploads/secret-name.pdf")],
+        });
+        assert_eq!(
+            attach,
+            BrowserAuditAction::SetFiles {
+                target: "g1s1e4".to_string(),
+                paths: vec!["/work/uploads/secret-name.pdf".to_string()],
+            },
+            "attachments audit the authorized source path, never a staged copy or file contents"
+        );
         let json = serde_json::to_string(&[query, fill, evaluate]).unwrap_or_default();
 
         assert!(!json.contains("secret"));

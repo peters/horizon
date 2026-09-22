@@ -37,8 +37,13 @@ pub(super) fn create_webdriver_session(
     config: &BrowserSessionConfig,
     request_bidi: bool,
 ) -> Result<Value, HttpError> {
-    let capabilities = new_session_capabilities(&config.browser, &config.panel_local_id, request_bidi)
-        .map_err(|error| HttpError::InvalidResponse(format!("invalid session capabilities: {error}")))?;
+    let capabilities = new_session_capabilities(
+        &config.browser,
+        &config.panel_local_id,
+        request_bidi,
+        config.frame_slot.file_chooser().has_consumer(),
+    )
+    .map_err(|error| HttpError::InvalidResponse(format!("invalid session capabilities: {error}")))?;
     transport.post("/session", &json!({ "capabilities": { "alwaysMatch": capabilities } }))
 }
 
@@ -46,6 +51,7 @@ pub(super) fn new_session_capabilities(
     config: &BrowserConfig,
     panel_local_id: &str,
     request_bidi: bool,
+    manual_file_chooser: bool,
 ) -> Result<Value, String> {
     match config.backend {
         BackendKind::FirefoxBidi => {
@@ -72,6 +78,7 @@ pub(super) fn new_session_capabilities(
                 json!({
                     "widget.gtk.overlay-scrollbars.enabled": false,
                     "ui.useOverlayScrollbars": 0,
+                    "remote.bidi.dismiss_file_pickers.enabled": manual_file_chooser,
                 }),
             );
             if let Some(command) = &config.firefox_command {

@@ -88,10 +88,67 @@ impl BrowserRuntimePaths {
         self.root.join("runtime").join("browser-results")
     }
 
+    /// Private copies of files an agent attaches through `set_files`, one
+    /// directory per panel and action. They stay while the panel's page may
+    /// still read them lazily and are pruned by age, count and size when the
+    /// panel's next attachment is staged. The browser must be able to read
+    /// them: on Linux a Snap-confined
+    /// browser cannot open hidden directories directly beneath the home
+    /// directory, so a runtime root such as `~/.horizon` stages under the
+    /// visible `~/Horizon` directory the Snap profile root already uses.
+    /// That visible directory is namespaced by the runtime root, so two
+    /// hidden roots under one home (say `~/.horizon` and `~/.horizon-dev`)
+    /// never share staging or sweep each other's. The path is absolute even
+    /// when the runtime root is the relative fallback, because queued
+    /// attachment paths must be absolute.
+    #[must_use]
+    pub fn browser_attachments_dir(&self) -> PathBuf {
+        let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        browser_visible_attachments_dir(&root, home.as_deref())
+            .unwrap_or_else(|| root.join("runtime").join("browser-attachments"))
+    }
+
     #[must_use]
     pub fn browser_audit_dir(&self) -> PathBuf {
         self.root.join("audit").join("browsers")
     }
+}
+
+#[cfg(target_os = "linux")]
+fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let home = home?;
+    let hidden_beneath_home = root
+        .strip_prefix(home)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|component| component.as_os_str().to_string_lossy().starts_with('.'));
+    hidden_beneath_home.then(|| {
+        home.join("Horizon")
+            .join("browser-attachments")
+            .join(encode_path_bytes(root))
+    })
+}
+
+/// A bounded directory name derived from a path's exact platform bytes (a
+/// SHA-256 digest in hex, 64 characters), so two distinct roots never share
+/// it however they are spelled and however long they are.
+#[cfg(target_os = "linux")]
+fn encode_path_bytes(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let digest = Sha256::digest(path.as_os_str().as_bytes());
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(LOWER_HEX[(byte >> 4) as usize] as char);
+        encoded.push(LOWER_HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+#[cfg(not(target_os = "linux"))]
+fn browser_visible_attachments_dir(_root: &Path, _home: Option<&Path>) -> Option<PathBuf> {
+    None
 }
 
 #[must_use]
@@ -108,4 +165,34 @@ pub fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    fn hidden_runtime_roots_under_one_home_stage_in_separate_visible_directories() {
+        let home = std::path::Path::new("/home/someone");
+        let first = super::browser_visible_attachments_dir(&home.join(".horizon"), Some(home)).expect("hidden");
+        let second = super::browser_visible_attachments_dir(&home.join(".horizon-dev"), Some(home)).expect("hidden");
+        assert!(first.starts_with(home.join("Horizon").join("browser-attachments")));
+        assert_ne!(first, second, "two hidden roots never share staging");
+        assert_eq!(
+            first.file_name().map(std::ffi::OsStr::len),
+            Some(64),
+            "the namespace is a bounded digest, not the path itself"
+        );
+        let long = home.join(format!(".{}", "h".repeat(200)));
+        let bounded = super::browser_visible_attachments_dir(&long, Some(home)).expect("hidden");
+        assert_eq!(bounded.file_name().map(std::ffi::OsStr::len), Some(64));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let odd = |bytes: &[u8]| home.join(std::ffi::OsStr::from_bytes(bytes));
+            let left = super::browser_visible_attachments_dir(&odd(b".horizon-\x80"), Some(home)).expect("hidden");
+            let right = super::browser_visible_attachments_dir(&odd(b".horizon-\x81"), Some(home)).expect("hidden");
+            assert_ne!(left, right, "non-UTF-8 roots are told apart by their exact bytes");
+        }
+        assert!(super::browser_visible_attachments_dir(&home.join("Horizon"), Some(home)).is_none());
+        assert!(super::browser_visible_attachments_dir(&home.join(".horizon"), None).is_none());
+    }
 }

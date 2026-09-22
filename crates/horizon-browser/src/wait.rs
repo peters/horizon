@@ -402,6 +402,7 @@ mod tests {
             visible,
             enabled: true,
             bounds: None,
+            file_input: None,
         }
     }
 

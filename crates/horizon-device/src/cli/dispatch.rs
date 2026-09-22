@@ -44,7 +44,28 @@ impl Dispatcher {
     pub fn call(&self, command: Command) -> Response {
         let result = self.lock().and_then(|lock| {
             let observation = matches!(command, Command::Screenshot(_)).then(|| self.marker("resize-observe"));
-            let value = self.execute(command)?;
+            let inherited_resize = self.marker("resize-pending").symlink_metadata().is_ok();
+            if inherited_resize && matches!(command, Command::Act(_)) {
+                return Err(DeviceError::ResizeUncertain(
+                    "previous resize requires owner reconciliation".into(),
+                ));
+            }
+            let mut owner =
+                if matches!(command, Command::Act(_)) || (!inherited_resize && matches!(command, Command::Resize(_))) {
+                    super::control_owner::ControlOwner::begin(&self.target_file)?
+                } else {
+                    None
+                };
+            let result = self.execute(command);
+            if (result.is_ok()
+                || result.as_ref().is_err_and(|error| {
+                    (!inherited_resize && error.resize_uncertain()) || matches!(error, DeviceError::Indeterminate(_))
+                }))
+                && let Some(owner) = &mut owner
+            {
+                owner.complete();
+            }
+            let value = result?;
             Ok(Response::new(
                 json!({"ok":true,"result":value}),
                 Some(lock),
@@ -355,6 +376,38 @@ mod tests {
             std::fs::read(dispatcher.marker("resize-pending")).map_err(io_error)?,
             b"original"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_resize_without_observation_marker_fences_input_before_target_access() -> crate::Result<()> {
+        let root = tempfile::tempdir().map_err(io_error)?;
+        let dispatcher = Dispatcher {
+            target_file: root.path().join("missing-target.json"),
+            resize_factory: None,
+        };
+        std::fs::write(dispatcher.marker("resize-pending"), b"pending").map_err(io_error)?;
+        let owner = dispatcher.marker("controller.json");
+        std::fs::write(&owner, b"original controller").map_err(io_error)?;
+        let request = ActRequest {
+            geometry: crate::Geometry {
+                target_id: "fixture".into(),
+                surface_id: "root".into(),
+                width: 100,
+                height: 100,
+                revision: "before-crash".into(),
+            },
+            action: crate::Action::Key {
+                key: crate::Key::Escape,
+                modifiers: Vec::new(),
+            },
+        };
+        let response = dispatcher.call(Command::Act(request));
+        assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        assert_eq!(response.value["error"]["resize_uncertain"], true);
+        assert!(dispatcher.marker("resize-pending").exists());
+        assert!(!dispatcher.marker("resize-observe").exists());
+        assert_eq!(std::fs::read(owner).map_err(io_error)?, b"original controller");
         Ok(())
     }
 

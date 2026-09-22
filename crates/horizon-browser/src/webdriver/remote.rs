@@ -31,6 +31,8 @@ const RELEASE_ATTEMPTS: u8 = 3;
 /// configuration, the resolved authorization) happens before this point.
 #[derive(Clone)]
 pub struct RemoteSessionRequest {
+    /// Configured provider adapter; also selects known file-transfer support.
+    pub adapter: crate::remote::RemoteAdapterKind,
     /// Private allocation identity retained through teardown.
     pub recovery: recovery::RemoteAllocation,
     /// Control endpoint including base path, already validated by the host.
@@ -389,9 +391,15 @@ impl RemoteHost {
                 });
             }
         };
-        request
+        if request
             .recovery
-            .identify(Arc::clone(&self.transport), session.id.clone(), self.report.clone());
+            .identify(Arc::clone(&self.transport), session.id.clone(), self.report.clone())
+            .is_err()
+        {
+            return Err(RemoteStartFailure::Unenforceable {
+                released: release_session(&self.transport, &session.id),
+            });
+        }
         match Watchdog::start(
             Arc::clone(&self.transport),
             session.id.clone(),

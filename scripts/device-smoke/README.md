@@ -103,6 +103,62 @@ session or automate the developer's desktop. Screenshots and recordings are
 supporting evidence, not a replacement for the user's live panel. Device CLI/MCP
 controls the isolated target; the panel is a read-only viewer.
 
+### Automatic viewer health check
+
+The agent performs this procedure through the public `device_panel` tool. Never
+ask a person whether the panel is visible or updating. Preserve the observations,
+decisions and attempted operations with the task's private smoke evidence.
+
+1. Inspect the exact task-owned viewer at least three times, two seconds apart.
+   Record UTC timestamps, panel identity, connection, visibility, ownership,
+   `image_received`, `image_displayed` and `frame_sequence`. Record whether target
+   output is independently known to be changing, static or unknown. A fixture's
+   existing heartbeat is suitable; do not drive an unverified interactive UI just
+   to manufacture changing content.
+2. If hidden, request `visibility(true)` once. If stopped or disconnected,
+   reconnect once, provided the task owns the viewer. An unowned/restored viewer
+   needs an explicit task ownership record before acquisition. Never mutate a
+   viewer owned by another agent. If a mutation times out, list/inspect before
+   deciding whether any further action is safe.
+3. Repeat the bounded observations after recovery. Never compare frame counters
+   across reconnects. A connected, visible panel that remains unpresented is a
+   presentation problem, not evidence that another reconnect will help. On hosts
+   advertising `reveal`, call it once for the owned viewer, then inspect again.
+   Reveal changes canvas presentation, preserves keyboard focus and does not
+   reconnect or itself prove a displayed image. Older hosts may lack this
+   operation; record `presentation_unverified` and the unsupported capability.
+   Do not enter a reconnect/recreate loop or request manual confirmation.
+   New hosts report `diagnostics`: the connection generation, decoded-frame
+   counter and age, sampling pause and a presentation reason. `not_rendered`
+   plus `sampling_paused` explains an offscreen viewer; it is not a transport
+   failure. `awaiting_frame` and `clipped` identify different presentation gaps.
+   A decoded frame is not an uploaded or displayed image. Missing diagnostics
+   mean an older host, not a healthy or failed connection.
+   `last_uploaded_age_millis` independently dates the last received-frame texture
+   submission, matching `frame_sequence`; it is not a GPU completion timestamp.
+   Repainting or cropping retained pixels does not refresh this age. Reconnect
+   clears it even if an old texture remains visible. Older hosts can omit it.
+4. Report the strongest evidence actually observed. Connected plus received plus
+   displayed with an advancing sequence during known changing output establishes
+   live presentation for that observation window. Displayed static content
+   establishes presentation only. Unchanged counters with static/unknown output
+   are inconclusive about transport freshness. A known-changing target without
+   advancement is `freshness_unverified`; a failed connection is
+   `connection_unavailable`; unavailable MCP/host support is `host_unavailable`.
+5. Keep a single recovery budget for the incident, including resumed agent turns:
+   at most one visibility request, one reveal and one justified reconnect, followed by a
+   recorded outcome. Further recovery requires new diagnostic evidence. A
+   blocked native lane does not block headless checks, and it never authorizes a
+   restart of the user's Horizon or automation of their desktop.
+
+`image_received` and `frame_sequence` retain their original texture-upload
+meaning for compatibility. The separate decoded-frame counter is available only
+when the host returns diagnostics. `image_displayed` refers to the last completed
+UI frame. Validate the running host's advertised capabilities; a new client or
+updated instructions do not upgrade an older running host.
+
+### Exercise the isolated target
+
 Use the target configuration to observe the disposable desktop:
 
 ```sh

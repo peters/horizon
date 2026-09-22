@@ -390,6 +390,8 @@ impl PanelState {
                 .as_ref()
                 .and_then(|profile| profile.remote_target.clone()),
             transcript_root: None,
+            #[cfg(feature = "cloud-workspaces")]
+            cloud_connection: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
         }

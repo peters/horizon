@@ -5,6 +5,8 @@ mod browser_cleanup;
 mod browser_close_requests;
 mod browser_connectors;
 mod browser_duplicate;
+mod browser_file_chooser;
+mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;
 mod browser_remote_create;
@@ -12,6 +14,8 @@ mod browser_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_scroll;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud_panel;
 mod detached_viewports;
 mod device_requests;
 #[cfg(test)]
@@ -21,6 +25,7 @@ mod file_drop_highlight;
 mod frame_stats;
 mod lifecycle;
 mod minimap;
+mod navigation_input;
 mod panel_chrome;
 mod panels;
 mod persistence;
@@ -143,6 +148,7 @@ struct DetachedWorkspaceViewportState {
     pan_target: Option<Vec2>,
     interaction: DetachedCanvasInteractionState,
     initial_fit_pending: bool,
+    pending_device_reveal: Option<PanelId>,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -156,6 +162,7 @@ impl DetachedWorkspaceViewportState {
             pan_target: None,
             interaction: DetachedCanvasInteractionState::default(),
             initial_fit_pending: true,
+            pending_device_reveal: None,
             panel_screen_rects: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
@@ -190,6 +197,7 @@ struct SpeechNotice {
 #[derive(Default)]
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
+    pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
@@ -199,6 +207,8 @@ pub struct PanelRenderCaches {
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
     board: Board,
+    #[cfg(feature = "cloud-workspaces")]
+    cloud_prototype: cloud_panel::CloudPrototype,
     panels_to_close: Vec<PanelId>,
     panels_to_restart: Vec<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
@@ -252,6 +262,7 @@ pub struct HorizonApp {
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
+    held_navigation_keys: Vec<horizon_core::ShortcutBinding>,
     sidebar_visible: bool,
     sidebar_drag_workspace: Option<WorkspaceId>,
     minimap_visible: bool,

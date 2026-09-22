@@ -16,7 +16,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
 use super::StandaloneError;
 
-const KEEP_ALIVE_IDLE: Duration = Duration::from_secs(60);
+const KEEP_ALIVE_IDLE: Duration = Duration::from_mins(1);
 const KEEP_ALIVE_POLL: Duration = Duration::from_millis(100);
 const STOP_GRACE: Duration = Duration::from_secs(15);
 const STOP_ESCALATION: Duration = Duration::from_secs(3);

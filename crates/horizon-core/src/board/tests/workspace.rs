@@ -941,3 +941,49 @@ fn resize_panel_pushes_neighbor_workspaces_horizontally_when_width_growth_domina
         gamma_after[1],
     );
 }
+
+#[cfg(feature = "cloud-workspaces")]
+#[test]
+fn ordinary_moves_and_workspace_removal_cannot_target_cloud_workspaces() {
+    let mut board = Board::new();
+    let cloud = board.create_workspace("cloud");
+    let source = board.create_workspace("local");
+    let local = board.workspace(cloud).unwrap().local_id.clone();
+    board.cloud_groups.0.push(crate::cloud_panel::CloudGroup::new(
+        1,
+        "Cloud".into(),
+        local,
+        PathBuf::new(),
+        [0.0, 0.0],
+    ));
+    let panel = board.create_panel(editor_panel_options(), source).unwrap();
+    board.assign_panel_to_workspace(panel, cloud);
+    assert_eq!(board.panel_workspace_id(panel), Some(source));
+    board.remove_workspace(source);
+    assert!(board.workspace(source).is_some());
+    assert_eq!(board.panel_workspace_id(panel), Some(source));
+    let ordinary = board.create_workspace("other local");
+    board.remove_workspace(source);
+    assert!(board.workspace(source).is_none());
+    assert_eq!(board.panel_workspace_id(panel), Some(ordinary));
+    assert!(board.workspace(ordinary).unwrap().panels.contains(&panel));
+    assert!(board.workspace(cloud).unwrap().panels.is_empty());
+}
+
+#[test]
+fn local_preparation_avoids_legacy_remote_workspaces_and_reuses_local_ones() {
+    let mut board = Board::new();
+    let remote = board.create_workspace("Legacy remote");
+    board.workspace_mut(remote).unwrap().remote_workspace = Some(
+        crate::RemoteWorkspaceReference::new("123e4567-e89b-42d3-a456-426614174000".into(), "remote-workspace".into())
+            .unwrap(),
+    );
+    board.active_workspace = Some(remote);
+    let local = board.ensure_local_workspace("Local setup");
+    assert_ne!(local, remote);
+    assert!(board.workspace(local).unwrap().remote_workspace.is_none());
+    assert_eq!(board.ensure_local_workspace("Local setup"), local);
+    let selected = board.create_workspace("Selected local");
+    board.active_workspace = Some(selected);
+    assert_eq!(board.ensure_local_workspace("Local setup"), selected);
+}

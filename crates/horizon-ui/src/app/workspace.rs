@@ -1,6 +1,8 @@
 mod paint;
 mod render;
 mod toolbar;
+#[cfg(feature = "cloud-workspaces")]
+pub(super) use toolbar::workspace_layout_buttons;
 
 use std::collections::HashMap;
 
@@ -29,6 +31,7 @@ struct WorkspaceVisual {
     label_hidden: bool,
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
+    cloud_count: usize,
 }
 
 struct WorkspaceInteraction {
@@ -65,6 +68,21 @@ struct WorkspaceDockTarget {
 }
 
 impl HorizonApp {
+    pub(super) fn workspace_can_arrange_panels(&self, id: WorkspaceId) -> bool {
+        if !self.board.workspace_accepts_panel_layout(id) {
+            return false;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .board
+            .workspace(id)
+            .is_some_and(|workspace| self.cloud_prototype.groups.contains_workspace(&workspace.local_id))
+        {
+            return false;
+        }
+        true
+    }
+
     #[profiling::function]
     pub(super) fn render_workspace_backgrounds(
         &mut self,
@@ -72,13 +90,14 @@ impl HorizonApp {
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
     ) {
+        let show_layout_toolbar = true;
         self.render_workspace_backgrounds_in_rect(
             ctx,
             workspace_bounds,
             overlay_zones,
             self.canvas_rect(ctx),
             None,
-            true,
+            show_layout_toolbar,
         );
     }
 
@@ -352,6 +371,16 @@ impl HorizonApp {
                     label_hidden: overlay_zones.intersects(label_screen_rect),
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
+                    #[cfg(feature = "cloud-workspaces")]
+                    cloud_count: self
+                        .cloud_prototype
+                        .groups
+                        .0
+                        .iter()
+                        .filter(|g| g.workspace == workspace.local_id)
+                        .count(),
+                    #[cfg(not(feature = "cloud-workspaces"))]
+                    cloud_count: 0,
                 })
             })
             .collect()
@@ -429,6 +458,7 @@ mod tests {
             label_hidden: false,
             panel_count,
             layout: None,
+            cloud_count: 0,
         }
     }
 

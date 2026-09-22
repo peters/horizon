@@ -222,15 +222,13 @@ jobs:
   rust-test:
     name: Tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    # Headroom for a cold cache, which every cache-key change (a lock bump,
-    # a toolchain bump, an eviction) produces: macOS x64 spent 20 minutes of
-    # this on a measured cold run, most of it compiling the vendored speech
-    # C++ tree. A job that times out also skips the cache save, so the next
-    # run starts cold again.
+    # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
+    # rebuilds the vendored speech C++ tree, and a job that times out skips
+    # the cache save, so the next run starts cold again.
     timeout-minutes: 35
     strategy:
-    # A failing OS releases the other two runners instead of holding them
-    # to the full timeout; cancelled siblings keep their logs and a re-run
+    # A failing OS releases the other runner instead of holding it to the
+    # full timeout; the cancelled sibling keeps its logs and a re-run
     # recovers the complete per-OS signal. See #677.
       fail-fast: true
       matrix:
@@ -241,9 +239,6 @@ jobs:
           - os: macos-latest
             name: macOS arm64
             cache_key: macos-test
-          - os: macos-15-intel
-            name: macOS x64
-            cache_key: macos-intel-test
     steps:
       - uses: actions/checkout@v7
         with:

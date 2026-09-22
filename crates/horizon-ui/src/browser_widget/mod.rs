@@ -16,6 +16,7 @@ const VIEWPORT_FRAME_TOLERANCE: f32 = 4.0;
 const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 12.0;
 
 mod chrome;
+mod file_chooser;
 mod ime;
 mod input;
 mod render;
@@ -93,17 +94,29 @@ pub struct BrowserUiState {
     /// panel cannot zoom in past a usable viewport, and zooming out is bounded
     /// by the renderer's texture limit and the frame pixel budget.
     effective_zoom: crate::panel_zoom::PanelZoom,
+    file_picker: Option<file_chooser::FilePicker>,
 }
 
 impl BrowserUiState {
     /// Drop theme-dependent render and input caches, keeping the panel's own
-    /// zoom: a repaint after an appearance change is not a new panel.
+    /// zoom and any open file picker: a repaint after an appearance change is
+    /// not a new panel.
     pub(crate) fn invalidate_theme(&mut self) {
         *self = Self {
             zoom: self.zoom,
             effective_zoom: self.effective_zoom,
+            file_picker: self.file_picker.take(),
             ..Self::default()
         };
+    }
+
+    pub(crate) fn show_file_chooser(
+        &mut self,
+        ctx: &egui::Context,
+        panel: horizon_core::PanelId,
+        handle: &horizon_core::browser::file_chooser::FileChooserHandle,
+    ) -> bool {
+        file_chooser::show(ctx, egui::Id::new(panel), handle, &mut self.file_picker)
     }
 
     /// Reset render and input caches when a different backend takes ownership
@@ -173,21 +186,7 @@ impl<'a> BrowserView<'a> {
         }
         let state = &mut *self.ui_state;
         let panel_id = self.panel.id;
-        if let Some(browser) = self.panel.browser() {
-            state.synchronize_backend(browser.backend());
-        }
-        if let Some(browser) = self.panel.browser_mut()
-            && let Some(text) = browser.take_clipboard_text()
-        {
-            ui.ctx().copy_text(text);
-        }
-        if let Some(browser) = self.panel.browser_mut() {
-            if browser.needs_event_waker() {
-                let ctx = ui.ctx().clone();
-                browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
-            }
-            restore_host_focus(ui, state, browser.take_host_focus_request());
-        }
+        prepare_panel(ui, self.panel, state);
 
         let (url_focused, chrome_clicked) = {
             let Some(browser) = self.panel.browser_mut() else {
@@ -205,10 +204,16 @@ impl<'a> BrowserView<'a> {
             state.synchronize_backend(browser.backend());
             render::show_body(ui, panel_id, browser, state, interactive)
         };
+        let chooser_open = self
+            .panel
+            .browser()
+            .is_some_and(|browser| browser.frame_slot.file_chooser().request().is_some());
+        let chooser_open = chooser_open || ui.memory(|memory| memory.top_modal_layer().is_some());
+        let interactive = interactive && !chooser_open;
         if interactive && let Some(browser) = self.panel.browser() {
             render::route_zoom(ui, browser, state, &body, self.fullscreen_active);
         }
-        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
+        let window_focused = !chooser_open && ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
             .memory(egui::Memory::focused)
             .is_some_and(|focused| body.keyboard_focus_id != Some(focused));
@@ -296,6 +301,24 @@ fn route_page_ime(ui: &Ui, body: &render::BodyOutput, page_keyboard_active: bool
         }
     } else {
         ime::clear_page_ime_state(ui, body_id);
+    }
+}
+
+fn prepare_panel(ui: &Ui, panel: &mut Panel, state: &mut BrowserUiState) {
+    if let Some(browser) = panel.browser() {
+        state.synchronize_backend(browser.backend());
+    }
+    if let Some(browser) = panel.browser_mut()
+        && let Some(text) = browser.take_clipboard_text()
+    {
+        ui.ctx().copy_text(text);
+    }
+    if let Some(browser) = panel.browser_mut() {
+        if browser.needs_event_waker() {
+            let ctx = ui.ctx().clone();
+            browser.set_event_waker(Arc::new(move || ctx.request_repaint()));
+        }
+        restore_host_focus(ui, state, browser.take_host_focus_request());
     }
 }
 

@@ -9,6 +9,9 @@ description.workspace = true
 repository.workspace = true
 
 [features]
+default = ["cloud-workspaces"]
+cloud-workspaces = ["horizon-core/cloud-workspaces"]
+cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
 # Opt-in speech input (mic button + push-to-talk hotkey). CPU-only inference
 # by default; add one of the GPU variants below to compile a GPU backend in.

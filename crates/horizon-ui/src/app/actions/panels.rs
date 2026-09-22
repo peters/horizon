@@ -17,7 +17,21 @@ fn normalize_new_panel_resume(options: &mut PanelOptions) {
 impl HorizonApp {
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
         let workspace_id = self.ensure_workspace_visible(ctx);
-        match self.create_panel_with_options(PanelOptions::default(), workspace_id) {
+        #[cfg(feature = "cloud-workspaces")]
+        let (workspace_id, options) =
+            self.fullscreen_cloud_target()
+                .map_or((workspace_id, PanelOptions::default()), |(workspace, position)| {
+                    (
+                        workspace,
+                        PanelOptions {
+                            position: Some(position),
+                            ..PanelOptions::default()
+                        },
+                    )
+                });
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let options = PanelOptions::default();
+        match self.create_panel_with_options(options, workspace_id) {
             Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
             Err(error) => tracing::error!("failed to create panel: {error}"),
         }
@@ -28,11 +42,26 @@ impl HorizonApp {
         mut options: PanelOptions,
         workspace_id: WorkspaceId,
     ) -> horizon_core::Result<PanelId> {
+        #[cfg(feature = "cloud-workspaces")]
+        let cloud_group = self.cloud_panel_launch_group(&mut options, workspace_id);
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(index) = cloud_group
+            && let Err(error) = self.prepare_cloud_remote_panel(index, &mut options)
+        {
+            self.cloud_prototype.error = Some(error.to_string());
+            return Err(error);
+        }
         let workspace_cwd = workspace_cwd(&self.board, workspace_id);
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
-        self.board.create_panel(options, workspace_id)
+        let id = self.board.create_panel(options, workspace_id)?;
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(index) = cloud_group {
+            self.cloud_panel_created(index, id);
+            self.cloud_prototype.error = None;
+        }
+        Ok(id)
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached
@@ -55,6 +84,14 @@ impl HorizonApp {
         workspace_id: WorkspaceId,
         panel_id: PanelId,
     ) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .board
+            .panel(panel_id)
+            .is_some_and(|p| !self.cloud_panel_is_in_view(&p.local_id))
+        {
+            self.exit_cloud_fullscreen(ctx);
+        }
         if self.focus_workspace_window(ctx, workspace_id) {
             self.board.focus(panel_id);
             return;
@@ -76,6 +113,10 @@ impl HorizonApp {
         &mut self,
         panel_id: PanelId,
     ) -> Option<horizon_core::browser::BrowserShutdownSignal> {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.close_cloud_browser(panel_id) {
+            return None;
+        }
         self.refresh_remote_recovery_scope();
         let transcript = self
             .board
@@ -95,6 +136,26 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.board.workspace(workspace_id).is_some_and(|workspace| {
+            self.cloud_prototype
+                .groups
+                .0
+                .iter()
+                .any(|group| group.remote.is_some() && group.workspace == workspace.local_id)
+        }) {
+            let ids = self
+                .board
+                .workspace(workspace_id)
+                .map(|workspace| workspace.panels.clone())
+                .unwrap_or_default();
+            self.board.retain_workspace_when_empty(workspace_id);
+            for id in ids {
+                self.close_panel(id);
+            }
+            self.mark_runtime_dirty();
+            return;
+        }
         self.refresh_remote_recovery_scope();
         let panels_to_close: Vec<_> = self
             .board
@@ -163,9 +224,36 @@ impl HorizonApp {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     ) {
-        if workspace_cwd(&self.board, workspace_id).is_some() || !preset.requires_workspace_cwd() {
+        #[cfg(feature = "cloud-workspaces")]
+        let (workspace_id, canvas_pos) = self
+            .fullscreen_cloud_target()
+            .map_or((workspace_id, canvas_pos), |(workspace, position)| {
+                (workspace, Some(position))
+            });
+        let has_directory = workspace_cwd(&self.board, workspace_id).is_some();
+        #[cfg(feature = "cloud-workspaces")]
+        let has_directory = has_directory
+            || canvas_pos.is_some_and(|pos| {
+                self.cloud_prototype
+                    .groups
+                    .at_position(&self.board, workspace_id, pos)
+                    .is_some()
+            });
+        if has_directory || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options(&self.template_config.browser);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
+            #[cfg(feature = "cloud-workspaces")]
+            if canvas_pos.is_some_and(|pos| {
+                self.cloud_prototype
+                    .groups
+                    .at_position(&self.board, workspace_id, pos)
+                    .is_some()
+            }) {
+                options.position = canvas_pos;
+                if let Some(ws) = self.board.workspace_mut(workspace_id) {
+                    ws.layout = None;
+                }
+            }
             match self.create_panel_with_options(options, workspace_id) {
                 Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
                 Err(error) => tracing::error!("failed to create panel: {error}"),
@@ -318,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_click_reveals_panel_the_same_way_as_sidebar() {
+    fn navigation_reveals_panel_after_the_view_is_panned_away() {
         use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -339,15 +427,66 @@ mod tests {
         app.canvas_view
             .set_pan_offset([reveal_pan[0] + 120.0, reveal_pan[1] + 80.0]);
         run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
-        let titlebar = titlebar_click_pos(&app, panel_id);
-        click_screen_pos(&ctx, &mut app, viewport, titlebar);
+        app.reveal_selected_panel(&ctx, panel_id);
 
         assert_eq!(app.board.focused, Some(panel_id));
         assert_pan_near(
             app.canvas_view.pan_offset,
             reveal_pan,
-            "titlebar click should restore the sidebar reveal pan",
+            "navigation should restore the reveal pan",
         );
+    }
+
+    #[test]
+    fn titlebar_clicks_focus_and_rename_without_changing_the_view() {
+        use crate::app::test_support::{
+            editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+        };
+
+        for zoom in [0.75, 1.0, 1.5] {
+            let mut workspace = editor_workspace_state("header-click", [0.0, 0.0]);
+            workspace.panels[0].size = Some([2200.0, 1400.0]);
+            let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState {
+                    workspaces: vec![workspace],
+                    ..RuntimeState::default()
+                }),
+            });
+            let viewport = [1600.0, 1000.0];
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            let panel_id = app.board.workspaces[0].panels[0];
+            app.board.focused = None;
+            app.canvas_view.set_zoom(zoom);
+            app.canvas_view.set_pan_offset([140.0, 100.0]);
+            app.pan_target = None;
+            let view = app.canvas_view;
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            let titlebar = titlebar_click_pos(&app, panel_id);
+
+            click_screen_pos(&ctx, &mut app, viewport, titlebar);
+            assert_eq!(app.board.focused, Some(panel_id));
+            assert_eq!(app.canvas_view, view, "first click must preserve the view");
+            assert_eq!(app.renaming_panel, None);
+
+            click_screen_pos(&ctx, &mut app, viewport, titlebar);
+            assert_eq!(app.renaming_panel, Some(panel_id));
+            assert_eq!(app.canvas_view, view, "double-click must preserve the view");
+
+            run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+            "Renamed panel".clone_into(&mut app.panel_rename_buffer);
+            let mut enter = raw_input(viewport, Some([0.0, 0.0]));
+            enter.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            run_app_frame_with_input(&ctx, &mut app, enter);
+            assert_eq!(app.board.panel(panel_id).expect("panel").title, "Renamed panel");
+            assert_eq!(app.renaming_panel, None);
+            assert_eq!(app.canvas_view, view, "committing the name must preserve the view");
+        }
     }
 
     #[test]

@@ -181,7 +181,10 @@ pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpErro
         }
     };
     let payload = value.get("value").cloned().unwrap_or_else(|| value.clone());
-    if !(200..300).contains(&status) || payload.get("error").is_some() {
+    // Only the status says whether this is a W3C error envelope: a 2xx
+    // script value whose object has an `error` member (the semantic probes
+    // report page-side refusals that way) belongs to the page.
+    if !(200..300).contains(&status) {
         let error = payload
             .get("error")
             .and_then(Value::as_str)
@@ -261,6 +264,18 @@ mod tests {
     fn surfaces_webdriver_errors() {
         let response = b"HTTP/1.1 500 Error\r\nContent-Length: 57\r\n\r\n{\"value\":{\"error\":\"session not created\",\"message\":\"busy\"}}";
         assert!(parse_response(response).is_err());
+    }
+
+    #[test]
+    fn script_values_with_an_error_member_are_not_error_envelopes() {
+        for body in [
+            &b"{\"value\":{\"error\":{\"code\":\"not_file_input\",\"message\":\"no\"}}}"[..],
+            b"{\"value\":{\"error\":\"validation message\"}}",
+        ] {
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+            let value = parse_response(&[response, body.to_vec()].concat()).expect("script value");
+            assert!(value["value"]["error"].is_object() || value["value"]["error"].is_string());
+        }
     }
 
     #[test]

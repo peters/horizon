@@ -150,6 +150,11 @@ impl HorizonApp {
     }
 
     fn render_toolbar_action_button(&mut self, ui: &mut egui::Ui, action: ToolbarAction) {
+        #[cfg(feature = "cloud-workspaces")]
+        if action == ToolbarAction::Cloud {
+            ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
+            return;
+        }
         let response = match action {
             ToolbarAction::QuickNav => ui
                 .add(
@@ -182,6 +187,8 @@ impl HorizonApp {
                     response
                 }
             }
+            #[cfg(feature = "cloud-workspaces")]
+            ToolbarAction::Cloud => return,
             ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
@@ -200,6 +207,11 @@ impl HorizonApp {
                 ui.set_min_width(160.0);
 
                 for action in overflow_actions {
+                    #[cfg(feature = "cloud-workspaces")]
+                    if *action == ToolbarAction::Cloud {
+                        ui.menu_button("Cloud", |ui| self.render_cloud_menu(ui));
+                        continue;
+                    }
                     let button =
                         egui::Button::new(egui::RichText::new(action.label()).size(12.0).color(theme::FG_SOFT()))
                             .frame(false);
@@ -221,6 +233,8 @@ impl HorizonApp {
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
             ToolbarAction::Settings => self.toggle_settings(),
+            #[cfg(feature = "cloud-workspaces")]
+            ToolbarAction::Cloud => self.open_cloud_accounts(ctx, false),
         }
     }
 }
@@ -233,6 +247,8 @@ fn action_button_width(action: ToolbarAction) -> f32 {
     match action {
         ToolbarAction::QuickNav => 102.0,
         ToolbarAction::RemoteHosts => 120.0,
+        #[cfg(feature = "cloud-workspaces")]
+        ToolbarAction::Cloud => 72.0,
         ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,

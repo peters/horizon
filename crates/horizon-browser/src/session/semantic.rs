@@ -10,6 +10,10 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
+use crate::semantic_files::{
+    ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, check_attachment_request, element_handle_expression,
+    local_file_facts, parse_attached_files, parse_file_input_probe, verify_attached,
+};
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
 };
@@ -19,6 +23,12 @@ use crate::{
 };
 
 use super::{BrowserEventSender, DriverState};
+
+#[derive(Clone, Copy)]
+pub(super) struct FileInputTarget<'a> {
+    pub(super) object: &'a str,
+    pub(super) session: &'a str,
+}
 
 fn agent_action_blocked_during_teach(action: &BrowserControlAction) -> bool {
     !matches!(
@@ -76,6 +86,9 @@ impl DriverState {
                 delta_x,
                 delta_y,
             } => self.semantic_scroll(link, event_tx, frame_slot, target.as_ref(), *delta_x, *delta_y),
+            BrowserControlAction::SetFiles { target, paths, .. } => {
+                self.semantic_set_files(link, event_tx, frame_slot, target, paths)
+            }
             BrowserControlAction::Evaluate { expression } => {
                 self.semantic_evaluate(link, event_tx, frame_slot, expression)
             }
@@ -253,6 +266,147 @@ impl DriverState {
         )?;
         check_script_error(&value)?;
         Ok(BrowserControlValue::Json { value })
+    }
+
+    /// Attach host files to an `input[type=file]` through
+    /// `DOM.setFileInputFiles`, which Chromium treats as the user's chooser
+    /// selection: it fires the input's `input` and `change` events itself.
+    /// The input is read back afterwards so the reported files are the ones
+    /// the page saw.
+    fn semantic_set_files(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        target: &crate::BrowserTarget,
+        paths: &[std::path::PathBuf],
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let selector = self.semantic.resolve(target)?;
+        let expected = local_file_facts(paths)?;
+        let object_id = self.file_input_object_id(link, event_tx, frame_slot, &selector)?;
+        let result = (|| {
+            let probe = self.file_input_value(link, event_tx, frame_slot, &object_id, FILE_INPUT_PROBE_FUNCTION)?;
+            check_attachment_request(&parse_file_input_probe(&probe)?, paths)?;
+            self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
+            self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
+            let files = paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            self.send_page_command(
+                link,
+                event_tx,
+                frame_slot,
+                "DOM.setFileInputFiles",
+                &json!({ "objectId": object_id, "files": files }),
+            )
+            .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
+            let readback = self.file_input_value(link, event_tx, frame_slot, &object_id, ATTACHED_FILES_FUNCTION)?;
+            let attached = parse_attached_files(&readback)?;
+            verify_attached(&attached, &expected)?;
+            Ok(BrowserControlValue::Files { files: attached })
+        })();
+        let _ = self.send_page_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Runtime.releaseObject",
+            &json!({ "objectId": object_id }),
+        );
+        result
+    }
+
+    pub(super) fn file_input_value(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        object_id: &str,
+        function: &str,
+    ) -> Result<Value, BrowserControlFailure> {
+        let session = self
+            .session_id
+            .clone()
+            .ok_or_else(|| BrowserControlFailure::new("browser_unavailable", "The page session closed"))?;
+        self.file_input_value_in_session(
+            link,
+            event_tx,
+            frame_slot,
+            FileInputTarget {
+                object: object_id,
+                session: &session,
+            },
+            function,
+        )
+    }
+
+    pub(super) fn file_input_value_in_session(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        target: FileInputTarget<'_>,
+        function: &str,
+    ) -> Result<Value, BrowserControlFailure> {
+        let result = self
+            .call_and_ack(
+                link,
+                event_tx,
+                frame_slot,
+                "Runtime.callFunctionOn",
+                &json!({
+                    "objectId": target.object,
+                    "functionDeclaration": format!("function() {{ return ({function})(this); }}"),
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "userGesture": true,
+                }),
+                Some(target.session),
+            )
+            .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
+        if result.get("exceptionDetails").is_some() {
+            return Err(BrowserControlFailure::new(
+                "javascript_error",
+                "the original file input could not be inspected",
+            ));
+        }
+        bounded_control_value(
+            result
+                .pointer("/result/value")
+                .cloned()
+                .ok_or_else(|| BrowserControlFailure::new("invalid_result", "CDP returned no file input value"))?,
+        )
+    }
+
+    /// A remote object handle for the selector's element, as
+    /// `DOM.setFileInputFiles` addresses the input by handle.
+    fn file_input_object_id(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        selector: &str,
+    ) -> Result<String, BrowserControlFailure> {
+        let result = self
+            .send_page_command(
+                link,
+                event_tx,
+                frame_slot,
+                "Runtime.evaluate",
+                &json!({ "expression": element_handle_expression(selector), "returnByValue": false }),
+            )
+            .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
+        if result.get("exceptionDetails").is_some() {
+            return Err(BrowserControlFailure::new(
+                "javascript_error",
+                "the file input could not be resolved to an element handle",
+            ));
+        }
+        result
+            .pointer("/result/objectId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| BrowserControlFailure::new("no_such_element", "no element matched the target"))
     }
 
     fn semantic_evaluate(

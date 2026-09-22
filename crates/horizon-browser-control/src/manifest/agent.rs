@@ -180,6 +180,150 @@ pub fn request_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, reason
     Ok(request_id)
 }
 
+/// A `set_files` action is queued with private staged copies of its files:
+/// the paths are resolved and confirmed under the attachment roots of this
+/// process, the audit summary keeps those resolved paths, and the engine
+/// receives copies that the original pathnames can no longer influence.
+/// The copies stay for the panel (bounded by age, count and size) because
+/// the page reads them lazily. The rebuilt action is validated again
+/// because resolution can change a pathname. Every other action passes
+/// through.
+fn authorize_attachments(
+    action: BrowserControlAction,
+    panel_local_id: &str,
+    action_id: &str,
+    remote: bool,
+) -> std::io::Result<(BrowserControlAction, BrowserAuditAction, Option<StagedAttachments>)> {
+    let BrowserControlAction::SetFiles { target, paths, .. } = action else {
+        let summary = BrowserAuditAction::from_control(&action);
+        return Ok((action, summary, None));
+    };
+    // The policy error travels inside the I/O error so a caller can recover
+    // its typed classification from this authoritative pass too.
+    let refused = |error: crate::AttachmentPolicyError| std::io::Error::new(error.io_kind(), error);
+    let authorized = crate::AttachmentPolicy::from_environment()
+        .authorize(&paths)
+        .map_err(refused)?;
+    if remote {
+        crate::attachments::check_remote_budget(&authorized).map_err(refused)?;
+    }
+    let sources = authorized
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect::<Vec<_>>();
+    let summary = BrowserAuditAction::from_control(&BrowserControlAction::SetFiles {
+        target: target.clone(),
+        paths: sources.clone(),
+        sources: Vec::new(),
+    });
+    let reserved_bytes =
+        crate::attachments::check_panel_budget(&authorized, crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES)
+            .map_err(refused)?;
+    let attachments_dir = crate::BrowserRuntimePaths::resolve().browser_attachments_dir();
+    // One panel stages one action at a time, so pruning for the reserved
+    // size and copying happen under the same lock and concurrent enqueues
+    // cannot both fit their files into the same budget. The lock is a
+    // sibling of the panel's staging directory, not the manifest lock, so
+    // a long copy never blocks the engine.
+    std::fs::create_dir_all(&attachments_dir).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not prepare the attachment staging directory: {error}"),
+        )
+    })?;
+    let lock = super::ManifestLock::acquire_with_timeout(
+        &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
+        STAGING_LOCK_WAIT,
+    )?;
+    let manifests = crate::BrowserRuntimePaths::resolve().browsers_manifest_dir();
+    crate::attachments::prune_attachments(
+        &attachments_dir,
+        panel_local_id,
+        |panel| {
+            let mut manifest = std::ffi::OsString::from(panel);
+            manifest.push(".json");
+            // A liveness check that cannot be answered keeps the staging.
+            manifests.join(manifest).try_exists().unwrap_or(true)
+        },
+        crate::attachments::ATTACHMENT_RETENTION,
+        crate::attachments::MAX_RETAINED_ATTACHMENT_ACTIONS,
+        crate::attachments::MAX_RETAINED_ATTACHMENT_BYTES,
+        reserved_bytes,
+    )
+    .map_err(refused)?;
+    let staged = StagedAttachments {
+        attachments_dir: attachments_dir.clone(),
+        panel_local_id: panel_local_id.to_string(),
+        action_id: action_id.to_string(),
+        keep: false,
+        _lock: lock,
+    };
+    let paths = crate::attachments::stage_attachments(&attachments_dir, panel_local_id, action_id, &authorized)
+        .map_err(refused)?;
+    // Engines read the staged copies; every audit record shows the sources.
+    let action = BrowserControlAction::SetFiles { target, paths, sources };
+    action
+        .validate()
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+    Ok((action, summary, Some(staged)))
+}
+
+/// The same eligibility the locked enqueue applies, read without the lock:
+/// a cheap refusal for callers whose action would be rejected anyway.
+fn check_enqueue_eligibility(
+    panel_local_id: &str,
+    identity: AgentIdentity<'_>,
+    agent_name: &str,
+) -> std::io::Result<bool> {
+    let manifest = super::read(panel_local_id)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
+    let now = now_millis();
+    let refusal = if manifest.remote_target.is_some() && !manifest.remote_file_upload {
+        Some((
+            std::io::ErrorKind::Unsupported,
+            "file attachment is unavailable for remote device sessions",
+        ))
+    } else if !manifest.permits(identity) {
+        Some((std::io::ErrorKind::PermissionDenied, OUTSIDE_WORKSPACE_MESSAGE))
+    } else if manifest.live_owner(now).is_none_or(|owner| owner.name != agent_name) {
+        Some((
+            std::io::ErrorKind::PermissionDenied,
+            "agent does not have a live ownership claim",
+        ))
+    } else if manifest.user_is_active(now) || manifest.handoff_pending().is_some() {
+        Some((std::io::ErrorKind::WouldBlock, "user is steering this browser panel"))
+    } else if manifest.actions.len() >= MAX_PENDING_ACTIONS {
+        Some((std::io::ErrorKind::WouldBlock, "browser action queue is full"))
+    } else {
+        None
+    };
+    refusal.map_or(Ok(manifest.remote_target.is_some()), |(kind, message)| {
+        Err(std::io::Error::new(kind, message))
+    })
+}
+
+/// Longest a `set_files` enqueue waits for the panel's staging lock while
+/// another attachment on the same panel is being copied.
+const STAGING_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Staged copies that are removed unless the action reached the queue; the
+/// panel's staging lock is held until the action is queued or released.
+struct StagedAttachments {
+    attachments_dir: std::path::PathBuf,
+    panel_local_id: String,
+    action_id: String,
+    keep: bool,
+    _lock: super::ManifestLock,
+}
+
+impl Drop for StagedAttachments {
+    fn drop(&mut self) {
+        if !self.keep {
+            crate::attachments::release_attachments(&self.attachments_dir, &self.panel_local_id, &self.action_id);
+        }
+    }
+}
+
 /// Queue one validated backend-neutral action for the live owner.
 ///
 /// The queue refuses input while the user is actively steering or a handoff
@@ -200,7 +344,14 @@ pub fn enqueue_action(
         .validate()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     let action_id = new_action_id();
-    let summary = BrowserAuditAction::from_control(&action);
+    let remote = if matches!(action, BrowserControlAction::SetFiles { .. }) {
+        // Refuse ineligible callers before any filesystem work, and carry
+        // the target's transfer limits into the authoritative authorization.
+        check_enqueue_eligibility(panel_local_id, identity, agent_name)?
+    } else {
+        false
+    };
+    let (action, summary, mut staged) = authorize_attachments(action, panel_local_id, &action_id, remote)?;
     let request = AgentAction {
         action_id: action_id.clone(),
         actor: agent_name.to_string(),
@@ -259,6 +410,9 @@ pub fn enqueue_action(
         }
         Err(std::io::Error::new(kind, message))
     } else {
+        if let Some(staged) = staged.as_mut() {
+            staged.keep = true;
+        }
         Ok(action_id)
     }
 }
@@ -316,6 +470,11 @@ pub(super) fn take_ready_actions(manifest: &mut BrowserManifest) -> (Vec<AgentAc
 }
 
 pub(super) fn append_rejected_actions(panel_local_id: &str, actions: Vec<AgentAction>) -> std::io::Result<()> {
+    release_rejected_attachments(
+        &crate::BrowserRuntimePaths::resolve().browser_attachments_dir(),
+        panel_local_id,
+        &actions,
+    );
     for request in actions {
         super::audit::append(
             &BrowserAuditEntry::new(
@@ -328,6 +487,16 @@ pub(super) fn append_rejected_actions(panel_local_id: &str, actions: Vec<AgentAc
         )?;
     }
     Ok(())
+}
+
+fn release_rejected_attachments(attachments_dir: &Path, panel_local_id: &str, actions: &[AgentAction]) {
+    // All of these actions left the queue without reaching a driver. Release
+    // every staging directory even if recording an audit entry later fails.
+    for request in actions {
+        if matches!(request.action, BrowserControlAction::SetFiles { .. }) {
+            crate::attachments::release_attachments(attachments_dir, panel_local_id, &request.action_id);
+        }
+    }
 }
 
 fn set_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) {
@@ -395,6 +564,55 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn ownership_rejection_releases_only_the_rejected_attachment_staging() {
+        let root = tempfile::tempdir().expect("root");
+        let source = root.path().join("notes.txt");
+        std::fs::write(&source, "fixture").expect("source");
+        let authorized = crate::AttachmentPolicy::new([root.path().to_path_buf()])
+            .authorize(&[source])
+            .expect("authorize");
+        let staging = root.path().join("staging");
+        let mut manifest = BrowserManifest {
+            panel_local_id: "panel".into(),
+            owner: Some(ManifestOwner {
+                name: "current".into(),
+                tty: None,
+                updated_at: now_millis(),
+            }),
+            ..BrowserManifest::default()
+        };
+        for (id, actor) in [("keep", "current"), ("reject", "previous")] {
+            let paths = crate::attachments::stage_attachments(&staging, "panel", id, &authorized).expect("stage");
+            manifest.actions.push(AgentAction {
+                action_id: id.into(),
+                actor: actor.into(),
+                requested_at_millis: now_millis(),
+                action: BrowserControlAction::SetFiles {
+                    target: horizon_browser::BrowserTarget::Selector {
+                        selector: "#file".into(),
+                    },
+                    paths,
+                    sources: Vec::new(),
+                },
+            });
+        }
+        let kept_path = match &manifest.actions[0].action {
+            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
+            _ => unreachable!(),
+        };
+        let rejected_path = match &manifest.actions[1].action {
+            BrowserControlAction::SetFiles { paths, .. } => paths[0].clone(),
+            _ => unreachable!(),
+        };
+        let (ready, rejected) = take_ready_actions(&mut manifest);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(rejected.len(), 1);
+        release_rejected_attachments(&staging, "panel", &rejected);
+        assert!(kept_path.exists());
+        assert!(!rejected_path.exists());
     }
 
     #[test]

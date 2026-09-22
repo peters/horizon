@@ -322,6 +322,8 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Pinch** | Zoom around the cursor (Linux/X11 requires XInput 2.4 gesture support) |
 | **Minimap click-and-drag** | Jump to that area of the canvas |
 | **Ctrl+Scroll** | Zoom around the cursor |
+| **Click** a panel header | Focus the panel while keeping the current pan and zoom |
+| **Double-click** a panel header | Rename the panel in place |
 | **Click** in a mouse-reporting TUI | Deliver the click to the app (Grok, vim, less, …) |
 | **Shift+Click/drag** | Select terminal text while the app has mouse reporting |
 | **Click** an OSC 8 hyperlink | Open the link in the default handler |

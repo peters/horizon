@@ -1605,7 +1605,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2181,16 +2181,20 @@ version = "0.2.7"
 dependencies = [
  "base64 0.23.1",
  "horizon-browser-protocol",
+ "mime_guess",
  "png",
  "process-wrap",
  "rav1e",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "tungstenite",
  "ureq",
+ "uuid",
+ "zip",
  "zune-jpeg",
 ]
 
@@ -2220,9 +2224,12 @@ version = "0.2.7"
 dependencies = [
  "atomicwrites",
  "horizon-browser",
+ "libc",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -2272,6 +2279,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-cloud"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.20",
+ "ureq",
+ "zeroize",
+]
+
+[[package]]
+name = "horizon-cloud-worker"
+version = "0.2.7"
+dependencies = [
+ "base64 0.23.1",
+ "horizon-browser",
+ "horizon-browser-control",
+ "horizon-browser-protocol",
+ "horizon-cloud",
+ "png",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml_edit",
+]
+
+[[package]]
 name = "horizon-core"
 version = "0.2.7"
 dependencies = [
@@ -2283,7 +2319,9 @@ dependencies = [
  "git2",
  "horizon-browser",
  "horizon-browser-control",
+ "horizon-browser-protocol",
  "horizon-browser-routines",
+ "horizon-cloud",
  "keyring-core",
  "libc",
  "profiling",
@@ -3026,6 +3064,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mime"
+version = "0.3.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3207,7 +3261,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4150,7 +4204,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4560,7 +4614,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5194,7 +5248,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5623,6 +5677,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5816,7 +5876,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.5.3"
-source = "git+https://github.com/peters/vnc-rs.git?rev=39b4fc141b26b4db6ec34ff96beaf6af9aa3c6a1#39b4fc141b26b4db6ec34ff96beaf6af9aa3c6a1"
+source = "git+https://github.com/peters/vnc-rs.git?rev=54b7faf0e58206d009ec681516f6a7e202155be4#54b7faf0e58206d009ec681516f6a7e202155be4"
 dependencies = [
  "async_io_stream",
  "flate2",
@@ -6320,7 +6380,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7031,6 +7091,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "indexmap",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

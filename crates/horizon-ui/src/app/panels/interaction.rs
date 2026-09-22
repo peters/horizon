@@ -57,7 +57,12 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn arranged_panel_position(&self, panel_id: PanelId, workspace_id: WorkspaceId, fallback: Pos2) -> Pos2 {
+    pub(in crate::app) fn arranged_panel_position(
+        &self,
+        panel_id: PanelId,
+        workspace_id: WorkspaceId,
+        fallback: Pos2,
+    ) -> Pos2 {
         let Some(preview_position) = self
             .arranged_panel_drag
             .and_then(|drag| drag.preview_for(panel_id, workspace_id))
@@ -65,15 +70,45 @@ impl HorizonApp {
             return fallback;
         };
 
-        if self
-            .board
-            .workspace(workspace_id)
-            .is_some_and(|workspace| workspace.layout.is_some())
-        {
+        if self.panel_is_arranged(panel_id, workspace_id) {
             preview_position
         } else {
             fallback
         }
+    }
+
+    fn panel_is_arranged(&self, panel_id: PanelId, workspace_id: WorkspaceId) -> bool {
+        if !self
+            .board
+            .panel(panel_id)
+            .is_some_and(|panel| panel.workspace_id == workspace_id)
+        {
+            return false;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(group) = self.cloud_prototype.groups.group_for_panel(&self.board, panel_id) {
+            return group.layout.is_some() && !group.collapsed;
+        }
+        self.board
+            .workspace(workspace_id)
+            .is_some_and(|workspace| workspace.layout.is_some())
+    }
+
+    fn reorder_arranged_panel(&mut self, panel_id: PanelId, position: [f32; 2]) -> bool {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
+            let changed = self
+                .cloud_prototype
+                .groups
+                .reorder_panel_at(&mut self.board, panel_id, position);
+            if changed {
+                self.save_cloud_prototype();
+            }
+            return changed;
+        }
+        self.board
+            .arranged_panel_collision_target(panel_id, position)
+            .is_some_and(|target| self.board.swap_arranged_panels(panel_id, target))
     }
 
     pub(super) fn update_panel_interactions(
@@ -91,8 +126,8 @@ impl HorizonApp {
         if resize_response.drag_started() || resize_response.clicked() {
             outcome.request_focus();
         }
-        if !is_renaming && drag_response.clicked() && !drag_response.double_clicked() {
-            outcome.request_reveal();
+        if !is_renaming && drag_response.clicked() {
+            outcome.request_focus();
         }
         if !is_renaming && drag_response.drag_started() {
             outcome.request_focus();
@@ -116,10 +151,6 @@ impl HorizonApp {
         if !is_renaming && drag_response.double_clicked() {
             outcome.command = Some(PanelCommand::StartRename);
             outcome.request_focus();
-            outcome.clear_reveal();
-        }
-        if outcome.mic_clicked || matches!(outcome.command, Some(PanelCommand::Close)) {
-            outcome.clear_reveal();
         }
     }
 
@@ -237,6 +268,25 @@ impl HorizonApp {
         });
     }
 
+    fn resize_panel_in_environment(
+        &mut self,
+        panel_id: PanelId,
+        size: [f32; 2],
+        workspace_collision_ids: &[WorkspaceId],
+    ) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self
+            .cloud_prototype
+            .groups
+            .resize_panel(&mut self.board, panel_id, size)
+        {
+            return;
+        }
+        let _ = self
+            .board
+            .resize_panel_with_workspace_scope(panel_id, size, workspace_collision_ids);
+    }
+
     pub(super) fn apply_panel_outcome(
         &mut self,
         ctx: &Context,
@@ -286,11 +336,7 @@ impl HorizonApp {
         );
         if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
-            let _ = self.board.resize_panel_with_workspace_scope(
-                panel_id,
-                [new_size.x, new_size.y],
-                workspace_collision_ids,
-            );
+            self.resize_panel_in_environment(panel_id, [new_size.x, new_size.y], workspace_collision_ids);
             self.mark_runtime_dirty();
         }
         if outcome.commit_terminal_resize {
@@ -308,7 +354,6 @@ impl HorizonApp {
             ctx.request_repaint();
         }
         match outcome.focus {
-            PanelFocusRequest::Reveal => self.reveal_selected_panel(ctx, panel_id),
             PanelFocusRequest::Focus => {
                 self.board.focus(panel_id);
             }
@@ -358,10 +403,7 @@ impl HorizonApp {
         outcome: &PanelUiOutcome,
     ) {
         let viewport_id = ctx.viewport_id();
-        let arranged = self
-            .board
-            .workspace(workspace_id)
-            .is_some_and(|workspace| workspace.layout.is_some());
+        let arranged = self.panel_is_arranged(panel_id, workspace_id);
         let active_drag_matches = self
             .arranged_panel_drag
             .is_some_and(|drag| drag.matches(panel_id, workspace_id, viewport_id));
@@ -417,9 +459,7 @@ impl HorizonApp {
                 .map(|drag| drag.advance(outcome.drag.delta));
             if let Some(preview_position) = preview_position {
                 let position = [preview_position.x, preview_position.y];
-                if let Some(target) = self.board.arranged_panel_collision_target(panel_id, position)
-                    && self.board.swap_arranged_panels(panel_id, target)
-                {
+                if self.reorder_arranged_panel(panel_id, position) {
                     self.mark_runtime_dirty();
                 }
                 ctx.request_repaint();
@@ -552,6 +592,100 @@ mod tests {
             },
         );
         assert!(app.arranged_panel_drag.is_none());
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    #[test]
+    fn cloud_arranged_drag_previews_reorders_and_persists_its_own_slots() {
+        use horizon_core::cloud_panel::{CloudGroup, CloudGroups};
+        for layout in [WorkspaceLayout::Rows, WorkspaceLayout::Columns, WorkspaceLayout::Grid] {
+            let (_temp, mut app) = test_app();
+            let workspace = app.board.create_workspace("Cloud fixture");
+            let source = app.board.create_panel(editor_panel_options(), workspace).unwrap();
+            let target = app.board.create_panel(editor_panel_options(), workspace).unwrap();
+            let locals = [source, target].map(|id| app.board.panel(id).unwrap().local_id.clone());
+            let mut group = CloudGroup::new(
+                1,
+                "Fixture".into(),
+                app.board.workspace(workspace).unwrap().local_id.clone(),
+                "/fixture".into(),
+                [0.0, 0.0],
+            );
+            group.panels = locals.to_vec();
+            group.set_layout(&mut app.board, Some(layout));
+            app.board.cloud_groups = CloudGroups(vec![group]);
+            let ctx = Context::default();
+            app.prepare_cloud_prototype(&ctx);
+            assert_eq!(app.board.workspace(workspace).unwrap().layout, None);
+            let from = app.board.panel(source).unwrap().layout.position;
+            let to = app.board.panel(target).unwrap().layout.position;
+            app.apply_panel_drag(
+                &ctx,
+                source,
+                workspace,
+                Pos2::from(from),
+                &PanelUiOutcome {
+                    drag: PanelDragOutcome {
+                        started: true,
+                        delta: Vec2::new(to[0] - from[0], to[1] - from[1]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                app.arranged_panel_position(source, workspace, Pos2::ZERO),
+                Pos2::from(to)
+            );
+            assert_eq!(
+                app.board.cloud_groups.0[0].panels,
+                [locals[1].clone(), locals[0].clone()]
+            );
+            app.prepare_cloud_prototype(&ctx);
+            assert_eq!(
+                Pos2::from(app.board.panel(source).unwrap().layout.position),
+                Pos2::from(to)
+            );
+            assert_eq!(
+                Pos2::from(app.board.panel(target).unwrap().layout.position),
+                Pos2::from(from)
+            );
+            assert_eq!(app.cloud_prototype.groups.0[0].layout, Some(layout));
+            app.apply_panel_drag(
+                &ctx,
+                source,
+                workspace,
+                Pos2::from(to),
+                &PanelUiOutcome {
+                    drag: PanelDragOutcome {
+                        stopped: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert!(app.arranged_panel_drag.is_none());
+            app.cloud_prototype.groups.0[0].set_layout(&mut app.board, None);
+            app.apply_panel_drag(
+                &ctx,
+                source,
+                workspace,
+                Pos2::from(to),
+                &PanelUiOutcome {
+                    drag: PanelDragOutcome {
+                        started: true,
+                        delta: Vec2::new(30.0, 20.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert!(app.arranged_panel_drag.is_none());
+            assert_eq!(
+                Pos2::from(app.board.panel(source).unwrap().layout.position),
+                Pos2::new(to[0] + 30.0, to[1] + 20.0)
+            );
+        }
     }
 
     #[test]

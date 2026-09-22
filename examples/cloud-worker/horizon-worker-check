@@ -1,0 +1,128 @@
+#!/usr/bin/python3
+"""Validate real requested runtimes before allocation and on worker startup."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--capabilities-json')
+parser.add_argument('--git-auth', action='store_true')
+parser.add_argument('--write-runtime', action='store_true')
+parser.add_argument('--agent')
+parser.add_argument('--ready', action='store_true')
+args = parser.parse_args()
+
+def capabilities(value):
+    if not isinstance(value, dict) or set(value) - {'agents', 'browsers', 'desktop', 'browserstack'}:
+        raise ValueError('Invalid worker capability configuration')
+    for field, allowed in [('agents', {'codex', 'claude', 'grok'}), ('browsers', {'chromium', 'firefox'})]:
+        values = value.get(field, [])
+        if not isinstance(values, list) or any(not isinstance(item, str) or item not in allowed for item in values):
+            raise ValueError('Unsupported worker capability')
+    if not isinstance(value.get('desktop', False), bool):
+        raise ValueError('Invalid desktop capability')
+    result = {'agents': value.get('agents', []), 'browsers': value.get('browsers', []), 'desktop': value.get('desktop', False)}
+    remote = value.get('browserstack')
+    if remote is not None:
+        if not isinstance(remote, dict) or set(remote) - {'provider', 'targets', 'local_ports'}:
+            raise ValueError('Invalid remote browser capability')
+        targets, ports = remote.get('targets', []), remote.get('local_ports', [])
+        provider = remote.get('provider', 'browserstack')
+        import re
+        if not isinstance(provider, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', provider):
+            raise ValueError('Invalid remote account name')
+        if not isinstance(targets, list) or len(targets) > 16 or any(not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', v) for v in targets):
+            raise ValueError('Invalid remote targets')
+        if not isinstance(ports, list) or len(ports) > 16 or any(type(v) is not int or not 1 <= v <= 65535 for v in ports):
+            raise ValueError('Invalid local ports')
+        result['browserstack'] = {'provider': provider, 'targets': sorted(set(targets)), 'local_ports': sorted(set(ports))}
+    return result
+
+def require(binary):
+    if shutil.which(binary) is None:
+        raise ValueError('Worker contract missing executable: ' + binary)
+
+def probe(command):
+    subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def services_ready(selected):
+    probe(['horizon-worker-supervise', '--check'])
+    with socket.create_connection(('127.0.0.1', 47280), timeout=5) as connection:
+        connection.sendall(b'{"operation":"list"}\n')
+        with connection.makefile('rb') as stream:
+            reply = json.loads(stream.readline(1024 * 1024))
+        if not isinstance(reply.get('browsers'), list) or reply.get('error'):
+            raise ValueError('Worker control service is not ready')
+    if selected['desktop']:
+        with socket.create_connection(('127.0.0.1', 5900), timeout=5) as connection:
+            with connection.makefile('rb') as stream:
+                if not stream.read(12).startswith(b'RFB '):
+                    raise ValueError('Worker desktop service is not ready')
+
+try:
+    if not hasattr(hashlib, 'file_digest') or not hasattr(tarfile, 'data_filter'):
+        print('Worker contract requires Python with hashlib.file_digest and safe tar extraction; use Python 3.12 or newer.', file=sys.stderr)
+        sys.exit(1)
+    available = capabilities(json.loads(Path('/etc/horizon-worker/capabilities.json').read_text()))
+    raw = args.capabilities_json or os.environ.get('HORIZON_WORKER_CAPABILITIES')
+    runtime = Path('/workspace/capabilities.json')
+    selected = capabilities(json.loads(raw)) if raw else capabilities(json.loads(runtime.read_text())) if runtime.exists() else available
+    if any(not set(selected[k]) <= set(available[k]) for k in ['agents', 'browsers']) or (selected['desktop'] and not available['desktop']):
+        raise ValueError('Worker image does not contain the requested capabilities')
+    if 'browserstack' in selected and 'browserstack' not in available:
+        raise ValueError('Worker image lacks remote browser support')
+    if args.agent:
+        if args.agent != 'shell' and args.agent not in selected['agents']:
+            raise ValueError('Agent is disabled by this cloud profile')
+        sys.exit(0)
+    for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
+        require(binary)
+    probe(['git', 'lfs', 'version'])
+    for agent in selected['agents']:
+        require(agent)
+        probe([agent, '--version'])
+    if selected['browsers'] or 'browserstack' in selected:
+        require('horizon-browser')
+    if 'browserstack' in selected:
+        require('horizon-worker-browserstack')
+        require('BrowserStackLocal')
+        probe(['BrowserStackLocal', '--version'])
+        print('horizon-browserstack-contract=1')
+    for browser in selected['browsers']:
+        if browser == 'chromium':
+            binary = next((name for name in ['chromium', 'chromium-browser', 'google-chrome-stable', 'google-chrome'] if shutil.which(name)), None)
+            if binary is None:
+                raise ValueError('Worker contract missing Chromium runtime')
+            probe([binary, '--version'])
+        else:
+            require('firefox'); require('geckodriver')
+            probe(['firefox', '--version']); probe(['geckodriver', '--version'])
+    if selected['desktop']:
+        for binary in ['Xvfb', 'openbox', 'x11vnc', 'xdpyinfo', 'xprop', 'horizon-device']:
+            require(binary)
+        probe(['horizon-device', '--help'])
+    if args.git_auth:
+        probe(['horizon-worker-git-auth', 'check'])
+        if os.readlink('/usr/local/bin/gh') != '/usr/local/bin/horizon-worker-git-auth':
+            raise ValueError('Worker Git wrapper is missing')
+        print('horizon-git-auth-contract=1')
+    if args.ready:
+        active = capabilities(json.loads(runtime.read_text()))
+        if active != selected:
+            raise ValueError('Active worker capabilities differ from this cloud profile')
+        services_ready(selected)
+    if args.write_runtime:
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        pending = runtime.with_suffix('.new')
+        pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
+    print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1')
+except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
+    print('Worker validation failed: requested capability runtime is missing, disabled or unusable', file=sys.stderr)
+    sys.exit(1)
