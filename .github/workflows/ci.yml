@@ -380,6 +380,7 @@ jobs:
             # XDG fixtures use Unix paths, which are not absolute on Windows.
             linux_desktop::tests::packaged_data_dirs_use_xdg_data_dirs_then_defaults
 
+
             # horizon-browser-cli: the fixture joins `.horizon/browser-jobs` with a
             # forward slash, so its expected path mixes separators.
             run_persists_preflight_failure_before_any_browser_action
