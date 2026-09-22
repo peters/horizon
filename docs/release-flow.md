@@ -123,6 +123,8 @@ Stable-release packaging assumes:
 - `WINGET_PUBLIC_PR_TOKEN` in that environment is a separate expiring classic PAT with only `public_repo`, used only to query/create upstream WinGet PRs; it has no private-repository, workflow, or package scope
 - `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
+After the credential migration, recover an older release by dispatching **Release from `main`** with the existing tag. Do not rerun a pre-migration workflow run: reruns retain the old workflow definition and its retired secret references.
+
 Run **Verify Release Credentials** after rotating either credential. It checks protected-environment access, one-repository App token scope and the public PR token owner/scope/expiry without writing release content. The initial migration also verified disposable branch writes, a draft storage asset upload/download, a controlled public PR, cleanup and token revocation.
 
 Each release job mints a short-lived installation token restricted to its one destination repository. Storage authentication is minted after the toolchain build, immediately before upload, to avoid spending token lifetime compiling. The token action revokes installation tokens when the job ends. The App does not have workflow-write permission.

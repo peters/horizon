@@ -674,14 +674,27 @@ jobs:
       WINGET_PKGS_REPOSITORY: peters/winget-pkgs
       WINGET_PACKAGE_IDENTIFIER: Peters.Horizon
     steps:
-      - name: Validate WinGet token
+      - name: Validate WinGet public PR token before fork writes
         env:
-          WINGET_PUBLIC_PR_TOKEN: ${{ secrets.WINGET_PUBLIC_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_PUBLIC_PR_TOKEN }}
+        shell: python
         run: |
-          if [ -z "$WINGET_PUBLIC_PR_TOKEN" ]; then
-            echo "::error::WINGET_PUBLIC_PR_TOKEN secret is required for stable release packaging."
-            exit 1
-          fi
+          import json, os, urllib.request
+          token = os.environ.get('GH_TOKEN', '')
+          assert token, 'WINGET_PUBLIC_PR_TOKEN is required for stable release packaging'
+          request = urllib.request.Request(
+              'https://api.github.com/user',
+              headers={'Authorization': 'Bearer ' + token,
+                       'User-Agent': 'release-credential-check'},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              identity = json.load(response)
+              scopes = response.headers.get('X-OAuth-Scopes', '')
+              expiry = response.headers.get('GitHub-Authentication-Token-Expiration', '')
+          assert identity['login'] == 'peters', 'Unexpected public PR identity'
+          assert scopes == 'public_repo', 'Unexpected public PR token scope'
+          assert expiry, 'Public PR token must expire'
+          print('Verified peters, public_repo only, expires ' + expiry)
 
       - name: Mint scoped winget credential
         id: winget-credential
