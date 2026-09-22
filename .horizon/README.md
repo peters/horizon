@@ -25,7 +25,11 @@ deploying. Each agent receives its own worktree. Run `.horizon/validate.sh cpu`
 or `.horizon/validate.sh gpu` in that worktree. Build caches are separated by
 worktree and profile on the persistent worker volume. Tests run serially by
 default to reduce timing and port-reuse interference; set `RUST_TEST_THREADS`
-explicitly to choose another concurrency level. A successful CUDA build
+explicitly to choose another concurrency level. When invoked as root, test
+processes drop filesystem access-override capabilities so permission-denial
+checks exercise filesystem mode bits. Test subprocesses also ignore global Git
+configuration so synthetic repositories use their own LFS storage and settings.
+A successful CUDA build
 does not establish inference accuracy or hardware graphics rendering; those
 require the corresponding live workload and adapter evidence.
 
