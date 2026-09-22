@@ -353,11 +353,7 @@ fn select_center(catalog: Catalog, worker: &WorkerSpec) -> Result<String> {
             let capacity = center
                 .cpu_availability
                 .iter()
-                .filter(|cpu| {
-                    worker.cpu_flavors.iter().any(|flavor| {
-                        cpu.id == *flavor || cpu.id.strip_prefix(flavor).is_some_and(|tail| tail.starts_with('-'))
-                    })
-                })
+                .filter(|cpu| worker.cpu_flavors.contains(&cpu.id))
                 .filter_map(|cpu| match cpu.availability.as_str() {
                     "HIGH" => Some(0),
                     "MEDIUM" => Some(1),

@@ -268,4 +268,24 @@ mod tests {
             }
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn removal_without_worker_spec_propagates_journal_metadata_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let record = record();
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":record.worker.operation_id,"repository":"/synthetic","revision":"a",
+            "profile":record.worker.profile,"stage":"Deleted","operation":{"state":"prepared"},
+            "spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &deployment).unwrap());
+        for name in ["workspace-volume.json", "workspace-volume.required"] {
+            let path = store.root().join(name);
+            std::os::unix::fs::symlink(name, &path).unwrap();
+            assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &deployment).is_err());
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 }

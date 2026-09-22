@@ -21,8 +21,8 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     }
     match &state.spec {
         Some(spec) => Ok(!super::deployment::storage::retained(store, spec)?),
-        None => Ok(!store.root().join("workspace-volume.json").exists()
-            && !store.root().join("workspace-volume.required").exists()),
+        None => Ok(!store.root().join("workspace-volume.json").try_exists()?
+            && !store.root().join("workspace-volume.required").try_exists()?),
     }
 }
 

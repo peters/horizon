@@ -582,4 +582,22 @@ mod volumes {
         );
         task.join().unwrap();
     }
+    #[test]
+    fn sized_catalog_entries_do_not_certify_flavor_capacity() {
+        for id in ["cpu3g-2-4", "cpu3g-4-16", "cpu3g-unknown"] {
+            let catalog = json!({"dataCenters":[{
+                "id":"available","networkVolumeTypes":["STANDARD"],
+                "cpuAvailability":[{"id":id,"availability":"HIGH"}]
+            }]});
+            let (mut provider, requests, task) = server(vec![(200, catalog.to_string())]);
+            provider.catalog_endpoint = provider.endpoint.clone();
+            assert!(
+                provider
+                    .workspace_volume_spec(&spec(), &Cancellation::default())
+                    .is_err()
+            );
+            task.join().unwrap();
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
+    }
 }
