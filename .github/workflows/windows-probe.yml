@@ -1,0 +1,47 @@
+name: Windows test probe
+
+# Temporary measurement run for #841. Deleted with its branch.
+on:
+  push:
+    branches: [ci/windows-test-probe]
+
+env:
+  CARGO_TERM_COLOR: never
+  RUSTFLAGS: -D warnings
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  # Same job id and key as ci.yml's Windows job so rust-cache restores main's entry.
+  windows-smoke:
+    name: Windows full test run
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-test-build
+          save-if: false
+      - name: Report rust-cache status
+        shell: bash
+        run: echo "cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
+      - run: cargo test --locked --workspace --no-run
+      - name: Run workspace tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --workspace --no-fail-fast 2>&1 | tee workspace-tests.log
+      - name: Summarize failures
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^test .* FAILED$|^     Running |^error: test failed|^test result:' workspace-tests.log || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-workspace-tests
+          path: workspace-tests.log
