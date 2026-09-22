@@ -118,6 +118,17 @@ the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.
 
+Before readiness, Horizon verifies the provider's assigned container disk and
+persistent volume sizes and the `/workspace` mount path against the profile.
+Missing, undersized or differently mounted storage blocks source and agent-credential
+transfer. The current adapter requests Pod-local volumes; an unexpected network
+volume attachment is unsupported and also blocks readiness. The worker remains allocated and bound to its original operation for
+inspection or explicit deletion; retry does not create a replacement. Old saved
+worker records without storage fields remain readable. Deployment and reconnect
+attempts that reach readiness inspect fresh provider data; this does not change
+panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
+survive a provider restart; persistence still needs a live recovery test.
+
 Stop is explicit and ends running processes; storage can remain billable. Resume
 starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker

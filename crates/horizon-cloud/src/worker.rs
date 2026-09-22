@@ -145,6 +145,17 @@ pub enum WorkerStatus {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NetworkVolume {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub size: Option<u32>,
+    #[serde(default)]
+    pub data_center_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Worker {
     pub id: String,
     pub name: String,
@@ -164,6 +175,14 @@ pub struct Worker {
     pub vcpu_count: Option<u32>,
     #[serde(default)]
     pub gpu_count: Option<u32>,
+    #[serde(default)]
+    pub container_disk_in_gb: Option<u32>,
+    #[serde(default)]
+    pub volume_in_gb: Option<u32>,
+    #[serde(default)]
+    pub volume_mount_path: Option<String>,
+    #[serde(default)]
+    pub network_volume: Option<NetworkVolume>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
@@ -213,6 +232,28 @@ impl Worker {
         {
             return Err(CloudError::Invalid(
                 "Assigned worker does not meet the requested resource profile",
+            ));
+        }
+        if self.network_volume.is_some() {
+            return Err(CloudError::Invalid(
+                "Assigned worker has an unsupported network volume; inspect or explicitly delete the worker",
+            ));
+        }
+        if self.container_disk_in_gb.is_none() || self.volume_in_gb.is_none() || self.volume_mount_path.is_none() {
+            return Err(CloudError::Invalid(
+                "Provider has not confirmed the assigned worker storage; inspect or explicitly delete the worker",
+            ));
+        }
+        if self
+            .container_disk_in_gb
+            .is_some_and(|size| size < u32::from(spec.profile.storage.container_gb))
+            || self
+                .volume_in_gb
+                .is_some_and(|size| size < u32::from(spec.profile.storage.volume_gb))
+            || self.volume_mount_path.as_deref() != Some("/workspace")
+        {
+            return Err(CloudError::Invalid(
+                "Assigned worker storage does not meet the requested profile; inspect or explicitly delete the worker",
             ));
         }
         Ok(())

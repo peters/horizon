@@ -1,5 +1,6 @@
 use super::*;
 mod recovery;
+mod storage;
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -387,6 +388,9 @@ fn readiness_requires_reported_resources_and_a_gpu_when_requested() {
     assert!(parse(&value).verify_resources(&spec).is_err());
     value["vcpuCount"] = json!(spec.profile.cpu);
     value["memoryInGb"] = json!(spec.profile.memory_gb);
+    value["containerDiskInGb"] = json!(spec.profile.storage.container_gb);
+    value["volumeInGb"] = json!(spec.profile.storage.volume_gb);
+    value["volumeMountPath"] = json!("/workspace");
     assert!(parse(&value).verify_resources(&spec).is_ok());
     spec.profile.gpu = true;
     assert!(parse(&value).verify_resources(&spec).is_err());
