@@ -628,6 +628,31 @@ mod tests {
     }
 
     #[test]
+    fn native_file_dialog_events_require_a_registered_host_consumer() {
+        let mut state = driver_state();
+        state.session_id = Some("session".into());
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let params = serde_json::json!({"backendNodeId":1,"frameId":"root"});
+        let event = CdpEvent {
+            method: "Page.fileChooserOpened",
+            session_id: Some("session"),
+            params: &params,
+        };
+        state.manifest_dirty = false;
+        state.handle_file_chooser_event(&event, &events);
+        assert!(!state.manifest_dirty);
+        assert!(!state.config.frame_slot.file_chooser().status().supported());
+        state.config.frame_slot.file_chooser().register_consumer();
+        state.handle_file_chooser_event(&event, &events);
+        assert!(state.manifest_dirty);
+    }
+
+    #[test]
     fn iframe_navigation_retires_only_its_chooser_and_publishes_replacement_invalidation() {
         for session in ["session", "child-session"] {
             let mut state = driver_state();

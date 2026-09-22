@@ -40,6 +40,7 @@ pub enum FileChooserAnswer {
 
 #[derive(Debug, Default)]
 struct State {
+    consumer_registered: bool,
     supported: bool,
     answered: bool,
     error: Option<String>,
@@ -52,6 +53,22 @@ struct State {
 pub struct FileChooserHandle(Arc<Mutex<State>>);
 
 impl FileChooserHandle {
+    /// Register a host that renders and answers manual choices before starting
+    /// the browser session. The registration persists across driver restarts.
+    pub fn register_consumer(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .consumer_registered = true;
+    }
+
+    pub(crate) fn has_consumer(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .consumer_registered
+    }
+
     #[must_use]
     pub fn status(&self) -> FileChooserStatus {
         let state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -284,6 +301,20 @@ pub(crate) fn audit_choice(config: &crate::BrowserSessionConfig, paths: &[PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consumer_registration_is_explicit_and_survives_backend_reset() {
+        let handle = FileChooserHandle::default();
+        assert!(!handle.has_consumer());
+        assert!(!handle.supported());
+        handle.register_consumer();
+        assert!(handle.has_consumer());
+        assert!(!handle.supported());
+        handle.enable();
+        handle.reset();
+        assert!(handle.has_consumer());
+        assert!(!handle.supported());
+    }
 
     #[test]
     fn navigation_invalidates_in_flight_choices_without_cancelling_sibling_frames() {

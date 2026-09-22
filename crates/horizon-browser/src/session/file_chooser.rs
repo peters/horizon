@@ -58,7 +58,10 @@ impl DriverState {
         };
         for (method, params) in [
             ("Page.enable", json!({})),
-            ("Page.setInterceptFileChooserDialog", json!({"enabled":true})),
+            (
+                "Page.setInterceptFileChooserDialog",
+                json!({"enabled":slot.file_chooser().has_consumer()}),
+            ),
         ] {
             if !self.file_chooser_session_live(session) {
                 break;
@@ -78,7 +81,7 @@ impl DriverState {
     }
 
     pub(super) fn handle_file_chooser_event(&mut self, event: &CdpEvent<'_>, events: &BrowserEventSender) {
-        if event.method == "Page.fileChooserOpened" {
+        if event.method == "Page.fileChooserOpened" && self.config.frame_slot.file_chooser().has_consumer() {
             self.note_file_chooser(event);
         } else if event
             .session_id

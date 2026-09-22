@@ -52,7 +52,7 @@ impl DriverState {
             ("Page.enable", serde_json::json!({})),
             (
                 "Page.setInterceptFileChooserDialog",
-                serde_json::json!({"enabled":true}),
+                serde_json::json!({"enabled":frame_slot.file_chooser().has_consumer()}),
             ),
             // Loader-scoped `Page.lifecycleEvent`s let a pending agent
             // navigation attribute `DOMContentLoaded` and `load` to its own
@@ -67,7 +67,9 @@ impl DriverState {
         if !self.resolve_main_frame_id(link, event_tx, frame_slot, session) {
             return false;
         }
-        frame_slot.file_chooser().enable();
+        if frame_slot.file_chooser().has_consumer() {
+            frame_slot.file_chooser().enable();
+        }
         self.manifest_dirty = true;
         // Observe only top-level response metadata so a completed user
         // handoff can report a repeated Cloudflare challenge. The driver

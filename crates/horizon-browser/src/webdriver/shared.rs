@@ -39,6 +39,7 @@ struct GroupState {
 
 #[derive(PartialEq, Eq)]
 struct FirefoxLaunchIdentity {
+    manual_file_chooser: bool,
     profile: std::path::PathBuf,
     browser: Option<String>,
     driver: Option<String>,
@@ -48,8 +49,14 @@ struct FirefoxLaunchIdentity {
 }
 
 impl GroupState {
-    fn pin_launch(&mut self, config: &crate::BrowserConfig, profile_id: &str) -> Result<(), String> {
+    fn pin_launch(
+        &mut self,
+        config: &crate::BrowserConfig,
+        profile_id: &str,
+        manual_file_chooser: bool,
+    ) -> Result<(), String> {
         let identity = FirefoxLaunchIdentity {
+            manual_file_chooser,
             profile: std::path::absolute(config.profile_dir(profile_id)).map_err(|error| error.to_string())?,
             browser: config.firefox_command.clone(),
             driver: config.geckodriver_command.clone(),
@@ -124,6 +131,7 @@ impl SharedFirefoxSession {
     pub(super) fn acquire(
         &self,
         config: &crate::BrowserConfig,
+        manual_file_chooser: bool,
         panel_control: &ChromeProcessControl,
         stop: &AtomicBool,
         launch: impl FnOnce(&ChromeProcessControl) -> Result<(DriverHost, NewSession), String>,
@@ -138,7 +146,7 @@ impl SharedFirefoxSession {
         if stop.load(Ordering::Acquire) {
             return Err("Firefox page startup cancelled".into());
         }
-        state.pin_launch(config, &self.profile_id)?;
+        state.pin_launch(config, &self.profile_id, manual_file_chooser)?;
         let first = state.service.is_none();
         if first {
             if !state.control.is_reaped() {
@@ -836,6 +844,7 @@ mod tests {
             group
                 .acquire(
                     &crate::BrowserConfig::default(),
+                    false,
                     &ChromeProcessControl::default(),
                     &stop,
                     |_| panic!("retired profile must not launch")
@@ -853,14 +862,15 @@ mod tests {
             profile_root: Some(std::path::PathBuf::from("profile-a")),
             ..crate::BrowserConfig::default()
         };
-        assert!(state.pin_launch(&config, "group").is_ok());
+        assert!(state.pin_launch(&config, "group", false).is_ok());
+        assert!(state.pin_launch(&config, "group", true).is_err());
         config.quality = 20;
-        assert!(state.pin_launch(&config, "group").is_ok());
+        assert!(state.pin_launch(&config, "group", false).is_ok());
         config.profile_root = Some(std::path::PathBuf::from("profile-b"));
-        assert!(state.pin_launch(&config, "group").is_err());
+        assert!(state.pin_launch(&config, "group", false).is_err());
         config.profile_root = Some(std::path::PathBuf::from("profile-a"));
         config.headless = !config.headless;
-        assert!(state.pin_launch(&config, "group").is_err());
+        assert!(state.pin_launch(&config, "group", false).is_err());
     }
     #[test]
     fn ambiguous_creation_retains_cleanup_and_blocks_more_windows_until_process_reap() {
@@ -895,6 +905,7 @@ mod tests {
                 group
                     .acquire(
                         &crate::BrowserConfig::default(),
+                        false,
                         &ChromeProcessControl::default(),
                         &AtomicBool::new(false),
                         |_| panic!("must not create again")

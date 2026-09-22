@@ -493,6 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn standalone_dialog_events_do_not_create_unanswerable_host_requests() {
+        let classic = Server::start(vec![]);
+        let (link, worker) = bidi_fixture(false, true);
+        let mut state = fixture_driver(&classic, link);
+        let events = events();
+        let event =
+            json!({"method":"input.fileDialogOpened","params":{"context":"first","element":{"sharedId":"node"}}});
+        assert!(state.handle_file_chooser_event(&event, &events));
+        state.tick_file_chooser(&events);
+        assert!(!state.panel_slot.file_chooser().status().supported());
+        state.panel_slot.file_chooser().register_consumer();
+        assert!(state.handle_file_chooser_event(&event, &events));
+        state.tick_file_chooser(&events);
+        assert!(state.panel_slot.file_chooser().status().pending());
+        drop(state);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn viewport_changes_preserve_incoming_and_open_choosers_until_navigation() {
         let classic = Server::start(vec![]);
         let (link, worker) = bidi_fixture(false, true);

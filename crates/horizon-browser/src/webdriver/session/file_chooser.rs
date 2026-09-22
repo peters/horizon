@@ -54,14 +54,16 @@ impl Driver {
         if event.get("method").and_then(Value::as_str) != Some("input.fileDialogOpened") {
             return false;
         }
-        if let Some(params) = event.get("params") {
+        if self.panel_slot.file_chooser().has_consumer()
+            && let Some(params) = event.get("params")
+        {
             self.note_file_chooser(params);
         }
         true
     }
 
     pub(super) fn enable_file_chooser(&mut self, events: &BrowserEventSender) {
-        if !self.firefox_bidi() {
+        if !self.firefox_bidi() || !self.panel_slot.file_chooser().has_consumer() {
             return;
         }
         let result = self.call_bidi(

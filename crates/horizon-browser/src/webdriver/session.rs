@@ -321,9 +321,13 @@ impl Driver {
             let (host, session) = if let Some(group) = group {
                 let mut shared_config = config.clone();
                 group.profile_id().clone_into(&mut shared_config.panel_local_id);
-                group.acquire(&shared_config.browser, process_control, stop_requested, |control| {
-                    start_local(&shared_config, control, stop_requested)
-                })?
+                group.acquire(
+                    &shared_config.browser,
+                    shared_config.frame_slot.file_chooser().has_consumer(),
+                    process_control,
+                    stop_requested,
+                    |control| start_local(&shared_config, control, stop_requested),
+                )?
             } else {
                 start_local(config, process_control, stop_requested)?
             };
@@ -964,7 +968,7 @@ mod tests {
             profile_root: Some(profile_root.path().to_path_buf()),
             ..BrowserConfig::default()
         };
-        let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+        let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
         let prefs = &capabilities["moz:firefoxOptions"]["prefs"];
 
         assert_eq!(capabilities["moz:firefoxOptions"]["args"][0], "-headless");
@@ -979,8 +983,13 @@ mod tests {
             },
             "panel",
             true,
+            false,
         )
         .unwrap_or_default();
+        assert_eq!(
+            visible["moz:firefoxOptions"]["prefs"]["remote.bidi.dismiss_file_pickers.enabled"],
+            false
+        );
         assert!(
             visible["moz:firefoxOptions"]["args"]
                 .as_array()
@@ -994,8 +1003,8 @@ mod tests {
             backend: BackendKind::SafariWebDriver,
             ..BrowserConfig::default()
         };
-        let with_bidi = new_session_capabilities(&config, "panel", true).unwrap_or_default();
-        let classic = new_session_capabilities(&config, "panel", false).unwrap_or_default();
+        let with_bidi = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
+        let classic = new_session_capabilities(&config, "panel", false, false).unwrap_or_default();
 
         assert_eq!(with_bidi["webSocketUrl"], true);
         assert!(classic.get("webSocketUrl").is_none());
@@ -1012,7 +1021,7 @@ mod tests {
                 profile_root: Some(profile_root.path().to_path_buf()),
                 ..BrowserConfig::default()
             };
-            let capabilities = new_session_capabilities(&config, "panel", true).unwrap_or_default();
+            let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
 
             assert_eq!(capabilities["timeouts"]["pageLoad"], PAGE_LOAD_TIMEOUT_MILLIS);
             if backend == BackendKind::FirefoxBidi {
