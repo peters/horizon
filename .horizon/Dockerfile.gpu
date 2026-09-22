@@ -29,6 +29,10 @@ ENV RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/
 ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display,video
 RUN bash /usr/local/lib/horizon/install-build-tools.sh gpu
 ENV LANG=C.UTF-8 PATH="${CARGO_HOME}/bin:${PATH}"
+RUN printf 'export RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH="%s"\n' "$PATH" \
+        > /etc/profile.d/horizon-development.sh \
+    && printf 'SetEnv RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH=%s\n' "$PATH" \
+        > /etc/ssh/sshd_config.d/horizon-development.conf
 LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
     org.opencontainers.image.description="Cloud development environment with isolated workspaces" \
     io.horizon.worker.contract="1" io.horizon.worker.capabilities="1"
