@@ -42,6 +42,26 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   They are development prerequisites; no recorder or remote manager is added
   to the product.
 
+### `horizon-wayland`
+
+- Owns the Wayland protocol bridges winit 0.30 does not provide, currently
+  trackpad pinch through `zwp_pointer_gestures_v1`. It adopts winit's own
+  `wl_display` through libwayland's foreign-display entry point, because
+  Wayland only delivers gestures over a client's own surfaces; a second
+  connection would see none.
+- This crate holds the only `unsafe` Wayland FFI. `PinchBridge::start` is an
+  `unsafe fn` whose contract is that the adopted display outlives the bridge;
+  its single caller, `horizon-ui::native_app::pinch`, discharges it by owning
+  the bridge for the life of the event loop alongside an `OwnedDisplayHandle`
+  that drops after it. The crate and that call site carry
+  `#![deny(unsafe_code)]` with one scoped `#[allow]` and a `// SAFETY:`
+  rationale each; the exception must not widen, and every other crate except
+  `horizon-cursor` keeps `forbid`.
+- `wayland-client` is requested with its `system` feature explicitly, since
+  only the libwayland backend can adopt a foreign display. The bridge is
+  Linux-only and returns `None` off Wayland, so X11 sessions keep the XInput
+  bridge and macOS keeps winit's native pinch.
+
 ### `horizon-browser-protocol`
 
 - Owns the small serialized contract shared by browser engines and clients:
@@ -228,8 +248,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - `app/mod.rs` orchestrates frame flow only.
-- `native_app/pinch.rs` bridges window-scoped XInput 2.4 pinch and focus events
-  into the existing zoom path; older X11 servers retain keyboard/scroll zoom.
+- `native_app/pinch.rs` bridges Linux trackpad pinch into the existing zoom
+  path: window-scoped XInput 2.4 pinch and focus events on X11, and the
+  `horizon-wayland` bridge on Wayland. Older X11 servers and compositors
+  without pointer gestures retain keyboard/scroll zoom.
 - `app/bootstrap.rs` constructs the initial application state and configures
   startup-only fonts and install discovery. It does not own per-frame polling,
   provider actions, or remote execution lifetime.
