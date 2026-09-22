@@ -446,6 +446,7 @@ impl HorizonApp {
             .iter()
             .any(|event| matches!(event, egui::Event::PointerButton { .. }));
         self.panels_to_close.clear();
+        let host_dialog_open = self.host_dialog_open();
         for panel_id in panel_ids {
             if self.render_panel(
                 ctx,
@@ -455,6 +456,7 @@ impl HorizonApp {
                 &browser_events,
                 crate::app::panels::PanelRenderScope {
                     detached: true,
+                    host_dialog_open,
                     frame_has_pointer_button,
                 },
             ) {

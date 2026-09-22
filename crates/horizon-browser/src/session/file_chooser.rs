@@ -10,12 +10,14 @@ use crate::semantic_files::{
 };
 use crate::{BrowserAuditStatus, BrowserControlFailure};
 
+use super::semantic::FileInputTarget;
 use super::{BrowserEvent, BrowserEventSender, DriverState};
 
 #[derive(Debug, Default)]
 pub(super) struct ChooserState {
     incoming: Option<Incoming>,
     binding: ChooserBinding,
+    session: Option<String>,
     target: Option<Target>,
 }
 
@@ -37,11 +39,48 @@ struct Target {
 }
 
 impl DriverState {
+    pub(super) fn file_chooser_session_live(&self, session: &str) -> bool {
+        self.session_id.is_some()
+            && (self.session_id.as_deref() == Some(session) || self.clipboard.iframe_sessions.contains(session))
+    }
+
+    pub(super) fn attach_file_chooser_iframe(
+        &mut self,
+        link: &mut CdpLink,
+        events: &BrowserEventSender,
+        slot: &Arc<FrameSlot>,
+        event: &CdpEvent<'_>,
+    ) {
+        let Some(session) = super::clipboard::target_event_session_id(event.params, event.session_id) else {
+            return;
+        };
+        for (method, params) in [
+            ("Page.enable", json!({})),
+            ("Page.setInterceptFileChooserDialog", json!({"enabled":true})),
+        ] {
+            if !self.file_chooser_session_live(session) {
+                break;
+            }
+            if let Err(error) = self.call_and_ack(link, events, slot, method, &params, Some(session)) {
+                tracing::warn!(target: "browser", "iframe file chooser setup failed: {error}");
+                break;
+            }
+        }
+    }
+
+    pub(super) fn retire_file_chooser_session(&mut self, event: &CdpEvent<'_>, events: &BrowserEventSender) {
+        let session = super::clipboard::target_event_session_id(event.params, event.session_id);
+        if session.is_some() && session == self.file_chooser.session.as_deref() {
+            self.invalidate_file_chooser_frame(None, events);
+        }
+    }
+
     pub(super) fn handle_file_chooser_event(&mut self, event: &CdpEvent<'_>, events: &BrowserEventSender) {
         if event.method == "Page.fileChooserOpened" {
             self.note_file_chooser(event);
-        } else if event.session_id.is_some()
-            && event.session_id == self.session_id.as_deref()
+        } else if event
+            .session_id
+            .is_some_and(|session| self.file_chooser_session_live(session))
             && let Some(frame) = event.params.get("frameId").and_then(serde_json::Value::as_str)
         {
             self.invalidate_file_chooser_frame(Some(frame), events);
@@ -49,7 +88,10 @@ impl DriverState {
     }
 
     pub(super) fn note_file_chooser(&mut self, event: &CdpEvent<'_>) {
-        if event.session_id != self.session_id.as_deref() {
+        if !event
+            .session_id
+            .is_some_and(|session| self.file_chooser_session_live(session))
+        {
             return;
         }
         if let (Some(node), Some(session), Some(frame)) = (
@@ -59,6 +101,7 @@ impl DriverState {
         ) {
             self.config.frame_slot.file_chooser().invalidate();
             self.manifest_dirty = true;
+            self.file_chooser.session = Some(session.to_string());
             let revision = self.file_chooser.binding.start(frame.to_string());
             self.file_chooser.incoming = Some(Incoming {
                 node,
@@ -87,7 +130,7 @@ impl DriverState {
         if let Some(target) = self.file_chooser.target.take() {
             let live = self.file_chooser.binding.current(target.revision)
                 && target.generation == self.semantic.generation()
-                && self.session_id.as_deref() == Some(&target.session)
+                && self.file_chooser_session_live(&target.session)
                 && slot
                     .file_chooser()
                     .request()
@@ -135,7 +178,7 @@ impl DriverState {
         let Some(incoming) = self.file_chooser.incoming.take() else {
             return;
         };
-        if incoming.generation != self.semantic.generation() || self.session_id.as_deref() != Some(&incoming.session) {
+        if incoming.generation != self.semantic.generation() || !self.file_chooser_session_live(&incoming.session) {
             return;
         }
         let result = self.open_file_choice(link, events, slot, incoming);
@@ -162,7 +205,14 @@ impl DriverState {
         } = incoming;
         let session = session.as_str();
         let resolved = self
-            .send_page_command(link, events, slot, "DOM.resolveNode", &json!({"backendNodeId":node}))
+            .call_and_ack(
+                link,
+                events,
+                slot,
+                "DOM.resolveNode",
+                &json!({"backendNodeId":node}),
+                Some(session),
+            )
             .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
         let object = resolved
             .pointer("/object/objectId")
@@ -170,20 +220,32 @@ impl DriverState {
             .ok_or_else(|| BrowserControlFailure::new("input_failed", "The file input is no longer available"))?
             .to_string();
         let result = (|| {
-            let value = self.file_input_value(link, events, slot, &object, FILE_INPUT_PROBE_FUNCTION)?;
+            let value = self.file_input_value_in_session(
+                link,
+                events,
+                slot,
+                FileInputTarget {
+                    object: &object,
+                    session,
+                },
+                FILE_INPUT_PROBE_FUNCTION,
+            )?;
             let probe = parse_file_input_probe(&value)?;
-            if generation != self.semantic.generation() || self.session_id.as_deref() != Some(session) {
+            if generation != self.semantic.generation() || !self.file_chooser_session_live(session) {
                 return Err(BrowserControlFailure::new(
                     "input_failed",
                     "The page changed while opening the chooser",
                 ));
             }
             let origin = self
-                .file_input_value(
+                .file_input_value_in_session(
                     link,
                     events,
                     slot,
-                    &object,
+                    FileInputTarget {
+                        object: &object,
+                        session,
+                    },
                     "element => element.ownerDocument.location.origin",
                 )?
                 .as_str()
@@ -191,7 +253,7 @@ impl DriverState {
                 .to_string();
             if !self.file_chooser.binding.current(revision)
                 || generation != self.semantic.generation()
-                || self.session_id.as_deref() != Some(session)
+                || !self.file_chooser_session_live(session)
             {
                 return Err(BrowserControlFailure::new("stale_target", "The frame changed"));
             }
@@ -230,20 +292,30 @@ impl DriverState {
     ) -> Result<(), BrowserControlFailure> {
         let files = wire_paths(paths)?;
         let _ = local_file_facts(paths)?;
-        let value = self.file_input_value(link, events, slot, &target.object, FILE_INPUT_PROBE_FUNCTION)?;
+        let value = self.file_input_value_in_session(
+            link,
+            events,
+            slot,
+            FileInputTarget {
+                object: &target.object,
+                session: &target.session,
+            },
+            FILE_INPUT_PROBE_FUNCTION,
+        )?;
         check_attachment_request(&parse_file_input_probe(&value)?, paths)?;
         if !self.file_chooser.binding.current(target.revision)
             || target.generation != self.semantic.generation()
-            || self.session_id.as_deref() != Some(&target.session)
+            || !self.file_chooser_session_live(&target.session)
         {
             return Err(BrowserControlFailure::new("stale_target", "The frame changed"));
         }
-        self.send_page_command(
+        self.call_and_ack(
             link,
             events,
             slot,
             "DOM.setFileInputFiles",
             &json!({"objectId":target.object,"files":files}),
+            Some(&target.session),
         )
         .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
         // Native attachment dispatches change handlers, which may immediately

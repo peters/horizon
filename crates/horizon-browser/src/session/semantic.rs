@@ -24,6 +24,12 @@ use crate::{
 
 use super::{BrowserEventSender, DriverState};
 
+#[derive(Clone, Copy)]
+pub(super) struct FileInputTarget<'a> {
+    pub(super) object: &'a str,
+    pub(super) session: &'a str,
+}
+
 fn agent_action_blocked_during_teach(action: &BrowserControlAction) -> bool {
     !matches!(
         action,
@@ -318,19 +324,44 @@ impl DriverState {
         object_id: &str,
         function: &str,
     ) -> Result<Value, BrowserControlFailure> {
+        let session = self
+            .session_id
+            .clone()
+            .ok_or_else(|| BrowserControlFailure::new("browser_unavailable", "The page session closed"))?;
+        self.file_input_value_in_session(
+            link,
+            event_tx,
+            frame_slot,
+            FileInputTarget {
+                object: object_id,
+                session: &session,
+            },
+            function,
+        )
+    }
+
+    pub(super) fn file_input_value_in_session(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        target: FileInputTarget<'_>,
+        function: &str,
+    ) -> Result<Value, BrowserControlFailure> {
         let result = self
-            .send_page_command(
+            .call_and_ack(
                 link,
                 event_tx,
                 frame_slot,
                 "Runtime.callFunctionOn",
                 &json!({
-                    "objectId": object_id,
+                    "objectId": target.object,
                     "functionDeclaration": format!("function() {{ return ({function})(this); }}"),
                     "returnByValue": true,
                     "awaitPromise": true,
                     "userGesture": true,
                 }),
+                Some(target.session),
             )
             .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
         if result.get("exceptionDetails").is_some() {
