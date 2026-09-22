@@ -1,0 +1,9 @@
+*
+!Dockerfile.cpu
+!Dockerfile.gpu
+!install-build-tools.sh
+!THIRD-PARTY.md
+!build-worker-tools.sh
+!collect-helper-notices.py
+!retain-component-sources.py
+!component-sources.json
