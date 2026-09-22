@@ -23,7 +23,9 @@ retains the complete upstream CUDA development base and its vendor notices.
 Commit the intended source revision and hydrate its Git LFS assets before
 deploying. Each agent receives its own worktree. Run `.horizon/validate.sh cpu`
 or `.horizon/validate.sh gpu` in that worktree. Build caches are separated by
-worktree and profile on the persistent worker volume. A successful CUDA build
+worktree and profile on the persistent worker volume. Tests run serially by
+default to reduce timing and port-reuse interference; set `RUST_TEST_THREADS`
+explicitly to choose another concurrency level. A successful CUDA build
 does not establish inference accuracy or hardware graphics rendering; those
 require the corresponding live workload and adapter evidence.
 

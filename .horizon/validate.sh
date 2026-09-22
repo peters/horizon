@@ -5,6 +5,7 @@ case "$mode" in cpu|gpu) ;; *) printf 'Usage: %s cpu|gpu\n' "$0" >&2; exit 2;; e
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/workspace/targets/$(basename "$PWD")-$mode}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+export RUST_TEST_THREADS="${RUST_TEST_THREADS:-1}"
 if [ "$mode" = gpu ]; then
     nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
     nvcc --version
