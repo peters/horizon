@@ -84,17 +84,28 @@ pub(super) struct Runtime {
 }
 impl Runtime {
     fn retains_network_volume(&self) -> bool {
-        self.state
-            .as_ref()
-            .and_then(|state| state.spec.as_ref())
-            .is_some_and(|spec| spec.network_volume.is_some())
+        self.state.as_ref().is_some_and(|state| {
+            state.spec.as_ref().is_some_and(|spec| spec.network_volume.is_some())
+                || state
+                    .worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.network_volume.is_some())
+        })
     }
 
     fn deleted_message(&self) -> &'static str {
         if self.retains_network_volume() {
             "Worker deleted; its network volume, files and credentials remain and storage charges continue"
         } else {
-            "Worker deleted; its processes and files are no longer available"
+            "Worker deleted; running sessions cannot be recovered. Any separately attached network volumes, their files and credentials remain; storage charges continue until those volumes are deleted."
+        }
+    }
+
+    fn deletion_confirmation(&self) -> &'static str {
+        if self.retains_network_volume() {
+            "Delete this worker? Running sessions cannot be recovered. Its network volume, files and credentials remain and storage charges continue."
+        } else {
+            "Delete this worker? Running sessions cannot be recovered. Any separately attached network volumes, their files and credentials remain; storage charges continue until those volumes are deleted."
         }
     }
 
@@ -554,5 +565,55 @@ fn run_deployment(
             }
             emit(Event::failed(error.to_string()));
         }
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unexpected_and_cleared_attachments_never_report_network_files_deleted() {
+        let profile = json!({"provider":"runpod","image":"registry.example.com/worker","cpu":8,"memory_gb":32});
+        let state = json!({
+            "version":1,"cloud_id":"fixture","repository":"/fixture","revision":"revision",
+            "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":{"operation_id":"fixture","image_digest":"registry.example.com/worker",
+                "profile":profile,"public_key":"fixture","registry_auth_id":null,
+                "gpu_types":[],"cpu_flavors":["cpu3g"],"data_centers":[],"network_volume":null},
+            "worker":{"id":"worker1","name":"horizon-cloud-fixture","imageName":"registry.example.com/worker",
+                "desiredStatus":"RUNNING","networkVolume":{"id":"unexpected","size":80,"dataCenterId":"region1"}},
+            "sessions":[]
+        });
+        let mut runtime = Runtime {
+            state: Some(serde_json::from_value(state).unwrap()),
+            ..Runtime::default()
+        };
+        assert!(
+            runtime.retains_network_volume(),
+            "observed attachment must warn even without a requested binding"
+        );
+        assert!(runtime.deleted_message().contains("remain"));
+        assert!(runtime.deletion_confirmation().contains("remain"));
+        let state = runtime.state.as_mut().unwrap();
+        state.worker = None;
+        state.stage = Stage::Deleted;
+        state.operation = cloud_runtime::CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        runtime.state = Some(serde_json::from_slice(&serde_json::to_vec(state).unwrap()).unwrap());
+        assert!(
+            runtime
+                .deleted_message()
+                .contains("Any separately attached network volume")
+        );
+        assert!(runtime.deleted_message().contains("remain"));
+        assert!(runtime.deletion_confirmation().contains("remain"));
+        runtime.state.as_mut().unwrap().spec.as_mut().unwrap().network_volume =
+            Some(serde_json::from_value(json!({"id":"bound-volume","data_center_id":"region1"})).unwrap());
+        assert!(runtime.retains_network_volume());
+        assert!(runtime.deleted_message().contains("remain"));
+        assert!(runtime.deletion_confirmation().contains("remain"));
     }
 }

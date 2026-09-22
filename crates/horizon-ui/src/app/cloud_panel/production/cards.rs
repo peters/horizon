@@ -374,14 +374,7 @@ fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<A
 fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     if runtime.state.is_some() {
         if runtime.confirmation == Confirmation::Delete {
-            ui.colored_label(
-                egui::Color32::LIGHT_RED,
-                if runtime.retains_network_volume() {
-                    "Delete this worker? Running sessions cannot be recovered. Its network volume, files and credentials remain and storage charges continue."
-                } else {
-                    "Delete this worker and its files? Running sessions cannot be recovered."
-                },
-            );
+            ui.colored_label(egui::Color32::LIGHT_RED, runtime.deletion_confirmation());
             if ui.button("Delete worker permanently").clicked() {
                 return Some(Action::Delete);
             }
