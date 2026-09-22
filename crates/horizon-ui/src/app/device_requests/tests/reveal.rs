@@ -1,5 +1,71 @@
 use super::*;
 
+#[test]
+fn revealing_a_hidden_viewer_does_not_create_keyboard_focus() {
+    let (_temp, ctx, mut app) = app();
+    let create = request(
+        &app,
+        Operation::Create {
+            identity: None,
+            endpoint: "127.0.0.1:5900".into(),
+        },
+    );
+    let initial = one(app.apply_device_request(&create, &ctx));
+    let id = app.board.panel_id_by_local_id(&initial.panel_id).unwrap();
+    app.board.set_panel_visible(id, false);
+    app.board.focused = None;
+    let active = app.board.active_workspace;
+    let reveal = request(
+        &app,
+        Operation::Reveal {
+            panel_id: initial.panel_id,
+        },
+    );
+    one(app.apply_device_request(&reveal, &ctx));
+    assert!(app.board.panel(id).unwrap().visible);
+    assert!(app.board.focused.is_none());
+    assert_eq!(app.board.active_workspace, active);
+}
+
+#[cfg(feature = "cloud-workspaces")]
+#[test]
+fn root_reveal_retains_focus_restored_after_cloud_fullscreen() {
+    use horizon_core::cloud_panel::CloudGroup;
+    let (temp, ctx, mut app) = app();
+    let create = request(
+        &app,
+        Operation::Create {
+            identity: None,
+            endpoint: "127.0.0.1:5900".into(),
+        },
+    );
+    let initial = one(app.apply_device_request(&create, &ctx));
+    let caller = app.board.panels[0].id;
+    let workspace = app.board.panels[0].workspace_id;
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    app.cloud_prototype.groups.0.push(CloudGroup::new(
+        1,
+        "Fixture".into(),
+        local,
+        temp.path().into(),
+        [0.0, 0.0],
+    ));
+    app.board.focus(caller);
+    let active = app.board.active_workspace;
+    app.toggle_cloud_fullscreen(&ctx, 1);
+    assert!(app.board.focused.is_none());
+    let reveal = request(
+        &app,
+        Operation::Reveal {
+            panel_id: initial.panel_id,
+        },
+    );
+    one(app.apply_device_request(&reveal, &ctx));
+    assert!(app.cloud_prototype.fullscreen.is_none());
+    assert_eq!(app.board.focused, Some(caller));
+    assert_eq!(app.board.active_workspace, active);
+}
+
 #[cfg(feature = "cloud-workspaces")]
 #[test]
 fn repeated_root_reveal_keeps_the_restore_deadline_and_latest_target() {

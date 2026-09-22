@@ -240,10 +240,11 @@ impl HorizonApp {
             .board
             .workspace(actor.workspace_id)
             .map(|workspace| workspace.local_id.clone());
-        if let Some(state) = local.and_then(|local| self.detached_workspaces.get_mut(&local)) {
+        let focused = if let Some(state) = local.and_then(|local| self.detached_workspaces.get_mut(&local)) {
             // The detached viewport applies this using its own geometry next frame.
             // Never send an OS Focus command from an automated reveal.
             state.pending_device_reveal = Some(id);
+            focused
         } else {
             if self.fullscreen_panel.is_some_and(|current| current != id) {
                 self.fullscreen_panel = None;
@@ -254,6 +255,11 @@ impl HorizonApp {
             let restored_fullscreen = self.exit_cloud_for_device_reveal(ctx);
             #[cfg(not(feature = "cloud-workspaces"))]
             let restored_fullscreen = None;
+            let focused = if restored_fullscreen.is_some() {
+                focused.or(self.board.focused)
+            } else {
+                focused
+            };
             let pending = match (
                 restored_fullscreen,
                 self.panel_render_caches.pending_device_reveal.take(),
@@ -269,7 +275,8 @@ impl HorizonApp {
                 },
             };
             self.panel_render_caches.pending_device_reveal = Some(pending);
-        }
+            focused
+        };
         self.board.focused = focused;
         self.board.active_workspace = active_workspace;
         self.mark_runtime_dirty();
