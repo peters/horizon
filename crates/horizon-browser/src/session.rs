@@ -549,7 +549,8 @@ struct DriverState {
     pending_viewport: Option<(u32, u32)>,
     viewport_retry_at: Option<Instant>,
     pending_viewport_capture_at: Option<Instant>,
-    viewport_capture_request_id: Option<u64>,
+    /// In-flight settle capture: its request id and the viewport it shows.
+    viewport_capture: Option<(u64, (u32, u32))>,
     /// Headless Chromium paints a native scrollbar that CDP mouse events
     /// cannot operate. Presses in the host overlay gutter become an
     /// engine-owned scroll interaction until the matching release.
@@ -637,7 +638,7 @@ impl DriverState {
             pending_viewport: None,
             viewport_retry_at: None,
             pending_viewport_capture_at: None,
-            viewport_capture_request_id: None,
+            viewport_capture: None,
             vertical_scrollbar_drag: None,
             scrollbar_layout: ScrollbarLayoutCache::new(),
             interaction_started_at: None,

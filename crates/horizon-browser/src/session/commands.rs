@@ -568,7 +568,7 @@ impl DriverState {
     /// screencast frame. Capture exactly once after a resize burst settles;
     /// the asynchronous response is published by `handle_message`.
     pub(super) fn tick_viewport_capture(&mut self, link: &mut CdpLink, frame_slot: &FrameSlot) {
-        if self.viewport_capture_request_id.is_some() {
+        if self.viewport_capture.is_some() {
             return;
         }
         let Some(due) = self.pending_viewport_capture_at else {
@@ -593,7 +593,7 @@ impl DriverState {
         ) {
             Ok(request_id) => {
                 frame_slot.record_capture_request();
-                self.viewport_capture_request_id = Some(request_id);
+                self.viewport_capture = Some((request_id, (self.viewport_w, self.viewport_h)));
             }
             Err(error) => tracing::debug!(target: "browser", "viewport frame capture failed: {error}"),
         }

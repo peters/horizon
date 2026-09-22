@@ -131,8 +131,8 @@ impl DriverState {
             }
             return;
         }
-        if self.viewport_capture_request_id == Some(id) {
-            self.viewport_capture_request_id = None;
+        if let Some((_, captured)) = self.viewport_capture.filter(|(request, _)| *request == id) {
+            self.viewport_capture = None;
             if let Some(error) = error {
                 tracing::debug!(target: "browser", "viewport frame capture rejected: {error}");
                 return;
@@ -145,7 +145,9 @@ impl DriverState {
                 return;
             };
             frame_slot.record_capture_completion();
-            if self.retain_frame_during_navigation {
+            // A resize while the capture was in flight makes it show the old
+            // layout; that resize scheduled a capture of its own.
+            if self.retain_frame_during_navigation || captured != (self.viewport_w, self.viewport_h) {
                 return;
             }
             if let Some(seq) = frame_slot.store_base64_jpeg(data) {
@@ -237,7 +239,7 @@ impl DriverState {
                     self.screencast_request_id = None;
                     self.navigate_request_id = None;
                     self.pending_viewport_capture_at = None;
-                    self.viewport_capture_request_id = None;
+                    self.viewport_capture = None;
                     self.invalidate_scrollbar_layout(event_tx);
                     self.reset_clipboard_tracking();
                     self.main_frame_id = None;
@@ -327,7 +329,7 @@ impl DriverState {
         self.screencast_request_id = None;
         self.navigate_request_id = None;
         self.pending_viewport_capture_at = None;
-        self.viewport_capture_request_id = None;
+        self.viewport_capture = None;
         self.invalidate_scrollbar_layout(event_tx);
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
@@ -523,7 +525,7 @@ impl DriverState {
         let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
             return;
         };
-        if self.retain_frame_during_navigation {
+        if self.retain_frame_during_navigation || self.screencast_frame_predates_viewport(event.params) {
             return;
         }
         if let Some(seq) = frame_slot.store_base64_jpeg(data) {
@@ -532,6 +534,22 @@ impl DriverState {
         } else {
             tracing::warn!(target: "browser", "dropping undecodable screencast frame");
         }
+    }
+
+    /// Chrome can keep emitting frames composited at an earlier emulated
+    /// viewport for a while after a resize burst, interleaved with frames of
+    /// the new size. Publishing one after the new size's frame would leave a
+    /// static page showing the stale layout, since nothing newer follows. Every
+    /// page session runs under a device-metrics override, so a frame whose
+    /// device size is neither the committed nor the in-flight viewport is
+    /// stale. Frames without size metadata are kept.
+    fn screencast_frame_predates_viewport(&self, params: &serde_json::Value) -> bool {
+        let size = |key: &str| params.pointer(key).and_then(serde_json::Value::as_f64);
+        let (Some(width), Some(height)) = (size("/metadata/deviceWidth"), size("/metadata/deviceHeight")) else {
+            return false;
+        };
+        let shows = |(w, h): (u32, u32)| (f64::from(w) - width).abs() < 0.5 && (f64::from(h) - height).abs() < 0.5;
+        !shows((self.viewport_w, self.viewport_h)) && !self.pending_viewport.is_some_and(shows)
     }
 
     fn record_interaction_frame(&mut self, frame_slot: &FrameSlot) {
@@ -1025,6 +1043,22 @@ mod tests {
         assert_eq!(rx.recv(), Ok(BrowserEvent::UrlChanged(URL.to_string())));
         assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
         assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn only_frames_of_the_committed_or_in_flight_viewport_are_published() {
+        let frame = |width: u32, height: u32| serde_json::json!({"metadata": {"deviceWidth": width, "deviceHeight": height}, "data": ""});
+        let mut state = driver_state();
+        assert!(!state.screencast_frame_predates_viewport(&frame(1280, 800)));
+        // A frame still composited at an earlier size after a resize burst.
+        assert!(state.screencast_frame_predates_viewport(&frame(1344, 918)));
+        assert!(state.screencast_frame_predates_viewport(&frame(1280, 801)));
+        // Frames of a resize still in flight carry the size it will commit.
+        state.pending_viewport = Some((1393, 951));
+        assert!(!state.screencast_frame_predates_viewport(&frame(1393, 951)));
+        assert!(!state.screencast_frame_predates_viewport(&frame(1280, 800)));
+        // Without size metadata there is nothing to compare, so keep it.
+        assert!(!state.screencast_frame_predates_viewport(&serde_json::json!({"data": ""})));
     }
 
     #[test]
