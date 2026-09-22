@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use egui::text::{CCursor, CCursorRange};
 use egui::{
     Align, Button, Color32, Context, CornerRadius, Id, Layout, Margin, Order, Pos2, Rect, Sense, Stroke, StrokeKind,
     UiBuilder, Vec2,
@@ -18,6 +19,8 @@ pub struct PickerModalState {
     query: String,
     selected: usize,
     opened_at: Instant,
+    caret_to_end: bool,
+    focus_on_open: bool,
 }
 
 pub enum PickerModalAction {
@@ -56,6 +59,8 @@ impl PickerModalState {
             query: query.into(),
             selected: 0,
             opened_at: Instant::now(),
+            caret_to_end: true,
+            focus_on_open: true,
         }
     }
 
@@ -65,6 +70,7 @@ impl PickerModalState {
 
     pub fn set_query(&mut self, query: impl Into<String>) {
         self.query = query.into();
+        self.caret_to_end = true;
     }
 
     pub fn selected_index(&self) -> usize {
@@ -155,7 +161,7 @@ impl PickerModalState {
         );
         ui.add_space(10.0);
 
-        self.render_query_input(ui, layout.inner, config.hint_text);
+        self.render_query_input(ui, layout.inner, config);
         if let Some(action) = self.handle_keyboard(ctx, results.len()) {
             return action;
         }
@@ -181,7 +187,7 @@ impl PickerModalState {
         PickerModalAction::None
     }
 
-    fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect, hint_text: &str) {
+    fn render_query_input(&mut self, ui: &mut egui::Ui, inner_rect: Rect, config: &PickerModalConfig<'_>) {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
         ui.painter()
             .rect_filled(input_rect, CornerRadius::same(12), theme::BG_ELEVATED());
@@ -198,18 +204,32 @@ impl PickerModalState {
                 .max_rect(text_rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
+        // The edit's cursor outlives this picker; a seeded or completed query continues at its end.
+        let id = Id::new((config.id_source, "query"));
+        if std::mem::take(&mut self.caret_to_end) {
+            let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+            let end = CCursor::new(self.query.chars().count());
+            state.cursor.set_char_range(Some(CCursorRange::one(end)));
+            state.store(ui.ctx(), id);
+        }
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
+                .id(id)
                 .font(egui::FontId::monospace(14.0))
                 .text_color(theme::FG())
                 .frame(egui::Frame::NONE)
                 .desired_width(text_rect.width())
-                .hint_text(egui::RichText::new(hint_text).color(theme::FG_DIM()).size(13.0))
+                .hint_text(egui::RichText::new(config.hint_text).color(theme::FG_DIM()).size(13.0))
                 .margin(Margin::ZERO),
         );
 
-        if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
-            response.request_focus();
+        // Claim focus until the query holds it once, however long the first frames take.
+        if self.focus_on_open {
+            if response.has_focus() {
+                self.focus_on_open = false;
+            } else {
+                response.request_focus();
+            }
         }
     }
 
@@ -376,4 +396,68 @@ pub fn split_path_display(display: &str) -> (String, String) {
 fn usize_to_f32(v: usize) -> f32 {
     let clamped = u16::try_from(v).unwrap_or(u16::MAX);
     f32::from(clamped)
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::text::{CCursor, CCursorRange};
+    use egui::{Color32, Event, Id, RawInput};
+
+    use super::{PickerEmptyState, PickerModalConfig, PickerModalState};
+    use crate::test_egui::DiscardTextures;
+
+    const CONFIG: PickerModalConfig<'static> = PickerModalConfig {
+        id_source: "picker_caret_test",
+        heading: "Select directory",
+        hint_text: "",
+        status_text: None,
+        empty_state: PickerEmptyState {
+            message: "",
+            color: Color32::WHITE,
+        },
+        footer_action_label: None,
+    };
+
+    fn frame(ctx: &egui::Context, modal: &mut PickerModalState, events: Vec<Event>) {
+        let input = RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+            events,
+            ..RawInput::default()
+        };
+        let _ = ctx
+            .run_ui(input, |ui| {
+                modal.show(ui.ctx(), &CONFIG, &[] as &[()], |_, _, _, (), _| false);
+            })
+            .discard_textures();
+    }
+
+    #[test]
+    fn seeded_and_completed_queries_continue_typing_at_their_end() {
+        let ctx = egui::Context::default();
+        let id = Id::new((CONFIG.id_source, "query"));
+        // An earlier picker session left the shared edit's caret mid-text.
+        let mut stale = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+        stale.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(2))));
+        stale.store(&ctx, id);
+
+        let mut modal = PickerModalState::new("~/src/");
+        frame(&ctx, &mut modal, Vec::new());
+        frame(&ctx, &mut modal, vec![Event::Text("repo".into())]);
+        assert_eq!(modal.query(), "~/src/repo");
+
+        modal.set_query("~/src/repository/");
+        frame(&ctx, &mut modal, Vec::new());
+        frame(&ctx, &mut modal, vec![Event::Text("crates".into())]);
+        assert_eq!(modal.query(), "~/src/repository/crates");
+    }
+
+    #[test]
+    fn a_late_first_frame_still_focuses_the_query() {
+        let ctx = egui::Context::default();
+        let mut modal = PickerModalState::new("");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        frame(&ctx, &mut modal, Vec::new());
+        frame(&ctx, &mut modal, vec![Event::Text("~/src".into())]);
+        assert_eq!(modal.query(), "~/src");
+    }
 }

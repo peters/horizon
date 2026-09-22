@@ -39,6 +39,7 @@ pub(super) struct Production {
     pub(super) focus_title_on_open: bool,
     title: String,
     repository: String,
+    choosing_repository: bool,
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,

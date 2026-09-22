@@ -1,11 +1,12 @@
 use super::*;
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
-use egui::{Event, Id, Key, Modifiers};
+use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape};
 use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
 mod profiles;
 mod reopening;
+mod repository_picker;
 
 fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>, modifiers: Modifiers) {
     let mut input = raw_input([1400.0, 900.0], None);
@@ -28,6 +29,36 @@ fn key(ctx: &egui::Context, app: &mut HorizonApp, key: Key, modifiers: Modifiers
                 modifiers,
             }],
             modifiers,
+        );
+    }
+}
+
+fn label_position(output: &egui::FullOutput, label: &str) -> Pos2 {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == label => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing visible label: {label}"))
+}
+
+fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
+    frame(ctx, app, vec![Event::PointerMoved(position)], Modifiers::NONE);
+    for pressed in [true, false] {
+        frame(
+            ctx,
+            app,
+            vec![Event::PointerButton {
+                pos: position,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }],
+            Modifiers::NONE,
         );
     }
 }
@@ -59,6 +90,10 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
     for _ in 0..16 {
         key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
         key(&ctx, &mut app, Key::Space, Modifiers::NONE);
+        if app.dir_picker.is_some() {
+            key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+            assert!(app.dir_picker.is_none(), "Escape must close the repository picker");
+        }
         assert!(app.command_palette.is_none(), "modal focus reached Quick Nav");
         assert!(app.settings.is_none(), "modal focus reached Settings");
         if !app.cloud_creation_open() {
@@ -111,24 +146,37 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     }
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
     frame(&ctx, &mut app, vec![Event::Text("Deployment".into())], Modifiers::NONE);
+    let repository = temp.path().join("committed-repository");
+    std::fs::create_dir(&repository).unwrap();
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     frame(
         &ctx,
         &mut app,
-        vec![Event::Text("/committed/repository".into())],
+        vec![Event::Text(repository.to_string_lossy().into())],
         Modifiers::NONE,
     );
+    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     frame(&ctx, &mut app, vec![Event::Text("HEAD".into())], Modifiers::NONE);
     assert_eq!(app.cloud_prototype.production.title, "Deployment");
-    assert_eq!(app.cloud_prototype.production.repository, "/committed/repository");
+    assert_eq!(
+        std::path::Path::new(&app.cloud_prototype.production.repository),
+        repository
+    );
     assert_eq!(app.cloud_prototype.production.revision, "HEAD");
     key(&ctx, &mut app, Key::Tab, Modifiers::SHIFT);
-    assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::new("cloud-repository")));
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
+    assert!(
+        app.dir_picker.is_some(),
+        "Shift+Tab must return to the repository field"
+    );
     key(&ctx, &mut app, Key::F11, Modifiers::NONE);
     assert!(app.fullscreen_panel.is_none());
     assert!(app.cloud_creation_open());
+    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+    assert!(app.dir_picker.is_none());
+    assert!(app.cloud_creation_open(), "Escape closes only the picker");
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
     assert!(!app.cloud_creation_open());
     std::thread::sleep(Duration::from_millis(50));
