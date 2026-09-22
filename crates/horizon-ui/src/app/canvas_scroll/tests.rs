@@ -1,10 +1,10 @@
-use egui::{Context, Event, Modifiers, MouseWheelUnit, Pos2, RawInput, TouchPhase, Vec2, ViewportId};
+use egui::{Context, Event, InputOptions, Modifiers, MouseWheelUnit, Pos2, RawInput, TouchPhase, Vec2, ViewportId};
 use horizon_core::{RuntimeState, StartupDecision};
 use tempfile::TempDir;
 
 use super::super::HorizonApp;
 use super::super::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use super::{ScrollGesture, ScrollTarget, route_canvas_scroll};
+use super::{ScrollGesture, ScrollTarget, WheelStep, route_canvas_scroll};
 use crate::test_egui::DiscardTextures;
 
 /// The gesture only needs to know whether a panel is under the pointer, so the
@@ -247,7 +247,9 @@ fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Ev
         egui::InputOptions::default(),
     );
     gesture
-        .route(&input, panel(on_canvas), true, &|_, _, _| false)
+        .route(&input, &InputOptions::default(), panel(on_canvas), true, &mut |_, _| {
+            false
+        })
         .pans_canvas
 }
 
@@ -338,7 +340,9 @@ fn focus_loss_and_disallowed_input_release_the_gesture() {
         input.focused = focused;
         assert!(
             !gesture
-                .route(&input, panel(false), !focused, &|_, _, _| false)
+                .route(&input, &InputOptions::default(), panel(false), !focused, &mut |_, _| {
+                    false
+                })
                 .pans_canvas
         );
         assert!(!claim(
@@ -365,7 +369,7 @@ fn root_and_detached_viewports_have_separate_scroll_owners() {
         let _ = ctx
             .run_ui(input, |ui| {
                 assert_eq!(
-                    route_canvas_scroll(ui.ctx(), panel(starts_on_canvas), true, |_, _, _| false).pans_canvas,
+                    route_canvas_scroll(ui.ctx(), panel(starts_on_canvas), true, |_, _| false).pans_canvas,
                     expected
                 );
             })
@@ -385,7 +389,9 @@ fn route(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, chain: bool, e
         egui::InputOptions::default(),
     );
     gesture
-        .route(&input, panel(on_canvas), true, &|_, _, _| chain)
+        .route(&input, &InputOptions::default(), panel(on_canvas), true, &mut |_, _| {
+            chain
+        })
         .pans_canvas
 }
 
@@ -424,7 +430,7 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
     // panel the pointer drifted over happens to be exhausted.
     let mut gesture = ScrollGesture::default();
     let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
-    let only_other_is_exhausted = |id: horizon_core::PanelId, _: Vec2, _: Modifiers| id == OTHER_PANEL;
+    let mut only_other_is_exhausted = |id: horizon_core::PanelId, _: WheelStep| id == OTHER_PANEL;
 
     let input = |time: f64| {
         egui::InputState::default().begin_pass(
@@ -442,7 +448,13 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
     // Latches to PANEL, which can still scroll.
     assert!(
         !gesture
-            .route(&input(1.0), ScrollTarget::Panel(PANEL), true, &only_other_is_exhausted)
+            .route(
+                &input(1.0),
+                &InputOptions::default(),
+                ScrollTarget::Panel(PANEL),
+                true,
+                &mut only_other_is_exhausted
+            )
             .pans_canvas
     );
     // The pointer moves over OTHER_PANEL, which is exhausted. The owner still
@@ -451,16 +463,23 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
         !gesture
             .route(
                 &input(1.016),
+                &InputOptions::default(),
                 ScrollTarget::Panel(OTHER_PANEL),
                 true,
-                &only_other_is_exhausted
+                &mut only_other_is_exhausted
             )
             .pans_canvas
     );
     // Once the owner itself is exhausted, the gesture chains.
     assert!(
         gesture
-            .route(&input(1.032), ScrollTarget::Panel(OTHER_PANEL), true, &|_, _, _| true)
+            .route(
+                &input(1.032),
+                &InputOptions::default(),
+                ScrollTarget::Panel(OTHER_PANEL),
+                true,
+                &mut |_, _| true
+            )
             .pans_canvas
     );
 }
@@ -494,7 +513,7 @@ fn coalesced_opposing_wheels_are_judged_one_event_at_a_time() {
     // direction; only a horizontal-only event finds it exhausted. egui can
     // coalesce opposing events into a zero frame delta, which must not read as
     // a horizontal swipe and chain the gesture away from the terminal.
-    let mid_history = |_: horizon_core::PanelId, delta: Vec2, _: Modifiers| delta.y == 0.0;
+    let mut mid_history = |_: horizon_core::PanelId, step: WheelStep| step.delta.y == 0.0;
     let input = egui::InputState::default().begin_pass(
         RawInput {
             time: Some(1.0),
@@ -510,7 +529,13 @@ fn coalesced_opposing_wheels_are_judged_one_event_at_a_time() {
     );
     assert_eq!(input.smooth_scroll_delta, Vec2::ZERO);
     let mut gesture = ScrollGesture::default();
-    let routing = gesture.route(&input, ScrollTarget::Panel(PANEL), true, &mid_history);
+    let routing = gesture.route(
+        &input,
+        &InputOptions::default(),
+        ScrollTarget::Panel(PANEL),
+        true,
+        &mut mid_history,
+    );
     assert!(!routing.pans_canvas);
     assert!(routing.claimed_wheels.is_empty());
     assert_eq!(gesture.canvas_owned, Some(false));
@@ -531,7 +556,129 @@ fn a_surface_without_a_scroll_extent_keeps_its_gesture() {
         1.0,
         egui::InputOptions::default(),
     );
-    let routing = gesture.route(&input, ScrollTarget::Surface, true, &|_, _, _| true);
+    let routing = gesture.route(
+        &input,
+        &InputOptions::default(),
+        ScrollTarget::Surface,
+        true,
+        &mut |_, _| true,
+    );
     assert!(!routing.pans_canvas);
     assert!(routing.claimed_wheels.is_empty());
+}
+
+fn pass(time: f64, events: Vec<Event>) -> egui::InputState {
+    egui::InputState::default().begin_pass(
+        RawInput {
+            time: Some(time),
+            events,
+            ..RawInput::default()
+        },
+        false,
+        1.0,
+        InputOptions::default(),
+    )
+}
+
+#[test]
+fn a_chaining_frame_pans_only_by_the_events_the_canvas_claimed() {
+    // The terminal absorbs the first event; the second finds it exhausted and
+    // chains. egui's frame-wide scroll nets both to zero, but the canvas must
+    // move by exactly the event it claimed.
+    let mut gesture = ScrollGesture::default();
+    let mut asked = 0;
+    let events = vec![
+        wheel(Vec2::new(0.0, 5.0), TouchPhase::Move),
+        wheel(Vec2::new(0.0, -5.0), TouchPhase::Move),
+    ];
+    let routing = gesture.route(
+        &pass(1.0, events),
+        &InputOptions::default(),
+        ScrollTarget::Panel(PANEL),
+        true,
+        &mut |_, _| {
+            asked += 1;
+            asked == 2
+        },
+    );
+    assert_eq!(asked, 2, "each moving event is judged in order");
+    assert_eq!(routing.claimed_wheels, vec![1]);
+    assert!(routing.pans_canvas);
+    assert_eq!(routing.pan, Vec2::new(0.0, -5.0));
+}
+
+#[test]
+fn a_claimed_mouse_wheel_notch_is_eased_in_like_egui_scrolls_it() {
+    let options = InputOptions::default();
+    let mut gesture = ScrollGesture::default();
+    let notch = Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    };
+    let mut route = |time: f64, events: Vec<Event>| {
+        gesture
+            .route(
+                &pass(time, events),
+                &options,
+                ScrollTarget::Canvas,
+                true,
+                &mut |_, _| false,
+            )
+            .pan
+    };
+    let first = route(1.0, vec![notch]);
+    assert!(first.y < 0.0 && first.y > -options.line_scroll_speed, "{first:?}");
+    let mut total = first;
+    for frame in 1..60 {
+        total += route(1.0 + f64::from(frame) / 60.0, Vec::new());
+    }
+    assert!((total.y + options.line_scroll_speed).abs() < 0.001, "{total:?}");
+    assert!(total.x.abs() < f32::EPSILON);
+}
+
+#[test]
+fn a_terminal_is_judged_where_the_frames_earlier_events_leave_it() {
+    use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+    use std::fmt::Write as _;
+
+    let (_temp, ctx, mut app) = app_fixture();
+    let transcripts = tempfile::tempdir().expect("transcript tempdir");
+    let mut replay = String::new();
+    for index in 0..120 {
+        write!(replay, "history {index:03}\r\n").expect("format history line");
+    }
+    std::fs::write(transcripts.path().join("history-panel.bin"), replay).expect("write transcript");
+    let panel = Panel::spawn(
+        PanelId(99),
+        WorkspaceId(7),
+        PanelOptions {
+            kind: PanelKind::Ssh,
+            rows: 10,
+            cols: 40,
+            local_id: Some("history-panel".to_string()),
+            transcript_root: Some(transcripts.path().to_path_buf()),
+            restore_as_disconnected_snapshot: true,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("spawn history snapshot");
+    assert!(panel.terminal().expect("terminal").history_size() > 3);
+    app.board.panels.push(panel);
+
+    let cell = crate::terminal_widget::wheel_cell_size(&ctx);
+    let lines = |lines: f32| WheelStep {
+        delta: Vec2::new(0.0, lines),
+        unit: MouseWheelUnit::Line,
+        modifiers: Modifiers::NONE,
+    };
+    let mut pending = None;
+    let mut exhausted = |step| app.panel_scroll_exhausted(PanelId(99), step, cell, &mut pending);
+    // At the bottom, a coalesced up-then-down pair belongs to the terminal:
+    // the first event moves it off the bottom before the second applies.
+    assert!(!exhausted(lines(2.0)));
+    assert!(!exhausted(lines(-2.0)));
+    // Back at the bottom, the next downward event is at the extent.
+    assert!(exhausted(lines(-1.0)));
 }

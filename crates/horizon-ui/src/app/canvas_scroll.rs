@@ -1,4 +1,4 @@
-use egui::{Context, Event, Id, InputState, Modifiers, TouchPhase, Vec2};
+use egui::{Context, Event, Id, InputOptions, InputState, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
 use horizon_core::PanelId;
 
 use crate::input::TerminalInputEvent;
@@ -19,6 +19,14 @@ pub(super) enum ScrollTarget {
     Surface,
 }
 
+/// One wheel event, carrying what the terminal needs to apply it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WheelStep {
+    pub(super) delta: Vec2,
+    pub(super) unit: MouseWheelUnit,
+    pub(super) modifiers: Modifiers,
+}
+
 #[derive(Clone, Default)]
 struct ScrollGesture {
     canvas_owned: Option<bool>,
@@ -27,11 +35,17 @@ struct ScrollGesture {
     owner: Option<PanelId>,
     last_motion_at: f64,
     has_touch_phase: bool,
+    /// Claimed wheel motion still being eased in, so a claimed mouse-wheel
+    /// notch pans as smoothly as egui would have scrolled it.
+    pan_backlog: Vec2,
 }
 
 #[derive(Default)]
 pub(super) struct ScrollRouting {
     pub(super) pans_canvas: bool,
+    /// Canvas motion from the claimed events only. egui's frame-wide scroll
+    /// also carries events a panel absorbed before the gesture chained.
+    pub(super) pan: Vec2,
     owns_smooth_scroll: bool,
     claimed_wheels: Vec<usize>,
 }
@@ -45,14 +59,54 @@ impl ScrollGesture {
             ScrollTarget::Panel(panel) => Some(panel),
             ScrollTarget::Canvas | ScrollTarget::Surface => None,
         };
+        self.pan_backlog = Vec2::ZERO;
+    }
+
+    /// Queue one claimed event's motion exactly as egui scrolls it: in points,
+    /// turned by the scroll-axis modifiers, and eased in over a few frames
+    /// unless it is a precise trackpad step.
+    fn claim_motion(&mut self, input: &InputState, options: &InputOptions, step: WheelStep, pan: &mut Vec2) {
+        let mut delta = match step.unit {
+            MouseWheelUnit::Point => step.delta,
+            MouseWheelUnit::Line => options.line_scroll_speed * step.delta,
+            MouseWheelUnit::Page => input.viewport_rect().height() * step.delta,
+        };
+        let horizontal = step.modifiers.matches_any(options.horizontal_scroll_modifier);
+        let vertical = step.modifiers.matches_any(options.vertical_scroll_modifier);
+        if horizontal && !vertical {
+            delta = Vec2::new(delta.x + delta.y, 0.0);
+        } else if vertical && !horizontal {
+            delta = Vec2::new(0.0, delta.x + delta.y);
+        }
+        if self.has_touch_phase || (step.unit == MouseWheelUnit::Point && delta.length() < 8.0) {
+            *pan += delta;
+        } else {
+            self.pan_backlog += delta;
+        }
+    }
+
+    /// egui's own easing: 90% of a queued step lands within 0.1 s.
+    fn ease_backlog(&mut self, dt: f32) -> Vec2 {
+        let t = egui::emath::exponential_smooth_factor(0.90, 0.1, dt.min(0.1));
+        let mut applied = Vec2::ZERO;
+        for axis in 0..2 {
+            applied[axis] = if self.pan_backlog[axis].abs() < 1.0 {
+                self.pan_backlog[axis]
+            } else {
+                t * self.pan_backlog[axis]
+            };
+            self.pan_backlog[axis] -= applied[axis];
+        }
+        applied
     }
 
     fn route(
         &mut self,
         input: &InputState,
+        options: &InputOptions,
         target: ScrollTarget,
         allowed: bool,
-        exhausted: &impl Fn(PanelId, Vec2, Modifiers) -> bool,
+        exhausted: &mut impl FnMut(PanelId, WheelStep) -> bool,
     ) -> ScrollRouting {
         if !allowed || !input.focused || input.pointer.any_pressed() {
             *self = Self::default();
@@ -61,20 +115,28 @@ impl ScrollGesture {
 
         let mut routing = ScrollRouting::default();
         let mut has_canvas_motion = false;
-        for (index, (delta, phase, modifiers)) in input
+        for (index, (step, phase)) in input
             .events
             .iter()
             .filter_map(|event| match event {
                 Event::MouseWheel {
+                    unit,
                     delta,
                     phase,
                     modifiers,
-                    ..
-                } => Some((*delta, *phase, *modifiers)),
+                } => Some((
+                    WheelStep {
+                        delta: *delta,
+                        unit: *unit,
+                        modifiers: *modifiers,
+                    },
+                    *phase,
+                )),
                 _ => None,
             })
             .enumerate()
         {
+            let delta = step.delta;
             match phase {
                 TouchPhase::Start => {
                     self.latch(target);
@@ -98,42 +160,54 @@ impl ScrollGesture {
             // an event carrying motion can chain: a phased gesture opens with a
             // zero-delta `Start`, which has no direction to be exhausted in.
             // Each event is judged by its own delta, as the terminal applies
-            // it, never by the frame's sum, where opposing events cancel out.
+            // it, never by the frame's sum, where opposing events cancel out,
+            // and in order, so `exhausted` can account for the events before.
             if delta != Vec2::ZERO
                 && self.canvas_owned == Some(false)
-                && self.owner.is_some_and(|owner| exhausted(owner, delta, modifiers))
+                && self.owner.is_some_and(|owner| exhausted(owner, step))
             {
                 self.canvas_owned = Some(true);
             }
             if self.canvas_owned == Some(true) {
                 routing.claimed_wheels.push(index);
                 has_canvas_motion |= delta != Vec2::ZERO;
+                if phase == TouchPhase::Move {
+                    self.claim_motion(input, options, step, &mut routing.pan);
+                }
             }
             if matches!(phase, TouchPhase::End | TouchPhase::Cancel) {
+                // egui drops a lifted gesture's pending scroll too.
                 *self = Self::default();
+                routing.pan = Vec2::ZERO;
             }
         }
 
         routing.owns_smooth_scroll = self.canvas_owned == Some(true);
-        routing.pans_canvas =
-            routing.owns_smooth_scroll && (has_canvas_motion || input.smooth_scroll_delta != Vec2::ZERO);
+        if routing.owns_smooth_scroll {
+            routing.pan += self.ease_backlog(input.stable_dt);
+        }
+        routing.pans_canvas = routing.owns_smooth_scroll && (has_canvas_motion || routing.pan != Vec2::ZERO);
         routing
     }
 }
 
 /// Route this frame's scroll. `target` is the surface under the pointer, used
-/// only when a gesture latches; `exhausted` reports whether a panel can still
-/// absorb one wheel event's delta and modifiers, and is always asked about the
-/// gesture's own owner.
+/// only when a gesture latches. `exhausted` reports whether a panel has run
+/// out of scroll for one wheel event; it is always asked about the gesture's
+/// own owner, once per moving event in order, until the gesture chains.
 pub(super) fn route_canvas_scroll(
     ctx: &Context,
     target: ScrollTarget,
     allowed: bool,
-    exhausted: impl Fn(PanelId, Vec2, Modifiers) -> bool,
+    mut exhausted: impl FnMut(PanelId, WheelStep) -> bool,
 ) -> ScrollRouting {
     let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
-    let routing = ctx.input(|input| gesture.route(input, target, allowed, &exhausted));
+    let options = ctx.options(|options| options.input_options);
+    let routing = ctx.input(|input| gesture.route(input, &options, target, allowed, &mut exhausted));
+    if gesture.pan_backlog != Vec2::ZERO {
+        ctx.request_repaint();
+    }
     ctx.data_mut(|data| data.insert_temp(id, gesture));
     routing
 }
