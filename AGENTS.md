@@ -103,6 +103,13 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 - Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
 
+### Cloud Development Profiles
+
+The repository's `.horizon/cloud.yml` defines CPU and GPU development profiles.
+Use [the cloud development guide](.horizon/README.md) for image prerequisites,
+isolated build caches, validation commands and native smoke requirements. The
+GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
+
 ### Browser Interface Parity
 
 - Treat browser features as capabilities shared by the UI, CLI, and MCP by default.
