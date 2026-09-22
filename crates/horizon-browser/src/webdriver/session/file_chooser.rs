@@ -33,7 +33,9 @@ impl Driver {
         let params = event.get("params").unwrap_or(&Value::Null);
         if matches!(
             method,
-            "browsingContext.navigationStarted" | "browsingContext.contextDestroyed"
+            "browsingContext.navigationStarted"
+                | "browsingContext.fragmentNavigated"
+                | "browsingContext.contextDestroyed"
         ) && let Some(context) = params.get("context").and_then(Value::as_str)
         {
             self.invalidate_file_chooser_context(context, event_tx);

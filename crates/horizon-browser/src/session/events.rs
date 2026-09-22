@@ -655,14 +655,14 @@ mod tests {
             state.manifest_dirty = false;
             for frame in ["sibling", "child"] {
                 state.handle_frame_navigated(
-                &events,
-                CdpEvent {
-                    method: "Page.frameNavigated",
-                    session_id: Some(session),
-                    params: &serde_json::json!({"frame":{"id":frame,"parentId":"root","url":"https://files.test/new"}}),
-                },
-                session == "session",
-            );
+                    &events,
+                    CdpEvent {
+                        method: "Page.frameNavigated",
+                        session_id: Some(session),
+                        params: &serde_json::json!({"frame":{"id":frame,"parentId":"root","url":"https://files.test/new"}}),
+                    },
+                    session == "session",
+                );
                 assert_eq!(handle.status().pending(), frame == "sibling");
             }
             assert!(state.manifest_dirty);

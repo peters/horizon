@@ -156,6 +156,17 @@ impl DriverState {
                             events.wake_ui();
                             return;
                         }
+                    } else {
+                        let _ = self.file_input_value_in_session(
+                            link,
+                            events,
+                            slot,
+                            FileInputTarget {
+                                object: &target.object,
+                                session: &target.session,
+                            },
+                            "element => element.isConnected && element.dispatchEvent(new Event('cancel', {bubbles:true}))",
+                        );
                     }
                     slot.file_chooser().invalidate_request(target.request);
                     self.manifest_dirty = true;

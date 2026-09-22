@@ -163,17 +163,6 @@ impl Driver {
         event_tx: &BrowserEventSender,
         stop_requested: &AtomicBool,
     ) {
-        if self.panel_slot.file_chooser().blocks(&request.action) {
-            self.audit_agent_action(request, BrowserAuditStatus::Rejected);
-            self.complete_agent_action(
-                request,
-                Err(crate::BrowserControlFailure::new(
-                    "file_chooser_pending",
-                    "Select or cancel files in the Horizon dialog before changing the page",
-                )),
-            );
-            return;
-        }
         if let Err(message) = request.action.validate() {
             self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
             self.complete_agent_action(

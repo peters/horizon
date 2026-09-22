@@ -442,7 +442,7 @@ mod tests {
         let events = events();
         let handle = state.panel_slot.file_chooser().clone();
         handle.enable();
-        for method in ["navigationStarted", "contextDestroyed"] {
+        for method in ["navigationStarted", "fragmentNavigated", "contextDestroyed"] {
             handle.open(false, String::new(), "https://files.test".into());
             state.coordination_dirty = false;
             state.note_file_chooser(&json!({"context":"child","element":{"sharedId":"node"}}));
@@ -458,6 +458,21 @@ mod tests {
             assert_eq!(state.generation, 0);
         }
         handle.open(false, String::new(), "https://files.test".into());
+        state.service_browser_request(
+            &AgentAction {
+                action_id: "chooser-resize".into(),
+                actor: "agent".into(),
+                requested_at_millis: crate::navigation::now_millis(),
+                action: BrowserControlAction::Resize {
+                    viewport: Some([800, 600]),
+                    timeout_millis: 5000,
+                },
+            },
+            &events,
+            &AtomicBool::new(false),
+        );
+        assert!(state.pending_resize.is_none());
+        assert!(handle.status().pending());
         state.coordination_dirty = false;
         state.begin_navigation();
         assert!(!handle.status().pending());

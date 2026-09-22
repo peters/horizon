@@ -176,7 +176,7 @@ pub(crate) fn run_webdriver(
     };
     driver.prepare_ready(config, frame_slot, event_tx);
 
-    while !stop_requested.load(Ordering::Acquire) {
+    'session: while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
         let batch = command_rx.drain(MAX_COMMAND_BURST);
         for command in batch.commands {
@@ -194,6 +194,9 @@ pub(crate) fn run_webdriver(
             return;
         }
         driver.tick_safari_input(event_tx);
+        if !driver.poll_bidi_events(frame_slot, event_tx) {
+            break;
+        }
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
             // timeout of a navigation or wait dispatched earlier in it, and a
@@ -204,20 +207,14 @@ pub(crate) fn run_webdriver(
             driver.tick_pending_wait(stop_requested);
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
+            if !driver.poll_bidi_events(frame_slot, event_tx) {
+                break 'session;
+            }
             driver.service_browser_request(&request, event_tx, stop_requested);
             if driver.finish_if_service_exited(event_tx) {
                 return;
             }
         }
-        if let Err(error) = driver.drain_bidi_events(event_tx) {
-            tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
-            if driver.firefox_bidi() {
-                let _ = event_tx.send(BrowserEvent::Warning(format!("Firefox BiDi disconnected: {error}")));
-                break;
-            }
-            driver.disable_optional_bidi(frame_slot, event_tx);
-        }
-        driver.tick_file_chooser(event_tx);
         driver.tick_firefox_http_response_bodies(event_tx);
         if let Some(message) = driver.challenge_loop.take_rejection() {
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
@@ -275,6 +272,17 @@ impl Driver {
         events: &BrowserEventSender,
         stop: &AtomicBool,
     ) {
+        if self.panel_slot.file_chooser().blocks(&request.action) {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new(
+                    "file_chooser_pending",
+                    "Select or cancel files in the Horizon dialog before changing the page",
+                )),
+            );
+            return;
+        }
         if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
             self.begin_resize(request);
         } else {

@@ -407,6 +407,20 @@ impl HorizonApp {
         use_logically_focused_terminal(matches_viewport, os_focus).then_some(panel_id)
     }
 
+    fn speech_gated_press_surface(&self, search_capturing: bool) -> &'static str {
+        if self.cloud_creation_open() {
+            "the cloud creation dialog is open"
+        } else if self.browser_file_chooser_open() {
+            "the browser file chooser is open"
+        } else {
+            gated_press_surface(
+                self.settings.is_some(),
+                self.command_palette.is_some(),
+                search_capturing,
+            )
+        }
+    }
+
     pub(in crate::app) fn speech_text_surface_active(&self) -> (bool, bool) {
         let search_capturing = self
             .search_overlay
@@ -487,7 +501,7 @@ impl HorizonApp {
         // would disable every shortcut indefinitely.
         let (root_focused_now, horizon_focused, sink) = self.speech_focus_and_sink(ctx);
         let (text_surface_active, search_capturing) = self.speech_text_surface_active();
-        let cloud_creation_open = self.cloud_creation_open();
+        let gated_surface = self.speech_gated_press_surface(search_capturing);
         self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, horizon_focused);
         self.install_speech_global_wake(ctx);
         if !root_focused_now {
@@ -534,15 +548,7 @@ impl HorizonApp {
                     .any(|(_, binding)| shortcuts::press_and_release_in_events(&input.events, *binding).0)
             });
             if gated_press {
-                let surface = if cloud_creation_open {
-                    "the cloud creation dialog is open"
-                } else {
-                    gated_press_surface(
-                        self.settings.is_some(),
-                        self.command_palette.is_some(),
-                        search_capturing,
-                    )
-                };
+                let surface = gated_surface;
                 events.push(SpeechEvent::Notice(format!("Push-to-talk press ignored: {surface}.")));
             }
         }
