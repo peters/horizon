@@ -268,7 +268,11 @@ pub(crate) fn audit_choice(config: &crate::BrowserSessionConfig, paths: &[PathBu
             status,
             crate::BrowserAuditAction::SetFiles {
                 target: "manual file chooser".into(),
-                paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+                paths: paths
+                    .iter()
+                    .filter_map(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .collect(),
             },
         );
         if let Err(error) = coordination.record_action(&config.panel_local_id, &entry) {
