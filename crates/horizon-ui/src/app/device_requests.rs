@@ -15,6 +15,17 @@ use super::{
     browser_requests::{ActorPanel, actor_panel},
 };
 
+pub(super) struct PendingDeviceReveal {
+    id: PanelId,
+    restored_fullscreen: Option<WindowRestore>,
+    deadline: Instant,
+}
+
+pub(super) struct WindowRestore {
+    pub fullscreen: bool,
+    pub size: egui::Vec2,
+}
+
 impl HorizonApp {
     pub(super) fn poll_device_panel_requests(&mut self, ctx: &Context) -> bool {
         let now = Instant::now();
@@ -229,20 +240,75 @@ impl HorizonApp {
             .board
             .workspace(actor.workspace_id)
             .map(|workspace| workspace.local_id.clone());
-        if let Some(state) = local.and_then(|local| self.detached_workspaces.get_mut(&local)) {
+        let focused = if let Some(state) = local.and_then(|local| self.detached_workspaces.get_mut(&local)) {
             // The detached viewport applies this using its own geometry next frame.
             // Never send an OS Focus command from an automated reveal.
             state.pending_device_reveal = Some(id);
+            focused
         } else {
             if self.fullscreen_panel.is_some_and(|current| current != id) {
                 self.fullscreen_panel = None;
             }
-            self.reveal_new_panel(ctx, actor.workspace_id, id);
-        }
+            // Cloud fullscreen refits the entire group on every render pass,
+            // including when this viewer belongs to that group.
+            #[cfg(feature = "cloud-workspaces")]
+            let restored_fullscreen = self.exit_cloud_for_device_reveal(ctx);
+            #[cfg(not(feature = "cloud-workspaces"))]
+            let restored_fullscreen = None;
+            let focused = if restored_fullscreen.is_some() {
+                focused.or(self.board.focused)
+            } else {
+                focused
+            };
+            let pending = match (
+                restored_fullscreen,
+                self.panel_render_caches.pending_device_reveal.take(),
+            ) {
+                (None, Some(mut pending)) => {
+                    pending.id = id;
+                    pending
+                }
+                (restored_fullscreen, _) => PendingDeviceReveal {
+                    id,
+                    restored_fullscreen,
+                    deadline: Instant::now() + Duration::from_secs(2),
+                },
+            };
+            self.panel_render_caches.pending_device_reveal = Some(pending);
+            focused
+        };
         self.board.focused = focused;
         self.board.active_workspace = active_workspace;
         self.mark_runtime_dirty();
         ctx.request_repaint();
+    }
+
+    pub(super) fn apply_pending_root_device_reveal(&mut self, ctx: &Context) {
+        let Some(pending) = self.panel_render_caches.pending_device_reveal.take() else {
+            return;
+        };
+        if !self.board.panel(pending.id).is_some_and(|panel| {
+            panel.visible && panel.device().is_some() && !self.workspace_is_detached(panel.workspace_id)
+        }) {
+            return;
+        }
+        if pending.restored_fullscreen.as_ref().is_some_and(|expected| {
+            ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) != expected.fullscreen
+                || (!expected.fullscreen && (ctx.content_rect().size() - expected.size).abs().max_elem() > 2.0)
+        }) {
+            if Instant::now() < pending.deadline {
+                self.panel_render_caches.pending_device_reveal = Some(pending);
+                ctx.request_repaint_after(Duration::from_millis(16));
+                return;
+            }
+            tracing::warn!(
+                panel_id = pending.id.0,
+                "Device reveal restoration timed out; using current window geometry"
+            );
+        }
+        // Fit after layout and the bounded restoration wait. The window manager
+        // may constrain the restored size, so expiry uses the available canvas.
+        self.reveal_device_in_rect(pending.id, self.canvas_rect(ctx));
     }
 
     pub(super) fn apply_pending_device_reveal(&mut self, local: &str, canvas: egui::Rect) {
@@ -261,7 +327,7 @@ impl HorizonApp {
         if valid {
             let focused = self.board.focused;
             let active_workspace = self.board.active_workspace;
-            self.reveal_panel_in_rect(id, canvas);
+            self.reveal_device_in_rect(id, canvas);
             self.board.focused = focused;
             self.board.active_workspace = active_workspace;
         }
@@ -281,6 +347,8 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
+    mod reveal;
+
     use super::*;
     use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
     use horizon_core::{RuntimeState, StartupDecision};
@@ -427,6 +495,7 @@ mod tests {
             },
         );
         let observed = one(app.apply_device_request(&reveal, &ctx));
+        app.apply_pending_root_device_reveal(&ctx);
         assert!(observed.visible);
         assert!(!app.board.workspace(workspace).unwrap().collapsed);
         assert_eq!(app.board.focused, Some(caller));

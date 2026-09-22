@@ -197,6 +197,7 @@ struct SpeechNotice {
 #[derive(Default)]
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
+    pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
