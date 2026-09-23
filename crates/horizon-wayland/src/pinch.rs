@@ -244,7 +244,7 @@ impl PinchSequence {
     /// only when a step is produced keeps a rejected scale coalesced into the
     /// next one instead of dropping it out of the gesture.
     fn advance(&mut self, scale: f64) -> Option<Pinch> {
-        if scale <= 0.0 {
+        if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
         let previous = self.scale?;
@@ -391,8 +391,9 @@ mod tests {
         let mut state = PinchSequence::default();
         assert!(state.advance(1.25).is_none());
         let mut state = sequence();
-        assert!(state.advance(0.0).is_none());
-        assert!(state.advance(-1.0).is_none());
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(state.advance(invalid).is_none(), "rejected scale {invalid}");
+        }
         let pinch = state.advance(2.0).expect("valid pinch");
         assert!((pinch.delta.exp() - 2.0).abs() < 0.0001);
         assert_eq!(pinch.surface, 7);
