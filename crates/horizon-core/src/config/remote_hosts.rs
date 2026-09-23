@@ -82,6 +82,11 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
                 .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
                 .map_or("  ", |line| &line[..line.len() - line.trim_start().len()]);
             let key_line = (start + 1..end).find(|index| is_direct_key(lines[*index], indent, "default_workspace"));
+            // A tagged, anchored or aliased value (`!!str "…"`, `&a …`, `*a`)
+            // has a prefix this scanner does not model; leave such files alone.
+            if key_line.is_some_and(|index| value_text(lines[index]).starts_with(['!', '&', '*'])) {
+                return None;
+            }
             // A value that continues on the next lines cannot be replaced one line at a time.
             if let Some(key_index) = key_line
                 && lines[key_index + 1..end]
@@ -108,9 +113,12 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
     Some(text)
 }
 
+/// `remote_hosts:` alone or followed by a comment after any separation whitespace.
 fn is_block_start(line: &str) -> bool {
-    let trimmed = line.trim_end();
-    trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
+    line.strip_prefix("remote_hosts:").is_some_and(|rest| {
+        let rest = rest.trim_start_matches([' ', '\t']);
+        rest.is_empty() || rest.starts_with('#')
+    })
 }
 
 /// A key that belongs to the block itself: exactly the block's child
@@ -128,10 +136,14 @@ fn is_direct_key(line: &str, indent: &str, key: &str) -> bool {
 /// semantics apply only when the value itself starts with a quote; a plain
 /// scalar such as `Bob's Ops` has no delimiters. Inside a quoted value,
 /// `\"` (double quotes) and a doubled `''` (single quotes) do not end it.
+/// The value part of a `key: value` line, without leading separation whitespace.
+fn value_text(line: &str) -> &str {
+    line.find(':')
+        .map_or(line, |colon| line[colon + 1..].trim_start_matches([' ', '\t']))
+}
+
 fn inline_comment(line: &str) -> &str {
-    let value_start = line.find(':').map_or(0, |colon| {
-        colon + 1 + line[colon + 1..].len() - line[colon + 1..].trim_start().len()
-    });
+    let value_start = line.len() - value_text(line).len();
     let mut chars = line
         .char_indices()
         .skip_while(|(index, _)| *index < value_start)
@@ -321,6 +333,30 @@ mod tests {
             "  ",
             "default_workspace"
         ));
+    }
+
+    #[test]
+    fn block_starts_accept_any_comment_spacing_and_decorated_scalars_are_refused() {
+        assert!(super::is_block_start("remote_hosts:  # preferences"));
+        assert!(super::is_block_start("remote_hosts:\t# preferences"));
+        assert!(!super::is_block_start("remote_hosts: {}"));
+        assert_eq!(
+            super::patch_default_workspace_source("remote_hosts:  # preferences\n  vnc_port: 5900\n", "Ops").as_deref(),
+            Some("remote_hosts:  # preferences\n  default_workspace: Ops\n  vnc_port: 5900\n")
+        );
+        assert_eq!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace: !!str \"Ops # east\" # note\n",
+                "Ops"
+            ),
+            None,
+            "a tagged scalar is refused rather than mis-scanned"
+        );
+        assert_eq!(
+            super::patch_default_workspace_source("remote_hosts:\n  default_workspace: &name Ops\n", "Ops"),
+            None,
+            "an anchored scalar is refused"
+        );
         assert_eq!(super::inline_comment("  default_workspace: 'a # b' # note"), " # note");
         assert_eq!(super::inline_comment("  default_workspace: Ops"), "");
         assert_eq!(

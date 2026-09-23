@@ -241,13 +241,22 @@ fn set_default_never_overwrites_a_file_it_cannot_patch_in_place() {
         "Remote Sessions"
     );
 
+    // The text written is what gets applied: a file edited since the last
+    // reload keeps its other settings when one key is patched.
+    let edited = "version: 11\nremote_hosts:\n  vnc_port: 5999\nworkspaces: []\n";
+    std::fs::write(&app.config_path, edited).unwrap();
+    assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
+    assert!(app.set_remote_hosts_default_workspace("Ops"));
+    assert_eq!(app.template_config.remote_hosts.vnc_port, 5999, "the file's value wins");
+    assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
+
     // Only a genuinely absent file is written from the config.
     std::fs::remove_file(&app.config_path).unwrap();
-    assert!(app.set_remote_hosts_default_workspace("Ops"));
+    assert!(app.set_remote_hosts_default_workspace("Fresh"));
     assert!(
         std::fs::read_to_string(&app.config_path)
             .unwrap()
-            .contains("default_workspace: Ops")
+            .contains("default_workspace: Fresh")
     );
 }
 

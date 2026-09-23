@@ -76,15 +76,23 @@ impl HorizonApp {
             tracing::warn!(setting = what, "config change refused while Settings has unsaved edits");
             return false;
         }
+        // What gets applied is exactly what gets written: the file's patched
+        // text parsed back, or the mutated in-memory config serialized. The
+        // two never mix, so a file edited since the last reload cannot be
+        // applied with stale values from memory.
         let mut config = self.template_config.clone();
         mutate(&mut config);
-        let written = source_text.map_or_else(|| config.to_yaml(), Ok).and_then(|yaml| {
+        let staged = match source_text {
+            Some(text) => Config::from_yaml(&text).map(|parsed| (text, parsed)),
+            None => config.to_yaml().map(|text| (text, config)),
+        };
+        let written = staged.and_then(|(yaml, parsed)| {
             atomic_write(&self.config_path, &yaml)
-                .map(|()| yaml)
+                .map(|()| (yaml, parsed))
                 .map_err(|error| horizon_core::Error::Config(error.to_string()))
         });
         match written {
-            Ok(yaml) => {
+            Ok((yaml, config)) => {
                 self.apply_runtime_config(&config);
                 if let Some(editor) = self.settings.as_mut() {
                     editor.adopt_saved_text(yaml);
