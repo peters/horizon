@@ -52,14 +52,16 @@ pub(super) struct ScrollRouting {
 
 impl ScrollGesture {
     /// Bind the gesture to the surface it started over. A gesture that starts
-    /// over empty canvas belongs to the canvas outright.
-    fn latch(&mut self, target: ScrollTarget) {
+    /// over empty canvas belongs to the canvas outright. Returns the previous
+    /// gesture's claimed motion still easing in, which lands rather than being
+    /// dropped.
+    fn latch(&mut self, target: ScrollTarget) -> Vec2 {
         self.canvas_owned = Some(target == ScrollTarget::Canvas);
         self.owner = match target {
             ScrollTarget::Panel(panel) => Some(panel),
             ScrollTarget::Canvas | ScrollTarget::Surface => None,
         };
-        self.pan_backlog = Vec2::ZERO;
+        std::mem::take(&mut self.pan_backlog)
     }
 
     /// Queue one claimed event's motion exactly as egui scrolls it: in points,
@@ -157,8 +159,7 @@ impl ScrollGesture {
             let delta = step.delta;
             match phase {
                 TouchPhase::Start => {
-                    routing.pan += self.pan_backlog;
-                    self.latch(target);
+                    routing.pan += self.latch(target);
                     self.last_motion_at = input.time;
                     self.has_touch_phase = true;
                 }
@@ -166,7 +167,7 @@ impl ScrollGesture {
                     if self.canvas_owned.is_none()
                         || (!self.has_touch_phase && input.time - self.last_motion_at > SCROLL_GESTURE_IDLE_SECONDS)
                     {
-                        self.latch(target);
+                        routing.pan += self.latch(target);
                     }
                     self.last_motion_at = input.time;
                 }
@@ -249,8 +250,10 @@ struct WheelZoom {
 /// taken here one event at a time instead, converted and eased exactly as
 /// egui zooms with them, while native pinch and multi-touch pass through as
 /// egui reports them. Unlike egui, a `Start` or `End` that carries a delta
-/// zooms too. Plain wheels are left to [`route_canvas_scroll`].
-pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
+/// zooms too. Plain wheels are left to [`route_canvas_scroll`]. Off the
+/// canvas nothing queues and any easing step is dropped, so a notch over the
+/// sidebar never zooms the canvas once the pointer moves onto it.
+pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
     let id = Id::new(("canvas_wheel_zoom", ctx.viewport_id()));
     let mut state = ctx.data_mut(|data| data.get_temp::<WheelZoom>(id).unwrap_or_default());
     let options = ctx.options(|options| options.input_options);
@@ -271,7 +274,7 @@ pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
                     }
                     // Any phase can carry motion, as for the pan: a Wayland
                     // touchpad gesture opens with a `Start` that has a delta.
-                    if *delta != Vec2::ZERO && modifiers.matches_any(options.zoom_modifier) {
+                    if over_canvas && *delta != Vec2::ZERO && modifiers.matches_any(options.zoom_modifier) {
                         let points = match unit {
                             MouseWheelUnit::Point => *delta,
                             MouseWheelUnit::Line => options.line_scroll_speed * *delta,
@@ -290,6 +293,9 @@ pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
                 }
                 _ => {}
             }
+        }
+        if !over_canvas {
+            state.backlog = 0.0;
         }
         let t = egui::emath::exponential_smooth_factor(0.90, 0.1, input.stable_dt.min(0.1));
         let eased = if state.backlog.abs() < 1.0 {

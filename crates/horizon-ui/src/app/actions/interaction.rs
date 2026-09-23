@@ -197,7 +197,6 @@ impl HorizonApp {
                     input.pointer.delta(),
                 )
             });
-        let zoom_delta = canvas_zoom_delta(ctx);
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
@@ -206,6 +205,7 @@ impl HorizonApp {
                         .work_resume_overlay_rect(ctx)
                         .is_some_and(|rect| rect.contains(position)))
         });
+        let zoom_delta = canvas_zoom_delta(ctx, pointer_in_canvas);
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
         let ctrl_or_cmd = modifiers.ctrl || modifiers.command;

@@ -930,29 +930,34 @@ fn a_frame_mixing_plain_and_zoom_wheels_pans_and_zooms_in_either_order() {
     }
 }
 
-#[test]
-fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
-    let options = InputOptions::default();
-    let ctx = Context::default();
-    let notch = Event::MouseWheel {
+fn zoom_frame(ctx: &Context, time: f64, events: Vec<Event>, over_canvas: bool) -> f32 {
+    let mut zoom = 1.0;
+    let input = RawInput {
+        time: Some(time),
+        events,
+        ..RawInput::default()
+    };
+    let _ = ctx
+        .run_ui(input, |ui| zoom = canvas_zoom_delta(ui.ctx(), over_canvas))
+        .discard_textures();
+    zoom
+}
+
+fn zoom_notch() -> Event {
+    Event::MouseWheel {
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
         modifiers: Modifiers::COMMAND,
-    };
-    let zoom_at = |time: f64, events: Vec<Event>| {
-        let mut zoom = 1.0;
-        let input = RawInput {
-            time: Some(time),
-            events,
-            ..RawInput::default()
-        };
-        let _ = ctx
-            .run_ui(input, |ui| zoom = canvas_zoom_delta(ui.ctx()))
-            .discard_textures();
-        zoom
-    };
-    let first = zoom_at(1.0, vec![notch]);
+    }
+}
+
+#[test]
+fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
+    let options = InputOptions::default();
+    let ctx = Context::default();
+    let zoom_at = |time: f64, events: Vec<Event>| zoom_frame(&ctx, time, events, true);
+    let first = zoom_at(1.0, vec![zoom_notch()]);
     let target = (options.scroll_zoom_speed * -options.line_scroll_speed).exp();
     assert!(first < 1.0 && first > target, "eased, not applied at once: {first}");
     let mut total = first;
@@ -981,4 +986,56 @@ fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
         modifiers: Modifiers::COMMAND,
     };
     assert!((zoom_at(5.0, vec![start]) - expected).abs() < 1e-6);
+}
+
+#[test]
+fn a_zoom_notch_off_the_canvas_never_zooms_it_later() {
+    // The canvas applies zoom only while the pointer is over it. A notch
+    // turned over the sidebar, or one still easing in when the pointer
+    // leaves, must not zoom the canvas once the pointer comes back.
+    let ctx = Context::default();
+    let mut total = zoom_frame(&ctx, 1.0, vec![zoom_notch()], false);
+    for frame in 1..60 {
+        total *= zoom_frame(&ctx, 1.0 + f64::from(frame) / 60.0, Vec::new(), true);
+    }
+    assert!((total - 1.0).abs() < f32::EPSILON, "{total}");
+    let started = zoom_frame(&ctx, 3.0, vec![zoom_notch()], true);
+    assert!(started < 1.0, "a notch over the canvas starts easing in");
+    let _ = zoom_frame(&ctx, 3.016, Vec::new(), false);
+    for frame in 2..60 {
+        let zoom = zoom_frame(&ctx, 3.0 + f64::from(frame) / 60.0, Vec::new(), true);
+        assert!((zoom - 1.0).abs() < f32::EPSILON, "frame {frame}: {zoom}");
+    }
+}
+
+#[test]
+fn an_idle_relatch_lands_the_previous_notch_in_full() {
+    // Phase-less (X11) wheels relatch after an idle gap. A mouse-wheel notch
+    // can still be easing in then; its remainder lands instead of vanishing.
+    let options = InputOptions::default();
+    let notch = Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    };
+    let mut gesture = ScrollGesture::default();
+    let mut frame = |time: f64, events: Vec<Event>| {
+        gesture
+            .route(
+                &pass(time, events),
+                &options,
+                ScrollTarget::Canvas,
+                true,
+                &mut |_, _| false,
+            )
+            .pan
+    };
+    let mut total = frame(1.0, vec![notch.clone()]);
+    // Past the idle gap, with most of the first notch still queued.
+    total += frame(1.2, vec![notch]);
+    for step in 1..60 {
+        total += frame(1.2 + f64::from(step) / 60.0, Vec::new());
+    }
+    assert!((total.y + 2.0 * options.line_scroll_speed).abs() < 0.001, "{total:?}");
 }
