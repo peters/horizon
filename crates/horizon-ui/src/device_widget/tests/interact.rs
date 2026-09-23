@@ -485,6 +485,17 @@ fn frame_with_modifiers(
 
 #[test]
 fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboard() {
+    // The platform command modifier: Ctrl (Control_L) except on macOS, where
+    // egui-winit reports Command and the viewer sends Super_L.
+    let (command, command_key, command_press) = if cfg!(target_os = "macos") {
+        (
+            egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND,
+            0xffeb,
+            egui::Key::SuperLeft,
+        )
+    } else {
+        (egui::Modifiers::CTRL, 0xffe3, egui::Key::ControlLeft)
+    };
     let (ctx, device, mut state, mut receiver) = viewer_with_input();
     click_label(&ctx, &mut state, &device, "Interact");
     let output = frame(&ctx, &mut state, &device, Vec::new());
@@ -503,14 +514,14 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
         &ctx,
         &mut state,
         &device,
-        vec![egui::Event::Copy, key_event(egui::Key::C, false, egui::Modifiers::CTRL)],
+        vec![egui::Event::Copy, key_event(egui::Key::C, false, command)],
         egui::Modifiers::NONE,
     );
     let c = u32::from('c');
     assert_eq!(
         keys(&drain(&mut receiver)),
-        vec![(0xffe3, true), (c, true), (c, false), (0xffe3, false)],
-        "Control_L is held around c"
+        vec![(command_key, true), (c, true), (c, false), (command_key, false)],
+        "the command key is held around c"
     );
     // Ctrl+V with an empty local clipboard, as winit reports it on X11: Ctrl
     // goes down and up, then only the V release arrives.
@@ -519,8 +530,8 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
         &mut state,
         &device,
         vec![
-            key_event(egui::Key::ControlLeft, true, egui::Modifiers::NONE),
-            key_event(egui::Key::ControlLeft, false, egui::Modifiers::CTRL),
+            key_event(command_press, true, egui::Modifiers::NONE),
+            key_event(command_press, false, command),
             egui::Event::ModifiersChanged(egui::Modifiers::NONE),
             key_event(egui::Key::V, false, egui::Modifiers::NONE),
         ],
@@ -530,12 +541,12 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
     assert_eq!(
         keys(&drain(&mut receiver)),
         vec![
-            (0xffe3, true),
-            (0xffe3, false),
-            (0xffe3, true),
+            (command_key, true),
+            (command_key, false),
+            (command_key, true),
             (v, true),
             (v, false),
-            (0xffe3, false)
+            (command_key, false)
         ],
         "the Ctrl press as it happened, then the paste chord with Ctrl held around v"
     );
@@ -545,7 +556,7 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
         &mut state,
         &device,
         vec![egui::Event::Paste("local secret".into()), egui::Event::Cut],
-        egui::Modifiers::CTRL,
+        command,
     );
     frame_with_modifiers(&ctx, &mut state, &device, Vec::new(), egui::Modifiers::NONE);
     let sent = keys(&drain(&mut receiver));
@@ -554,7 +565,7 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
         .filter(|(_, down)| *down)
         .map(|(keysym, _)| *keysym)
         .collect();
-    assert_eq!(letters, vec![0xffe3, u32::from('v'), u32::from('x')], "{sent:?}");
+    assert_eq!(letters, vec![command_key, u32::from('v'), u32::from('x')], "{sent:?}");
     assert!(
         !sent.iter().any(|(keysym, _)| *keysym == u32::from('l')),
         "the local clipboard is not typed"
