@@ -381,9 +381,6 @@ jobs:
             linux_desktop::tests::packaged_data_dirs_use_xdg_data_dirs_then_defaults
 
 
-            # horizon-browser-cli: the fixture joins `.horizon/browser-jobs` with a
-            # forward slash, so its expected path mixes separators.
-            run_persists_preflight_failure_before_any_browser_action
 
             # horizon-core agent work: tempfile's persist cannot rename onto a record
             # path longer than MAX_PATH, which a 128-character panel id reaches (#848).
