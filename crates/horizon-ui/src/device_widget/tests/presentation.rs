@@ -8,10 +8,10 @@ fn empty_or_edge_touching_image_never_counts_as_displayed() {
             let texture = ui
                 .ctx()
                 .load_texture("fixture", patterned_desktop(), TextureOptions::LINEAR);
-            assert!(!visible_image(ui, &texture, egui::Vec2::ZERO));
+            assert!(!visible_image(ui, &texture, egui::Vec2::ZERO, false).0);
             let top = ui.next_widget_position();
             ui.set_clip_rect(egui::Rect::from_min_max(top - egui::vec2(50.0, 50.0), top));
-            assert!(!visible_image(ui, &texture, egui::vec2(100.0, 100.0)));
+            assert!(!visible_image(ui, &texture, egui::vec2(100.0, 100.0), false).0);
         })
         .discard_textures();
 }

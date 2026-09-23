@@ -2,6 +2,7 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 use horizon_core::browser::manifest::device::Connection;
 
+mod interact;
 mod presentation;
 
 fn fixture_device() -> DevicePanelState {

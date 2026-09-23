@@ -127,6 +127,7 @@ pub(super) fn header(
     server: &DeviceServerDetails,
     status: &super::session::Status,
     interactive: bool,
+    interact: bool,
 ) -> bool {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
@@ -170,7 +171,12 @@ pub(super) fn header(
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             connection_status(ui, status);
-            ui.label(RichText::new("Read-only").size(12.0).color(theme::FG_SOFT()));
+            let mode = if interact {
+                "Interactive: your mouse and keyboard go to the desktop"
+            } else {
+                "Read-only"
+            };
+            ui.label(RichText::new(mode).size(12.0).color(theme::FG_SOFT()));
             if name.is_some() {
                 let source = if device.display_name(None).is_some() {
                     "Supplied name"

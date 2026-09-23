@@ -12,7 +12,7 @@ use horizon_core::{
     DevicePanelState, DeviceViewOptions, SshConnection, browser::manifest::device::DeviceServerDetails,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
 use self::tunnel::SshTunnel;
@@ -97,6 +97,9 @@ pub(super) struct Observation {
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
     latest_full: Arc<Mutex<Option<ColorImage>>>,
+    /// Pointer and key events a person sends through Interact; the worker
+    /// forwards them ahead of the next refresh.
+    input: mpsc::UnboundedSender<X11Event>,
     stop: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -124,6 +127,7 @@ impl Session {
         let state = Arc::clone(&updates);
         let retained = Arc::clone(&latest_full);
         let (stop, cancelled) = oneshot::channel();
+        let (input, mut input_events) = mpsc::unbounded_channel();
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -134,7 +138,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(route, &state, &retained, &ctx) => result,
+                            result = connection(route, &state, &retained, &ctx, &mut input_events) => result,
                         }
                     })
                 });
@@ -148,9 +152,19 @@ impl Session {
         Ok(Self {
             updates,
             latest_full,
+            input,
             stop: Some(stop),
             thread: Some(thread),
         })
+    }
+
+    /// Queue input for the server. A worker that has already stopped drops it.
+    pub(super) fn send_input(&self, events: impl IntoIterator<Item = X11Event>) {
+        for event in events {
+            if self.input.send(event).is_err() {
+                return;
+            }
+        }
     }
 
     pub(super) fn set_options(&self, options: DeviceViewOptions) {
@@ -169,7 +183,18 @@ impl Session {
 
     #[cfg(test)]
     pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
-        Self {
+        Self::pending_frame_with_input(latest_full, image, produced_with).0
+    }
+
+    /// A connected-looking session whose queued input the test can read back.
+    #[cfg(test)]
+    pub(super) fn pending_frame_with_input(
+        latest_full: ColorImage,
+        image: ColorImage,
+        produced_with: DeviceViewOptions,
+    ) -> (Self, mpsc::UnboundedReceiver<X11Event>) {
+        let (input, receiver) = mpsc::unbounded_channel();
+        let session = Self {
             updates: Arc::new(Mutex::new(Updates {
                 stream: StreamEvidence {
                     sequence: 1,
@@ -186,9 +211,11 @@ impl Session {
                 server_name: None,
             })),
             latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            input,
             stop: None,
             thread: None,
-        }
+        };
+        (session, receiver)
     }
 
     pub(super) fn set_visible(&self, visible: bool) {
@@ -266,10 +293,11 @@ async fn connection(
     updates: &Mutex<Updates>,
     latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
     // The tunnel process lives exactly as long as this connection.
     let (client, mut tunnel) = connect_client(route).await?;
-    let result = stream_desktop(client, updates, latest_full, ctx).await;
+    let result = stream_desktop(client, updates, latest_full, ctx, input).await;
     match (result, tunnel.as_mut()) {
         // A forward that dies mid-session ends the stream; ssh says why.
         (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
@@ -282,6 +310,7 @@ async fn stream_desktop(
     updates: &Mutex<Updates>,
     latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
@@ -302,7 +331,7 @@ async fn stream_desktop(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .options;
-        tokio::time::sleep(options.interval()).await;
+        forward_input_until(&client, input, options.interval()).await?;
         let mut changed = false;
         let started = std::time::Instant::now();
         let mut idle = false;
@@ -362,6 +391,36 @@ async fn stream_desktop(
         )
         .await
         .map_err(|_| ViewError::Timeout)??;
+    }
+}
+
+/// Wait out the refresh cadence, sending any queued input as it arrives so a
+/// click or keystroke never waits for the next frame.
+async fn forward_input_until(
+    client: &vnc::VncClient,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
+    interval: Duration,
+) -> Result<(), ViewError> {
+    let deadline = Instant::now() + interval;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        match tokio::time::timeout(remaining, input.recv()).await {
+            Ok(Some(event)) => {
+                tokio::time::timeout(Duration::from_secs(5), client.input(event))
+                    .await
+                    .map_err(|_| ViewError::Timeout)??;
+            }
+            // The sender lives in the Session, which cancels this worker when it
+            // drops; until then a closed channel just means no more input.
+            Ok(None) => {
+                tokio::time::sleep(remaining).await;
+                return Ok(());
+            }
+            Err(_) => return Ok(()),
+        }
     }
 }
 
