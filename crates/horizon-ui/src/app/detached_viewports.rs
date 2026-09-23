@@ -69,7 +69,10 @@ impl HorizonApp {
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return false;
         };
-        if !self.workspace_can_arrange_panels(workspace_id) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.groups.contains_workspace(&workspace.local_id)
+            || self.board.cloud_groups.contains_workspace(&workspace.local_id)
+        {
             return false;
         }
         !self.detached_workspaces.contains_key(&workspace.local_id)

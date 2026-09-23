@@ -12,7 +12,7 @@ impl Board {
         }
 
         let source_panel = self.panel(source)?;
-        if !source_panel.visible {
+        if !self.panel_follows_workspace_layout(source) {
             return None;
         }
         let workspace = self.workspace(source_panel.workspace_id)?;
@@ -31,11 +31,11 @@ impl Board {
             if *candidate_id == source {
                 return false;
             }
-            self.panel(*candidate_id).is_some_and(|candidate| {
-                candidate.visible
-                    && candidate.workspace_id == source_panel.workspace_id
-                    && point_in_panel(center, candidate.layout.position, candidate.layout.size)
-            })
+            self.panel_follows_workspace_layout(*candidate_id)
+                && self.panel(*candidate_id).is_some_and(|candidate| {
+                    candidate.workspace_id == source_panel.workspace_id
+                        && point_in_panel(center, candidate.layout.position, candidate.layout.size)
+                })
         })
     }
 

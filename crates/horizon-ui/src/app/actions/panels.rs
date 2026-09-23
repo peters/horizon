@@ -55,13 +55,38 @@ impl HorizonApp {
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
+        #[cfg(feature = "cloud-workspaces")]
+        let id = if let Some(index) = cloud_group {
+            self.create_cloud_member(index, options, workspace_id)?
+        } else {
+            self.board.create_panel(options, workspace_id)?
+        };
+        #[cfg(not(feature = "cloud-workspaces"))]
         let id = self.board.create_panel(options, workspace_id)?;
         #[cfg(feature = "cloud-workspaces")]
-        if let Some(index) = cloud_group {
-            self.cloud_panel_created(index, id);
+        if cloud_group.is_some() {
             self.cloud_prototype.error = None;
         }
         Ok(id)
+    }
+
+    pub(in crate::app) fn create_agent_child_panel(
+        &mut self,
+        options: PanelOptions,
+        workspace: WorkspaceId,
+        actor: PanelId,
+    ) -> horizon_core::Result<PanelId> {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(index) = self.cloud_agent_child_group(actor) {
+            let options = PanelOptions {
+                position: Some(self.cloud_prototype.groups.0[index].next_position(&self.board)),
+                ..options
+            };
+            return self.create_cloud_member(index, options, workspace);
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let _ = actor;
+        self.board.create_panel(options, workspace)
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached
@@ -250,9 +275,6 @@ impl HorizonApp {
                     .is_some()
             }) {
                 options.position = canvas_pos;
-                if let Some(ws) = self.board.workspace_mut(workspace_id) {
-                    ws.layout = None;
-                }
             }
             match self.create_panel_with_options(options, workspace_id) {
                 Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),

@@ -119,11 +119,9 @@ impl HorizonApp {
             .retain(|g| self.board.workspace_id_by_local_id(&g.workspace).is_some());
         self.cloud_prototype.groups.adopt_intersecting(&self.board);
         self.cloud_prototype.groups.reconcile(&mut self.board);
-        for group in &mut self.cloud_prototype.groups.0 {
+        self.sync_board_cloud_groups();
+        for group in &self.cloud_prototype.groups.0 {
             if let Some(id) = self.board.workspace_id_by_local_id(&group.workspace) {
-                if let Some(workspace) = self.board.workspace_mut(id) {
-                    workspace.layout = None;
-                }
                 self.board.retain_workspace_when_empty(id);
             }
         }
@@ -221,6 +219,7 @@ impl HorizonApp {
             self.board.cloud_groups.clone_from(&self.cloud_prototype.groups);
             self.board
                 .resolve_workspace_frame_growth_in_scope(workspace, before, workspace_collision_ids);
+            self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
         }
         true
     }
@@ -244,12 +243,65 @@ impl HorizonApp {
         }
     }
 
+    /// True when the UI cloud list differs in identity, environment, title,
+    /// membership, or launch state. Geometry-only updates are written by
+    /// reconciliation.
+    fn cloud_catalog_changed(&self) -> bool {
+        let board = &self.board.cloud_groups.0;
+        let ui = &self.cloud_prototype.groups.0;
+        if board.len() != ui.len() {
+            return true;
+        }
+        board.iter().zip(ui.iter()).any(|(left, right)| {
+            left.environment != right.environment
+                || left.title != right.title
+                || left.panels != right.panels
+                || left.issue != right.issue
+                || left.workspace != right.workspace
+                || left.cwd != right.cwd
+                || left.remote != right.remote
+        })
+    }
+
+    /// Copy the UI cloud list onto the board. When a cloud disappears, put the
+    /// remaining preset panels back in their slots instead of leaving them
+    /// offset around the removed obstacle.
+    fn sync_board_cloud_groups(&mut self) {
+        if !self.cloud_catalog_changed() {
+            return;
+        }
+        let old = &self.board.cloud_groups.0;
+        let new = &self.cloud_prototype.groups.0;
+        let changed_membership = |group: &&CloudGroup, other: &[CloudGroup]| {
+            !other
+                .iter()
+                .any(|current| current.environment.id == group.environment.id && current.workspace == group.workspace)
+        };
+        let mut affected = Vec::new();
+        for group in old
+            .iter()
+            .filter(|g| changed_membership(g, new))
+            .chain(new.iter().filter(|g| changed_membership(g, old)))
+        {
+            if let Some(workspace) = self.board.workspace_id_by_local_id(&group.workspace)
+                && !affected.iter().any(|(id, _)| *id == workspace)
+            {
+                affected.push((workspace, self.board.workspace_frame_rect(workspace)));
+            }
+        }
+        self.board.cloud_groups.clone_from(&self.cloud_prototype.groups);
+        for (workspace, before) in affected {
+            self.board.reapply_workspace_layout_after(workspace, before);
+        }
+        self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
+    }
+
     pub(super) fn save_cloud_prototype(&mut self) {
         if !self.cloud_state_is_live() {
             return;
         }
         let mock = std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some();
-        self.board.cloud_groups = self.cloud_prototype.groups.clone();
+        self.sync_board_cloud_groups();
         if !mock {
             self.mark_runtime_dirty();
             return;
@@ -368,24 +420,13 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn cloud_attach_agent_child(&mut self, actor: horizon_core::PanelId, child: horizon_core::PanelId) {
-        let Some(actor) = self.board.panel(actor) else {
-            return;
-        };
-        let Some(index) = self
-            .cloud_prototype
+    pub(super) fn cloud_agent_child_group(&self, actor: PanelId) -> Option<usize> {
+        let actor = self.board.panel(actor)?;
+        self.cloud_prototype
             .groups
             .0
             .iter()
-            .position(|g| g.panels.contains(&actor.local_id))
-        else {
-            return;
-        };
-        let position = self.cloud_prototype.groups.0[index].next_position(&self.board);
-        if let Some(panel) = self.board.panel_mut(child) {
-            panel.layout.position = position;
-        }
-        self.cloud_panel_created(index, child);
+            .position(|group| group.panels.contains(&actor.local_id))
     }
 
     pub(super) fn cloud_panel_launch_group(
@@ -411,12 +452,31 @@ impl HorizonApp {
         Some(index)
     }
 
+    pub(super) fn create_cloud_member(
+        &mut self,
+        index: usize,
+        options: PanelOptions,
+        workspace: WorkspaceId,
+    ) -> horizon_core::Result<PanelId> {
+        self.sync_board_cloud_groups();
+        let before = self.board.workspace_frame_rect(workspace);
+        let child = self
+            .board
+            .create_panel_preserving_workspace_layout(options, workspace)?;
+        self.cloud_panel_created(index, child);
+        let scope: Vec<_> = self.board.workspaces.iter().map(|workspace| workspace.id).collect();
+        self.board
+            .resolve_workspace_frame_growth_in_scope(workspace, before, &scope);
+        self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
+        Ok(child)
+    }
+
     pub(super) fn cloud_panel_created(&mut self, index: usize, id: horizon_core::PanelId) {
         if self.cloud_prototype.groups.contains_panel(&self.board, id) {
             return;
         }
         self.cloud_prototype.groups.0[index].attach(&mut self.board, id);
-        self.board.cloud_groups = self.cloud_prototype.groups.clone();
+        self.sync_board_cloud_groups();
         self.cloud_prototype.groups.make_room(&mut self.board, index);
         if let Some(ws) = self.board.panel_workspace_id(id) {
             self.board.retain_workspace_when_empty(ws);
@@ -449,17 +509,13 @@ impl HorizonApp {
         if kind == PanelKind::Browser {
             options.browser_config = Some(self.template_config.browser.clone());
         }
-        if let Some(workspace) = self.board.workspace_mut(ws) {
-            workspace.layout = None;
-        }
         options.transcript_root.clone_from(&self.transcript_root);
         if let Err(error) = self.prepare_cloud_remote_panel(index, &mut options) {
             self.cloud_prototype.error = Some(error.to_string());
             return;
         }
-        match self.board.create_panel(options, ws) {
+        match self.create_cloud_member(index, options, ws) {
             Ok(id) => {
-                self.cloud_panel_created(index, id);
                 self.reveal_selected_panel(ctx, id);
                 self.cloud_prototype.error = None;
                 self.save_cloud_prototype();
@@ -654,5 +710,253 @@ mod tests {
         let members = &app.cloud_prototype.groups.0[0].panels;
         assert_eq!(members.len(), 6);
         assert_eq!(members.iter().collect::<std::collections::HashSet<_>>().len(), 6);
+    }
+    #[test]
+    fn agent_child_creation_preserves_presets_and_neighbors_inside_cloud_bounds() {
+        for preset in horizon_core::WorkspaceLayout::ALL {
+            for kind in [PanelKind::Browser, PanelKind::Device] {
+                let (temp, mut app) = test_app();
+                let ws = app.board.create_workspace_at("Cloud", [0.0, 0.0]);
+                let editor = |position| PanelOptions {
+                    kind: PanelKind::Editor,
+                    position: Some(position),
+                    size: Some([120.0, 100.0]),
+                    ..PanelOptions::default()
+                };
+                let actor = app.board.create_panel(editor([14.0, 84.0]), ws).unwrap();
+                let ordinary = app.board.create_panel(editor([20.0, 1100.0]), ws).unwrap();
+                let local = app.board.workspace(ws).unwrap().local_id.clone();
+                let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+                group.size = [1800.0, 900.0];
+                group.attach(&mut app.board, actor);
+                app.cloud_prototype.groups = CloudGroups(vec![group]);
+                app.sync_board_cloud_groups();
+                app.board.arrange_workspace(ws, preset);
+                let frame = app.board.workspace_frame_rect(ws).unwrap();
+                let neighbor = app.board.create_workspace_at("Neighbor", [frame[2] + 64.0, 0.0]);
+                let before = app.board.panel(ordinary).unwrap().layout;
+                let neighbor_before = app.board.workspace(neighbor).unwrap().position;
+                let expected = app.cloud_prototype.groups.0[0].next_position(&app.board);
+                let child = app
+                    .create_agent_child_panel(
+                        PanelOptions {
+                            kind,
+                            command: Some(
+                                if kind == PanelKind::Device {
+                                    "127.0.0.1:5900"
+                                } else {
+                                    "about:blank"
+                                }
+                                .into(),
+                            ),
+                            ..PanelOptions::default()
+                        },
+                        ws,
+                        actor,
+                    )
+                    .unwrap();
+                assert_eq!(app.board.workspace(ws).unwrap().layout, Some(preset));
+                assert_eq!(
+                    app.board.panel(ordinary).unwrap().layout.position.map(f32::to_bits),
+                    before.position.map(f32::to_bits)
+                );
+                assert_eq!(
+                    app.board.panel(ordinary).unwrap().layout.size.map(f32::to_bits),
+                    before.size.map(f32::to_bits)
+                );
+                assert_eq!(
+                    app.board.workspace(neighbor).unwrap().position.map(f32::to_bits),
+                    neighbor_before.map(f32::to_bits)
+                );
+                assert_eq!(
+                    app.board.panel(child).unwrap().layout.position.map(f32::to_bits),
+                    expected.map(f32::to_bits)
+                );
+                assert!(app.cloud_prototype.groups.contains_panel(&app.board, child));
+                assert!(app.board.cloud_groups.contains_panel(&app.board, child));
+                let count = app.board.panels.len();
+                assert!(
+                    app.create_agent_child_panel(
+                        PanelOptions {
+                            kind: PanelKind::Device,
+                            command: Some("invalid-endpoint".into()),
+                            ..PanelOptions::default()
+                        },
+                        ws,
+                        actor
+                    )
+                    .is_err()
+                );
+                assert_eq!(app.board.panels.len(), count);
+                assert_eq!(app.board.workspace(ws).unwrap().layout, Some(preset));
+                assert_eq!(
+                    app.board.workspace(neighbor).unwrap().position.map(f32::to_bits),
+                    neighbor_before.map(f32::to_bits)
+                );
+            }
+        }
+    }
+    #[test]
+    fn cloud_growth_respects_workspace_collision_scope_through_sibling_translation() {
+        for include_neighbor in [false, true] {
+            let (temp, mut app) = test_app();
+            let ws = app.board.create_workspace_at("Clouds", [0.0, 0.0]);
+            let local = app.board.workspace(ws).unwrap().local_id.clone();
+            let child = app
+                .board
+                .create_panel(
+                    PanelOptions {
+                        kind: PanelKind::Editor,
+                        position: Some([14.0, 84.0]),
+                        size: Some([120.0, 100.0]),
+                        ..PanelOptions::default()
+                    },
+                    ws,
+                )
+                .unwrap();
+            let mut first = CloudGroup::new(1, "First".into(), local.clone(), temp.path().into(), [0.0, 0.0]);
+            first.attach(&mut app.board, child);
+            let second = CloudGroup::new(2, "Second".into(), local, temp.path().into(), [1000.0, 0.0]);
+            app.cloud_prototype.groups = CloudGroups(vec![first, second]);
+            app.sync_board_cloud_groups();
+            app.cloud_prototype.initialized = true;
+            app.cloud_prototype.ready = true;
+            app.active_session = None;
+            let neighbor = app.board.create_workspace_at("Neighbor", [2500.0, 0.0]);
+            let before = app.board.workspace(neighbor).unwrap().position;
+            let scope = if include_neighbor { vec![ws, neighbor] } else { vec![ws] };
+            assert!(
+                app.cloud_state_is_live(),
+                "fixture must exercise live geometry publication"
+            );
+            let old_frame = app.board.workspace_frame_rect(ws);
+            assert!(app.resize_cloud_member(child, [2300.0, 700.0], &scope));
+            assert!(app.cloud_prototype.groups.0[1].position[0] > 1000.0);
+            let after = app.board.workspace(neighbor).unwrap().position;
+            if include_neighbor {
+                assert!(
+                    after[0] > before[0],
+                    "{before:?} -> {after:?}; {old_frame:?} -> {:?}",
+                    app.board.workspace_frame_rect(ws)
+                );
+                assert!(
+                    app.board.workspace_frame_rect(neighbor).unwrap()[0]
+                        >= app.board.workspace_frame_rect(ws).unwrap()[2]
+                );
+            } else {
+                assert_eq!(after.map(f32::to_bits), before.map(f32::to_bits));
+            }
+        }
+    }
+
+    #[test]
+    fn attaching_to_collapsed_cloud_matches_expanding_before_creation() {
+        for preset in horizon_core::WorkspaceLayout::ALL {
+            let mut outcomes = Vec::new();
+            for expand_first in [false, true] {
+                let (temp, mut app) = test_app();
+                let ws = app.board.create_workspace_at("Cloud", [0.0, 0.0]);
+                let options = |position| PanelOptions {
+                    kind: PanelKind::Editor,
+                    position: Some(position),
+                    size: Some([120.0, 100.0]),
+                    ..PanelOptions::default()
+                };
+                let actor = app.board.create_panel(options([14.0, 84.0]), ws).unwrap();
+                for index in 0_u16..3 {
+                    app.board
+                        .create_panel(options([20.0 + f32::from(index) * 150.0, 1000.0]), ws)
+                        .unwrap();
+                }
+                let local = app.board.workspace(ws).unwrap().local_id.clone();
+                let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+                group.size = [1800.0, 900.0];
+                group.attach(&mut app.board, actor);
+                group.set_collapsed(&mut app.board, true);
+                app.cloud_prototype.groups = CloudGroups(vec![group]);
+                app.sync_board_cloud_groups();
+                app.board.arrange_workspace(ws, preset);
+                let frame = app.board.workspace_frame_rect(ws).unwrap();
+                let neighbor = app.board.create_workspace_at("Neighbor", [frame[2] + 64.0, 0.0]);
+                if expand_first {
+                    app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, false);
+                }
+                app.create_agent_child_panel(
+                    PanelOptions {
+                        kind: PanelKind::Device,
+                        command: Some("127.0.0.1:5900".into()),
+                        ..PanelOptions::default()
+                    },
+                    ws,
+                    actor,
+                )
+                .unwrap();
+                assert_eq!(app.board.workspace(ws).unwrap().layout, Some(preset));
+                outcomes.push((
+                    app.board
+                        .panels
+                        .iter()
+                        .map(|p| (p.layout.position, p.layout.size))
+                        .collect::<Vec<_>>(),
+                    app.board.workspace(neighbor).unwrap().position,
+                ));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "{preset:?}");
+        }
+    }
+    #[test]
+    fn tall_imported_cloud_child_clears_the_neighbor_below() {
+        let (temp, mut app) = test_app();
+        let ws = app.board.create_workspace_at("Cloud", [0.0, 0.0]);
+        let local = app.board.workspace(ws).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+        group.size = [1800.0, 900.0];
+        app.cloud_prototype.groups = CloudGroups(vec![group]);
+        app.sync_board_cloud_groups();
+        let neighbor = app.board.create_workspace_at("Below", [20.0, 1000.0]);
+        let before = app.board.workspace(neighbor).unwrap().position;
+        let position = app.cloud_prototype.groups.0[0].next_position(&app.board);
+        app.create_cloud_member(
+            0,
+            PanelOptions {
+                kind: PanelKind::Editor,
+                position: Some(position),
+                size: Some([100.0, 1600.0]),
+                ..PanelOptions::default()
+            },
+            ws,
+        )
+        .unwrap();
+        assert!(app.board.workspace(neighbor).unwrap().position[1] > before[1]);
+        assert!(app.board.workspace_frame_rect(neighbor).unwrap()[1] >= app.board.workspace_frame_rect(ws).unwrap()[3]);
+    }
+    #[test]
+    fn changed_launch_profile_is_published_without_a_geometry_change() {
+        let (temp, mut app) = test_app();
+        let ws = app.board.create_workspace("Cloud");
+        let local = app.board.workspace(ws).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+        let mut config = cloud_panel::CloudConfig::parse("version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: registry.example/fixture\n    cpu: 8\n    memory_gb: 32\n").unwrap();
+        group.remote = Some(cloud_panel::CloudLaunch {
+            id: "fixture".into(),
+            revision: "a".repeat(40),
+            deployment_started: false,
+            profile_name: "cpu".into(),
+            profile: config.profiles.remove("cpu").unwrap(),
+        });
+        app.cloud_prototype.groups = CloudGroups(vec![group]);
+        app.sync_board_cloud_groups();
+        app.cloud_prototype.groups.0[0]
+            .remote
+            .as_mut()
+            .unwrap()
+            .profile
+            .memory_gb = 64;
+        app.sync_board_cloud_groups();
+        assert_eq!(
+            app.board.cloud_groups.0[0].remote.as_ref().unwrap().profile.memory_gb,
+            64
+        );
+        assert!(!app.cloud_catalog_changed());
     }
 }

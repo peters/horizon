@@ -89,6 +89,21 @@ impl Board {
         self.create_panel_with(opts, workspace, Panel::spawn)
     }
 
+    /// Spawn a cloud member without applying workspace layout or collisions.
+    /// The caller must attach membership and resolve the final cloud geometry
+    /// before publishing the board; temporary free-panel bounds must not move
+    /// neighboring workspaces.
+    ///
+    /// # Errors
+    /// Returns a spawn error without changing the workspace preset or geometry.
+    pub fn create_panel_preserving_workspace_layout(
+        &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+    ) -> Result<PanelId> {
+        self.create_panel_with_layout(opts, workspace, false, Panel::spawn)
+    }
+
     pub(super) fn create_failed_restore_panel(
         &mut self,
         opts: PanelOptions,
@@ -102,8 +117,18 @@ impl Board {
 
     pub(super) fn create_panel_with(
         &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+        spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
+    ) -> Result<PanelId> {
+        self.create_panel_with_layout(opts, workspace, true, spawn_panel)
+    }
+
+    fn create_panel_with_layout(
+        &mut self,
         mut opts: PanelOptions,
         workspace: WorkspaceId,
+        apply_layout: bool,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
         if let Some(reference) = self
@@ -122,10 +147,10 @@ impl Board {
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
         let explicit_position = opts.position.is_some();
-        if explicit_position {
+        if apply_layout && explicit_position {
             self.set_workspace_layout(workspace, None);
         }
-        let workspace_layout = (!explicit_position)
+        let workspace_layout = (apply_layout && !explicit_position)
             .then(|| self.workspace_layout_value(workspace))
             .flatten();
         let previous_frame = self.workspace_frame_rect(workspace);
@@ -157,7 +182,9 @@ impl Board {
         if let Some(layout) = workspace_layout {
             self.apply_workspace_layout(workspace, layout);
         }
-        self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
+        if apply_layout {
+            self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
+        }
 
         Ok(id)
     }
@@ -641,7 +668,26 @@ impl Board {
             }
         }
 
+        // Collision uses the workspace frame immediately, before the UI
+        // reconciles its cloud snapshot. Move the board's cloud with the
+        // workspace so that frame does not span the cloud's old position.
+        #[cfg(feature = "cloud-workspaces")]
+        self.translate_cloud_groups_with_workspace(id, delta);
+
         positions_changed
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    fn translate_cloud_groups_with_workspace(&mut self, id: WorkspaceId, delta: [f32; 2]) {
+        let Some(local_id) = self.workspace(id).map(|workspace| workspace.local_id.clone()) else {
+            return;
+        };
+        for group in &mut self.cloud_groups.0 {
+            if group.workspace != local_id {
+                continue;
+            }
+            group.translate_with_workspace(delta);
+        }
     }
 
     /// Translate a workspace and push any colliding workspaces further along

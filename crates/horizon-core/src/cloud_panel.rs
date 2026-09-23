@@ -47,7 +47,30 @@ pub struct CloudGroup {
     hidden: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Fields reconciliation compares. Omits the remote launch payload so the
+/// per-frame path does not clone it.
+struct CloudGeometry {
+    position: [f32; 2],
+    size: [f32; 2],
+    workspace_position: [f32; 2],
+    collapsed: bool,
+    /// Membership already matched `self.panels` when this snapshot was taken.
+    panels_matched: bool,
+    panel_count: usize,
+}
+
+impl CloudGeometry {
+    fn differs_from(&self, group: &CloudGroup) -> bool {
+        !self.panels_matched
+            || self.panel_count != group.panels.len()
+            || self.position.map(f32::to_bits) != group.position.map(f32::to_bits)
+            || self.size.map(f32::to_bits) != group.size.map(f32::to_bits)
+            || self.workspace_position.map(f32::to_bits) != group.workspace_position.map(f32::to_bits)
+            || self.collapsed != group.collapsed
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CloudLaunch {
     #[serde(default)]
     pub deployment_started: bool,
@@ -103,7 +126,7 @@ impl CloudGroup {
         if board.panel(id).is_some_and(|p| self.panels.contains(&p.local_id)) {
             return;
         }
-        self.set_collapsed(board, false);
+        self.set_collapsed_state(board, false);
         let position = board.panel(id).map_or(self.position, |p| p.layout.position);
         if let Some(panel) = board.panel_mut(id) {
             if !self.panels.contains(&panel.local_id) {
@@ -130,7 +153,20 @@ impl CloudGroup {
         [x, self.position[1] + HEADER]
     }
 
+    /// Move the cloud by the same delta as its workspace, including the
+    /// remembered workspace origin so a later reconcile does not apply it twice.
+    pub(crate) fn translate_with_workspace(&mut self, delta: [f32; 2]) {
+        for (axis, amount) in delta.iter().enumerate() {
+            self.position[axis] += amount;
+            self.workspace_position[axis] += amount;
+        }
+    }
+
     pub fn translate(&mut self, board: &mut Board, delta: [f32; 2]) {
+        self.translate_with_collisions(board, delta, true);
+    }
+
+    fn translate_with_collisions(&mut self, board: &mut Board, delta: [f32; 2], resolve_collisions: bool) {
         for (axis, amount) in delta.iter().enumerate() {
             self.position[axis] += amount;
         }
@@ -141,12 +177,17 @@ impl CloudGroup {
                 }
             }
         }
+        self.publish(board, resolve_collisions);
     }
 
     pub fn set_collapsed(&mut self, board: &mut Board, collapsed: bool) {
-        if self.collapsed == collapsed {
-            return;
+        if self.collapsed != collapsed {
+            self.set_collapsed_state(board, collapsed);
+            self.publish(board, true);
         }
+    }
+
+    fn set_collapsed_state(&mut self, board: &mut Board, collapsed: bool) {
         self.collapsed = collapsed;
         for panel in &mut board.panels {
             if !self.panels.contains(&panel.local_id) {
@@ -208,9 +249,10 @@ impl CloudGroup {
     pub fn set_layout(&mut self, board: &mut Board, layout: Option<WorkspaceLayout>) {
         self.layout = layout;
         if layout.is_some() {
-            self.set_collapsed(board, false);
+            self.set_collapsed_state(board, false);
             self.arrange(board);
         }
+        self.publish(board, true);
     }
 
     pub fn arrange(&mut self, board: &mut Board) {
@@ -242,10 +284,29 @@ impl CloudGroup {
         }
     }
 
-    pub fn reconcile(&mut self, board: &mut Board) {
+    pub fn reconcile(&mut self, board: &mut Board) -> bool {
+        self.reconcile_with_collisions(board, true)
+    }
+
+    fn reconcile_with_collisions(&mut self, board: &mut Board, resolve_collisions: bool) -> bool {
+        // Callers such as attach and resize mutate this group before reconcile.
+        // Compare with the board's geometry from before those mutations,
+        // without cloning the remote payload on the per-frame path.
+        let stored = board
+            .cloud_groups
+            .0
+            .iter()
+            .find(|group| group.environment.id == self.environment.id)
+            .map(|group| CloudGeometry {
+                position: group.position,
+                size: group.size,
+                workspace_position: group.workspace_position,
+                collapsed: group.collapsed,
+                panels_matched: group.panels == self.panels,
+                panel_count: self.panels.len(),
+            });
         let workspace = board.workspace_id_by_local_id(&self.workspace);
         if let Some(ws) = workspace.and_then(|id| board.workspace_mut(id)) {
-            ws.layout = None;
             for axis in 0..2 {
                 self.position[axis] += ws.position[axis] - self.workspace_position[axis];
             }
@@ -293,6 +354,48 @@ impl CloudGroup {
             self.hidden.clear();
             self.arrange(board);
         }
+        let changed = stored.as_ref().is_none_or(|previous| previous.differs_from(self));
+        if changed {
+            // Direct callers (attach, resize) ignore the returned flag, so
+            // publish here. Unchanged reconciles, including the per-frame
+            // pass, do not reapply the workspace preset.
+            self.publish(board, resolve_collisions);
+        }
+        changed
+    }
+
+    /// Copy this group's geometry onto the board and reapply the workspace
+    /// preset so arranged panels stay clear of the cloud.
+    fn publish(&self, board: &mut Board, resolve_collisions: bool) {
+        if !board
+            .cloud_groups
+            .0
+            .iter()
+            .any(|group| group.environment.id == self.environment.id)
+        {
+            return;
+        }
+        let workspace_id = board.workspace_id_by_local_id(&self.workspace);
+        let before = workspace_id.and_then(|id| board.workspace_frame_rect(id));
+        self.write_geometry(board);
+        if let Some(workspace_id) = workspace_id {
+            if resolve_collisions {
+                board.reapply_workspace_layout_after(workspace_id, before);
+            } else {
+                board.reapply_workspace_layout_if_set(workspace_id);
+            }
+        }
+    }
+
+    fn write_geometry(&self, board: &mut Board) {
+        if let Some(slot) = board
+            .cloud_groups
+            .0
+            .iter_mut()
+            .find(|group| group.environment.id == self.environment.id)
+        {
+            *slot = self.clone();
+        }
     }
 }
 
@@ -325,12 +428,33 @@ impl CloudGroups {
     }
 
     pub fn reconcile(&mut self, board: &mut Board) {
+        let mut registered = Vec::new();
+        for group in &self.0 {
+            if board
+                .cloud_groups
+                .0
+                .iter()
+                .any(|stored| stored.environment.id == group.environment.id)
+            {
+                continue;
+            }
+            if let Some(workspace) = board.workspace_id_by_local_id(&group.workspace)
+                && !registered.iter().any(|(id, _)| *id == workspace)
+            {
+                registered.push((workspace, board.workspace_frame_rect(workspace)));
+            }
+            board.cloud_groups.0.push(group.clone());
+        }
+        // Register every member before any preset can mistake it for a free panel.
         for index in 0..self.0.len() {
             let before = self.0[index].size;
             self.0[index].reconcile(board);
             if self.0[index].size.iter().zip(before).any(|(new, old)| *new > old) {
                 self.make_room(board, index);
             }
+        }
+        for (workspace, before) in registered {
+            board.reapply_workspace_layout_after(workspace, before);
         }
     }
 
@@ -355,13 +479,17 @@ impl CloudGroups {
                     group.size[axis].max(panel.layout.position[axis] - group.position[axis] + extent + PAD);
             }
         }
-        group.reconcile(board);
-        self.make_room(board, index);
+        group.reconcile_with_collisions(board, false);
+        self.make_room_with_collisions(board, index, false);
         true
     }
 
     /// Make room for an expanded frame without changing any panel's membership.
     pub fn make_room(&mut self, board: &mut Board, expanded: usize) {
+        self.make_room_with_collisions(board, expanded, true);
+    }
+
+    fn make_room_with_collisions(&mut self, board: &mut Board, expanded: usize, resolve_collisions: bool) {
         let order: Vec<_> = std::iter::once(expanded)
             .chain((0..self.0.len()).filter(|i| *i != expanded))
             .collect();
@@ -375,7 +503,11 @@ impl CloudGroups {
                     let (other_min, other_max) = self.0[other].overview_bounds();
                     if min[0] < other_max[0] && max[0] > other_min[0] && min[1] < other_max[1] && max[1] > other_min[1]
                     {
-                        self.0[index].translate(board, [other_max[0] + PAD * 2.0 - min[0], 0.0]);
+                        self.0[index].translate_with_collisions(
+                            board,
+                            [other_max[0] + PAD * 2.0 - min[0], 0.0],
+                            resolve_collisions,
+                        );
                     }
                 }
             }

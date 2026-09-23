@@ -110,14 +110,12 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let Ok(id) = self.board.create_panel(options, actor.workspace_id) else {
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
             return Outcome::failed(
                 "invalid_endpoint",
                 "Device viewer requires a numeric loopback address and nonzero port",
             );
         };
-        #[cfg(feature = "cloud-workspaces")]
-        self.cloud_attach_agent_child(actor.panel_id, id);
         // Creating a viewer must not steal keyboard input from the caller.
         if let Some(focused) = focused {
             self.board.focus(focused);
