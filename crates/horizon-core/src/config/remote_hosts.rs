@@ -102,12 +102,21 @@ fn is_direct_key(line: &str, key: &str) -> bool {
         .is_some_and(|rest| !rest.starts_with(' ') && rest.starts_with(key) && rest[key.len()..].starts_with(':'))
 }
 
-/// The trailing ` # comment` of a scalar line, or nothing.
+/// The trailing ` # comment` of a scalar line, or nothing. Quoted scalars
+/// are skipped with YAML's escapes in mind: `\"` inside double quotes and a
+/// doubled `''` inside single quotes do not end the quote.
 fn inline_comment(line: &str) -> &str {
     let mut in_quote = None;
-    for (index, character) in line.char_indices() {
+    let mut chars = line.char_indices().peekable();
+    while let Some((index, character)) = chars.next() {
         match (character, in_quote) {
             ('"' | '\'', None) => in_quote = Some(character),
+            ('\\', Some('"')) => {
+                chars.next();
+            }
+            ('\'', Some('\'')) if chars.peek().is_some_and(|(_, next)| *next == '\'') => {
+                chars.next();
+            }
             (quote, Some(open)) if quote == open => in_quote = None,
             ('#', None) if index > 0 && line[..index].ends_with(' ') => return line[index - 1..].trim_end(),
             _ => {}
@@ -200,6 +209,17 @@ mod tests {
         assert_eq!(super::patch_default_workspace_source("remote_hosts: {}\n", "Ops"), None);
         assert_eq!(super::inline_comment("  default_workspace: 'a # b' # note"), " # note");
         assert_eq!(super::inline_comment("  default_workspace: Ops"), "");
+        assert_eq!(
+            super::inline_comment("  default_workspace: \"say \\\"hi\\\" # not\" # note"),
+            " # note",
+            "an escaped double quote does not end the scalar"
+        );
+        assert_eq!(
+            super::inline_comment("  default_workspace: 'it''s # not' # note"),
+            " # note",
+            "a doubled single quote does not end the scalar"
+        );
+        assert_eq!(super::inline_comment("  default_workspace: \"open # not"), "");
     }
 
     #[test]

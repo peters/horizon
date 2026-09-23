@@ -143,17 +143,22 @@ pub(super) fn render_destination_picker(
         .find(|entry| entry.choice == *destination)
         .or_else(|| entries.first())
         .map_or("", |entry| entry.label.as_str());
+    // A fixed width with truncation keeps a long workspace name from pushing
+    // the rest of the header around; the full name is in the tooltip.
     let button = ui
-        .add(
+        .add_sized(
+            Vec2::new(DESTINATION_WIDTH, 22.0),
             Button::new(
                 RichText::new(format!("{selected}  \u{25be}"))
                     .font(FontId::proportional(12.0))
                     .color(theme::FG()),
             )
-            .corner_radius(CornerRadius::same(6))
-            .min_size(Vec2::new(DESTINATION_WIDTH, 22.0)),
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .corner_radius(CornerRadius::same(6)),
         )
-        .on_hover_text("Workspace that receives the new session (Alt+\u{2191}/\u{2193} cycles)");
+        .on_hover_text(format!(
+            "{selected}\nWorkspace that receives the new session (Alt+\u{2191}/\u{2193} cycles)"
+        ));
     // The overlay card sits on the Tooltip layer, so a default (Foreground)
     // popup would open underneath it.
     let popup_id = Popup::default_response_id(&button);
@@ -161,8 +166,10 @@ pub(super) fn render_destination_picker(
         .kind(PopupKind::Tooltip)
         .width(DESTINATION_WIDTH)
         .show(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             for entry in entries {
-                ui.selectable_value(destination, entry.choice.clone(), &entry.label);
+                ui.selectable_value(destination, entry.choice.clone(), &entry.label)
+                    .on_hover_text(&entry.label);
             }
         })
         .is_some();
