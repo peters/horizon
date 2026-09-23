@@ -38,6 +38,9 @@ struct ScrollGesture {
     /// Claimed wheel motion still being eased in, so a claimed mouse-wheel
     /// notch pans as smoothly as egui would have scrolled it.
     pan_backlog: Vec2,
+    /// Already computed motion held until panel wheels can render without
+    /// moving their target geometry or disabling panel interaction.
+    deferred_pan: Vec2,
 }
 
 #[derive(Default)]
@@ -116,7 +119,10 @@ impl ScrollGesture {
             return ScrollRouting::default();
         }
 
-        let mut routing = ScrollRouting::default();
+        let mut routing = ScrollRouting {
+            pan: std::mem::take(&mut self.deferred_pan),
+            ..ScrollRouting::default()
+        };
         let mut has_canvas_motion = false;
         for (index, (step, phase)) in input
             .events
@@ -331,15 +337,35 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 }
 
 impl ScrollRouting {
-    /// Deliver earlier panel wheels before a later canvas pan changes hit
-    /// testing or disables panel interaction. Only delivered events are removed.
-    pub(super) fn apply_absorbed_wheels(&mut self, mut apply: impl FnMut(PanelId, WheelStep) -> bool) {
-        for &(index, panel, step) in &self.absorbed_wheels {
-            if apply(panel, step) {
+    /// A latched panel's wheel must never leak to a different hover target.
+    pub(super) fn discard_displaced_wheels(&mut self, target: ScrollTarget) {
+        for &(index, owner, _) in &self.absorbed_wheels {
+            if target != ScrollTarget::Panel(owner) {
                 self.claimed_wheels.push(index);
             }
         }
         self.claimed_wheels.sort_unstable();
+    }
+
+    /// Keep the original geometry and interaction enabled while a panel takes
+    /// its wheels through the normal renderer. Continuous panel input can hold
+    /// the old canvas tail until the first idle frame; no displacement is lost.
+    pub(super) fn defer_for_panel_delivery(&mut self, ctx: &Context) {
+        if !self.pans_canvas
+            || !self
+                .absorbed_wheels
+                .iter()
+                .any(|(index, _, _)| self.claimed_wheels.binary_search(index).is_err())
+        {
+            return;
+        }
+        let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
+        ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<ScrollGesture>(id).deferred_pan += std::mem::take(&mut self.pan);
+        });
+        self.pans_canvas = false;
+        self.owns_smooth_scroll = false;
+        ctx.request_repaint();
     }
 
     pub(super) fn consume(&self, ctx: &Context, terminal_events: &mut Vec<TerminalInputEvent>) {

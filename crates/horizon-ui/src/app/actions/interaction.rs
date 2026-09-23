@@ -308,27 +308,8 @@ impl HorizonApp {
                 }
                 self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback)
             });
-        if scroll_routing.pans_canvas {
-            scroll_routing.apply_absorbed_wheels(|owner, step| {
-                if terminal_under_pointer != Some(owner) {
-                    return false;
-                }
-                let Some(panel) = self.board.panels.iter_mut().find(|panel| panel.id == owner) else {
-                    return false;
-                };
-                let Some(terminal) = panel.terminal() else {
-                    return false;
-                };
-                let point = GridPoint { line: 0, column: 0 };
-                let Some(WheelAction::Scrollback(lines)) =
-                    wheel_action(step.delta, step.unit, cell_size, step.modifiers, terminal.mode(), point)
-                else {
-                    return false;
-                };
-                panel.scroll_scrollback_by(lines);
-                true
-            });
-        }
+        scroll_routing.discard_displaced_wheels(scroll_target);
+        scroll_routing.defer_for_panel_delivery(ctx);
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
         } else if scroll_routing.pans_canvas {

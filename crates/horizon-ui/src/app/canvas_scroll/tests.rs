@@ -151,9 +151,14 @@ fn ending_gestures_apply_their_tail_without_stealing_a_new_contact() {
             };
             input.events.extend(expected_wheels.clone());
             let _ = run_app_frame_with_input(&ctx, &mut app, input);
-            // The claimed move batched with its end still pans, once.
-            assert_offset(app.canvas_view.pan_offset, [before[0], before[1] - 5.0]);
-            assert!(app.canvas_pan_input_claimed);
+            // A new panel contact receives its wheel before the old tail pans.
+            let expected_pan = if restart_on_panel {
+                before
+            } else {
+                [before[0], before[1] - 5.0]
+            };
+            assert_offset(app.canvas_view.pan_offset, expected_pan);
+            assert_eq!(app.canvas_pan_input_claimed, !restart_on_panel);
             let wheels = ctx.input(|input| {
                 input
                     .events
@@ -170,6 +175,14 @@ fn ending_gestures_apply_their_tail_without_stealing_a_new_contact() {
                 .map(|input| input.event.clone())
                 .collect::<Vec<_>>();
             assert_eq!(terminal_wheels, expected_wheels);
+            if restart_on_panel {
+                let _ = run_app_frame_with_input(
+                    &ctx,
+                    &mut app,
+                    scroll_frame(1.032, pointer, Vec2::ZERO, TouchPhase::Move),
+                );
+                assert_offset(app.canvas_view.pan_offset, [before[0], before[1] - 5.0]);
+            }
         }
     }
 }
@@ -227,13 +240,8 @@ fn coalesced_panel_end_and_canvas_start_only_pan_by_the_new_gesture() {
             .cloned()
             .collect::<Vec<_>>()
     });
-    assert_eq!(
-        wheels,
-        vec![
-            wheel(Vec2::new(0.0, -5.0), TouchPhase::Move),
-            wheel(Vec2::ZERO, TouchPhase::End)
-        ]
-    );
+    // Motion belonging to the old panel is discarded after the pointer leaves it.
+    assert_eq!(wheels, vec![wheel(Vec2::ZERO, TouchPhase::End)]);
 }
 
 fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Event>) -> bool {
@@ -741,6 +749,7 @@ fn an_idle_relatch_lands_the_previous_notch_in_full() {
     assert!((total.y + 2.0 * options.line_scroll_speed).abs() < 0.001, "{total:?}");
 }
 
+mod delivery;
 mod suppression;
 mod zoom;
 
@@ -905,10 +914,16 @@ fn a_chaining_frame_applies_the_terminals_earlier_wheel_before_moving_it() {
         wheel(Vec2::new(0.0, -2000.0), TouchPhase::Move),
     ]);
     let _ = run_app_frame_with_input(&ctx, &mut app, input);
-    assert!(app.canvas_view.pan_offset[1] < before[1] - 1000.0);
+    assert_offset(app.canvas_view.pan_offset, before);
     assert_eq!(
         app.board.panels[0].terminal().expect("terminal").scrollback(),
         0,
-        "the first wheel must reach its terminal even when the second moves it away"
+        "the first wheel must reach its terminal before the second moves it away"
     );
+    let _ = run_app_frame_with_input(
+        &ctx,
+        &mut app,
+        scroll_frame(1.016, body.center(), Vec2::ZERO, TouchPhase::Move),
+    );
+    assert!(app.canvas_view.pan_offset[1] < before[1] - 1000.0);
 }
