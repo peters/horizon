@@ -84,6 +84,11 @@ pub(super) struct InputState {
     /// Wheel travel not yet worth a whole notch; trackpads deliver many small
     /// deltas that must add up rather than each become a click.
     scroll_remainder: egui::Vec2,
+    /// Clipboard chords already sent whose key release is still to come.
+    pending_clipboard: Vec<char>,
+    /// egui-winit reported a V press since the last V release. It reports one
+    /// for every V except command+V, so a release without one was a paste.
+    v_pressed: bool,
 }
 
 impl InputState {
@@ -163,6 +168,12 @@ impl InputState {
         let Some(keysym) = keysym_for_key(pressed) else {
             return Vec::new();
         };
+        if pressed == Key::V && down {
+            self.v_pressed = true;
+        }
+        if !down && let Some(events) = self.clipboard_release(pressed) {
+            return events;
+        }
         let printable = keysym < 0xff00;
         // A release always follows its press, even if the modifier that made
         // the press a chord went up first; otherwise the key stays held.
@@ -172,6 +183,56 @@ impl InputState {
         }
         self.track(keysym, down);
         vec![key(keysym, down)]
+    }
+
+    /// A clipboard shortcut egui-winit reported as Copy, Cut or Paste: the
+    /// letter with the platform command modifier held around it, whatever
+    /// the modifier state was by the end of the frame. The key's release,
+    /// which egui-winit still reports, is then swallowed.
+    pub(super) fn clipboard_chord(&mut self, letter: char) -> Vec<X11Event> {
+        let mut chord = self.modifiers;
+        if cfg!(target_os = "macos") {
+            chord.mac_cmd = true;
+        } else {
+            chord.ctrl = true;
+        }
+        let mut events = self.modifiers(chord);
+        events.extend(Self::tap(letter));
+        self.pending_clipboard.push(letter);
+        events
+    }
+
+    /// One press and release of a letter, for a chord whose modifier state
+    /// has already been sent.
+    pub(super) fn tap(letter: char) -> Vec<X11Event> {
+        let keysym = keysym_for_char(letter);
+        vec![key(keysym, true), key(keysym, false)]
+    }
+
+    /// The release of C, X or V after a clipboard chord is swallowed. A V
+    /// release with neither a V press nor a Paste before it was command+V
+    /// with an empty local clipboard, which egui-winit reports as nothing but
+    /// that release (often after the modifier's own release); the chord is
+    /// sent now.
+    fn clipboard_release(&mut self, pressed: Key) -> Option<Vec<X11Event>> {
+        let letter = match pressed {
+            Key::C => 'c',
+            Key::X => 'x',
+            Key::V => 'v',
+            _ => return None,
+        };
+        let v_pressed = std::mem::take(&mut self.v_pressed) || letter != 'v';
+        if let Some(index) = self.pending_clipboard.iter().position(|pending| *pending == letter) {
+            self.pending_clipboard.remove(index);
+            return Some(Vec::new());
+        }
+        if !v_pressed {
+            let events = self.clipboard_chord('v');
+            self.pending_clipboard.pop();
+            // The chord's modifier goes back to the frame's state at its end.
+            return Some(events);
+        }
+        None
     }
 
     /// Typed text: a press and release per character.
@@ -190,6 +251,7 @@ impl InputState {
     pub(super) fn release_all(&mut self) -> Vec<X11Event> {
         // A partial wheel gesture must not carry into the next capture.
         self.scroll_remainder = egui::Vec2::ZERO;
+        self.pending_clipboard.clear();
         let mut events = Vec::new();
         for keysym in self.held_keys.drain(..) {
             events.push(key(keysym, false));
@@ -494,6 +556,53 @@ mod tests {
                 (UNICODE_KEYSYM_BASE | 0x20ac, false),
             ],
             "Latin-1 is direct, other scripts use the Unicode keysym range, controls are dropped"
+        );
+    }
+
+    #[test]
+    fn clipboard_chords_hold_the_command_modifier_and_swallow_their_release() {
+        let control = if cfg!(target_os = "macos") {
+            XK_SUPER_L
+        } else {
+            XK_CONTROL_L
+        };
+        let command = if cfg!(target_os = "macos") {
+            Modifiers::MAC_CMD
+        } else {
+            Modifiers::CTRL
+        };
+        let (c, v) = (u32::from('c'), u32::from('v'));
+        let mut state = InputState::default();
+        // Ctrl already up by the end of the frame: the chord still holds it.
+        assert_eq!(
+            keysyms(&state.clipboard_chord('c')),
+            vec![(control, true), (c, true), (c, false)]
+        );
+        assert!(
+            state.key(Key::C, false, command).is_empty(),
+            "the release was already sent"
+        );
+        assert_eq!(keysyms(&state.modifiers(Modifiers::NONE)), vec![(control, false)]);
+
+        // Ctrl+V with an empty local clipboard: only the V release arrives,
+        // and on X11 it comes after Ctrl's own release.
+        assert_eq!(
+            keysyms(&state.key(Key::V, false, Modifiers::NONE)),
+            vec![(control, true), (v, true), (v, false)]
+        );
+        state.modifiers(Modifiers::NONE);
+        // A typed v reports its press, so its release is not a paste.
+        assert!(state.key(Key::V, true, Modifiers::NONE).is_empty());
+        assert!(state.key(Key::V, false, Modifiers::NONE).is_empty());
+        state.modifiers(command);
+        // With a Paste event first, its release is swallowed instead.
+        assert_eq!(keysyms(&state.clipboard_chord('v')), vec![(v, true), (v, false)]);
+        assert!(state.key(Key::V, false, command).is_empty());
+        state.clipboard_chord('x');
+        state.release_all();
+        assert!(
+            state.key(Key::X, false, Modifiers::NONE).is_empty(),
+            "a plain x release is text's business, and release_all dropped the pending chord"
         );
     }
 

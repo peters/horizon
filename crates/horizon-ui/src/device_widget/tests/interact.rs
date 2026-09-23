@@ -459,3 +459,121 @@ fn a_fast_drag_that_ends_outside_the_image_keeps_its_press_and_release() {
         "and so did its release: {sent:?}"
     );
 }
+
+fn frame_with_modifiers(
+    ctx: &egui::Context,
+    state: &mut DeviceUiState,
+    device: &DevicePanelState,
+    mut events: Vec<egui::Event>,
+    modifiers: egui::Modifiers,
+) -> egui::FullOutput {
+    events.insert(0, egui::Event::ModifiersChanged(modifiers));
+    state.begin_frame();
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                ..Default::default()
+            },
+            |ui| state.show(ui, device, true),
+        )
+        .discard_textures();
+    state.finish_frame();
+    output
+}
+
+#[test]
+fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboard() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    let output = frame(&ctx, &mut state, &device, click_events(middle, false));
+    assert!(
+        output.platform_output.ime.is_some(),
+        "the input method is on while captured"
+    );
+    drain(&mut receiver);
+
+    // What egui-winit emits for a quick Ctrl+C inside one repaint: Copy, the
+    // key release, and Ctrl already up by the end of the frame.
+    frame_with_modifiers(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::Copy, key_event(egui::Key::C, false, egui::Modifiers::CTRL)],
+        egui::Modifiers::NONE,
+    );
+    let c = u32::from('c');
+    assert_eq!(
+        keys(&drain(&mut receiver)),
+        vec![(0xffe3, true), (c, true), (c, false), (0xffe3, false)],
+        "Control_L is held around c"
+    );
+    // Ctrl+V with an empty local clipboard, as winit reports it on X11: Ctrl
+    // goes down and up, then only the V release arrives.
+    frame_with_modifiers(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            key_event(egui::Key::ControlLeft, true, egui::Modifiers::NONE),
+            key_event(egui::Key::ControlLeft, false, egui::Modifiers::CTRL),
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+            key_event(egui::Key::V, false, egui::Modifiers::NONE),
+        ],
+        egui::Modifiers::NONE,
+    );
+    let v = u32::from('v');
+    assert_eq!(
+        keys(&drain(&mut receiver)),
+        vec![
+            (0xffe3, true),
+            (0xffe3, false),
+            (0xffe3, true),
+            (v, true),
+            (v, false),
+            (0xffe3, false)
+        ],
+        "the Ctrl press as it happened, then the paste chord with Ctrl held around v"
+    );
+
+    frame_with_modifiers(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::Paste("local secret".into()), egui::Event::Cut],
+        egui::Modifiers::CTRL,
+    );
+    frame_with_modifiers(&ctx, &mut state, &device, Vec::new(), egui::Modifiers::NONE);
+    let sent = keys(&drain(&mut receiver));
+    let letters: Vec<u32> = sent
+        .iter()
+        .filter(|(_, down)| *down)
+        .map(|(keysym, _)| *keysym)
+        .collect();
+    assert_eq!(letters, vec![0xffe3, u32::from('v'), u32::from('x')], "{sent:?}");
+    assert!(
+        !sent.iter().any(|(keysym, _)| *keysym == u32::from('l')),
+        "the local clipboard is not typed"
+    );
+
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::Ime(egui::ImeEvent::Commit("日本".into()))],
+    );
+    assert_eq!(
+        keys(&drain(&mut receiver)),
+        vec![
+            (0x0100_65e5, true),
+            (0x0100_65e5, false),
+            (0x0100_672c, true),
+            (0x0100_672c, false)
+        ],
+        "a composed commit is sent as Unicode keysyms"
+    );
+}

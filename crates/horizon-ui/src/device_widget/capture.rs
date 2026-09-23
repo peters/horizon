@@ -154,9 +154,25 @@ impl DeviceUiState {
                 },
             );
         });
+        publish_ime_output(ui, response.rect);
         let (modifiers, raw_events) = ui.input(|input| (input.modifiers, input.events.clone()));
         let mut events = Vec::new();
         for event in raw_events {
+            // egui-winit turns the Ctrl or Command press of C, X and V into
+            // these instead of a key event (the release still arrives as a
+            // key). Send the chord so the remote application runs its own
+            // clipboard action; the local clipboard text in Paste is never
+            // typed into the remote desktop.
+            let clipboard_letter = match &event {
+                egui::Event::Copy => Some('c'),
+                egui::Event::Cut => Some('x'),
+                egui::Event::Paste(_) => Some('v'),
+                _ => None,
+            };
+            if let Some(letter) = clipboard_letter {
+                events.extend(self.input.clipboard_chord(letter));
+                continue;
+            }
             match event {
                 egui::Event::Key {
                     key,
@@ -169,7 +185,9 @@ impl DeviceUiState {
                     events.extend(self.input.modifiers(modifiers));
                     events.extend(self.input.key(key, pressed, modifiers));
                 }
-                egui::Event::Text(text) => events.extend(InputState::text(&text)),
+                egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                    events.extend(InputState::text(&text));
+                }
                 _ => {}
             }
         }
@@ -187,6 +205,21 @@ impl DeviceUiState {
             session.send_input(events);
         }
     }
+}
+
+/// Enable the platform input method over the captured image, so composed
+/// text (CJK and similar) arrives as a commit instead of being unavailable.
+fn publish_ime_output(ui: &Ui, image: egui::Rect) {
+    let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
+    let cursor = egui::Rect::from_min_size(image.min, egui::vec2(1.0, 1.0));
+    ui.ctx().output_mut(|output| {
+        output.ime = Some(egui::output::IMEOutput {
+            purpose: egui::IMEPurpose::Normal,
+            rect: to_global * image,
+            cursor_rect: to_global * cursor,
+            should_interrupt_composition: false,
+        });
+    });
 }
 
 /// This frame's wheel travel in points, from raw events rather than egui's

@@ -44,12 +44,18 @@ Must include:
   routing gate).
 - `tests::interact::a_discarded_pass_does_not_send_its_input_twice` — one
   wheel line is one notch and text is sent once even when egui re-runs a pass.
+- `tests::interact::clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboard`
+  and `input::tests::clipboard_chords_hold_the_command_modifier_and_swallow_their_release`
+  — egui-winit's Copy, Cut and Paste become the command chord for c, x, v;
+  the matching key release is swallowed; a V release with no V press is an
+  empty-clipboard paste; IME commits are sent as Unicode keysyms and the
+  input method is enabled while captured.
 - `session::tests::queued_input_reaches_the_server_before_the_next_refresh`
   — against the fake RFB server, a queued key and pointer event arrive as RFB
   KeyEvent and PointerEvent before the next FramebufferUpdateRequest (fails
   when the worker's forwarding is replaced by a sleep).
 
-Status: **PASS** (2026-09-23, Linux x64; 57 `device_widget` tests).
+Status: **PASS** (2026-09-23, Linux x64; 59 `device_widget` tests).
 
 ## Lane B — live viewer on an isolated desktop (Linux)
 
@@ -118,6 +124,21 @@ click, a drag released outside the Horizon viewer, and a second click each
 logged a `ButtonPress`/`ButtonRelease` pair at `root:(514,336)` with no button
 left held; typed `ok` arrived. Lane A adds
 `a_fast_drag_that_ends_outside_the_image_keeps_its_press_and_release`.
+
+### B5. Clipboard chords and typing of the same letters (review round six)
+
+With the image captured, press Ctrl+C, Ctrl+V (empty local clipboard) and
+Ctrl+X, then type `vcx`. The fixture logs `+Control_L +c -c -Control_L`,
+`+Control_L -Control_L +Control_L +v -v -Control_L` (winit on X11 reports
+Ctrl's release before V's, and egui-winit reports nothing else for an
+empty-clipboard Ctrl+V, so the chord is rebuilt from that release),
+`+Control_L +x -x -Control_L`, then `+v -v +c -c +x -x`. The local clipboard
+text carried by egui's Paste event is never typed into the desktop.
+
+Status: **PASS** (2026-09-23, Linux x64). The first attempt of this lane found
+two defects that the unit test had missed (Control_L released before `c`;
+Ctrl+V lost entirely); both are fixed and the widget test now replays the
+event order winit produced.
 
 ## Not covered
 
