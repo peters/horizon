@@ -1,5 +1,6 @@
 //! Export only the selected committed tree and its Git history.
 mod attributes;
+pub mod launch;
 mod material;
 use super::{Error, Result, command::Runner};
 use std::{

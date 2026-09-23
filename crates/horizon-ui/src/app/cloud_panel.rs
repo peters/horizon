@@ -280,6 +280,11 @@ impl HorizonApp {
             self.cloud_prototype.production.focus_title_on_open = true;
             return;
         }
+        let workspace = self.board.ensure_workspace();
+        self.add_mock_cloud_in_workspace(ctx, workspace);
+    }
+
+    fn add_mock_cloud_in_workspace(&mut self, ctx: &egui::Context, workspace_id: horizon_core::WorkspaceId) {
         let Some(&(id, title)) = CLOUDS
             .iter()
             .find(|(id, _)| !self.cloud_prototype.groups.0.iter().any(|g| g.issue == *id))
@@ -290,21 +295,13 @@ impl HorizonApp {
             return;
         };
         let cwd = root.join(format!("issue-{id}"));
-        let ws = self.board.ensure_workspace();
-        let Some(workspace) = self.board.workspace(ws) else {
+        let Some(workspace) = self.board.workspace(workspace_id) else {
             return;
         };
-        let position = [
-            24.0,
-            self.cloud_prototype
-                .groups
-                .0
-                .iter()
-                .map(|g| g.bounds().1[1])
-                .fold(80.0, f32::max)
-                + 48.0,
-        ];
-        let mut group = CloudGroup::new(id, title.into(), workspace.local_id.clone(), cwd, position);
+        let local_id = workspace.local_id.clone();
+        let position = self.cloud_prototype.groups.next_position(&local_id, &self.board);
+        let mut group = CloudGroup::new(id, title.into(), local_id, cwd, position);
+        group.reconcile(&mut self.board);
         if let Some(first) = self.cloud_prototype.groups.0.first() {
             group.environment.profile.clone_from(&first.environment.profile);
             group.environment.provider.clone_from(&first.environment.provider);

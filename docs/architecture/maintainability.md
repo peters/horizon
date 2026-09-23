@@ -434,6 +434,10 @@ separate. `deployment::storage` persists a separate volume journal under the sam
 per-cloud lock; explicit cleanup and local removal account for both resources.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
+`repository::launch` discovers the selected checkout, parses its default profile
+and resolves the committed revision; the UI launch coordinator captures workspace
+identity and performs preparation while the user enters a title. Credential
+preflight runs off-thread and checks only profile-enabled agents.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. UI modules render controls, consume progress and attach the
