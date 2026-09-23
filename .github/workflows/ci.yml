@@ -319,10 +319,6 @@ jobs:
             # path longer than MAX_PATH, which a 128-character panel id reaches (#848).
             agent_work::store::tests::panel_paths_preserve_identity_on_case_insensitive_filesystems
 
-            # horizon-browser-routines: deleting a routine renames its directory while
-            # the lock file inside it is open (#846).
-            registry::tests::save_load_list_and_delete_round_trip
-
             # Intermittent: replacing a manifest or job file fails with access denied
             # while another process has it open (#847). These horizon-browser-cli and
             # horizon-browser-mcp tests poll such a file while the process under test
