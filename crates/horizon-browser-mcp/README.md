@@ -323,6 +323,29 @@ configuration. CLI plans invoke the same tool; see the
 
 ## Native Device viewer lifecycle
 
+New hosts include optional `diagnostics.host` in the same `device_panel` list and
+inspect responses (and the CLI plan runner's MCP results). It records the
+render-time canvas separately from `canvas_after_pass`, because minimap or
+attention navigation may change the next view after panels were drawn. Canvas
+bounds use viewport points. `viewport` distinguishes root and detached windows;
+an unrendered detached viewport reports no canvas instead of borrowing root or
+stale geometry. `exclusion` follows actual visibility, fullscreen and canvas
+clipping decisions; unknown omissions remain `unclassified`.
+
+`reveal_requests` counts accepted requests for this viewer;
+`applied_reveal_request` identifies the latest request actually applied to its
+canvas. Superseded requests can remain unapplied. `view_revision` counts observed
+viewport/canvas changes without identifying who caused them.
+`view_changed_since_reveal` means the current view differs from the applied view;
+moving away and back resets it. It is null when the required observations are
+missing. Counters are transient and reset with the viewer state.
+
+Host context describes an egui UI pass, not operating-system presentation.
+`ui_pass` is viewport-local; `discarded` samples `will_discard` at callback
+completion, before end-pass plugins. Neither host context, an applied Reveal nor
+a canvas intersection replaces `image_displayed` and advancing frame evidence.
+Older hosts omit `host`; missing context is not a diagnosis.
+
 The compact viewer summary selects the supplied machine name, hostname,
 Tailscale name, server-advertised VNC name, then local endpoint. Expand
 **Connection details** for selectable supplied labels, the local endpoint,

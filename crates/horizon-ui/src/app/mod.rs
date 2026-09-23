@@ -17,6 +17,7 @@ mod canvas_scroll;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
 mod detached_viewports;
+mod device_presentation;
 mod device_requests;
 #[cfg(test)]
 mod device_tests;
@@ -418,6 +419,7 @@ impl eframe::App for HorizonApp {
             state.begin_frame();
         }
         self.update_ui(ui);
+        self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.
         for state in self.panel_render_caches.device_ui_state.values() {

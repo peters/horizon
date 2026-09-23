@@ -217,6 +217,12 @@ impl HorizonApp {
     }
 
     fn reveal_device_viewer(&mut self, ctx: &Context, id: PanelId, actor: ActorPanel) {
+        self.panel_render_caches
+            .device_ui_state
+            .entry(id)
+            .or_default()
+            .host
+            .requested();
         let focused = self.board.focused;
         let active_workspace = self.board.active_workspace;
         self.board.set_panel_visible(id, true);
@@ -308,7 +314,9 @@ impl HorizonApp {
         }
         // Fit after layout and the bounded restoration wait. The window manager
         // may constrain the restored size, so expiry uses the available canvas.
-        self.reveal_device_in_rect(pending.id, self.canvas_rect(ctx));
+        let canvas = self.canvas_rect(ctx);
+        self.reveal_device_in_rect(pending.id, canvas);
+        self.record_applied_device_reveal(pending.id, canvas);
     }
 
     pub(super) fn apply_pending_device_reveal(&mut self, local: &str, canvas: egui::Rect) {
@@ -328,6 +336,7 @@ impl HorizonApp {
             let focused = self.board.focused;
             let active_workspace = self.board.active_workspace;
             self.reveal_device_in_rect(id, canvas);
+            self.record_applied_device_reveal(id, canvas);
             self.board.focused = focused;
             self.board.active_workspace = active_workspace;
         }
@@ -386,6 +395,44 @@ mod tests {
         };
         assert_eq!(panels.len(), 1);
         panels.remove(0)
+    }
+
+    #[test]
+    fn superseded_reveal_remains_requested_without_claiming_canvas_application() {
+        let (_temp, ctx, mut app) = app();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let create = request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:5900".into(),
+                    identity: None,
+                },
+            );
+            let panel = one(app.apply_device_request(&create, &ctx));
+            let id = app.board.panel_id_by_local_id(&panel.panel_id).unwrap();
+            let reveal = request(
+                &app,
+                Operation::Reveal {
+                    panel_id: panel.panel_id,
+                },
+            );
+            one(app.apply_device_request(&reveal, &ctx));
+            ids.push(id);
+        }
+        app.apply_pending_root_device_reveal(&ctx);
+        app.capture_root_device_presentation(app.canvas_rect(&ctx));
+        app.record_root_device_presentation(&ctx);
+        let observations: Vec<_> = ids
+            .iter()
+            .map(|id| app.panel_render_caches.device_ui_state[id].host.observation().unwrap())
+            .collect();
+        assert_eq!(observations[0].reveal_requests, 1);
+        assert_eq!(observations[0].applied_reveal_request, 0);
+        assert_eq!(observations[0].view_changed_since_reveal, None);
+        assert_eq!(observations[1].reveal_requests, 1);
+        assert_eq!(observations[1].applied_reveal_request, 1);
+        assert_eq!(observations[1].view_changed_since_reveal, Some(false));
     }
 
     #[test]
