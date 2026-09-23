@@ -65,14 +65,14 @@ pub enum Connection {
 /// with the host machine's own SSH configuration and keys; the route never
 /// carries credentials, identity files or extra arguments.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct SshRoute {
-    /// Host name, address or SSH config alias.
+    /// Host name, address or SSH config alias. Required.
     pub host: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// SSH port; omitted means the SSH configuration's or 22.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
 }
 
@@ -439,6 +439,15 @@ mod tests {
             .is_err(),
             "credentials and key paths are not part of the route"
         );
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation":"create","endpoint":"127.0.0.1:5901","ssh":{"user":"deploy"}
+            }))
+            .is_err(),
+            "a route without a host is rejected at the schema, not defaulted"
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(SshRoute)).unwrap();
+        assert_eq!(schema["required"], serde_json::json!(["host"]));
     }
 
     #[test]
