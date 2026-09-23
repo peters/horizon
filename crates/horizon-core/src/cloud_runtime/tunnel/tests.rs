@@ -1,5 +1,8 @@
 use super::*;
-use std::io::Write;
+use std::{
+    io::Write,
+    sync::{Arc, atomic::Ordering},
+};
 
 #[test]
 fn silent_and_trickled_banners_share_one_deadline() {
@@ -86,14 +89,20 @@ fn listener_ownership_idle_transport_capacity_and_disconnect_cleanup() {
     drop(clients.pop());
     thread::sleep(Duration::from_millis(100));
     clients.push(connect_banner(tunnel.endpoint));
-    let endpoint = tunnel.endpoint;
+    // Parallel tests bind 127.0.0.1:0 and can be handed this ephemeral port as
+    // soon as the listener closes. Shutdown is proven by the accept thread
+    // releasing its socket, which stays true when that port is reused.
+    let listener_released = Arc::clone(&tunnel.listener_released);
     let started = Instant::now();
     drop(tunnel);
     assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(
+        listener_released.load(Ordering::Acquire),
+        "desktop tunnel listener was still held after shutdown"
+    );
     for mut socket in clients {
         assert_eq!(socket.read(&mut [0]).unwrap(), 0);
     }
-    assert!(TcpStream::connect(endpoint).is_err());
 }
 
 #[test]
