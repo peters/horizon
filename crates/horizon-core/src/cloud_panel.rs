@@ -1,6 +1,8 @@
 //! Opt-in cloud-panel prototype: grouping of ordinary panels, not a new runtime.
 mod capabilities;
 mod fixture;
+#[cfg(test)]
+mod placement;
 mod reordering;
 
 pub use horizon_cloud::Connection as CloudConnection;
@@ -400,26 +402,32 @@ impl CloudGroup {
 }
 
 impl CloudGroups {
+    /// Workspace-relative origin for a newly created cloud.
+    ///
+    /// Callers store the result on a group whose remembered workspace origin is
+    /// zero; reconcile adds the live workspace position. The top edge sits below
+    /// ordinary-panel bounds and clouds already in that workspace. Panel
+    /// positions, cloud positions, and membership stay as they were.
     #[must_use]
     pub fn next_position(&self, workspace: &str, board: &Board) -> [f32; 2] {
         let destination = board.workspaces.iter().find(|item| item.local_id == workspace);
-        let local_bottom = board
+        let origin_y = destination.map_or(0.0, |item| item.position[1]);
+        let panel_bottom = board
             .panels
             .iter()
             .filter(|panel| destination.is_some_and(|item| panel.workspace_id == item.id))
-            .map(|panel| {
-                panel.layout.position[1] + panel.layout.size[1] - destination.map_or(0.0, |item| item.position[1])
-            })
+            .map(|panel| crate::board::panel_visual_rect(panel.layout.position, panel.layout.size)[3] - origin_y)
             .fold(80.0, f32::max);
-        [
-            24.0,
-            self.0
-                .iter()
-                .filter(|group| group.workspace == workspace)
-                .map(|group| group.overview_bounds().1[1] - group.workspace_position[1])
-                .fold(local_bottom, f32::max)
-                + 48.0,
-        ]
+        let bottom = self
+            .0
+            .iter()
+            .filter(|group| group.workspace == workspace)
+            .map(|group| {
+                let baseline = destination.map_or(group.workspace_position[1], |_| origin_y);
+                group.placed_overview_bounds(board).1[1] - baseline
+            })
+            .fold(panel_bottom, f32::max);
+        [24.0, bottom + 48.0]
     }
 
     #[must_use]
@@ -1001,12 +1009,31 @@ mod tests {
             )
             .unwrap();
         let panel = board.panel(id).unwrap();
-        let bottom = panel.layout.position[1] + panel.layout.size[1];
+        let occupied = crate::board::panel_visual_rect(panel.layout.position, panel.layout.size);
+        let position_before = panel.layout.position;
+        let size_before = panel.layout.size;
         let local = board.workspace(workspace).unwrap().local_id.clone();
         let groups = CloudGroups::default();
         let position = groups.next_position(&local, &board);
         let mut group = CloudGroup::new(1, "Cloud".into(), local, PathBuf::new(), position);
         group.reconcile(&mut board);
-        assert!(group.position[1] >= bottom + 48.0);
+        assert!(group.position[1] >= occupied[3] + 48.0);
+        let panel = board.panel(id).unwrap();
+        assert!(
+            panel
+                .layout
+                .position
+                .into_iter()
+                .zip(position_before)
+                .all(|(left, right)| (left - right).abs() <= f32::EPSILON)
+        );
+        assert!(
+            panel
+                .layout
+                .size
+                .into_iter()
+                .zip(size_before)
+                .all(|(left, right)| (left - right).abs() <= f32::EPSILON)
+        );
     }
 }

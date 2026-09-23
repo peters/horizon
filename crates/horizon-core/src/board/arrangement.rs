@@ -467,7 +467,7 @@ impl Board {
         let rects: Vec<[f32; 4]> = panel_ids
             .iter()
             .filter_map(|panel_id| self.panel(*panel_id))
-            .map(|panel| panel_visual_rect(panel.layout.position, panel.layout.size))
+            .map(|panel| super::panel_visual_rect(panel.layout.position, panel.layout.size))
             .collect();
         let shift = clearance_translation(&rects, &obstacles);
         if shift[0].abs() <= f32::EPSILON && shift[1].abs() <= f32::EPSILON {
@@ -729,15 +729,6 @@ fn resize_axis_push(a: [f32; 4], b: [f32; 4], axis: ResizeCollisionAxis, gap: f3
 
 pub(super) fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
     !(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1])
-}
-
-fn panel_visual_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
-    [
-        position[0],
-        position[1],
-        position[0] + size[0] + 2.0 * super::PANEL_CHROME_PAD,
-        position[1] + size[1] + super::PANEL_CHROME_TITLEBAR + 2.0 * super::PANEL_CHROME_PAD,
-    ]
 }
 
 /// Shortest axis-aligned move of the whole arrangement that leaves every
