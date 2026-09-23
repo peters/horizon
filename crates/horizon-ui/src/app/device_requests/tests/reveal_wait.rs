@@ -317,3 +317,22 @@ fn a_reveal_held_by_a_frame_keeps_the_request_pump_waking() {
         "a frame that holds a reveal must keep the pump waking if frames stop"
     );
 }
+
+#[test]
+fn a_reveal_answer_never_reports_an_earlier_draw_as_its_success() {
+    let (_temp, ctx, mut app, id, local) = off_canvas_viewer();
+    app.board.panel_mut(id).unwrap().layout.position = [0.0, 0.0];
+    for _ in 0..3 {
+        frame(&ctx, &mut app);
+    }
+    assert!(app.device_observation(id, "any").unwrap().image.image_displayed);
+    reveal(&mut app, &ctx, &local);
+    // The reveal never reaches the canvas, as when another request replaces it.
+    app.panel_render_caches.pending_device_reveal = None;
+    let mut outcomes = settled(&mut app, Instant::now());
+    let panel = one(outcomes.remove(0));
+    assert!(!panel.image.image_displayed, "the draw predates the reveal");
+    let diagnostics = panel.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::Displayed);
+    assert_eq!(diagnostics.host.unwrap().applied_reveal_request, 0);
+}

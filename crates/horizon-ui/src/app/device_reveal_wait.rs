@@ -148,7 +148,7 @@ impl HorizonApp {
         if !self.panel_render_caches.device_ui_state.contains_key(&waiting.id) {
             return Some(Outcome::failed("panel_unavailable", "Device panel closed"));
         }
-        let Some(panel) = self.device_observation(waiting.id, &waiting.request.actor) else {
+        let Some(mut panel) = self.device_observation(waiting.id, &waiting.request.actor) else {
             return Some(Outcome::failed("panel_unavailable", "Device panel closed"));
         };
         let displayed = panel.image.image_displayed
@@ -161,8 +161,14 @@ impl HorizonApp {
         // nor for a reveal that was superseded or dropped before reaching the canvas.
         let unreachable = !awaits_frames(&panel.connection);
         let dropped = !self.device_reveal_reached_or_queued(waiting.id, waiting.reveal);
-        (displayed || unreachable || dropped || !panel.visible || now >= waiting.deadline)
-            .then(|| Outcome::Panels { panels: vec![panel] })
+        if !(displayed || unreachable || dropped || !panel.visible || now >= waiting.deadline) {
+            return None;
+        }
+        // In a reveal answer `image_displayed` is the reveal's own evidence: a
+        // pass drawn before the reveal applied never reads as success.
+        // `presentation` still describes the latest pass.
+        panel.image.image_displayed = displayed;
+        Some(Outcome::Panels { panels: vec![panel] })
     }
 
     fn device_reveal_reached_or_queued(&self, id: PanelId, reveal: u64) -> bool {
