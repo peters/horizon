@@ -25,15 +25,19 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 ### Native Device panels
 
-- `horizon-core::device` owns the validated local VNC target and panel state;
+- `horizon-core::device` owns the validated VNC target and panel state;
   `panel::spawn::device` creates a panel without a PTY. Creator-supplied identity
   is normalized in core and persisted with panel state; VNC observations stay
-  connection-local. Existing command metadata
-  persists the target. Restored panels require manual reconnect.
+  connection-local. Existing command metadata persists the target, and an
+  optional SSH tunnel host is persisted through the panel's `ssh_connection`
+  like an SSH panel, in which case the target is the endpoint as seen from that
+  host. Restored panels require manual reconnect.
 - `horizon-ui::device_widget` owns only read-only presentation. `details` renders
   labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
-  worker and a single latest-frame slot. The completed UI pass reconciles root
+  worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`
+  process per tunnelled connection, piped straight into the decoder and killed
+  with it, and keeps ssh's last diagnostic lines for the failure message. The completed UI pass reconciles root
   and detached viewer visibility; hidden workers pause frame requests and resume
   with a full refresh. Desktop resizing also requests a full refresh. Panel,
   workspace and session cleanup drops the worker. Viewer input never reaches the target.
@@ -424,8 +428,9 @@ and credential logic must not be copied into either transport or UI rendering.
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
-fencing, attachment verification and deletion. It must not depend on core/UI, terminal, browser, device, Git,
-settings storage or a provider CLI.
+fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
+stock for placement. The crate must not depend on core/UI, terminal, browser, device,
+Git, settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.

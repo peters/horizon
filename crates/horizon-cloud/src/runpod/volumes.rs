@@ -1,5 +1,5 @@
 //! Dedicated workspace storage with a durable fence around every allocation.
-use super::{RunPod, json};
+use super::{RunPod, flavors::Flavor, json};
 use crate::{Cancellation, CloudError, NetworkVolume, Worker, WorkerSpec, valid_id};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -78,7 +78,8 @@ pub enum State {
     Deleted,
 }
 impl RunPod {
-    /// Selects available CPU capacity with standard network storage, honoring placement preferences.
+    /// Selects a data center with the worker's exact CPU size in stock and standard
+    /// network storage, honoring placement preferences.
     /// # Errors
     /// Refuses missing or unknown capacity rather than allocating storage in an arbitrary location.
     pub fn workspace_volume_spec(&self, worker: &WorkerSpec, cancel: &Cancellation) -> Result<Spec> {
@@ -94,7 +95,18 @@ impl RunPod {
         );
         let catalog: Catalog = serde_json::from_value(self.request_url("GET", &url, None, cancel, None)?)
             .map_err(|_| CloudError::InvalidResponse)?;
-        let data_center_id = select_center(catalog, worker)?;
+        let candidates = candidates(catalog, worker);
+        let centers: Vec<String> = candidates.iter().map(|(_, id)| id.clone()).collect();
+        let flavors: Vec<&Flavor> = worker.cpu_flavors.iter().filter_map(|id| Flavor::get(id)).collect();
+        let stock = self.cpu_stock(&centers, &flavors, worker.profile.cpu, cancel)?;
+        let data_center_id = candidates
+            .into_iter()
+            .filter_map(|(preference, id)| Some((preference, *stock.get(&id)?, id)))
+            .min()
+            .map(|(_, _, id)| id)
+            .ok_or(CloudError::Invalid(
+                "No allowed data center has this CPU size in stock with standard workspace storage",
+            ))?;
         let spec = Spec {
             operation_id: worker.operation_id.clone(),
             size: u32::from(worker.profile.storage.volume_gb),
@@ -337,8 +349,10 @@ struct Capacity {
     id: String,
     availability: String,
 }
-fn select_center(catalog: Catalog, worker: &WorkerSpec) -> Result<String> {
-    let mut candidates: Vec<_> = catalog
+/// Configured data centers with standard storage whose flavor family reports
+/// capacity, with their preference rank. Family capacity only narrows the stock query.
+fn candidates(catalog: Catalog, worker: &WorkerSpec) -> Vec<(usize, String)> {
+    catalog
         .data_centers
         .into_iter()
         .filter_map(|center| {
@@ -350,28 +364,16 @@ fn select_center(catalog: Catalog, worker: &WorkerSpec) -> Result<String> {
             } else {
                 worker.data_centers.iter().position(|id| id == &center.id)?
             };
-            let capacity = center
+            center
                 .cpu_availability
                 .iter()
-                .filter(|cpu| worker.cpu_flavors.contains(&cpu.id))
-                .filter_map(|cpu| match cpu.availability.as_str() {
-                    "HIGH" => Some(0),
-                    "MEDIUM" => Some(1),
-                    "LOW" => Some(2),
-                    _ => None,
+                .any(|cpu| {
+                    worker.cpu_flavors.contains(&cpu.id)
+                        && matches!(cpu.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
                 })
-                .min()?;
-            Some((preference, capacity, center.id))
+                .then_some((preference, center.id))
         })
-        .collect();
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .map(|(_, _, id)| id)
-        .ok_or(CloudError::Invalid(
-            "No configured CPU capacity with standard workspace storage is currently available",
-        ))
+        .collect()
 }
 
 #[derive(Deserialize)]

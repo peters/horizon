@@ -71,7 +71,16 @@ fn machine(ui: &mut Ui, device: &DevicePanelState) {
 
 fn connection(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
     section(ui, "Connection");
-    row(ui, "Local endpoint", &device.target.address().to_string());
+    match &device.ssh_tunnel {
+        Some(tunnel) => {
+            row(ui, "SSH host", &tunnel.display_label());
+            if let Some(port) = tunnel.port {
+                row(ui, "SSH port", &port.to_string());
+            }
+            row(ui, "Remote endpoint", &device.target.address().to_string());
+        }
+        None => row(ui, "Local endpoint", &device.target.address().to_string()),
+    }
     if server.name.is_some() || server.desktop_size.is_some() {
         ui.add_space(6.0);
         caption(
@@ -122,7 +131,12 @@ pub(super) fn header(
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(8.0);
-        let endpoint = device.target.address().to_string();
+        let endpoint = device.endpoint_label();
+        let transport = if device.ssh_tunnel.is_some() {
+            "VNC desktop over SSH"
+        } else {
+            "VNC desktop"
+        };
         let name = device.display_name(server.name.as_deref());
         let reconnect = ui
             .horizontal_top(|ui| {
@@ -137,7 +151,7 @@ pub(super) fn header(
                         .on_hover_text(name.unwrap_or(&endpoint));
                     ui.add(
                         Label::new(
-                            RichText::new(if name.is_some() { &endpoint } else { "VNC desktop" })
+                            RichText::new(if name.is_some() { &endpoint } else { transport })
                                 .size(12.0)
                                 .color(theme::FG_SOFT()),
                         )
