@@ -1,6 +1,7 @@
 use super::*;
 
 #[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn from_board_preserves_window_view_focus_and_bindings() {
     let mut board = Board::new();
     let alpha = board.create_workspace_at("alpha", [120.0, 64.0]);
@@ -79,11 +80,17 @@ fn from_board_preserves_window_view_focus_and_bindings() {
 fn from_board_persists_workspace_layout_selection() {
     let mut board = Board::new();
     let workspace_id = board.create_workspace_at("grid", [860.0, 64.0]);
+    // The default shell is `/bin/bash` when `SHELL` is unset (#688), so
+    // Windows runs `cmd.exe`.
+    let shell = || PanelOptions {
+        command: cfg!(windows).then(|| "cmd.exe".to_string()),
+        ..PanelOptions::default()
+    };
     board
-        .create_panel(PanelOptions::default(), workspace_id)
+        .create_panel(shell(), workspace_id)
         .expect("first panel should spawn");
     board
-        .create_panel(PanelOptions::default(), workspace_id)
+        .create_panel(shell(), workspace_id)
         .expect("second panel should spawn");
     board.arrange_workspace(workspace_id, WorkspaceLayout::Grid);
 
