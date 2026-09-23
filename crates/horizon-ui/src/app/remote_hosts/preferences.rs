@@ -2,7 +2,6 @@
 use horizon_core::Config;
 
 use crate::app::HorizonApp;
-use crate::app::settings::SettingsStatus;
 use crate::app::util::atomic_write;
 
 impl HorizonApp {
@@ -49,9 +48,7 @@ impl HorizonApp {
             Ok(yaml) => {
                 self.apply_runtime_config(&config);
                 if let Some(editor) = self.settings.as_mut() {
-                    editor.buffer.clone_from(&yaml);
-                    editor.original = yaml;
-                    editor.status = SettingsStatus::Saved;
+                    editor.adopt_saved_text(yaml);
                 }
                 tracing::info!(setting = what, path = %self.config_path.display(), "config updated");
                 true

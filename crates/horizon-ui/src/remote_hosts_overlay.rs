@@ -108,12 +108,15 @@ pub enum RemoteHostsOverlayAction {
     SetDefaultWorkspace(String),
 }
 
-/// Alt+D is a command here, but the platform also reports it as typed text,
-/// which the filter box would insert; drop that text before the box sees it.
+/// Alt+D is a command here, but the platform also reports it as typed text
+/// (`d`, or `∂` on a macOS US layout), which the filter box would insert.
+/// Drop the text event that follows the key event, whatever it says.
 fn swallow_alt_shortcut_text(ctx: &Context) {
     ctx.input_mut(|input| {
-        let alt_default = input.events.iter().any(|event| {
-            matches!(
+        let mut correlated_text = false;
+        input.events.retain(|event| {
+            let consume = correlated_text && matches!(event, egui::Event::Text(_));
+            correlated_text = matches!(
                 event,
                 egui::Event::Key {
                     key: egui::Key::D,
@@ -121,13 +124,9 @@ fn swallow_alt_shortcut_text(ctx: &Context) {
                     modifiers,
                     ..
                 } if *modifiers == egui::Modifiers::ALT
-            )
+            );
+            !consume
         });
-        if alt_default {
-            input
-                .events
-                .retain(|event| !matches!(event, egui::Event::Text(text) if text.eq_ignore_ascii_case("d")));
-        }
     });
 }
 
@@ -754,7 +753,8 @@ mod tests {
         assert_eq!(overlay.destination, WorkspaceChoice::Existing(WorkspaceId(7)));
         assert_eq!(overlay.selected, 0, "Alt+Down leaves the host selection alone");
 
-        // X11 reports Alt+D as a key press and as typed text.
+        // Platforms report Alt+D as a key press followed by typed text: `d` on
+        // X11, `∂` on a macOS US layout. Unrelated text keeps flowing.
         overlay.query = "smoke".into();
         let (_, _, action) = show_overlay_collecting(
             &ctx,
@@ -763,12 +763,18 @@ mod tests {
             &workspaces,
             vec![
                 key_event(egui::Key::D, egui::Modifiers::ALT),
-                egui::Event::Text("d".into()),
+                egui::Event::Text("\u{2202}".into()),
+                egui::Event::Text("x".into()),
             ],
             None,
         );
         assert!(matches!(action, RemoteHostsOverlayAction::SetDefaultWorkspace(ref name) if name == "Ops"));
-        assert_eq!(overlay.query, "smoke", "the shortcut's text never reaches the filter");
+        assert!(
+            !overlay.query.contains('\u{2202}'),
+            "the shortcut's text never reaches the filter"
+        );
+        assert_eq!(overlay.query.replace('x', ""), "smoke");
+        assert_eq!(overlay.query.matches('x').count(), 1, "unrelated text keeps flowing");
 
         show_overlay(
             &ctx,

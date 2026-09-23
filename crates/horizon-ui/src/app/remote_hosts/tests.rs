@@ -176,6 +176,13 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
     assert_eq!(editor.buffer, editor.original);
     assert!(editor.buffer.contains("default_workspace: Ops"), "{}", editor.buffer);
     assert_eq!(
+        editor
+            .editing_config()
+            .map(|config| config.remote_hosts.default_workspace_name()),
+        Some("Ops"),
+        "the GUI tabs' snapshot follows the file"
+    );
+    assert_eq!(
         std::fs::read_to_string(&app.config_path).unwrap(),
         editor.buffer,
         "editor text matches the file"

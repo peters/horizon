@@ -73,6 +73,23 @@ pub(super) struct SettingsEditor {
     provider_usage: remote_usage::UsagePanels,
 }
 
+impl SettingsEditor {
+    /// Adopt config text that was just written to disk by another path, so
+    /// the YAML buffer, the saved baseline and the GUI tabs' parsed snapshot
+    /// all describe the file again.
+    pub(super) fn adopt_saved_text(&mut self, yaml: String) {
+        self.editing_config = Config::from_yaml(&yaml).ok();
+        self.buffer.clone_from(&yaml);
+        self.original = yaml;
+        self.status = SettingsStatus::Saved;
+    }
+
+    #[cfg(test)]
+    pub(super) fn editing_config(&self) -> Option<&Config> {
+        self.editing_config.as_ref()
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SettingsAction {
     None,
