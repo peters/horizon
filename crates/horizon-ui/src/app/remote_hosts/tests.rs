@@ -1,5 +1,6 @@
 use horizon_core::{Config, PanelKind, RuntimeState, SshConnection, StartupDecision, WorkspaceId};
 
+use super::launch::RemoteLaunch;
 use crate::app::test_support::{test_app_with_config_and_startup, test_app_with_startup};
 use crate::remote_hosts_overlay::{RemoteConnectMode, WorkspaceChoice};
 
@@ -17,6 +18,15 @@ fn lab_connection() -> SshConnection {
     }
 }
 
+fn launch(label: &str, connection: SshConnection, mode: RemoteConnectMode) -> RemoteLaunch {
+    RemoteLaunch {
+        label: label.into(),
+        connection,
+        mode,
+        vnc_port: None,
+    }
+}
+
 #[test]
 fn vnc_opens_a_tunnelled_device_panel_in_the_default_workspace() {
     let (_temp, ctx, mut app) = test_app_with_startup(ephemeral());
@@ -25,9 +35,7 @@ fn vnc_opens_a_tunnelled_device_panel_in_the_default_workspace() {
     let panel_id = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            connection.clone(),
-            RemoteConnectMode::Vnc,
+            launch("lab", connection.clone(), RemoteConnectMode::Vnc),
             &WorkspaceChoice::Default,
         )
         .expect("panel");
@@ -53,9 +61,7 @@ fn the_configured_vnc_port_and_workspace_name_are_used() {
     let panel_id = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Vnc,
+            launch("lab", lab_connection(), RemoteConnectMode::Vnc),
             &WorkspaceChoice::Default,
         )
         .expect("panel");
@@ -67,6 +73,81 @@ fn the_configured_vnc_port_and_workspace_name_are_used() {
 }
 
 #[test]
+fn per_host_ports_and_a_typed_port_override_the_global_vnc_port() {
+    let mut config = Config::default();
+    config.remote_hosts.vnc_port = 5901;
+    config.remote_hosts.vnc_ports.insert("lab".into(), 5902);
+    config.remote_hosts.vnc_ports.insert("db.example".into(), 5903);
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(&config, ephemeral());
+    let target = |app: &crate::app::HorizonApp, panel_id| {
+        let panel = app.board.panel(panel_id).unwrap();
+        panel.device().expect("device state").target.address().to_string()
+    };
+
+    let by_label = app
+        .open_remote_host(
+            &ctx,
+            launch("lab", lab_connection(), RemoteConnectMode::Vnc),
+            &WorkspaceChoice::Default,
+        )
+        .expect("panel");
+    assert_eq!(target(&app, by_label), "127.0.0.1:5902", "the label's entry wins");
+
+    let db = SshConnection {
+        host: "db.example".into(),
+        ..SshConnection::default()
+    };
+    let by_host = app
+        .open_remote_host(
+            &ctx,
+            launch("db", db.clone(), RemoteConnectMode::Vnc),
+            &WorkspaceChoice::Default,
+        )
+        .expect("panel");
+    assert_eq!(
+        target(&app, by_host),
+        "127.0.0.1:5903",
+        "the SSH host name is the fallback key"
+    );
+
+    let mut typed = launch("lab", lab_connection(), RemoteConnectMode::Vnc);
+    typed.vnc_port = Some(5999);
+    let overridden = app
+        .open_remote_host(&ctx, typed, &WorkspaceChoice::Default)
+        .expect("panel");
+    assert_eq!(
+        target(&app, overridden),
+        "127.0.0.1:5999",
+        "a typed :port beats the map"
+    );
+
+    let unlisted = app
+        .open_remote_host(
+            &ctx,
+            launch("web", db, RemoteConnectMode::Vnc),
+            &WorkspaceChoice::Default,
+        )
+        .expect("panel");
+    assert_eq!(target(&app, unlisted), "127.0.0.1:5903");
+    let other = SshConnection {
+        host: "web.example".into(),
+        ..SshConnection::default()
+    };
+    let global = app
+        .open_remote_host(
+            &ctx,
+            launch("web", other, RemoteConnectMode::Vnc),
+            &WorkspaceChoice::Default,
+        )
+        .expect("panel");
+    assert_eq!(
+        target(&app, global),
+        "127.0.0.1:5901",
+        "no entry falls back to vnc_port"
+    );
+}
+
+#[test]
 fn ssh_opens_in_the_chosen_existing_workspace_and_reuses_the_default_one() {
     let (_temp, ctx, mut app) = test_app_with_startup(ephemeral());
     let ops = app.board.create_workspace("Ops");
@@ -74,9 +155,7 @@ fn ssh_opens_in_the_chosen_existing_workspace_and_reuses_the_default_one() {
     let first = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Ssh,
+            launch("lab", lab_connection(), RemoteConnectMode::Ssh),
             &WorkspaceChoice::Existing(ops),
         )
         .expect("panel");
@@ -89,18 +168,14 @@ fn ssh_opens_in_the_chosen_existing_workspace_and_reuses_the_default_one() {
     let second = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Ssh,
+            launch("lab", lab_connection(), RemoteConnectMode::Ssh),
             &WorkspaceChoice::Default,
         )
         .expect("panel");
     let third = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Vnc,
+            launch("lab", lab_connection(), RemoteConnectMode::Vnc),
             &WorkspaceChoice::Existing(WorkspaceId(999)),
         )
         .expect("panel");
@@ -143,9 +218,7 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
     let panel_id = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Vnc,
+            launch("lab", lab_connection(), RemoteConnectMode::Vnc),
             &WorkspaceChoice::Default,
         )
         .expect("panel");
@@ -285,18 +358,14 @@ fn legacy_remote_workspaces_are_neither_listed_nor_used_as_destinations() {
     let picked = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Ssh,
+            launch("lab", lab_connection(), RemoteConnectMode::Ssh),
             &WorkspaceChoice::Existing(legacy),
         )
         .expect("panel");
     let by_default = app
         .open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Vnc,
+            launch("lab", lab_connection(), RemoteConnectMode::Vnc),
             &WorkspaceChoice::Default,
         )
         .expect("panel");
@@ -324,11 +393,11 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
     let presets_before = app.template_config.presets.len();
 
     assert_eq!(
-        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Vnc),
+        app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
     assert_eq!(
-        app.save_remote_host_shortcut(" lab ", lab_connection(), RemoteConnectMode::Ssh),
+        app.save_remote_host_shortcut(launch(" lab ", lab_connection(), RemoteConnectMode::Ssh)),
         Some("SSH: lab".to_string())
     );
     let blank = SshConnection {
@@ -336,7 +405,7 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
         ..SshConnection::default()
     };
     assert_eq!(
-        app.save_remote_host_shortcut("lab", blank, RemoteConnectMode::Ssh),
+        app.save_remote_host_shortcut(launch("lab", blank, RemoteConnectMode::Ssh)),
         None
     );
 
@@ -350,6 +419,22 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
     assert_eq!(vnc.kind, PanelKind::Device);
     assert_eq!(vnc.command.as_deref(), Some("127.0.0.1:5901"));
     assert_eq!(vnc.ssh_connection.as_ref(), Some(&lab_connection()));
+
+    let mut typed = launch("lab", lab_connection(), RemoteConnectMode::Vnc);
+    typed.vnc_port = Some(5999);
+    assert_eq!(app.save_remote_host_shortcut(typed), Some("VNC: lab".to_string()));
+    let saved = Config::load(Some(&app.config_path)).expect("config reloads");
+    let vnc = saved
+        .presets
+        .iter()
+        .find(|preset| preset.name == "VNC: lab")
+        .expect("vnc preset");
+    assert_eq!(
+        vnc.command.as_deref(),
+        Some("127.0.0.1:5999"),
+        "a typed :port is frozen into the re-saved shortcut"
+    );
+    assert_eq!(saved.presets.len(), presets_before + 2, "re-saving replaces the preset");
     let ssh = saved
         .presets
         .iter()
@@ -368,7 +453,7 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
         ..lab_connection()
     };
     assert_eq!(
-        app.save_remote_host_shortcut("lab", as_root.clone(), RemoteConnectMode::Vnc),
+        app.save_remote_host_shortcut(launch("lab", as_root.clone(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
@@ -390,7 +475,7 @@ fn saving_a_shortcut_keeps_external_config_edits_and_refuses_a_broken_file() {
     assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
 
     assert_eq!(
-        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Vnc),
+        app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
@@ -413,7 +498,7 @@ fn saving_a_shortcut_keeps_external_config_edits_and_refuses_a_broken_file() {
     let broken = "version: 11\nremote_hosts:\n  vnc_port: [\n";
     std::fs::write(&app.config_path, broken).unwrap();
     assert_eq!(
-        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Vnc),
+        app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
         None
     );
     assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), broken, "left alone");
@@ -470,9 +555,7 @@ mod picker_in_full_app {
         let ops = app.board.create_workspace("Ops");
         app.open_remote_host(
             &ctx,
-            "lab".into(),
-            lab_connection(),
-            RemoteConnectMode::Ssh,
+            launch("lab", lab_connection(), RemoteConnectMode::Ssh),
             &WorkspaceChoice::Existing(ops),
         )
         .expect("ssh panel");

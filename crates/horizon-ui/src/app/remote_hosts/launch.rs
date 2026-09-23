@@ -1,22 +1,39 @@
 //! Turning an overlay choice into a panel in the right workspace.
-use horizon_core::{PanelId, PanelKind, PanelOptions, SshConnection, WorkspaceId, WorkspaceLayout};
+use horizon_core::{PanelId, PanelKind, PanelOptions, RemoteHostsConfig, SshConnection, WorkspaceId, WorkspaceLayout};
 
 use crate::app::HorizonApp;
 use crate::remote_hosts_overlay::{RemoteConnectMode, WorkspaceChoice};
 
+/// One host the overlay chose, with everything typed into the filter applied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app) struct RemoteLaunch {
+    pub label: String,
+    pub connection: SshConnection,
+    pub mode: RemoteConnectMode,
+    /// A `:port` from the filter; `None` falls back to the config's per-host
+    /// map and then to `remote_hosts.vnc_port`.
+    pub vnc_port: Option<u16>,
+}
+
+impl RemoteLaunch {
+    /// The Device panel target for this host's VNC server, as seen from the host.
+    pub(in crate::app) fn vnc_target(&self, remote_hosts: &RemoteHostsConfig) -> String {
+        remote_hosts.vnc_target(&self.label, &self.connection.host, self.vnc_port)
+    }
+}
+
 impl HorizonApp {
-    /// Open `connection` as an SSH terminal or a tunnelled VNC viewer in the
+    /// Open the host as an SSH terminal or a tunnelled VNC viewer in the
     /// chosen workspace, creating the configured default workspace on first use.
     pub(in crate::app) fn open_remote_host(
         &mut self,
         ctx: &egui::Context,
-        label: String,
-        connection: SshConnection,
-        mode: RemoteConnectMode,
+        launch: RemoteLaunch,
         destination: &WorkspaceChoice,
     ) -> Option<PanelId> {
         let workspace_id = self.resolve_remote_destination(ctx, destination);
-        let options = self.remote_panel_options(label, connection, mode);
+        let mode = launch.mode;
+        let options = self.remote_panel_options(launch);
         match self.create_panel_with_options(options, workspace_id) {
             Ok(panel_id) => {
                 self.reveal_new_panel(ctx, workspace_id, panel_id);
@@ -56,21 +73,20 @@ impl HorizonApp {
         workspace_id
     }
 
-    fn remote_panel_options(&self, label: String, connection: SshConnection, mode: RemoteConnectMode) -> PanelOptions {
-        match mode {
-            RemoteConnectMode::Ssh => PanelOptions {
-                name: Some(label),
-                kind: PanelKind::Ssh,
-                ssh_connection: Some(connection),
-                ..PanelOptions::default()
+    fn remote_panel_options(&self, launch: RemoteLaunch) -> PanelOptions {
+        let command = match launch.mode {
+            RemoteConnectMode::Ssh => None,
+            RemoteConnectMode::Vnc => Some(launch.vnc_target(&self.template_config.remote_hosts)),
+        };
+        PanelOptions {
+            name: Some(launch.label),
+            kind: match launch.mode {
+                RemoteConnectMode::Ssh => PanelKind::Ssh,
+                RemoteConnectMode::Vnc => PanelKind::Device,
             },
-            RemoteConnectMode::Vnc => PanelOptions {
-                name: Some(label),
-                kind: PanelKind::Device,
-                command: Some(self.template_config.remote_hosts.vnc_target()),
-                ssh_connection: Some(connection),
-                ..PanelOptions::default()
-            },
+            command,
+            ssh_connection: Some(launch.connection),
+            ..PanelOptions::default()
         }
     }
 }

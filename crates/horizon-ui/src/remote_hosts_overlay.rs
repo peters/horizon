@@ -19,7 +19,7 @@ use self::layout::{
     Columns, DESTINATION_ROW_HEIGHT, INPUT_HEIGHT, OverlayLayout, columns, current_epoch_secs, overlay_layout,
 };
 use self::paint::{HostRowRenderContext, paint_empty, render_column_headers, render_host_details, render_host_row};
-use self::query::{connect_action, filtered_indices, parse_user_prefix};
+use self::query::{QueryOverrides, connect_action, filtered_indices, parse_query};
 use crate::command_palette::render::paint_card;
 use crate::theme;
 
@@ -104,6 +104,8 @@ pub enum RemoteHostsOverlayAction {
         connection: SshConnection,
         mode: RemoteConnectMode,
         destination: WorkspaceChoice,
+        /// A `:port` typed after the filter, overriding the configured VNC port.
+        vnc_port: Option<u16>,
     },
     /// The picked workspace should become the configured default, by name.
     SetDefaultWorkspace(String),
@@ -112,6 +114,7 @@ pub enum RemoteHostsOverlayAction {
         label: String,
         connection: SshConnection,
         mode: RemoteConnectMode,
+        vnc_port: Option<u16>,
     },
 }
 
@@ -179,7 +182,8 @@ impl KeyPresses {
 
 struct FrameContext<'a> {
     refresh_in_flight: bool,
-    user_override: Option<&'a str>,
+    /// The `user@` prefix and `:port` suffix typed into the filter.
+    overrides: QueryOverrides<'a>,
     now_secs: i64,
     /// Seconds until next auto-refresh, or `None` if refreshing or no timer.
     next_refresh_secs: Option<u64>,
@@ -233,15 +237,15 @@ impl RemoteHostsOverlay {
 
     pub fn show(&mut self, ctx: &Context, inputs: &RemoteHostsOverlayInputs<'_>) -> RemoteHostsOverlayAction {
         swallow_alt_shortcut_text(ctx);
-        let (user_override, filter_query) = parse_user_prefix(&self.query);
-        let user_override = user_override.map(str::to_string);
+        let query = self.query.clone();
+        let (overrides, filter_query) = parse_query(&query);
         let filtered = filtered_indices(&inputs.catalog.hosts, filter_query);
         let layout = overlay_layout(ctx.input(egui::InputState::viewport_rect));
         let destinations = destination_entries(inputs.workspaces, inputs.default_workspace);
         normalize_destination(&mut self.destination, &destinations);
         let frame = FrameContext {
             refresh_in_flight: inputs.refresh_in_flight,
-            user_override: user_override.as_deref(),
+            overrides,
             now_secs: current_epoch_secs(),
             next_refresh_secs: inputs.next_refresh_secs,
             destinations: &destinations,
@@ -372,39 +376,34 @@ impl RemoteHostsOverlay {
         match self.render_results(ui, &columns, render) {
             Some(RowRequest::Connect(index)) => {
                 let host = &render.catalog.hosts[render.filtered[index]];
-                self.open_action(host, render.frame.user_override)
+                self.open_action(host, render.frame.overrides)
             }
             Some(RowRequest::Menu(index, choice)) => {
                 let host = &render.catalog.hosts[render.filtered[index]];
-                self.menu_action(host, render.frame.user_override, choice)
+                self.menu_action(host, render.frame.overrides, choice)
             }
             None => RemoteHostsOverlayAction::None,
         }
     }
 
-    fn open_action(&self, host: &RemoteHost, user_override: Option<&str>) -> RemoteHostsOverlayAction {
-        connect_action(host, user_override, self.mode, self.destination.clone())
+    fn open_action(&self, host: &RemoteHost, overrides: QueryOverrides<'_>) -> RemoteHostsOverlayAction {
+        connect_action(host, overrides, self.mode, self.destination.clone())
     }
 
     fn menu_action(
         &self,
         host: &RemoteHost,
-        user_override: Option<&str>,
+        overrides: QueryOverrides<'_>,
         choice: RowMenuChoice,
     ) -> RemoteHostsOverlayAction {
         match choice {
-            RowMenuChoice::Open(mode) => connect_action(host, user_override, mode, self.destination.clone()),
-            RowMenuChoice::SaveShortcut(mode) => {
-                let mut connection = host.ssh_connection.clone();
-                if let Some(user) = user_override {
-                    connection.user = Some(user.to_string());
-                }
-                RemoteHostsOverlayAction::SaveShortcut {
-                    label: host.label.clone(),
-                    connection,
-                    mode,
-                }
-            }
+            RowMenuChoice::Open(mode) => connect_action(host, overrides, mode, self.destination.clone()),
+            RowMenuChoice::SaveShortcut(mode) => RemoteHostsOverlayAction::SaveShortcut {
+                label: host.label.clone(),
+                connection: overrides.connection(host),
+                mode,
+                vnc_port: overrides.vnc_port,
+            },
         }
     }
 
@@ -457,7 +456,7 @@ impl RemoteHostsOverlay {
                 .frame(egui::Frame::NONE)
                 .desired_width((text_rect.width() - reserved_right).max(160.0))
                 .hint_text(
-                    RichText::new("type to filter, prefix user@ to connect as that user")
+                    RichText::new("type to filter · user@ sets the user · :port the VNC port")
                         .color(theme::FG_DIM())
                         .font(FontId::monospace(11.0)),
                 )
@@ -604,7 +603,7 @@ impl RemoteHostsOverlay {
         }
         if enter && !filtered.is_empty() {
             let host = &catalog.hosts[filtered[self.selected]];
-            return Some(self.open_action(host, frame.user_override));
+            return Some(self.open_action(host, frame.overrides));
         }
 
         None
@@ -713,6 +712,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::controls::RowMenuChoice;
+    use super::query::QueryOverrides;
     use super::{
         KeyPresses, NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction,
         RemoteHostsOverlayInputs, WorkspaceChoice, WorkspaceOption,
@@ -966,10 +966,12 @@ mod tests {
                 label,
                 connection,
                 mode,
+                vnc_port,
             } => {
                 assert_eq!(label, "live-a");
                 assert_eq!(connection.port, Some(22429));
                 assert_eq!(mode, RemoteConnectMode::Vnc);
+                assert_eq!(vnc_port, None);
             }
             RemoteHostsOverlayAction::None
             | RemoteHostsOverlayAction::Cancelled
@@ -1177,18 +1179,24 @@ mod tests {
         overlay.mode = RemoteConnectMode::Vnc;
         overlay.destination = WorkspaceChoice::Existing(WorkspaceId(4));
 
-        match overlay.open_action(&host, Some("ops")) {
+        let overrides = QueryOverrides {
+            user: Some("ops"),
+            vnc_port: Some(5901),
+        };
+        match overlay.open_action(&host, overrides) {
             RemoteHostsOverlayAction::Open {
                 label,
                 connection,
                 mode,
                 destination,
+                vnc_port,
             } => {
                 assert_eq!(label, "live-a");
                 assert_eq!(connection.user.as_deref(), Some("ops"));
                 assert_eq!(connection.port, Some(22429));
                 assert_eq!(mode, RemoteConnectMode::Vnc);
                 assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(4)));
+                assert_eq!(vnc_port, Some(5901));
             }
             RemoteHostsOverlayAction::None
             | RemoteHostsOverlayAction::Cancelled
@@ -1203,23 +1211,33 @@ mod tests {
         let mut overlay = RemoteHostsOverlay::new();
         overlay.destination = WorkspaceChoice::Existing(WorkspaceId(3));
 
-        match overlay.menu_action(&host, Some("ops"), RowMenuChoice::SaveShortcut(RemoteConnectMode::Vnc)) {
+        let overrides = QueryOverrides {
+            user: Some("ops"),
+            vnc_port: Some(5902),
+        };
+        match overlay.menu_action(&host, overrides, RowMenuChoice::SaveShortcut(RemoteConnectMode::Vnc)) {
             RemoteHostsOverlayAction::SaveShortcut {
                 label,
                 connection,
                 mode,
+                vnc_port,
             } => {
                 assert_eq!(label, "live-a");
                 assert_eq!(connection.user.as_deref(), Some("ops"));
                 assert_eq!(connection.port, Some(22429));
                 assert_eq!(mode, RemoteConnectMode::Vnc);
+                assert_eq!(vnc_port, Some(5902), "the typed port travels with the shortcut");
             }
             RemoteHostsOverlayAction::None
             | RemoteHostsOverlayAction::Cancelled
             | RemoteHostsOverlayAction::Open { .. }
             | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected a shortcut action"),
         }
-        match overlay.menu_action(&host, None, RowMenuChoice::Open(RemoteConnectMode::Vnc)) {
+        match overlay.menu_action(
+            &host,
+            QueryOverrides::default(),
+            RowMenuChoice::Open(RemoteConnectMode::Vnc),
+        ) {
             RemoteHostsOverlayAction::Open { mode, destination, .. } => {
                 assert_eq!(
                     mode,

@@ -13,6 +13,7 @@ use crate::remote_hosts_overlay::{
     RemoteHostsOverlay, RemoteHostsOverlayAction, RemoteHostsOverlayInputs, WorkspaceOption,
 };
 
+use self::launch::RemoteLaunch;
 use super::HorizonApp;
 
 const DEFAULT_REMOTE_HOSTS_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
@@ -67,9 +68,16 @@ impl HorizonApp {
                 connection,
                 mode,
                 destination,
+                vnc_port,
             } => {
                 self.dismiss_remote_hosts_overlay(ctx);
-                self.open_remote_host(ctx, label, connection, mode, &destination);
+                let launch = RemoteLaunch {
+                    label,
+                    connection,
+                    mode,
+                    vnc_port,
+                };
+                self.open_remote_host(ctx, launch, &destination);
             }
             RemoteHostsOverlayAction::SetDefaultWorkspace(name) => {
                 let notice = if self.set_remote_hosts_default_workspace(&name) {
@@ -87,8 +95,15 @@ impl HorizonApp {
                 label,
                 connection,
                 mode,
+                vnc_port,
             } => {
-                let notice = match self.save_remote_host_shortcut(&label, connection, mode) {
+                let launch = RemoteLaunch {
+                    label,
+                    connection,
+                    mode,
+                    vnc_port,
+                };
+                let notice = match self.save_remote_host_shortcut(launch) {
                     Some(name) => format!("Saved preset \"{name}\""),
                     None if self.settings_has_unsaved_edits() => "Save or discard the Settings edits first".to_string(),
                     None => "Could not save the shortcut; see the log".to_string(),
