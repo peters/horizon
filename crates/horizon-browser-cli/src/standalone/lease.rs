@@ -399,19 +399,15 @@ fn process_start_identity(pid: u32) -> Option<String> {
 
 /// Compare a live process identity with the one stored on a lease.
 ///
-/// PowerShell `ToString('o')` values were written before the numeric identity.
-/// A live pid carrying that older string is not evidence the pid was reused.
+/// A different creation time means the pid was reused. Callers signal only a
+/// current host, so the mismatched lease is pruned and the new process is left
+/// alone.
 fn liveness_from_identity(current: Option<&str>, stored: &str) -> HostLiveness {
     match current {
         Some(identity) if identity == stored => HostLiveness::Current,
-        Some(_) if is_legacy_powershell_identity(stored) => HostLiveness::Unknown,
         Some(_) => HostLiveness::Stale,
         None => HostLiveness::Unknown,
     }
-}
-
-fn is_legacy_powershell_identity(identity: &str) -> bool {
-    identity.contains('T')
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -441,24 +437,7 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 fn platform_process_start_identity(pid: u32) -> Option<String> {
-    let started = windows_process(pid)?.start_secs;
-    (started > 0).then(|| started.to_string())
-}
-
-#[cfg(windows)]
-struct WindowsProcess {
-    start_secs: u64,
-}
-
-#[cfg(windows)]
-fn windows_process(pid: u32) -> Option<WindowsProcess> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut system = System::new();
-    let pid = Pid::from_u32(pid);
-    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
-    Some(WindowsProcess {
-        start_secs: system.process(pid)?.start_time(),
-    })
+    horizon_process_time::process_creation_identity(pid)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -507,7 +486,7 @@ fn pid_probe(pid: u32) -> PidProbe {
     }
     #[cfg(windows)]
     {
-        if windows_process(pid).is_some() {
+        if horizon_process_time::process_creation_identity(pid).is_some() {
             PidProbe::Alive
         } else {
             PidProbe::Dead
@@ -583,20 +562,19 @@ mod tests {
     }
 
     #[test]
-    fn powershell_round_trip_identity_is_not_treated_as_pid_reuse() {
+    fn a_different_creation_time_is_not_the_same_host() {
         assert_eq!(
-            liveness_from_identity(Some("1700000000"), "2026-09-23T05:18:26.1234567Z"),
-            HostLiveness::Unknown
-        );
-        assert_eq!(
-            liveness_from_identity(Some("1700000000"), "1700000000"),
+            liveness_from_identity(Some("2026-09-23T05:18:26.2182731Z"), "2026-09-23T05:18:26.2182731Z"),
             HostLiveness::Current
         );
         assert_eq!(
-            liveness_from_identity(Some("1700000001"), "1700000000"),
+            liveness_from_identity(Some("2026-09-23T05:18:26.9000000Z"), "2026-09-23T05:18:26.2182731Z"),
             HostLiveness::Stale
         );
-        assert_eq!(liveness_from_identity(None, "1700000000"), HostLiveness::Unknown);
+        assert_eq!(
+            liveness_from_identity(None, "2026-09-23T05:18:26.2182731Z"),
+            HostLiveness::Unknown
+        );
     }
 
     #[test]

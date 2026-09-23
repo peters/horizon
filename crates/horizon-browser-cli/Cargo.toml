@@ -33,4 +33,4 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-sysinfo.workspace = true
+horizon-process-time.workspace = true
