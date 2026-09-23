@@ -188,6 +188,8 @@ impl InputState {
     /// Release everything still held when the viewer loses capture, so the
     /// desktop is not left with a stuck modifier or mouse button.
     pub(super) fn release_all(&mut self) -> Vec<X11Event> {
+        // A partial wheel gesture must not carry into the next capture.
+        self.scroll_remainder = egui::Vec2::ZERO;
         let mut events = Vec::new();
         for keysym in self.held_keys.drain(..) {
             events.push(key(keysym, false));
@@ -409,6 +411,12 @@ mod tests {
         assert!(
             state.scroll(egui::Vec2::ZERO).is_empty(),
             "the excess beyond the cap is dropped"
+        );
+        assert!(state.scroll(egui::vec2(0.0, 20.0)).is_empty());
+        state.release_all();
+        assert!(
+            state.scroll(egui::vec2(0.0, 20.0)).is_empty(),
+            "a partial gesture does not carry across the end of capture"
         );
     }
 

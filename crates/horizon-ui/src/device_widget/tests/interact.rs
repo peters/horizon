@@ -420,3 +420,42 @@ fn a_discarded_pass_does_not_send_its_input_twice() {
     );
     assert_eq!(keys(&sent), vec![(u32::from('a'), true), (u32::from('a'), false)]);
 }
+
+#[test]
+fn a_fast_drag_that_ends_outside_the_image_keeps_its_press_and_release() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let start = image_rect(&output).center();
+    let outside = egui::Pos2::new(SCREEN.x - 4.0, SCREEN.y - 4.0);
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(start)]);
+    drain(&mut receiver);
+    // Press on the image, drag off it and release, all before one repaint.
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerMoved(outside),
+            egui::Event::PointerButton {
+                pos: outside,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let sent = pointers(&drain(&mut receiver));
+    assert!(sent.contains(&(80, 40, 1)), "the press reached the desktop: {sent:?}");
+    assert_eq!(
+        sent.last().map(|(_, _, buttons)| *buttons),
+        Some(0),
+        "and so did its release: {sent:?}"
+    );
+}

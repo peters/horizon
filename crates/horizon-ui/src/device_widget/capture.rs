@@ -80,13 +80,27 @@ impl DeviceUiState {
             let local = from_global.map_or(pos, |transform| transform * pos);
             desktop_point(response.rect, layout, local)
         };
+        // Whether egui gave this frame's pointer gesture to the image, the same
+        // test the browser panel uses.
+        let owns_pointer = response.contains_pointer()
+            || response.is_pointer_button_down_on()
+            || response.drag_started()
+            || response.dragged()
+            || response.interact_pointer_pos().is_some();
+        // egui judges a gesture by where the pointer ended the frame, so a
+        // press that left the image before the repaint is decided by the
+        // layer on top at the press position instead: this panel's layer, not
+        // a popup, modal or overlapping panel.
+        let this_layer = ui.layer_id();
+        let on_top_at =
+            |global: egui::Pos2| ui.ctx().layer_id_at(global).unwrap_or_else(egui::LayerId::background) == this_layer;
         let mut events = Vec::new();
         for event in pointer_events {
             match event {
                 egui::Event::PointerMoved(pos) => {
                     // Over the image only while egui routes the pointer here, so
                     // hovering a popup or panel on top does not move the desktop.
-                    let inside = mapped(pos).filter(|_| response.hovered());
+                    let inside = mapped(pos).filter(|_| owns_pointer);
                     if inside.is_some() || self.input.buttons() != 0 {
                         let buttons = self.input.buttons();
                         events.extend(self.input.pointer(inside, buttons));
@@ -101,7 +115,7 @@ impl DeviceUiState {
                     let inside = mapped(pos);
                     // Presses start on the image and only when no other layer
                     // or widget is on top of it; releases end a drag anywhere.
-                    let press = pressed && inside.is_some() && response.hovered();
+                    let press = pressed && inside.is_some() && (owns_pointer || on_top_at(pos));
                     if press || (!pressed && self.input.buttons() & bit != 0) {
                         let buttons = if pressed {
                             self.input.buttons() | bit

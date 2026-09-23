@@ -49,7 +49,7 @@ Must include:
   KeyEvent and PointerEvent before the next FramebufferUpdateRequest (fails
   when the worker's forwarding is replaced by a sleep).
 
-Status: **PASS** (2026-09-23, Linux x64; 56 `device_widget` tests).
+Status: **PASS** (2026-09-23, Linux x64; 57 `device_widget` tests).
 
 ## Lane B — live viewer on an isolated desktop (Linux)
 
@@ -111,6 +111,13 @@ lane shows direction only; the notch count per wheel line is covered by
 `scroll_travel_becomes_clicks_of_the_wheel_buttons` and
 `a_discarded_pass_does_not_send_its_input_twice`, which drive real egui wheel
 events.
+
+Fourth review-round rerun (press ownership by the top layer at the press
+position, scroll remainder cleared on release): read-only logged nothing; a
+click, a drag released outside the Horizon viewer, and a second click each
+logged a `ButtonPress`/`ButtonRelease` pair at `root:(514,336)` with no button
+left held; typed `ok` arrived. Lane A adds
+`a_fast_drag_that_ends_outside_the_image_keeps_its_press_and_release`.
 
 ## Not covered
 
