@@ -1,5 +1,5 @@
 //! Saving a discovered host as a preset, so any workspace can add it later.
-use horizon_core::{PanelKind, PanelResume, PresetConfig, RemoteHostsConfig, SshConnection};
+use horizon_core::{Config, PanelKind, PanelResume, PresetConfig, RemoteHostsConfig, SshConnection};
 
 use crate::app::HorizonApp;
 use crate::remote_hosts_overlay::RemoteConnectMode;
@@ -41,16 +41,41 @@ impl HorizonApp {
         }
         let preset = remote_host_shortcut(label, connection, mode, &self.template_config.remote_hosts);
         let name = preset.name.clone();
-        let saved = self.persist_config_change("presets", None, |config| {
-            match config
-                .presets
-                .iter_mut()
-                .find(|existing| existing.name.eq_ignore_ascii_case(&preset.name))
-            {
-                Some(existing) => *existing = preset,
-                None => config.presets.push(preset),
+        // Stage the change against the file as it is now, so an edit made
+        // since the last reload survives; an unreadable or invalid file is
+        // left alone, and only an absent file is written from memory.
+        let staged = match std::fs::read_to_string(&self.config_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                tracing::warn!(%error, path = %self.config_path.display(), "config file unreadable; shortcut not saved");
+                return None;
             }
+            Ok(source) => {
+                let staged = Config::from_yaml(&source).ok().and_then(|mut on_disk| {
+                    upsert_preset(&mut on_disk.presets, preset.clone());
+                    on_disk.to_yaml().ok()
+                });
+                let Some(staged) = staged else {
+                    tracing::warn!(path = %self.config_path.display(), "config file cannot be updated; shortcut not saved");
+                    return None;
+                };
+                Some(staged)
+            }
+        };
+        let saved = self.persist_config_change("presets", staged, |config| {
+            upsert_preset(&mut config.presets, preset);
         });
         saved.then_some(name)
+    }
+}
+
+/// Replace the preset with the same name (case-insensitively) or append.
+fn upsert_preset(presets: &mut Vec<PresetConfig>, preset: PresetConfig) {
+    match presets
+        .iter_mut()
+        .find(|existing| existing.name.eq_ignore_ascii_case(&preset.name))
+    {
+        Some(existing) => *existing = preset,
+        None => presets.push(preset),
     }
 }
