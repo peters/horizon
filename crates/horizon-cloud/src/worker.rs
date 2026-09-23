@@ -1,5 +1,5 @@
 //! Portable worker lifecycle. The caller durably persists `CreateState` before I/O.
-use crate::{Profile, valid_id, valid_image};
+use crate::{Profile, Reason, valid_id, valid_image};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -307,12 +307,12 @@ pub enum CloudError {
     Cancelled,
     #[error("Provider transport failed; reconcile before retrying")]
     Transport,
-    #[error("Provider returned HTTP {0}")]
-    Http(u16),
+    #[error("Provider returned HTTP {0}{reason}", reason = .1.suffix())]
+    Http(u16, Reason),
     #[error("Provider authentication failed; check the machine-local credential")]
     Unauthorized,
-    #[error("Provider rejected the request or capacity is unavailable")]
-    Rejected,
+    #[error("Provider rejected the request or capacity is unavailable{reason}", reason = .0.suffix())]
+    Rejected(Reason),
     #[error("Provider response is invalid")]
     InvalidResponse,
     #[error("Worker creation is unresolved; no second allocation was attempted")]

@@ -1,7 +1,10 @@
 //! `RunPod` REST adapter. Never repeats a create request after an uncertain response.
-use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Worker, WorkerSpec, valid_id};
+use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Reason, Worker, WorkerSpec, valid_id};
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{io::Read, time::Duration};
+
+/// Larger error bodies are not provider explanations worth parsing.
+const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 
 pub mod flavors;
 pub mod recovery;
@@ -125,7 +128,7 @@ impl RunPod {
         }
         let value = match self.request("POST", "/pods", Some(body), cancel) {
             Ok(value) => value,
-            Err(error @ (CloudError::Unauthorized | CloudError::Rejected | CloudError::Cancelled)) => {
+            Err(error @ (CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled)) => {
                 persist(&CreateState::Prepared)?;
                 *state = CreateState::Prepared;
                 return Err(error);
@@ -139,7 +142,7 @@ impl RunPod {
         Ok(worker)
     }
     /// # Errors
-    /// Returns transport, authentication or response errors without response-body contents.
+    /// Returns transport, authentication or response errors; failures carry at most a sanitized provider reason.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
         serde_json::from_value(self.request(
             "GET",
@@ -184,7 +187,7 @@ impl RunPod {
             cancel,
             timeout,
         ) {
-            Err(CloudError::Http(404)) => Ok(None),
+            Err(CloudError::Http(404, _)) => Ok(None),
             result => {
                 let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
                 if worker.id != id {
@@ -212,7 +215,7 @@ impl RunPod {
         if let Some(worker) = self.inspect(&id, cancel)? {
             worker.verify(spec)?;
             match self.request("DELETE", &format!("/pods/{id}"), None, cancel) {
-                Ok(_) | Err(CloudError::Http(404)) => {}
+                Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(e) => return Err(e),
             }
             if self.inspect(&id, cancel)?.is_some() {
@@ -291,8 +294,8 @@ impl RunPod {
             204 => return Ok(Value::Null),
             200..=299 => {}
             401 | 403 => return Err(CloudError::Unauthorized),
-            400 | 422 => return Err(CloudError::Rejected),
-            _ => return Err(CloudError::Http(status)),
+            400 | 422 => return Err(CloudError::Rejected(self.failure_reason(&mut response))),
+            _ => return Err(CloudError::Http(status, self.failure_reason(&mut response))),
         }
         if method == "DELETE" || url.ends_with("/stop") || url.ends_with("/start") {
             return Ok(Value::Null);
@@ -303,6 +306,19 @@ impl RunPod {
             .limit(4 * 1024 * 1024)
             .read_json()
             .map_err(|_| CloudError::InvalidResponse)
+    }
+    /// A failed or oversized read yields no reason rather than masking the status.
+    fn failure_reason(&self, response: &mut ureq::http::Response<ureq::Body>) -> Reason {
+        let mut body = Vec::new();
+        let read = response
+            .body_mut()
+            .as_reader()
+            .take(FAILURE_BODY_LIMIT + 1)
+            .read_to_end(&mut body);
+        if read.is_err() || body.len() as u64 > FAILURE_BODY_LIMIT {
+            return Reason::default();
+        }
+        Reason::from_body(&body, self.credential.value())
     }
 }
 fn bind(

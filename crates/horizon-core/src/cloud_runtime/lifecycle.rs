@@ -119,7 +119,7 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
         if matches!(
             error,
             horizon_cloud::CloudError::Unauthorized
-                | horizon_cloud::CloudError::Rejected
+                | horizon_cloud::CloudError::Rejected(_)
                 | horizon_cloud::CloudError::Cancelled
         ) {
             (state.stop_requested, state.stage) = previous;

@@ -160,7 +160,7 @@ impl RunPod {
             cancel,
         );
         let value = match response {
-            Err(error @ (CloudError::Unauthorized | CloudError::Rejected | CloudError::Cancelled)) => {
+            Err(error @ (CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled)) => {
                 transition(state, State::Prepared, &mut persist)?;
                 return Err(error);
             }
@@ -203,7 +203,7 @@ impl RunPod {
             }
             transition(state, State::Deleting { volume: volume.clone() }, &mut persist)?;
             match self.request("DELETE", &format!("/networkvolumes/{}", volume.id), None, cancel) {
-                Ok(_) | Err(CloudError::Http(404)) => {}
+                Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(error) => return Err(error),
             }
             if self.inspect_volume(&volume.id, cancel)?.is_some() {
@@ -266,7 +266,7 @@ impl RunPod {
             }
             let url = format!("{}/pods/{}", self.api_endpoint, worker.id);
             let value = match self.request_url("GET", &url, None, cancel, None) {
-                Err(CloudError::Http(404)) => {
+                Err(CloudError::Http(404, _)) => {
                     if self.inspect(&worker.id, cancel)?.is_some() {
                         return Err(CloudError::Invalid(
                             "Worker mount inspection is unavailable; retry storage cleanup",
@@ -301,7 +301,7 @@ impl RunPod {
             return Err(CloudError::Invalid("Invalid workspace volume ID"));
         }
         match self.request("GET", &format!("/networkvolumes/{id}"), None, cancel) {
-            Err(CloudError::Http(404)) => Ok(None),
+            Err(CloudError::Http(404, _)) => Ok(None),
             result => {
                 let volume: Volume = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
                 if volume.id != id {
