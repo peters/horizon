@@ -189,6 +189,22 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
     );
 }
 
+#[test]
+fn setting_the_default_workspace_patches_the_file_text_in_place() {
+    let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
+    let source = "version: 11 # keep this comment\nremote_hosts:\n  vnc_port: 5901 # and this one\n  future_key: true\nworkspaces: []\n";
+    std::fs::write(&app.config_path, source).unwrap();
+
+    assert!(app.set_remote_hosts_default_workspace("Ops"));
+
+    let saved = std::fs::read_to_string(&app.config_path).unwrap();
+    assert_eq!(
+        saved,
+        "version: 11 # keep this comment\nremote_hosts:\n  default_workspace: Ops\n  vnc_port: 5901 # and this one\n  future_key: true\nworkspaces: []\n"
+    );
+    assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
+}
+
 mod picker_in_full_app {
     use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, SshConnection};
 

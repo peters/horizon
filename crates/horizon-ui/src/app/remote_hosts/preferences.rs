@@ -14,7 +14,15 @@ impl HorizonApp {
         if self.template_config.remote_hosts.default_workspace_name() == name {
             return true;
         }
-        self.persist_config_change("remote_hosts.default_workspace", |config| {
+        // Patch the one key in the file's own text when it can be read and
+        // parsed, so comments, ordering and unknown keys survive; a missing or
+        // unparsable file is written from the config instead.
+        let patched = std::fs::read_to_string(&self.config_path)
+            .ok()
+            .filter(|source| Config::from_yaml(source).is_ok())
+            .and_then(|source| horizon_core::patch_default_workspace_source(&source, name))
+            .filter(|patched| Config::from_yaml(patched).is_ok());
+        self.persist_config_change("remote_hosts.default_workspace", patched, |config| {
             config.remote_hosts.default_workspace = name.to_string();
         })
     }
@@ -32,14 +40,23 @@ impl HorizonApp {
     /// while the editor holds unsaved edits, since it re-applies its draft
     /// every frame and a later Save would overwrite the file with it; an open
     /// editor without edits is moved onto the new text instead.
-    fn persist_config_change(&mut self, what: &str, mutate: impl FnOnce(&mut Config)) -> bool {
+    ///
+    /// `source_text` is the file's own text with only the change applied;
+    /// when given it is what gets written, otherwise the mutated config is
+    /// serialized (the same canonical form migrations write).
+    pub(in crate::app) fn persist_config_change(
+        &mut self,
+        what: &str,
+        source_text: Option<String>,
+        mutate: impl FnOnce(&mut Config),
+    ) -> bool {
         if self.settings_has_unsaved_edits() {
             tracing::warn!(setting = what, "config change refused while Settings has unsaved edits");
             return false;
         }
         let mut config = self.template_config.clone();
         mutate(&mut config);
-        let written = config.to_yaml().and_then(|yaml| {
+        let written = source_text.map_or_else(|| config.to_yaml(), Ok).and_then(|yaml| {
             atomic_write(&self.config_path, &yaml)
                 .map(|()| yaml)
                 .map_err(|error| horizon_core::Error::Config(error.to_string()))

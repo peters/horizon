@@ -44,6 +44,64 @@ impl RemoteHostsConfig {
     }
 }
 
+/// Rewrite only `remote_hosts.default_workspace` in config source text,
+/// leaving comments, ordering and unknown keys alone. Returns `None` when
+/// the text cannot be patched safely (a non-block `remote_hosts` value), in
+/// which case the caller falls back to serializing the config.
+#[must_use]
+pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String> {
+    let value = serde_yaml::to_string(&name).ok()?;
+    let value = value.trim_end_matches('\n').trim_start_matches("--- ").to_string();
+    let key_line = format!("  default_workspace: {value}");
+    let lines: Vec<&str> = source.lines().collect();
+    let block = lines.iter().position(|line| {
+        let trimmed = line.trim_end();
+        trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
+    });
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 2);
+    match block {
+        None => {
+            if lines
+                .iter()
+                .any(|line| line.starts_with("remote_hosts:") && !line.trim_end().ends_with(':'))
+            {
+                return None;
+            }
+            out.extend(lines.iter().map(|line| (*line).to_string()));
+            out.push("remote_hosts:".to_string());
+            out.push(key_line);
+        }
+        Some(start) => {
+            let end = lines[start + 1..]
+                .iter()
+                .position(|line| !line.is_empty() && !line.starts_with(' ') && !line.starts_with('#'))
+                .map_or(lines.len(), |offset| start + 1 + offset);
+            let mut replaced = false;
+            for (index, line) in lines.iter().enumerate() {
+                if index > start && index < end && line.trim_start().starts_with("default_workspace:") {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    out.push(format!("{indent}default_workspace: {value}"));
+                    replaced = true;
+                } else {
+                    out.push((*line).to_string());
+                }
+                if index == start
+                    && !replaced
+                    && !lines[start + 1..end]
+                        .iter()
+                        .any(|line| line.trim_start().starts_with("default_workspace:"))
+                {
+                    out.push(key_line.clone());
+                    replaced = true;
+                }
+            }
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    Some(text)
+}
+
 impl Default for RemoteHostsConfig {
     fn default() -> Self {
         Self {
@@ -86,6 +144,45 @@ mod tests {
         assert!(error.to_string().contains("remote_hosts.default_workspace"));
         let error = Config::from_yaml("version: 11\nremote_hosts:\n  vnc_port: 0\n").unwrap_err();
         assert!(error.to_string().contains("remote_hosts.vnc_port"));
+    }
+
+    #[test]
+    fn patching_the_default_workspace_keeps_comments_and_unknown_keys() {
+        let source = "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Remote Sessions\n  vnc_port: 5901\n  future_key: true\npresets: []\n";
+        let patched = super::patch_default_workspace_source(source, "Ops").unwrap();
+        assert_eq!(
+            patched,
+            "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Ops\n  vnc_port: 5901\n  future_key: true\npresets: []\n"
+        );
+        assert_eq!(
+            Config::from_yaml(&patched)
+                .unwrap()
+                .remote_hosts
+                .default_workspace_name(),
+            "Ops"
+        );
+
+        let without_key = "remote_hosts:\n  vnc_port: 5901\nworkspaces: []\n";
+        assert_eq!(
+            super::patch_default_workspace_source(without_key, "Ops: lab").unwrap(),
+            "remote_hosts:\n  default_workspace: 'Ops: lab'\n  vnc_port: 5901\nworkspaces: []\n"
+        );
+
+        let without_section = "version: 11\nworkspaces: [] # none\n";
+        let patched = super::patch_default_workspace_source(without_section, "Ops").unwrap();
+        assert_eq!(
+            patched,
+            "version: 11\nworkspaces: [] # none\nremote_hosts:\n  default_workspace: Ops\n"
+        );
+        assert_eq!(
+            Config::from_yaml(&patched)
+                .unwrap()
+                .remote_hosts
+                .default_workspace_name(),
+            "Ops"
+        );
+
+        assert_eq!(super::patch_default_workspace_source("remote_hosts: {}\n", "Ops"), None);
     }
 
     #[test]

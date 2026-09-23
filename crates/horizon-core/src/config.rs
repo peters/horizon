@@ -20,7 +20,7 @@ pub(crate) use presets::{
     insert_missing_browser_preset, insert_missing_gemini_presets, insert_missing_grok_presets,
     insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
-pub use remote_hosts::RemoteHostsConfig;
+pub use remote_hosts::{RemoteHostsConfig, patch_default_workspace_source};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
