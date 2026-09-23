@@ -161,6 +161,17 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
     }
     assert!(app.settings_has_unsaved_edits());
     assert!(!app.set_remote_hosts_default_workspace("Ops"));
+    // A draft that already says the new name must not count as persisted.
+    if let Some(editor) = app.settings.as_mut() {
+        editor.buffer = editor
+            .original
+            .replace("default_workspace: Remote Sessions", "default_workspace: Ops");
+    }
+    assert!(app.settings_has_unsaved_edits());
+    assert!(!app.set_remote_hosts_default_workspace("Ops"));
+    if let Some(editor) = app.settings.as_mut() {
+        editor.buffer.push_str("\n# draft\n");
+    }
     assert_eq!(
         app.template_config.remote_hosts.default_workspace_name(),
         "Remote Sessions"

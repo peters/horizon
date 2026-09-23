@@ -102,15 +102,28 @@ fn is_direct_key(line: &str, key: &str) -> bool {
         .is_some_and(|rest| !rest.starts_with(' ') && rest.starts_with(key) && rest[key.len()..].starts_with(':'))
 }
 
-/// The trailing ` # comment` of a scalar line, or nothing. Quoted scalars
-/// are skipped with YAML's escapes in mind: `\"` inside double quotes and a
-/// doubled `''` inside single quotes do not end the quote.
+/// The trailing ` # comment` of a `key: value` line, or nothing. Quote
+/// semantics apply only when the value itself starts with a quote; a plain
+/// scalar such as `Bob's Ops` has no delimiters. Inside a quoted value,
+/// `\"` (double quotes) and a doubled `''` (single quotes) do not end it.
 fn inline_comment(line: &str) -> &str {
-    let mut in_quote = None;
-    let mut chars = line.char_indices().peekable();
+    let value_start = line.find(':').map_or(0, |colon| {
+        colon + 1 + line[colon + 1..].len() - line[colon + 1..].trim_start().len()
+    });
+    let mut chars = line
+        .char_indices()
+        .skip_while(|(index, _)| *index < value_start)
+        .peekable();
+    let mut in_quote = match chars.peek() {
+        Some((_, quote @ ('"' | '\''))) => {
+            let quote = *quote;
+            chars.next();
+            Some(quote)
+        }
+        _ => None,
+    };
     while let Some((index, character)) = chars.next() {
         match (character, in_quote) {
-            ('"' | '\'', None) => in_quote = Some(character),
             ('\\', Some('"')) => {
                 chars.next();
             }
@@ -220,6 +233,12 @@ mod tests {
             "a doubled single quote does not end the scalar"
         );
         assert_eq!(super::inline_comment("  default_workspace: \"open # not"), "");
+        assert_eq!(
+            super::inline_comment("  default_workspace: Bob's Ops # keep"),
+            " # keep",
+            "an apostrophe in a plain scalar is not a delimiter"
+        );
+        assert_eq!(super::inline_comment("  default_workspace: it's#not # yes"), " # yes");
     }
 
     #[test]

@@ -144,7 +144,12 @@ struct KeyPresses {
 }
 
 impl KeyPresses {
-    fn record(&mut self, key: egui::Key, alt: bool) {
+    /// A held Tab must not flip the mode on every auto-repeat; the arrows keep
+    /// repeating so a held key keeps moving.
+    fn record(&mut self, key: egui::Key, alt: bool, repeat: bool) {
+        if repeat && key == egui::Key::Tab {
+            return;
+        }
         match (key, alt) {
             (egui::Key::ArrowUp, false) => self.up = true,
             (egui::Key::ArrowDown, false) => self.down = true,
@@ -510,11 +515,12 @@ impl RemoteHostsOverlay {
                 if let egui::Event::Key {
                     key,
                     pressed: true,
+                    repeat,
                     modifiers,
                     ..
                 } = event
                 {
-                    keys.record(*key, *modifiers == egui::Modifiers::ALT);
+                    keys.record(*key, *modifiers == egui::Modifiers::ALT, *repeat);
                 }
             }
         });
@@ -656,8 +662,8 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction, RemoteHostsOverlayInputs,
-        WorkspaceChoice, WorkspaceOption,
+        KeyPresses, NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction,
+        RemoteHostsOverlayInputs, WorkspaceChoice, WorkspaceOption,
     };
     use crate::test_egui::DiscardTextures;
 
@@ -987,6 +993,20 @@ mod tests {
             .expect("the process started more than eight seconds ago");
         overlay.notice = Some(("stale".into(), stale));
         assert_eq!(overlay.current_notice(), None);
+    }
+
+    #[test]
+    fn a_held_tab_toggles_the_mode_once() {
+        let mut keys = KeyPresses::default();
+        keys.record(egui::Key::Tab, false, false);
+        keys.record(egui::Key::Tab, false, true);
+        keys.record(egui::Key::Tab, false, true);
+        assert!(keys.tab);
+        let mut repeats_only = KeyPresses::default();
+        repeats_only.record(egui::Key::Tab, false, true);
+        assert!(!repeats_only.tab, "an auto-repeat alone never toggles");
+        repeats_only.record(egui::Key::ArrowDown, false, true);
+        assert!(repeats_only.down, "arrows keep repeating");
     }
 
     #[test]

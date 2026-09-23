@@ -11,6 +11,12 @@ impl HorizonApp {
         if name.is_empty() {
             return false;
         }
+        // With unsaved Settings edits the live config may already say `name`
+        // without the file doing so; that is a refusal, not a success.
+        if self.settings_has_unsaved_edits() {
+            tracing::warn!("default workspace change refused while Settings has unsaved edits");
+            return false;
+        }
         if self.template_config.remote_hosts.default_workspace_name() == name {
             return true;
         }
