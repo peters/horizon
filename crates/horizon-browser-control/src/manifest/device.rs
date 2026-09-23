@@ -121,6 +121,59 @@ pub struct Diagnostics {
     #[serde(default)]
     pub last_uploaded_age_millis: Option<u64>,
     pub last_displayed_age_millis: Option<u64>,
+    /// Last completed host pass, separate from transport and actual image evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostPresentation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostViewport {
+    Root,
+    Detached,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostExclusion {
+    Hidden,
+    OtherPanelFullscreen,
+    OtherCloudFullscreen,
+    OutsideCanvas,
+    HostOverlay,
+    DetachedViewportNotRendered,
+    Unclassified,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct HostCanvas {
+    pub pan_offset: [f32; 2],
+    pub zoom: f32,
+    /// Canvas bounds [left, top, right, bottom] in viewport points.
+    pub rect: [f32; 4],
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct HostPresentation {
+    pub observed_at_millis: i64,
+    pub viewport: HostViewport,
+    /// Why the host omitted this viewer, if known. None does not prove an image.
+    pub exclusion: Option<HostExclusion>,
+    pub canvas: Option<HostCanvas>,
+    /// Navigation after panel rendering may already have changed the next view.
+    pub canvas_after_pass: Option<HostCanvas>,
+    /// Viewport-local egui pass number, not a platform presentation counter.
+    pub ui_pass: u64,
+    /// `will_discard` sampled at UI callback completion, before end-pass plugins.
+    pub discarded: bool,
+    /// Changes to the observed viewport/canvas, not an attribution to an actor.
+    pub view_revision: u64,
+    pub reveal_requests: u64,
+    /// Most recent request applied to the canvas; dispatch alone is not application.
+    pub applied_reveal_request: u64,
+    /// Current view differs from the applied reveal; moving away and back resets it.
+    /// None until both an applied reveal and a subsequent canvas observation exist.
+    pub view_changed_since_reveal: Option<bool>,
 }
 
 /// Reception, upload and completed-frame presentation evidence for one connection.
@@ -305,6 +358,7 @@ mod tests {
         }))
         .unwrap();
         assert!(diagnostics.last_uploaded_age_millis.is_none());
+        assert!(diagnostics.host.is_none());
     }
 
     #[test]

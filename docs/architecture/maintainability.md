@@ -402,6 +402,10 @@ and `app/device_requests.rs` for live board scope and ownership checks. Requests
 are host-bound; inspection is workspace-scoped and mutations require ownership.
 `device_widget` reports connection and actual clipped image presentation
 separately. Native input remains in the standalone device crate.
+`app/device_presentation.rs` captures the renderer's root/detached visibility
+context; `device_widget/host.rs` owns transient view and Reveal observations.
+Their optional shared manifest data keeps render-time and later navigation
+geometry distinct without changing view, focus, ownership or transport.
 
 ### Shared remote-provider capacity
 

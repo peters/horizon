@@ -2,6 +2,7 @@
 mod controls;
 mod details;
 mod frame;
+mod host;
 mod observation;
 mod session;
 
@@ -14,6 +15,7 @@ use session::{Session, Status};
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
     pub(crate) owner: Option<String>,
+    pub(crate) host: host::HostState,
     image: ImageDisplay,
     initialized: bool,
     rendered: bool,
@@ -43,12 +45,12 @@ struct ImageDisplay {
 }
 
 impl DeviceUiState {
-    #[cfg(test)]
     pub(crate) fn was_rendered(&self) -> bool {
         self.rendered
     }
 
     pub(crate) fn begin_frame(&mut self) {
+        self.host.begin_frame();
         self.image.previous_displayed = self.image.displayed;
         self.previous_rendered = self.rendered;
         self.image.displayed = false;
