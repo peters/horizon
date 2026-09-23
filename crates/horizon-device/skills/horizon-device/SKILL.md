@@ -25,6 +25,16 @@ desktop or forward input. The source checkout's `scripts/device-smoke/README.md`
 describes the isolated fixture; launch it with `--native-view` and use its
 `vnc_address`, not a browser URL.
 
+A VNC server on another machine's loopback is reached with optional `ssh` in
+create: `{ "host": "lab", "user": "deploy", "port": 2222 }` (user and port
+optional). `endpoint` is then the address as seen from that SSH host, typically
+`127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
+keys, so the host must already be trusted in `known_hosts` (open it over SSH
+once); never pass credentials, key paths or ssh options, and the route is
+refused if a label looks like an option. Inspect and list report `ssh` for
+tunnelled viewers, and `connection_error` carries ssh's last lines when the
+tunnel fails.
+
 When known, include optional `identity` in create: `machine_name`, `hostname`,
 `ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels
 supplied by the session creator, not verified identity. Use details for the

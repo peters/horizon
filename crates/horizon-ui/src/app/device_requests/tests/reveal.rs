@@ -8,6 +8,7 @@ fn revealing_a_hidden_viewer_does_not_create_keyboard_focus() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));
@@ -37,6 +38,7 @@ fn root_reveal_retains_focus_restored_after_cloud_fullscreen() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));
@@ -78,6 +80,7 @@ fn repeated_root_reveal_keeps_the_restore_deadline_and_latest_target() {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -141,6 +144,7 @@ fn expired_root_reveal_uses_the_available_window_geometry() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));
@@ -181,6 +185,7 @@ fn root_reveal_waits_for_smaller_restored_window() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));
@@ -232,6 +237,7 @@ fn root_reveal_leaves_cloud_fullscreen_and_survives_later_frames() {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -289,6 +295,7 @@ fn detached_reveal_preserves_root_fullscreen_and_uses_the_child_canvas() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));
@@ -338,6 +345,7 @@ fn reveal_keeps_a_distant_viewer_on_screen_at_minimum_zoom() {
         Operation::Create {
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
+            ssh: None,
         },
     );
     let initial = one(app.apply_device_request(&create, &ctx));

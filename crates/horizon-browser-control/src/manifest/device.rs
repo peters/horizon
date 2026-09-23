@@ -21,10 +21,15 @@ use crate::paths::{BrowserRuntimePaths, safe_local_id};
 pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
+        /// Numeric loopback address and nonzero port of the VNC server, as seen
+        /// from this machine or, with `ssh`, from that SSH host.
         endpoint: String,
         /// Optional labels supplied by the session creator, not verified by VNC.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         identity: Option<DeviceIdentity>,
+        /// Reach `endpoint` on another machine's loopback through `ssh -W`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh: Option<SshRoute>,
     },
     List,
     Inspect {
@@ -56,6 +61,52 @@ pub enum Connection {
     Disconnected,
 }
 
+/// An SSH host whose loopback holds the VNC server. Horizon runs `ssh -W`
+/// with the host machine's own SSH configuration and keys; the route never
+/// carries credentials, identity files or extra arguments.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SshRoute {
+    /// Host name, address or SSH config alias.
+    pub host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// SSH port; omitted means the SSH configuration's or 22.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+impl SshRoute {
+    /// Trim the labels and refuse anything `ssh` could read as an option or
+    /// that would not survive as one argument: blank, leading `-`, whitespace
+    /// or control characters, or a zero port.
+    ///
+    /// # Errors
+    /// Describes the first rejected field.
+    pub fn normalize(&mut self) -> Result<(), String> {
+        fn label(value: &str, what: &str) -> Result<String, String> {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(format!("ssh.{what} cannot be empty"));
+            }
+            if trimmed.starts_with('-') || trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return Err(format!(
+                    "ssh.{what} must be a plain host label without options or spaces"
+                ));
+            }
+            Ok(trimmed.to_owned())
+        }
+        self.host = label(&self.host, "host")?;
+        if let Some(user) = &self.user {
+            self.user = Some(label(user, "user")?);
+        }
+        if self.port == Some(0) {
+            return Err("ssh.port must be nonzero".into());
+        }
+        Ok(())
+    }
+}
+
 /// Machine details supplied by the session creator; never inferred from loopback.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -81,6 +132,9 @@ pub struct PanelState {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<DeviceIdentity>,
+    /// The SSH host `endpoint` is reached through, when tunnelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshRoute>,
     #[serde(default)]
     pub server: DeviceServerDetails,
     pub visible: bool,
@@ -348,6 +402,62 @@ fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_accepts_an_ssh_route_and_older_requests_without_one() {
+        let older: Operation =
+            serde_json::from_value(serde_json::json!({"operation":"create","endpoint":"127.0.0.1:5900"})).unwrap();
+        assert!(matches!(older, Operation::Create { ssh: None, .. }));
+        let routed: Operation = serde_json::from_value(serde_json::json!({
+            "operation":"create","endpoint":"127.0.0.1:5901",
+            "ssh":{"host":"lab","user":"deploy","port":2222}
+        }))
+        .unwrap();
+        let Operation::Create { ssh: Some(route), .. } = routed else {
+            panic!("expected a routed create")
+        };
+        assert_eq!(route.host, "lab");
+        assert_eq!(route.user.as_deref(), Some("deploy"));
+        assert_eq!(route.port, Some(2222));
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation":"create","endpoint":"127.0.0.1:5901","ssh":{"host":"lab","identity_file":"~/.ssh/id"}
+            }))
+            .is_err(),
+            "credentials and key paths are not part of the route"
+        );
+    }
+
+    #[test]
+    fn ssh_routes_are_trimmed_and_option_like_or_broken_labels_are_refused() {
+        let mut route = SshRoute {
+            host: "  lab.example  ".into(),
+            user: Some(" deploy ".into()),
+            port: Some(2222),
+        };
+        route.normalize().unwrap();
+        assert_eq!(
+            (route.host.as_str(), route.user.as_deref()),
+            ("lab.example", Some("deploy"))
+        );
+        for (host, user, port, field) in [
+            ("  ", None, None, "ssh.host cannot be empty"),
+            ("-oProxyCommand=id", None, None, "ssh.host must be"),
+            ("lab example", None, None, "ssh.host must be"),
+            ("lab\u{7}", None, None, "ssh.host must be"),
+            ("lab", Some("-l root"), None, "ssh.user must be"),
+            ("lab", Some(" "), None, "ssh.user cannot be empty"),
+            ("lab", None, Some(0), "ssh.port must be nonzero"),
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                user: user.map(str::to_owned),
+                port,
+            };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{host:?} {user:?} {port:?}: {error}");
+        }
+    }
 
     #[test]
     fn older_diagnostics_do_not_imply_a_texture_upload_time() {
