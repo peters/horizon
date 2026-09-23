@@ -267,6 +267,8 @@ impl HorizonApp {
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
         self.retire_pending_browser_closes_for_shutdown();
+        // The switch overlay hides every viewer until the old board is gone.
+        self.abandon_device_reveals("Device panel closed by a session switch");
         self.pending_session_switch = Some(PendingSessionSwitch {
             shutdown_progress: self.board.begin_async_shutdown(),
             target: Some(session.clone()),

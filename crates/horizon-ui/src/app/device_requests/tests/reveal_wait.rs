@@ -184,6 +184,12 @@ fn a_discarded_pass_is_not_presentation_evidence() {
         frame(&ctx, &mut app);
         let state = app.panel_render_caches.device_ui_state.get_mut(&id).unwrap();
         state.host.finish(None, true, 0, true);
+        state.finish_frame();
+        let inspected = app.device_observation(id, "any").unwrap();
+        assert!(
+            !inspected.image.image_displayed,
+            "inspection does not report a discarded pass"
+        );
         assert!(
             settled(&mut app, Instant::now()).is_empty(),
             "egui discarded the pass that drew the viewer"

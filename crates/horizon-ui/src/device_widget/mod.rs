@@ -75,8 +75,7 @@ impl DeviceUiState {
 
     pub(crate) fn begin_frame(&mut self) {
         self.host.begin_frame();
-        self.image.previous_displayed = self.image.displayed;
-        self.previous_rendered = self.rendered;
+        self.commit_pass();
         self.image.displayed = false;
         self.rendered = false;
     }
@@ -93,7 +92,13 @@ impl DeviceUiState {
         }
         // Observations between passes (request pump, held reveals) describe
         // this completed pass rather than the one before it.
-        self.image.previous_displayed = self.image.displayed;
+        self.commit_pass();
+    }
+
+    /// A pass its viewport discarded was never presented, so it cannot be
+    /// display evidence for inspection or a held reveal.
+    fn commit_pass(&mut self) {
+        self.image.previous_displayed = self.image.displayed && !self.host.last_pass_discarded();
         self.previous_rendered = self.rendered;
     }
 

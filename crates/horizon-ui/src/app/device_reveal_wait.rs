@@ -62,8 +62,8 @@ impl HorizonApp {
         if panels.iter().any(|panel| !awaits_frames(&panel.connection)) {
             return Some(outcome);
         }
-        // A closing host answers now; it will not draw the viewer again.
-        if self.shutdown_progress.is_some() {
+        // A closing or switching host answers now; it will not draw the viewer.
+        if self.shutdown_progress.is_some() || self.pending_session_switch.is_some() {
             return Some(outcome);
         }
         let Some(id) = self.board.panel_id_by_local_id(panel_id) else {
