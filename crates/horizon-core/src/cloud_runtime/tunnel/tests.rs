@@ -1,8 +1,8 @@
 use super::*;
-use std::{
-    io::Write,
-    sync::{Arc, atomic::Ordering},
-};
+use std::io::Write;
+
+#[cfg(unix)]
+use std::sync::{Arc, atomic::Ordering};
 
 #[test]
 fn silent_and_trickled_banners_share_one_deadline() {
