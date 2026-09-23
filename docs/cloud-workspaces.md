@@ -145,7 +145,11 @@ storage contract. Unexpected volume identities, locations or capacities block
 readiness. CPU mount verification uses the current provider API because the legacy
 worker response omits CPU network attachments. Deletion checks current mounts on
 all listed workers before removing storage. Network storage remains billable when the worker is stopped or deleted;
-explicit cloud deletion removes the worker first, then confirms volume deletion.
+explicit cloud deletion removes the worker first, then confirms deletion of the
+volume allocated and tracked by this cloud. Separately attached network volumes
+are not adopted or deleted: their files and credentials remain, and their storage
+charges continue. Cleanup messages preserve that distinction even for older
+records whose worker attachment details are no longer available.
 Failed cleanup keeps the cloud available for retry and prevents local removal.
 Allocation and deletion are journaled so uncertain responses never create a second
 volume or adopt an unrelated one. The worker remains allocated and bound to its original operation for

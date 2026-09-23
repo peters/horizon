@@ -141,7 +141,13 @@ impl RunPod {
     /// # Errors
     /// Returns transport, authentication or response errors without response-body contents.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
-        serde_json::from_value(self.request("GET", "/pods", None, cancel)?).map_err(|_| CloudError::InvalidResponse)
+        serde_json::from_value(self.request(
+            "GET",
+            "/pods?includeNetworkVolume=true&includeWorkers=true",
+            None,
+            cancel,
+        )?)
+        .map_err(|_| CloudError::InvalidResponse)
     }
     /// # Errors
     /// Rejects invalid IDs and provider failures. HTTP 404 is a missing worker.
@@ -171,7 +177,13 @@ impl RunPod {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid worker ID"));
         }
-        match self.request_with_timeout("GET", &format!("/pods/{id}"), None, cancel, timeout) {
+        match self.request_with_timeout(
+            "GET",
+            &format!("/pods/{id}?includeNetworkVolume=true"),
+            None,
+            cancel,
+            timeout,
+        ) {
             Err(CloudError::Http(404)) => Ok(None),
             result => {
                 let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
