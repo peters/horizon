@@ -1,3 +1,4 @@
+mod controls;
 mod layout;
 mod paint;
 mod query;
@@ -5,28 +6,162 @@ mod query;
 use std::time::{Duration, Instant};
 
 use egui::{
-    Align, Color32, Context, CornerRadius, FontId, Id, Layout, Margin, Order, Rect, RichText, ScrollArea, Sense,
-    Stroke, StrokeKind, UiBuilder, Vec2,
+    Align, Color32, Context, CornerRadius, EventFilter, FontId, Id, Layout, Margin, Order, Rect, RichText, ScrollArea,
+    Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
-use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostConnectionSummary, SshConnection};
+use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostConnectionSummary, SshConnection, WorkspaceId};
 
-use self::layout::{Columns, INPUT_HEIGHT, OverlayLayout, columns, current_epoch_secs, overlay_layout};
+use self::controls::{
+    DestinationEntry, DestinationPickerAction, cycle_destination, destination_entries, normalize_destination,
+    render_destination_picker, render_mode_toggle,
+};
+use self::layout::{
+    Columns, DESTINATION_ROW_HEIGHT, INPUT_HEIGHT, OverlayLayout, columns, current_epoch_secs, overlay_layout,
+};
 use self::paint::{HostRowRenderContext, paint_empty, render_column_headers, render_host_details, render_host_row};
 use self::query::{connect_action, filtered_indices, parse_user_prefix};
 use crate::command_palette::render::paint_card;
 use crate::theme;
+
+const NOTICE_DURATION: Duration = Duration::from_secs(4);
 
 pub struct RemoteHostsOverlay {
     query: String,
     selected: usize,
     expanded_host: Option<ExpandedHostId>,
     opened_at: Instant,
+    mode: RemoteConnectMode,
+    destination: WorkspaceChoice,
+    /// Short-lived feedback shown in place of the host count.
+    notice: Option<(String, Instant)>,
 }
 
+/// What opening a host creates: a terminal over SSH, or a read-only Device
+/// panel that reaches the host's loopback VNC server through an SSH tunnel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RemoteConnectMode {
+    #[default]
+    Ssh,
+    Vnc,
+}
+
+impl RemoteConnectMode {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH",
+            Self::Vnc => "VNC",
+        }
+    }
+
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Ssh => Self::Vnc,
+            Self::Vnc => Self::Ssh,
+        }
+    }
+
+    const fn hint(self) -> &'static str {
+        match self {
+            Self::Ssh => "Open a terminal on the host over SSH (Tab switches)",
+            Self::Vnc => "View the host's desktop over VNC through an SSH tunnel (Tab switches)",
+        }
+    }
+}
+
+/// Which workspace receives the new panel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum WorkspaceChoice {
+    /// The configured default workspace, created when missing.
+    #[default]
+    Default,
+    Existing(WorkspaceId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceOption {
+    pub id: WorkspaceId,
+    pub name: String,
+}
+
+pub struct RemoteHostsOverlayInputs<'a> {
+    pub catalog: &'a RemoteHostCatalog,
+    pub connection_summaries: &'a [RemoteHostConnectionSummary],
+    pub refresh_in_flight: bool,
+    /// Seconds until next auto-refresh, or `None` if refreshing or no timer.
+    pub next_refresh_secs: Option<u64>,
+    pub workspaces: &'a [WorkspaceOption],
+    pub default_workspace: &'a str,
+}
+
+#[derive(Debug)]
 pub enum RemoteHostsOverlayAction {
     None,
     Cancelled,
-    OpenSsh { label: String, connection: SshConnection },
+    Open {
+        label: String,
+        connection: SshConnection,
+        mode: RemoteConnectMode,
+        destination: WorkspaceChoice,
+    },
+    /// The picked workspace should become the configured default, by name.
+    SetDefaultWorkspace(String),
+}
+
+/// Alt+D is a command here, but the platform also reports it as typed text
+/// (`d`, or `∂` on a macOS US layout), which the filter box would insert.
+/// Drop the text event that follows the key event, whatever it says.
+fn swallow_alt_shortcut_text(ctx: &Context) {
+    ctx.input_mut(|input| {
+        let mut correlated_text = false;
+        input.events.retain(|event| {
+            let consume = correlated_text && matches!(event, egui::Event::Text(_));
+            correlated_text = matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::D,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if *modifiers == egui::Modifiers::ALT
+            );
+            !consume
+        });
+    });
+}
+
+#[derive(Default)]
+struct KeyPresses {
+    up: bool,
+    down: bool,
+    enter: bool,
+    escape: bool,
+    tab: bool,
+    alt_up: bool,
+    alt_down: bool,
+    alt_default: bool,
+}
+
+impl KeyPresses {
+    /// A held Tab must not flip the mode on every auto-repeat; the arrows keep
+    /// repeating so a held key keeps moving.
+    fn record(&mut self, key: egui::Key, alt: bool, repeat: bool) {
+        if repeat && key == egui::Key::Tab {
+            return;
+        }
+        match (key, alt) {
+            (egui::Key::ArrowUp, false) => self.up = true,
+            (egui::Key::ArrowDown, false) => self.down = true,
+            (egui::Key::ArrowUp, true) => self.alt_up = true,
+            (egui::Key::ArrowDown, true) => self.alt_down = true,
+            (egui::Key::D, true) => self.alt_default = true,
+            (egui::Key::Enter, _) => self.enter = true,
+            (egui::Key::Escape, _) => self.escape = true,
+            (egui::Key::Tab, _) => self.tab = true,
+            _ => {}
+        }
+    }
 }
 
 struct FrameContext<'a> {
@@ -35,6 +170,9 @@ struct FrameContext<'a> {
     now_secs: i64,
     /// Seconds until next auto-refresh, or `None` if refreshing or no timer.
     next_refresh_secs: Option<u64>,
+    destinations: &'a [DestinationEntry],
+    /// Destination controls on their own row under the filter.
+    compact_header: bool,
 }
 
 struct OverlayRenderContext<'a, 'b> {
@@ -58,30 +196,47 @@ impl RemoteHostsOverlay {
             selected: 0,
             expanded_host: None,
             opened_at: Instant::now(),
+            mode: RemoteConnectMode::default(),
+            destination: WorkspaceChoice::default(),
+            notice: None,
         }
     }
 
-    pub fn show(
-        &mut self,
-        ctx: &Context,
-        catalog: &RemoteHostCatalog,
-        connection_summaries: &[RemoteHostConnectionSummary],
-        refresh_in_flight: bool,
-        next_refresh_secs: Option<u64>,
-    ) -> RemoteHostsOverlayAction {
+    /// Show `text` in the header for a few seconds, e.g. after a saved default.
+    pub fn set_notice(&mut self, text: impl Into<String>) {
+        self.notice = Some((text.into(), Instant::now()));
+    }
+
+    fn current_notice(&mut self) -> Option<&str> {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|(_, shown_at)| shown_at.elapsed() > NOTICE_DURATION)
+        {
+            self.notice = None;
+        }
+        self.notice.as_ref().map(|(text, _)| text.as_str())
+    }
+
+    pub fn show(&mut self, ctx: &Context, inputs: &RemoteHostsOverlayInputs<'_>) -> RemoteHostsOverlayAction {
+        swallow_alt_shortcut_text(ctx);
         let (user_override, filter_query) = parse_user_prefix(&self.query);
         let user_override = user_override.map(str::to_string);
-        let filtered = filtered_indices(&catalog.hosts, filter_query);
+        let filtered = filtered_indices(&inputs.catalog.hosts, filter_query);
         let layout = overlay_layout(ctx.input(egui::InputState::viewport_rect));
+        let destinations = destination_entries(inputs.workspaces, inputs.default_workspace);
+        normalize_destination(&mut self.destination, &destinations);
         let frame = FrameContext {
-            refresh_in_flight,
+            refresh_in_flight: inputs.refresh_in_flight,
             user_override: user_override.as_deref(),
             now_secs: current_epoch_secs(),
-            next_refresh_secs,
+            next_refresh_secs: inputs.next_refresh_secs,
+            destinations: &destinations,
+            compact_header: layout.compact_header,
         };
         let render = OverlayRenderContext {
-            catalog,
-            connection_summaries,
+            catalog: inputs.catalog,
+            connection_summaries: inputs.connection_summaries,
             filtered: &filtered,
             layout: &layout,
             frame: &frame,
@@ -108,10 +263,12 @@ impl RemoteHostsOverlay {
 
     fn show_backdrop(&self, ctx: &Context, screen_rect: Rect) -> bool {
         let mut cancelled = false;
+        // The sidebar lives on the Tooltip layer; a newly shown backdrop on the
+        // same layer lands above it, so the whole window dims.
         egui::Area::new(Id::new("remote_hosts_backdrop"))
             .fixed_pos(screen_rect.min)
             .constrain(false)
-            .order(Order::Foreground)
+            .order(Order::Tooltip)
             .interactable(true)
             .show(ctx, |ui| {
                 let (rect, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
@@ -127,10 +284,19 @@ impl RemoteHostsOverlay {
     fn show_modal(&mut self, ctx: &Context, render: &OverlayRenderContext<'_, '_>) -> RemoteHostsOverlayAction {
         let mut action = RemoteHostsOverlayAction::None;
 
+        // Tooltip rather than Debug: the card must clear the sidebar, and its
+        // own popups open on the Tooltip layer so they can draw above it.
+        // Clicking the backdrop raises it within the Tooltip order and egui
+        // keeps that order across overlay instances, so the card is registered
+        // as the backdrop's sublayer every pass: sublayers are spliced directly
+        // above their parent, whatever was raised last.
+        let backdrop_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_backdrop"));
+        let modal_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_modal"));
+        ctx.memory_mut(|memory| memory.areas_mut().set_sublayer(backdrop_layer, modal_layer));
         egui::Area::new(Id::new("remote_hosts_modal"))
             .fixed_pos(render.layout.card.min)
             .constrain(true)
-            .order(Order::Debug)
+            .order(Order::Tooltip)
             .show(ctx, |ui| {
                 paint_card(ui, render.layout.card);
 
@@ -154,12 +320,29 @@ impl RemoteHostsOverlay {
         render: &OverlayRenderContext<'_, '_>,
     ) -> RemoteHostsOverlayAction {
         let total = render.catalog.hosts.len();
-        self.render_query_input(ui, render.layout.inner, render.filtered.len(), total, render.frame);
-        if let Some(action) = self.handle_keyboard(ctx, render.catalog, render.filtered, render.frame.user_override) {
+        if let Some(action) =
+            self.render_query_input(ui, render.layout.inner, render.filtered.len(), total, render.frame)
+        {
+            return action;
+        }
+        if let Some(action) = self.handle_keyboard(ctx, render.catalog, render.filtered, render.frame) {
             return action;
         }
 
         ui.allocate_space(Vec2::new(render.layout.inner.width(), INPUT_HEIGHT));
+        if render.frame.compact_header {
+            let row = ui
+                .allocate_space(Vec2::new(render.layout.inner.width(), DESTINATION_ROW_HEIGHT))
+                .1;
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(row.shrink2(Vec2::new(14.0, 3.0)))
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            if let Some(action) = self.render_destination_controls(&mut child, render.frame.destinations) {
+                return action;
+            }
+        }
         ui.add_space(6.0);
 
         let columns = columns(render.layout.inner.width());
@@ -176,10 +359,14 @@ impl RemoteHostsOverlay {
         match self.render_results(ui, &columns, render) {
             Some(index) => {
                 let host = &render.catalog.hosts[render.filtered[index]];
-                connect_action(host, render.frame.user_override)
+                self.open_action(host, render.frame.user_override)
             }
             None => RemoteHostsOverlayAction::None,
         }
+    }
+
+    fn open_action(&self, host: &RemoteHost, user_override: Option<&str>) -> RemoteHostsOverlayAction {
+        connect_action(host, user_override, self.mode, self.destination.clone())
     }
 
     fn render_query_input(
@@ -189,7 +376,7 @@ impl RemoteHostsOverlay {
         filtered_count: usize,
         total_count: usize,
         frame: &FrameContext<'_>,
-    ) {
+    ) -> Option<RemoteHostsOverlayAction> {
         let input_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(inner_rect.width(), INPUT_HEIGHT));
 
         ui.painter()
@@ -209,23 +396,27 @@ impl RemoteHostsOverlay {
         );
 
         child.label(
-            RichText::new("SSH Remote")
+            RichText::new("Remote")
                 .font(FontId::proportional(13.0))
                 .color(theme::FG_SOFT())
                 .strong(),
         );
+        child.add_space(6.0);
+        render_mode_toggle(&mut child, &mut self.mode);
+        child.add_space(4.0);
         child.label(
             RichText::new(" > ")
                 .font(FontId::monospace(13.0))
                 .color(theme::ACCENT()),
         );
 
+        let reserved_right = if frame.compact_header { 330.0 } else { 640.0 };
         let response = child.add(
             egui::TextEdit::singleline(&mut self.query)
                 .font(FontId::monospace(14.0))
                 .text_color(theme::FG())
                 .frame(egui::Frame::NONE)
-                .desired_width(text_rect.width() - 260.0)
+                .desired_width((text_rect.width() - reserved_right).max(160.0))
                 .hint_text(
                     RichText::new("type to filter, prefix user@ to connect as that user")
                         .color(theme::FG_DIM())
@@ -236,10 +427,23 @@ impl RemoteHostsOverlay {
         if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
             response.request_focus();
         }
+        // Tab switches SSH/VNC instead of moving focus out of the filter.
+        child.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                EventFilter {
+                    tab: true,
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..EventFilter::default()
+                },
+            );
+        });
         if response.changed() {
             self.selected = 0;
         }
 
+        let mut action = None;
         child.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let refresh_status = if frame.refresh_in_flight {
                 "refreshing...".to_string()
@@ -253,12 +457,56 @@ impl RemoteHostsOverlay {
             } else {
                 format!("{filtered_count}/{total_count}  {refresh_status}")
             };
-            ui.label(
-                RichText::new(count_text)
-                    .font(FontId::monospace(11.0))
-                    .color(theme::FG_SOFT()),
-            );
+            match self.current_notice() {
+                Some(notice) => {
+                    ui.label(
+                        RichText::new(notice)
+                            .font(FontId::proportional(11.5))
+                            .color(theme::ACCENT()),
+                    );
+                    ui.ctx().request_repaint_after(NOTICE_DURATION);
+                }
+                None => {
+                    ui.label(
+                        RichText::new(count_text)
+                            .font(FontId::monospace(11.0))
+                            .color(theme::FG_SOFT()),
+                    );
+                }
+            }
+            if !frame.compact_header {
+                ui.add_space(10.0);
+                action = self.render_destination_controls(ui, frame.destinations);
+            }
         });
+        action
+    }
+
+    fn render_destination_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        destinations: &[DestinationEntry],
+    ) -> Option<RemoteHostsOverlayAction> {
+        if render_destination_picker(ui, &mut self.destination, destinations) == DestinationPickerAction::SetDefault {
+            return self.set_default_action(destinations);
+        }
+        None
+    }
+
+    fn set_default_action(&self, destinations: &[DestinationEntry]) -> Option<RemoteHostsOverlayAction> {
+        self.selected_destination_name(destinations)
+            .map(RemoteHostsOverlayAction::SetDefaultWorkspace)
+    }
+
+    /// The real name of the picked workspace, never its disambiguated label;
+    /// nothing when another workspace shares that name, since a default is
+    /// stored by name and could not single the picked one out.
+    fn selected_destination_name(&self, destinations: &[DestinationEntry]) -> Option<String> {
+        destinations
+            .iter()
+            .find(|entry| entry.choice == self.destination && entry.choice != WorkspaceChoice::Default)
+            .filter(|entry| !entry.ambiguous)
+            .map(|entry| entry.name.clone())
     }
 
     fn handle_keyboard(
@@ -266,19 +514,48 @@ impl RemoteHostsOverlay {
         ctx: &Context,
         catalog: &RemoteHostCatalog,
         filtered: &[usize],
-        user_override: Option<&str>,
+        frame: &FrameContext<'_>,
     ) -> Option<RemoteHostsOverlayAction> {
-        let (up, down, enter, escape) = ctx.input(|input| {
-            (
-                input.key_pressed(egui::Key::ArrowUp),
-                input.key_pressed(egui::Key::ArrowDown),
-                input.key_pressed(egui::Key::Enter),
-                input.key_pressed(egui::Key::Escape),
-            )
+        // Alt is the destination modifier: Tab stays on the mode toggle and
+        // the plain arrows keep moving through the host rows. Each press
+        // carries its own modifiers, so a held Alt never leaks into the rows.
+        let mut keys = KeyPresses::default();
+        ctx.input(|input| {
+            for event in &input.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    keys.record(*key, *modifiers == egui::Modifiers::ALT, *repeat);
+                }
+            }
         });
+        let KeyPresses {
+            up,
+            down,
+            enter,
+            escape,
+            tab,
+            alt_up,
+            alt_down,
+            alt_default,
+        } = keys;
 
         if escape {
             return Some(RemoteHostsOverlayAction::Cancelled);
+        }
+        if tab {
+            self.mode = self.mode.toggled();
+        }
+        if alt_down || alt_up {
+            cycle_destination(&mut self.destination, frame.destinations, alt_down);
+        }
+        if alt_default && let Some(action) = self.set_default_action(frame.destinations) {
+            return Some(action);
         }
         if up && self.selected > 0 {
             self.selected -= 1;
@@ -288,7 +565,7 @@ impl RemoteHostsOverlay {
         }
         if enter && !filtered.is_empty() {
             let host = &catalog.hosts[filtered[self.selected]];
-            return Some(connect_action(host, user_override));
+            return Some(self.open_action(host, frame.user_override));
         }
 
         None
@@ -387,9 +664,423 @@ impl From<&RemoteHost> for ExpandedHostId {
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::{RemoteHost, RemoteHostSources, RemoteHostStatus, SshConnection};
+    use horizon_core::{
+        RemoteHost, RemoteHostCatalog, RemoteHostConnectionSummary, RemoteHostSources, RemoteHostStatus, SshConnection,
+        WorkspaceId,
+    };
 
-    use super::RemoteHostsOverlay;
+    use std::time::{Duration, Instant};
+
+    use super::{
+        KeyPresses, NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction,
+        RemoteHostsOverlayInputs, WorkspaceChoice, WorkspaceOption,
+    };
+    use crate::test_egui::DiscardTextures;
+
+    fn show_overlay(
+        ctx: &egui::Context,
+        overlay: &mut RemoteHostsOverlay,
+        catalog: &RemoteHostCatalog,
+        workspaces: &[WorkspaceOption],
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        show_overlay_probing(ctx, overlay, catalog, workspaces, events, None).0
+    }
+
+    /// Also report which layer is on top at `probe`; that is only defined while the pass runs.
+    fn show_overlay_probing(
+        ctx: &egui::Context,
+        overlay: &mut RemoteHostsOverlay,
+        catalog: &RemoteHostCatalog,
+        workspaces: &[WorkspaceOption],
+        events: Vec<egui::Event>,
+        probe: Option<egui::Pos2>,
+    ) -> (egui::FullOutput, Option<egui::LayerId>) {
+        let (output, layer, _) = show_overlay_collecting(ctx, overlay, catalog, workspaces, events, probe);
+        (output, layer)
+    }
+
+    fn show_overlay_collecting(
+        ctx: &egui::Context,
+        overlay: &mut RemoteHostsOverlay,
+        catalog: &RemoteHostCatalog,
+        workspaces: &[WorkspaceOption],
+        events: Vec<egui::Event>,
+        probe: Option<egui::Pos2>,
+    ) -> (egui::FullOutput, Option<egui::LayerId>, RemoteHostsOverlayAction) {
+        let summaries = vec![RemoteHostConnectionSummary::default(); catalog.hosts.len()];
+        let mut top_layer = None;
+        let mut action = RemoteHostsOverlayAction::None;
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    action = overlay.show(
+                        ui.ctx(),
+                        &RemoteHostsOverlayInputs {
+                            catalog,
+                            connection_summaries: &summaries,
+                            refresh_in_flight: false,
+                            next_refresh_secs: None,
+                            workspaces,
+                            default_workspace: "Remote Sessions",
+                        },
+                    );
+                    top_layer = probe.and_then(|pos| ui.ctx().layer_id_at(pos));
+                },
+            )
+            .discard_textures();
+        (output, top_layer, action)
+    }
+
+    fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn alt_arrows_cycle_the_destination_and_alt_d_makes_it_the_default() {
+        let ctx = egui::Context::default();
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = vec![WorkspaceOption {
+            id: WorkspaceId(7),
+            name: "Ops".into(),
+        }];
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+
+        show_overlay(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![key_event(egui::Key::ArrowDown, egui::Modifiers::ALT)],
+        );
+        assert_eq!(overlay.destination, WorkspaceChoice::Existing(WorkspaceId(7)));
+        assert_eq!(overlay.selected, 0, "Alt+Down leaves the host selection alone");
+
+        // Platforms report Alt+D as a key press followed by typed text: `d` on
+        // X11, `∂` on a macOS US layout. Unrelated text keeps flowing.
+        overlay.query = "smoke".into();
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![
+                key_event(egui::Key::D, egui::Modifiers::ALT),
+                egui::Event::Text("\u{2202}".into()),
+                egui::Event::Text("x".into()),
+            ],
+            None,
+        );
+        assert!(matches!(action, RemoteHostsOverlayAction::SetDefaultWorkspace(ref name) if name == "Ops"));
+        assert!(
+            !overlay.query.contains('\u{2202}'),
+            "the shortcut's text never reaches the filter"
+        );
+        assert_eq!(overlay.query.replace('x', ""), "smoke");
+        assert_eq!(overlay.query.matches('x').count(), 1, "unrelated text keeps flowing");
+
+        show_overlay(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![key_event(egui::Key::ArrowUp, egui::Modifiers::ALT)],
+        );
+        assert_eq!(overlay.destination, WorkspaceChoice::Default);
+    }
+
+    fn text_shapes<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| text_shapes(shape, out)),
+            _ => {}
+        }
+    }
+
+    fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            text_shapes(&shape.shape, &mut texts);
+        }
+        texts.iter().find(|text| text.galley.text() == label).map_or_else(
+            || {
+                let seen: Vec<_> = texts.iter().map(|text| text.galley.text()).collect();
+                panic!("missing label {label}; saw {seen:?}")
+            },
+            |text| text.pos + text.galley.size() * 0.5,
+        )
+    }
+
+    fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn destination_picker_opens_above_the_card_and_selects_a_workspace() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = vec![WorkspaceOption {
+            id: WorkspaceId(7),
+            name: "Ops".into(),
+        }];
+        let mut overlay = RemoteHostsOverlay::new();
+
+        // A brand-new area is laid out invisibly on its first pass.
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let picker = text_center(&output, "Remote Sessions (new)  \u{25be}");
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, click_events(picker, true));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, click_events(picker, false));
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let ops = text_center(&output, "Ops");
+        assert_eq!(overlay.destination, WorkspaceChoice::Default);
+
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, click_events(ops, true));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, click_events(ops, false));
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        assert_eq!(overlay.destination, WorkspaceChoice::Existing(WorkspaceId(7)));
+        text_center(&output, "Set default");
+        text_center(&output, "Ops  \u{25be}");
+    }
+
+    #[test]
+    fn the_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut first = RemoteHostsOverlay::new();
+        // Past the 200 ms click guard so the backdrop click counts.
+        first.opened_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("the process started more than a second ago");
+        show_overlay(&ctx, &mut first, &catalog, &workspaces, Vec::new());
+        show_overlay(&ctx, &mut first, &catalog, &workspaces, Vec::new());
+        let outside = egui::Pos2::new(4.0, 896.0);
+        let mut click = click_events(outside, true);
+        click.extend(click_events(outside, false));
+        let (_, _, action) = show_overlay_collecting(&ctx, &mut first, &catalog, &workspaces, click, None);
+        assert!(matches!(action, RemoteHostsOverlayAction::Cancelled), "{action:?}");
+        drop(first);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+
+        let mut second = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut second, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut second, &catalog, &workspaces, Vec::new());
+        let row = text_center(&output, "live-a");
+        let (_, layer) = show_overlay_probing(&ctx, &mut second, &catalog, &workspaces, Vec::new(), Some(row));
+        assert_eq!(
+            layer.expect("a layer under the card").id,
+            egui::Id::new("remote_hosts_modal"),
+            "the reopened card must sit above the backdrop"
+        );
+    }
+
+    #[test]
+    fn picker_stays_above_the_card_after_the_overlay_was_dismissed_with_it_open() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = vec![WorkspaceOption {
+            id: WorkspaceId(7),
+            name: "Ops".into(),
+        }];
+        let open_picker = |overlay: &mut RemoteHostsOverlay| {
+            show_overlay(&ctx, overlay, &catalog, &workspaces, Vec::new());
+            let output = show_overlay(&ctx, overlay, &catalog, &workspaces, Vec::new());
+            let picker = text_center(&output, "Remote Sessions (new)  \u{25be}");
+            // Press and release in one frame, as a slow display delivers them:
+            // the press raises the card in the same pass that opens the popup.
+            let mut click = click_events(picker, true);
+            click.extend(click_events(picker, false));
+            show_overlay(&ctx, overlay, &catalog, &workspaces, click);
+            // The popup's first frame is a sizing pass.
+            let output = show_overlay(&ctx, overlay, &catalog, &workspaces, Vec::new());
+            text_center(&output, "Ops")
+        };
+
+        let mut first = RemoteHostsOverlay::new();
+        let ops = open_picker(&mut first);
+        // Escape dismisses the overlay while its popup is still open.
+        let escape = vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }];
+        show_overlay(&ctx, &mut first, &catalog, &workspaces, escape);
+        drop(first);
+        // A frame without the overlay, as the app renders after dismissing it.
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+
+        let mut second = RemoteHostsOverlay::new();
+        let ops_again = open_picker(&mut second);
+        assert_eq!(ops, ops_again);
+        let (_, layer) = show_overlay_probing(&ctx, &mut second, &catalog, &workspaces, Vec::new(), Some(ops));
+        let layer = layer.expect("a layer under the popup entry");
+        assert_ne!(
+            layer.id,
+            egui::Id::new("remote_hosts_modal"),
+            "popup entry hidden below the card"
+        );
+        assert_ne!(
+            layer.id,
+            egui::Id::new("remote_hosts_backdrop"),
+            "popup entry hidden below the backdrop"
+        );
+        show_overlay(&ctx, &mut second, &catalog, &workspaces, click_events(ops, true));
+        show_overlay(&ctx, &mut second, &catalog, &workspaces, click_events(ops, false));
+        show_overlay(&ctx, &mut second, &catalog, &workspaces, Vec::new());
+        assert_eq!(second.destination, WorkspaceChoice::Existing(WorkspaceId(7)));
+    }
+
+    #[test]
+    fn enter_opens_the_selected_host_with_the_current_mode_and_destination() {
+        let host = remote_host("live-a", 22429);
+        let mut overlay = RemoteHostsOverlay::new();
+        overlay.mode = RemoteConnectMode::Vnc;
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(4));
+
+        match overlay.open_action(&host, Some("ops")) {
+            RemoteHostsOverlayAction::Open {
+                label,
+                connection,
+                mode,
+                destination,
+            } => {
+                assert_eq!(label, "live-a");
+                assert_eq!(connection.user.as_deref(), Some("ops"));
+                assert_eq!(connection.port, Some(22429));
+                assert_eq!(mode, RemoteConnectMode::Vnc);
+                assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(4)));
+            }
+            RemoteHostsOverlayAction::None
+            | RemoteHostsOverlayAction::Cancelled
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected an open action"),
+        }
+    }
+
+    #[test]
+    fn set_default_is_refused_for_a_workspace_that_shares_its_name() {
+        let ctx = egui::Context::default();
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = vec![
+            WorkspaceOption {
+                id: WorkspaceId(1),
+                name: "Ops".into(),
+            },
+            WorkspaceOption {
+                id: WorkspaceId(2),
+                name: "Ops".into(),
+            },
+        ];
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(2));
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![key_event(egui::Key::D, egui::Modifiers::ALT)],
+            None,
+        );
+        assert!(
+            matches!(action, RemoteHostsOverlayAction::None),
+            "an ambiguous name cannot become the default: {action:?}"
+        );
+
+        let unique = vec![WorkspaceOption {
+            id: WorkspaceId(2),
+            name: "Ops".into(),
+        }];
+        show_overlay(&ctx, &mut overlay, &catalog, &unique, Vec::new());
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(2));
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &unique,
+            vec![key_event(egui::Key::D, egui::Modifiers::ALT)],
+            None,
+        );
+        assert!(
+            matches!(action, RemoteHostsOverlayAction::SetDefaultWorkspace(ref name) if name == "Ops"),
+            "{action:?}"
+        );
+    }
+
+    #[test]
+    fn a_notice_replaces_the_host_count_until_it_expires() {
+        let mut overlay = RemoteHostsOverlay::new();
+        assert_eq!(overlay.current_notice(), None);
+        overlay.set_notice("Saved shortcut");
+        assert_eq!(overlay.current_notice(), Some("Saved shortcut"));
+        let stale = Instant::now()
+            .checked_sub(NOTICE_DURATION * 2)
+            .expect("the process started more than eight seconds ago");
+        overlay.notice = Some(("stale".into(), stale));
+        assert_eq!(overlay.current_notice(), None);
+    }
+
+    #[test]
+    fn a_held_tab_toggles_the_mode_once() {
+        let mut keys = KeyPresses::default();
+        keys.record(egui::Key::Tab, false, false);
+        keys.record(egui::Key::Tab, false, true);
+        keys.record(egui::Key::Tab, false, true);
+        assert!(keys.tab);
+        let mut repeats_only = KeyPresses::default();
+        repeats_only.record(egui::Key::Tab, false, true);
+        assert!(!repeats_only.tab, "an auto-repeat alone never toggles");
+        repeats_only.record(egui::Key::ArrowDown, false, true);
+        assert!(repeats_only.down, "arrows keep repeating");
+    }
+
+    #[test]
+    fn tab_toggles_between_ssh_and_vnc() {
+        assert_eq!(RemoteConnectMode::default(), RemoteConnectMode::Ssh);
+        assert_eq!(RemoteConnectMode::Ssh.toggled(), RemoteConnectMode::Vnc);
+        assert_eq!(RemoteConnectMode::Vnc.toggled(), RemoteConnectMode::Ssh);
+        assert_eq!(RemoteConnectMode::Vnc.label(), "VNC");
+    }
 
     #[test]
     fn expanded_host_identity_keeps_duplicate_connection_rows_separate() {

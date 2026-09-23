@@ -11,6 +11,7 @@ pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, Sp
 use crate::ssh::{SshConnection, discover_ssh_hosts};
 
 mod presets;
+mod remote_hosts;
 
 pub use presets::PresetConfig;
 use presets::default_presets;
@@ -19,6 +20,7 @@ pub(crate) use presets::{
     insert_missing_browser_preset, insert_missing_gemini_presets, insert_missing_grok_presets,
     insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
+pub use remote_hosts::{RemoteHostsConfig, patch_default_workspace_source};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -36,6 +38,8 @@ pub struct Config {
     pub features: FeaturesConfig,
     #[serde(default)]
     pub browser: crate::browser::BrowserConfig,
+    #[serde(default)]
+    pub remote_hosts: RemoteHostsConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -59,6 +63,7 @@ impl Default for Config {
             overlays: OverlaysConfig::default(),
             features: FeaturesConfig::default(),
             browser: crate::browser::BrowserConfig::default(),
+            remote_hosts: RemoteHostsConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -432,6 +437,7 @@ impl Config {
             .map_err(|error| Error::Config(format!("browser.remote: {error}")))?;
         let shortcuts = self.shortcuts.resolve()?;
         crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
+        self.remote_hosts.validate()?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }
