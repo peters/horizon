@@ -5,6 +5,7 @@ use std::time::Duration;
 
 pub mod flavors;
 pub mod recovery;
+mod stock;
 pub mod volumes;
 
 #[cfg(test)]
@@ -16,6 +17,7 @@ pub struct RunPod {
     endpoint: String,
     catalog_endpoint: String,
     api_endpoint: String,
+    graphql_endpoint: String,
 }
 impl RunPod {
     #[must_use]
@@ -31,6 +33,7 @@ impl RunPod {
             endpoint: "https://rest.runpod.io/v1".into(),
             catalog_endpoint: "https://api.runpod.io/v2/catalog".into(),
             api_endpoint: "https://api.runpod.io/v2".into(),
+            graphql_endpoint: "https://api.runpod.io/graphql".into(),
         }
     }
 

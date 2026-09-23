@@ -150,8 +150,11 @@ Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.
 Missing, undersized or differently mounted storage blocks source and agent-credential
 transfer. New CPU clouds allocate an owned standard network volume in a data center
-with compatible CPU capacity, honoring configured location preferences, and attach
-it at worker creation. GPU clouds and existing deployments retain their Pod-local
+that has the cloud's exact CPU size in stock, honoring configured location
+preferences, and attach it at worker creation. The provider catalog rates only CPU
+flavor families, so Horizon confirms stock for the requested vCPU and memory size
+before allocating storage; when no configured data center has it, no volume is
+created. GPU clouds and existing deployments retain their Pod-local
 storage contract. Unexpected volume identities, locations or capacities block
 readiness. CPU mount verification uses the current provider API because the legacy
 worker response omits CPU network attachments. Deletion checks current mounts on
