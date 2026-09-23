@@ -11,7 +11,6 @@
 //! delete sharing, such as a scanner or an external reader, still blocks the
 //! rename, so publication retries for a bounded window before failing.
 
-use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -73,20 +72,19 @@ struct StagedFile {
 
 impl StagedFile {
     fn write(destination: &Path, bytes: &[u8]) -> io::Result<Self> {
-        let file_name = destination.file_name().ok_or_else(|| {
-            io::Error::new(
+        if destination.file_name().is_none() {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("{} has no file name", destination.display()),
-            )
-        })?;
+            ));
+        }
         let directory = match destination.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
             _ => PathBuf::from("."),
         };
-        let mut staged_name = OsString::from(".");
-        staged_name.push(file_name);
-        staged_name.push(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
-        let path = directory.join(staged_name);
+        // A fixed-length leaf keeps staging valid for every destination the
+        // filesystem accepts, however long its own leaf is.
+        let path = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -174,8 +172,8 @@ mod tests {
     use std::cell::Cell;
     use std::io;
     use std::path::Path;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     use super::{create_new, replace, retry_while_blocked};
@@ -252,22 +250,31 @@ mod tests {
         let second = vec![b'b'; 64 * 1024];
         replace(&path, &first).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let readers: Vec<_> = (0..4)
+        let reader_count = 4;
+        let polling = Arc::new(Barrier::new(reader_count + 1));
+        let readers: Vec<_> = (0..reader_count)
             .map(|_| {
                 let path = path.clone();
                 let stop = Arc::clone(&stop);
+                let polling = Arc::clone(&polling);
                 let (first, second) = (first.clone(), second.clone());
                 std::thread::spawn(move || {
                     let mut reads = 0_u32;
-                    while !stop.load(Ordering::Relaxed) {
+                    loop {
                         let contents = std::fs::read(&path).unwrap();
                         assert!(contents == first || contents == second, "observed a partial file");
                         reads += 1;
+                        if reads == 1 {
+                            polling.wait();
+                        }
+                        if stop.load(Ordering::Relaxed) {
+                            return reads;
+                        }
                     }
-                    reads
                 })
             })
             .collect();
+        polling.wait();
 
         for round in 0..200 {
             let contents = if round % 2 == 0 { &second } else { &first };
@@ -279,6 +286,18 @@ mod tests {
             assert!(reader.join().unwrap() > 0);
         }
         assert_eq!(entry_names(root.path()), ["panel.json"]);
+    }
+
+    #[test]
+    fn replace_accepts_a_destination_leaf_near_the_name_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(format!("{}.json", "p".repeat(245)));
+
+        replace(&path, b"first").unwrap();
+        replace(&path, b"second").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert_eq!(entry_names(root.path()).len(), 1);
     }
 
     #[test]
