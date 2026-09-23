@@ -139,13 +139,18 @@ fn a_new_terminal_app_gesture_receives_input_before_the_canvas_tail_moves_it() {
     let (_temp, ctx, mut app) = app_fixture();
     let output = tempfile::tempdir().expect("PTY receipt directory");
     let receipt = output.path().join("mouse-input");
-    let command = "import os,sys,tty; tty.setraw(0); print('\\x1b[?1000h',end='',flush=True); data=os.read(0,6); open(sys.argv[1],'wb').write(data)";
+    let command = "stty raw -echo; printf '\\033[?1000h'; dd bs=1 count=6 of=\"$1\" 2>/dev/null";
     let mut terminal = Panel::spawn(
         app.board.panels[0].id,
         app.board.panels[0].workspace_id,
         PanelOptions {
-            command: Some("/usr/bin/python3".into()),
-            args: vec!["-c".into(), command.into(), receipt.to_string_lossy().into_owned()],
+            command: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                command.into(),
+                "mouse-fixture".into(),
+                receipt.to_string_lossy().into_owned(),
+            ],
             ..PanelOptions::default()
         },
     )
