@@ -76,7 +76,16 @@ impl HorizonApp {
                 self.open_remote_host(ctx, label, connection, mode, &destination);
             }
             RemoteHostsOverlayAction::SetDefaultWorkspace(name) => {
-                self.set_remote_hosts_default_workspace(&name);
+                let notice = if self.set_remote_hosts_default_workspace(&name) {
+                    format!("Default workspace: {name}")
+                } else if self.settings_has_unsaved_edits() {
+                    "Save or discard the Settings edits first".to_string()
+                } else {
+                    "Could not update the config file; see the log".to_string()
+                };
+                if let Some(overlay) = self.remote_hosts_overlay.as_mut() {
+                    overlay.set_notice(notice);
+                }
             }
         }
     }

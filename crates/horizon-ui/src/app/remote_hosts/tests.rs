@@ -148,6 +148,40 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
     assert_eq!(app.board.workspace(workspace_id).unwrap().name, "Ops");
 }
 
+#[test]
+fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
+    let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
+    std::fs::write(&app.config_path, Config::default().to_yaml().unwrap()).unwrap();
+    app.toggle_settings();
+    assert!(app.settings.is_some(), "settings editor open");
+
+    // An unsaved edit in the editor blocks the write and stays intact.
+    if let Some(editor) = app.settings.as_mut() {
+        editor.buffer.push_str("\n# draft\n");
+    }
+    assert!(app.settings_has_unsaved_edits());
+    assert!(!app.set_remote_hosts_default_workspace("Ops"));
+    assert_eq!(
+        app.template_config.remote_hosts.default_workspace_name(),
+        "Remote Sessions"
+    );
+    assert!(app.settings.as_ref().unwrap().buffer.ends_with("# draft\n"));
+
+    // A clean editor is moved onto the rewritten file so a later Save keeps the default.
+    if let Some(editor) = app.settings.as_mut() {
+        editor.buffer.clone_from(&editor.original);
+    }
+    assert!(app.set_remote_hosts_default_workspace("Ops"));
+    let editor = app.settings.as_ref().unwrap();
+    assert_eq!(editor.buffer, editor.original);
+    assert!(editor.buffer.contains("default_workspace: Ops"), "{}", editor.buffer);
+    assert_eq!(
+        std::fs::read_to_string(&app.config_path).unwrap(),
+        editor.buffer,
+        "editor text matches the file"
+    );
+}
+
 mod picker_in_full_app {
     use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, SshConnection};
 

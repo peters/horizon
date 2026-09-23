@@ -51,6 +51,23 @@ pub(super) fn normalize_destination(destination: &mut WorkspaceChoice, entries: 
     }
 }
 
+/// Move the selection one entry forward or back, wrapping around.
+pub(super) fn cycle_destination(destination: &mut WorkspaceChoice, entries: &[DestinationEntry], forward: bool) {
+    if entries.is_empty() {
+        return;
+    }
+    let current = entries
+        .iter()
+        .position(|entry| entry.choice == *destination)
+        .unwrap_or(0);
+    let next = if forward {
+        (current + 1) % entries.len()
+    } else {
+        (current + entries.len() - 1) % entries.len()
+    };
+    destination.clone_from(&entries[next].choice);
+}
+
 pub(super) fn render_mode_toggle(ui: &mut Ui, mode: &mut RemoteConnectMode) -> bool {
     let mut changed = false;
     ui.spacing_mut().item_spacing.x = 2.0;
@@ -70,6 +87,7 @@ pub(super) fn render_mode_toggle(ui: &mut Ui, mode: &mut RemoteConnectMode) -> b
                         .color(color),
                 )
                 .fill(fill)
+                .selected(selected)
                 .corner_radius(CornerRadius::same(6))
                 .min_size(MODE_BUTTON_SIZE),
             )
@@ -98,7 +116,7 @@ pub(super) fn render_destination_picker(
                 )
                 .corner_radius(CornerRadius::same(6)),
             )
-            .on_hover_text("Send future remote sessions to this workspace unless another is picked")
+            .on_hover_text("Send future remote sessions to this workspace unless another is picked (Alt+D)")
             .clicked()
     {
         action = DestinationPickerAction::SetDefault;
@@ -118,7 +136,7 @@ pub(super) fn render_destination_picker(
             .corner_radius(CornerRadius::same(6))
             .min_size(Vec2::new(DESTINATION_WIDTH, 22.0)),
         )
-        .on_hover_text("Workspace that receives the new session");
+        .on_hover_text("Workspace that receives the new session (Alt+\u{2191}/\u{2193} cycles)");
     // The overlay card sits on the Tooltip layer, so a default (Foreground)
     // popup would open underneath it.
     let popup_id = Popup::default_response_id(&button);
@@ -182,6 +200,22 @@ mod tests {
             entries.iter().map(|entry| entry.label.as_str()).collect::<Vec<_>>(),
             vec!["Remote Sessions", "Ops"]
         );
+    }
+
+    #[test]
+    fn cycling_wraps_through_every_destination_in_both_directions() {
+        let entries = destination_entries(&workspaces(&["Backend", "Ops"]), "Remote Sessions");
+        let mut destination = WorkspaceChoice::Default;
+        cycle_destination(&mut destination, &entries, true);
+        assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(1)));
+        cycle_destination(&mut destination, &entries, true);
+        assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(2)));
+        cycle_destination(&mut destination, &entries, true);
+        assert_eq!(destination, WorkspaceChoice::Default);
+        cycle_destination(&mut destination, &entries, false);
+        assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(2)));
+        cycle_destination(&mut destination, &[], false);
+        assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(2)));
     }
 
     #[test]

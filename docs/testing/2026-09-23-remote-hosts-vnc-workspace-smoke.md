@@ -39,6 +39,14 @@ Must include:
   a sublayer of the card for that reason).
 - `destination_picker_opens_with_workspaces_and_panels_on_the_board` — the same
   click through the whole app frame with a sidebar and panels present.
+- `alt_arrows_cycle_the_destination_and_alt_d_makes_it_the_default` and
+  `cycling_wraps_through_every_destination_in_both_directions` — the keyboard
+  path to the destination controls while Tab stays on the mode toggle.
+- `narrow_windows_move_the_destination_controls_to_their_own_row` — the header
+  reflows below the 860 px inner width.
+- `set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor`
+  — the config write is refused while Settings has unsaved edits and moves a
+  clean editor onto the rewritten text.
 
 Status: **PASS** (2026-09-23, Linux x64; 42 config tests, 18 remote hosts
 tests, 1 full-app test).
@@ -78,6 +86,20 @@ It connects on its own and renders the fixture desktop.
 Open the overlay again, filter `smoke`, click the picker, choose `Ops`, and
 press **Enter** (mode is SSH again because the overlay starts fresh). An SSH
 terminal panel `smoke-node` opens in `Ops`, not in `Remote Sessions`.
+
+### B3b. Keyboard path and narrow window
+
+With the overlay open, **Alt+↓** moves the picker to `Ops` without changing
+the highlighted host; **Alt+D** sets it as the default (same notice as B4).
+Launch once more with `window: { width: 800, height: 600 }`: the input row
+keeps the filter and mode toggle, and the picker sits on its own row below.
+
+Observed 2026-09-23 (debug build with the review fixes): Alt+↓ moved the
+picker to `Ops` with the host row still highlighted, Alt+D showed
+`Default workspace: Ops` and rewrote the file, and the 800 px window put the
+picker on its own row. The first run typed a `d` into the filter alongside
+Alt+D; the overlay now drops that text event, which
+`alt_arrows_cycle_the_destination_and_alt_d_makes_it_the_default` covers.
 
 ### B4. Set default
 
