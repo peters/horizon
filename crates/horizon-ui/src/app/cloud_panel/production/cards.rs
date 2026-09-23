@@ -1,4 +1,4 @@
-use super::{Confirmation, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
+use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
@@ -268,14 +268,24 @@ fn machine_size(
 fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
+    if runtime.stage == Some(Stage::Deleted) {
+        ui.label(DELETED_RESOURCES_MESSAGE);
+        return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+    }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(
             state.operation,
             horizon_core::cloud_runtime::CreateState::Terminated { .. }
         )
     }) {
-        ui.label("Worker deleted. Its processes and files are no longer available.");
-        return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+        progress_output(ui, runtime);
+        ui.label("Worker deleted. Finish managed workspace storage cleanup to stop its storage charges.");
+        return if runtime.receiver.is_some() {
+            ui.spinner();
+            None
+        } else {
+            deletion_action(ui, runtime)
+        };
     }
     progress_output(ui, runtime);
     ui.add_space(8.0);
@@ -373,15 +383,15 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
-                "Delete this worker and its files? Running sessions cannot be recovered.",
+                "Delete this worker and its managed workspace storage? Running sessions and files in that storage cannot be recovered. Any separately attached network volumes retain their files and credentials and remain billable until deleted.",
             );
-            if ui.button("Delete worker permanently").clicked() {
+            if ui.button("Delete resources permanently").clicked() {
                 return Some(Action::Delete);
             }
-            if ui.button("Keep worker").clicked() {
+            if ui.button("Keep resources").clicked() {
                 runtime.confirmation = Confirmation::None;
             }
-        } else if ui.button("Delete worker…").clicked() {
+        } else if ui.button("Delete cloud resources…").clicked() {
             runtime.confirmation = Confirmation::Delete;
         }
     }

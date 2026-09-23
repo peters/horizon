@@ -6,7 +6,9 @@ use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::super::input::{GridPoint, TerminalInputEvent, WheelAction, terminal_input_events, wheel_action};
 use super::super::canvas_drag::canvas_drag_delta;
-use super::super::canvas_scroll::{ScrollTarget, WheelStep, canvas_zoom_delta, route_canvas_scroll};
+use super::super::canvas_scroll::{
+    ScrollTarget, WheelStep, canvas_zoom_delta, reset_canvas_scroll, route_canvas_scroll,
+};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_key_may_emit_text, shortcut_pressed, take_captured_clipboard_event,
@@ -180,7 +182,8 @@ impl HorizonApp {
         canvas_rect: Rect,
         visible_workspace: Option<WorkspaceId>,
     ) {
-        if self.browser_file_chooser_open() {
+        if self.host_dialog_open() {
+            reset_canvas_scroll(ctx);
             self.terminal_keyboard_events.clear();
             self.frame_keyboard_events.remove(&ctx.viewport_id());
             return;
@@ -283,12 +286,49 @@ impl HorizonApp {
         } else {
             panel_under_pointer.map_or(ScrollTarget::Canvas, ScrollTarget::Panel)
         };
+        let terminal_under_pointer = panel_under_pointer.filter(|panel| {
+            !over_cloud_runtime && {
+                panel_geometry.iter().any(|(id, geometry)| {
+                    id == panel
+                        && geometry
+                            .terminal_body_screen_rect
+                            .is_some_and(|body| pointer_position.is_some_and(|position| body.contains(position)))
+                })
+            }
+        });
         let cell_size = crate::terminal_widget::wheel_cell_size(ctx);
         let mut pending_scrollback = None;
-        let scroll_routing =
+        let mut scroll_routing =
             route_canvas_scroll(ctx, scroll_target, pointer_in_canvas && !drag_panning, |panel, step| {
+                // A latched owner outside the pointer's terminal body will
+                // not receive this event, so earlier events cannot move its
+                // predicted scrollback either.
+                if terminal_under_pointer != Some(panel) {
+                    pending_scrollback = None;
+                }
                 self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback)
             });
+        if scroll_routing.pans_canvas {
+            scroll_routing.apply_absorbed_wheels(|owner, step| {
+                if terminal_under_pointer != Some(owner) {
+                    return false;
+                }
+                let Some(panel) = self.board.panels.iter_mut().find(|panel| panel.id == owner) else {
+                    return false;
+                };
+                let Some(terminal) = panel.terminal() else {
+                    return false;
+                };
+                let point = GridPoint { line: 0, column: 0 };
+                let Some(WheelAction::Scrollback(lines)) =
+                    wheel_action(step.delta, step.unit, cell_size, step.modifiers, terminal.mode(), point)
+                else {
+                    return false;
+                };
+                panel.scroll_scrollback_by(lines);
+                true
+            });
+        }
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
         } else if scroll_routing.pans_canvas {

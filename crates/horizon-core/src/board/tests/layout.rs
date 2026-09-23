@@ -30,7 +30,7 @@ fn parent_presets_and_reflow_preserve_cloud_layouts() {
         for parent in WorkspaceLayout::ALL {
             board.arrange_workspace(workspace, parent);
             assert_eq!(geometry(&board), before);
-            assert_eq!(board.workspace(workspace).unwrap().layout, None);
+            assert_eq!(board.workspace(workspace).unwrap().layout, Some(parent));
         }
         board.workspace_mut(workspace).unwrap().layout = Some(WorkspaceLayout::Columns);
         let added = board.create_panel(editor_panel_options(), workspace).unwrap();
@@ -39,7 +39,12 @@ fn parent_presets_and_reflow_preserve_cloud_layouts() {
         groups.reconcile(&mut board);
         assert_eq!(geometry(&board), before);
         assert_eq!(groups.0[0].layout, layout);
-        assert_eq!(board.workspace(workspace).unwrap().layout, None);
+        assert_eq!(
+            board.workspace(workspace).unwrap().layout,
+            Some(WorkspaceLayout::Columns)
+        );
+        // Keep this resize about reflow, clear of the cloud.
+        board.move_panel(added, [0.0, 4000.0]);
         let size = board.panel(added).unwrap().layout.size;
         board.workspace_mut(workspace).unwrap().layout = Some(WorkspaceLayout::Grid);
         board.resize_panel(added, [size[0] + 25.0, size[1] + 25.0]);
@@ -49,6 +54,250 @@ fn parent_presets_and_reflow_preserve_cloud_layouts() {
             [size[0] + 25.0, size[1] + 25.0]
         ));
     }
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn workspace_layout_arranges_free_panels_without_moving_cloud_members() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("mixed");
+    let origin = board.workspace(workspace).unwrap().position;
+    let free_first = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let free_second = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let cloud_first = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let cloud_second = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let local = board.workspace(workspace).unwrap().local_id.clone();
+    let mut group = CloudGroup::new(1, "Cloud".into(), local, std::path::PathBuf::new(), [24.0, 900.0]);
+    group.attach(&mut board, cloud_first);
+    group.attach(&mut board, cloud_second);
+    group.set_layout(&mut board, Some(WorkspaceLayout::Rows));
+    let cloud_layout = group.layout;
+    board.cloud_groups = CloudGroups(vec![group]);
+    let cloud_geometry = [cloud_first, cloud_second].map(|id| {
+        let panel = board.panel(id).unwrap();
+        (panel.layout.position, panel.layout.size)
+    });
+
+    board.arrange_workspace(workspace, WorkspaceLayout::Columns);
+
+    assert_eq!(
+        board.workspace(workspace).unwrap().layout,
+        Some(WorkspaceLayout::Columns)
+    );
+    assert_eq!(board.cloud_groups.0[0].layout, cloud_layout);
+    assert_eq!(
+        [cloud_first, cloud_second].map(|id| {
+            let panel = board.panel(id).unwrap();
+            (panel.layout.position, panel.layout.size)
+        }),
+        cloud_geometry
+    );
+    let free_first_panel = board.panel(free_first).unwrap();
+    let free_second_panel = board.panel(free_second).unwrap();
+    assert!(vec2_eq(
+        free_first_panel.layout.position,
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+    ));
+    assert!(vec2_eq(free_first_panel.layout.size, free_second_panel.layout.size));
+    assert!(free_second_panel.layout.position[0] > free_first_panel.layout.position[0]);
+    assert!((free_second_panel.layout.position[1] - free_first_panel.layout.position[1]).abs() <= f32::EPSILON);
+
+    let mut groups = board.cloud_groups.clone();
+    groups.reconcile(&mut board);
+    assert_eq!(
+        board.workspace(workspace).unwrap().layout,
+        Some(WorkspaceLayout::Columns)
+    );
+    assert_eq!(
+        [cloud_first, cloud_second].map(|id| {
+            let panel = board.panel(id).unwrap();
+            (panel.layout.position, panel.layout.size)
+        }),
+        cloud_geometry
+    );
+
+    let member_position = board.panel(cloud_first).unwrap().layout.position;
+    assert!(board.move_panel(cloud_first, [member_position[0] + 12.0, member_position[1] + 8.0]));
+    assert_eq!(
+        board.workspace(workspace).unwrap().layout,
+        Some(WorkspaceLayout::Columns)
+    );
+    assert!(board.move_panel(free_first, [480.0, 360.0]));
+    assert_eq!(board.workspace(workspace).unwrap().layout, None);
+    assert_eq!(board.cloud_groups.0[0].layout, Some(WorkspaceLayout::Rows));
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn workspace_grid_does_not_cover_an_attached_cloud() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("mixed");
+    let origin = board.workspace(workspace).unwrap().position;
+    let _left = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let _right = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let local = board.workspace(workspace).unwrap().local_id.clone();
+    // Sit the cloud on the workspace origin, where Grid would otherwise place a panel.
+    let cloud_position = [origin[0] + 8.0, origin[1] + 8.0];
+    let group = CloudGroup::new(1, "Cloud".into(), local, std::path::PathBuf::new(), cloud_position);
+    let (cloud_min, cloud_max) = group.overview_bounds();
+    let cloud_rect = [cloud_min[0], cloud_min[1], cloud_max[0], cloud_max[1]];
+    board.cloud_groups = CloudGroups(vec![group]);
+
+    board.arrange_workspace(workspace, WorkspaceLayout::Grid);
+
+    assert!(vec2_eq(board.cloud_groups.0[0].position, cloud_position));
+    assert_eq!(board.workspace(workspace).unwrap().layout, Some(WorkspaceLayout::Grid));
+    for panel in board.panels.iter().filter(|panel| panel.workspace_id == workspace) {
+        let rect = [
+            panel.layout.position[0],
+            panel.layout.position[1],
+            panel.layout.position[0] + panel.layout.size[0],
+            panel.layout.position[1] + panel.layout.size[1],
+        ];
+        assert!(
+            rect[2] <= cloud_rect[0]
+                || cloud_rect[2] <= rect[0]
+                || rect[3] <= cloud_rect[1]
+                || cloud_rect[3] <= rect[1],
+            "grid panel {:?} covers the cloud {cloud_rect:?}",
+            panel.layout.position
+        );
+    }
+    let (frame_min, frame_max) = board.workspace_bounds(workspace).expect("workspace frame");
+    assert!(frame_min[0] <= cloud_rect[0] && frame_min[1] <= cloud_rect[1]);
+    assert!(frame_max[0] >= cloud_rect[2] && frame_max[1] >= cloud_rect[3]);
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn workspace_grid_clears_a_row_of_clouds_without_a_step_limit() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+    use crate::layout::TILE_GAP;
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("row");
+    let origin = board.workspace(workspace).unwrap().position;
+    let panel_id = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let local = board.workspace(workspace).unwrap().local_id.clone();
+    let sample = CloudGroup::new(1, "Cloud".into(), local.clone(), std::path::PathBuf::new(), origin);
+    let (sample_min, sample_max) = sample.overview_bounds();
+    let pitch = (sample_max[0] - sample_min[0]) + TILE_GAP;
+    let mut cursor_x = origin[0];
+    let groups = (0..9)
+        .map(|index| {
+            let position = [cursor_x, origin[1]];
+            cursor_x += pitch;
+            CloudGroup::new(
+                index + 1,
+                format!("Cloud {index}"),
+                local.clone(),
+                std::path::PathBuf::new(),
+                position,
+            )
+        })
+        .collect();
+    board.cloud_groups = CloudGroups(groups);
+    let obstacles: Vec<[f32; 4]> = board
+        .cloud_groups
+        .0
+        .iter()
+        .map(|group| {
+            let (min, max) = group.overview_bounds();
+            [min[0], min[1], max[0], max[1]]
+        })
+        .collect();
+
+    board.arrange_workspace(workspace, WorkspaceLayout::Grid);
+
+    let panel = board.panel(panel_id).unwrap();
+    let rect = [
+        panel.layout.position[0],
+        panel.layout.position[1],
+        panel.layout.position[0] + panel.layout.size[0] + 2.0 * super::super::PANEL_CHROME_PAD,
+        panel.layout.position[1]
+            + panel.layout.size[1]
+            + super::super::PANEL_CHROME_TITLEBAR
+            + 2.0 * super::super::PANEL_CHROME_PAD,
+    ];
+    for obstacle in &obstacles {
+        assert!(
+            rect[2] <= obstacle[0] || obstacle[2] <= rect[0] || rect[3] <= obstacle[1] || obstacle[3] <= rect[1],
+            "panel {rect:?} still covers cloud {obstacle:?}"
+        );
+    }
+    assert!(vec2_eq(board.cloud_groups.0[0].position, origin));
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn translating_a_workspace_moves_its_cloud_with_the_frame() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("mixed");
+    let _panel = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let local = board.workspace(workspace).unwrap().local_id.clone();
+    let group = CloudGroup::new(
+        1,
+        "Cloud".into(),
+        local,
+        std::path::PathBuf::new(),
+        board.workspace(workspace).unwrap().position,
+    );
+    board.cloud_groups = CloudGroups(vec![group]);
+    let mut groups = board.cloud_groups.clone();
+    groups.reconcile(&mut board);
+    let synced = board.cloud_groups.0[0].position;
+    let before = board.workspace_frame_rect(workspace).expect("frame");
+
+    assert!(board.translate_workspace_with_push(workspace, [80.0, 0.0]));
+
+    assert!(vec2_eq(board.cloud_groups.0[0].position, [synced[0] + 80.0, synced[1]]));
+    groups = board.cloud_groups.clone();
+    groups.reconcile(&mut board);
+    assert!(vec2_eq(board.cloud_groups.0[0].position, [synced[0] + 80.0, synced[1]]));
+    let after = board.workspace_frame_rect(workspace).expect("translated frame");
+    assert!((after[0] - before[0] - 80.0).abs() <= 0.5);
+    assert!((after[2] - before[2] - 80.0).abs() <= 0.5);
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn removing_a_cloud_returns_arranged_panels_to_the_preset() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("mixed");
+    let panel = board.create_panel(editor_panel_options(), workspace).unwrap();
+    let local = board.workspace(workspace).unwrap().local_id.clone();
+    let origin = board.workspace(workspace).unwrap().position;
+    let group = CloudGroup::new(1, "Cloud".into(), local, std::path::PathBuf::new(), origin);
+    board.cloud_groups = CloudGroups(vec![group]);
+    board.arrange_workspace(workspace, WorkspaceLayout::Grid);
+    let grid_size = board.panel(panel).unwrap().layout.size;
+    let shifted = board.panel(panel).unwrap().layout.position;
+    assert!(!vec2_eq(shifted, [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]));
+    board.arrange_workspace(workspace, WorkspaceLayout::Rows);
+    assert!(vec2_eq(board.panel(panel).unwrap().layout.size, grid_size));
+    board.arrange_workspace(workspace, WorkspaceLayout::Grid);
+
+    let grid_size = board.panel(panel).unwrap().layout.size;
+    board.arrange_workspace(workspace, WorkspaceLayout::Rows);
+    let rows_size = board.panel(panel).unwrap().layout.size;
+    assert!(rows_size[0] <= grid_size[0] + 1.0);
+    assert!(rows_size[1] <= grid_size[1] + 1.0);
+
+    board.cloud_groups.0.clear();
+    board.reapply_workspace_layout_if_set(workspace);
+
+    assert!(vec2_eq(
+        board.panel(panel).unwrap().layout.position,
+        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]
+    ));
 }
 
 #[test]
@@ -590,4 +839,84 @@ fn hidden_panels_leave_layout_and_focus_and_showing_focuses_them() {
     board.focus(second);
     assert!(board.panel(second).expect("second panel").visible);
     assert_eq!(board.focused, Some(second));
+}
+
+#[test]
+fn deferred_cloud_creation_does_not_reflow_or_move_neighbors_before_membership() {
+    for preset in WorkspaceLayout::ALL {
+        let mut board = Board::new();
+        let workspace = board.create_workspace_at("Cloud", [0.0, 0.0]);
+        let ordinary = board.create_panel(editor_panel_options(), workspace).unwrap();
+        board.arrange_workspace(workspace, preset);
+        let neighbor = board.create_workspace_at("Neighbor", [900.0, 0.0]);
+        let other = board.create_panel(editor_panel_options(), neighbor).unwrap();
+        let before = [ordinary, other].map(|id| board.panel(id).unwrap().layout.position);
+        let origin = board.workspace(neighbor).unwrap().position;
+        let mut options = editor_panel_options();
+        options.position = Some([800.0, 40.0]);
+        let child = board
+            .create_panel_preserving_workspace_layout(options, workspace)
+            .unwrap();
+        assert_eq!(board.workspace(workspace).unwrap().layout, Some(preset));
+        assert_eq!(
+            board.workspace(neighbor).unwrap().position.map(f32::to_bits),
+            origin.map(f32::to_bits)
+        );
+        assert_eq!(
+            [ordinary, other].map(|id| board.panel(id).unwrap().layout.position),
+            before
+        );
+        assert_eq!(
+            board.panel(child).unwrap().layout.position.map(f32::to_bits),
+            [800.0_f32, 40.0].map(f32::to_bits)
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "cloud-workspaces")]
+fn registering_clouds_publishes_all_members_before_reflow_and_is_idempotent() {
+    use crate::cloud_panel::{CloudGroup, CloudGroups};
+    let mut board = Board::new();
+    let ws = board.create_workspace("Clouds");
+    let ids: Vec<_> = (0..3)
+        .map(|_| board.create_panel(editor_panel_options(), ws).unwrap())
+        .collect();
+    let local = board.workspace(ws).unwrap().local_id.clone();
+    let mut groups = CloudGroups::default();
+    for (index, id) in (0_u16..).zip(&ids[..2]) {
+        let mut group = CloudGroup::new(
+            u32::from(index),
+            "Cloud".into(),
+            local.clone(),
+            std::path::PathBuf::new(),
+            [f32::from(index) * 1600.0, 1000.0],
+        );
+        group.attach(&mut board, *id);
+        groups.0.push(group);
+    }
+    assert!(
+        board.cloud_groups.0.is_empty(),
+        "standalone attachment does not register a cloud"
+    );
+    board.workspace_mut(ws).unwrap().layout = Some(WorkspaceLayout::Columns);
+    groups.reconcile(&mut board);
+    assert_eq!(board.cloud_groups.0.len(), 2);
+    assert!(ids[..2].iter().all(|id| board.cloud_groups.contains_panel(&board, *id)));
+    let before: Vec<_> = board
+        .panels
+        .iter()
+        .map(|p| (p.layout.position, p.layout.size))
+        .collect();
+    groups.reconcile(&mut board);
+    assert_eq!(
+        board
+            .panels
+            .iter()
+            .map(|p| (p.layout.position, p.layout.size))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(board.workspace(ws).unwrap().layout, Some(WorkspaceLayout::Columns));
+    assert_eq!(board.cloud_groups.0.len(), 2);
 }

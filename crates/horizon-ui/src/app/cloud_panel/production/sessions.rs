@@ -48,8 +48,8 @@ impl HorizonApp {
                 remaining.insert(session.panel_id);
                 continue;
             }
-            match self.board.create_panel(options, workspace) {
-                Ok(id) => self.cloud_panel_created(index, id),
+            match self.create_cloud_member(index, options, workspace) {
+                Ok(_) => {}
                 Err(error) => {
                     self.cloud_prototype.error = Some(error.to_string());
                     remaining.insert(session.panel_id);

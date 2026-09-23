@@ -135,10 +135,7 @@ pub(super) fn show_workspace_context_menu(
         ui.separator();
         ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
         if ui
-            .add_enabled(
-                workspace.cloud_count == 0,
-                Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false),
-            )
+            .add(Button::new(egui::RichText::new("Default").size(12.0).color(theme::FG_SOFT())).frame(false))
             .clicked()
         {
             interaction.action = Some(WorkspaceAction::ClearLayout);
@@ -146,10 +143,7 @@ pub(super) fn show_workspace_context_menu(
         }
         for layout in WorkspaceLayout::ALL {
             let text = egui::RichText::new(layout.label()).size(12.0).color(theme::FG_SOFT());
-            if ui
-                .add_enabled(workspace.cloud_count == 0, Button::new(text).frame(false))
-                .clicked()
-            {
+            if ui.add(Button::new(text).frame(false)).clicked() {
                 interaction.action = Some(WorkspaceAction::ArrangeLayout(layout));
                 ui.close();
             }
@@ -207,21 +201,24 @@ fn workspace_layout_preset_row_width() -> f32 {
 }
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
-    ui.add(
-        Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
-            .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
-            .fill(theme::alpha(
-                theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
-                220,
-            ))
-            .stroke(Stroke::new(
-                1.0_f32,
-                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
-            ))
-            .corner_radius(8),
-    )
-    .on_hover_text("Open in a separate window")
-    .clicked()
+    let response = ui
+        .add_enabled(
+            workspace.capabilities.can_detach,
+            Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
+                .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+                .fill(theme::alpha(
+                    theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
+                    220,
+                ))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
+                ))
+                .corner_radius(8),
+        )
+        .on_hover_text("Open in a separate window")
+        .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.");
+    response.clicked()
 }
 
 #[cfg(test)]
@@ -250,7 +247,10 @@ mod tests {
             label_hidden: false,
             panel_count: 3,
             layout: None,
-            cloud_count: 0,
+            capabilities: super::super::WorkspaceLayoutCapabilities {
+                can_arrange: true,
+                can_detach: true,
+            },
         }
     }
 

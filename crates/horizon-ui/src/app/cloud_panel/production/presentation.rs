@@ -330,8 +330,7 @@ impl HorizonApp {
                 if self.prepare_cloud_remote_panel(index, &mut options).is_err() {
                     continue;
                 }
-                if let Ok(id) = self.board.create_panel(options, ws) {
-                    self.cloud_panel_created(index, id);
+                if self.create_cloud_member(index, options, ws).is_ok() {
                     if collapsed {
                         self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, true);
                     }

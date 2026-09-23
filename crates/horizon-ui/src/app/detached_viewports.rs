@@ -69,7 +69,10 @@ impl HorizonApp {
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return false;
         };
-        if !self.workspace_can_arrange_panels(workspace_id) {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.groups.contains_workspace(&workspace.local_id)
+            || self.board.cloud_groups.contains_workspace(&workspace.local_id)
+        {
             return false;
         }
         !self.detached_workspaces.contains_key(&workspace.local_id)
@@ -229,6 +232,7 @@ impl HorizonApp {
         self.render_canvas(ui);
         self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.render_browser_connector_lines(ctx, canvas_rect, Some(workspace_id));
+        self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);
         self.render_file_drop_highlight(ctx);
         let _ = self.render_workspace_minimap(
@@ -247,6 +251,7 @@ impl HorizonApp {
             ctx.request_repaint();
         }
 
+        self.finish_detached_device_presentation(ctx, workspace_id, canvas_rect);
         self.persist_detached_viewport_state(workspace_local_id);
 
         self.canvas_view = saved_canvas_view;

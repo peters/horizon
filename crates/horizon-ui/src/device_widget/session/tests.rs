@@ -8,7 +8,7 @@ fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewErro
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let session = Session::start(
-        listener.local_addr()?,
+        DeviceRoute::Direct(listener.local_addr()?),
         Context::default(),
         ViewportId::ROOT,
         DeviceViewOptions::default(),
@@ -68,13 +68,22 @@ fn named_session_with_context(
     visible: bool,
     ctx: Context,
 ) -> Result<(Session, std::net::TcpStream), ViewError> {
+    session_with_options(name, visible, ctx, DeviceViewOptions::default())
+}
+
+fn session_with_options(
+    name: &str,
+    visible: bool,
+    ctx: Context,
+    options: DeviceViewOptions,
+) -> Result<(Session, std::net::TcpStream), ViewError> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let session = Session::start(
-        listener.local_addr()?,
+        DeviceRoute::Direct(listener.local_addr()?),
         ctx,
         ViewportId::ROOT,
-        DeviceViewOptions::default(),
+        options,
     )?;
     session.set_visible(visible);
     let started = std::time::Instant::now();
@@ -388,5 +397,38 @@ fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(
         assert_eq!(session.take_server_details().desktop_size, Some([3, 2]));
         assert!(session.latest_full().is_none());
     }
+    Ok(())
+}
+
+#[test]
+fn queued_input_reaches_the_server_before_the_next_refresh() -> Result<(), ViewError> {
+    // One frame a second: the next refresh request is a second away, so
+    // anything the server reads first was forwarded while the worker waited.
+    let options = DeviceViewOptions {
+        max_fps: 1,
+        ..DeviceViewOptions::default()
+    };
+    let (session, mut stream) = session_with_options("", true, Context::default(), options)?;
+    session.send_input([
+        X11Event::KeyEvent(vnc::ClientKeyEvent {
+            keycode: 0xff0d,
+            down: true,
+        }),
+        X11Event::PointerEvent(vnc::ClientMouseEvent {
+            position_x: 1,
+            position_y: 0,
+            bottons: 1,
+        }),
+    ]);
+    let mut key = [0; 8];
+    stream.read_exact(&mut key)?;
+    assert_eq!(key, [4, 1, 0, 0, 0, 0, 0xff, 0x0d], "RFB KeyEvent for Return, down");
+    let mut pointer = [0; 6];
+    stream.read_exact(&mut pointer)?;
+    assert_eq!(pointer, [5, 1, 0, 1, 0, 0], "RFB PointerEvent, left button at (1, 0)");
+    let mut refresh = [0; 10];
+    stream.read_exact(&mut refresh)?;
+    assert_eq!(refresh[0], 3, "the refresh follows the input");
+    drop(session);
     Ok(())
 }

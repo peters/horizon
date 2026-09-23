@@ -1,5 +1,5 @@
 //! Portable worker lifecycle. The caller durably persists `CreateState` before I/O.
-use crate::{Profile, valid_id, valid_image};
+use crate::{Profile, Reason, valid_id, valid_image};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -114,7 +114,9 @@ impl WorkerSpec {
         Ok(())
     }
 }
-fn valid_public_key(value: &str) -> bool {
+/// Whether a public identity satisfies the worker SSH key contract.
+#[must_use]
+pub fn valid_public_key(value: &str) -> bool {
     if value.len() > 4096 || value.contains(['\n', '\r', '\0']) {
         return false;
     }
@@ -228,6 +230,15 @@ impl Worker {
     /// # Errors
     /// Inspect actual assigned resources separately after persisting the worker identity.
     pub fn verify_resources(&self, spec: &WorkerSpec) -> Result<(), CloudError> {
+        self.verify_resources_with_volume(spec, None)
+    }
+    /// # Errors
+    /// Requires the exact owned volume and mount before source or credentials may be transferred.
+    pub fn verify_resources_with_volume(
+        &self,
+        spec: &WorkerSpec,
+        expected_volume: Option<&crate::runpod::volumes::Volume>,
+    ) -> Result<(), CloudError> {
         if self.vcpu_count.is_none() || self.memory_in_gb.is_none() || (spec.profile.gpu && self.gpu_count.is_none()) {
             return Err(CloudError::Invalid(
                 "Provider has not confirmed the assigned worker resources",
@@ -241,7 +252,19 @@ impl Worker {
                 "Assigned worker does not meet the requested resource profile",
             ));
         }
-        if self.network_volume.is_some() {
+        if let Some(expected) = expected_volume {
+            expected.verify_worker_spec(spec)?;
+            if !self.network_volume.as_ref().is_some_and(|assigned| {
+                assigned.id.as_deref() == Some(&expected.id)
+                    && assigned.size == Some(expected.size)
+                    && assigned.data_center_id.as_deref() == Some(&expected.data_center_id)
+            }) || self.volume_in_gb != Some(0)
+            {
+                return Err(CloudError::Invalid(
+                    "Assigned workspace volume differs from the recorded storage allocation",
+                ));
+            }
+        } else if self.network_volume.is_some() {
             return Err(CloudError::Invalid(
                 "Assigned worker has an unsupported network volume; inspect or explicitly delete the worker",
             ));
@@ -254,9 +277,10 @@ impl Worker {
         if self
             .container_disk_in_gb
             .is_some_and(|size| size < u32::from(spec.profile.storage.container_gb))
-            || self
-                .volume_in_gb
-                .is_some_and(|size| size < u32::from(spec.profile.storage.volume_gb))
+            || (expected_volume.is_none()
+                && self
+                    .volume_in_gb
+                    .is_some_and(|size| size < u32::from(spec.profile.storage.volume_gb)))
             || self.volume_mount_path.as_deref() != Some("/workspace")
         {
             return Err(CloudError::Invalid(
@@ -283,12 +307,12 @@ pub enum CloudError {
     Cancelled,
     #[error("Provider transport failed; reconcile before retrying")]
     Transport,
-    #[error("Provider returned HTTP {0}")]
-    Http(u16),
+    #[error("Provider returned HTTP {0}{reason}", reason = .1.suffix())]
+    Http(u16, Reason),
     #[error("Provider authentication failed; check the machine-local credential")]
     Unauthorized,
-    #[error("Provider rejected the request or capacity is unavailable")]
-    Rejected,
+    #[error("Provider rejected the request or capacity is unavailable{reason}", reason = .0.suffix())]
+    Rejected(Reason),
     #[error("Provider response is invalid")]
     InvalidResponse,
     #[error("Worker creation is unresolved; no second allocation was attempted")]

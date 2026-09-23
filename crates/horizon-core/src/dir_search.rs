@@ -64,6 +64,33 @@ pub fn expand_tilde(input: &str) -> PathBuf {
     }
 }
 
+/// Resolve a typed picker query to the directory path it names, using the
+/// same rules as completion so a confirmed query matches its suggestions.
+///
+/// Absolute paths resolve as written and `~` or `~/…` from `$HOME`. The UI
+/// shows `~` as a prefix, so other queries containing a separator
+/// (`github/foo`, `./foo`) are relative to `$HOME`, not the process working
+/// directory. Bare names and `~user` forms are fuzzy searches and name no path.
+#[must_use]
+pub fn resolve_query_path(query: &str) -> Option<PathBuf> {
+    let trimmed = query.trim();
+    let path = if let Some(rest) = trimmed.strip_prefix('~') {
+        if rest.is_empty() {
+            home_dir()
+        } else {
+            home_dir().join(rest.strip_prefix(std::path::is_separator)?)
+        }
+    } else if trimmed.starts_with('/') || Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else if trimmed.contains(std::path::is_separator) {
+        home_dir().join(trimmed)
+    } else {
+        return None;
+    };
+    // Drop trailing separators and `.` components so the chosen path displays cleanly.
+    Some(path.components().collect())
+}
+
 fn search_directories(query: &str) -> Vec<PathBuf> {
     let trimmed = query.trim();
 
@@ -71,18 +98,10 @@ fn search_directories(query: &str) -> Vec<PathBuf> {
         return list_home_children();
     }
 
-    // Path-based completion: query contains a separator or starts with ~ /
-    if trimmed.starts_with('/') || trimmed.starts_with('~') {
-        return complete_path(trimmed);
+    match resolve_query_path(trimmed) {
+        Some(path) => complete_path(&path, trimmed.ends_with(std::path::is_separator)),
+        None => fuzzy_search(trimmed),
     }
-    if trimmed.contains('/') {
-        // The UI shows ~ as a prefix, so bare relative paths like "github/foo"
-        // should resolve against $HOME, not the current working directory.
-        return complete_path(&format!("~/{trimmed}"));
-    }
-
-    // Fuzzy name search from $HOME
-    fuzzy_search(trimmed)
 }
 
 /// List immediate subdirectories of $HOME, sorted with project-like dirs first.
@@ -103,14 +122,11 @@ fn list_home_children() -> Vec<PathBuf> {
     dirs
 }
 
-/// Tab-complete a partial path.
-fn complete_path(input: &str) -> Vec<PathBuf> {
-    let expanded = expand_tilde(input);
-
-    // If the expanded path is an existing directory and the input ends with /,
-    // list its children.
-    if expanded.is_dir() && input.ends_with('/') {
-        return list_child_dirs(&expanded);
+/// Tab-complete a partial path. A trailing separator on an existing directory
+/// lists its children instead of its matching siblings.
+fn complete_path(expanded: &Path, list_children: bool) -> Vec<PathBuf> {
+    if list_children && expanded.is_dir() {
+        return list_child_dirs(expanded);
     }
 
     // Otherwise complete in the parent directory.
@@ -279,6 +295,34 @@ mod tests {
         assert_eq!(expand_tilde("/etc"), PathBuf::from("/etc"));
         assert_eq!(expand_tilde("~cache/model.gguf"), PathBuf::from("~cache/model.gguf"));
         assert_eq!(expand_tilde("~alice/model.gguf"), PathBuf::from("~alice/model.gguf"));
+    }
+
+    #[test]
+    fn query_paths_resolve_like_completion() {
+        let home = home_dir();
+        assert_eq!(resolve_query_path("~"), Some(home.clone()));
+        assert_eq!(resolve_query_path("~/src/repo/"), Some(home.join("src/repo")));
+        assert_eq!(resolve_query_path("/srv/repo"), Some(PathBuf::from("/srv/repo")));
+        assert_eq!(resolve_query_path(" src/repo "), Some(home.join("src/repo")));
+        assert_eq!(resolve_query_path("./src/repo"), Some(home.join("src/repo")));
+        assert_eq!(resolve_query_path("~/"), Some(home.clone()));
+        assert_eq!(resolve_query_path("~alice/repo"), None);
+        assert_eq!(resolve_query_path("repo"), None);
+        assert_eq!(resolve_query_path(""), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_query_paths_resolve_like_completion() {
+        assert_eq!(resolve_query_path(r"C:\src\repo\"), Some(PathBuf::from(r"C:\src\repo")));
+        assert_eq!(
+            resolve_query_path(r"~\src\repo"),
+            Some(home_dir().join("src").join("repo"))
+        );
+        assert_eq!(
+            resolve_query_path(r"src\repo"),
+            Some(home_dir().join("src").join("repo"))
+        );
     }
 
     #[test]

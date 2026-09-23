@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use eframe::{AppCreator, EframeWinitApplication, NativeOptions, UserEvent};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 
+use super::app::DeviceRequestBridge;
 use super::input::ObservedKeyboardInputs;
 
 #[cfg(target_os = "linux")]
@@ -13,12 +16,14 @@ pub(crate) fn run_native_with_keyboard_observer(
     native_options: NativeOptions,
     app_creator: AppCreator<'_>,
     observed_keyboard_inputs: ObservedKeyboardInputs,
+    device_requests: Arc<DeviceRequestBridge>,
 ) -> eframe::Result {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    device_requests.start_watcher(event_loop.create_proxy());
 
     let eframe_app = eframe::create_native(app_name, native_options, app_creator, &event_loop);
-    let mut app = KeyboardAwareApp::new(eframe_app, observed_keyboard_inputs);
+    let mut app = KeyboardAwareApp::new(eframe_app, observed_keyboard_inputs, device_requests);
     #[cfg(target_os = "linux")]
     {
         app.pinch = pinch::NativePinch::start(&event_loop);
@@ -33,6 +38,7 @@ pub(crate) fn run_native_with_keyboard_observer(
 struct KeyboardAwareApp<'app> {
     inner: EframeWinitApplication<'app>,
     observed_keyboard_inputs: ObservedKeyboardInputs,
+    device_requests: Arc<DeviceRequestBridge>,
     modifiers: egui::Modifiers,
     native_window_liveness: NativeWindowLiveness,
     // `pinch` borrows the platform display through raw FFI, so it must be
@@ -46,10 +52,15 @@ struct KeyboardAwareApp<'app> {
 }
 
 impl<'app> KeyboardAwareApp<'app> {
-    fn new(inner: EframeWinitApplication<'app>, observed_keyboard_inputs: ObservedKeyboardInputs) -> Self {
+    fn new(
+        inner: EframeWinitApplication<'app>,
+        observed_keyboard_inputs: ObservedKeyboardInputs,
+        device_requests: Arc<DeviceRequestBridge>,
+    ) -> Self {
         Self {
             inner,
             observed_keyboard_inputs,
+            device_requests,
             modifiers: egui::Modifiers::default(),
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
@@ -178,6 +189,12 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         }
         #[cfg(target_os = "linux")]
         self.drain_pinch(event_loop);
+        // Not a repaint. Claiming here runs while Wayland is withholding
+        // `RedrawRequested` for an unpresented surface.
+        if crate::app::is_device_queue_wake(&event) {
+            self.device_requests.poll_on_ui_thread();
+            return;
+        }
         self.inner.user_event(event_loop, event);
     }
 

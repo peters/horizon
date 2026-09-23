@@ -25,15 +25,20 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 ### Native Device panels
 
-- `horizon-core::device` owns the validated local VNC target and panel state;
+- `horizon-core::device` owns the validated VNC target and panel state;
   `panel::spawn::device` creates a panel without a PTY. Creator-supplied identity
   is normalized in core and persisted with panel state; VNC observations stay
-  connection-local. Existing command metadata
-  persists the target. Restored panels require manual reconnect.
-- `horizon-ui::device_widget` owns only read-only presentation. `details` renders
+  connection-local. Existing command metadata persists the target, and an
+  optional SSH tunnel host is persisted through the panel's `ssh_connection`
+  like an SSH panel, in which case the target is the endpoint as seen from that
+  host. Restored panels require manual reconnect.
+- Device panel requests are claimed on the UI thread by `app/device_request_pump.rs` when a request file appears. Wayland does not deliver `RedrawRequested` while a frame callback is outstanding and the compositor is not presenting the surface, and it reports neither visibility nor minimization, so the queue cannot wait for `App::ui`.
+- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the pointer and keyboard mapping in `input.rs`; agents never get that path. `details` renders
   labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
-  worker and a single latest-frame slot. The completed UI pass reconciles root
+  worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`
+  process per tunnelled connection, piped straight into the decoder and killed
+  with it, and keeps ssh's last diagnostic lines for the failure message. The completed UI pass reconciles root
   and detached viewer visibility; hidden workers pause frame requests and resume
   with a full refresh. Desktop resizing also requests a full refresh. Panel,
   workspace and session cleanup drops the worker. Viewer input never reaches the target.
@@ -157,7 +162,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   attention flows, agent working-status detection, workspace and panel
   membership changes, arrangement/collision logic, geometry queries, and
   shutdown state. Preset slot collision and swapping lives in
-  `board/arrangement/reordering.rs`.
+  `board/arrangement/reordering.rs`; the panel resize collision cascade, which
+  pushes sibling panels and whole cloud frames, lives in
+  `board/arrangement/panel_collisions.rs`.
 - Large board test surfaces should live in `board/tests/` topic files so
   `board.rs` can stay focused on production orchestration.
 - `panel.rs` owns panel models and content access; explicit restart logic lives
@@ -287,7 +294,15 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `panels`: panel-area orchestration and body rendering, with gesture and
     context-menu handling and outcome application in `panels/interaction.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
-    layout, and row/header paint helpers split into `remote_hosts_overlay/`
+    layout, row/header paint helpers and the SSH/VNC mode plus destination
+    workspace controls split into `remote_hosts_overlay/`, plus the per-host
+    context menu; the overlay only reports an `Open`, `SetDefaultWorkspace`
+    or `SaveShortcut` action
+  - `remote_hosts`: overlay lifecycle and catalog refresh, with workspace
+    resolution, VNC port resolution (`RemoteLaunch`) and panel creation in
+    `remote_hosts/launch.rs`, config-backed
+    preferences (the default workspace) in `remote_hosts/preferences.rs`, and
+    host shortcuts saved as presets in `remote_hosts/shortcuts.rs`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
@@ -422,6 +437,10 @@ and `app/device_requests.rs` for live board scope and ownership checks. Requests
 are host-bound; inspection is workspace-scoped and mutations require ownership.
 `device_widget` reports connection and actual clipped image presentation
 separately. Native input remains in the standalone device crate.
+`app/device_presentation.rs` captures the renderer's root/detached visibility
+context; `device_widget/host.rs` owns transient view and Reveal observations.
+Their optional shared manifest data keeps render-time and later navigation
+geometry distinct without changing view, focus, ownership or transport.
 
 ### Shared remote-provider capacity
 
@@ -443,14 +462,22 @@ and credential logic must not be copied into either transport or UI rendering.
 
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
-caller supplied. It must not depend on core/UI, terminal, browser, device, Git,
-settings storage or a provider CLI.
+caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
+fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
+stock for placement. The crate must not depend on core/UI, terminal, browser, device,
+Git, settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
-separate. `worker_contract` shares capability transport and contract validation
+separate. `deployment::storage` persists a separate volume journal under the same
+per-cloud lock; explicit cleanup and local removal account for both resources.
+`worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
+`repository::launch` discovers the selected checkout, parses its default profile
+and resolves the committed revision; the UI launch coordinator captures workspace
+identity and performs preparation while the user enters a title. Credential
+preflight runs off-thread and checks only profile-enabled agents.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. UI modules render controls, consume progress and attach the

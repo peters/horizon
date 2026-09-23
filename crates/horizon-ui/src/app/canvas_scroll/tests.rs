@@ -641,30 +641,10 @@ fn a_claimed_mouse_wheel_notch_is_eased_in_like_egui_scrolls_it() {
 
 #[test]
 fn a_terminal_is_judged_where_the_frames_earlier_events_leave_it() {
-    use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
-    use std::fmt::Write as _;
+    use horizon_core::{PanelId, WorkspaceId};
 
     let (_temp, ctx, mut app) = app_fixture();
-    let transcripts = tempfile::tempdir().expect("transcript tempdir");
-    let mut replay = String::new();
-    for index in 0..120 {
-        write!(replay, "history {index:03}\r\n").expect("format history line");
-    }
-    std::fs::write(transcripts.path().join("history-panel.bin"), replay).expect("write transcript");
-    let panel = Panel::spawn(
-        PanelId(99),
-        WorkspaceId(7),
-        PanelOptions {
-            kind: PanelKind::Ssh,
-            rows: 10,
-            cols: 40,
-            local_id: Some("history-panel".to_string()),
-            transcript_root: Some(transcripts.path().to_path_buf()),
-            restore_as_disconnected_snapshot: true,
-            ..PanelOptions::default()
-        },
-    )
-    .expect("spawn history snapshot");
+    let (_transcripts, panel) = history_panel(PanelId(99), WorkspaceId(7));
     assert!(panel.terminal().expect("terminal").history_size() > 3);
     app.board.panels.push(panel);
 
@@ -761,6 +741,7 @@ fn an_idle_relatch_lands_the_previous_notch_in_full() {
     assert!((total.y + 2.0 * options.line_scroll_speed).abs() < 0.001, "{total:?}");
 }
 
+mod suppression;
 mod zoom;
 
 #[test]
@@ -818,4 +799,116 @@ fn shift_never_chains_mouse_reporting_or_alternate_scroll_terminals() {
             );
         }
     }
+}
+
+fn history_panel(
+    panel_id: horizon_core::PanelId,
+    workspace_id: horizon_core::WorkspaceId,
+) -> (TempDir, horizon_core::Panel) {
+    use horizon_core::{Panel, PanelKind, PanelOptions};
+    use std::fmt::Write as _;
+    let transcripts = tempfile::tempdir().expect("transcript tempdir");
+    let mut replay = String::new();
+    for index in 0..120 {
+        write!(replay, "history {index:03}\r\n").expect("format history line");
+    }
+    std::fs::write(transcripts.path().join("history-panel.bin"), replay).expect("write transcript");
+    let panel = Panel::spawn(
+        panel_id,
+        workspace_id,
+        PanelOptions {
+            kind: PanelKind::Ssh,
+            rows: 10,
+            cols: 40,
+            local_id: Some("history-panel".to_string()),
+            transcript_root: Some(transcripts.path().to_path_buf()),
+            restore_as_disconnected_snapshot: true,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("spawn history snapshot");
+    (transcripts, panel)
+}
+
+#[test]
+fn pointer_drift_does_not_advance_the_owners_predicted_scrollback() {
+    let (_temp, ctx, mut app) = app_fixture();
+    let id = app.board.panels[0].id;
+    let (_transcripts, mut panel) = history_panel(id, app.board.panels[0].workspace_id);
+    panel.layout = app.board.panels[0].layout;
+    panel.set_scrollback(1);
+    app.board.panels[0] = panel;
+    let geometry = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)[0].1;
+    let body = geometry.terminal_body_screen_rect.expect("terminal body");
+    let outside = Pos2::new(1300.0, 850.0);
+    assert!(!geometry.screen_rect.contains(outside));
+    for (time, destination) in [
+        (1.0, outside),
+        (2.0, geometry.screen_rect.center_top() + Vec2::new(0.0, 2.0)),
+    ] {
+        let frame = |time, pointer, events: Vec<Event>| {
+            let mut input = raw_input([1400.0, 900.0], None);
+            input.time = Some(time);
+            input.events = std::iter::once(Event::PointerMoved(pointer)).chain(events).collect();
+            input
+        };
+        let _ = ctx
+            .run_ui(
+                frame(time, body.center(), vec![wheel(Vec2::ZERO, TouchPhase::Start)]),
+                |ui| app.handle_canvas_pan(ui.ctx()),
+            )
+            .discard_textures();
+        let before = app.canvas_view.pan_offset;
+        let down = Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        let _ = ctx
+            .run_ui(frame(time + 0.016, destination, vec![down.clone(), down]), |ui| {
+                app.handle_canvas_pan(ui.ctx());
+            })
+            .discard_textures();
+        assert_offset(app.canvas_view.pan_offset, before);
+        assert!(!app.canvas_pan_input_claimed);
+        assert_eq!(app.board.panels[0].terminal().expect("terminal").scrollback(), 1);
+    }
+}
+
+#[test]
+fn a_chaining_frame_applies_the_terminals_earlier_wheel_before_moving_it() {
+    let (_temp, ctx, mut app) = app_fixture();
+    let id = app.board.panels[0].id;
+    let (_transcripts, mut panel) = history_panel(id, app.board.panels[0].workspace_id);
+    panel.layout = app.board.panels[0].layout;
+    app.board.panels[0] = panel;
+    for time in [0.1, 0.2, 0.3] {
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(time);
+        let _ = run_app_frame_with_input(&ctx, &mut app, input);
+    }
+    app.board.panels[0].set_scrollback(1);
+    let body = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)[0]
+        .1
+        .terminal_body_screen_rect
+        .expect("body");
+    let before = app.canvas_view.pan_offset;
+    let mut input = scroll_frame(1.0, body.center(), Vec2::ZERO, TouchPhase::Start);
+    input.events.extend([
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        },
+        wheel(Vec2::new(0.0, -2000.0), TouchPhase::Move),
+    ]);
+    let _ = run_app_frame_with_input(&ctx, &mut app, input);
+    assert!(app.canvas_view.pan_offset[1] < before[1] - 1000.0);
+    assert_eq!(
+        app.board.panels[0].terminal().expect("terminal").scrollback(),
+        0,
+        "the first wheel must reach its terminal even when the second moves it away"
+    );
 }

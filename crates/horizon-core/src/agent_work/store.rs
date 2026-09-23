@@ -13,6 +13,7 @@ use super::{HookEvent, SuspendRecord, TranscriptSnapshot, TurnLedger, TurnState}
 const SCHEMA_VERSION: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 256 * 1024;
 const LOCK_WAIT: Duration = Duration::from_millis(200);
+const STAGING_PREFIX: &str = ".tmp-";
 
 #[derive(Debug, Deserialize)]
 pub struct HookInput {
@@ -444,10 +445,7 @@ impl WorkStore {
             return Err(invalid("work record exceeds size limit"));
         }
         let path = self.record_path(&record.panel_local_id)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
-        temporary.write_all(&bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(&path).map_err(|error| error.error)?;
+        replace_file(&self.root, &path, &bytes)?;
         #[cfg(unix)]
         self.sync_parent_directories(&path)?;
         Ok(())
@@ -498,6 +496,25 @@ fn private_options() -> OpenOptions {
     }
     #[cfg(not(unix))]
     options
+}
+
+/// Stage `bytes` in `directory`, then rename them over `path`.
+///
+/// `tempfile`'s `persist` hands the destination to `MoveFileExW` without the
+/// verbatim prefix, so on Windows it cannot publish a record path longer than
+/// `MAX_PATH`, which the longest panel ids reach. `fs::rename` adds the prefix,
+/// and a staging file created through `fs` does not carry the temporary
+/// attribute that `tempfile` sets on Windows.
+fn replace_file(directory: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let staging = directory.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4().simple()));
+    let mut file = private_options().write(true).create_new(true).open(&staging)?;
+    let staged = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let published = staged.and_then(|()| fs::rename(&staging, path));
+    if published.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    published
 }
 
 fn invalid(message: &'static str) -> io::Error {

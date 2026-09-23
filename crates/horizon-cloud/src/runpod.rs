@@ -1,10 +1,15 @@
 //! `RunPod` REST adapter. Never repeats a create request after an uncertain response.
-use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Worker, WorkerSpec, valid_id};
+use crate::{Cancellation, CloudError, CreateState, Credential, Progress, Reason, Worker, WorkerSpec, valid_id};
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{io::Read, time::Duration};
+
+/// Larger error bodies are not provider explanations worth parsing.
+const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 
 pub mod flavors;
 pub mod recovery;
+mod stock;
+pub mod volumes;
 
 #[cfg(test)]
 mod tests;
@@ -13,6 +18,9 @@ pub struct RunPod {
     agent: ureq::Agent,
     credential: Credential,
     endpoint: String,
+    catalog_endpoint: String,
+    api_endpoint: String,
+    graphql_endpoint: String,
 }
 impl RunPod {
     #[must_use]
@@ -26,6 +34,9 @@ impl RunPod {
             agent: ureq::Agent::new_with_config(config),
             credential,
             endpoint: "https://rest.runpod.io/v1".into(),
+            catalog_endpoint: "https://api.runpod.io/v2/catalog".into(),
+            api_endpoint: "https://api.runpod.io/v2".into(),
+            graphql_endpoint: "https://api.runpod.io/graphql".into(),
         }
     }
 
@@ -39,10 +50,28 @@ impl RunPod {
         spec: &WorkerSpec,
         state: &mut CreateState,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        progress: impl FnMut(Progress),
+    ) -> Result<Worker, CloudError> {
+        self.ensure_with_volume(spec, state, None, cancel, persist, progress)
+    }
+
+    /// As `ensure`, with an explicitly owned and verified workspace volume.
+    /// # Errors
+    /// Refuses incompatible storage and retains uncertain worker creation fences.
+    pub fn ensure_with_volume(
+        &self,
+        spec: &WorkerSpec,
+        state: &mut CreateState,
+        volume: Option<&volumes::Volume>,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
     ) -> Result<Worker, CloudError> {
         spec.validate()?;
+        if let Some(volume) = volume {
+            volume.verify_worker_spec(spec)?;
+        }
         cancel.check()?;
         progress(Progress::Reconciling);
         if *state == CreateState::Requested {
@@ -93,9 +122,16 @@ impl RunPod {
         persist(&CreateState::Requested)?;
         *state = CreateState::Requested;
         progress(Progress::Requesting);
-        let value = match self.request("POST", "/pods", Some(create_body(spec)), cancel) {
+        let mut body = create_body(spec);
+        if let Some(volume) = volume {
+            body["networkVolumeId"] = json!(volume.id);
+            body["volumeInGb"] = json!(0);
+            body["dataCenterIds"] = json!([volume.data_center_id]);
+            body["dataCenterPriority"] = json!("custom");
+        }
+        let value = match self.request("POST", "/pods", Some(body), cancel) {
             Ok(value) => value,
-            Err(error @ (CloudError::Unauthorized | CloudError::Rejected | CloudError::Cancelled)) => {
+            Err(error @ (CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled)) => {
                 persist(&CreateState::Prepared)?;
                 *state = CreateState::Prepared;
                 return Err(error);
@@ -109,9 +145,15 @@ impl RunPod {
         Ok(worker)
     }
     /// # Errors
-    /// Returns transport, authentication or response errors without response-body contents.
+    /// Returns transport, authentication or response errors; failures carry at most a sanitized provider reason.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
-        serde_json::from_value(self.request("GET", "/pods", None, cancel)?).map_err(|_| CloudError::InvalidResponse)
+        serde_json::from_value(self.request(
+            "GET",
+            "/pods?includeNetworkVolume=true&includeWorkers=true",
+            None,
+            cancel,
+        )?)
+        .map_err(|_| CloudError::InvalidResponse)
     }
     /// # Errors
     /// Rejects invalid IDs and provider failures. HTTP 404 is a missing worker.
@@ -141,8 +183,14 @@ impl RunPod {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid worker ID"));
         }
-        match self.request_with_timeout("GET", &format!("/pods/{id}"), None, cancel, timeout) {
-            Err(CloudError::Http(404)) => Ok(None),
+        match self.request_with_timeout(
+            "GET",
+            &format!("/pods/{id}?includeNetworkVolume=true"),
+            None,
+            cancel,
+            timeout,
+        ) {
+            Err(CloudError::Http(404, _)) => Ok(None),
             result => {
                 let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
                 if worker.id != id {
@@ -170,7 +218,7 @@ impl RunPod {
         if let Some(worker) = self.inspect(&id, cancel)? {
             worker.verify(spec)?;
             match self.request("DELETE", &format!("/pods/{id}"), None, cancel) {
-                Ok(_) | Err(CloudError::Http(404)) => {}
+                Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(e) => return Err(e),
             }
             if self.inspect(&id, cancel)?.is_some() {
@@ -215,16 +263,27 @@ impl RunPod {
     ) -> Result<Value, CloudError> {
         cancel.check()?;
         let url = format!("{}{path}", self.endpoint);
+        self.request_url(method, &url, body, cancel, timeout)
+    }
+    fn request_url(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<Value>,
+        cancel: &Cancellation,
+        timeout: Option<Duration>,
+    ) -> Result<Value, CloudError> {
+        cancel.check()?;
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
         let response = match method {
             "POST" => self
                 .agent
-                .post(&url)
+                .post(url)
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or(Value::Null)),
-            "DELETE" => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
+            "DELETE" => self.agent.delete(url).header("Authorization", auth.as_str()).call(),
             _ => {
-                let request = self.agent.get(&url).header("Authorization", auth.as_str());
+                let request = self.agent.get(url).header("Authorization", auth.as_str());
                 if let Some(timeout) = timeout {
                     request.config().timeout_global(Some(timeout)).build().call()
                 } else {
@@ -238,10 +297,10 @@ impl RunPod {
             204 => return Ok(Value::Null),
             200..=299 => {}
             401 | 403 => return Err(CloudError::Unauthorized),
-            400 | 422 => return Err(CloudError::Rejected),
-            _ => return Err(CloudError::Http(status)),
+            400 | 422 => return Err(CloudError::Rejected(self.failure_reason(&mut response))),
+            _ => return Err(CloudError::Http(status, self.failure_reason(&mut response))),
         }
-        if method == "DELETE" || path.ends_with("/stop") || path.ends_with("/start") {
+        if method == "DELETE" || url.ends_with("/stop") || url.ends_with("/start") {
             return Ok(Value::Null);
         }
         response
@@ -250,6 +309,19 @@ impl RunPod {
             .limit(4 * 1024 * 1024)
             .read_json()
             .map_err(|_| CloudError::InvalidResponse)
+    }
+    /// A failed or oversized read yields no reason rather than masking the status.
+    fn failure_reason(&self, response: &mut ureq::http::Response<ureq::Body>) -> Reason {
+        let mut body = Vec::new();
+        let read = response
+            .body_mut()
+            .as_reader()
+            .take(FAILURE_BODY_LIMIT + 1)
+            .read_to_end(&mut body);
+        if read.is_err() || body.len() as u64 > FAILURE_BODY_LIMIT {
+            return Reason::default();
+        }
+        Reason::from_body(&body, self.credential.value())
     }
 }
 fn bind(

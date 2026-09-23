@@ -1,4 +1,6 @@
 use super::*;
+mod inspection;
+mod placement;
 mod recovery;
 mod storage;
 use std::{
@@ -293,6 +295,50 @@ fn cpu_gpu_specs_and_credential_debug() {
 }
 
 #[test]
+fn failed_requests_carry_the_provider_reason_without_resolving_creation() {
+    let spec = spec();
+    let refusal = "create pod: There are no longer any instances available with the requested specifications.";
+    let (provider, _, task) = server(vec![
+        (200, "[]".into()),
+        (500, json!({"error": refusal, "status": 500}).to_string()),
+        (
+            422,
+            json!({"detail": "Request validation failed.", "errors": ["x"]}).to_string(),
+        ),
+        (502, json!({"error": "echoed secret-test-key"}).to_string()),
+        (
+            503,
+            format!(
+                "{}{}",
+                json!({"error": "complete prefix"}),
+                " ".repeat(usize::try_from(FAILURE_BODY_LIMIT).unwrap())
+            ),
+        ),
+    ]);
+    let cancel = Cancellation::default();
+    let mut state = CreateState::Prepared;
+    let error = provider
+        .ensure(&spec, &mut state, &cancel, |_| Ok(()), |_| {})
+        .unwrap_err();
+    assert!(matches!(error, CloudError::Http(500, _)));
+    assert_eq!(error.to_string(), format!("Provider returned HTTP 500: {refusal}"));
+    assert_eq!(state, CreateState::Requested);
+    assert_eq!(
+        provider.list(&cancel).unwrap_err().to_string(),
+        "Provider rejected the request or capacity is unavailable: Request validation failed."
+    );
+    assert_eq!(
+        provider.list(&cancel).unwrap_err().to_string(),
+        "Provider returned HTTP 502"
+    );
+    assert_eq!(
+        provider.list(&cancel).unwrap_err().to_string(),
+        "Provider returned HTTP 503"
+    );
+    task.join().unwrap();
+}
+
+#[test]
 fn definite_refusal_can_retry_but_no_post_after_pre_send_cancel() {
     let spec = spec();
     let (provider, requests, task) = server(vec![
@@ -304,7 +350,7 @@ fn definite_refusal_can_retry_but_no_post_after_pre_send_cancel() {
     let mut state = CreateState::Prepared;
     assert!(matches!(
         provider.ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
-        Err(CloudError::Rejected)
+        Err(CloudError::Rejected(_))
     ));
     assert_eq!(state, CreateState::Prepared);
     assert!(

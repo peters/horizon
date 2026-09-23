@@ -115,7 +115,6 @@ pub(super) fn render_workspace_visual(
         .inner;
 
     if show_layout_toolbar
-        && workspace.cloud_count == 0
         && !is_renaming
         && interaction.action.is_none()
         && should_show_workspace_layout_toolbar(workspace)

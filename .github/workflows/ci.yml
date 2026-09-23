@@ -272,8 +272,11 @@ jobs:
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked -p horizon-ui --features speech
 
+  # Kept out of the rust-test matrix because its speech step only builds (see
+  # below). The job id and cache key predate the test run; renaming either
+  # would start the cache cold.
   windows-smoke:
-    name: Windows test build
+    name: Tests (Windows x64)
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
@@ -283,6 +286,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: true
+      - name: Keep Defender off the build tree
+        shell: pwsh
+        run: ./scripts/ci-windows-defender.ps1
       - id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -296,15 +302,15 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - run: cargo test --locked --workspace --no-run
-      - name: Execute durable publication regression
-        run: cargo test --locked -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
+      - run: cargo test --locked --workspace
       # The speech feature is advertised on Windows too (WASAPI capture via
-      # cpal); build it so a Windows-only break cannot pass CI. Compiling the
-      # vendored C++ tree here is the point — tests are not run. horizon-ui
-      # owns the feature, so the rest of the workspace is already built by the
-      # pass above.
-      - run: cargo test --locked -p horizon-ui --features speech --no-run
+      # cpal); build it so a Windows-only break cannot pass CI. Only the build
+      # is checked: the speech tests have not been enabled on Windows yet.
+      # horizon-ui owns the feature, so the rest of the workspace is already
+      # built by the pass above. `!cancelled()` keeps a test failure from
+      # hiding a speech build break.
+      - if: ${{ !cancelled() }}
+        run: cargo test --locked -p horizon-ui --features speech --no-run
 
 
   snap-build:
@@ -371,6 +377,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: true
+      - name: Keep Defender off the build tree
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci-windows-defender.ps1
       - id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -384,7 +394,9 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - run: cargo build --locked --release
+      # The uploaded asset is the horizon binary. The other workspace bins are
+      # outside its dependency graph, and each one repeated a thin-LTO link.
+      - run: cargo build --locked --release -p horizon-ui
       - name: Package release asset
         shell: bash
         run: |

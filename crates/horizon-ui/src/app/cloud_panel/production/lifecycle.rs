@@ -225,23 +225,29 @@ impl HorizonApp {
         let store = match cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path)) {
             Ok(store) => store,
             Err(error) => {
-                self.cloud_prototype.error = Some(error.to_string());
+                self.cloud_removal_error(id, error.to_string());
                 return;
             }
         };
         let allowed = match store.load() {
-            Ok(Some(state)) => matches!(
-                state.operation,
-                cloud_runtime::CreateState::Prepared | cloud_runtime::CreateState::Terminated { .. }
-            ),
+            Ok(Some(state)) => match cloud_runtime::lifecycle::can_remove(&store, &state) {
+                Ok(allowed) => allowed,
+                Err(error) => {
+                    self.cloud_removal_error(id, error.to_string());
+                    return;
+                }
+            },
             Ok(None) => !launch.deployment_started,
             Err(error) => {
-                self.cloud_prototype.error = Some(error.to_string());
+                self.cloud_removal_error(id, error.to_string());
                 return;
             }
         };
         if !allowed {
-            self.cloud_prototype.error = Some("Reconcile and delete the worker before removing this cloud".into());
+            self.cloud_removal_error(
+                id,
+                "Delete the worker and workspace storage before removing this cloud".into(),
+            );
             return;
         }
         if self
@@ -263,5 +269,11 @@ impl HorizonApp {
         }
         self.cloud_prototype.production.runtimes.remove(&id);
         self.save_cloud_prototype();
+    }
+    fn cloud_removal_error(&mut self, id: u32, message: String) {
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.error = Some(message.clone());
+        }
+        self.cloud_prototype.error = Some(message);
     }
 }

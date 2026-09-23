@@ -17,6 +17,8 @@ mod canvas_scroll;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
 mod detached_viewports;
+mod device_presentation;
+mod device_request_pump;
 mod device_requests;
 #[cfg(test)]
 mod device_tests;
@@ -64,6 +66,7 @@ use horizon_core::{
 
 use self::browser_requests::BrowserCreateHostState;
 use self::canvas::CanvasGridCache;
+pub(crate) use self::device_request_pump::{BridgeApp, DeviceRequestBridge, is_device_queue_wake};
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
 use super::dir_picker::DirPicker;
@@ -418,9 +421,10 @@ impl eframe::App for HorizonApp {
             state.begin_frame();
         }
         self.update_ui(ui);
+        self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.
-        for state in self.panel_render_caches.device_ui_state.values() {
+        for state in self.panel_render_caches.device_ui_state.values_mut() {
             state.finish_frame();
         }
     }

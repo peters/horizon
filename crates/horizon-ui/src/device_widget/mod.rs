@@ -1,7 +1,11 @@
-//! Read-only native VNC rendering; device actions stay in the CLI/MCP crate.
+//! Native VNC rendering, read-only unless a person turns Interact on; agent
+//! device actions stay in the CLI/MCP crate.
+mod capture;
 mod controls;
 mod details;
 mod frame;
+mod host;
+mod input;
 mod observation;
 mod session;
 
@@ -9,11 +13,13 @@ use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
 use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 
 use frame::present_image;
-use session::{Session, Status};
+use input::InputState;
+use session::{DeviceRoute, Session, Status};
 
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
     pub(crate) owner: Option<String>,
+    pub(crate) host: host::HostState,
     image: ImageDisplay,
     initialized: bool,
     rendered: bool,
@@ -28,6 +34,14 @@ pub(crate) struct DeviceUiState {
     server: DeviceServerDetails,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
+    /// A person's choice for this session only; never persisted, never set by agents.
+    interact: bool,
+    input: InputState,
+    /// The image had keyboard focus last frame, so a loss must release keys.
+    captured: bool,
+    /// Where the pointer last was, in global coordinates, carried across
+    /// frames so each wheel event is routed by the position it happened at.
+    pointer_global: Option<egui::Pos2>,
 }
 
 #[derive(Default)]
@@ -43,19 +57,25 @@ struct ImageDisplay {
 }
 
 impl DeviceUiState {
-    #[cfg(test)]
     pub(crate) fn was_rendered(&self) -> bool {
         self.rendered
     }
 
     pub(crate) fn begin_frame(&mut self) {
+        self.host.begin_frame();
         self.image.previous_displayed = self.image.displayed;
         self.previous_rendered = self.rendered;
         self.image.displayed = false;
         self.rendered = false;
     }
 
-    pub(crate) fn finish_frame(&self) {
+    pub(crate) fn finish_frame(&mut self) {
+        // A viewer that was not drawn this frame (hidden, collapsed, closed
+        // workspace, another panel fullscreen) cannot see a release, so let go
+        // of everything now rather than leave a key or button held remotely.
+        if !self.rendered {
+            self.release_input();
+        }
         if let Some(session) = &self.session {
             session.set_visible(self.rendered);
         }
@@ -101,7 +121,7 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        if details::header(ui, device, &self.server, &self.status, interactive) {
+        if details::header(ui, device, &self.server, &self.status, interactive, self.interact) {
             self.reconnect(ui.ctx(), device);
         }
         ui.add_enabled_ui(interactive, |ui| {
@@ -117,23 +137,32 @@ impl DeviceUiState {
         if changed && self.apply_view_options(previous) {
             ui.ctx().request_repaint();
         }
+        ui.add_enabled_ui(interactive, |ui| self.interact_toggle(ui));
         self.refresh_presentation(ui);
         ui.separator();
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
-            let image_visible = if self.controls.one_to_one {
+            let interact = self.interact && interactive;
+            let (image_visible, response) = if self.controls.one_to_one {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| visible_image(ui, texture, size))
+                    .show(ui, |ui| visible_image(ui, texture, size, interact))
                     .inner
             } else {
                 let available = ui.available_size().max(egui::Vec2::ZERO);
                 let scale = (available.x / size.x).min(available.y / size.y);
-                visible_image(ui, texture, size * scale)
+                visible_image(ui, texture, size * scale, interact)
             };
             self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
             if self.image.displayed {
                 self.image.last_displayed = Some(std::time::Instant::now());
+            }
+            // Only a visible image takes input: a clipped or off-canvas one
+            // releases everything, as a hidden viewer does.
+            if interact && image_visible && matches!(self.status, Status::Connected) {
+                self.forward_input(ui, &response);
+            } else {
+                self.release_input();
             }
         } else {
             ui.label("The device desktop appears here after connection.");
@@ -246,12 +275,14 @@ impl DeviceUiState {
         self.connection_generation = self.connection_generation.saturating_add(1);
         self.image = ImageDisplay::default();
         self.server = DeviceServerDetails::default();
+        self.input = InputState::default();
+        self.captured = false;
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
         self.session = None;
         match Session::start(
-            device.target.address(),
+            DeviceRoute::from(device),
             ctx.clone(),
             ctx.viewport_id(),
             self.controls.options,
@@ -265,13 +296,15 @@ impl DeviceUiState {
     }
 }
 
-fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> bool {
-    let response = ui.add(
-        egui::Image::new(texture)
-            .fit_to_exact_size(size)
-            .sense(egui::Sense::hover()),
-    );
-    ui.is_rect_visible(response.rect) && response.rect.intersect(ui.clip_rect()).is_positive()
+fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2, interact: bool) -> (bool, egui::Response) {
+    let sense = if interact {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let response = ui.add(egui::Image::new(texture).fit_to_exact_size(size).sense(sense));
+    let visible = ui.is_rect_visible(response.rect) && response.rect.intersect(ui.clip_rect()).is_positive();
+    (visible, response)
 }
 
 #[cfg(test)]

@@ -17,6 +17,11 @@ use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEI
 use self::render::render_workspace_visual;
 use self::toolbar::workspace_layout_toolbar_rect;
 
+pub(super) struct WorkspaceLayoutCapabilities {
+    pub can_arrange: bool,
+    pub can_detach: bool,
+}
+
 struct WorkspaceVisual {
     id: WorkspaceId,
     name: String,
@@ -31,7 +36,7 @@ struct WorkspaceVisual {
     label_hidden: bool,
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
-    cloud_count: usize,
+    capabilities: WorkspaceLayoutCapabilities,
 }
 
 struct WorkspaceInteraction {
@@ -68,19 +73,15 @@ struct WorkspaceDockTarget {
 }
 
 impl HorizonApp {
+    pub(super) fn workspace_layout_capabilities(&self, id: WorkspaceId) -> WorkspaceLayoutCapabilities {
+        WorkspaceLayoutCapabilities {
+            can_arrange: self.workspace_can_arrange_panels(id),
+            can_detach: self.workspace_can_detach(id),
+        }
+    }
+
     pub(super) fn workspace_can_arrange_panels(&self, id: WorkspaceId) -> bool {
-        if !self.board.workspace_accepts_panel_layout(id) {
-            return false;
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        if self
-            .board
-            .workspace(id)
-            .is_some_and(|workspace| self.cloud_prototype.groups.contains_workspace(&workspace.local_id))
-        {
-            return false;
-        }
-        true
+        self.board.workspace_accepts_panel_layout(id)
     }
 
     #[profiling::function]
@@ -371,16 +372,7 @@ impl HorizonApp {
                     label_hidden: overlay_zones.intersects(label_screen_rect),
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
-                    #[cfg(feature = "cloud-workspaces")]
-                    cloud_count: self
-                        .cloud_prototype
-                        .groups
-                        .0
-                        .iter()
-                        .filter(|g| g.workspace == workspace.local_id)
-                        .count(),
-                    #[cfg(not(feature = "cloud-workspaces"))]
-                    cloud_count: 0,
+                    capabilities: self.workspace_layout_capabilities(workspace.id),
                 })
             })
             .collect()
@@ -458,7 +450,10 @@ mod tests {
             label_hidden: false,
             panel_count,
             layout: None,
-            cloud_count: 0,
+            capabilities: super::WorkspaceLayoutCapabilities {
+                can_arrange: true,
+                can_detach: true,
+            },
         }
     }
 

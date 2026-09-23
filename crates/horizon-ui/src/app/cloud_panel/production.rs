@@ -5,6 +5,7 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+mod launch;
 mod lifecycle;
 mod presentation;
 mod progress;
@@ -30,15 +31,19 @@ use std::{
     sync::mpsc::{Receiver, channel},
 };
 
+const DELETED_RESOURCES_MESSAGE: &str = "Worker deleted; managed workspace storage cleanup is complete. Any separately attached network volumes retain their files and credentials and remain billable until deleted.";
+
 #[derive(Default)]
 pub(super) struct Production {
     pub(super) setup: setup::State,
     pub creating: bool,
+    launch: launch::State,
     pending_creation: Option<creation_job::Pending>,
     creation_busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(super) focus_title_on_open: bool,
     title: String,
     repository: String,
+    choosing_repository: bool,
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,
@@ -187,7 +192,7 @@ impl HorizonApp {
                         runtime.progress.stage(Stage::Deleted, std::time::Instant::now());
                         runtime.stage = Some(Stage::Deleted);
                         runtime.desktop = None;
-                        runtime.error = Some("Worker deleted; its processes and files are no longer available".into());
+                        runtime.error = Some(DELETED_RESOURCES_MESSAGE.into());
                         finished.push(id);
                     }
                     Event::Stage(stage, at) => {
@@ -226,7 +231,7 @@ impl HorizonApp {
         self.remove_closed_cloud_browsers(removed);
         self.sync_cloud_presentations();
         self.cloud_prototype.groups.reconcile(&mut self.board);
-        self.board.cloud_groups = self.cloud_prototype.groups.clone();
+        self.sync_board_cloud_groups();
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);
@@ -343,6 +348,12 @@ impl HorizonApp {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
+        if !launch.deployment_started {
+            self.save_cloud_prototype();
+            if !self.persist_cloud_before_allocation(id) {
+                return;
+            }
+        }
         let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
             Ok(path) => path,
             Err(error) => {
@@ -400,22 +411,8 @@ impl HorizonApp {
             launch.deployment_started = true;
         }
         self.save_cloud_prototype();
-        if !existing {
-            if !self.active_session.as_ref().is_some_and(|session| session.persistent)
-                || !self.auto_save_runtime_state()
-            {
-                self.cloud_prototype.error =
-                    Some("Save this workspace in a persistent Horizon session before allocating a worker".into());
-                return;
-            }
-            let Some(session) = &self.active_session else {
-                self.cloud_prototype.error = Some("The active session changed before deployment could be saved".into());
-                return;
-            };
-            if let Err(error) = self.session_store.sync_runtime_state(&session.session_id) {
-                self.cloud_prototype.error = Some(error.to_string());
-                return;
-            }
+        if !existing && !self.persist_cloud_before_allocation(id) {
+            return;
         }
         self.cloud_prototype
             .production
@@ -423,6 +420,33 @@ impl HorizonApp {
             .entry(id)
             .or_default()
             .start_deployment(request, ctx);
+    }
+
+    fn persist_cloud_before_allocation(&mut self, id: u32) -> bool {
+        let result = (|| {
+            let session = self
+                .active_session
+                .as_ref()
+                .filter(|session| session.persistent)
+                .ok_or_else(|| {
+                    "Save this workspace in a persistent Horizon session before allocating a worker".to_string()
+                })?;
+            if !self.auto_save_runtime_state() {
+                return Err(
+                    "Could not save this workspace before allocating a worker; retry after fixing session storage"
+                        .into(),
+                );
+            }
+            self.session_store
+                .sync_runtime_state(&session.session_id)
+                .map_err(|error| error.to_string())
+        })();
+        if let Err(error) = result {
+            self.cloud_prototype.production.runtimes.entry(id).or_default().error = Some(error.clone());
+            self.cloud_prototype.error = Some(error);
+            return false;
+        }
+        true
     }
 
     pub(in crate::app) fn prepare_cloud_remote_panel(

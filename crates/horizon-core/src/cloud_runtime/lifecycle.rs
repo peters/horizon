@@ -14,6 +14,19 @@ pub struct ReconciledDeployment {
 }
 
 /// # Errors
+/// Refuses removal while any owned worker or workspace storage may remain.
+pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
+    if !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. }) {
+        return Ok(false);
+    }
+    match &state.spec {
+        Some(spec) => Ok(!super::deployment::storage::retained(store, spec)?),
+        None => Ok(!store.root().join("workspace-volume.json").try_exists()?
+            && !store.root().join("workspace-volume.required").try_exists()?),
+    }
+}
+
+/// # Errors
 /// Checks only the recorded operation. A provider-confirmed worker hint cannot reset its fence.
 /// Image builds, source preparation and agent credentials are not needed for recovery.
 pub fn reconcile(
@@ -44,6 +57,11 @@ pub fn reconcile(
         state.worker = Some(worker.clone());
     }
     if matches!(operation, CreateState::Terminated { .. }) {
+        if super::deployment::storage::retained(&store, &spec)? {
+            return Err(Error::Invalid(
+                "Worker termination is confirmed, but workspace storage remains; explicitly delete the cloud to finish cleanup",
+            ));
+        }
         state.worker = None;
         state.stage = Stage::Deleted;
     }
@@ -101,7 +119,7 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
         if matches!(
             error,
             horizon_cloud::CloudError::Unauthorized
-                | horizon_cloud::CloudError::Rejected
+                | horizon_cloud::CloudError::Rejected(_)
                 | horizon_cloud::CloudError::Cancelled
         ) {
             (state.stop_requested, state.stage) = previous;

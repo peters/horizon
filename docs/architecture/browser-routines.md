@@ -65,7 +65,7 @@ paths use an opaque UUID, never the user-provided name.
 ```text
 ~/.horizon/browser-routines/<routine-uuid>/routine.json
 ~/.horizon/browser-routines/<routine-uuid>/draft.json
-~/.horizon/browser-routines/<routine-uuid>/lock
+~/.horizon/browser-routines/.<routine-uuid>.lock
 <existing browser profile root>/routines/<routine-uuid>/<backend>/
 ~/.horizon/browser-jobs/<run-uuid>/          # unchanged #324 job tree
 ```
@@ -87,8 +87,12 @@ must never affect another panel, routine, or shared profile. Session
 duplication cannot share or orphan those records.
 
 Writes are atomic (temp file in the same directory, `fsync`, replace). Each
-routine directory has one exclusive lock so two processes cannot publish
-concurrent definitions against the same UUID.
+routine has one exclusive lock so two processes cannot publish concurrent
+definitions against the same UUID. The lock file sits beside the routine
+directory rather than inside it, because deletion renames the directory while
+holding the lock and Windows refuses that rename while a file inside is open.
+Lock files are kept after deletion; removing a lock file that another process
+may be waiting on would let two holders proceed at once.
 
 ## Lifecycle states
 

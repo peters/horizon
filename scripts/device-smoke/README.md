@@ -138,6 +138,14 @@ decisions and attempted operations with the task's private smoke evidence.
    submission, matching `frame_sequence`; it is not a GPU completion timestamp.
    Repainting or cropping retained pixels does not refresh this age. Reconnect
    clears it even if an old texture remains visible. Older hosts can omit it.
+   When `diagnostics.host` is available, retain its viewport, exclusion,
+   render-time `canvas`, `canvas_after_pass`, view revision and Reveal counters.
+   A changed camera can explain why the next pass differs without attributing
+   navigation to an actor. An unapplied Reveal request is distinct from a later
+   camera change. Host evidence is a UI-pass observation: reject discarded
+   passes as presentation proof, and do not compare viewport-local pass numbers
+   across windows. Missing detached canvas is intentionally unknown, not root
+   geometry. Continue to require actual displayed advancing frames.
 4. Report the strongest evidence actually observed. Connected plus received plus
    displayed with an advancing sequence during known changing output establishes
    live presentation for that observation window. Displayed static content

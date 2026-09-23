@@ -32,10 +32,16 @@ fn marker_command(path: &Path) -> (String, Vec<String>) {
     if cfg!(windows) {
         (
             "cmd.exe".into(),
+            // Terminal spawns escape arguments the MSVCRT way, which cmd.exe
+            // does not parse, so the redirect target is a separate argument
+            // rather than an embedded quoted string.
             vec![
                 "/D".into(),
                 "/C".into(),
-                format!("echo unexpected>\"{}\"", path.display()),
+                "echo".into(),
+                "unexpected".into(),
+                ">".into(),
+                path.display().to_string(),
             ],
         )
     } else {

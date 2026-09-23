@@ -8,6 +8,7 @@ use super::super::input;
 use crate::theme;
 
 use super::canvas::CanvasGridCache;
+use super::canvas_scroll::reset_canvas_scroll;
 use super::{HorizonApp, attention_feed};
 
 mod shutdown;
@@ -307,6 +308,7 @@ impl HorizonApp {
         self.apply_pending_root_device_reveal(ui.ctx());
 
         if self.fullscreen_panel.is_some() {
+            reset_canvas_scroll(ui.ctx());
             self.render_fullscreen_panel(ui);
             // Detached windows are immediate viewports: egui closes any child
             // viewport that is not shown during a pass, so they must keep
@@ -325,6 +327,7 @@ impl HorizonApp {
 
         #[cfg(feature = "cloud-workspaces")]
         if self.render_fullscreen_cloud(ui) {
+            reset_canvas_scroll(ui.ctx());
             self.render_detached_viewports(ui);
             self.render_cloud_dialogs(ui.ctx());
             return;
@@ -337,6 +340,8 @@ impl HorizonApp {
         let workspace_bounds = &mut workspace_bounds;
         if !root_interaction_suppressed && !self.host_dialog_open() {
             self.handle_canvas_pan(ui);
+        } else {
+            reset_canvas_scroll(ui.ctx());
         }
         self.render_toolbar(ui);
         self.render_work_resume_banner(ui);

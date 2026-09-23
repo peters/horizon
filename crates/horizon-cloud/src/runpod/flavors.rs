@@ -35,6 +35,11 @@ impl Flavor {
     pub fn get(id: &str) -> Option<&'static Self> {
         FLAVORS.iter().find(|flavor| flavor.id == id)
     }
+    /// The provider's name for this flavor at `cpu` vCPUs, such as `cpu3g-8-32`.
+    #[must_use]
+    pub fn instance_id(&self, cpu: u16) -> String {
+        format!("{}-{cpu}-{}", self.id, u32::from(cpu) * u32::from(self.memory_per_vcpu))
+    }
     /// Offers `cpu` vCPUs with at least `memory_gb` memory and `container_gb` container disk.
     #[must_use]
     pub fn fits(&self, cpu: u16, memory_gb: u16, container_gb: u16) -> bool {
@@ -158,5 +163,11 @@ mod tests {
         assert_eq!(resize_vcpu(&profile(8, 32, 30), 2), Some((2, 8)));
         assert_eq!(resize_vcpu(&profile(8, 32, 50), 2), None);
         assert!(offered(&profile(8, 32, 30)) && !offered(&profile(1, 2, 10)));
+    }
+    #[test]
+    fn instance_ids_name_the_memory_the_flavor_assigns() {
+        assert_eq!(Flavor::get("cpu3g").unwrap().instance_id(8), "cpu3g-8-32");
+        assert_eq!(Flavor::get("cpu3c").unwrap().instance_id(2), "cpu3c-2-4");
+        assert_eq!(Flavor::get("cpu5m").unwrap().instance_id(32), "cpu5m-32-256");
     }
 }

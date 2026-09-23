@@ -1,5 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod readiness;
+pub(super) mod storage;
 
 use super::{
     Error, Event, Result, Stage,
@@ -51,6 +52,11 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         secrets: Vec::new(),
     };
     let mut state = initial_state(request, &store)?;
+    if state.stage == Stage::Deleted {
+        return Err(Error::Invalid(
+            "This cloud was deleted; create a new cloud to allocate resources",
+        ));
+    }
     let started = attempt_started(&state, started);
     let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
     let browser_auth = super::browser_auth::Prepared::for_repository(
@@ -95,18 +101,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     emit(Event::Progress(super::progress::Progress::activity(
         "Requesting or reconciling worker capacity",
     )));
-    let mut operation = state.operation.clone();
-    let worker = provider.ensure(
-        &spec,
-        &mut operation,
-        cancel,
-        |next| {
-            state.operation = next.clone();
-            store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
-        },
-        |progress| emit(Event::Output(format!("{progress:?}"))),
-    )?;
-    state.worker = Some(worker);
+    provision(&provider, &store, &mut state, &spec, cancel, emit)?;
     let connection = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
     if !state.source_ready {
         state.stage = Stage::Worktrees;
@@ -136,6 +131,31 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         browser_auth.install(&connection, &runner)?;
     }
     finish_ready(state, &store, started, emit)
+}
+
+fn provision(
+    provider: &RunPod,
+    store: &Store,
+    state: &mut Deployment,
+    spec: &WorkerSpec,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
+    let mut operation = state.operation.clone();
+    let volume = storage::prepare(provider, store, state, spec, cancel)?;
+    let worker = provider.ensure_with_volume(
+        spec,
+        &mut operation,
+        volume.as_ref(),
+        cancel,
+        |next| {
+            state.operation = next.clone();
+            store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
+        },
+        |progress| emit(Event::Output(format!("{progress:?}"))),
+    )?;
+    state.worker = Some(worker);
+    Ok(())
 }
 
 fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
@@ -366,6 +386,12 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let provider = RunPod::new(settings.credential()?);
     let mut operation = state.operation.clone();
+    if operation == CreateState::Prepared {
+        storage::terminate(&provider, &store, &spec, cancel)?;
+        state.stage = Stage::Deleted;
+        state.worker = None;
+        return store.save(&state);
+    }
     if operation == CreateState::Requested {
         provider.ensure(
             &spec,
@@ -406,6 +432,7 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
         state.operation = next.clone();
         store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
     })?;
+    storage::terminate(&provider, &store, &spec, cancel)?;
     state.stage = Stage::Deleted;
     state.worker = None;
     store.save(&state)

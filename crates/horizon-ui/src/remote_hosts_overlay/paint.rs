@@ -6,6 +6,7 @@ use horizon_core::{
     RemoteHost, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostStatus, SshConnectionStatus,
 };
 
+use super::controls::{RowMenuChoice, render_row_menu};
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
 use crate::text::single_line_job;
 use crate::theme;
@@ -18,11 +19,12 @@ pub(super) struct HostRowInteraction {
     pub(super) select: bool,
     pub(super) connect: bool,
     pub(super) toggle_expand: bool,
+    /// An item picked from the row's context menu.
+    pub(super) menu: Option<RowMenuChoice>,
 }
 
 pub(super) struct HostRowRenderContext<'a> {
     pub(super) width: f32,
-    pub(super) index: usize,
     pub(super) host: &'a RemoteHost,
     pub(super) summary: &'a RemoteHostConnectionSummary,
     pub(super) is_selected: bool,
@@ -74,7 +76,7 @@ pub(super) fn render_column_headers(ui: &mut Ui, width: f32, columns: &Columns) 
 
 pub(super) fn render_host_row(ui: &mut Ui, row: &HostRowRenderContext<'_>) -> HostRowInteraction {
     let layout = host_row_layout(ui, row.width, row.columns);
-    let interaction = host_row_interaction(ui, &layout, row.index, row.is_selected);
+    let interaction = host_row_interaction(ui, &layout, host_row_id(row.host), row.is_selected);
 
     paint_row_background(ui, layout.row, interaction, row.is_selected);
     paint_host_row_contents(ui, &layout, row);
@@ -190,19 +192,44 @@ fn host_row_layout(ui: &mut Ui, width: f32, columns: &Columns) -> HostRowLayout 
     }
 }
 
-fn host_row_interaction(ui: &mut Ui, layout: &HostRowLayout, index: usize, is_selected: bool) -> HostRowInteraction {
-    let chevron_response = ui.interact(
-        layout.chevron,
-        ui.make_persistent_id(("rh_expand", index)),
-        Sense::click(),
-    );
-    let body_response = ui.interact(layout.body, ui.make_persistent_id(("rh_click", index)), Sense::click());
+/// Widget ids follow the host, not its position in the filtered list: the
+/// context menu persists across frames, and typing in the filter or a catalog
+/// refresh would otherwise move another host under an open menu.
+pub(super) fn host_row_id(host: &RemoteHost) -> egui::Id {
+    egui::Id::new((
+        "remote_host_row",
+        host.label.as_str(),
+        host.ssh_connection.host.as_str(),
+        host.ssh_connection.port,
+        host.ssh_connection.user.as_deref(),
+    ))
+}
+
+fn host_row_interaction(
+    ui: &mut Ui,
+    layout: &HostRowLayout,
+    row_id: egui::Id,
+    is_selected: bool,
+) -> HostRowInteraction {
+    // The whole painted row answers a right click, including the gaps around
+    // the chevron; it is created first so the chevron and body stay on top
+    // for primary clicks.
+    let row_response = ui.interact(layout.row, row_id.with("row"), Sense::click());
+    let chevron_response = ui.interact(layout.chevron, row_id.with("expand"), Sense::click());
+    let body_response = ui.interact(layout.body, row_id.with("click"), Sense::click());
+    let menu = render_row_menu(ui, &row_response, &[&body_response, &chevron_response]);
 
     HostRowInteraction {
-        select: chevron_response.clicked() || body_response.clicked(),
+        // A right click anywhere on the row selects the host its menu is about.
+        select: chevron_response.clicked()
+            || body_response.clicked()
+            || body_response.secondary_clicked()
+            || chevron_response.secondary_clicked()
+            || row_response.secondary_clicked(),
         connect: !chevron_response.clicked()
             && (body_response.double_clicked() || (body_response.clicked() && is_selected)),
         toggle_expand: chevron_response.clicked(),
+        menu,
     }
 }
 
@@ -539,7 +566,40 @@ fn details_stroke() -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    use horizon_core::{RemoteHostSources, SshConnection};
+
     use super::*;
+
+    #[test]
+    fn row_ids_follow_the_host_identity_rather_than_the_row_index() {
+        let host = |label: &str, port: Option<u16>| RemoteHost {
+            label: label.to_string(),
+            ssh_connection: SshConnection {
+                host: "127.0.0.1".to_string(),
+                port,
+                ..SshConnection::default()
+            },
+            sources: RemoteHostSources::default(),
+            status: RemoteHostStatus::Unknown,
+            last_seen_secs: None,
+            os: None,
+            hostname: None,
+            tags: Vec::new(),
+            ips: Vec::new(),
+        };
+        assert_eq!(
+            host_row_id(&host("live-a", Some(22429))),
+            host_row_id(&host("live-a", Some(22429)))
+        );
+        assert_ne!(
+            host_row_id(&host("live-a", Some(22429))),
+            host_row_id(&host("live-b", Some(22429)))
+        );
+        assert_ne!(
+            host_row_id(&host("live-a", Some(22429))),
+            host_row_id(&host("live-a", Some(22431)))
+        );
+    }
 
     #[test]
     fn tags_layout_job_uses_single_line_ellipsis_and_preserves_tag_colors() {

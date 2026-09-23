@@ -4,7 +4,9 @@
 
 mod capabilities;
 mod profile;
+mod reason;
 pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};
+pub use reason::Reason;
 pub mod runpod;
 mod worker;
 pub use profile::{

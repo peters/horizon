@@ -25,6 +25,19 @@ desktop or forward input. The source checkout's `scripts/device-smoke/README.md`
 describes the isolated fixture; launch it with `--native-view` and use its
 `vnc_address`, not a browser URL.
 
+A VNC server on another machine's loopback is reached with optional `ssh` in
+create: `{ "host": "lab", "user": "deploy", "port": 2222 }` (user and port
+optional). `endpoint` is then the address as seen from that SSH host, typically
+`127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
+keys, with strict host-key checking pinned regardless of `ssh_config`, so the
+host must already be trusted in `known_hosts` (open it over SSH once); never
+pass credentials, key paths or ssh options. Labels may only contain
+letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host), at most 253
+characters for the host and 64 for the user, and are refused otherwise, so
+nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for
+tunnelled viewers, and `connection_error` carries ssh's last lines when the
+tunnel fails.
+
 When known, include optional `identity` in create: `machine_name`, `hostname`,
 `ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels
 supplied by the session creator, not verified identity. Use details for the
@@ -87,7 +100,8 @@ fresh geometry. Observe the result after each action. A `dispatched` receipt
 confirms input delivery, not application success. On stale geometry take another
 screenshot. On indeterminate input observe before deciding whether another
 action is appropriate; never replay blindly. The native Device panel is
-read-only.
+read-only for agents: a person may turn its Interact toggle on in the UI, but
+no tool operation can.
 
 The local CLI has the same contract:
 `horizon-device --target <private-target.json> doctor|screenshot|act|resize <JSON>`.

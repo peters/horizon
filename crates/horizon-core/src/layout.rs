@@ -40,6 +40,15 @@ pub(crate) fn ceil_sqrt_usize(value: usize) -> usize {
     root
 }
 
+/// Smallest `(min, max)` box that contains both boxes.
+#[cfg(feature = "cloud-workspaces")]
+pub(crate) fn union_bounds(a: ([f32; 2], [f32; 2]), b: ([f32; 2], [f32; 2])) -> ([f32; 2], [f32; 2]) {
+    (
+        [a.0[0].min(b.0[0]), a.0[1].min(b.0[1])],
+        [a.1[0].max(b.1[0]), a.1[1].max(b.1[1])],
+    )
+}
+
 pub(crate) fn usize_to_f32(value: usize) -> f32 {
     let clamped = u16::try_from(value).unwrap_or(u16::MAX);
     f32::from(clamped)

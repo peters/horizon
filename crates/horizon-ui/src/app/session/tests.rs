@@ -878,6 +878,7 @@ fn collect_dynamic_binding_updates_does_not_reassign_claude_bindings() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
     let (_temp, mut app) = test_app();
     let workspace_id = app.board.create_workspace("test");
@@ -917,6 +918,7 @@ fn rebind_and_restart_updates_the_binding_and_queues_the_panel() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn rebind_rejects_a_session_used_by_another_panel() {
     let (_temp, mut app) = test_app();
     let workspace_id = app.board.create_workspace("test");

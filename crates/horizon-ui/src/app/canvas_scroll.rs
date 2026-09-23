@@ -48,6 +48,7 @@ pub(super) struct ScrollRouting {
     pub(super) pan: Vec2,
     owns_smooth_scroll: bool,
     claimed_wheels: Vec<usize>,
+    absorbed_wheels: Vec<(usize, PanelId, WheelStep)>,
 }
 
 impl ScrollGesture {
@@ -185,9 +186,13 @@ impl ScrollGesture {
             // and in order, so `exhausted` can account for the events before.
             if delta != Vec2::ZERO
                 && self.canvas_owned == Some(false)
-                && self.owner.is_some_and(|owner| exhausted(owner, step))
+                && let Some(owner) = self.owner
             {
-                self.canvas_owned = Some(true);
+                if exhausted(owner, step) {
+                    self.canvas_owned = Some(true);
+                } else {
+                    routing.absorbed_wheels.push((index, owner, step));
+                }
             }
             if self.canvas_owned == Some(true) {
                 routing.claimed_wheels.push(index);
@@ -234,6 +239,16 @@ pub(super) fn route_canvas_scroll(
     }
     ctx.data_mut(|data| data.insert_temp(id, gesture));
     routing
+}
+
+/// Suppressed viewports must discard ownership and easing, since they cannot
+/// observe the contact ending while a dialog or fullscreen view handles input.
+pub(super) fn reset_canvas_scroll(ctx: &Context) {
+    let viewport = ctx.viewport_id();
+    ctx.data_mut(|data| {
+        data.remove::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)));
+        data.remove::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
+    });
 }
 
 /// Ctrl/Cmd wheel zoom still being eased in, and whether a phased wheel
@@ -316,6 +331,17 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 }
 
 impl ScrollRouting {
+    /// Deliver earlier panel wheels before a later canvas pan changes hit
+    /// testing or disables panel interaction. Only delivered events are removed.
+    pub(super) fn apply_absorbed_wheels(&mut self, mut apply: impl FnMut(PanelId, WheelStep) -> bool) {
+        for &(index, panel, step) in &self.absorbed_wheels {
+            if apply(panel, step) {
+                self.claimed_wheels.push(index);
+            }
+        }
+        self.claimed_wheels.sort_unstable();
+    }
+
     pub(super) fn consume(&self, ctx: &Context, terminal_events: &mut Vec<TerminalInputEvent>) {
         ctx.input_mut(|input| {
             discard_claimed_wheels(&mut input.events, &self.claimed_wheels, |event| event);

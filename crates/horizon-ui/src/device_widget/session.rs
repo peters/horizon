@@ -1,3 +1,5 @@
+mod tunnel;
+
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -6,11 +8,19 @@ use std::{
 };
 
 use egui::{ColorImage, Context, ViewportId};
-use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
-use tokio::sync::oneshot;
+use horizon_core::{
+    DevicePanelState, DeviceViewOptions, SshConnection, browser::manifest::device::DeviceServerDetails,
+};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::{mpsc, oneshot};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
+use self::tunnel::SshTunnel;
 use super::frame::{Framebuffer, present_image};
+
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Key exchange over a mesh network plus the VNC handshake behind it.
+const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ViewError {
@@ -22,8 +32,33 @@ pub(super) enum ViewError {
     Frame(&'static str),
     #[error("{0}")]
     Server(String),
+    #[error("{0}")]
+    Tunnel(String),
     #[error("connection timed out")]
     Timeout,
+}
+
+/// How the worker reaches the VNC server; owned so the worker thread can keep it.
+#[derive(Clone, Debug)]
+pub(super) enum DeviceRoute {
+    Direct(SocketAddr),
+    /// `remote` is the endpoint as seen from the SSH host.
+    SshTunnel {
+        connection: SshConnection,
+        remote: SocketAddr,
+    },
+}
+
+impl From<&DevicePanelState> for DeviceRoute {
+    fn from(device: &DevicePanelState) -> Self {
+        match &device.ssh_tunnel {
+            Some(connection) => Self::SshTunnel {
+                connection: connection.clone(),
+                remote: device.target.address(),
+            },
+            None => Self::Direct(device.target.address()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -62,13 +97,16 @@ pub(super) struct Observation {
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
     latest_full: Arc<Mutex<Option<ColorImage>>>,
+    /// Pointer and key events a person sends through Interact; the worker
+    /// forwards them ahead of the next refresh.
+    input: mpsc::UnboundedSender<X11Event>,
     stop: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Session {
     pub(super) fn start(
-        address: SocketAddr,
+        route: DeviceRoute,
         ctx: Context,
         viewport: ViewportId,
         options: DeviceViewOptions,
@@ -89,6 +127,7 @@ impl Session {
         let state = Arc::clone(&updates);
         let retained = Arc::clone(&latest_full);
         let (stop, cancelled) = oneshot::channel();
+        let (input, mut input_events) = mpsc::unbounded_channel();
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -99,7 +138,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(address, &state, &retained, &ctx) => result,
+                            result = connection(route, &state, &retained, &ctx, &mut input_events) => result,
                         }
                     })
                 });
@@ -113,9 +152,19 @@ impl Session {
         Ok(Self {
             updates,
             latest_full,
+            input,
             stop: Some(stop),
             thread: Some(thread),
         })
+    }
+
+    /// Queue input for the server. A worker that has already stopped drops it.
+    pub(super) fn send_input(&self, events: impl IntoIterator<Item = X11Event>) {
+        for event in events {
+            if self.input.send(event).is_err() {
+                return;
+            }
+        }
     }
 
     pub(super) fn set_options(&self, options: DeviceViewOptions) {
@@ -134,7 +183,18 @@ impl Session {
 
     #[cfg(test)]
     pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
-        Self {
+        Self::pending_frame_with_input(latest_full, image, produced_with).0
+    }
+
+    /// A connected-looking session whose queued input the test can read back.
+    #[cfg(test)]
+    pub(super) fn pending_frame_with_input(
+        latest_full: ColorImage,
+        image: ColorImage,
+        produced_with: DeviceViewOptions,
+    ) -> (Self, mpsc::UnboundedReceiver<X11Event>) {
+        let (input, receiver) = mpsc::unbounded_channel();
+        let session = Self {
             updates: Arc::new(Mutex::new(Updates {
                 stream: StreamEvidence {
                     sequence: 1,
@@ -151,9 +211,11 @@ impl Session {
                 server_name: None,
             })),
             latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            input,
             stop: None,
             thread: None,
-        }
+        };
+        (session, receiver)
     }
 
     pub(super) fn set_visible(&self, visible: bool) {
@@ -227,12 +289,29 @@ fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
 }
 
 async fn connection(
-    address: SocketAddr,
+    route: DeviceRoute,
     updates: &Mutex<Updates>,
     latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
 ) -> Result<(), ViewError> {
-    let client = connect_client(address).await?;
+    // The tunnel process lives exactly as long as this connection.
+    let (client, mut tunnel) = connect_client(route).await?;
+    let result = stream_desktop(client, updates, latest_full, ctx, input).await;
+    match (result, tunnel.as_mut()) {
+        // A forward that dies mid-session ends the stream; ssh says why.
+        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
+        (result, _) => result,
+    }
+}
+
+async fn stream_desktop(
+    client: vnc::VncClient,
+    updates: &Mutex<Updates>,
+    latest_full: &Mutex<Option<ColorImage>>,
+    ctx: &Context,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
+) -> Result<(), ViewError> {
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
     // ServerInit queues resolution before the client is returned. Observe that
@@ -252,7 +331,7 @@ async fn connection(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .options;
-        tokio::time::sleep(options.interval()).await;
+        forward_input_until(&client, input, options.interval()).await?;
         let mut changed = false;
         let started = std::time::Instant::now();
         let mut idle = false;
@@ -315,29 +394,80 @@ async fn connection(
     }
 }
 
-async fn connect_client(address: SocketAddr) -> Result<vnc::VncClient, ViewError> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let stream = tokio::net::TcpStream::connect(address).await?;
-        stream.set_nodelay(true)?;
-        // The local MVP has no credentials. Password-required servers fail
-        // explicitly; input and clipboard are never forwarded by this viewer.
-        let client = VncConnector::new(stream)
-            .set_auth_method(async { Err(vnc::VncError::NoPassword) })
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
-            .allow_shared(true)
-            .set_pixel_format(PixelFormat::rgba())
-            .build()?
-            .try_start()
-            .await?
-            .finish()?;
-        Ok::<_, ViewError>(client)
-    })
-    .await
-    .map_err(|_| ViewError::Timeout)?
+/// Wait out the refresh cadence, sending any queued input as it arrives so a
+/// click or keystroke never waits for the next frame.
+async fn forward_input_until(
+    client: &vnc::VncClient,
+    input: &mut mpsc::UnboundedReceiver<X11Event>,
+    interval: Duration,
+) -> Result<(), ViewError> {
+    let deadline = Instant::now() + interval;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        match tokio::time::timeout(remaining, input.recv()).await {
+            Ok(Some(event)) => {
+                tokio::time::timeout(Duration::from_secs(5), client.input(event))
+                    .await
+                    .map_err(|_| ViewError::Timeout)??;
+            }
+            // The sender lives in the Session, which cancels this worker when it
+            // drops; until then a closed channel just means no more input.
+            Ok(None) => {
+                tokio::time::sleep(remaining).await;
+                return Ok(());
+            }
+            Err(_) => return Ok(()),
+        }
+    }
+}
+
+async fn connect_client(route: DeviceRoute) -> Result<(vnc::VncClient, Option<SshTunnel>), ViewError> {
+    match route {
+        DeviceRoute::Direct(address) => {
+            let client = tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, async {
+                let stream = tokio::net::TcpStream::connect(address).await?;
+                stream.set_nodelay(true)?;
+                handshake(stream).await
+            })
+            .await
+            .map_err(|_| ViewError::Timeout)??;
+            Ok((client, None))
+        }
+        DeviceRoute::SshTunnel { connection, remote } => {
+            let mut tunnel = SshTunnel::spawn("ssh", &connection.stdio_forward_args(&remote.to_string()))?;
+            let stream = tunnel.take_stream()?;
+            match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
+                Ok(Ok(client)) => Ok((client, Some(tunnel))),
+                Ok(Err(error)) => Err(tunnel.explain(error).await),
+                Err(_) => Err(tunnel.explain(ViewError::Timeout).await),
+            }
+        }
+    }
+}
+
+async fn handshake<S>(stream: S) -> Result<vnc::VncClient, ViewError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
+{
+    // The local MVP has no credentials. Password-required servers fail
+    // explicitly; input and clipboard are never forwarded by this viewer.
+    let client = VncConnector::new(stream)
+        .set_auth_method(async { Err(vnc::VncError::NoPassword) })
+        .add_encoding(VncEncoding::Zrle)
+        .add_encoding(VncEncoding::CopyRect)
+        .add_encoding(VncEncoding::Raw)
+        .add_encoding(VncEncoding::DesktopSizePseudo)
+        .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
+        .allow_shared(true)
+        .set_pixel_format(PixelFormat::rgba())
+        .build()?
+        .try_start()
+        .await?
+        .finish()?;
+    Ok(client)
 }
 
 fn apply_frame_event(

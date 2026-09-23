@@ -2,6 +2,7 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 use horizon_core::browser::manifest::device::Connection;
 
+mod interact;
 mod presentation;
 
 fn fixture_device() -> DevicePanelState {
@@ -9,6 +10,7 @@ fn fixture_device() -> DevicePanelState {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
         identity: None,
         connect_on_start: false,
+        ssh_tunnel: None,
     }
 }
 
@@ -381,6 +383,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
         identity: None,
         connect_on_start: false,
+        ssh_tunnel: None,
     };
     for one_to_one in [false, true] {
         for (clip_height, expected) in [(20.0, false), (600.0, true)] {

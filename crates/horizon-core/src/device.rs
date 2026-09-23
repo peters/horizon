@@ -4,6 +4,7 @@ pub use view::{DeviceImageLayout, DeviceViewOptions, DeviceViewport};
 use std::net::SocketAddr;
 
 use crate::browser::manifest::device::DeviceIdentity;
+use crate::ssh::SshConnection;
 use crate::{Error, Result};
 
 /// An explicit local VNC endpoint; connecting and rendering belong to the UI.
@@ -38,14 +39,26 @@ impl DeviceViewTarget {
 /// A read-only viewer target, separate from application/device input control.
 #[derive(Clone, Debug)]
 pub struct DevicePanelState {
+    /// The VNC endpoint: on this machine, or as seen from the `ssh_tunnel` host.
     pub target: DeviceViewTarget,
     pub identity: Option<DeviceIdentity>,
     /// Restored panels require explicit reconnection because local ports can be reused.
     pub connect_on_start: bool,
+    /// Reach `target` through `ssh -W` on this host instead of connecting directly.
+    pub ssh_tunnel: Option<SshConnection>,
 }
 
 impl DevicePanelState {
     const MAX_LABEL_CHARS: usize = 256;
+
+    /// Where the desktop lives, for titles and connection details.
+    #[must_use]
+    pub fn endpoint_label(&self) -> String {
+        match &self.ssh_tunnel {
+            Some(connection) => format!("{} via {}", self.target.address(), connection.display_label()),
+            None => self.target.address().to_string(),
+        }
+    }
 
     /// Bound the untrusted handshake label and flatten controls for plain-text display.
     #[must_use]
@@ -117,7 +130,7 @@ impl DevicePanelState {
 mod tests {
     use std::time::Duration;
 
-    use super::DeviceViewTarget;
+    use super::{DevicePanelState, DeviceViewTarget};
     use crate::{
         Board, CanvasViewState, Panel, PanelId, PanelKind, PanelOptions, PanelResume, PresetConfig, RuntimeState,
         WindowConfig, WorkspaceId,
@@ -222,6 +235,85 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tunnelled_device_keeps_its_ssh_host_across_restore() -> crate::Result<()> {
+        use crate::SshConnection;
+        let tunnel = SshConnection {
+            host: "lab".into(),
+            user: Some("deploy".into()),
+            port: Some(2222),
+            ..SshConnection::default()
+        };
+        let mut board = Board::new();
+        let workspace = board.create_workspace("tunnel fixture");
+        let id = board.create_panel(
+            PanelOptions {
+                kind: PanelKind::Device,
+                command: Some("127.0.0.1:5901".into()),
+                ssh_connection: Some(tunnel.clone()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )?;
+        let panel = board
+            .panel(id)
+            .ok_or_else(|| crate::Error::State("missing panel".into()))?;
+        assert_eq!(panel.ssh_connection.as_ref(), Some(&tunnel));
+        assert_eq!(panel.title, "Device deploy@lab");
+        let device = panel
+            .device()
+            .ok_or_else(|| crate::Error::State("missing device".into()))?;
+        assert_eq!(device.ssh_tunnel.as_ref(), Some(&tunnel));
+        assert!(device.connect_on_start);
+        assert_eq!(device.endpoint_label(), "127.0.0.1:5901 via deploy@lab");
+
+        let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        let restored: RuntimeState =
+            serde_yaml::from_str(&state.to_yaml()?).map_err(|error| crate::Error::State(error.to_string()))?;
+        let saved = &restored.workspaces[0].panels[0];
+        assert_eq!(saved.ssh_connection.as_ref(), Some(&tunnel));
+        let panel = Panel::spawn(
+            PanelId(2),
+            workspace,
+            saved.to_panel_options(&crate::browser::BrowserConfig::default()),
+        )?;
+        let device = panel
+            .device()
+            .ok_or_else(|| crate::Error::State("missing device".into()))?;
+        assert_eq!(device.ssh_tunnel.as_ref(), Some(&tunnel));
+        assert_eq!(device.target.address().to_string(), "127.0.0.1:5901");
+        assert!(!device.connect_on_start);
+        Ok(())
+    }
+
+    #[test]
+    fn tunnel_without_a_host_is_rejected_before_panel_creation() {
+        use crate::SshConnection;
+        assert!(
+            Panel::spawn(
+                PanelId(1),
+                WorkspaceId(1),
+                PanelOptions {
+                    kind: PanelKind::Device,
+                    command: Some("127.0.0.1:5900".into()),
+                    ssh_connection: Some(SshConnection {
+                        host: "   ".into(),
+                        ..SshConnection::default()
+                    }),
+                    ..PanelOptions::default()
+                }
+            )
+            .is_err()
+        );
+        let local = DevicePanelState {
+            target: DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+            identity: None,
+            connect_on_start: true,
+            ssh_tunnel: None,
+        };
+        assert_eq!(local.endpoint_label(), "127.0.0.1:5900");
+    }
+
+    #[test]
     fn supplied_identity_is_normalized_and_selected_without_endpoint_inference() -> crate::Result<()> {
         use crate::browser::manifest::device::DeviceIdentity;
         let mut identity = DeviceIdentity {
@@ -235,6 +327,7 @@ mod tests {
             target: DeviceViewTarget::parse("127.0.0.1:5900")?,
             identity: Some(identity),
             connect_on_start: false,
+            ssh_tunnel: None,
         };
         assert_eq!(device.display_name(Some("Desktop")), Some("Lab workstation"));
         device.identity.as_mut().unwrap().machine_name = None;

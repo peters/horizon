@@ -314,7 +314,7 @@ impl HorizonApp {
             remote_session: remote.map(|plan| plan.request),
             ..PanelOptions::default()
         });
-        let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
+        let panel_id = match self.create_agent_child_panel(options, actor_panel.workspace_id, actor_panel.panel_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
                 if let Some(recovery) = &recovery {
@@ -329,8 +329,6 @@ impl HorizonApp {
                 return;
             }
         };
-        #[cfg(feature = "cloud-workspaces")]
-        self.cloud_attach_agent_child(actor_panel.panel_id, panel_id);
         let Some(panel_local_id) = self.board.panel(panel_id).map(|panel| panel.local_id.clone()) else {
             tracing::error!(request_id = %request.request_id, "created browser panel disappeared before registration");
             complete_failure(
@@ -1131,6 +1129,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn placement_fingerprint_follows_membership_not_unrelated_panels() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");
@@ -1186,6 +1185,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn restamping_rewrites_a_live_manifest_for_the_new_membership() {
         let root = tempfile::tempdir().expect("isolated horizon home");
         let mut board = Board::new();
@@ -1280,6 +1280,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_placement_change_restamps_before_the_next_poll_tick() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");
@@ -1343,6 +1344,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn workspace_stamp_follows_agent_panel_membership() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");

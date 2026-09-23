@@ -14,14 +14,25 @@ platform qualification remains separately tracked in #741.
 
 ## One-time machine setup
 
-Open **Cloud > New cloud**. On first use, Horizon opens **Cloud settings**:
-enter the compute API key, select coding agents, and choose API-key or subscription
-authentication for each. Saving creates a dedicated SSH identity when needed and
-stores keys in private machine-local files. Blank replacement fields preserve
-saved keys; choosing subscription login removes that agent's API-key binding.
-Subscription login happens through the actual agent on the worker. Saving settings
-does not allocate compute or verify account access. Reopen **Cloud > Cloud settings**
-to change these choices. On narrow windows, Cloud appears in the toolbar overflow.
+In an existing workspace, choose **Cloud** from the panel-creation menu (or
+**Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
+root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
+default profile. Preparation runs while you type. A configured launch starts
+provisioning immediately after submission, without a separate Deploy action.
+**Advanced** contains repository, committed revision and profile overrides.
+Only committed source is transferred; local changes stay on this computer.
+
+Missing account settings open a repair form without losing the title or target
+workspace. Enter the compute API key and choose API-key or subscription login for
+the profile's agents. **Save and start** continues the submitted launch. A dedicated
+SSH identity is created when needed and keys stay in private machine-local files.
+Blank replacement fields preserve saved keys. Subscription login happens through
+the actual agent on the worker; worker readiness does not prove authentication.
+Open **Cloud > Cloud settings** to change machine defaults without launching.
+On narrow windows, Cloud appears in the toolbar overflow.
+
+Cloud allocation requires a saved session so worker identity survives reconnect.
+An isolated test instance can use its own disposable saved session and private home.
 
 Install Git (and Git LFS for repositories that use it), OpenSSH, and Docker with BuildKit/buildx. Configure Docker registry
 authentication in a private configuration directory using `docker login` with
@@ -138,8 +149,24 @@ views from their saved remote references.
 Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.
 Missing, undersized or differently mounted storage blocks source and agent-credential
-transfer. The current adapter requests Pod-local volumes; an unexpected network
-volume attachment is unsupported and also blocks readiness. The worker remains allocated and bound to its original operation for
+transfer. New CPU clouds allocate an owned standard network volume in a data center
+that has the cloud's exact CPU size in stock, honoring configured location
+preferences, and attach it at worker creation. The provider catalog rates only CPU
+flavor families, so Horizon confirms stock for the requested vCPU and memory size
+before allocating storage; when no configured data center has it, no volume is
+created. GPU clouds and existing deployments retain their Pod-local
+storage contract. Unexpected volume identities, locations or capacities block
+readiness. CPU mount verification uses the current provider API because the legacy
+worker response omits CPU network attachments. Deletion checks current mounts on
+all listed workers before removing storage. Network storage remains billable when the worker is stopped or deleted;
+explicit cloud deletion removes the worker first, then confirms deletion of the
+volume allocated and tracked by this cloud. Separately attached network volumes
+are not adopted or deleted: their files and credentials remain, and their storage
+charges continue. Cleanup messages preserve that distinction even for older
+records whose worker attachment details are no longer available.
+Failed cleanup keeps the cloud available for retry and prevents local removal.
+Allocation and deletion are journaled so uncertain responses never create a second
+volume or adopt an unrelated one. The worker remains allocated and bound to its original operation for
 inspection or explicit deletion; retry does not create a replacement. Old saved
 worker records without storage fields remain readable. Deployment and reconnect
 attempts that reach readiness inspect fresh provider data; this does not change

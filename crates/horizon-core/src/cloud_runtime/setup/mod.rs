@@ -18,9 +18,11 @@ pub enum Authentication {
 }
 
 /// Editable credentials are deliberately neither serializable nor debug-printable.
+#[derive(Clone)]
 pub struct Draft {
     root: PathBuf,
     original: Option<Vec<u8>>,
+    profile_agents: Option<Vec<Agent>>,
     pub settings: Settings,
     pub runpod_key: Zeroizing<String>,
     pub openai_key: Zeroizing<String>,
@@ -52,6 +54,7 @@ impl Draft {
         Ok(Self {
             root: root.into(),
             original,
+            profile_agents: None,
             openai_auth: authentication(settings.openai_api_key_file.as_ref()),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
             settings,
@@ -59,6 +62,16 @@ impl Draft {
             openai_key: Zeroizing::new(String::new()),
             anthropic_key: Zeroizing::new(String::new()),
         })
+    }
+
+    /// Limit this repair to repository capabilities without replacing machine defaults.
+    pub fn select_profile_agents(&mut self, agents: Vec<Agent>) {
+        self.profile_agents = Some(agents);
+    }
+
+    #[must_use]
+    pub fn selected_agents(&self) -> &[Agent] {
+        self.profile_agents.as_deref().unwrap_or(&self.settings.default_agents)
     }
 
     /// # Errors
@@ -69,7 +82,12 @@ impl Draft {
             return Err(Error::Invalid("Enter your RunPod API key"));
         }
         validate_input(&self.runpod_key, Some(&self.settings.runpod_key_file))?;
-        if self.settings.default_agents.is_empty() {
+        if self.runpod_key.is_empty() {
+            self.settings.credential()?;
+        } else {
+            horizon_cloud::Credential::new(self.runpod_key.trim().to_owned())?;
+        }
+        if self.profile_agents.is_none() && self.settings.default_agents.is_empty() {
             return Err(Error::Invalid("Choose at least one coding agent"));
         }
         for (agent, mode, value, saved) in [
@@ -86,7 +104,7 @@ impl Draft {
                 self.settings.anthropic_api_key_file.as_ref(),
             ),
         ] {
-            if !value.is_empty() || (self.settings.default_agents.contains(&agent) && mode == Authentication::ApiKey) {
+            if !value.is_empty() || (self.selected_agents().contains(&agent) && mode == Authentication::ApiKey) {
                 validate_input(value, saved)?;
             }
         }

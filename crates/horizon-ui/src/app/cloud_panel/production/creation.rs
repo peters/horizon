@@ -1,7 +1,10 @@
 //! Presentation of the existing repository-backed cloud creation flow.
-use super::{CloudConfig, HorizonApp, PathBuf, Production};
+use super::{HorizonApp, Production};
+use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
-use egui::{Align, Button, Context, Frame, Id, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
+use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
+use horizon_core::dir_search;
+use std::path::Path;
 
 #[derive(Default)]
 struct Actions {
@@ -14,6 +17,7 @@ struct Actions {
 enum RepositoryAction {
     #[default]
     None,
+    Choose,
     Load,
     Setup,
 }
@@ -28,6 +32,12 @@ impl HorizonApp {
         let body_height = (viewport.height() - 240.0).max(100.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let picking = self.dir_picker.is_some();
+        // Focus returns to the field when its picker closes, whether or not a directory was chosen.
+        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
+        if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
+            self.read_cloud_profiles(ctx);
+        }
         let id = Id::new("cloud-creation");
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
@@ -41,6 +51,9 @@ impl HorizonApp {
             )
             .show(ctx, |ui| {
                 ui.set_width(width);
+                if picking {
+                    ui.disable();
+                }
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
                 heading(ui);
                 ui.add_space(16.0);
@@ -48,16 +61,24 @@ impl HorizonApp {
                     .id_salt("cloud-creation-body")
                     .max_height(body_height)
                     .show(ui, |ui| {
-                        ui.add_enabled_ui(self.cloud_prototype.production.pending_creation.is_none(), |ui| {
-                            if fields(ui, &mut self.cloud_prototype.production) {
-                                actions.repository = RepositoryAction::Load;
-                            }
-                            if self.cloud_prototype.production.profiles.is_none()
-                                && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
-                            {
-                                actions.repository = RepositoryAction::Setup;
-                            }
-                        });
+                        ui.add_enabled_ui(
+                            self.cloud_prototype.production.pending_creation.is_none()
+                                && !self.cloud_prototype.production.launch.submitted,
+                            |ui| {
+                                actions.repository = fields(
+                                    ui,
+                                    &mut self.cloud_prototype.production,
+                                    &mut actions.create,
+                                    refocus_repository,
+                                );
+                                if !self.cloud_prototype.production.launch.loading()
+                                    && self.cloud_prototype.production.profiles.is_none()
+                                    && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
+                                {
+                                    actions.repository = RepositoryAction::Setup;
+                                }
+                            },
+                        );
                         if let Some(error) = &self.cloud_prototype.error {
                             ui.add_space(8.0);
                             ui.colored_label(theme::PALETTE_RED(), error);
@@ -69,7 +90,15 @@ impl HorizonApp {
                 footer(ui, &self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
-        let dismissed = response.should_close();
+        // The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
+        let dismissed = if picking {
+            if response.backdrop_response.clicked() {
+                self.dir_picker = None;
+            }
+            false
+        } else {
+            response.should_close()
+        };
         if dismissed && escape {
             self.consume_navigation_key(
                 ctx,
@@ -82,37 +111,37 @@ impl HorizonApp {
         if dismissed || actions.cancel {
             self.cloud_prototype.production.creating = false;
             self.cloud_prototype.production.pending_creation = None;
+            self.cloud_prototype.production.launch = super::launch::State::default();
             return;
         }
         match actions.repository {
-            RepositoryAction::Load => self.read_cloud_profiles(),
+            RepositoryAction::Choose => self.choose_cloud_repository(),
+            RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
             RepositoryAction::None => {}
         }
-        if actions.create
-            && let Err(error) = self.create_production_cloud(ctx)
-        {
-            self.cloud_prototype.error = Some(error.to_string());
+        if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
+            self.cloud_prototype.production.launch.submitted = true;
         }
+        self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
     }
 
-    pub(super) fn read_cloud_profiles(&mut self) {
+    fn choose_cloud_repository(&mut self) {
         let form = &mut self.cloud_prototype.production;
-        let result = std::fs::read_to_string(PathBuf::from(&form.repository).join(".horizon/cloud.yml"))
-            .map_err(|_| "Cannot read .horizon/cloud.yml".to_owned())
-            .and_then(|yaml| CloudConfig::parse(&yaml).map_err(|error| error.to_string()));
-        match result {
-            Ok(config) => {
-                form.selected_profile.clone_from(&config.default);
-                form.profiles = Some(config);
-                self.cloud_prototype.error = None;
-            }
-            Err(error) => {
-                form.profiles = None;
-                form.selected_profile.clear();
-                self.cloud_prototype.error = Some(error);
-            }
+        form.choosing_repository = true;
+        let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
+        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
+    }
+
+    pub(in crate::app) fn set_cloud_repository(&mut self, path: &Path) {
+        let form = &mut self.cloud_prototype.production;
+        let repository = path.to_string_lossy();
+        if form.repository != repository {
+            form.repository = repository.into_owned();
+            form.profiles = None;
+            form.selected_profile.clear();
+            form.launch.accounts_checked = false;
         }
     }
 }
@@ -149,7 +178,35 @@ fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> 
     )
 }
 
-fn fields(ui: &mut Ui, form: &mut Production) -> bool {
+fn repository_field(ui: &mut Ui, repository: &str) -> egui::Response {
+    ui.label(RichText::new("Repository").size(14.0).strong().color(theme::FG()));
+    let path = if repository.trim().is_empty() {
+        RichText::new("Choose a local repository").color(theme::FG_DIM())
+    } else {
+        RichText::new(dir_search::abbreviate_home(Path::new(repository))).color(theme::FG())
+    };
+    ui.scope_builder(egui::UiBuilder::new().id(Id::new("cloud-repository")), |ui| {
+        ui.spacing_mut().button_padding = Vec2::new(12.0, 10.0);
+        ui.add(
+            Button::new(path.size(15.0))
+                .right_text(RichText::new("Browse…").size(13.0).color(theme::FG_SOFT()))
+                .truncate()
+                .fill(ui.visuals().text_edit_bg_color())
+                .min_size(Vec2::new(ui.available_width(), 38.0)),
+        )
+    })
+    .inner
+}
+
+fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_repository: bool) -> RepositoryAction {
+    if form.focus_title_on_open
+        && !ui.is_sizing_pass()
+        && ui.is_enabled()
+        && !ui.input(|input| input.pointer.any_down() || input.pointer.any_released())
+    {
+        ui.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+        form.focus_title_on_open = false;
+    }
     let title = field(
         ui,
         "Cloud title",
@@ -157,29 +214,65 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
         &mut form.title,
         "e.g. Feature development",
     );
-    if std::mem::take(&mut form.focus_title_on_open) {
-        title.request_focus();
+    if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
+        *submit = true;
+    }
+    if form.launch.loading() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Preparing cloud…");
+        });
+    } else if let Some(config) = &form.profiles {
+        ui.small(&form.repository);
+        if let Some(profile) = config.profiles.get(&form.selected_profile) {
+            ui.small(format!(
+                "{} · {} vCPU · {} GB",
+                form.selected_profile, profile.cpu, profile.memory_gb
+            ));
+        }
+    }
+    ui.small("Only committed files are transferred. Local changes stay on this computer.");
+    let mut action = RepositoryAction::None;
+    egui::CollapsingHeader::new("Advanced")
+        .default_open(form.profiles.is_none() && !form.launch.loading())
+        .show(ui, |ui| {
+            action = advanced_fields(ui, form, refocus_repository);
+        });
+    action
+}
+
+fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool) -> RepositoryAction {
+    let mut changed = false;
+    ui.add_space(8.0);
+    let repository = repository_field(ui, &form.repository);
+    if refocus_repository {
+        repository.request_focus();
+    }
+    let choose = repository.clicked();
+    if choose {
+        // Keyboard activation (Enter with any modifiers) must not also confirm the picker opening this frame.
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                )
+            });
+        });
     }
     ui.add_space(8.0);
-    if field(
-        ui,
-        "Repository",
-        "cloud-repository",
-        &mut form.repository,
-        "/path/to/repository",
-    )
-    .changed()
-    {
-        form.profiles = None;
-    }
-    ui.add_space(8.0);
-    field(
+    changed |= field(
         ui,
         "Committed base revision",
         "cloud-revision",
         &mut form.revision,
         "HEAD",
-    );
+    )
+    .changed();
     ui.label(
         RichText::new("Only committed files are transferred. Local changes stay on this computer.")
             .size(12.0)
@@ -207,6 +300,7 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
                     .clicked()
                 {
                     form.selected_profile.clone_from(name);
+                    form.launch.accounts_checked = false;
                 }
             }
         });
@@ -229,7 +323,13 @@ fn fields(ui: &mut Ui, form: &mut Production) -> bool {
                 .color(theme::FG_SOFT()),
         );
     }
-    load
+    if choose {
+        RepositoryAction::Choose
+    } else if load || changed {
+        RepositoryAction::Load
+    } else {
+        RepositoryAction::None
+    }
 }
 
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
@@ -237,14 +337,14 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
         Vec2::new(ui.available_width(), 40.0),
         Layout::right_to_left(Align::Center),
         |ui| {
-            actions.create = ui
+            actions.create |= ui
                 .add_enabled(
-                    !form.title.trim().is_empty() && form.profiles.is_some() && form.pending_creation.is_none(),
+                    can_submit(form),
                     Button::new(
-                        RichText::new(if form.pending_creation.is_some() {
-                            "Checking repository…"
+                        RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
+                            "Starting cloud…"
                         } else {
-                            "Create cloud"
+                            "Start cloud"
                         })
                         .size(14.0)
                         .strong(),
@@ -264,4 +364,11 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
                 .clicked();
         },
     );
+}
+
+fn can_submit(form: &Production) -> bool {
+    !form.title.trim().is_empty()
+        && (form.profiles.is_some() || form.launch.loading())
+        && form.pending_creation.is_none()
+        && !form.launch.submitted
 }

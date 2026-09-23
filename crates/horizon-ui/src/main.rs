@@ -117,21 +117,26 @@ fn main() -> eframe::Result {
 
     let observed_keyboard_inputs = input::ObservedKeyboardInputs::default();
     let app_keyboard_inputs = observed_keyboard_inputs.clone();
+    let device_requests = app::DeviceRequestBridge::new();
+    let device_requests_for_app = Arc::clone(&device_requests);
     native_app::run_native_with_keyboard_observer(
         branding::APP_NAME,
         options,
         Box::new(move |cc| {
             log_graphics_adapter(cc);
-            Ok(Box::new(HorizonApp::new(
+            let host = HorizonApp::new(
                 cc,
                 &config,
                 resolved_config_path.clone(),
                 session_store.clone(),
                 startup.clone(),
                 app_keyboard_inputs.clone(),
-            )))
+            );
+            device_requests_for_app.install(host, cc.egui_ctx.clone());
+            Ok(Box::new(app::BridgeApp::new(device_requests_for_app)))
         }),
         observed_keyboard_inputs,
+        device_requests,
     )
 }
 

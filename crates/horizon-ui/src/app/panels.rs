@@ -335,7 +335,7 @@ impl HorizonApp {
             .collect()
     }
 
-    fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
+    pub(super) fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
         let canvas_position = self.arranged_panel_position(
             panel.id,
             panel.workspace_id,
@@ -475,6 +475,7 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn render_panels(&mut self, ctx: &Context) {
+        self.capture_root_device_presentation(self.canvas_rect(ctx));
         self.panel_screen_rects.clear();
         self.terminal_body_screen_rects.clear();
         self.panel_screen_order.clear();

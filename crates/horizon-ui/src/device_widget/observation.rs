@@ -2,7 +2,7 @@
 use super::{DevicePanelState, DeviceUiState, Status};
 use horizon_core::browser::manifest::{
     self,
-    device::{Connection, Diagnostics, ImageEvidence, PanelState, Presentation},
+    device::{Connection, Diagnostics, ImageEvidence, PanelState, Presentation, SshRoute},
 };
 use std::time::Instant;
 
@@ -54,6 +54,11 @@ impl DeviceUiState {
             panel_id,
             endpoint: device.target.address().to_string(),
             identity: device.identity.clone(),
+            ssh: device.ssh_tunnel.as_ref().map(|connection| SshRoute {
+                host: connection.host.clone(),
+                user: connection.user.clone(),
+                port: connection.port,
+            }),
             server: self.server.clone(),
             visible,
             owned_by_caller: self.owner.as_deref() == Some(actor),
@@ -72,6 +77,7 @@ impl DeviceUiState {
                 last_decoded_age_millis: age(stream.last_frame),
                 last_uploaded_age_millis: age(self.image.last_uploaded),
                 last_displayed_age_millis: age(self.image.last_displayed),
+                host: self.host.observation(),
             }),
             connection,
             connection_error,

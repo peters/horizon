@@ -1,9 +1,10 @@
 //! Native viewer host lifecycle. Standalone device input never enters this path.
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::{
-    PanelId, PanelKind, PanelOptions,
+    PanelId, PanelKind, PanelOptions, SshConnection,
     browser::manifest::{
         self,
         device::{self, Operation, Outcome, PanelState, Request},
@@ -14,6 +15,12 @@ use super::{
     HorizonApp,
     browser_requests::{ActorPanel, actor_panel},
 };
+
+/// Options every MCP-created SSH route carries: the host must already be
+/// trusted, whatever the machine's SSH configuration says.
+fn mcp_route_ssh_args() -> Vec<String> {
+    vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]
+}
 
 pub(super) struct PendingDeviceReveal {
     id: PanelId,
@@ -26,6 +33,21 @@ pub(super) struct WindowRestore {
     pub size: egui::Vec2,
 }
 
+fn claim_device_requests(root: Option<&Path>) -> std::io::Result<Vec<Request>> {
+    let host = manifest::host_instance();
+    match root {
+        Some(root) => device::claim_at(root, host),
+        None => device::claim(host),
+    }
+}
+
+fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
+    match root {
+        Some(root) => device::complete_at(root, request, outcome),
+        None => device::complete(request, outcome),
+    }
+}
+
 impl HorizonApp {
     pub(super) fn poll_device_panel_requests(&mut self, ctx: &Context) -> bool {
         let now = Instant::now();
@@ -36,8 +58,18 @@ impl HorizonApp {
         {
             return false;
         }
-        self.panel_render_caches.device_request_poll = Some(now);
-        let requests = match device::claim(manifest::host_instance()) {
+        self.drain_device_panel_requests(ctx, None)
+    }
+
+    /// Claim and apply every queued request. `root` selects an explicit queue
+    /// directory; `None` uses the process runtime root.
+    ///
+    /// The frame poll skips calls closer than 250ms apart. This entry point
+    /// does not: the unpresented-host pump uses it when a request is already
+    /// waiting, and no later frame is guaranteed to notice the cadence.
+    pub(super) fn drain_device_panel_requests(&mut self, ctx: &Context, root: Option<&Path>) -> bool {
+        self.panel_render_caches.device_request_poll = Some(Instant::now());
+        let requests = match claim_device_requests(root) {
             Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(%error, "could not poll Device panel requests");
@@ -47,7 +79,7 @@ impl HorizonApp {
         let changed = !requests.is_empty();
         for request in requests {
             let outcome = self.apply_device_request(&request, ctx);
-            if let Err(error) = device::complete(&request, outcome) {
+            if let Err(error) = complete_device_request(root, &request, outcome) {
                 tracing::warn!(%error, "could not publish Device panel result");
             }
         }
@@ -68,9 +100,11 @@ impl HorizonApp {
             );
         };
         match &request.operation {
-            Operation::Create { endpoint, identity } => {
-                self.create_device_viewer(endpoint, identity.clone(), actor, &request.actor, ctx)
-            }
+            Operation::Create {
+                endpoint,
+                identity,
+                ssh,
+            } => self.create_device_viewer(endpoint, identity.clone(), ssh.clone(), actor, &request.actor, ctx),
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -94,6 +128,7 @@ impl HorizonApp {
         &mut self,
         endpoint: &str,
         mut identity: Option<device::DeviceIdentity>,
+        mut ssh: Option<device::SshRoute>,
         actor: ActorPanel,
         owner: &str,
         ctx: &Context,
@@ -103,21 +138,37 @@ impl HorizonApp {
         {
             return Outcome::failed("invalid_identity", &error.to_string());
         }
+        if let Some(route) = &mut ssh
+            && let Err(error) = route.normalize()
+        {
+            return Outcome::failed("invalid_ssh_route", &error);
+        }
+        // Only the route's own fields reach ssh; keys and options come from
+        // this machine's SSH configuration, never from the caller. Host-key
+        // checking is pinned strict on the command line, which ssh applies
+        // before any config file, so a permissive `StrictHostKeyChecking` in
+        // that configuration cannot let an unknown host use this machine's keys.
+        let ssh_connection = ssh.map(|route| SshConnection {
+            host: route.host,
+            user: route.user,
+            port: route.port,
+            extra_args: mcp_route_ssh_args(),
+            ..SshConnection::default()
+        });
         let options = PanelOptions {
             kind: PanelKind::Device,
             device_identity: identity,
             command: Some(endpoint.into()),
+            ssh_connection,
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let Ok(id) = self.board.create_panel(options, actor.workspace_id) else {
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
             return Outcome::failed(
                 "invalid_endpoint",
                 "Device viewer requires a numeric loopback address and nonzero port",
             );
         };
-        #[cfg(feature = "cloud-workspaces")]
-        self.cloud_attach_agent_child(actor.panel_id, id);
         // Creating a viewer must not steal keyboard input from the caller.
         if let Some(focused) = focused {
             self.board.focus(focused);
@@ -217,6 +268,12 @@ impl HorizonApp {
     }
 
     fn reveal_device_viewer(&mut self, ctx: &Context, id: PanelId, actor: ActorPanel) {
+        self.panel_render_caches
+            .device_ui_state
+            .entry(id)
+            .or_default()
+            .host
+            .requested();
         let focused = self.board.focused;
         let active_workspace = self.board.active_workspace;
         self.board.set_panel_visible(id, true);
@@ -308,7 +365,9 @@ impl HorizonApp {
         }
         // Fit after layout and the bounded restoration wait. The window manager
         // may constrain the restored size, so expiry uses the available canvas.
-        self.reveal_device_in_rect(pending.id, self.canvas_rect(ctx));
+        let canvas = self.canvas_rect(ctx);
+        self.reveal_device_in_rect(pending.id, canvas);
+        self.record_applied_device_reveal(pending.id, canvas);
     }
 
     pub(super) fn apply_pending_device_reveal(&mut self, local: &str, canvas: egui::Rect) {
@@ -328,6 +387,7 @@ impl HorizonApp {
             let focused = self.board.focused;
             let active_workspace = self.board.active_workspace;
             self.reveal_device_in_rect(id, canvas);
+            self.record_applied_device_reveal(id, canvas);
             self.board.focused = focused;
             self.board.active_workspace = active_workspace;
         }
@@ -389,6 +449,66 @@ mod tests {
     }
 
     #[test]
+    fn a_queued_list_is_answered_without_running_a_frame() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let (_temp, ctx, app) = app();
+        let actor = format!("horizon:{}", app.board.panels[0].local_id);
+        let host = manifest::host_instance();
+        let request = device::enqueue_at(
+            root.path(),
+            manifest::AgentIdentity::new(&actor, Some(host)),
+            Operation::List,
+            Duration::from_secs(5),
+        )
+        .expect("enqueue");
+        let bridge = crate::app::DeviceRequestBridge::with_root(root.path().to_path_buf());
+        bridge.install(app, ctx);
+        assert!(bridge.poll_on_ui_thread());
+        let outcome = device::take_result_at(root.path(), &request).expect("result");
+        assert!(matches!(outcome, Some(Outcome::Panels { .. })));
+        assert!(!bridge.poll_on_ui_thread());
+    }
+
+    #[test]
+    fn superseded_reveal_remains_requested_without_claiming_canvas_application() {
+        let (_temp, ctx, mut app) = app();
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let create = request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:5900".into(),
+                    identity: None,
+                    ssh: None,
+                },
+            );
+            let panel = one(app.apply_device_request(&create, &ctx));
+            let id = app.board.panel_id_by_local_id(&panel.panel_id).unwrap();
+            let reveal = request(
+                &app,
+                Operation::Reveal {
+                    panel_id: panel.panel_id,
+                },
+            );
+            one(app.apply_device_request(&reveal, &ctx));
+            ids.push(id);
+        }
+        app.apply_pending_root_device_reveal(&ctx);
+        app.capture_root_device_presentation(app.canvas_rect(&ctx));
+        app.record_root_device_presentation(&ctx);
+        let observations: Vec<_> = ids
+            .iter()
+            .map(|id| app.panel_render_caches.device_ui_state[id].host.observation().unwrap())
+            .collect();
+        assert_eq!(observations[0].reveal_requests, 1);
+        assert_eq!(observations[0].applied_reveal_request, 0);
+        assert_eq!(observations[0].view_changed_since_reveal, None);
+        assert_eq!(observations[1].reveal_requests, 1);
+        assert_eq!(observations[1].applied_reveal_request, 1);
+        assert_eq!(observations[1].view_changed_since_reveal, Some(false));
+    }
+
+    #[test]
     fn lifecycle_preserves_other_panels_and_never_calls_creation_live_image_proof() {
         let (_temp, ctx, mut app) = app();
         let original_ids: Vec<_> = app.board.panels.iter().map(|p| p.local_id.clone()).collect();
@@ -397,6 +517,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let panel = one(app.apply_device_request(&create, &ctx));
@@ -431,6 +552,7 @@ mod tests {
                 Operation::Create {
                     identity: None,
                     endpoint: endpoint.into(),
+                    ssh: None,
                 },
             );
             assert!(matches!(
@@ -443,6 +565,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let panel = one(app.apply_device_request(&create, &ctx));
@@ -476,6 +599,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -519,6 +643,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -620,6 +745,7 @@ mod tests {
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
                 identity: Some(identity),
+                ssh: None,
             },
         );
         let created = one(app.apply_device_request(&create, &ctx));
@@ -646,12 +772,100 @@ mod tests {
                     machine_name: Some("a".repeat(257)),
                     ..Default::default()
                 }),
+                ssh: None,
             },
         );
         assert!(
             matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_identity")
         );
         assert_eq!(app.board.panels.len(), count);
+    }
+
+    #[test]
+    fn create_with_an_ssh_route_tunnels_the_viewer_and_reports_the_route() {
+        let (_temp, ctx, mut app) = app();
+        let route = device::SshRoute {
+            host: " lab.example ".into(),
+            user: Some("deploy".into()),
+            port: Some(2222),
+        };
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5901".into(),
+                identity: None,
+                ssh: Some(route),
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        let normalized = device::SshRoute {
+            host: "lab.example".into(),
+            user: Some("deploy".into()),
+            port: Some(2222),
+        };
+        assert_eq!(
+            created.endpoint, "127.0.0.1:5901",
+            "the endpoint is the host's loopback"
+        );
+        assert_eq!(created.ssh, Some(normalized.clone()));
+        let panel = app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.local_id == created.panel_id)
+            .expect("device panel");
+        let tunnel = panel
+            .device()
+            .and_then(|device| device.ssh_tunnel.clone())
+            .expect("tunnel");
+        assert_eq!(tunnel.host, "lab.example");
+        assert_eq!(tunnel.user.as_deref(), Some("deploy"));
+        assert_eq!(tunnel.port, Some(2222));
+        assert!(
+            tunnel.identity_file.is_none() && tunnel.proxy_jump.is_none(),
+            "only the route's own fields reach ssh"
+        );
+        assert_eq!(
+            tunnel.extra_args,
+            ["-o", "StrictHostKeyChecking=yes"],
+            "strict host-key checking is pinned, not inherited from ssh_config"
+        );
+        let argv = tunnel.stdio_forward_args("127.0.0.1:5901");
+        let strict = argv
+            .windows(2)
+            .position(|pair| pair == ["-o", "StrictHostKeyChecking=yes"])
+            .expect("strict host-key checking on the tunnel command line");
+        assert!(
+            argv.iter().position(|arg| arg == "deploy@lab.example") > Some(strict),
+            "the option precedes the destination, so ssh applies it before any config file: {argv:?}"
+        );
+        assert_eq!(
+            panel.ssh_connection.as_ref(),
+            Some(&tunnel),
+            "persisted like an SSH panel"
+        );
+        let listed = one(app.apply_device_request(&request(&app, Operation::List), &ctx));
+        assert_eq!(listed.ssh, Some(normalized));
+
+        let count = app.board.panels.len();
+        for host in ["-oProxyCommand=id", " ", "lab example", "lab;id", "lab$(id)"] {
+            let invalid = request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:5901".into(),
+                    identity: None,
+                    ssh: Some(device::SshRoute {
+                        host: host.into(),
+                        ..Default::default()
+                    }),
+                },
+            );
+            assert!(
+                matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_ssh_route"),
+                "{host:?}"
+            );
+        }
+        assert_eq!(app.board.panels.len(), count, "a refused route creates nothing");
     }
 
     #[cfg(feature = "cloud-workspaces")]
@@ -665,6 +879,7 @@ mod tests {
                 Operation::Create {
                     endpoint: "127.0.0.1:5900".into(),
                     identity: None,
+                    ssh: None,
                 },
             );
             let viewer = one(app.apply_device_request(&create, &ctx));

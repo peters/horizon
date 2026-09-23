@@ -54,7 +54,7 @@ INSERT INTO session_docs (session_id, cwd, updated_at, title, content, content_h
     assert_eq!(sessions.len(), 3);
     assert_eq!(sessions[0].kind, PanelKind::Grok);
     assert_eq!(sessions[0].session_id, "grok-newer");
-    assert_eq!(sessions[0].cwd.as_deref(), Some("/repo"));
+    assert_eq!(sessions[0].cwd, stored_cwd("/repo"));
     assert_eq!(sessions[0].label.as_deref(), Some("Newer fix"));
     assert_eq!(sessions[0].updated_at, 1_750_000_000_123);
     assert!(sessions[0].interactive);
