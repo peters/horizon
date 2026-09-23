@@ -31,8 +31,9 @@ optional). `endpoint` is then the address as seen from that SSH host, typically
 `127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
 keys, so the host must already be trusted in `known_hosts` (open it over SSH
 once); never pass credentials, key paths or ssh options. Labels may only contain
-letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host) and are refused
-otherwise, so nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for
+letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host), at most 253
+characters for the host and 64 for the user, and are refused otherwise, so
+nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for
 tunnelled viewers, and `connection_error` carries ssh's last lines when the
 tunnel fails.
 

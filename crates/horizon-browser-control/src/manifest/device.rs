@@ -77,19 +77,28 @@ pub struct SshRoute {
 }
 
 impl SshRoute {
+    /// A host name is at most 253 characters; aliases and addresses are shorter.
+    pub const MAX_HOST_CHARS: usize = 253;
+    /// Longer than any login name a system accepts.
+    pub const MAX_USER_CHARS: usize = 64;
+
     /// Trim the labels and keep them to the characters a host name, address,
     /// SSH config alias or user name is made of. `ssh` passes `%h` and `%r`
     /// into shell-executed `ProxyCommand` and `Match exec` lines from the
     /// machine's own configuration, so a label is never allowed to carry
-    /// shell metacharacters, options (leading `-`), whitespace or controls.
+    /// shell metacharacters, options (leading `-`), whitespace or controls,
+    /// and each label is bounded in length.
     ///
     /// # Errors
     /// Describes the first rejected field.
     pub fn normalize(&mut self) -> Result<(), String> {
-        fn label(value: &str, what: &str, extra: &[char]) -> Result<String, String> {
+        fn label(value: &str, what: &str, extra: &[char], max_chars: usize) -> Result<String, String> {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Err(format!("ssh.{what} cannot be empty"));
+            }
+            if trimmed.len() > max_chars {
+                return Err(format!("ssh.{what} must be at most {max_chars} characters"));
             }
             let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || extra.contains(&c);
             if trimmed.starts_with('-') || !trimmed.chars().all(plain) {
@@ -100,9 +109,9 @@ impl SshRoute {
             }
             Ok(trimmed.to_owned())
         }
-        self.host = label(&self.host, "host", &[':'])?;
+        self.host = label(&self.host, "host", &[':'], Self::MAX_HOST_CHARS)?;
         if let Some(user) = &self.user {
-            self.user = Some(label(user, "user", &[])?);
+            self.user = Some(label(user, "user", &[], Self::MAX_USER_CHARS)?);
         }
         if self.port == Some(0) {
             return Err("ssh.port must be nonzero".into());
@@ -476,6 +485,38 @@ mod tests {
             ("lab", Some("a:b"), None, "ssh.user may only"),
             ("lab", Some(" "), None, "ssh.user cannot be empty"),
             ("lab", None, Some(0), "ssh.port must be nonzero"),
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                user: user.map(str::to_owned),
+                port,
+            };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{host:?} {user:?} {port:?}: {error}");
+        }
+        let long_host = "h".repeat(SshRoute::MAX_HOST_CHARS);
+        let long_user = "u".repeat(SshRoute::MAX_USER_CHARS);
+        let mut longest = SshRoute {
+            host: format!(" {long_host} "),
+            user: Some(long_user.clone()),
+            port: None,
+        };
+        assert!(longest.normalize().is_ok(), "bounds are inclusive after trimming");
+        for (host, user, field) in [
+            (format!("{long_host}h"), None, "ssh.host must be at most 253"),
+            (
+                "lab".to_owned(),
+                Some(format!("{long_user}u")),
+                "ssh.user must be at most 64",
+            ),
+        ] {
+            let mut route = SshRoute { host, user, port: None };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{error}");
+        }
+        for (host, user, port, field) in [
+            ("lab\u{7}", None, None, "ssh.host may only"),
+            ("lab", Some("deploy;id"), None, "ssh.user may only"),
         ] {
             let mut route = SshRoute {
                 host: host.into(),

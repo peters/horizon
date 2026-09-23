@@ -26,7 +26,9 @@ Must include:
 - `ssh_routes_are_trimmed_and_option_like_or_broken_labels_are_refused` —
   labels are limited to letters, digits, `.`, `_`, `-` (and `:` in a host),
   so a leading `-`, whitespace, control characters and shell metacharacters
-  (`;`, `$()`, backticks, `>`, `|`, `%`) are refused, as is port zero; the
+  (`;`, `$()`, backticks, `>`, `|`, `%`) are refused, as are port zero and
+  labels over 253 (host) or 64 (user) characters, with the bounds inclusive
+  after trimming; the
   labels reach shell-executed `ProxyCommand`/`Match exec` lines through
   ssh's `%h`/`%r`.
 - `create_with_an_ssh_route_tunnels_the_viewer_and_reports_the_route` — the
