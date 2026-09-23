@@ -271,7 +271,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `panels`: panel-area orchestration and body rendering, with gesture and
     context-menu handling and outcome application in `panels/interaction.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
-    layout, and row/header paint helpers split into `remote_hosts_overlay/`
+    layout, row/header paint helpers and the SSH/VNC mode plus destination
+    workspace controls split into `remote_hosts_overlay/`; the overlay only
+    reports an `Open` or `SetDefaultWorkspace` action
+  - `remote_hosts`: overlay lifecycle and catalog refresh, with workspace
+    resolution and panel creation in `remote_hosts/launch.rs` and config-backed
+    preferences (the default workspace) in `remote_hosts/preferences.rs`
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup

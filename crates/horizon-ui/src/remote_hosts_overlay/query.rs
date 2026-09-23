@@ -1,6 +1,6 @@
 use horizon_core::RemoteHost;
 
-use super::RemoteHostsOverlayAction;
+use super::{RemoteConnectMode, RemoteHostsOverlayAction, WorkspaceChoice};
 
 pub(super) fn parse_user_prefix(query: &str) -> (Option<&str>, &str) {
     if let Some(at_pos) = query.find('@') {
@@ -16,14 +16,21 @@ pub(super) fn parse_user_prefix(query: &str) -> (Option<&str>, &str) {
     }
 }
 
-pub(super) fn connect_action(host: &RemoteHost, user_override: Option<&str>) -> RemoteHostsOverlayAction {
+pub(super) fn connect_action(
+    host: &RemoteHost,
+    user_override: Option<&str>,
+    mode: RemoteConnectMode,
+    destination: WorkspaceChoice,
+) -> RemoteHostsOverlayAction {
     let mut connection = host.ssh_connection.clone();
     if let Some(user) = user_override {
         connection.user = Some(user.to_string());
     }
-    RemoteHostsOverlayAction::OpenSsh {
+    RemoteHostsOverlayAction::Open {
         label: host.label.clone(),
         connection,
+        mode,
+        destination,
     }
 }
 
@@ -77,7 +84,7 @@ mod tests {
     use horizon_core::{RemoteHost, RemoteHostSources, RemoteHostStatus, SshConnection};
 
     use super::{connect_action, filtered_indices, parse_user_prefix};
-    use crate::remote_hosts_overlay::RemoteHostsOverlayAction;
+    use crate::remote_hosts_overlay::{RemoteConnectMode, RemoteHostsOverlayAction, WorkspaceChoice};
 
     #[test]
     fn parse_user_prefix_extracts_user_and_filter() {
@@ -115,16 +122,25 @@ mod tests {
     fn connect_action_applies_user_override_without_mutating_host() {
         let host = remote_host("Prod API", "prod-api", RemoteHostStatus::Online, &["app"], &[]);
 
-        let action = connect_action(&host, Some("deploy"));
+        let action = connect_action(&host, Some("deploy"), RemoteConnectMode::Ssh, WorkspaceChoice::Default);
 
         match action {
-            RemoteHostsOverlayAction::OpenSsh { label, connection } => {
+            RemoteHostsOverlayAction::Open {
+                label,
+                connection,
+                mode,
+                destination,
+            } => {
                 assert_eq!(label, "Prod API");
                 assert_eq!(connection.user.as_deref(), Some("deploy"));
                 assert_eq!(host.ssh_connection.user, None);
+                assert_eq!(mode, RemoteConnectMode::Ssh);
+                assert_eq!(destination, WorkspaceChoice::Default);
             }
-            RemoteHostsOverlayAction::None | RemoteHostsOverlayAction::Cancelled => {
-                panic!("expected ssh action")
+            RemoteHostsOverlayAction::None
+            | RemoteHostsOverlayAction::Cancelled
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => {
+                panic!("expected an open action")
             }
         }
     }
