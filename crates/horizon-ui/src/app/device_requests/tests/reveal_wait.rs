@@ -29,14 +29,12 @@ fn off_canvas_viewer() -> (tempfile::TempDir, Context, HorizonApp, PanelId, Stri
 }
 
 /// One host frame. Held reveals stay out of it so nothing is published to
-/// the real runtime directory; the next frame's `begin_frame` is replayed.
+/// the real runtime directory; tests then settle them as the frame's end or
+/// the request pump would, with no later `begin_frame`.
 fn frame(ctx: &Context, app: &mut HorizonApp) {
     let awaiting = std::mem::take(&mut app.panel_render_caches.awaiting_device_reveals);
     run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
     app.panel_render_caches.awaiting_device_reveals = awaiting;
-    for state in app.panel_render_caches.device_ui_state.values_mut() {
-        state.begin_frame();
-    }
 }
 
 fn reveal(app: &mut HorizonApp, ctx: &Context, local: &str) -> Request {
@@ -150,14 +148,10 @@ fn stopped_and_closed_viewers_answer_without_waiting() {
         .insert(id, DeviceUiState::connected_fixture(&stopped.actor));
 
     reveal(&mut app, &ctx, &local);
-    assert!(app.take_closed_device_reveals().is_empty());
+    assert!(settled(&mut app, Instant::now()).is_empty());
     let close = request(&app, Operation::Close { panel_id: local });
     app.apply_device_request(&close, &ctx);
-    let outcomes: Vec<_> = app
-        .take_closed_device_reveals()
-        .into_iter()
-        .map(|answer| answer.outcome)
-        .collect();
+    let outcomes = settled(&mut app, Instant::now());
     assert!(matches!(&outcomes[..], [Outcome::Failed { code, .. }] if code == "panel_unavailable"));
     assert!(app.panel_render_caches.awaiting_device_reveals.is_empty());
 }

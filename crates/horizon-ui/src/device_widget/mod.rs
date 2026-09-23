@@ -61,8 +61,8 @@ impl DeviceUiState {
         self.rendered
     }
 
-    /// The last completed, non-discarded frame painted this viewer after
-    /// reveal `request` (or a later one) reached the canvas.
+    /// The last completed, non-discarded pass of this viewer's own viewport
+    /// painted it after reveal `request` (or a later one) reached the canvas.
     pub(crate) fn displayed_since_reveal(&self, request: u64) -> bool {
         self.image.previous_displayed
             && !self.host.last_pass_discarded()
@@ -91,6 +91,10 @@ impl DeviceUiState {
         if let Some(session) = &self.session {
             session.set_visible(self.rendered);
         }
+        // Observations between passes (request pump, held reveals) describe
+        // this completed pass rather than the one before it.
+        self.image.previous_displayed = self.image.displayed;
+        self.previous_rendered = self.rendered;
     }
 
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {

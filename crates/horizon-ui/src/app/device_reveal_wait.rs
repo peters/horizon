@@ -98,7 +98,7 @@ impl HorizonApp {
         !self.panel_render_caches.awaiting_device_reveals.is_empty()
     }
 
-    /// Runs after `begin_frame`, so observations describe the completed frame.
+    /// Runs after `finish_frame`, so observations describe the completed pass.
     pub(super) fn complete_settled_device_reveals(&mut self, ctx: &Context) {
         if !self.holds_device_reveals() {
             return;
@@ -110,35 +110,11 @@ impl HorizonApp {
     }
 
     /// The request pump's path while the host runs no frames: expiry and
-    /// closed viewers still answer. An observation here can be one frame
-    /// old, but presentation needs a display after the reveal was applied.
+    /// closed viewers still answer, from the last completed pass.
     pub(super) fn settle_device_reveals_without_frame(&mut self) {
         if self.holds_device_reveals() {
-            self.answer_closed_device_reveals();
             publish(self.take_settled_device_reveals(Instant::now()));
         }
-    }
-
-    /// Runs after the frame's requests and panel closes, so a viewer closed
-    /// while its reveal is held answers without depending on another frame.
-    pub(super) fn answer_closed_device_reveals(&mut self) {
-        publish(self.take_closed_device_reveals());
-    }
-
-    pub(super) fn take_closed_device_reveals(&mut self) -> Vec<RevealAnswer> {
-        let (closed, open): (Vec<_>, Vec<_>) = std::mem::take(&mut self.panel_render_caches.awaiting_device_reveals)
-            .into_iter()
-            .partition(|waiting| {
-                self.board
-                    .panel(waiting.id)
-                    .and_then(horizon_core::Panel::device)
-                    .is_none()
-            });
-        self.panel_render_caches.awaiting_device_reveals = open;
-        closed
-            .into_iter()
-            .map(|waiting| RevealAnswer::new(waiting, Outcome::failed("panel_unavailable", "Device panel closed")))
-            .collect()
     }
 
     /// Answers every held reveal before a session switch renumbers panels or
@@ -175,10 +151,7 @@ impl HorizonApp {
         let Some(panel) = self.device_observation(waiting.id, &waiting.request.actor) else {
             return Some(Outcome::failed("panel_unavailable", "Device panel closed"));
         };
-        // An immediate detached viewport draws inside the root pass, so a
-        // discarded root pass discards its image too.
         let displayed = panel.image.image_displayed
-            && !self.panel_render_caches.root_pass_discarded
             && self
                 .panel_render_caches
                 .device_ui_state
