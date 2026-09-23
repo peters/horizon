@@ -225,10 +225,11 @@ fn authorize_attachments(
     // cannot both fit their files into the same budget. The lock is a
     // sibling of the panel's staging directory, not the manifest lock, so
     // a long copy never blocks the engine.
-    // Propagate the OS error unchanged: callers tell a coordination refusal
-    // from an operating system failure by its OS error code.
-    std::fs::create_dir_all(&attachments_dir).inspect_err(|error| {
-        tracing::warn!(target: "browser", "could not prepare the attachment staging directory: {error}");
+    std::fs::create_dir_all(&attachments_dir).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not prepare the attachment staging directory: {error}"),
+        )
     })?;
     let lock = super::ManifestLock::acquire_with_timeout(
         &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
