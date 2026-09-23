@@ -514,3 +514,56 @@ fn panel_paths_preserve_identity_on_case_insensitive_filesystems() {
     assert!(store.read("Panel-A").is_err());
     assert!(store.read("panel-a").expect("other panel").is_some());
 }
+
+fn staging_files(store: &WorkStore) -> Vec<std::ffi::OsString> {
+    fs::read_dir(&store.root)
+        .expect("store root")
+        .map(|entry| entry.expect("entry").file_name())
+        .filter(|name| name.to_string_lossy().starts_with(STAGING_PREFIX))
+        .collect()
+}
+
+#[test]
+fn longest_panel_ids_round_trip_beyond_windows_max_path() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let store = WorkStore::new(directory.path());
+    let panel = "p".repeat(128);
+    let record_path = store.record_path(&panel).expect("record path");
+    assert!(record_path.as_os_str().len() > 260, "{}", record_path.display());
+    for owner in ["first", "second"] {
+        store
+            .register_owner(&panel, PanelKind::Codex, owner, Some("session"), directory.path())
+            .expect("register");
+        let record = store.read(&panel).expect("read").expect("record");
+        assert_eq!(
+            (record.panel_local_id.as_str(), record.owner_token.as_str()),
+            (panel.as_str(), owner)
+        );
+    }
+    assert!(staging_files(&store).is_empty());
+    store.invalidate(&panel, "second").expect("invalidate");
+    assert!(store.read(&panel).is_err());
+}
+
+#[test]
+fn failed_publication_leaves_no_staging_file() {
+    let fixture = Fixture::new();
+    let mut record = fixture.store.read("panel").expect("read").expect("record");
+    record.panel_local_id = "blocked".into();
+    let blocked = fixture.store.record_path("blocked").expect("blocked path");
+    fs::create_dir_all(blocked.join("occupied")).expect("directory in the record's place");
+    assert!(fixture.store.write(&record).is_err());
+    assert!(staging_files(&fixture.store).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn published_records_are_not_marked_temporary() {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
+    let fixture = Fixture::new();
+    let attributes = fs::metadata(fixture.store.record_path("panel").expect("path"))
+        .expect("metadata")
+        .file_attributes();
+    assert_eq!(attributes & FILE_ATTRIBUTE_TEMPORARY, 0);
+}
