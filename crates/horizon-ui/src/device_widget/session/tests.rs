@@ -8,7 +8,7 @@ fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewErro
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let session = Session::start(
-        listener.local_addr()?,
+        DeviceRoute::Direct(listener.local_addr()?),
         Context::default(),
         ViewportId::ROOT,
         DeviceViewOptions::default(),
@@ -71,7 +71,7 @@ fn named_session_with_context(
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let session = Session::start(
-        listener.local_addr()?,
+        DeviceRoute::Direct(listener.local_addr()?),
         ctx,
         ViewportId::ROOT,
         DeviceViewOptions::default(),

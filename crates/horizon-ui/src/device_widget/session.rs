@@ -1,3 +1,5 @@
+mod tunnel;
+
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -6,11 +8,19 @@ use std::{
 };
 
 use egui::{ColorImage, Context, ViewportId};
-use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
+use horizon_core::{
+    DevicePanelState, DeviceViewOptions, SshConnection, browser::manifest::device::DeviceServerDetails,
+};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
+use self::tunnel::SshTunnel;
 use super::frame::{Framebuffer, present_image};
+
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Key exchange over a mesh network plus the VNC handshake behind it.
+const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ViewError {
@@ -22,8 +32,33 @@ pub(super) enum ViewError {
     Frame(&'static str),
     #[error("{0}")]
     Server(String),
+    #[error("{0}")]
+    Tunnel(String),
     #[error("connection timed out")]
     Timeout,
+}
+
+/// How the worker reaches the VNC server; owned so the worker thread can keep it.
+#[derive(Clone, Debug)]
+pub(super) enum DeviceRoute {
+    Direct(SocketAddr),
+    /// `remote` is the endpoint as seen from the SSH host.
+    SshTunnel {
+        connection: SshConnection,
+        remote: SocketAddr,
+    },
+}
+
+impl From<&DevicePanelState> for DeviceRoute {
+    fn from(device: &DevicePanelState) -> Self {
+        match &device.ssh_tunnel {
+            Some(connection) => Self::SshTunnel {
+                connection: connection.clone(),
+                remote: device.target.address(),
+            },
+            None => Self::Direct(device.target.address()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -68,7 +103,7 @@ pub(super) struct Session {
 
 impl Session {
     pub(super) fn start(
-        address: SocketAddr,
+        route: DeviceRoute,
         ctx: Context,
         viewport: ViewportId,
         options: DeviceViewOptions,
@@ -99,7 +134,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(address, &state, &retained, &ctx) => result,
+                            result = connection(route, &state, &retained, &ctx) => result,
                         }
                     })
                 });
@@ -227,12 +262,27 @@ fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
 }
 
 async fn connection(
-    address: SocketAddr,
+    route: DeviceRoute,
     updates: &Mutex<Updates>,
     latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
 ) -> Result<(), ViewError> {
-    let client = connect_client(address).await?;
+    // The tunnel process lives exactly as long as this connection.
+    let (client, mut tunnel) = connect_client(route).await?;
+    let result = stream_desktop(client, updates, latest_full, ctx).await;
+    match (result, tunnel.as_mut()) {
+        // A forward that dies mid-session ends the stream; ssh says why.
+        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
+        (result, _) => result,
+    }
+}
+
+async fn stream_desktop(
+    client: vnc::VncClient,
+    updates: &Mutex<Updates>,
+    latest_full: &Mutex<Option<ColorImage>>,
+    ctx: &Context,
+) -> Result<(), ViewError> {
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
     // ServerInit queues resolution before the client is returned. Observe that
@@ -315,29 +365,50 @@ async fn connection(
     }
 }
 
-async fn connect_client(address: SocketAddr) -> Result<vnc::VncClient, ViewError> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let stream = tokio::net::TcpStream::connect(address).await?;
-        stream.set_nodelay(true)?;
-        // The local MVP has no credentials. Password-required servers fail
-        // explicitly; input and clipboard are never forwarded by this viewer.
-        let client = VncConnector::new(stream)
-            .set_auth_method(async { Err(vnc::VncError::NoPassword) })
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
-            .allow_shared(true)
-            .set_pixel_format(PixelFormat::rgba())
-            .build()?
-            .try_start()
-            .await?
-            .finish()?;
-        Ok::<_, ViewError>(client)
-    })
-    .await
-    .map_err(|_| ViewError::Timeout)?
+async fn connect_client(route: DeviceRoute) -> Result<(vnc::VncClient, Option<SshTunnel>), ViewError> {
+    match route {
+        DeviceRoute::Direct(address) => {
+            let client = tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, async {
+                let stream = tokio::net::TcpStream::connect(address).await?;
+                stream.set_nodelay(true)?;
+                handshake(stream).await
+            })
+            .await
+            .map_err(|_| ViewError::Timeout)??;
+            Ok((client, None))
+        }
+        DeviceRoute::SshTunnel { connection, remote } => {
+            let mut tunnel = SshTunnel::spawn("ssh", &connection.stdio_forward_args(&remote.to_string()))?;
+            let stream = tunnel.take_stream()?;
+            match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
+                Ok(Ok(client)) => Ok((client, Some(tunnel))),
+                Ok(Err(error)) => Err(tunnel.explain(error).await),
+                Err(_) => Err(tunnel.explain(ViewError::Timeout).await),
+            }
+        }
+    }
+}
+
+async fn handshake<S>(stream: S) -> Result<vnc::VncClient, ViewError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
+{
+    // The local MVP has no credentials. Password-required servers fail
+    // explicitly; input and clipboard are never forwarded by this viewer.
+    let client = VncConnector::new(stream)
+        .set_auth_method(async { Err(vnc::VncError::NoPassword) })
+        .add_encoding(VncEncoding::Zrle)
+        .add_encoding(VncEncoding::CopyRect)
+        .add_encoding(VncEncoding::Raw)
+        .add_encoding(VncEncoding::DesktopSizePseudo)
+        .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
+        .allow_shared(true)
+        .set_pixel_format(PixelFormat::rgba())
+        .build()?
+        .try_start()
+        .await?
+        .finish()?;
+    Ok(client)
 }
 
 fn apply_frame_event(
