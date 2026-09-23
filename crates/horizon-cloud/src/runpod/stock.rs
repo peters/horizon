@@ -65,7 +65,7 @@ impl RunPod {
                 .find(|entry| entry.id == flavor)
                 .and_then(|entry| entry.specifics.as_ref())
                 .ok_or(CloudError::InvalidResponse)?;
-            let level = specifics.stock_status.as_deref().and_then(level);
+            let level = level(specifics.stock_status.as_deref())?;
             if let Some(level) = level {
                 let best = stock.entry(center.clone()).or_insert(level);
                 *best = (*best).min(level);
@@ -75,12 +75,14 @@ impl RunPod {
     }
 }
 
-fn level(status: &str) -> Option<Level> {
+fn level(status: Option<&str>) -> Result<Option<Level>, CloudError> {
+    let Some(status) = status else { return Ok(None) };
     match status.to_ascii_lowercase().as_str() {
-        "high" => Some(Level::High),
-        "medium" => Some(Level::Medium),
-        "low" => Some(Level::Low),
-        _ => None,
+        "high" => Ok(Some(Level::High)),
+        "medium" => Ok(Some(Level::Medium)),
+        "low" => Ok(Some(Level::Low)),
+        "none" => Ok(None),
+        _ => Err(CloudError::InvalidResponse),
     }
 }
 

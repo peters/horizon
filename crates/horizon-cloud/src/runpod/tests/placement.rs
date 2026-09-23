@@ -70,7 +70,7 @@ fn configured_preference_outranks_stock_level_and_limits_the_lookup() {
         center("other", "HIGH"),
         center("preferred", "LOW"),
     ];
-    for (preferred, expected) in [(Some("Low"), "preferred"), (None, "other")] {
+    for (preferred, expected) in [(Some("Low"), "preferred"), (None, "other"), (Some("nOnE"), "other")] {
         let (provider, requests, task) = server(vec![
             (200, catalog(&centers)),
             (200, stock(&[("cpu3g", Some("High")), ("cpu3g", preferred)])),
@@ -186,6 +186,8 @@ fn malformed_stock_cannot_be_masked_by_a_healthy_alternative() {
         json!([{"id":"cpu3g"}]),
         json!([{"id":"cpu3g","specifics":null}]),
         json!([{"id":"cpu3g","specifics":{}}]),
+        json!([{"id":"cpu3g","specifics":{"stockStatus":"Unknown"}}]),
+        json!([{"id":"cpu3g","specifics":{"stockStatus":""}}]),
     ];
     for same_center in [false, true] {
         let mut worker = spec();
