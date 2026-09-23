@@ -7,8 +7,9 @@ use crate::app::util::atomic_write;
 impl HorizonApp {
     /// Make `name` the workspace that receives remote sessions by default.
     pub(in crate::app) fn set_remote_hosts_default_workspace(&mut self, name: &str) -> bool {
-        let name = name.trim();
-        if name.is_empty() {
+        // Workspace names are not normalized anywhere, so the default is
+        // stored exactly as the workspace is named; only a blank name is refused.
+        if name.trim().is_empty() {
             return false;
         }
         // With unsaved Settings edits the live config may already say `name`

@@ -9,6 +9,7 @@ pub(super) const ROW_HEIGHT: f32 = 28.0;
 /// hold the filter, the mode toggle, the picker and the count side by side.
 pub(super) const DESTINATION_ROW_HEIGHT: f32 = 30.0;
 const COMPACT_HEADER_WIDTH: f32 = 860.0;
+const CARD_VIEWPORT_MARGIN: f32 = 12.0;
 
 const OVERLAY_WIDTH: f32 = 1100.0;
 const MAX_VISIBLE_ROWS: usize = 20;
@@ -47,8 +48,16 @@ pub(super) fn overlay_layout(screen: Rect) -> OverlayLayout {
     let compact_header = width - 40.0 < COMPACT_HEADER_WIDTH;
     let results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT;
     let destination_row = if compact_header { DESTINATION_ROW_HEIGHT } else { 0.0 };
-    let card_height = INPUT_HEIGHT + destination_row + 16.0 + HEADER_ROW_HEIGHT + results_height + 56.0;
-    let card_min = Pos2::new((screen.width() - width) * 0.5, (screen.height() - card_height) * 0.22);
+    let chrome_height = INPUT_HEIGHT + destination_row + 16.0 + HEADER_ROW_HEIGHT + 56.0;
+    // Never taller than the viewport: the results list shrinks and scrolls
+    // instead of the card's bottom rows landing off screen.
+    let max_results = (screen.height() - CARD_VIEWPORT_MARGIN * 2.0 - chrome_height).max(ROW_HEIGHT * 3.0);
+    let results_height = results_height.min(max_results);
+    let card_height = chrome_height + results_height;
+    let card_min = Pos2::new(
+        (screen.width() - width) * 0.5,
+        ((screen.height() - card_height) * 0.22).max(CARD_VIEWPORT_MARGIN),
+    );
     let card = Rect::from_min_size(card_min, Vec2::new(width, card_height));
 
     OverlayLayout {
@@ -90,6 +99,13 @@ mod tests {
         assert!(!wide.compact_header);
         let narrow = overlay_layout(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)));
         assert!(narrow.compact_header);
-        assert!((narrow.card.height() - wide.card.height() - DESTINATION_ROW_HEIGHT).abs() < f32::EPSILON);
+        assert!(
+            narrow.card.min.y >= 0.0 && narrow.card.max.y <= 600.0,
+            "{:?}",
+            narrow.card
+        );
+        assert!(narrow.results_height < wide.results_height, "the list shrinks to fit");
+        let tall_enough = overlay_layout(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 1200.0)));
+        assert!((tall_enough.card.height() - wide.card.height() - DESTINATION_ROW_HEIGHT).abs() < f32::EPSILON);
     }
 }

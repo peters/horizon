@@ -31,10 +31,11 @@ impl RemoteHostsConfig {
         Ok(())
     }
 
-    /// The configured workspace name without surrounding whitespace.
+    /// The configured workspace name, exactly as written: workspace names are
+    /// not normalized anywhere else, so a default must match them verbatim.
     #[must_use]
     pub fn default_workspace_name(&self) -> &str {
-        self.default_workspace.trim()
+        &self.default_workspace
     }
 
     /// The VNC endpoint as seen from the remote host, in Device panel form.
@@ -85,7 +86,7 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
             if let Some(key_index) = key_line
                 && lines[key_index + 1..end]
                     .iter()
-                    .find(|line| !line.trim().is_empty())
+                    .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
                     .is_some_and(|line| line.len() - line.trim_start().len() > indent.len())
             {
                 return None;
@@ -112,10 +113,15 @@ fn is_block_start(line: &str) -> bool {
     trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
 }
 
-/// A key that belongs to the block itself: exactly the block's child indentation.
+/// A key that belongs to the block itself: exactly the block's child
+/// indentation, the exact key, and the `:` delimiter followed by separation
+/// whitespace or the end of the line (so `default_workspace::` is another key).
 fn is_direct_key(line: &str, indent: &str, key: &str) -> bool {
     line.strip_prefix(indent)
-        .is_some_and(|rest| !rest.starts_with(' ') && rest.starts_with(key) && rest[key.len()..].starts_with(':'))
+        .and_then(|rest| (!rest.starts_with(' ')).then_some(rest))
+        .and_then(|rest| rest.strip_prefix(key))
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t'))
 }
 
 /// The trailing ` # comment` of a `key: value` line, or nothing. Quote
@@ -187,7 +193,11 @@ mod tests {
         assert_eq!(config.remote_hosts.vnc_target(), "127.0.0.1:5901");
 
         let config = Config::from_yaml("version: 11\nremote_hosts:\n  default_workspace: '  Ops  '\n").unwrap();
-        assert_eq!(config.remote_hosts.default_workspace_name(), "Ops");
+        assert_eq!(
+            config.remote_hosts.default_workspace_name(),
+            "  Ops  ",
+            "names stay exact"
+        );
     }
 
     #[test]
@@ -234,7 +244,10 @@ mod tests {
             super::patch_default_workspace_source(four_spaces_key, "Ops").unwrap(),
             "remote_hosts:\n    default_workspace: Ops # note\n    vnc_port: 5901\n"
         );
+    }
 
+    #[test]
+    fn patching_inserts_or_refuses_by_layout_and_scans_comments_precisely() {
         let without_key = "remote_hosts:\n  vnc_port: 5901\nworkspaces: []\n";
         assert_eq!(
             super::patch_default_workspace_source(without_key, "Ops: lab").unwrap(),
@@ -280,6 +293,34 @@ mod tests {
             .is_some(),
             "a blank line or comment after the key is not a continuation"
         );
+        assert_eq!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace: Old\n      # indented note\n  vnc_port: 5900\n",
+                "Ops"
+            )
+            .as_deref(),
+            Some("remote_hosts:\n  default_workspace: Ops\n      # indented note\n  vnc_port: 5900\n"),
+            "an indented comment is not scalar content"
+        );
+        assert_eq!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace:: legacy\n  vnc_port: 5900\n",
+                "Ops"
+            )
+            .as_deref(),
+            Some("remote_hosts:\n  default_workspace: Ops\n  default_workspace:: legacy\n  vnc_port: 5900\n"),
+            "a different key that merely starts the same is left alone"
+        );
+        assert!(super::is_direct_key(
+            "  default_workspace:\tOps",
+            "  ",
+            "default_workspace"
+        ));
+        assert!(!super::is_direct_key(
+            "  default_workspace_x: Ops",
+            "  ",
+            "default_workspace"
+        ));
         assert_eq!(super::inline_comment("  default_workspace: 'a # b' # note"), " # note");
         assert_eq!(super::inline_comment("  default_workspace: Ops"), "");
         assert_eq!(

@@ -123,10 +123,15 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
 
     let saved = std::fs::read_to_string(&app.config_path).expect("config written");
     assert!(
-        saved.contains("remote_hosts:\n  default_workspace: Ops\n  vnc_port: 5900\n"),
+        saved.contains("remote_hosts:\n  default_workspace: '  Ops  '\n  vnc_port: 5900\n"),
         "{saved}"
     );
-    assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
+    assert_eq!(
+        app.template_config.remote_hosts.default_workspace_name(),
+        "  Ops  ",
+        "kept exact"
+    );
+    assert!(app.set_remote_hosts_default_workspace("Ops"));
     assert_eq!(
         Config::load(Some(&app.config_path))
             .unwrap()
