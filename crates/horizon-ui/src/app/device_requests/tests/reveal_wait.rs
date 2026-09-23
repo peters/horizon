@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::app::test_support::{raw_input, run_app_frame_with_input};
 use crate::device_widget::DeviceUiState;
+use crate::test_egui::DiscardTextures;
 use horizon_core::browser::manifest::device::{Connection, HostExclusion, Presentation};
 
 /// A connected viewer far off the canvas, as after unrelated navigation.
@@ -292,4 +293,27 @@ fn a_reveal_claimed_while_no_frame_runs_still_answers_in_its_queue() {
         device::take_result_at(root.path(), &held).expect("result"),
         Some(Outcome::Failed { code, .. }) if code == "panel_unavailable"
     ));
+}
+
+#[test]
+fn a_reveal_held_by_a_frame_keeps_the_request_pump_waking() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (_temp, ctx, mut app, _id, local) = off_canvas_viewer();
+    let held = request(&app, Operation::Reveal { panel_id: local });
+    let outcome = app.apply_device_request(&held, &ctx);
+    assert!(app.defer_device_reveal(&held, outcome, Some(root.path())).is_none());
+    let bridge = crate::app::DeviceRequestBridge::with_root(root.path().to_path_buf());
+    bridge.install(app, ctx.clone());
+    assert!(!bridge.holds_reveals());
+    let mut host = crate::app::BridgeApp::new(std::sync::Arc::clone(&bridge));
+    let mut frame = eframe::Frame::_new_kittest();
+    let _ = ctx
+        .run_ui(raw_input([1400.0, 900.0], None), |ui| {
+            eframe::App::ui(&mut host, ui, &mut frame);
+        })
+        .discard_textures();
+    assert!(
+        bridge.holds_reveals(),
+        "a frame that holds a reveal must keep the pump waking if frames stop"
+    );
 }

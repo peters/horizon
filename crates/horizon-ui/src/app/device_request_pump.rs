@@ -93,9 +93,20 @@ impl DeviceRequestBridge {
                 .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
         installed.app.settle_device_reveals_without_frame();
-        self.reveals_pending
-            .store(installed.app.holds_device_reveals(), Ordering::Relaxed);
+        self.sync_held_reveals(&installed.app);
         changed
+    }
+
+    /// Frames and pump wakes both hold and settle reveals, so either may be
+    /// the last to run before the host stops presenting.
+    fn sync_held_reveals(&self, app: &HorizonApp) {
+        self.reveals_pending
+            .store(app.holds_device_reveals(), Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds_reveals(&self) -> bool {
+        self.reveals_pending.load(Ordering::Relaxed)
     }
 
     pub(crate) fn start_watcher(&self, proxy: EventLoopProxy<UserEvent>) {
@@ -150,6 +161,7 @@ impl eframe::App for BridgeApp {
         let mut installed = lock(&self.bridge.installed);
         if let Some(installed) = installed.as_mut() {
             eframe::App::ui(&mut installed.app, ui, frame);
+            self.bridge.sync_held_reveals(&installed.app);
         }
     }
 
