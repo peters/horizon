@@ -59,6 +59,16 @@ impl SshConnection {
         args
     }
 
+    /// Arguments for `ssh -W`, which relays this process's stdio to
+    /// `remote_endpoint` as seen from the SSH host. `-W` runs no remote
+    /// command and allocates no TTY; batch mode fails instead of prompting.
+    #[must_use]
+    pub fn stdio_forward_args(&self, remote_endpoint: &str) -> Vec<String> {
+        let mut args = vec!["-W".to_string(), remote_endpoint.to_string()];
+        args.extend(self.ssh_transport_args());
+        args
+    }
+
     #[must_use]
     pub fn scp_transport_args(&self) -> Vec<String> {
         self.base_transport_args("-P", true)
@@ -179,6 +189,35 @@ mod tests {
                 "deploy@prod".to_string(),
                 "tmux attach".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn stdio_forward_args_relay_the_remote_endpoint_in_batch_mode() {
+        let connection = SshConnection {
+            host: "lab".to_string(),
+            port: Some(2222),
+            user: Some("deploy".to_string()),
+            remote_command: Some("tmux attach".to_string()),
+            ..SshConnection::default()
+        };
+
+        assert_eq!(
+            connection.stdio_forward_args("127.0.0.1:5900"),
+            vec![
+                "-W".to_string(),
+                "127.0.0.1:5900".to_string(),
+                "-p".to_string(),
+                "2222".to_string(),
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "deploy@lab".to_string(),
+            ],
+            "the remote command never runs behind a stdio forward"
         );
     }
 

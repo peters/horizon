@@ -85,6 +85,7 @@ Workspaces stay visible. There are no hidden tabs. If something is off-screen, p
 | `git_changes` | Changed files, diffs, and hunks for the workspace repo |
 | `usage` | Token spend across agent panels |
 | `command` | Run an arbitrary command as a panel |
+| `device` | Read-only native VNC view of a loopback desktop, or of a remote desktop reached through an SSH tunnel |
 
 ---
 

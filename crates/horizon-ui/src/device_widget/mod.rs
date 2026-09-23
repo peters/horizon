@@ -9,7 +9,7 @@ use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
 use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 
 use frame::present_image;
-use session::{Session, Status};
+use session::{DeviceRoute, Session, Status};
 
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
@@ -251,7 +251,7 @@ impl DeviceUiState {
         }
         self.session = None;
         match Session::start(
-            device.target.address(),
+            DeviceRoute::from(device),
             ctx.clone(),
             ctx.viewport_id(),
             self.controls.options,
