@@ -680,3 +680,97 @@ fn window_focus_loss_releases_and_the_first_wheel_uses_the_current_pointer() {
     assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
     assert!(!state.captured);
 }
+
+#[test]
+fn a_press_on_covering_ui_stays_there_even_if_the_pointer_then_reaches_the_image() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let image = image_rect(&output);
+    let covered_spot = image.center();
+    let open_spot = image.min + egui::vec2(10.0, 10.0);
+    let covered = |state: &mut DeviceUiState, events: Vec<egui::Event>| {
+        state.begin_frame();
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                    ..Default::default()
+                },
+                |ui| {
+                    state.show(ui, &device, true);
+                    egui::Area::new(egui::Id::new("popup"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(covered_spot - egui::vec2(20.0, 20.0))
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_response(egui::vec2(40.0, 40.0), egui::Sense::click());
+                        });
+                },
+            )
+            .discard_textures();
+        state.finish_frame();
+    };
+    covered(&mut state, Vec::new());
+    covered(&mut state, Vec::new());
+    drain(&mut receiver);
+    // Press on the popup, then move onto the open image before the repaint.
+    covered(
+        &mut state,
+        vec![
+            egui::Event::PointerMoved(covered_spot),
+            egui::Event::PointerButton {
+                pos: covered_spot,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerMoved(open_spot),
+        ],
+    );
+    let sent = pointers(&drain(&mut receiver));
+    assert!(
+        sent.iter().all(|(_, _, buttons)| *buttons == 0),
+        "the popup's press is not replayed to the desktop: {sent:?}"
+    );
+}
+
+#[test]
+fn a_wheel_without_a_move_is_sent_at_the_current_pointer() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let image = image_rect(&output);
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::PointerMoved(image.center())],
+    );
+    drain(&mut receiver);
+    // The desktop last saw the centre; the pointer is now near the top-left.
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::PointerMoved(image.min + egui::vec2(1.0, 1.0))],
+    );
+    state.input = InputState::default();
+    drain(&mut receiver);
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        }],
+    );
+    let sent = pointers(&drain(&mut receiver));
+    assert!(
+        sent.contains(&(0, 0, 8)),
+        "the notch is at the pointer, not dropped: {sent:?}"
+    );
+}
