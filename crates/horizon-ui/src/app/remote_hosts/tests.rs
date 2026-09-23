@@ -260,6 +260,62 @@ fn set_default_never_overwrites_a_file_it_cannot_patch_in_place() {
     );
 }
 
+#[test]
+fn legacy_remote_workspaces_are_neither_listed_nor_used_as_destinations() {
+    let (_temp, ctx, mut app) = test_app_with_startup(ephemeral());
+    let legacy = app.board.create_workspace("Remote Sessions");
+    app.board.workspace_mut(legacy).unwrap().remote_workspace = Some(
+        horizon_core::RemoteWorkspaceReference::new(
+            "8d8c366e-f07e-4dd1-9518-1e75b6eca205".into(),
+            "remote-environment".into(),
+        )
+        .expect("reference"),
+    );
+    let ops = app.board.create_workspace("Ops");
+
+    assert_eq!(
+        app.destination_workspaces()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![ops],
+        "the legacy workspace is not offered"
+    );
+
+    let picked = app
+        .open_remote_host(
+            &ctx,
+            "lab".into(),
+            lab_connection(),
+            RemoteConnectMode::Ssh,
+            &WorkspaceChoice::Existing(legacy),
+        )
+        .expect("panel");
+    let by_default = app
+        .open_remote_host(
+            &ctx,
+            "lab".into(),
+            lab_connection(),
+            RemoteConnectMode::Vnc,
+            &WorkspaceChoice::Default,
+        )
+        .expect("panel");
+    for panel_id in [picked, by_default] {
+        let workspace_id = app.board.panel_workspace_id(panel_id).expect("workspace");
+        assert_ne!(workspace_id, legacy, "never the legacy workspace");
+        let workspace = app.board.workspace(workspace_id).unwrap();
+        assert_eq!(workspace.name, "Remote Sessions");
+        assert!(
+            workspace.remote_workspace.is_none(),
+            "a fresh local default was created"
+        );
+        assert!(
+            app.board.panel(panel_id).unwrap().device().is_some()
+                || app.board.panel(panel_id).unwrap().kind == PanelKind::Ssh
+        );
+    }
+}
+
 mod picker_in_full_app {
     use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, SshConnection};
 

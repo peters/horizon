@@ -31,13 +31,23 @@ impl HorizonApp {
     }
 
     fn resolve_remote_destination(&mut self, ctx: &egui::Context, destination: &WorkspaceChoice) -> WorkspaceId {
+        // Only ordinary local workspaces can hold a new panel; a legacy remote
+        // workspace would turn it into a restore-failure view.
         if let WorkspaceChoice::Existing(id) = destination
-            && self.board.workspace(*id).is_some()
+            && self
+                .board
+                .workspace(*id)
+                .is_some_and(|workspace| workspace.remote_workspace.is_none())
         {
             return *id;
         }
         let name = self.template_config.remote_hosts.default_workspace_name().to_string();
-        if let Some(workspace) = self.board.workspaces.iter().find(|workspace| workspace.name == name) {
+        if let Some(workspace) = self
+            .board
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.name == name && workspace.remote_workspace.is_none())
+        {
             return workspace.id;
         }
         let workspace_id = self.create_workspace_visible(ctx, &name);

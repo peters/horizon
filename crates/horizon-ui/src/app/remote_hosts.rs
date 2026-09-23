@@ -27,6 +27,10 @@ impl HorizonApp {
     }
 
     pub(super) fn render_remote_hosts_overlay(&mut self, ctx: &egui::Context) {
+        if self.remote_hosts_overlay.is_none() {
+            return;
+        }
+        let workspaces = self.destination_workspaces();
         let Some(overlay) = self.remote_hosts_overlay.as_mut() else {
             return;
         };
@@ -41,15 +45,6 @@ impl HorizonApp {
             })
         };
         let connection_summaries = summarize_remote_host_connections(&self.board, &self.remote_hosts_catalog);
-        let workspaces: Vec<WorkspaceOption> = self
-            .board
-            .workspaces
-            .iter()
-            .map(|workspace| WorkspaceOption {
-                id: workspace.id,
-                name: workspace.name.clone(),
-            })
-            .collect();
         let action = overlay.show(
             ctx,
             &RemoteHostsOverlayInputs {
@@ -149,6 +144,21 @@ impl HorizonApp {
             let _ = tx.send(horizon_core::discover_remote_hosts(None));
         });
         rx
+    }
+
+    /// Workspaces a remote session can land in: ordinary local ones. A legacy
+    /// remote workspace turns any new panel into a read-only restore-failure
+    /// view, so it is neither listed nor matched by name.
+    pub(in crate::app) fn destination_workspaces(&self) -> Vec<WorkspaceOption> {
+        self.board
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.remote_workspace.is_none())
+            .map(|workspace| WorkspaceOption {
+                id: workspace.id,
+                name: workspace.name.clone(),
+            })
+            .collect()
     }
 
     fn dismiss_remote_hosts_overlay(&mut self, ctx: &egui::Context) {
