@@ -1,5 +1,6 @@
 use super::*;
 mod inspection;
+mod placement;
 mod recovery;
 mod storage;
 use std::{

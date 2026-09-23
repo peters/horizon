@@ -424,8 +424,9 @@ and credential logic must not be copied into either transport or UI rendering.
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
-fencing, attachment verification and deletion. It must not depend on core/UI, terminal, browser, device, Git,
-settings storage or a provider CLI.
+fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
+stock for placement. The crate must not depend on core/UI, terminal, browser, device,
+Git, settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
