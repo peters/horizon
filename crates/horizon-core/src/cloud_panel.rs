@@ -298,14 +298,23 @@ impl CloudGroup {
 
 impl CloudGroups {
     #[must_use]
-    pub fn next_position(&self, workspace: &str) -> [f32; 2] {
+    pub fn next_position(&self, workspace: &str, board: &Board) -> [f32; 2] {
+        let destination = board.workspaces.iter().find(|item| item.local_id == workspace);
+        let local_bottom = board
+            .panels
+            .iter()
+            .filter(|panel| destination.is_some_and(|item| panel.workspace_id == item.id))
+            .map(|panel| {
+                panel.layout.position[1] + panel.layout.size[1] - destination.map_or(0.0, |item| item.position[1])
+            })
+            .fold(80.0, f32::max);
         [
             24.0,
             self.0
                 .iter()
                 .filter(|group| group.workspace == workspace)
                 .map(|group| group.overview_bounds().1[1] - group.workspace_position[1])
-                .fold(80.0, f32::max)
+                .fold(local_bottom, f32::max)
                 + 48.0,
         ]
     }
@@ -843,5 +852,29 @@ mod tests {
             restored.close_panel(id);
         }
         assert!(restored.workspace(ws).is_some());
+    }
+    #[test]
+    fn new_cloud_position_clears_existing_local_panels() {
+        let mut board = Board::new();
+        let workspace = board.create_workspace_at("Local", [500.0, 200.0]);
+        let id = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Usage,
+                    position: Some([550.0, 300.0]),
+                    size: Some([600.0, 400.0]),
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .unwrap();
+        let panel = board.panel(id).unwrap();
+        let bottom = panel.layout.position[1] + panel.layout.size[1];
+        let local = board.workspace(workspace).unwrap().local_id.clone();
+        let groups = CloudGroups::default();
+        let position = groups.next_position(&local, &board);
+        let mut group = CloudGroup::new(1, "Cloud".into(), local, PathBuf::new(), position);
+        group.reconcile(&mut board);
+        assert!(group.position[1] >= bottom + 48.0);
     }
 }

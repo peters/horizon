@@ -51,6 +51,24 @@ fn successful_first_use_continues_to_creation_and_reopening_preserves_bindings()
     wait(&mut app, &ctx);
     assert!(app.cloud_prototype.production.creating);
     assert!(!app.cloud_prototype.production.setup.open);
+    let settings = horizon_core::cloud_runtime::settings::Settings::load(&root.join("settings.json")).unwrap();
+    std::fs::write(&settings.runpod_key_file, "invalid saved key").unwrap();
+    app.cloud_prototype.production.creating = false;
+    app.open_cloud_accounts(&ctx, true);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.setup.open);
+    assert!(!app.cloud_prototype.production.creating);
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.setup.error.is_some());
+    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "synthetic-é".into();
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.setup.error.is_some());
+    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "synthetic-key".into();
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.creating);
     let before = std::fs::read(root.join("settings.json")).unwrap();
     app.open_cloud_accounts(&ctx, true);
     wait(&mut app, &ctx);
@@ -69,6 +87,40 @@ fn successful_first_use_continues_to_creation_and_reopening_preserves_bindings()
             .runpod_key
             .is_empty()
     );
+}
+
+#[test]
+fn missing_custom_identity_save_retains_input_and_can_retry() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let root = temp.path().join("cloud");
+    let identity = temp.path().join("custom-identity");
+    app.cloud_prototype.root = Some(root.clone());
+    app.open_cloud_accounts(&ctx, false);
+    wait(&mut app, &ctx);
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    *draft.runpod_key = "synthetic-key".into();
+    draft.settings.ssh_identity_file = identity.clone();
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    let state = &app.cloud_prototype.production.setup;
+    assert!(state.open && state.error.is_some());
+    assert_eq!(state.draft.as_ref().unwrap().runpod_key.as_str(), "synthetic-key");
+    assert_eq!(state.draft.as_ref().unwrap().settings.ssh_identity_file, identity);
+    assert!(!root.join("settings.json").exists());
+    assert!(
+        std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&identity)
+            .status()
+            .unwrap()
+            .success()
+    );
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(!app.cloud_prototype.production.setup.open);
+    assert!(root.join("settings.json").exists());
 }
 
 #[test]
@@ -196,4 +248,91 @@ fn held_escape_closes_accounts_without_reaching_terminal_or_fullscreen() {
         assert!(Instant::now() < deadline, "PTY capture must observe actual input");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn selected_profile_missing_key_cannot_skip_account_repair() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let root = temp.path().join("cloud");
+    let mut draft = Draft::load(&root).unwrap();
+    *draft.runpod_key = "synthetic-key".into();
+    draft.settings.default_agents = vec![horizon_core::cloud_runtime::setup::Agent::Claude];
+    draft.settings.openai_api_key_file = Some(root.join("missing-agent-key"));
+    draft.openai_auth = horizon_core::cloud_runtime::setup::Authentication::ApiKey;
+    draft.save().unwrap();
+    app.cloud_prototype.root = Some(root);
+    let form = &mut app.cloud_prototype.production;
+    form.profiles = Some(horizon_core::cloud_panel::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    capabilities:\n      agents: [codex]\n").unwrap());
+    form.selected_profile = "dev".into();
+    app.open_cloud_accounts(&ctx, true);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.setup.open);
+    assert!(!app.cloud_prototype.production.launch.accounts_checked);
+    assert!(app.cloud_prototype.groups.0.is_empty());
+}
+
+#[test]
+fn agentless_profile_repairs_compute_without_changing_machine_defaults() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let root = temp.path().join("cloud");
+    app.cloud_prototype.root = Some(root.clone());
+    let form = &mut app.cloud_prototype.production;
+    form.profiles = Some(horizon_core::cloud_panel::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    capabilities: {}\n").unwrap());
+    form.selected_profile = "dev".into();
+    app.open_cloud_accounts(&ctx, true);
+    wait(&mut app, &ctx);
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    let defaults = draft.settings.default_agents.clone();
+    assert!(draft.selected_agents().is_empty());
+    *draft.runpod_key = "synthetic-compute-key".into();
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(!app.cloud_prototype.production.setup.open);
+    assert!(app.cloud_prototype.production.creating);
+    assert_eq!(
+        horizon_core::cloud_runtime::settings::Settings::load(&root.join("settings.json"))
+            .unwrap()
+            .default_agents,
+        defaults
+    );
+}
+
+#[test]
+fn cancelling_workspace_credential_repair_returns_to_the_entered_title() {
+    use crate::test_egui::DiscardTextures;
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.cloud_prototype.root = Some(temp.path().join("cloud"));
+    let workspace = app.board.ensure_workspace();
+    app.open_workspace_cloud(&ctx, workspace);
+    app.cloud_prototype.production.title = "Keep this title".into();
+    app.open_cloud_accounts(&ctx, true);
+    wait(&mut app, &ctx);
+    app.cloud_prototype.production.launch.submitted = true;
+    for _ in 0..2 {
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| app.render_cloud_accounts(ui.ctx()))
+            .discard_textures();
+    }
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: Some(egui::Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx
+        .run_ui(input, |ui| app.render_cloud_accounts(ui.ctx()))
+        .discard_textures();
+    assert!(!app.cloud_prototype.production.setup.open);
+    assert!(app.cloud_prototype.production.creating);
+    assert_eq!(app.cloud_prototype.production.title, "Keep this title");
+    assert!(!app.cloud_prototype.production.launch.submitted);
+    assert!(!app.cloud_prototype.production.launch.accounts_checked);
 }

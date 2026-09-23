@@ -167,6 +167,16 @@ impl HorizonApp {
                                 .strong(),
                         );
                         ui.add_space(4.0);
+                        #[cfg(feature = "cloud-workspaces")]
+                        if let Some(workspace_id) = target_workspace {
+                            if ui
+                                .add_enabled(self.cloud_launch_ready(), egui::Button::new("Cloud").frame(false))
+                                .clicked()
+                            {
+                                selected_action = Some(PresetPickerAction::CreateCloud { workspace_id });
+                            }
+                            ui.separator();
+                        }
 
                         if let Some(action) =
                             render_grouped_preset_rows(ui, target_workspace, canvas_pos, &self.presets)
@@ -181,6 +191,8 @@ impl HorizonApp {
 
     fn apply_preset_picker_action(&mut self, ctx: &Context, action: PresetPickerAction) {
         match action {
+            #[cfg(feature = "cloud-workspaces")]
+            PresetPickerAction::CreateCloud { workspace_id } => self.open_cloud_for_workspace(ctx, workspace_id),
             PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset,

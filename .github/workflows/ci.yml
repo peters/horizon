@@ -309,64 +309,11 @@ jobs:
         shell: bash
         run: |
           pending=(
-            # horizon-core terminal and shell fixtures.
-            # Terminals spawn $SHELL or /bin/sh.
-            panel::tests::process_output_copies_pinned_horizon_title_into_the_titlebar
-            terminal::tests::asynchronous_teardown_remains_observable_after_the_handle_is_taken
-            terminal::tests::clearing_horizon_title_allows_ordinary_titles_again
-            terminal::tests::clickable_at_point_returns_osc8_uri_for_labeled_text
-            terminal::tests::full_text_lines_preserve_unicode_matrix
-            terminal::tests::horizon_notify_does_not_unlock_horizon_title
-            terminal::tests::horizon_notify_event_sets_notification_without_overwriting_title
-            terminal::tests::horizon_title_clear_event_clears_existing_title
-            terminal::tests::horizon_title_replaces_ordinary_terminal_title
-            terminal::tests::horizon_title_set_event_updates_title_without_notification
-            terminal::tests::invalid_horizon_title_event_does_not_clobber_existing_title
-            terminal::tests::later_horizon_title_set_replaces_pinned_title
-            terminal::tests::line_selection_preserves_unicode_content
-            terminal::tests::malformed_horizon_notify_event_does_not_leak_into_visible_title
-            terminal::tests::ordinary_terminal_title_does_not_replace_horizon_title
-            terminal::tests::shutdown_with_timeout_waits_for_pty_exit
-            # Shell panels rely on the default shell, which is /bin/bash when
-            # SHELL is unset, and agent panels always launch through a POSIX
-            # login shell (#688, closed as not planned).
-            board::tests::core::begin_async_shutdown_completes_for_shell_and_command_panels
-            board::tests::core::shutdown_terminal_panels_waits_for_shell_and_command_panels
-            runtime_state::tests::workspaces::from_board_persists_workspace_layout_selection
-            runtime_state::tests::workspaces::from_board_preserves_window_view_focus_and_bindings
-            workspace_bounds_map_matches_individual_workspace_bounds
-            # A cmd.exe marker embeds quotes that terminal argument escaping breaks.
-            runtime_state::tests::remote_references::remote_views_never_execute_saved_commands_on_restore_or_restart
-
-            # horizon-core session fixtures keep Unix paths that loaders would
-            # normalize to `\repo` on Windows.
-            runtime_state::agent_sessions::tests::bootstrap_assigns_distinct_sessions_per_group
-            runtime_state::agent_sessions::tests::bootstrap_assigns_scoped_groups_before_cwd_less_groups
-            runtime_state::agent_sessions::tests::bootstrap_does_not_duplicate_a_root_resume
-            runtime_state::agent_sessions::tests::bootstrap_never_assigns_sessions_open_in_other_processes
-            runtime_state::agent_sessions::tests::grok::load_grok_sessions_reads_sessions_from_search_index
-            runtime_state::agent_sessions::tests::load_claude_project_session_summary_reads_head_and_tail_metadata
-            runtime_state::agent_sessions::tests::load_opencode_sessions_reads_root_sessions_from_sqlite
-            runtime_state::agent_sessions::tests::parse_claude_project_session_uses_resumable_jsonl_session_id
-            runtime_state::agent_sessions::tests::parse_pi_session_uses_header_metadata_and_latest_user_message
-            runtime_state::agent_sessions::tests::provider_scoping::bootstrap_allows_equal_session_ids_from_different_providers
-
-            # horizon-core build snapshots inherit core.autocrlf, so git archive
-            # writes CRLF text.
-            cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
-            cloud_runtime::repository::tests::selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files
 
 
-            # horizon-browser-control audit rotation truncates through an append
-            # handle, which Windows opens without write-data access.
-            manifest::audit::tests::audit_rotation_bounds_storage_and_keeps_the_newest_segments
-            manifest::audit::tests::interrupted_copy_does_not_duplicate_event_ids_or_loop_pages
-            manifest::audit::tests::pending_drop_is_held_until_the_rotated_segment_is_replaced
-            manifest::audit::tests::rotation_counts_invalid_utf8_records_without_aborting
 
-            # horizon-browser-cli: the fixture joins `.horizon/browser-jobs` with a
-            # forward slash, so its expected path mixes separators.
-            run_persists_preflight_failure_before_any_browser_action
+
+
 
             # horizon-core agent work: tempfile's persist cannot rename onto a record
             # path longer than MAX_PATH, which a 128-character panel id reaches (#848).

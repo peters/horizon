@@ -884,9 +884,20 @@ mod tests {
 
         use crate::terminal::{Terminal, TerminalSpawnOptions};
 
+        let (program, args) = if cfg!(windows) {
+            (
+                "cmd.exe".to_string(),
+                vec!["/D".to_string(), "/C".to_string(), "exit".to_string()],
+            )
+        } else {
+            (
+                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+                vec!["-c".to_string(), "exit".to_string()],
+            )
+        };
         let mut terminal = Terminal::spawn(TerminalSpawnOptions {
-            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-            args: vec!["-c".to_string(), "exit".to_string()],
+            program,
+            args,
             cwd: None,
             rows: 24,
             cols: 80,

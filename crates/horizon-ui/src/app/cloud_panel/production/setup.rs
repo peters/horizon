@@ -20,22 +20,24 @@ enum Completion {
 pub(in crate::app::cloud_panel) struct State {
     pub(in crate::app::cloud_panel) open: bool,
     continue_creation: bool,
+    required_agents: Option<Vec<horizon_core::cloud_runtime::setup::Agent>>,
     receiver: Option<Receiver<Completion>>,
     draft: Option<Box<Draft>>,
     error: Option<String>,
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn cloud_launch_ready(&self) -> bool {
+        self.cloud_prototype.ready
+    }
+
     pub(in crate::app) fn render_cloud_menu(&mut self, ui: &mut egui::Ui) {
         if ui
-            .add_enabled(self.cloud_prototype.ready, egui::Button::new("New cloud…"))
+            .add_enabled(self.cloud_launch_ready(), egui::Button::new("New cloud…"))
             .clicked()
         {
-            if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() {
-                self.add_mock_cloud(ui.ctx());
-            } else {
-                self.open_cloud_accounts(ui.ctx(), true);
-            }
+            let workspace = self.board.ensure_workspace();
+            self.open_cloud_for_workspace(ui.ctx(), workspace);
             ui.close();
         }
         if ui.button("Cloud settings…").clicked() {
@@ -55,26 +57,53 @@ impl HorizonApp {
         }
     }
 
+    pub(in crate::app) fn open_cloud_for_workspace(&mut self, ctx: &Context, workspace: horizon_core::WorkspaceId) {
+        if !self.cloud_launch_ready() {
+            return;
+        }
+        if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() {
+            self.add_mock_cloud_in_workspace(ctx, workspace);
+        } else {
+            self.open_workspace_cloud(ctx, workspace);
+        }
+    }
+
     pub(in crate::app) fn open_cloud_accounts(&mut self, ctx: &Context, continue_creation: bool) {
         let root = self
             .cloud_prototype
             .root
             .clone()
             .unwrap_or_else(|| horizon_core::HorizonHome::resolve().root().join("cloud"));
+        let required_agents = continue_creation
+            .then(|| {
+                let form = &self.cloud_prototype.production;
+                form.profiles
+                    .as_ref()?
+                    .profiles
+                    .get(&form.selected_profile)
+                    .map(|profile| profile.capabilities.agents.iter().copied().collect::<Vec<_>>())
+            })
+            .flatten();
         self.cloud_prototype.production.creating = false;
         self.cloud_prototype.production.pending_creation = None;
         let (sender, receiver) = channel();
         self.cloud_prototype.production.setup = State {
             open: true,
             continue_creation,
+            required_agents: required_agents.clone(),
             receiver: Some(receiver),
             ..State::default()
         };
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let completion = match Draft::load(&root) {
-                Ok(draft) => {
-                    let configured = draft.validate().is_ok() && draft.settings.ssh_identity_file.is_file();
+                Ok(mut draft) => {
+                    if let Some(agents) = required_agents {
+                        draft.select_profile_agents(agents);
+                    }
+                    let configured =
+                        draft.validate().is_ok() && cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
+
                     Completion::Loaded(Box::new(draft), configured)
                 }
                 Err(error) => Completion::Failed(error.to_string()),
@@ -121,6 +150,7 @@ impl HorizonApp {
         };
         if proceed {
             *state = State::default();
+            self.cloud_prototype.production.launch.accounts_checked = true;
             self.add_mock_cloud(ctx);
         }
         if let Some(agents) = agents {
@@ -170,7 +200,11 @@ impl HorizonApp {
                     .max_height((ctx.content_rect().height() - 240.0).max(100.0))
                     .show(ui, |ui| {
                         if let Some(draft) = &mut state.draft {
-                            fields::render(ui, draft);
+                            if state.required_agents.is_some() {
+                                fields::render_profile(ui, draft, true);
+                            } else {
+                                fields::render(ui, draft);
+                            }
                         }
                         if let Some(error) = &state.error {
                             ui.colored_label(theme::PALETTE_RED(), error);
@@ -192,7 +226,7 @@ impl HorizonApp {
                             .add_enabled(
                                 state.draft.is_some() && state.receiver.is_none(),
                                 egui::Button::new(if state.continue_creation {
-                                    "Save and continue"
+                                    "Save and start"
                                 } else {
                                     "Save settings"
                                 })
@@ -217,7 +251,7 @@ impl HorizonApp {
         ctx.move_to_top(response.response.layer_id);
         // Once Save starts, retain its completion and do not imply cancellation of writes.
         if (cancel || response.should_close()) && state.receiver.is_none() {
-            *state = State::default();
+            self.cancel_cloud_accounts();
             if escape {
                 self.consume_navigation_key(
                     ctx,
@@ -232,9 +266,25 @@ impl HorizonApp {
         }
     }
 
+    fn cancel_cloud_accounts(&mut self) {
+        let resume_creation = self.cloud_prototype.production.setup.continue_creation
+            && self.cloud_prototype.production.launch.workspace.is_some();
+        self.cloud_prototype.production.setup = State::default();
+        if resume_creation {
+            let form = &mut self.cloud_prototype.production;
+            form.launch.submitted = false;
+            form.launch.accounts_checked = false;
+            form.creating = true;
+            form.focus_title_on_open = true;
+        }
+    }
+
     fn save_cloud_accounts(&mut self, ctx: &Context) {
         let state = &mut self.cloud_prototype.production.setup;
-        let Some(draft) = state.draft.take() else { return };
+        let Some(mut draft) = state.draft.take() else { return };
+        if let Some(agents) = &state.required_agents {
+            draft.select_profile_agents(agents.clone());
+        }
         state.error = None;
         let (sender, receiver) = channel();
         state.receiver = Some(receiver);
@@ -245,12 +295,22 @@ impl HorizonApp {
                 ctx.request_repaint();
                 return;
             }
-            let completion = match draft.save() {
+            if draft.settings.ssh_identity_file.exists() && !cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file)
+            {
+                let _ = sender.send(Completion::Invalid(draft, "SSH keypair is incomplete or invalid. Restore the matching .pub file beside the configured private key, then retry.".into()));
+                ctx.request_repaint();
+                return;
+            }
+            let completion = match draft.clone().save() {
                 Ok(settings) => Completion::Saved(settings.default_agents),
-                Err(error) => Completion::Failed(format!("{error}. Reopen Cloud settings to try again.")),
+                Err(error) => Completion::Invalid(draft, format!("{error}. Check the settings and retry.")),
             };
             let _ = sender.send(completion);
             ctx.request_repaint();
         });
     }
+}
+
+fn cloud_runtime_ssh_valid(path: &std::path::Path) -> bool {
+    horizon_core::cloud_runtime::repository::launch::ssh_ready(path)
 }
