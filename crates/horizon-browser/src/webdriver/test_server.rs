@@ -2,8 +2,8 @@
 //! one connection per scripted reply and records what each request carried.
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::net::{SocketAddr, TcpListener};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -52,6 +52,8 @@ pub(super) struct Recorded {
 pub(super) struct Server {
     pub(super) port: u16,
     seen: Arc<Mutex<Vec<Recorded>>>,
+    /// Becomes readable when the worker has finished its scripted replies.
+    done: mpsc::Receiver<()>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -61,6 +63,7 @@ impl Server {
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
+        let (done_tx, done_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             for reply in replies {
                 let Ok((mut stream, _)) = listener.accept() else { return };
@@ -85,10 +88,12 @@ impl Server {
                 let _ = stream.write_all(&reply.body);
                 let _ = stream.flush();
             }
+            let _ = done_tx.send(());
         });
         Self {
             port,
             seen,
+            done: done_rx,
             handle: Some(handle),
         }
     }
@@ -104,8 +109,17 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        // Unblock accept() if a test ended early, then join.
-        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        // The worker is still blocked in accept() only while this side has not
+        // been signaled. A connect to a port it has already closed is not
+        // refused on Windows: the firewall discards the SYN and the stack
+        // retransmits for about two seconds, once per finished server.
+        let still_listening = matches!(self.done.try_recv(), Err(mpsc::TryRecvError::Empty));
+        if still_listening {
+            let _ = std::net::TcpStream::connect_timeout(
+                &SocketAddr::from(([127, 0, 0, 1], self.port)),
+                Duration::from_millis(200),
+            );
+        }
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -163,5 +177,44 @@ fn parse_request(buffer: &[u8], head_end: usize) -> Recorded {
         path,
         authorization,
         body,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpStream;
+    use std::time::Instant;
+
+    use super::*;
+
+    fn assert_within(limit: Duration, body: impl FnOnce()) {
+        let started = Instant::now();
+        body();
+        let elapsed = started.elapsed();
+        assert!(elapsed < limit, "took {elapsed:?}");
+    }
+
+    #[test]
+    fn dropping_a_server_that_already_answered_is_immediate() {
+        assert_within(Duration::from_secs(1), || {
+            let server = Server::start(vec![Reply::json(200, &serde_json::json!({"ok": true}))]);
+            let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+            stream
+                .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .expect("write");
+            let mut buf = [0_u8; 512];
+            let _ = stream.read(&mut buf);
+            drop(stream);
+            thread::sleep(Duration::from_millis(50));
+            drop(server);
+        });
+    }
+
+    #[test]
+    fn dropping_a_server_still_waiting_for_a_request_is_immediate() {
+        assert_within(Duration::from_secs(1), || {
+            let server = Server::start(vec![Reply::json(204, &serde_json::json!({}))]);
+            drop(server);
+        });
     }
 }
