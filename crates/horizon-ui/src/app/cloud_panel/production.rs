@@ -231,7 +231,7 @@ impl HorizonApp {
         self.remove_closed_cloud_browsers(removed);
         self.sync_cloud_presentations();
         self.cloud_prototype.groups.reconcile(&mut self.board);
-        self.board.cloud_groups = self.cloud_prototype.groups.clone();
+        self.sync_board_cloud_groups();
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);

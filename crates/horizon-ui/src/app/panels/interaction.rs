@@ -613,7 +613,10 @@ mod tests {
             app.board.cloud_groups = CloudGroups(vec![group]);
             let ctx = Context::default();
             app.prepare_cloud_prototype(&ctx);
-            assert_eq!(app.board.workspace(workspace).unwrap().layout, None);
+            assert_eq!(
+                app.board.workspace(workspace).unwrap().layout,
+                Some(WorkspaceLayout::Grid)
+            );
             let from = app.board.panel(source).unwrap().layout.position;
             let to = app.board.panel(target).unwrap().layout.position;
             app.apply_panel_drag(

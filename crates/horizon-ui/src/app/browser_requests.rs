@@ -314,7 +314,7 @@ impl HorizonApp {
             remote_session: remote.map(|plan| plan.request),
             ..PanelOptions::default()
         });
-        let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
+        let panel_id = match self.create_agent_child_panel(options, actor_panel.workspace_id, actor_panel.panel_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
                 if let Some(recovery) = &recovery {
@@ -329,8 +329,6 @@ impl HorizonApp {
                 return;
             }
         };
-        #[cfg(feature = "cloud-workspaces")]
-        self.cloud_attach_agent_child(actor_panel.panel_id, panel_id);
         let Some(panel_local_id) = self.board.panel(panel_id).map(|panel| panel.local_id.clone()) else {
             tracing::error!(request_id = %request.request_id, "created browser panel disappeared before registration");
             complete_failure(
