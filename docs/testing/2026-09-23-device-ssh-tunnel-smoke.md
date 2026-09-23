@@ -48,7 +48,12 @@ Fixture setup, all task-owned and outside the developer's `~/.ssh`:
    `ListenAddress 127.0.0.1`, `UsePAM no`, `PasswordAuthentication no`,
    `StrictModes no`, `AllowTcpForwarding yes`, and start it with the absolute
    binary path. Write a client config with a `Host smoke-node` alias pointing at
-   `127.0.0.1:2299` and the scratch identity.
+   `127.0.0.1:2299` and the scratch identity. `-F` alone does not move
+   OpenSSH's default `~/.ssh/known_hosts` or identities, and the tunnel
+   accepts first-contact keys, so also put `UserKnownHostsFile` and
+   `IdentitiesOnly yes` in a `Host *` block of that config and run every
+   `ssh` and the candidate Horizon under a private `HOME` whose `.ssh/` holds
+   only the scratch files. The developer's `~/.ssh` is never read or written.
 2. `Xvfb :97 -screen 0 1024x700x24`, then
    `x11vnc -display :97 -localhost -viewonly -forever -shared -rfbport 5997 -nopw`.
 3. Prove the forward independently:
