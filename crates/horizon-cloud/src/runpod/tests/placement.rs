@@ -177,3 +177,45 @@ fn sized_catalog_entries_do_not_certify_flavor_capacity() {
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn malformed_stock_cannot_be_masked_by_a_healthy_alternative() {
+    let malformed = [
+        json!([]),
+        json!([{"id":"other","specifics":{"stockStatus":"High"}}]),
+        json!([{"id":"cpu3g"}]),
+        json!([{"id":"cpu3g","specifics":null}]),
+        json!([{"id":"cpu3g","specifics":{}}]),
+    ];
+    for same_center in [false, true] {
+        let mut worker = spec();
+        let centers = if same_center {
+            worker.cpu_flavors = vec!["cpu3g".into(), "cpu5g".into()];
+            vec![center("first", "HIGH")]
+        } else {
+            vec![center("first", "HIGH"), center("second", "HIGH")]
+        };
+        for malformed in &malformed {
+            for index in 0..2 {
+                let mut answer: Value = serde_json::from_str(&stock(&[
+                    ("cpu3g", Some("High")),
+                    (if same_center { "cpu5g" } else { "cpu3g" }, Some("High")),
+                ]))
+                .unwrap();
+                let mut invalid = malformed.clone();
+                if same_center && index == 1 {
+                    for entry in invalid.as_array_mut().unwrap() {
+                        if entry["id"] == "cpu3g" {
+                            entry["id"] = json!("cpu5g");
+                        }
+                    }
+                }
+                answer["data"][format!("s{index}")] = invalid;
+                let (provider, requests, task) = server(vec![(200, catalog(&centers)), (200, answer.to_string())]);
+                assert!(matches!(place(&provider, &worker), Err(CloudError::InvalidResponse)));
+                task.join().unwrap();
+                assert_eq!(requests.lock().unwrap().len(), 2);
+            }
+        }
+    }
+}

@@ -57,13 +57,15 @@ impl RunPod {
         let mut stock: HashMap<String, Level> = HashMap::new();
         for (alias, center, flavor) in lookups {
             // A well-formed answer names every alias; a null value means no stock.
-            let level = data
-                .get(&alias)
-                .ok_or(CloudError::InvalidResponse)?
-                .as_ref()
-                .and_then(|entries| entries.iter().find(|entry| entry.id == flavor))
-                .and_then(|entry| entry.specifics.as_ref()?.stock_status.as_deref())
-                .and_then(level);
+            let Some(entries) = data.get(&alias).ok_or(CloudError::InvalidResponse)? else {
+                continue;
+            };
+            let specifics = entries
+                .iter()
+                .find(|entry| entry.id == flavor)
+                .and_then(|entry| entry.specifics.as_ref())
+                .ok_or(CloudError::InvalidResponse)?;
+            let level = specifics.stock_status.as_deref().and_then(level);
             if let Some(level) = level {
                 let best = stock.entry(center.clone()).or_insert(level);
                 *best = (*best).min(level);
@@ -96,5 +98,6 @@ struct Entry {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Specifics {
+    #[serde(deserialize_with = "Option::<String>::deserialize")]
     stock_status: Option<String>,
 }
