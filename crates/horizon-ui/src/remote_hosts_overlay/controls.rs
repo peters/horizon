@@ -14,6 +14,9 @@ pub(super) struct DestinationEntry {
     pub(super) name: String,
     /// Display text; duplicate names carry a running number here only.
     pub(super) label: String,
+    /// Another listed workspace shares this name, so a default stored by
+    /// name could not single this one out.
+    pub(super) ambiguous: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +42,7 @@ pub(super) fn destination_entries(workspaces: &[WorkspaceOption], default_worksp
         } else {
             format!("{default_workspace} (new)")
         },
+        ambiguous: false,
     }];
     let mut seen: Vec<(&str, usize)> = vec![(default_workspace, 1)];
     for (index, workspace) in workspaces.iter().enumerate() {
@@ -56,7 +60,16 @@ pub(super) fn destination_entries(workspaces: &[WorkspaceOption], default_worksp
             choice: WorkspaceChoice::Existing(workspace.id),
             name: workspace.name.clone(),
             label,
+            ambiguous: false,
         });
+    }
+    for index in 1..entries.len() {
+        let name = entries[index].name.clone();
+        let shared = entries
+            .iter()
+            .enumerate()
+            .any(|(other, entry)| other != index && entry.name == name);
+        entries[index].ambiguous = shared;
     }
     entries
 }
@@ -123,7 +136,9 @@ pub(super) fn render_destination_picker(
     entries: &[DestinationEntry],
 ) -> DestinationPickerAction {
     let mut action = DestinationPickerAction::None;
+    let selected_entry = entries.iter().find(|entry| entry.choice == *destination);
     if *destination != WorkspaceChoice::Default
+        && selected_entry.is_some_and(|entry| !entry.ambiguous)
         && ui
             .add(
                 Button::new(
@@ -138,9 +153,15 @@ pub(super) fn render_destination_picker(
     {
         action = DestinationPickerAction::SetDefault;
     }
-    let selected = entries
-        .iter()
-        .find(|entry| entry.choice == *destination)
+    if selected_entry.is_some_and(|entry| entry.ambiguous) {
+        ui.label(
+            RichText::new("shares its name; cannot be the default")
+                .font(FontId::proportional(11.0))
+                .color(theme::FG_DIM()),
+        )
+        .on_hover_text("Defaults are stored by name; rename the workspace to make it the default");
+    }
+    let selected = selected_entry
         .or_else(|| entries.first())
         .map_or("", |entry| entry.label.as_str());
     // A fixed width with truncation keeps a long workspace name from pushing
@@ -245,6 +266,13 @@ mod tests {
             vec!["Remote Sessions", "Ops", "Remote Sessions", "Ops"],
             "the running number is display text only"
         );
+        assert_eq!(
+            entries.iter().map(|entry| entry.ambiguous).collect::<Vec<_>>(),
+            vec![false, true, true, true],
+            "every workspace sharing a name is ambiguous as a default"
+        );
+        let unique = destination_entries(&workspaces(&["Ops"]), "Remote Sessions");
+        assert!(unique.iter().all(|entry| !entry.ambiguous));
     }
 
     #[test]

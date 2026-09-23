@@ -491,11 +491,14 @@ impl RemoteHostsOverlay {
             .map(RemoteHostsOverlayAction::SetDefaultWorkspace)
     }
 
-    /// The real name of the picked workspace, never its disambiguated label.
+    /// The real name of the picked workspace, never its disambiguated label;
+    /// nothing when another workspace shares that name, since a default is
+    /// stored by name and could not single the picked one out.
     fn selected_destination_name(&self, destinations: &[DestinationEntry]) -> Option<String> {
         destinations
             .iter()
             .find(|entry| entry.choice == self.destination && entry.choice != WorkspaceChoice::Default)
+            .filter(|entry| !entry.ambiguous)
             .map(|entry| entry.name.clone())
     }
 
@@ -949,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn set_default_persists_the_real_name_of_a_duplicate_named_workspace() {
+    fn set_default_is_refused_for_a_workspace_that_shares_its_name() {
         let ctx = egui::Context::default();
         let catalog = RemoteHostCatalog {
             hosts: vec![remote_host("live-a", 22429)],
@@ -973,6 +976,25 @@ mod tests {
             &mut overlay,
             &catalog,
             &workspaces,
+            vec![key_event(egui::Key::D, egui::Modifiers::ALT)],
+            None,
+        );
+        assert!(
+            matches!(action, RemoteHostsOverlayAction::None),
+            "an ambiguous name cannot become the default: {action:?}"
+        );
+
+        let unique = vec![WorkspaceOption {
+            id: WorkspaceId(2),
+            name: "Ops".into(),
+        }];
+        show_overlay(&ctx, &mut overlay, &catalog, &unique, Vec::new());
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(2));
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &unique,
             vec![key_event(egui::Key::D, egui::Modifiers::ALT)],
             None,
         );

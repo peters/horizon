@@ -73,15 +73,20 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
                 .iter()
                 .position(|line| !line.is_empty() && !line.starts_with(' ') && !line.starts_with('#'))
                 .map_or(lines.len(), |offset| start + 1 + offset);
-            let key_line = (start + 1..end).find(|index| is_direct_key(lines[*index], "default_workspace"));
+            // The block's own child indentation, whatever the file uses.
+            let indent = lines[start + 1..end]
+                .iter()
+                .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+                .map_or("  ", |line| &line[..line.len() - line.trim_start().len()]);
+            let key_line = (start + 1..end).find(|index| is_direct_key(lines[*index], indent, "default_workspace"));
             for (index, line) in lines.iter().enumerate() {
                 if Some(index) == key_line {
-                    out.push(format!("  default_workspace: {value}{}", inline_comment(line)));
+                    out.push(format!("{indent}default_workspace: {value}{}", inline_comment(line)));
                 } else {
                     out.push((*line).to_string());
                 }
                 if index == start && key_line.is_none() {
-                    out.push(format!("  default_workspace: {value}"));
+                    out.push(format!("{indent}default_workspace: {value}"));
                 }
             }
         }
@@ -96,9 +101,9 @@ fn is_block_start(line: &str) -> bool {
     trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
 }
 
-/// A key that belongs to the block itself: exactly two spaces of indentation.
-fn is_direct_key(line: &str, key: &str) -> bool {
-    line.strip_prefix("  ")
+/// A key that belongs to the block itself: exactly the block's child indentation.
+fn is_direct_key(line: &str, indent: &str, key: &str) -> bool {
+    line.strip_prefix(indent)
         .is_some_and(|rest| !rest.starts_with(' ') && rest.starts_with(key) && rest[key.len()..].starts_with(':'))
 }
 
@@ -197,6 +202,26 @@ mod tests {
                 .remote_hosts
                 .default_workspace_name(),
             "Ops"
+        );
+
+        let four_spaces = "remote_hosts:\n    vnc_port: 5901 # wide\n    nested:\n        default_workspace: deeper\nworkspaces: []\n";
+        let patched = super::patch_default_workspace_source(four_spaces, "Ops").unwrap();
+        assert_eq!(
+            patched,
+            "remote_hosts:\n    default_workspace: Ops\n    vnc_port: 5901 # wide\n    nested:\n        default_workspace: deeper\nworkspaces: []\n",
+            "the block's own indentation is detected and kept"
+        );
+        assert_eq!(
+            Config::from_yaml(&patched)
+                .unwrap()
+                .remote_hosts
+                .default_workspace_name(),
+            "Ops"
+        );
+        let four_spaces_key = "remote_hosts:\n    default_workspace: Old # note\n    vnc_port: 5901\n";
+        assert_eq!(
+            super::patch_default_workspace_source(four_spaces_key, "Ops").unwrap(),
+            "remote_hosts:\n    default_workspace: Ops # note\n    vnc_port: 5901\n"
         );
 
         let without_key = "remote_hosts:\n  vnc_port: 5901\nworkspaces: []\n";
