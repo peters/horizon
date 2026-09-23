@@ -62,8 +62,18 @@ fn show_card_popup<R>(
     shown
 }
 
-pub(super) fn render_row_menu(ui: &Ui, row: &Response) -> Option<RowMenuChoice> {
-    show_card_popup(ui, Popup::context_menu(row).width(ROW_MENU_WIDTH), row.layer_id, |ui| {
+/// The menu belongs to the whole row: a right click on the expand chevron
+/// opens the same popup as one on the row body.
+pub(super) fn render_row_menu(ui: &Ui, row: &Response, chevron: &Response) -> Option<RowMenuChoice> {
+    let open = if row.secondary_clicked() || chevron.secondary_clicked() {
+        Some(egui::SetOpenCommand::Bool(true))
+    } else if row.clicked() || chevron.clicked() {
+        Some(egui::SetOpenCommand::Bool(false))
+    } else {
+        None
+    };
+    let popup = Popup::context_menu(row).open_memory(open).width(ROW_MENU_WIDTH);
+    show_card_popup(ui, popup, row.layer_id, |ui| {
         let mut picked = None;
         for choice in RowMenuChoice::ALL {
             if matches!(choice, RowMenuChoice::SaveShortcut(RemoteConnectMode::Ssh)) {

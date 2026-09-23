@@ -213,11 +213,14 @@ fn host_row_interaction(
 ) -> HostRowInteraction {
     let chevron_response = ui.interact(layout.chevron, row_id.with("expand"), Sense::click());
     let body_response = ui.interact(layout.body, row_id.with("click"), Sense::click());
-    let menu = render_row_menu(ui, &body_response);
+    let menu = render_row_menu(ui, &body_response, &chevron_response);
 
     HostRowInteraction {
-        // A right click selects the row its menu is about.
-        select: chevron_response.clicked() || body_response.clicked() || body_response.secondary_clicked(),
+        // A right click anywhere on the row selects the host its menu is about.
+        select: chevron_response.clicked()
+            || body_response.clicked()
+            || body_response.secondary_clicked()
+            || chevron_response.secondary_clicked(),
         connect: !chevron_response.clicked()
             && (body_response.double_clicked() || (body_response.clicked() && is_selected)),
         toggle_expand: chevron_response.clicked(),

@@ -1024,6 +1024,42 @@ mod tests {
             egui::Id::new("remote_hosts_modal"),
             "the reopened card must sit above the backdrop"
         );
+        );
+    }
+
+    #[test]
+    fn a_right_click_on_the_expand_chevron_opens_the_same_row_menu() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429), remote_host("live-b", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        // The second row's chevron: the ">" painted left of its alias.
+        let alias = text_center(&output, "live-b");
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            text_shapes(&shape.shape, &mut texts);
+        }
+        let chevron = texts
+            .iter()
+            .filter(|text| text.galley.text() == ">")
+            .map(|text| text.pos + text.galley.size() * 0.5)
+            .find(|pos| (pos.y - alias.y).abs() < 2.0)
+            .expect("chevron on the second row");
+        assert!(chevron.x < alias.x);
+
+        let mut right_click = button_events(chevron, egui::PointerButton::Secondary, true);
+        right_click.extend(button_events(chevron, egui::PointerButton::Secondary, false));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, right_click);
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        assert_eq!(overlay.selected, 1, "the right click selects the chevron's row");
+        assert!(!overlay.is_expanded(&catalog.hosts[1]), "a right click does not expand");
+        text_center(&output, "Save VNC shortcut");
     }
 
     #[test]
