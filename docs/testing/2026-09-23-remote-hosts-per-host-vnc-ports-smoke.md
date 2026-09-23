@@ -74,7 +74,9 @@ map, `smoke:5997` kept the row listed (`1/901`), the hint fit the header at
 1400 px, and Enter connected through `ssh -W 127.0.0.1:5997`. B3: Save VNC
 shortcut showed `Saved preset "VNC: smoke-node"` and the loaded file gained
 the `device` preset with `command: 127.0.0.1:5997` and the host's
-`ssh_connection`.
+`ssh_connection`. B2 was run again on the review-round head that re-reads
+the query at action time (`text_and_enter_in_one_frame_open_with_the_text_applied`
+covers the same-frame case in Lane A) and connected the same way.
 
 ## Not covered
 

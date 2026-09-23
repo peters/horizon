@@ -27,7 +27,8 @@ impl RemoteHostsConfig {
     pub const DEFAULT_VNC_PORT: u16 = 5900;
 
     /// # Errors
-    /// Rejects a blank workspace name and port zero.
+    /// Rejects a blank workspace name, a zero `vnc_port`, and any `vnc_ports`
+    /// entry with a blank key or a zero port.
     pub fn validate(&self) -> Result<()> {
         if self.default_workspace.trim().is_empty() {
             return Err(Error::Config("remote_hosts.default_workspace cannot be empty".into()));

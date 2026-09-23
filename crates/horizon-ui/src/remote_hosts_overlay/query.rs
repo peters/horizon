@@ -3,7 +3,9 @@ use horizon_core::{RemoteHost, SshConnection};
 use super::{RemoteConnectMode, RemoteHostsOverlayAction, WorkspaceChoice};
 
 /// What the filter text adds to a connection: `user@` in front picks the
-/// SSH user, `:port` at the end picks the VNC port for this session only.
+/// SSH user, `:port` at the end picks the VNC port. Both apply to the host
+/// being opened and to a shortcut saved from the row menu, where the port
+/// is frozen into the preset's target.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QueryOverrides<'a> {
     pub(super) user: Option<&'a str>,
