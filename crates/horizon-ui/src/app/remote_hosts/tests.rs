@@ -314,6 +314,70 @@ fn legacy_remote_workspaces_are_neither_listed_nor_used_as_destinations() {
                 || app.board.panel(panel_id).unwrap().kind == PanelKind::Ssh
         );
     }
+
+#[test]
+fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
+    let mut config = Config::default();
+    config.remote_hosts.vnc_port = 5901;
+    let (_temp, _ctx, mut app) = test_app_with_config_and_startup(&config, ephemeral());
+    let presets_before = app.template_config.presets.len();
+
+    assert_eq!(
+        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Vnc),
+        Some("VNC: lab".to_string())
+    );
+    assert_eq!(
+        app.save_remote_host_shortcut(" lab ", lab_connection(), RemoteConnectMode::Ssh),
+        Some("SSH: lab".to_string())
+    );
+    let blank = SshConnection {
+        host: " ".into(),
+        ..SshConnection::default()
+    };
+    assert_eq!(
+        app.save_remote_host_shortcut("lab", blank, RemoteConnectMode::Ssh),
+        None
+    );
+
+    let saved = Config::load(Some(&app.config_path)).expect("config reloads");
+    assert_eq!(saved.presets.len(), presets_before + 2);
+    let vnc = saved
+        .presets
+        .iter()
+        .find(|preset| preset.name == "VNC: lab")
+        .expect("vnc preset");
+    assert_eq!(vnc.kind, PanelKind::Device);
+    assert_eq!(vnc.command.as_deref(), Some("127.0.0.1:5901"));
+    assert_eq!(vnc.ssh_connection.as_ref(), Some(&lab_connection()));
+    let ssh = saved
+        .presets
+        .iter()
+        .find(|preset| preset.name == "SSH: lab")
+        .expect("ssh preset");
+    assert_eq!(ssh.kind, PanelKind::Ssh);
+    assert_eq!(ssh.command, None);
+    assert!(
+        app.presets.iter().any(|preset| preset.name == "VNC: lab"),
+        "applied live"
+    );
+
+    // Re-saving with another user replaces the preset instead of duplicating it.
+    let as_root = SshConnection {
+        user: Some("root".into()),
+        ..lab_connection()
+    };
+    assert_eq!(
+        app.save_remote_host_shortcut("lab", as_root.clone(), RemoteConnectMode::Vnc),
+        Some("VNC: lab".to_string())
+    );
+    let saved = Config::load(Some(&app.config_path)).expect("config reloads");
+    assert_eq!(saved.presets.len(), presets_before + 2);
+    let vnc = saved
+        .presets
+        .iter()
+        .find(|preset| preset.name == "VNC: lab")
+        .expect("vnc preset");
+    assert_eq!(vnc.ssh_connection.as_ref(), Some(&as_root));
 }
 
 mod picker_in_full_app {

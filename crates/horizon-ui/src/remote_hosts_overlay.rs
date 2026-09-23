@@ -12,8 +12,8 @@ use egui::{
 use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostConnectionSummary, SshConnection, WorkspaceId};
 
 use self::controls::{
-    DestinationEntry, DestinationPickerAction, cycle_destination, destination_entries, normalize_destination,
-    render_destination_picker, render_mode_toggle,
+    DestinationEntry, DestinationPickerAction, RowMenuChoice, cycle_destination, destination_entries,
+    normalize_destination, render_destination_picker, render_mode_toggle,
 };
 use self::layout::{
     Columns, DESTINATION_ROW_HEIGHT, INPUT_HEIGHT, OverlayLayout, columns, current_epoch_secs, overlay_layout,
@@ -107,6 +107,19 @@ pub enum RemoteHostsOverlayAction {
     },
     /// The picked workspace should become the configured default, by name.
     SetDefaultWorkspace(String),
+    /// Store the host as a preset so any workspace can add it later.
+    SaveShortcut {
+        label: String,
+        connection: SshConnection,
+        mode: RemoteConnectMode,
+    },
+}
+
+/// What a click or menu pick on a host row asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowRequest {
+    Connect(usize),
+    Menu(usize, RowMenuChoice),
 }
 
 /// Alt+D is a command here, but the platform also reports it as typed text
@@ -202,7 +215,7 @@ impl RemoteHostsOverlay {
         }
     }
 
-    /// Show `text` in the header for a few seconds, e.g. after a saved default.
+    /// Show `text` in the header for a few seconds, e.g. after a saved shortcut or default.
     pub fn set_notice(&mut self, text: impl Into<String>) {
         self.notice = Some((text.into(), Instant::now()));
     }
@@ -357,9 +370,13 @@ impl RemoteHostsOverlay {
         ui.add_space(2.0);
 
         match self.render_results(ui, &columns, render) {
-            Some(index) => {
+            Some(RowRequest::Connect(index)) => {
                 let host = &render.catalog.hosts[render.filtered[index]];
                 self.open_action(host, render.frame.user_override)
+            }
+            Some(RowRequest::Menu(index, choice)) => {
+                let host = &render.catalog.hosts[render.filtered[index]];
+                self.menu_action(host, render.frame.user_override, choice)
             }
             None => RemoteHostsOverlayAction::None,
         }
@@ -367,6 +384,28 @@ impl RemoteHostsOverlay {
 
     fn open_action(&self, host: &RemoteHost, user_override: Option<&str>) -> RemoteHostsOverlayAction {
         connect_action(host, user_override, self.mode, self.destination.clone())
+    }
+
+    fn menu_action(
+        &self,
+        host: &RemoteHost,
+        user_override: Option<&str>,
+        choice: RowMenuChoice,
+    ) -> RemoteHostsOverlayAction {
+        match choice {
+            RowMenuChoice::Open(mode) => connect_action(host, user_override, mode, self.destination.clone()),
+            RowMenuChoice::SaveShortcut(mode) => {
+                let mut connection = host.ssh_connection.clone();
+                if let Some(user) = user_override {
+                    connection.user = Some(user.to_string());
+                }
+                RemoteHostsOverlayAction::SaveShortcut {
+                    label: host.label.clone(),
+                    connection,
+                    mode,
+                }
+            }
+        }
     }
 
     fn render_query_input(
@@ -576,13 +615,13 @@ impl RemoteHostsOverlay {
         ui: &mut egui::Ui,
         columns: &Columns,
         render: &OverlayRenderContext<'_, '_>,
-    ) -> Option<usize> {
+    ) -> Option<RowRequest> {
         if render.filtered.is_empty() {
             paint_empty(ui, "No matching hosts");
             return None;
         }
 
-        let mut clicked_idx = None;
+        let mut request = None;
         let scroll_height = render
             .layout
             .results_height
@@ -619,7 +658,10 @@ impl RemoteHostsOverlay {
                         self.toggle_expanded(host);
                     }
                     if interaction.connect {
-                        clicked_idx = Some(filtered_idx);
+                        request = Some(RowRequest::Connect(filtered_idx));
+                    }
+                    if let Some(choice) = interaction.menu {
+                        request = Some(RowRequest::Menu(filtered_idx, choice));
                     }
                     if is_expanded {
                         render_host_details(
@@ -634,7 +676,7 @@ impl RemoteHostsOverlay {
                 }
             });
 
-        clicked_idx
+        request
     }
 
     fn is_expanded(&self, host: &RemoteHost) -> bool {
@@ -671,6 +713,7 @@ mod tests {
 
     use std::time::{Duration, Instant};
 
+    use super::controls::RowMenuChoice;
     use super::{
         KeyPresses, NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction,
         RemoteHostsOverlayInputs, WorkspaceChoice, WorkspaceOption,
@@ -870,6 +913,84 @@ mod tests {
         text_center(&output, "Ops  \u{25be}");
     }
 
+    fn button_events(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_right_click_menu_above_the_card_saves_a_shortcut() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let row = text_center(&output, "live-a");
+
+        // Press and release in one frame, like a slow display delivers them.
+        let mut right_click = button_events(row, egui::PointerButton::Secondary, true);
+        right_click.extend(button_events(row, egui::PointerButton::Secondary, false));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, right_click);
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        assert_eq!(overlay.selected, 0);
+        let save = text_center(&output, "Save VNC shortcut");
+        let (_, layer) = show_overlay_probing(&ctx, &mut overlay, &catalog, &workspaces, Vec::new(), Some(save));
+        assert_ne!(
+            layer.expect("a layer under the menu").id,
+            egui::Id::new("remote_hosts_modal"),
+            "menu hidden below the card"
+        );
+
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, click_events(save, true));
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            click_events(save, false),
+            None,
+        );
+        match action {
+            RemoteHostsOverlayAction::SaveShortcut {
+                label,
+                connection,
+                mode,
+            } => {
+                assert_eq!(label, "live-a");
+                assert_eq!(connection.port, Some(22429));
+                assert_eq!(mode, RemoteConnectMode::Vnc);
+            }
+            RemoteHostsOverlayAction::None
+            | RemoteHostsOverlayAction::Cancelled
+            | RemoteHostsOverlayAction::Open { .. }
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected a shortcut action"),
+        }
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let seen: Vec<_> = {
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                text_shapes(&shape.shape, &mut texts);
+            }
+            texts.iter().map(|text| text.galley.text().to_string()).collect()
+        };
+        assert!(
+            !seen.iter().any(|text| text == "Save VNC shortcut"),
+            "menu closed after the pick"
+        );
+    }
+
     #[test]
     fn the_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
         let ctx = egui::Context::default();
@@ -990,7 +1111,46 @@ mod tests {
             }
             RemoteHostsOverlayAction::None
             | RemoteHostsOverlayAction::Cancelled
-            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected an open action"),
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_)
+            | RemoteHostsOverlayAction::SaveShortcut { .. } => panic!("expected an open action"),
+        }
+    }
+
+    #[test]
+    fn the_row_menu_saves_a_shortcut_with_the_user_override_or_opens_in_the_header_destination() {
+        let host = remote_host("live-a", 22429);
+        let mut overlay = RemoteHostsOverlay::new();
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(3));
+
+        match overlay.menu_action(&host, Some("ops"), RowMenuChoice::SaveShortcut(RemoteConnectMode::Vnc)) {
+            RemoteHostsOverlayAction::SaveShortcut {
+                label,
+                connection,
+                mode,
+            } => {
+                assert_eq!(label, "live-a");
+                assert_eq!(connection.user.as_deref(), Some("ops"));
+                assert_eq!(connection.port, Some(22429));
+                assert_eq!(mode, RemoteConnectMode::Vnc);
+            }
+            RemoteHostsOverlayAction::None
+            | RemoteHostsOverlayAction::Cancelled
+            | RemoteHostsOverlayAction::Open { .. }
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected a shortcut action"),
+        }
+        match overlay.menu_action(&host, None, RowMenuChoice::Open(RemoteConnectMode::Vnc)) {
+            RemoteHostsOverlayAction::Open { mode, destination, .. } => {
+                assert_eq!(
+                    mode,
+                    RemoteConnectMode::Vnc,
+                    "the menu's mode wins over the header toggle"
+                );
+                assert_eq!(destination, WorkspaceChoice::Existing(WorkspaceId(3)));
+            }
+            RemoteHostsOverlayAction::None
+            | RemoteHostsOverlayAction::Cancelled
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_)
+            | RemoteHostsOverlayAction::SaveShortcut { .. } => panic!("expected an open action"),
         }
     }
 

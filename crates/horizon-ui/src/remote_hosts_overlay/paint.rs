@@ -6,6 +6,7 @@ use horizon_core::{
     RemoteHost, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostStatus, SshConnectionStatus,
 };
 
+use super::controls::{RowMenuChoice, render_row_menu};
 use super::layout::{Columns, HEADER_ROW_HEIGHT, ROW_HEIGHT};
 use crate::text::single_line_job;
 use crate::theme;
@@ -18,6 +19,8 @@ pub(super) struct HostRowInteraction {
     pub(super) select: bool,
     pub(super) connect: bool,
     pub(super) toggle_expand: bool,
+    /// An item picked from the row's context menu.
+    pub(super) menu: Option<RowMenuChoice>,
 }
 
 pub(super) struct HostRowRenderContext<'a> {
@@ -197,12 +200,15 @@ fn host_row_interaction(ui: &mut Ui, layout: &HostRowLayout, index: usize, is_se
         Sense::click(),
     );
     let body_response = ui.interact(layout.body, ui.make_persistent_id(("rh_click", index)), Sense::click());
+    let menu = render_row_menu(ui, &body_response);
 
     HostRowInteraction {
-        select: chevron_response.clicked() || body_response.clicked(),
+        // A right click selects the row its menu is about.
+        select: chevron_response.clicked() || body_response.clicked() || body_response.secondary_clicked(),
         connect: !chevron_response.clicked()
             && (body_response.double_clicked() || (body_response.clicked() && is_selected)),
         toggle_expand: chevron_response.clicked(),
+        menu,
     }
 }
 

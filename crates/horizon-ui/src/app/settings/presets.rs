@@ -155,7 +155,11 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
                 if horizon_core::DeviceViewTarget::parse(preset.command.as_deref().unwrap_or_default()).is_err() {
                     ui.colored_label(
                         theme::PALETTE_RED(),
-                        "Enter a loopback IP and port for the local device.",
+                        if preset.ssh_connection.is_some() {
+                            "Enter the loopback IP and port as seen from the preset's SSH host."
+                        } else {
+                            "Enter a loopback IP and port for the local device."
+                        },
                     );
                 }
             }

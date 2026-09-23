@@ -139,7 +139,8 @@ mod tests {
             }
             RemoteHostsOverlayAction::None
             | RemoteHostsOverlayAction::Cancelled
-            | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => {
+            | RemoteHostsOverlayAction::SetDefaultWorkspace(_)
+            | RemoteHostsOverlayAction::SaveShortcut { .. } => {
                 panic!("expected an open action")
             }
         }
