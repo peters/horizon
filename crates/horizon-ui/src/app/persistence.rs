@@ -32,7 +32,9 @@ impl HorizonApp {
     }
 
     /// Persist device-request mutations immediately. The normal flush waits
-    /// for another frame, and an unpresented host may not render one.
+    /// for another frame, and an unpresented host may not render one. A
+    /// refused or failed write leaves the dirty flag set so the request pump
+    /// can retry without another frame.
     pub(super) fn save_runtime_after_device_request(&mut self) {
         if self.runtime_dirty_since.is_none() {
             return;
@@ -40,6 +42,11 @@ impl HorizonApp {
         if self.auto_save_runtime_state() {
             self.runtime_dirty_since = None;
         }
+    }
+
+    #[must_use]
+    pub(super) fn runtime_is_dirty(&self) -> bool {
+        self.runtime_dirty_since.is_some()
     }
 
     #[must_use]

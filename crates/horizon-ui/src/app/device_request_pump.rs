@@ -27,6 +27,8 @@ pub(crate) const DEVICE_QUEUE_WAKE_PASS: u64 = u64::MAX;
 
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 const PENDING_WAIT: Duration = Duration::from_millis(50);
+const PERSIST_WAIT_MIN: Duration = Duration::from_millis(200);
+const PERSIST_WAIT_MAX: Duration = Duration::from_secs(5);
 
 struct InstalledHost {
     app: HorizonApp,
@@ -38,6 +40,9 @@ pub(crate) struct DeviceRequestBridge {
     /// `None` follows the process runtime root. Tests pin a directory.
     root_override: Option<PathBuf>,
     stop: Arc<AtomicBool>,
+    /// Set when a device mutation is still unsaved. The watcher keeps waking
+    /// until the write succeeds, because no later frame may run.
+    persist_pending: Arc<AtomicBool>,
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -60,6 +65,7 @@ impl DeviceRequestBridge {
             installed: Mutex::new(None),
             root_override,
             stop: Arc::new(AtomicBool::new(false)),
+            persist_pending: Arc::new(AtomicBool::new(false)),
             watcher: Mutex::new(None),
         }
     }
@@ -77,8 +83,10 @@ impl DeviceRequestBridge {
         let changed = installed
             .app
             .drain_device_panel_requests(&installed.ctx, self.root_override.as_deref());
-        if changed {
+        if changed || self.persist_pending.load(Ordering::Relaxed) {
             installed.app.save_runtime_after_device_request();
+            self.persist_pending
+                .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
         changed
     }
@@ -89,10 +97,11 @@ impl DeviceRequestBridge {
             return;
         }
         let stop = Arc::clone(&self.stop);
+        let persist_pending = Arc::clone(&self.persist_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
             .name("horizon-device-requests".to_owned())
-            .spawn(move || watch_device_requests(&stop, root_override.as_deref(), &proxy))
+            .spawn(move || watch_device_requests(&stop, &persist_pending, root_override.as_deref(), &proxy))
         {
             Ok(handle) => *watcher = Some(handle),
             Err(error) => tracing::error!(%error, "could not start Device request watcher"),
@@ -166,17 +175,27 @@ pub(crate) fn is_device_queue_wake(event: &UserEvent) -> bool {
     )
 }
 
-fn watch_device_requests(stop: &AtomicBool, root_override: Option<&Path>, proxy: &EventLoopProxy<UserEvent>) {
+fn watch_device_requests(
+    stop: &AtomicBool,
+    persist_pending: &AtomicBool,
+    root_override: Option<&Path>,
+    proxy: &EventLoopProxy<UserEvent>,
+) {
+    let mut persist_wait = PERSIST_WAIT_MIN;
     while !stop.load(Ordering::Relaxed) {
-        let pending = match device_requests_pending(root_override) {
+        let files_pending = match device_requests_pending(root_override) {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::warn!(%error, "could not check Device panel requests");
-                thread::park_timeout(Duration::from_secs(1));
-                continue;
+                if !persist_pending.load(Ordering::Relaxed) {
+                    thread::park_timeout(Duration::from_secs(1));
+                    continue;
+                }
+                false
             }
         };
-        if pending
+        let persist = persist_pending.load(Ordering::Relaxed);
+        if (files_pending || persist)
             && proxy
                 .send_event(UserEvent::RequestRepaint {
                     viewport_id: ViewportId::ROOT,
@@ -187,7 +206,21 @@ fn watch_device_requests(stop: &AtomicBool, root_override: Option<&Path>, proxy:
         {
             return;
         }
-        thread::park_timeout(if pending { PENDING_WAIT } else { IDLE_WAIT });
+        let (wait, next_persist_wait) = next_pump_wait(files_pending, persist, persist_wait);
+        persist_wait = next_persist_wait;
+        thread::park_timeout(wait);
+    }
+}
+
+/// How long to sleep, and the backoff to use after a persistence-only wake.
+fn next_pump_wait(files_pending: bool, persist_pending: bool, persist_wait: Duration) -> (Duration, Duration) {
+    if files_pending {
+        (PENDING_WAIT, PERSIST_WAIT_MIN)
+    } else if persist_pending {
+        let wait = persist_wait.clamp(PERSIST_WAIT_MIN, PERSIST_WAIT_MAX);
+        (wait, wait.saturating_mul(2).min(PERSIST_WAIT_MAX))
+    } else {
+        (IDLE_WAIT, PERSIST_WAIT_MIN)
     }
 }
 
@@ -221,5 +254,61 @@ mod tests {
             cumulative_pass_nr: 3,
         };
         assert!(!is_device_queue_wake(&repaint));
+    }
+
+    #[test]
+    fn persistence_retries_back_off_until_a_request_file_resets_them() {
+        let (first, next) = next_pump_wait(false, true, PERSIST_WAIT_MIN);
+        assert_eq!(first, PERSIST_WAIT_MIN);
+        assert_eq!(next, Duration::from_millis(400));
+        let (second, capped) = next_pump_wait(false, true, PERSIST_WAIT_MAX);
+        assert_eq!((second, capped), (PERSIST_WAIT_MAX, PERSIST_WAIT_MAX));
+        let (with_file, reset) = next_pump_wait(true, true, PERSIST_WAIT_MAX);
+        assert_eq!((with_file, reset), (PENDING_WAIT, PERSIST_WAIT_MIN));
+        assert_eq!(
+            next_pump_wait(false, false, Duration::from_secs(3)),
+            (IDLE_WAIT, PERSIST_WAIT_MIN)
+        );
+    }
+
+    #[test]
+    fn a_blocked_runtime_save_keeps_the_pump_awake_until_it_succeeds() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let (_temp, ctx, mut app) =
+            super::super::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::new(horizon_core::RuntimeState::default()),
+            });
+        let session = app
+            .session_store
+            .create_session_from_runtime(horizon_core::RuntimeState::default())
+            .expect("session");
+        app.activate_persistent_session(&session);
+        app.root_viewport_stabilizer = None;
+        // Startup stabilization refuses the snapshot. The request is still
+        // removed from the queue, so only the persistence flag can retry it.
+        app.pending_startup_runtime_state = Some(horizon_core::RuntimeState::default());
+        app.mark_runtime_dirty();
+        let actor = "horizon:agent";
+        let request = device::enqueue_at(
+            root.path(),
+            manifest::AgentIdentity::new(actor, Some(manifest::host_instance())),
+            device::Operation::List,
+            Duration::from_secs(5),
+        )
+        .expect("enqueue");
+        let bridge = DeviceRequestBridge::with_root(root.path().to_path_buf());
+        bridge.install(app, ctx);
+        assert!(bridge.poll_on_ui_thread());
+        assert!(bridge.persist_pending.load(Ordering::Relaxed));
+        assert!(device::take_result_at(root.path(), &request).expect("result").is_some());
+
+        {
+            let mut installed = lock(&bridge.installed);
+            let installed = installed.as_mut().expect("installed");
+            installed.app.pending_startup_runtime_state = None;
+            assert!(installed.app.runtime_is_dirty());
+        }
+        assert!(!bridge.poll_on_ui_thread());
+        assert!(!bridge.persist_pending.load(Ordering::Relaxed));
     }
 }
