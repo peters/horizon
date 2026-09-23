@@ -372,6 +372,7 @@ fn host_liveness(host: &StandaloneHostRef) -> HostLiveness {
     }
     match pid_probe(host.host_pid) {
         PidProbe::Dead => HostLiveness::Stale,
+        #[cfg(unix)]
         PidProbe::Unknown => HostLiveness::Unknown,
         PidProbe::Alive => {
             liveness_from_identity(process_start_identity(host.host_pid).as_deref(), &host.start_identity)
@@ -482,6 +483,8 @@ fn command_identity(output: std::process::Output) -> Option<String> {
 enum PidProbe {
     Alive,
     Dead,
+    /// `kill -0` could not be spawned. Windows queries do not have that failure.
+    #[cfg(unix)]
     Unknown,
 }
 
