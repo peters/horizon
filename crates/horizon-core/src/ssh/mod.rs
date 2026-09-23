@@ -61,10 +61,17 @@ impl SshConnection {
 
     /// Arguments for `ssh -W`, which relays this process's stdio to
     /// `remote_endpoint` as seen from the SSH host. `-W` runs no remote
-    /// command and allocates no TTY; batch mode fails instead of prompting.
+    /// command and allocates no TTY; batch mode fails instead of prompting,
+    /// so a first contact accepts the host key while a changed key still
+    /// refuses. `extra_args` come later and can override that.
     #[must_use]
     pub fn stdio_forward_args(&self, remote_endpoint: &str) -> Vec<String> {
-        let mut args = vec!["-W".to_string(), remote_endpoint.to_string()];
+        let mut args = vec![
+            "-W".to_string(),
+            remote_endpoint.to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+        ];
         args.extend(self.ssh_transport_args());
         args
     }
@@ -207,6 +214,8 @@ mod tests {
             vec![
                 "-W".to_string(),
                 "127.0.0.1:5900".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=accept-new".to_string(),
                 "-p".to_string(),
                 "2222".to_string(),
                 "-o".to_string(),

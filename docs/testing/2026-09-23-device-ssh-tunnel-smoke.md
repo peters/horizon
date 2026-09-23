@@ -20,7 +20,8 @@ cargo test -p horizon-ui --bin horizon device_widget
 Must include:
 
 - `stdio_forward_args_relay_the_remote_endpoint_in_batch_mode` — `ssh -W`
-  arguments carry the transport options and never the remote command.
+  arguments carry the transport options, accept a first-contact host key
+  (batch mode cannot prompt) and never the remote command.
 - `tunnelled_device_keeps_its_ssh_host_across_restore` — the tunnel host is
   persisted with the panel and restored without reconnecting.
 - `tunnel_without_a_host_is_rejected_before_panel_creation` — an empty SSH
