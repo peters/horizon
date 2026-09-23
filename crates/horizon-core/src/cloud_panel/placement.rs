@@ -67,7 +67,11 @@ fn place(groups: &mut CloudGroups, board: &mut Board, workspace: &str, issue: u3
 fn expected_top(board: &Board, workspace: WorkspaceId, existing: &[CloudGroup]) -> f32 {
     let origin_y = board.workspace(workspace).expect("workspace").position[1];
     let mut bottom = origin_y + 80.0;
-    for panel in board.panels.iter().filter(|panel| panel.workspace_id == workspace) {
+    for panel in board
+        .panels
+        .iter()
+        .filter(|panel| panel.visible && panel.workspace_id == workspace)
+    {
         bottom = bottom.max(panel_visual_rect(panel.layout.position, panel.layout.size)[3]);
     }
     for group in existing {
@@ -90,7 +94,11 @@ fn assert_placement(board: &Board, workspace: WorkspaceId, group: &CloudGroup, e
         "cloud y {:?} expected {top}",
         group.position
     );
-    for panel in board.panels.iter().filter(|panel| panel.workspace_id == workspace) {
+    for panel in board
+        .panels
+        .iter()
+        .filter(|panel| panel.visible && panel.workspace_id == workspace)
+    {
         let rect = panel_visual_rect(panel.layout.position, panel.layout.size);
         assert!(!overlaps(cloud, rect), "cloud {cloud:?} covers panel {rect:?}");
     }
@@ -350,6 +358,26 @@ fn placement_survives_restart_and_stays_clear() {
     assert_eq!(layouts(&restored), saved_layouts);
     let workspace = restored.workspace_id_by_local_id(&local).expect("workspace");
     assert_placement(&restored, workspace, &restored.cloud_groups.0[0], &[]);
+}
+
+#[test]
+fn a_hidden_panel_does_not_push_the_new_cloud() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace_at("Local", [0.0, 0.0]);
+    board
+        .create_panel(usage_panel([40.0, 40.0], [400.0, 200.0]), workspace)
+        .expect("visible panel");
+    let hidden = board
+        .create_panel(usage_panel([40.0, 2200.0], [400.0, 500.0]), workspace)
+        .expect("hidden panel");
+    assert!(board.set_panel_visible(hidden, false));
+    let before = layouts(&board);
+    let local = board.workspace(workspace).expect("workspace").local_id.clone();
+    let group = place(&mut CloudGroups::default(), &mut board, &local, 1);
+    assert_eq!(layouts(&board), before);
+    assert!(!board.panel(hidden).expect("hidden panel").visible);
+    assert_placement(&board, workspace, &group, &[]);
+    assert!(group.position[1] < occupied(&board, hidden)[3]);
 }
 
 #[test]

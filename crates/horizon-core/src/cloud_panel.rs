@@ -406,7 +406,7 @@ impl CloudGroups {
     ///
     /// Callers store the result on a group whose remembered workspace origin is
     /// zero; reconcile adds the live workspace position. The top edge sits below
-    /// ordinary-panel bounds and clouds already in that workspace. Panel
+    /// visible ordinary-panel bounds and clouds already in that workspace. Panel
     /// positions, cloud positions, and membership stay as they were.
     #[must_use]
     pub fn next_position(&self, workspace: &str, board: &Board) -> [f32; 2] {
@@ -415,7 +415,7 @@ impl CloudGroups {
         let panel_bottom = board
             .panels
             .iter()
-            .filter(|panel| destination.is_some_and(|item| panel.workspace_id == item.id))
+            .filter(|panel| panel.visible && destination.is_some_and(|item| panel.workspace_id == item.id))
             .map(|panel| crate::board::panel_visual_rect(panel.layout.position, panel.layout.size)[3] - origin_y)
             .fold(80.0, f32::max);
         let bottom = self
