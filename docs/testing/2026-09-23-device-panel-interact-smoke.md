@@ -36,10 +36,20 @@ Must include:
   — with the panel's layer scaled and shifted as a zoomed canvas does, global
   pointer positions still press and release the desktop centre (this test
   fails without the mapping).
-- `session::tests::*` unchanged; the worker forwards queued input ahead of the
-  next refresh (`forward_input_until`).
+- `tests::interact::a_drag_that_leaves_the_window_or_a_hidden_viewer_releases_what_is_held`
+  — `PointerGone` ends a drag; a frame where the viewer is not drawn releases
+  held keys.
+- `tests::interact::a_click_on_ui_covering_the_image_does_not_reach_the_desktop`
+  — a foreground area over the image takes the click (fails without the
+  routing gate).
+- `tests::interact::a_discarded_pass_does_not_send_its_input_twice` — one
+  wheel line is one notch and text is sent once even when egui re-runs a pass.
+- `session::tests::queued_input_reaches_the_server_before_the_next_refresh`
+  — against the fake RFB server, a queued key and pointer event arrive as RFB
+  KeyEvent and PointerEvent before the next FramebufferUpdateRequest (fails
+  when the worker's forwarding is replaced by a sleep).
 
-Status: **PASS** (2026-09-23, Linux x64; 52 `device_widget` tests).
+Status: **PASS** (2026-09-23, Linux x64; 56 `device_widget` tests).
 
 ## Lane B — live viewer on an isolated desktop (Linux)
 
@@ -89,6 +99,18 @@ this lane before the pass: pointer input sampled once per frame lost a click
 whose press and release shared a repaint (now replayed per egui event), and
 global pointer positions were compared against the panel's canvas-local image
 rectangle (now mapped through the layer transform).
+
+Review-round rerun (head with event-routing gates, raw wheel events and
+fractional wheel accumulation): B1 logged nothing; B2 logged `MotionNotify`,
+`ButtonPress`/`ButtonRelease` button 1 at `root:(514,336)` and wheel
+button 5 press/release pairs at the same point; B3 logged `h`, `i` in order.
+Synthetic XTest wheel clicks reach winit inconsistently on Xvfb (one run
+delivered several notches for two clicks, three later single clicks delivered
+none to egui at all while the viewer was connected and interactive), so this
+lane shows direction only; the notch count per wheel line is covered by
+`scroll_travel_becomes_clicks_of_the_wheel_buttons` and
+`a_discarded_pass_does_not_send_its_input_twice`, which drive real egui wheel
+events.
 
 ## Not covered
 

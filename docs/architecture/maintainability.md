@@ -32,7 +32,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   optional SSH tunnel host is persisted through the panel's `ssh_connection`
   like an SSH panel, in which case the target is the endpoint as seen from that
   host. Restored panels require manual reconnect.
-- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, the pointer and keyboard mapping in `input.rs`; agents never get that path. `details` renders
+- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the pointer and keyboard mapping in `input.rs`; agents never get that path. `details` renders
   labelled connection facts, while core selects and bounds the displayed name. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
   worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`

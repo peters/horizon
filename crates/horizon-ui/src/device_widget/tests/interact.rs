@@ -325,3 +325,98 @@ fn a_drag_that_leaves_the_window_or_a_hidden_viewer_releases_what_is_held() {
     assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
     assert!(!state.captured);
 }
+
+#[test]
+fn a_click_on_ui_covering_the_image_does_not_reach_the_desktop() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    // A foreground area (a popup, modal or another panel) over the image.
+    let covered = |state: &mut DeviceUiState, events: Vec<egui::Event>| {
+        state.begin_frame();
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                    ..Default::default()
+                },
+                |ui| {
+                    state.show(ui, &device, true);
+                    egui::Area::new(egui::Id::new("cover"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(middle - egui::vec2(40.0, 40.0))
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_response(egui::vec2(80.0, 80.0), egui::Sense::click());
+                        });
+                },
+            )
+            .discard_textures();
+        state.finish_frame();
+    };
+    // egui lays a new area out invisibly first; hit testing sees it after.
+    for events in [
+        Vec::new(),
+        Vec::new(),
+        vec![egui::Event::PointerMoved(middle)],
+        click_events(middle, true),
+        click_events(middle, false),
+    ] {
+        covered(&mut state, events);
+    }
+    let sent = pointers(&drain(&mut receiver));
+    assert!(
+        sent.iter().all(|(_, _, buttons)| *buttons == 0),
+        "no press reached the desktop through the covering UI: {sent:?}"
+    );
+    assert!(!state.captured, "the covered click did not capture the keyboard");
+}
+
+#[test]
+fn a_discarded_pass_does_not_send_its_input_twice() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    drain(&mut receiver);
+    // egui re-runs a discarded pass with the same input events.
+    let mut passes = 0;
+    state.begin_frame();
+    let _ = ctx
+        .run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(middle),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: egui::vec2(0.0, -1.0),
+                        modifiers: egui::Modifiers::NONE,
+                        phase: egui::TouchPhase::Move,
+                    },
+                    egui::Event::Text("a".into()),
+                ],
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                ..Default::default()
+            },
+            |ui| {
+                passes += 1;
+                state.show(ui, &device, true);
+                if ui.ctx().current_pass_index() == 0 {
+                    ui.ctx().request_discard("test");
+                }
+            },
+        )
+        .discard_textures();
+    state.finish_frame();
+    assert_eq!(passes, 2, "the frame ran a second pass");
+    let sent = drain(&mut receiver);
+    assert_eq!(
+        pointers(&sent).iter().filter(|(_, _, buttons)| *buttons == 16).count(),
+        1,
+        "one wheel line is one notch: {sent:?}"
+    );
+    assert_eq!(keys(&sent), vec![(u32::from('a'), true), (u32::from('a'), false)]);
+}

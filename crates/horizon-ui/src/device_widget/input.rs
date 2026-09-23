@@ -37,7 +37,7 @@ const BUTTON_SCROLL_DOWN: u8 = 16;
 const BUTTON_SCROLL_LEFT: u8 = 32;
 const BUTTON_SCROLL_RIGHT: u8 = 64;
 /// One scroll notch per this many logical points of wheel travel.
-const SCROLL_NOTCH_POINTS: f32 = 40.0;
+pub(super) const SCROLL_NOTCH_POINTS: f32 = 40.0;
 const MAX_SCROLL_NOTCHES_PER_FRAME: u32 = 8;
 
 /// Where the pointer is on the desktop, in server pixels.
@@ -81,6 +81,9 @@ pub(super) struct InputState {
     position: Option<DesktopPoint>,
     modifiers: Modifiers,
     held_keys: Vec<u32>,
+    /// Wheel travel not yet worth a whole notch; trackpads deliver many small
+    /// deltas that must add up rather than each become a click.
+    scroll_remainder: egui::Vec2,
 }
 
 impl InputState {
@@ -105,22 +108,28 @@ impl InputState {
     }
 
     /// Wheel travel as scroll button clicks at the current pointer position.
-    pub(super) fn scroll(&self, delta: egui::Vec2) -> Vec<X11Event> {
+    /// Travel is accumulated across frames and only whole notches are sent;
+    /// the part beyond the per-frame cap is dropped rather than queued.
+    pub(super) fn scroll(&mut self, delta: egui::Vec2) -> Vec<X11Event> {
         let Some(position) = self.position else {
             return Vec::new();
         };
+        self.scroll_remainder += delta;
         let mut events = Vec::new();
-        for (amount, positive, negative) in [
-            (delta.y, BUTTON_SCROLL_UP, BUTTON_SCROLL_DOWN),
-            (delta.x, BUTTON_SCROLL_LEFT, BUTTON_SCROLL_RIGHT),
+        for (axis, positive, negative) in [
+            (1, BUTTON_SCROLL_UP, BUTTON_SCROLL_DOWN),
+            (0, BUTTON_SCROLL_LEFT, BUTTON_SCROLL_RIGHT),
         ] {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let notches = ((amount.abs() / SCROLL_NOTCH_POINTS).ceil() as u32).min(MAX_SCROLL_NOTCHES_PER_FRAME);
-            if amount == 0.0 {
+            let travel = self.scroll_remainder[axis];
+            let whole = (travel / SCROLL_NOTCH_POINTS).trunc();
+            if whole == 0.0 {
                 continue;
             }
-            let button = if amount > 0.0 { positive } else { negative };
-            for _ in 0..notches.max(1) {
+            self.scroll_remainder[axis] = travel - whole * SCROLL_NOTCH_POINTS;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let notches = (whole.abs() as u32).min(MAX_SCROLL_NOTCHES_PER_FRAME);
+            let button = if whole > 0.0 { positive } else { negative };
+            for _ in 0..notches {
                 events.push(mouse(position, self.buttons | button));
                 events.push(mouse(position, self.buttons));
             }
@@ -382,15 +391,25 @@ mod tests {
             vec![(1, 2, 9), (1, 2, 1), (1, 2, 9), (1, 2, 1)],
             "two notches up keep the held button"
         );
+        for _ in 0..3 {
+            assert!(
+                state.scroll(egui::vec2(-10.0, 0.0)).is_empty(),
+                "small trackpad deltas accumulate"
+            );
+        }
         assert_eq!(
-            pointers(&state.scroll(egui::vec2(-5.0, 0.0))),
-            vec![(1, 2, 65), (1, 2, 1)]
+            pointers(&state.scroll(egui::vec2(-10.0, 0.0))),
+            vec![(1, 2, 65), (1, 2, 1)],
+            "four 10-point deltas make one notch, not four"
         );
         assert_eq!(
             state.scroll(egui::vec2(0.0, -100_000.0)).len(),
             2 * MAX_SCROLL_NOTCHES_PER_FRAME as usize
         );
-        assert!(state.scroll(egui::Vec2::ZERO).is_empty());
+        assert!(
+            state.scroll(egui::Vec2::ZERO).is_empty(),
+            "the excess beyond the cap is dropped"
+        );
     }
 
     #[test]
