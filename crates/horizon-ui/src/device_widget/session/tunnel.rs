@@ -140,6 +140,17 @@ mod tests {
 
     use super::*;
 
+    /// Whether the kernel still knows the pid, zombie or not. `kill -0` is
+    /// portable across Unix targets, unlike `/proc`, and a zombie still
+    /// answers it, so only a reaped child makes this false.
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -158,12 +169,10 @@ mod tests {
             stream.read_exact(&mut echo).await.unwrap();
             assert_eq!(&echo, b"RFB 003.008\n");
             let pid = tunnel.child.id().expect("running child");
+            assert!(process_exists(pid), "the child is running before the drop");
             drop(tunnel);
             // Killed and reaped synchronously on drop: not merely a zombie.
-            assert!(
-                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-                "tunnel process outlived the session"
-            );
+            assert!(!process_exists(pid), "tunnel process outlived the session");
         });
     }
 
@@ -217,10 +226,7 @@ mod tests {
             pid
         });
         drop(runtime);
-        assert!(
-            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-            "cancelled tunnel left a process behind"
-        );
+        assert!(!process_exists(pid), "cancelled tunnel left a process behind");
     }
 
     #[test]
