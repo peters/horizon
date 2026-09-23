@@ -46,10 +46,12 @@ impl RemoteHostsConfig {
 
 /// Rewrite only `remote_hosts.default_workspace` in config source text,
 /// leaving comments, ordering and unknown keys alone. Only the block's own
-/// two-space-indented key is touched, never a deeper one, and an inline
-/// comment on that key line is kept. Returns `None` when the text cannot be
-/// patched safely (a non-block `remote_hosts` value), in which case the
-/// caller falls back to serializing the config.
+/// key is touched (at whatever child indentation the block uses), never a
+/// deeper one, and an inline comment on that key line is kept. Returns
+/// `None` when the text cannot be patched safely: a flow-style
+/// `remote_hosts` value, or an existing value that continues on further
+/// lines (a multiline plain scalar or a block scalar). Callers treat `None`
+/// as "leave the file alone".
 #[must_use]
 pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String> {
     let value = serde_yaml::to_string(&name).ok()?;
@@ -79,6 +81,15 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
                 .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
                 .map_or("  ", |line| &line[..line.len() - line.trim_start().len()]);
             let key_line = (start + 1..end).find(|index| is_direct_key(lines[*index], indent, "default_workspace"));
+            // A value that continues on the next lines cannot be replaced one line at a time.
+            if let Some(key_index) = key_line
+                && lines[key_index + 1..end]
+                    .iter()
+                    .find(|line| !line.trim().is_empty())
+                    .is_some_and(|line| line.len() - line.trim_start().len() > indent.len())
+            {
+                return None;
+            }
             for (index, line) in lines.iter().enumerate() {
                 if Some(index) == key_line {
                     out.push(format!("{indent}default_workspace: {value}{}", inline_comment(line)));
@@ -245,6 +256,30 @@ mod tests {
         );
 
         assert_eq!(super::patch_default_workspace_source("remote_hosts: {}\n", "Ops"), None);
+        assert_eq!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace: Remote\n    Sessions\n  vnc_port: 5900\n",
+                "Ops"
+            ),
+            None,
+            "a multiline plain scalar is refused rather than half-replaced"
+        );
+        assert_eq!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace: |\n    Remote Sessions\n",
+                "Ops"
+            ),
+            None,
+            "a block scalar is refused"
+        );
+        assert!(
+            super::patch_default_workspace_source(
+                "remote_hosts:\n  default_workspace: Remote Sessions\n\n  # note\n  vnc_port: 5900\n",
+                "Ops"
+            )
+            .is_some(),
+            "a blank line or comment after the key is not a continuation"
+        );
         assert_eq!(super::inline_comment("  default_workspace: 'a # b' # note"), " # note");
         assert_eq!(super::inline_comment("  default_workspace: Ops"), "");
         assert_eq!(
