@@ -225,12 +225,7 @@ fn authorize_attachments(
     // cannot both fit their files into the same budget. The lock is a
     // sibling of the panel's staging directory, not the manifest lock, so
     // a long copy never blocks the engine.
-    std::fs::create_dir_all(&attachments_dir).map_err(|error| {
-        std::io::Error::new(
-            error.kind(),
-            format!("could not prepare the attachment staging directory: {error}"),
-        )
-    })?;
+    create_staging_directory(&attachments_dir)?;
     let lock = super::ManifestLock::acquire_with_timeout(
         &attachments_dir.join(crate::paths::safe_local_id(panel_local_id)),
         STAGING_LOCK_WAIT,
@@ -548,6 +543,14 @@ fn validate_reason(reason: &str) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Keep the OS error intact: the MCP tells a coordination refusal from an
+/// operating system failure by its OS error code (#847).
+fn create_staging_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory).inspect_err(|error| {
+        tracing::warn!(target: "browser", "could not prepare the attachment staging directory: {error}");
+    })
 }
 
 #[cfg(test)]
@@ -879,5 +882,19 @@ mod tests {
         assert_eq!(released.ownership_established, Some(true));
         assert!(released.handoff.is_none());
         assert!(!release_at(&path, "panel", "agent-a").unwrap());
+    }
+
+    #[test]
+    fn staging_directory_failures_keep_their_os_error_code() {
+        let root = tempfile::tempdir().unwrap();
+        let blocker = root.path().join("attachments");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+
+        let error = create_staging_directory(&blocker.join("panel")).unwrap_err();
+
+        assert!(
+            error.raw_os_error().is_some(),
+            "a filesystem failure must stay distinguishable from a coordination refusal: {error:?}"
+        );
     }
 }
