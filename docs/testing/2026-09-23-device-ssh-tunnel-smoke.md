@@ -13,7 +13,8 @@ developer's real hosts.
 ## Lane A — unit (no live viewer)
 
 ```sh
-cargo test -p horizon-core device:: ssh::
+cargo test -p horizon-core device::
+cargo test -p horizon-core ssh::
 cargo test -p horizon-ui --bin horizon device_widget
 ```
 
