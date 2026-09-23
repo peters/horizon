@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::{
-    PanelId, PanelKind, PanelOptions,
+    PanelId, PanelKind, PanelOptions, SshConnection,
     browser::manifest::{
         self,
         device::{self, Operation, Outcome, PanelState, Request},
@@ -14,6 +14,12 @@ use super::{
     HorizonApp,
     browser_requests::{ActorPanel, actor_panel},
 };
+
+/// Options every MCP-created SSH route carries: the host must already be
+/// trusted, whatever the machine's SSH configuration says.
+fn mcp_route_ssh_args() -> Vec<String> {
+    vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]
+}
 
 pub(super) struct PendingDeviceReveal {
     id: PanelId,
@@ -68,9 +74,11 @@ impl HorizonApp {
             );
         };
         match &request.operation {
-            Operation::Create { endpoint, identity } => {
-                self.create_device_viewer(endpoint, identity.clone(), actor, &request.actor, ctx)
-            }
+            Operation::Create {
+                endpoint,
+                identity,
+                ssh,
+            } => self.create_device_viewer(endpoint, identity.clone(), ssh.clone(), actor, &request.actor, ctx),
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -94,6 +102,7 @@ impl HorizonApp {
         &mut self,
         endpoint: &str,
         mut identity: Option<device::DeviceIdentity>,
+        mut ssh: Option<device::SshRoute>,
         actor: ActorPanel,
         owner: &str,
         ctx: &Context,
@@ -103,10 +112,28 @@ impl HorizonApp {
         {
             return Outcome::failed("invalid_identity", &error.to_string());
         }
+        if let Some(route) = &mut ssh
+            && let Err(error) = route.normalize()
+        {
+            return Outcome::failed("invalid_ssh_route", &error);
+        }
+        // Only the route's own fields reach ssh; keys and options come from
+        // this machine's SSH configuration, never from the caller. Host-key
+        // checking is pinned strict on the command line, which ssh applies
+        // before any config file, so a permissive `StrictHostKeyChecking` in
+        // that configuration cannot let an unknown host use this machine's keys.
+        let ssh_connection = ssh.map(|route| SshConnection {
+            host: route.host,
+            user: route.user,
+            port: route.port,
+            extra_args: mcp_route_ssh_args(),
+            ..SshConnection::default()
+        });
         let options = PanelOptions {
             kind: PanelKind::Device,
             device_identity: identity,
             command: Some(endpoint.into()),
+            ssh_connection,
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
@@ -405,6 +432,7 @@ mod tests {
                 Operation::Create {
                     endpoint: "127.0.0.1:5900".into(),
                     identity: None,
+                    ssh: None,
                 },
             );
             let panel = one(app.apply_device_request(&create, &ctx));
@@ -442,6 +470,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let panel = one(app.apply_device_request(&create, &ctx));
@@ -476,6 +505,7 @@ mod tests {
                 Operation::Create {
                     identity: None,
                     endpoint: endpoint.into(),
+                    ssh: None,
                 },
             );
             assert!(matches!(
@@ -488,6 +518,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let panel = one(app.apply_device_request(&create, &ctx));
@@ -521,6 +552,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -564,6 +596,7 @@ mod tests {
             Operation::Create {
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
+                ssh: None,
             },
         );
         let initial = one(app.apply_device_request(&create, &ctx));
@@ -665,6 +698,7 @@ mod tests {
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
                 identity: Some(identity),
+                ssh: None,
             },
         );
         let created = one(app.apply_device_request(&create, &ctx));
@@ -691,12 +725,100 @@ mod tests {
                     machine_name: Some("a".repeat(257)),
                     ..Default::default()
                 }),
+                ssh: None,
             },
         );
         assert!(
             matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_identity")
         );
         assert_eq!(app.board.panels.len(), count);
+    }
+
+    #[test]
+    fn create_with_an_ssh_route_tunnels_the_viewer_and_reports_the_route() {
+        let (_temp, ctx, mut app) = app();
+        let route = device::SshRoute {
+            host: " lab.example ".into(),
+            user: Some("deploy".into()),
+            port: Some(2222),
+        };
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5901".into(),
+                identity: None,
+                ssh: Some(route),
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        let normalized = device::SshRoute {
+            host: "lab.example".into(),
+            user: Some("deploy".into()),
+            port: Some(2222),
+        };
+        assert_eq!(
+            created.endpoint, "127.0.0.1:5901",
+            "the endpoint is the host's loopback"
+        );
+        assert_eq!(created.ssh, Some(normalized.clone()));
+        let panel = app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.local_id == created.panel_id)
+            .expect("device panel");
+        let tunnel = panel
+            .device()
+            .and_then(|device| device.ssh_tunnel.clone())
+            .expect("tunnel");
+        assert_eq!(tunnel.host, "lab.example");
+        assert_eq!(tunnel.user.as_deref(), Some("deploy"));
+        assert_eq!(tunnel.port, Some(2222));
+        assert!(
+            tunnel.identity_file.is_none() && tunnel.proxy_jump.is_none(),
+            "only the route's own fields reach ssh"
+        );
+        assert_eq!(
+            tunnel.extra_args,
+            ["-o", "StrictHostKeyChecking=yes"],
+            "strict host-key checking is pinned, not inherited from ssh_config"
+        );
+        let argv = tunnel.stdio_forward_args("127.0.0.1:5901");
+        let strict = argv
+            .windows(2)
+            .position(|pair| pair == ["-o", "StrictHostKeyChecking=yes"])
+            .expect("strict host-key checking on the tunnel command line");
+        assert!(
+            argv.iter().position(|arg| arg == "deploy@lab.example") > Some(strict),
+            "the option precedes the destination, so ssh applies it before any config file: {argv:?}"
+        );
+        assert_eq!(
+            panel.ssh_connection.as_ref(),
+            Some(&tunnel),
+            "persisted like an SSH panel"
+        );
+        let listed = one(app.apply_device_request(&request(&app, Operation::List), &ctx));
+        assert_eq!(listed.ssh, Some(normalized));
+
+        let count = app.board.panels.len();
+        for host in ["-oProxyCommand=id", " ", "lab example", "lab;id", "lab$(id)"] {
+            let invalid = request(
+                &app,
+                Operation::Create {
+                    endpoint: "127.0.0.1:5901".into(),
+                    identity: None,
+                    ssh: Some(device::SshRoute {
+                        host: host.into(),
+                        ..Default::default()
+                    }),
+                },
+            );
+            assert!(
+                matches!(app.apply_device_request(&invalid, &ctx), Outcome::Failed { code, .. } if code == "invalid_ssh_route"),
+                "{host:?}"
+            );
+        }
+        assert_eq!(app.board.panels.len(), count, "a refused route creates nothing");
     }
 
     #[cfg(feature = "cloud-workspaces")]
@@ -710,6 +832,7 @@ mod tests {
                 Operation::Create {
                     endpoint: "127.0.0.1:5900".into(),
                     identity: None,
+                    ssh: None,
                 },
             );
             let viewer = one(app.apply_device_request(&create, &ctx));

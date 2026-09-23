@@ -21,10 +21,15 @@ use crate::paths::{BrowserRuntimePaths, safe_local_id};
 pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
+        /// Numeric loopback address and nonzero port of the VNC server, as seen
+        /// from this machine or, with `ssh`, from that SSH host.
         endpoint: String,
         /// Optional labels supplied by the session creator, not verified by VNC.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         identity: Option<DeviceIdentity>,
+        /// Reach `endpoint` on another machine's loopback through `ssh -W`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh: Option<SshRoute>,
     },
     List,
     Inspect {
@@ -56,6 +61,65 @@ pub enum Connection {
     Disconnected,
 }
 
+/// An SSH host whose loopback holds the VNC server. Horizon runs `ssh -W`
+/// with the host machine's own SSH configuration and keys; the route never
+/// carries credentials, identity files or extra arguments.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SshRoute {
+    /// Host name, address or SSH config alias. Required.
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// SSH port; omitted means the SSH configuration's or 22.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+impl SshRoute {
+    /// A host name is at most 253 characters; aliases and addresses are shorter.
+    pub const MAX_HOST_CHARS: usize = 253;
+    /// Longer than any login name a system accepts.
+    pub const MAX_USER_CHARS: usize = 64;
+
+    /// Trim the labels and keep them to the characters a host name, address,
+    /// SSH config alias or user name is made of. `ssh` passes `%h` and `%r`
+    /// into shell-executed `ProxyCommand` and `Match exec` lines from the
+    /// machine's own configuration, so a label is never allowed to carry
+    /// shell metacharacters, options (leading `-`), whitespace or controls,
+    /// and each label is bounded in length.
+    ///
+    /// # Errors
+    /// Describes the first rejected field.
+    pub fn normalize(&mut self) -> Result<(), String> {
+        fn label(value: &str, what: &str, extra: &[char], max_chars: usize) -> Result<String, String> {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(format!("ssh.{what} cannot be empty"));
+            }
+            if trimmed.len() > max_chars {
+                return Err(format!("ssh.{what} must be at most {max_chars} characters"));
+            }
+            let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || extra.contains(&c);
+            if trimmed.starts_with('-') || !trimmed.chars().all(plain) {
+                return Err(format!(
+                    "ssh.{what} may only contain letters, digits, '.', '_' and '-'{}, and cannot start with '-'",
+                    if extra.is_empty() { "" } else { " (and ':' for IPv6)" }
+                ));
+            }
+            Ok(trimmed.to_owned())
+        }
+        self.host = label(&self.host, "host", &[':'], Self::MAX_HOST_CHARS)?;
+        if let Some(user) = &self.user {
+            self.user = Some(label(user, "user", &[], Self::MAX_USER_CHARS)?);
+        }
+        if self.port == Some(0) {
+            return Err("ssh.port must be nonzero".into());
+        }
+        Ok(())
+    }
+}
+
 /// Machine details supplied by the session creator; never inferred from loopback.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -81,6 +145,9 @@ pub struct PanelState {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<DeviceIdentity>,
+    /// The SSH host `endpoint` is reached through, when tunnelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshRoute>,
     #[serde(default)]
     pub server: DeviceServerDetails,
     pub visible: bool,
@@ -348,6 +415,127 @@ fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_accepts_an_ssh_route_and_older_requests_without_one() {
+        let older: Operation =
+            serde_json::from_value(serde_json::json!({"operation":"create","endpoint":"127.0.0.1:5900"})).unwrap();
+        assert!(matches!(older, Operation::Create { ssh: None, .. }));
+        let routed: Operation = serde_json::from_value(serde_json::json!({
+            "operation":"create","endpoint":"127.0.0.1:5901",
+            "ssh":{"host":"lab","user":"deploy","port":2222}
+        }))
+        .unwrap();
+        let Operation::Create { ssh: Some(route), .. } = routed else {
+            panic!("expected a routed create")
+        };
+        assert_eq!(route.host, "lab");
+        assert_eq!(route.user.as_deref(), Some("deploy"));
+        assert_eq!(route.port, Some(2222));
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation":"create","endpoint":"127.0.0.1:5901","ssh":{"host":"lab","identity_file":"~/.ssh/id"}
+            }))
+            .is_err(),
+            "credentials and key paths are not part of the route"
+        );
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation":"create","endpoint":"127.0.0.1:5901","ssh":{"user":"deploy"}
+            }))
+            .is_err(),
+            "a route without a host is rejected at the schema, not defaulted"
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(SshRoute)).unwrap();
+        assert_eq!(schema["required"], serde_json::json!(["host"]));
+    }
+
+    #[test]
+    fn ssh_routes_are_trimmed_and_option_like_or_broken_labels_are_refused() {
+        let mut route = SshRoute {
+            host: "  lab.example  ".into(),
+            user: Some(" deploy ".into()),
+            port: Some(2222),
+        };
+        route.normalize().unwrap();
+        assert_eq!(
+            (route.host.as_str(), route.user.as_deref()),
+            ("lab.example", Some("deploy"))
+        );
+        for host in [
+            "lab",
+            "lab-01.example.ts.net",
+            "192.0.2.10",
+            "fd7a:115c::1",
+            "under_score",
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                ..Default::default()
+            };
+            assert!(route.normalize().is_ok(), "{host}");
+        }
+        // `%h` and `%r` reach shell-executed ProxyCommand and Match exec lines.
+        for (host, user, port, field) in [
+            ("  ", None, None, "ssh.host cannot be empty"),
+            ("-oProxyCommand=id", None, None, "ssh.host may only"),
+            ("lab example", None, None, "ssh.host may only"),
+            ("lab\u{7}", None, None, "ssh.host may only"),
+            ("lab;id", None, None, "ssh.host may only"),
+            ("lab$(id)", None, None, "ssh.host may only"),
+            ("lab`id`", None, None, "ssh.host may only"),
+            ("lab>out", None, None, "ssh.host may only"),
+            ("lab|id", None, None, "ssh.host may only"),
+            ("lab%h", None, None, "ssh.host may only"),
+            ("user@lab", None, None, "ssh.host may only"),
+            ("lab/", None, None, "ssh.host may only"),
+            ("lab", Some("-l root"), None, "ssh.user may only"),
+            ("lab", Some("deploy;id"), None, "ssh.user may only"),
+            ("lab", Some("a:b"), None, "ssh.user may only"),
+            ("lab", Some(" "), None, "ssh.user cannot be empty"),
+            ("lab", None, Some(0), "ssh.port must be nonzero"),
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                user: user.map(str::to_owned),
+                port,
+            };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{host:?} {user:?} {port:?}: {error}");
+        }
+        let long_host = "h".repeat(SshRoute::MAX_HOST_CHARS);
+        let long_user = "u".repeat(SshRoute::MAX_USER_CHARS);
+        let mut longest = SshRoute {
+            host: format!(" {long_host} "),
+            user: Some(long_user.clone()),
+            port: None,
+        };
+        assert!(longest.normalize().is_ok(), "bounds are inclusive after trimming");
+        for (host, user, field) in [
+            (format!("{long_host}h"), None, "ssh.host must be at most 253"),
+            (
+                "lab".to_owned(),
+                Some(format!("{long_user}u")),
+                "ssh.user must be at most 64",
+            ),
+        ] {
+            let mut route = SshRoute { host, user, port: None };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{error}");
+        }
+        for (host, user, port, field) in [
+            ("lab\u{7}", None, None, "ssh.host may only"),
+            ("lab", Some("deploy;id"), None, "ssh.user may only"),
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                user: user.map(str::to_owned),
+                port,
+            };
+            let error = route.normalize().unwrap_err();
+            assert!(error.starts_with(field), "{host:?} {user:?} {port:?}: {error}");
+        }
+    }
 
     #[test]
     fn older_diagnostics_do_not_imply_a_texture_upload_time() {

@@ -383,12 +383,22 @@ standalone device CLI/MCP with an explicitly configured isolated target for inpu
 
 ```json
 {"operation":"create","endpoint":"127.0.0.1:5900"}
+{"operation":"create","endpoint":"127.0.0.1:5900","ssh":{"host":"lab","user":"deploy","port":2222}}
 {"operation":"list"}
 {"operation":"inspect","panel_id":"<returned id>"}
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"reconnect","panel_id":"<returned id>"}
 {"operation":"close","panel_id":"<returned id>"}
 ```
+
+With `ssh`, `endpoint` is the VNC address as seen from that SSH host and
+Horizon reaches it through `ssh -W` using its own SSH configuration and keys;
+the host must already be trusted in `known_hosts` (strict host-key checking is
+pinned for these routes regardless of `ssh_config`). `host` is required, `user`
+and `port` optional, and labels are limited to letters, digits, `.`, `_`, `-`
+(plus `:` in an IPv6 host), at most 253 and 64 characters. Credentials, key
+paths and ssh options are never accepted. `list` and `inspect` report `ssh`
+for tunnelled viewers.
 
 Creation returns a stable id immediately. Inspect `connection`,
 `image_received`, `image_displayed`, and `frame_sequence` before claiming live

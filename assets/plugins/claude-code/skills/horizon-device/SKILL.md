@@ -25,6 +25,25 @@ desktop or forward input. The source checkout's `scripts/device-smoke/README.md`
 describes the isolated fixture; launch it with `--native-view` and use its
 `vnc_address`, not a browser URL.
 
+A VNC server on another machine's loopback is reached with optional `ssh` in
+create: `{ "host": "lab", "user": "deploy", "port": 2222 }` (user and port
+optional). `endpoint` is then the address as seen from that SSH host, typically
+`127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
+keys, with strict host-key checking pinned regardless of `ssh_config`, so the
+host must already be trusted in `known_hosts` (open it over SSH once); never
+pass credentials, key paths or ssh options. Labels may only contain
+letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host), at most 253
+characters for the host and 64 for the user, and are refused otherwise, so
+nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for
+tunnelled viewers, and `connection_error` carries ssh's last lines when the
+tunnel fails.
+
+When known, include optional `identity` in create: `machine_name`, `hostname`,
+`ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels
+supplied by the session creator, not verified identity. Use details for the
+actual target machine; never substitute the local tunnel endpoint or the
+viewer's own hostname. Omit unknown fields. Inspect/list return these labels.
+
 Creation returns immediately. Use `operation: "inspect"` and the returned id to
 check `connection: "connected"`. For a visible, on-screen viewer, also verify
 `image_received`, `image_displayed` and an advancing `frame_sequence` while target
@@ -40,6 +59,30 @@ interpret a missing/default-zero counter as a failure. Set
 `operation: "visibility", visible: true` for a hidden owned viewer, then verify
 actual presentation. Never claim that a separate isolated viewer is visible to
 the user merely because its screenshot is available.
+
+Check this automatically; never ask a human to confirm visibility or advancing
+frames. Save at least three timestamped public inspections, two seconds apart.
+The current `frame_sequence` counts uploaded images, not independent transport
+heartbeats. An unchanged sequence on a static or unknown target does not prove a
+stalled connection. A displayed static image proves presentation only; changing
+target output and sequence advancement are needed for live-motion evidence.
+
+Recover only the task-owned viewer, with at most one visibility request when
+hidden and one reconnect when stopped or disconnected. Inspect again after each
+request; do not reconnect a healthy connection merely because its image is not
+displayed. Do not close/recreate viewers in a loop. Retain the attempt budget
+across retries for the same incident. A connected, visible, unpresented viewer
+requires `operation: "reveal"` on hosts advertising it. Reveal an owned viewer
+at most once, then inspect again; this changes the viewport without reconnecting
+or claiming live-image proof. When diagnostics are present, record connection
+generation, decoded-frame sequence and age, sampling pause, last displayed age
+and presentation reason. Current hosts keep reception active while hidden or off
+canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling
+pause proves a transport failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
+prove display. Older hosts may lack reveal or diagnostics: record
+`presentation_unverified` and the missing capability instead of asking the user
+to move or watch the panel. Continue non-interactive checks. Never restart the
+user's Horizon to upgrade these capabilities without authorization.
 
 `operation: "reconnect"` explicitly connects and acquires an unowned/restored
 viewer; do not take another owner's panel. Restored viewers stay stopped until
