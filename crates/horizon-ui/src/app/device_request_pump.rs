@@ -43,6 +43,9 @@ pub(crate) struct DeviceRequestBridge {
     /// Set when a device mutation is still unsaved. The watcher keeps waking
     /// until the write succeeds, because no later frame may run.
     persist_pending: Arc<AtomicBool>,
+    /// Set while a reveal's answer is held. It settles on frames, or on these
+    /// wakes when the host runs none, at the pending-request cadence.
+    reveals_pending: Arc<AtomicBool>,
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -66,6 +69,7 @@ impl DeviceRequestBridge {
             root_override,
             stop: Arc::new(AtomicBool::new(false)),
             persist_pending: Arc::new(AtomicBool::new(false)),
+            reveals_pending: Arc::new(AtomicBool::new(false)),
             watcher: Mutex::new(None),
         }
     }
@@ -88,6 +92,9 @@ impl DeviceRequestBridge {
             self.persist_pending
                 .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
+        installed.app.settle_device_reveals_without_frame();
+        self.reveals_pending
+            .store(installed.app.holds_device_reveals(), Ordering::Relaxed);
         changed
     }
 
@@ -98,11 +105,19 @@ impl DeviceRequestBridge {
         }
         let stop = Arc::clone(&self.stop);
         let persist_pending = Arc::clone(&self.persist_pending);
+        let reveals_pending = Arc::clone(&self.reveals_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
             .name("horizon-device-requests".to_owned())
-            .spawn(move || watch_device_requests(&stop, &persist_pending, root_override.as_deref(), &proxy))
-        {
+            .spawn(move || {
+                watch_device_requests(
+                    &stop,
+                    &persist_pending,
+                    &reveals_pending,
+                    root_override.as_deref(),
+                    &proxy,
+                );
+            }) {
             Ok(handle) => *watcher = Some(handle),
             Err(error) => tracing::error!(%error, "could not start Device request watcher"),
         }
@@ -178,22 +193,27 @@ pub(crate) fn is_device_queue_wake(event: &UserEvent) -> bool {
 fn watch_device_requests(
     stop: &AtomicBool,
     persist_pending: &AtomicBool,
+    reveals_pending: &AtomicBool,
     root_override: Option<&Path>,
     proxy: &EventLoopProxy<UserEvent>,
 ) {
     let mut persist_wait = PERSIST_WAIT_MIN;
     while !stop.load(Ordering::Relaxed) {
-        let files_pending = match device_requests_pending(root_override) {
-            Ok(pending) => pending,
-            Err(error) => {
-                tracing::warn!(%error, "could not check Device panel requests");
-                if !persist_pending.load(Ordering::Relaxed) {
-                    thread::park_timeout(Duration::from_secs(1));
-                    continue;
+        let reveals = reveals_pending.load(Ordering::Relaxed);
+        // A held reveal wakes at the pending-request cadence, so its bounded
+        // answer is not delayed by the persistence backoff.
+        let files_pending = reveals
+            || match device_requests_pending(root_override) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::warn!(%error, "could not check Device panel requests");
+                    if !persist_pending.load(Ordering::Relaxed) {
+                        thread::park_timeout(Duration::from_secs(1));
+                        continue;
+                    }
+                    false
                 }
-                false
-            }
-        };
+            };
         let persist = persist_pending.load(Ordering::Relaxed);
         if (files_pending || persist)
             && proxy

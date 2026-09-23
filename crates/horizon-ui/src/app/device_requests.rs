@@ -28,6 +28,12 @@ pub(super) struct PendingDeviceReveal {
     deadline: Instant,
 }
 
+impl PendingDeviceReveal {
+    pub(super) fn targets(&self, id: PanelId) -> bool {
+        self.id == id
+    }
+}
+
 pub(super) struct WindowRestore {
     pub fullscreen: bool,
     pub size: egui::Vec2,
@@ -41,7 +47,7 @@ fn claim_device_requests(root: Option<&Path>) -> std::io::Result<Vec<Request>> {
     }
 }
 
-fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
+pub(super) fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
     match root {
         Some(root) => device::complete_at(root, request, outcome),
         None => device::complete(request, outcome),
@@ -79,6 +85,9 @@ impl HorizonApp {
         let changed = !requests.is_empty();
         for request in requests {
             let outcome = self.apply_device_request(&request, ctx);
+            let Some(outcome) = self.defer_device_reveal(&request, outcome, root) else {
+                continue;
+            };
             if let Err(error) = complete_device_request(root, &request, outcome) {
                 tracing::warn!(%error, "could not publish Device panel result");
             }
@@ -393,7 +402,7 @@ impl HorizonApp {
         }
     }
 
-    fn device_observation(&mut self, id: PanelId, owner: &str) -> Option<PanelState> {
+    pub(super) fn device_observation(&mut self, id: PanelId, owner: &str) -> Option<PanelState> {
         let panel = self.board.panel(id)?;
         Some(
             self.panel_render_caches
@@ -408,6 +417,7 @@ impl HorizonApp {
 #[cfg(test)]
 mod tests {
     mod reveal;
+    mod reveal_wait;
 
     use super::*;
     use crate::app::test_support::{editor_workspace_state, test_app_with_startup};

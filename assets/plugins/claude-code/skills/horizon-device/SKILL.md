@@ -73,8 +73,10 @@ request; do not reconnect a healthy connection merely because its image is not
 displayed. Do not close/recreate viewers in a loop. Retain the attempt budget
 across retries for the same incident. A connected, visible, unpresented viewer
 requires `operation: "reveal"` on hosts advertising it. Reveal an owned viewer
-at most once, then inspect again; this changes the viewport without reconnecting
-or claiming live-image proof. When diagnostics are present, record connection
+at most once; it changes the viewport without reconnecting and answers once the
+host has drawn the viewer, or after at most three seconds with the presentation
+reason and host exclusion that kept it off screen (a host running no UI frames
+cannot draw it and answers when that bound expires). A drawn image is not live-motion proof. When diagnostics are present, record connection
 generation, decoded-frame sequence and age, sampling pause, last displayed age
 and presentation reason. Current hosts keep reception active while hidden or off
 canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling

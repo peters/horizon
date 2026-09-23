@@ -61,6 +61,18 @@ impl DeviceUiState {
         self.rendered
     }
 
+    /// The last completed, non-discarded frame painted this viewer after
+    /// reveal `request` (or a later one) reached the canvas.
+    pub(crate) fn displayed_since_reveal(&self, request: u64) -> bool {
+        self.image.previous_displayed
+            && !self.host.last_pass_discarded()
+            && self
+                .host
+                .applied_at(request)
+                .zip(self.image.last_displayed)
+                .is_some_and(|(applied, displayed)| displayed >= applied)
+    }
+
     pub(crate) fn begin_frame(&mut self) {
         self.host.begin_frame();
         self.image.previous_displayed = self.image.displayed;
@@ -262,6 +274,23 @@ impl DeviceUiState {
         } else {
             self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
             true
+        }
+    }
+
+    /// A connected viewer holding one undelivered frame, without a VNC server.
+    #[cfg(test)]
+    pub(crate) fn connected_fixture(owner: &str) -> Self {
+        let image = ColorImage::filled([4, 4], egui::Color32::GREEN);
+        Self {
+            owner: Some(owner.into()),
+            initialized: true,
+            status: Status::Connected,
+            session: Some(Session::pending_frame(
+                image.clone(),
+                image,
+                DeviceViewOptions::default(),
+            )),
+            ..Default::default()
         }
     }
 

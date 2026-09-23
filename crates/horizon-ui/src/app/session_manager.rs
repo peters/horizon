@@ -396,6 +396,7 @@ impl HorizonApp {
         self.transcript_root = None;
         self.last_panel_output_at = None;
         self.fullscreen_panel = None;
+        self.abandon_device_reveals("Device panel closed by a session switch");
         // Numeric panel ids restart in the replacement board. Drop every
         // per-panel cache so a same-id panel cannot inherit stale textures or
         // sequence numbers from the previous session.

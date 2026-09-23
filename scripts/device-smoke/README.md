@@ -123,9 +123,12 @@ decisions and attempted operations with the task's private smoke evidence.
 3. Repeat the bounded observations after recovery. Never compare frame counters
    across reconnects. A connected, visible panel that remains unpresented is a
    presentation problem, not evidence that another reconnect will help. On hosts
-   advertising `reveal`, call it once for the owned viewer, then inspect again.
-   Reveal changes canvas presentation, preserves keyboard focus and does not
-   reconnect or itself prove a displayed image. Older hosts may lack this
+   advertising `reveal`, call it once for the owned viewer. Reveal changes
+   canvas presentation, preserves keyboard focus and does not reconnect; new
+   hosts answer once the viewer was drawn after the reveal, or after at most
+   three seconds with `presentation` and `diagnostics.host.exclusion` naming the
+   blocked reason. A host running no UI frames answers when that bound expires.
+   Inspect again for advancing frames. Older hosts may lack this
    operation; record `presentation_unverified` and the unsupported capability.
    Do not enter a reconnect/recreate loop or request manual confirmation.
    New hosts report `diagnostics`: the connection generation, decoded-frame

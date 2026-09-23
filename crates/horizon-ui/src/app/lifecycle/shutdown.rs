@@ -35,6 +35,7 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.git_watchers.clear();
+        self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
         self.retire_pending_browser_closes_for_shutdown();
         let mut progress = self
@@ -73,6 +74,7 @@ impl HorizonApp {
         // is known to be finished.
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
+        self.abandon_device_reveals("Horizon is exiting");
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
