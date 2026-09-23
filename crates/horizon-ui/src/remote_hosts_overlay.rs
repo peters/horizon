@@ -286,6 +286,13 @@ impl RemoteHostsOverlay {
 
         // Tooltip rather than Debug: the card must clear the sidebar, and its
         // own popups open on the Tooltip layer so they can draw above it.
+        // Clicking the backdrop raises it within the Tooltip order and egui
+        // keeps that order across overlay instances, so the card is registered
+        // as the backdrop's sublayer every pass: sublayers are spliced directly
+        // above their parent, whatever was raised last.
+        let backdrop_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_backdrop"));
+        let modal_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_modal"));
+        ctx.memory_mut(|memory| memory.areas_mut().set_sublayer(backdrop_layer, modal_layer));
         egui::Area::new(Id::new("remote_hosts_modal"))
             .fixed_pos(render.layout.card.min)
             .constrain(true)
@@ -662,7 +669,7 @@ mod tests {
         WorkspaceId,
     };
 
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use super::{
         KeyPresses, NOTICE_DURATION, RemoteConnectMode, RemoteHostsOverlay, RemoteHostsOverlayAction,
@@ -861,6 +868,42 @@ mod tests {
         assert_eq!(overlay.destination, WorkspaceChoice::Existing(WorkspaceId(7)));
         text_center(&output, "Set default");
         text_center(&output, "Ops  \u{25be}");
+    }
+
+    #[test]
+    fn the_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut first = RemoteHostsOverlay::new();
+        // Past the 200 ms click guard so the backdrop click counts.
+        first.opened_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("the process started more than a second ago");
+        show_overlay(&ctx, &mut first, &catalog, &workspaces, Vec::new());
+        show_overlay(&ctx, &mut first, &catalog, &workspaces, Vec::new());
+        let outside = egui::Pos2::new(4.0, 896.0);
+        let mut click = click_events(outside, true);
+        click.extend(click_events(outside, false));
+        let (_, _, action) = show_overlay_collecting(&ctx, &mut first, &catalog, &workspaces, click, None);
+        assert!(matches!(action, RemoteHostsOverlayAction::Cancelled), "{action:?}");
+        drop(first);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+
+        let mut second = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut second, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut second, &catalog, &workspaces, Vec::new());
+        let row = text_center(&output, "live-a");
+        let (_, layer) = show_overlay_probing(&ctx, &mut second, &catalog, &workspaces, Vec::new(), Some(row));
+        assert_eq!(
+            layer.expect("a layer under the card").id,
+            egui::Id::new("remote_hosts_modal"),
+            "the reopened card must sit above the backdrop"
+        );
     }
 
     #[test]

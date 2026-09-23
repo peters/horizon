@@ -165,7 +165,9 @@ fn inline_comment(line: &str) -> &str {
                 chars.next();
             }
             (quote, Some(open)) if quote == open => in_quote = None,
-            ('#', None) if index > 0 && line[..index].ends_with(' ') => return line[index - 1..].trim_end(),
+            ('#', None) if index > 0 && line[..index].ends_with([' ', '\t']) => {
+                return line[index - 1..].trim_end();
+            }
             _ => {}
         }
     }
@@ -376,6 +378,11 @@ mod tests {
             "an apostrophe in a plain scalar is not a delimiter"
         );
         assert_eq!(super::inline_comment("  default_workspace: it's#not # yes"), " # yes");
+        assert_eq!(
+            super::inline_comment("  default_workspace: Ops\t# keep"),
+            "\t# keep",
+            "a tab is separation whitespace too, and the separator is kept"
+        );
     }
 
     #[test]
