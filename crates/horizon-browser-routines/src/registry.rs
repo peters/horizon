@@ -111,8 +111,11 @@ impl RoutineRegistry {
 
     /// Deletes the routine directory. Missing routines succeed.
     ///
+    /// The lock is held until the directory is gone, so a concurrent save or
+    /// lock of the same routine runs either before the delete or after it.
+    ///
     /// # Errors
-    /// I/O failure while removing files.
+    /// Lock failure, or I/O failure while removing files.
     pub fn delete(&self, routine_id: Uuid) -> Result<(), RoutineError> {
         let dir = self.root.join(routine_id.to_string());
         match fs::symlink_metadata(&dir) {
@@ -120,28 +123,34 @@ impl RoutineRegistry {
             Err(_) => return Err(RoutineError::Storage),
             Ok(_) => {}
         }
-        let lock = self.lock(routine_id)?;
+        let _lock = self.lock_file(routine_id)?;
         let staging = self.root.join(format!(".{routine_id}.deleting"));
-        let rename = fs::rename(&dir, &staging);
-        drop(lock);
-        match rename {
+        // A delete interrupted after its rename leaves the staging directory
+        // behind, and renaming onto it would fail.
+        remove_staging(&staging)?;
+        match fs::rename(&dir, &staging) {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(_) => return Err(RoutineError::Storage),
             Ok(()) => {}
         }
-        match fs::remove_dir_all(&staging) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(RoutineError::Storage),
-        }
+        remove_staging(&staging)
     }
 
+    /// Takes the routine's exclusive lock and creates its directory.
+    ///
     /// # Errors
     /// I/O or lock failure.
     pub fn lock(&self, routine_id: Uuid) -> Result<RoutineLock, RoutineError> {
-        let dir = self.root.join(routine_id.to_string());
-        create_private_dir(&dir)?;
-        let path = dir.join("lock");
+        let lock = self.lock_file(routine_id)?;
+        create_private_dir(&self.root.join(routine_id.to_string()))?;
+        Ok(lock)
+    }
+
+    /// The lock file sits beside the routine directory, not inside it:
+    /// Windows refuses to rename a directory while a file inside it is open,
+    /// and [`Self::delete`] renames the directory while holding the lock.
+    fn lock_file(&self, routine_id: Uuid) -> Result<RoutineLock, RoutineError> {
+        let path = self.root.join(format!(".{routine_id}.lock"));
         let mut options = fs::OpenOptions::new();
         options.create(true).write(true);
         #[cfg(unix)]
@@ -166,6 +175,14 @@ impl RoutineRegistry {
         #[cfg(unix)]
         set_file_mode(&path, 0o600)?;
         Ok(RoutineLock { _file: file })
+    }
+}
+
+fn remove_staging(staging: &Path) -> Result<(), RoutineError> {
+    match fs::remove_dir_all(staging) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RoutineError::Storage),
     }
 }
 
@@ -371,6 +388,42 @@ mod tests {
         assert!(registry.list().expect("list").is_empty());
     }
 
+    #[test]
+    fn delete_is_excluded_by_a_held_lock() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let routine = sample_definition();
+        registry.save(&routine).expect("save");
+        let held = registry.lock(routine.routine_id).expect("lock");
+        assert_eq!(registry.delete(routine.routine_id), Err(RoutineError::Storage));
+        assert_eq!(registry.list().expect("list"), vec![routine.routine_id]);
+        drop(held);
+        registry.delete(routine.routine_id).expect("delete");
+        assert!(registry.list().expect("list").is_empty());
+        registry.save(&routine).expect("save after delete");
+        assert_eq!(registry.list().expect("list"), vec![routine.routine_id]);
+    }
+
+    #[test]
+    fn delete_removes_a_legacy_lock_file_and_a_leftover_staging_directory() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let root = temp.path().join("routines");
+        let registry = RoutineRegistry::open(root.clone()).expect("open");
+        let routine = sample_definition();
+        registry.save(&routine).expect("save");
+        let id = routine.routine_id;
+        std::fs::write(root.join(id.to_string()).join("lock"), b"").expect("legacy lock");
+        let leftover = root.join(format!(".{id}.deleting"));
+        std::fs::create_dir(&leftover).expect("leftover");
+        std::fs::write(leftover.join("routine.json"), b"{}").expect("leftover file");
+        registry.delete(id).expect("delete");
+        assert!(registry.list().expect("list").is_empty());
+        assert!(!root.join(id.to_string()).exists());
+        assert!(!leftover.exists());
+    }
+
     #[cfg(unix)]
     fn privatize_temp(path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt as _;
@@ -475,12 +528,10 @@ mod tests {
         privatize_temp(temp.path());
         let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
         let id = Uuid::from_u128(13);
-        let dir = temp.path().join("routines").join(id.to_string());
-        std::fs::create_dir(&dir).expect("dir");
-        privatize_temp(&dir);
         let victim = temp.path().join("victim");
         std::fs::write(&victim, b"keep").expect("victim");
-        std::os::unix::fs::symlink(&victim, dir.join("lock")).expect("symlink");
+        let lock = temp.path().join("routines").join(format!(".{id}.lock"));
+        std::os::unix::fs::symlink(&victim, lock).expect("symlink");
         assert_eq!(registry.lock(id).err(), Some(RoutineError::Storage));
         assert_eq!(std::fs::read(&victim).expect("read"), b"keep");
     }
