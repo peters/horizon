@@ -38,7 +38,23 @@ impl HorizonApp {
         if self.cloud_prototype.production.pending_creation.is_some() {
             return Ok(());
         }
-        let workspace = self.board.ensure_workspace();
+        if self.cloud_prototype.production.launch.workspace.is_some()
+            && !self.active_session.as_ref().is_some_and(|session| session.persistent)
+        {
+            return Err(cloud_runtime::Error::Invalid(
+                "Open a saved session from Sessions before starting a cloud",
+            ));
+        }
+        if self.cloud_prototype.production.title.trim().is_empty() {
+            return Err(cloud_runtime::Error::Invalid("Enter a cloud title"));
+        }
+        let workspace = if let Some(local) = &self.cloud_prototype.production.launch.workspace {
+            self.board
+                .workspace_id_by_local_id(local)
+                .ok_or(cloud_runtime::Error::Invalid("The selected workspace was removed"))?
+        } else {
+            self.board.ensure_workspace()
+        };
         if self.workspace_is_detached(workspace) {
             return Err(cloud_runtime::Error::Invalid(
                 "Move this workspace to the main window before creating a cloud",
@@ -56,8 +72,10 @@ impl HorizonApp {
             .and_then(|config| config.profiles.get(&form.selected_profile))
             .cloned()
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
-        let repository = PathBuf::from(&form.repository);
-        let revision = if form.revision.is_empty() {
+        let repository = horizon_core::Config::expand_tilde(&form.repository);
+        let revision = if let Some(revision) = &form.launch.revision {
+            revision.clone()
+        } else if form.revision.is_empty() {
             "HEAD".into()
         } else {
             form.revision.clone()
@@ -91,7 +109,6 @@ impl HorizonApp {
         self.cloud_prototype.error = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _permit = permit;
             let result = (|| {
                 cancel.check()?;
                 let repository = repository.canonicalize()?;
@@ -103,6 +120,7 @@ impl HorizonApp {
                 let revision = cloud_runtime::repository::resolve_with_runner(&repository, &revision, &runner)?;
                 Ok(Resolved { repository, revision })
             })();
+            drop(permit);
             let _ = sender.send(result);
             ctx.request_repaint();
         });
@@ -158,7 +176,10 @@ impl HorizonApp {
             .checked_add(1)
             .ok_or(cloud_runtime::Error::Invalid("Too many clouds"))?;
         pending.launch.revision = resolved.revision;
-        let position = self.cloud_prototype.groups.next_position(&pending.workspace);
+        let position = self
+            .cloud_prototype
+            .groups
+            .next_position(&pending.workspace, &self.board);
         let mut group = CloudGroup::new(id, pending.title, pending.workspace, resolved.repository, position);
         group.environment.id.clone_from(&pending.launch.id);
         group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
@@ -172,6 +193,9 @@ impl HorizonApp {
         self.cloud_prototype.error = None;
         self.save_cloud_prototype();
         self.cloud_overview(ctx);
+        if self.cloud_prototype.production.launch.workspace.is_some() {
+            self.start_production_deployment(id, ctx);
+        }
         Ok(())
     }
 }

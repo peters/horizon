@@ -74,6 +74,7 @@ fn prepare(app: &mut HorizonApp, ctx: &egui::Context, directory: &std::path::Pat
     app.cloud_prototype.production.repository = directory.to_string_lossy().into();
     app.cloud_prototype.production.profiles = Some(config);
     app.cloud_prototype.production.selected_profile = "development".into();
+    app.cloud_prototype.production.launch.accounts_checked = true;
     app.add_mock_cloud(ctx);
     for _ in 0..3 {
         dialog_frame(ctx, app, Vec::new());
@@ -87,12 +88,34 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
     });
     prepare(&mut app, &ctx, temp.path());
     let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
+    for _ in 0..8 {
+        dialog_frame(&ctx, &mut app, Vec::new());
+    }
+    dialog_frame(
+        &ctx,
+        &mut app,
+        vec![
+            Event::PointerMoved(egui::pos2(450.0, 300.0)),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, -240.0),
+                modifiers: Modifiers::NONE,
+            },
+        ],
+    );
+    for _ in 0..8 {
+        dialog_frame(&ctx, &mut app, Vec::new());
+    }
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
     let profile = label_rect(&output, "prebuilt");
-    let create = label_rect(&output, "Create cloud");
+    let create = label_rect(&output, "Start cloud");
     assert!(Rect::from_min_max(Pos2::ZERO, egui::pos2(900.0, 600.0)).contains_rect(create));
     click(&ctx, &mut app, profile.center());
     assert!(app.cloud_creation_open());
     assert_eq!(app.cloud_prototype.production.selected_profile, "prebuilt");
+    app.cloud_prototype.production.launch.accounts_checked = true;
     click(&ctx, &mut app, create.center());
     finish_creation(&ctx, &mut app);
     assert!(!app.cloud_creation_open());
@@ -137,6 +160,11 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
     ctx.memory_mut(|memory| memory.surrender_focus(Id::new("cloud-title")));
     dialog_frame(&ctx, &mut app, Vec::new());
     assert_eq!(ctx.memory(egui::Memory::focused), None);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
+    for _ in 0..8 {
+        dialog_frame(&ctx, &mut app, Vec::new());
+    }
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-revision")));
     let press = |app: &mut HorizonApp, key| {
         for pressed in [true, false] {

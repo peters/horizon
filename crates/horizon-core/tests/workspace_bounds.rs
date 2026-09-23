@@ -1,5 +1,14 @@
 use horizon_core::{Board, PanelOptions};
 
+/// Shell panels whose program Windows can launch: the default shell is
+/// `/bin/bash` when `SHELL` is unset (#688), so they run `cmd.exe` there.
+fn shell_panel_options() -> PanelOptions {
+    PanelOptions {
+        command: cfg!(windows).then(|| "cmd.exe".to_string()),
+        ..PanelOptions::default()
+    }
+}
+
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
 }
@@ -16,7 +25,7 @@ fn workspace_bounds_map_matches_individual_workspace_bounds() {
             PanelOptions {
                 position: Some([100.0, 120.0]),
                 size: Some([300.0, 220.0]),
-                ..PanelOptions::default()
+                ..shell_panel_options()
             },
             alpha,
         )
@@ -26,7 +35,7 @@ fn workspace_bounds_map_matches_individual_workspace_bounds() {
             PanelOptions {
                 position: Some([640.0, 140.0]),
                 size: Some([260.0, 180.0]),
-                ..PanelOptions::default()
+                ..shell_panel_options()
             },
             alpha,
         )
@@ -36,7 +45,7 @@ fn workspace_bounds_map_matches_individual_workspace_bounds() {
             PanelOptions {
                 position: Some([1500.0, 360.0]),
                 size: Some([420.0, 260.0]),
-                ..PanelOptions::default()
+                ..shell_panel_options()
             },
             beta,
         )

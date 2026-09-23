@@ -1131,6 +1131,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn placement_fingerprint_follows_membership_not_unrelated_panels() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");
@@ -1186,6 +1187,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn restamping_rewrites_a_live_manifest_for_the_new_membership() {
         let root = tempfile::tempdir().expect("isolated horizon home");
         let mut board = Board::new();
@@ -1280,6 +1282,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_placement_change_restamps_before_the_next_poll_tick() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");
@@ -1343,6 +1346,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn workspace_stamp_follows_agent_panel_membership() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");

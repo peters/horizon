@@ -14,14 +14,25 @@ platform qualification remains separately tracked in #741.
 
 ## One-time machine setup
 
-Open **Cloud > New cloud**. On first use, Horizon opens **Cloud settings**:
-enter the compute API key, select coding agents, and choose API-key or subscription
-authentication for each. Saving creates a dedicated SSH identity when needed and
-stores keys in private machine-local files. Blank replacement fields preserve
-saved keys; choosing subscription login removes that agent's API-key binding.
-Subscription login happens through the actual agent on the worker. Saving settings
-does not allocate compute or verify account access. Reopen **Cloud > Cloud settings**
-to change these choices. On narrow windows, Cloud appears in the toolbar overflow.
+In an existing workspace, choose **Cloud** from the panel-creation menu (or
+**Cloud > New cloud**), enter a title, and press Enter. Horizon discovers the Git
+root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
+default profile. Preparation runs while you type. A configured launch starts
+provisioning immediately after submission, without a separate Deploy action.
+**Advanced** contains repository, committed revision and profile overrides.
+Only committed source is transferred; local changes stay on this computer.
+
+Missing account settings open a repair form without losing the title or target
+workspace. Enter the compute API key and choose API-key or subscription login for
+the profile's agents. **Save and start** continues the submitted launch. A dedicated
+SSH identity is created when needed and keys stay in private machine-local files.
+Blank replacement fields preserve saved keys. Subscription login happens through
+the actual agent on the worker; worker readiness does not prove authentication.
+Open **Cloud > Cloud settings** to change machine defaults without launching.
+On narrow windows, Cloud appears in the toolbar overflow.
+
+Cloud allocation requires a saved session so worker identity survives reconnect.
+An isolated test instance can use its own disposable saved session and private home.
 
 Install Git (and Git LFS for repositories that use it), OpenSSH, and Docker with BuildKit/buildx. Configure Docker registry
 authentication in a private configuration directory using `docker login` with

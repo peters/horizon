@@ -114,7 +114,9 @@ impl WorkerSpec {
         Ok(())
     }
 }
-fn valid_public_key(value: &str) -> bool {
+/// Whether a public identity satisfies the worker SSH key contract.
+#[must_use]
+pub fn valid_public_key(value: &str) -> bool {
     if value.len() > 4096 || value.contains(['\n', '\r', '\0']) {
         return false;
     }

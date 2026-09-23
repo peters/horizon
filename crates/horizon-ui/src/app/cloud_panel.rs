@@ -280,6 +280,11 @@ impl HorizonApp {
             self.cloud_prototype.production.focus_title_on_open = true;
             return;
         }
+        let workspace = self.board.ensure_workspace();
+        self.add_mock_cloud_in_workspace(ctx, workspace);
+    }
+
+    fn add_mock_cloud_in_workspace(&mut self, ctx: &egui::Context, workspace_id: horizon_core::WorkspaceId) {
         let Some(&(id, title)) = CLOUDS
             .iter()
             .find(|(id, _)| !self.cloud_prototype.groups.0.iter().any(|g| g.issue == *id))
@@ -290,21 +295,13 @@ impl HorizonApp {
             return;
         };
         let cwd = root.join(format!("issue-{id}"));
-        let ws = self.board.ensure_workspace();
-        let Some(workspace) = self.board.workspace(ws) else {
+        let Some(workspace) = self.board.workspace(workspace_id) else {
             return;
         };
-        let position = [
-            24.0,
-            self.cloud_prototype
-                .groups
-                .0
-                .iter()
-                .map(|g| g.bounds().1[1])
-                .fold(80.0, f32::max)
-                + 48.0,
-        ];
-        let mut group = CloudGroup::new(id, title.into(), workspace.local_id.clone(), cwd, position);
+        let local_id = workspace.local_id.clone();
+        let position = self.cloud_prototype.groups.next_position(&local_id, &self.board);
+        let mut group = CloudGroup::new(id, title.into(), local_id, cwd, position);
+        group.reconcile(&mut self.board);
         if let Some(first) = self.cloud_prototype.groups.0.first() {
             group.environment.profile.clone_from(&first.environment.profile);
             group.environment.provider.clone_from(&first.environment.provider);
@@ -557,6 +554,11 @@ mod tests {
     #[test]
     fn cloud_launch_defaults_precede_workspace_cwd_and_binding_is_unique() {
         let (temp, mut app) = test_app();
+        let (program, args): (String, Vec<String>) = if cfg!(windows) {
+            ("cmd.exe".into(), vec!["/D".into(), "/C".into(), "exit".into()])
+        } else {
+            ("/bin/sh".into(), vec!["-c".into(), "true".into()])
+        };
         let issue_dir = temp.path().join("issue");
         std::fs::create_dir(&issue_dir).unwrap();
         let ws = app.board.create_workspace_at("test", [0.0, 0.0]);
@@ -573,8 +575,8 @@ mod tests {
             .create_panel_with_options(
                 PanelOptions {
                     kind: PanelKind::Shell,
-                    command: Some("/bin/sh".into()),
-                    args: vec!["-c".into(), "true".into()],
+                    command: Some(program.clone()),
+                    args: args.clone(),
                     position: Some([20.0, 100.0]),
                     ..PanelOptions::default()
                 },
@@ -602,8 +604,8 @@ mod tests {
             .create_panel(
                 PanelOptions {
                     kind: PanelKind::Shell,
-                    command: Some("/bin/sh".into()),
-                    args: vec!["-c".into(), "true".into()],
+                    command: Some(program.clone()),
+                    args: args.clone(),
                     ..PanelOptions::default()
                 },
                 ws,
@@ -616,6 +618,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn one_cloud_accepts_multiple_instances_of_each_agent() {
         let (temp, mut app) = test_app();
         let ws = app.board.create_workspace_at("test", [0.0, 0.0]);

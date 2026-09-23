@@ -4,11 +4,11 @@ fn open_creation(ctx: &egui::Context, app: &mut HorizonApp, root: std::path::Pat
     app.root_viewport_stabilizer = None;
     app.cloud_prototype.root = Some(root);
     app.cloud_prototype.ready = true;
-    for _ in 0..2 {
+    for _ in 0..10 {
         frame(ctx, app, Vec::new(), Modifiers::NONE);
     }
     app.add_mock_cloud(ctx);
-    for _ in 0..2 {
+    for _ in 0..10 {
         frame(ctx, app, Vec::new(), Modifiers::NONE);
     }
 }
@@ -27,6 +27,7 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
         )
         .unwrap(),
     );
+    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     assert!(
