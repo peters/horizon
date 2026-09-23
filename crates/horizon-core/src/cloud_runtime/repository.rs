@@ -62,12 +62,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     let archive = root.join("source.tar");
     runner.run(
         "git archive",
-        Command::new("git")
-            .arg("-C")
-            .arg(repository)
-            .args(["archive", "--format=tar", "--output"])
-            .arg(&archive)
-            .arg(&sha),
+        archive_command(repository).arg(&archive).arg(&sha),
         Duration::from_secs(120),
     )?;
     runner.run(
@@ -81,12 +76,7 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
         std::fs::create_dir_all(&destination)?;
         runner.run(
             "Export committed submodule",
-            Command::new("git")
-                .arg("-C")
-                .arg(&module.repository)
-                .args(["archive", "--format=tar", "--output"])
-                .arg(&archive)
-                .arg(&module.revision),
+            archive_command(&module.repository).arg(&archive).arg(&module.revision),
             Duration::from_secs(120),
         )?;
         runner.run(
@@ -97,6 +87,19 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     }
     material.hydrate(&path, runner)?;
     Ok(path)
+}
+/// `git archive` converts line endings the way a checkout on this host would.
+/// The Linux worker builds the snapshot, so pin the conversion to a Linux
+/// checkout's: Windows defaults (`core.autocrlf=true`, a CRLF `core.eol`) would
+/// otherwise turn committed LF text into CRLF. Explicit `eol` attributes still
+/// apply. The caller appends the output path and revision.
+fn archive_command(repository: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C"])
+        .arg(repository)
+        .args(["archive", "--format=tar", "--output"]);
+    command
 }
 /// # Errors
 /// Packs only objects reachable from the selected commit; no branch mutation/push.

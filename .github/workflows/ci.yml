@@ -311,10 +311,6 @@ jobs:
           pending=(
 
 
-            # horizon-core build snapshots inherit core.autocrlf, so git archive
-            # writes CRLF text.
-            cloud_runtime::repository::tests::committed_transfer_excludes_dirty_working_tree_and_preserves_history
-            cloud_runtime::repository::tests::selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files
 
             # horizon-ui test fixtures.
             # Shell panels rely on the default shell, which is /bin/bash when
