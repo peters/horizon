@@ -5,6 +5,18 @@ use crate::workspace::WorkspaceId;
 
 use super::{Board, PANEL_CHROME_PAD, PANEL_CHROME_TITLEBAR};
 
+/// Occupied panel rectangle used by workspace collision. Layout size is the
+/// painted body; the title bar and padding extend past that body.
+#[must_use]
+pub(crate) fn panel_visual_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
+    [
+        position[0],
+        position[1],
+        position[0] + size[0] + 2.0 * PANEL_CHROME_PAD,
+        position[1] + size[1] + PANEL_CHROME_TITLEBAR + 2.0 * PANEL_CHROME_PAD,
+    ]
+}
+
 impl Board {
     /// Computes the bounding rectangle of the visible panels in a workspace
     /// and any attached cloud overview.
@@ -26,12 +38,11 @@ impl Board {
             .filter(|panel| panel.workspace_id == id && panel.visible)
         {
             any = true;
-            let chrome_w = panel.layout.size[0] + 2.0 * PANEL_CHROME_PAD;
-            let chrome_h = panel.layout.size[1] + PANEL_CHROME_TITLEBAR + 2.0 * PANEL_CHROME_PAD;
-            min[0] = min[0].min(panel.layout.position[0]);
-            min[1] = min[1].min(panel.layout.position[1]);
-            max[0] = max[0].max(panel.layout.position[0] + chrome_w);
-            max[1] = max[1].max(panel.layout.position[1] + chrome_h);
+            let rect = panel_visual_rect(panel.layout.position, panel.layout.size);
+            min[0] = min[0].min(rect[0]);
+            min[1] = min[1].min(rect[1]);
+            max[0] = max[0].max(rect[2]);
+            max[1] = max[1].max(rect[3]);
         }
         // These rects stay aligned with the workspace because
         // `translate_workspace` moves each attached cloud, including its
@@ -81,12 +92,11 @@ impl Board {
                     [f32::MIN, f32::MIN],
                 )
             });
-            let chrome_w = panel.layout.size[0] + 2.0 * PANEL_CHROME_PAD;
-            let chrome_h = panel.layout.size[1] + PANEL_CHROME_TITLEBAR + 2.0 * PANEL_CHROME_PAD;
-            entry.0[0] = entry.0[0].min(panel.layout.position[0]);
-            entry.0[1] = entry.0[1].min(panel.layout.position[1]);
-            entry.1[0] = entry.1[0].max(panel.layout.position[0] + chrome_w);
-            entry.1[1] = entry.1[1].max(panel.layout.position[1] + chrome_h);
+            let rect = panel_visual_rect(panel.layout.position, panel.layout.size);
+            entry.0[0] = entry.0[0].min(rect[0]);
+            entry.0[1] = entry.0[1].min(rect[1]);
+            entry.1[0] = entry.1[0].max(rect[2]);
+            entry.1[1] = entry.1[1].max(rect[3]);
         }
 
         self.include_cloud_overviews(&workspace_origins, &mut bounds);

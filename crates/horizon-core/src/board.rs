@@ -5,6 +5,8 @@ mod geometry;
 mod shutdown;
 mod workspaces;
 
+pub(crate) use geometry::panel_visual_rect;
+
 pub use arrangement::WorkspaceAlignment;
 #[cfg(feature = "cloud-workspaces")]
 pub(crate) use arrangement::arranged_panel_layout;
