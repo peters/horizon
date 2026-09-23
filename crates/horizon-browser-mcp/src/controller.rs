@@ -789,7 +789,7 @@ impl ControlError {
 }
 
 /// Coordination code refuses a claim, request or workspace with a synthesized
-/// `PermissionDenied`. One the operating system raised while touching a
+/// `PermissionDenied`. An error the operating system raised while touching a
 /// coordination file carries an OS error code and says nothing about
 /// ownership (#847), so `horizon-browser-control` propagates filesystem
 /// errors without re-wrapping them.

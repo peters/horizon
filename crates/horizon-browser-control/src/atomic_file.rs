@@ -2,8 +2,8 @@
 //!
 //! Manifests, request queues, results and CLI job files are read by other
 //! processes while they are rewritten. Every write lands in a sibling
-//! temporary file that is flushed before it is renamed or linked into place,
-//! so a reader observes either the previous or the next complete file.
+//! temporary file that is flushed before it is moved into place, so a reader
+//! observes either the previous or the next complete file.
 //!
 //! On Windows `std::fs::rename` falls back to a POSIX-semantics rename when
 //! the destination is open, which succeeds for handles opened with
@@ -45,9 +45,12 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Create `path` with `bytes`, refusing to replace an existing file.
 ///
-/// Publication links the fully written temporary file into place, so a
-/// reader never sees a partial file and a concurrent creator cannot be
-/// overwritten.
+/// Publication moves the fully written temporary file into place without
+/// replacement, so a reader never sees a partial file and a concurrent
+/// creator cannot be overwritten. No reader can hold a destination that does
+/// not exist yet, so this keeps the `atomicwrites` no-replace move
+/// (`renameat2` or a hard link on Unix, `MoveFileExW` without replacement on
+/// Windows), which also works on Windows volumes without hard links.
 ///
 /// # Errors
 /// Returns `AlreadyExists` when `path` exists, leaving that file untouched,
@@ -55,7 +58,7 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
 pub fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let staged = StagedFile::write(path, bytes)?;
     retry_while_blocked(
-        || std::fs::hard_link(&staged.path, path),
+        || atomicwrites::move_atomic(&staged.path, path),
         is_blocked_by_open_handle,
         BLOCKED_RETRY_WINDOW,
     )?;
