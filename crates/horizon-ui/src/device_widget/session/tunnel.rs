@@ -77,6 +77,10 @@ impl SshTunnel {
         tracing::debug!(pid = ?self.child.id(), %error, ssh = %tail, "device tunnel ended");
         if tail.is_empty() {
             error
+        } else if tail.contains("Host key verification failed") {
+            ViewError::Tunnel(format!(
+                "{error}; ssh: {tail} (the tunnel never trusts a first-contact key; open the host over SSH once to trust it)"
+            ))
         } else if tail.starts_with("ssh: ") {
             ViewError::Tunnel(format!("{error}; {tail}"))
         } else {
@@ -166,6 +170,21 @@ mod tests {
                 error.to_string(),
                 "connection timed out; ssh: Could not resolve hostname nowhere.invalid: Name or service not known"
             );
+        });
+    }
+
+    #[test]
+    fn an_unknown_host_key_explains_how_to_trust_it() {
+        runtime().block_on(async {
+            let script = "echo 'Host key verification failed.' >&2; exit 255";
+            let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
+            let error = tunnel.explain(ViewError::Frame("early end of stream")).await;
+            let text = error.to_string();
+            assert!(
+                text.starts_with("early end of stream; ssh: Host key verification failed."),
+                "{text}"
+            );
+            assert!(text.contains("open the host over SSH once"), "{text}");
         });
     }
 

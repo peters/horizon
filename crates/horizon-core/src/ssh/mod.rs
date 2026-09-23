@@ -61,16 +61,15 @@ impl SshConnection {
 
     /// Arguments for `ssh -W`, which relays this process's stdio to
     /// `remote_endpoint` as seen from the SSH host. `-W` runs no remote
-    /// command and allocates no TTY; batch mode fails instead of prompting,
-    /// so a first contact accepts the host key while a changed key still
-    /// refuses. ssh keeps the first value it sees for an option, so that
-    /// default goes after the connection's own `extra_args`, which win.
+    /// command and allocates no TTY. Batch mode fails instead of prompting,
+    /// and host-key verification is left to OpenSSH: an unknown or changed
+    /// key refuses the forward, so a viewer that connects on its own never
+    /// trusts a first-contact key. The key is trusted the usual way first,
+    /// for example by opening the host over SSH once.
     #[must_use]
     pub fn stdio_forward_args(&self, remote_endpoint: &str) -> Vec<String> {
         let mut args = vec!["-W".to_string(), remote_endpoint.to_string()];
-        args.extend(self.base_transport_args("-p", true));
-        args.extend(["-o".to_string(), "StrictHostKeyChecking=accept-new".to_string()]);
-        args.push(self.transport_target());
+        args.extend(self.ssh_transport_args());
         args
     }
 
@@ -208,8 +207,9 @@ mod tests {
             ..SshConnection::default()
         };
 
+        let args = connection.stdio_forward_args("127.0.0.1:5900");
         assert_eq!(
-            connection.stdio_forward_args("127.0.0.1:5900"),
+            args,
             vec![
                 "-W".to_string(),
                 "127.0.0.1:5900".to_string(),
@@ -223,11 +223,13 @@ mod tests {
                 "ServerAliveCountMax=1".to_string(),
                 "-o".to_string(),
                 "StrictHostKeyChecking=yes".to_string(),
-                "-o".to_string(),
-                "StrictHostKeyChecking=accept-new".to_string(),
                 "deploy@lab".to_string(),
             ],
-            "the connection's own options come first and win; the remote command never runs behind a stdio forward"
+            "the remote command never runs behind a stdio forward"
+        );
+        assert!(
+            !args.iter().any(|arg| arg.contains("accept-new")),
+            "a viewer that connects on its own must not trust first-contact keys"
         );
     }
 

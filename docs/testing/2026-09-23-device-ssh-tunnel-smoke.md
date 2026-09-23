@@ -21,8 +21,9 @@ cargo test -p horizon-ui --bin horizon device_widget
 Must include:
 
 - `stdio_forward_args_relay_the_remote_endpoint_in_batch_mode` — `ssh -W`
-  arguments carry the transport options, accept a first-contact host key
-  (batch mode cannot prompt) and never the remote command.
+  arguments carry the transport options, never the remote command, and never
+  relax host-key checking; `an_unknown_host_key_explains_how_to_trust_it` —
+  an unknown key fails with a hint to trust it over SSH first.
 - `tunnelled_device_keeps_its_ssh_host_across_restore` — the tunnel host is
   persisted with the panel and restored without reconnecting.
 - `tunnel_without_a_host_is_rejected_before_panel_creation` — an empty SSH
@@ -49,11 +50,13 @@ Fixture setup, all task-owned and outside the developer's `~/.ssh`:
    `StrictModes no`, `AllowTcpForwarding yes`, and start it with the absolute
    binary path. Write a client config with a `Host smoke-node` alias pointing at
    `127.0.0.1:2299` and the scratch identity. `-F` alone does not move
-   OpenSSH's default `~/.ssh/known_hosts` or identities, and the tunnel
-   accepts first-contact keys, so also put `UserKnownHostsFile` and
-   `IdentitiesOnly yes` in a `Host *` block of that config and run every
-   `ssh` and the candidate Horizon under a private `HOME` whose `.ssh/` holds
-   only the scratch files. The developer's `~/.ssh` is never read or written.
+   OpenSSH's default `~/.ssh/known_hosts` or identities, so also put
+   `UserKnownHostsFile` and `IdentitiesOnly yes` in a `Host *` block of that
+   config and run every `ssh` and the candidate Horizon under a private
+   `HOME` whose `.ssh/` holds only the scratch files. The tunnel never trusts
+   a first-contact key, so seed that known-hosts file first:
+   `ssh-keyscan -p 2299 127.0.0.1 >> <scratch known_hosts>`. The developer's
+   `~/.ssh` is never read or written.
 2. `Xvfb :97 -screen 0 1024x700x24`, then
    `x11vnc -display :97 -localhost -viewonly -forever -shared -rfbport 5997 -nopw`.
 3. Prove the forward independently:
@@ -85,7 +88,13 @@ process exists.
 Click **Reconnect** on the other two panels. The unknown-host panel reports
 `… ssh: Could not resolve hostname nowhere.invalid …`; the closed-port panel
 reports `… ssh: channel 0: open failed: connect failed: Connection refused;
-stdio forwarding failed`. Their ssh children exit on their own.
+stdio forwarding failed`. Their ssh children exit on their own. A panel
+whose connection adds `-o UserKnownHostsFile=/dev/null` (with the fixture's
+`StrictHostKeyChecking yes`) reports `… ssh: No ED25519 host key is known
+for [127.0.0.1]:2299 and you have requested strict checking.; Host key
+verification failed. (the tunnel never trusts a first-contact key; open the
+host over SSH once to trust it)` while the trusted-key panel next to it
+connects.
 
 ### B4. Closing the panel reaps the tunnel
 
@@ -96,7 +105,10 @@ Status: **PASS** (2026-09-23, Linux x64, Xvfb `:98` + openbox, debug build of
 this branch). B1 to B4 observed as described; the closed-port panel showed
 `early eof; ssh: channel 0: open failed: connect failed: Connection refused;
 stdio forwarding failed`, and the Horizon process had no `ssh -W` child after
-each failed forward and after the connected panel was closed.
+each failed forward and after the connected panel was closed. Re-run after
+first-contact acceptance was removed: with the key pre-scanned into the
+scratch known-hosts file the trusted panel connected, and the panel pointed
+at an empty known-hosts file was refused with the hint above.
 
 ## Not covered
 
