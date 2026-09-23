@@ -26,8 +26,10 @@ Must include:
   persisted with the panel and restored without reconnecting.
 - `tunnel_without_a_host_is_rejected_before_panel_creation` — an empty SSH
   host fails before a panel exists.
-- `tunnel_relays_bytes_through_the_program_stdio_and_reaps_it_on_drop` — the
-  forward is bidirectional and the child is gone after the session drops.
+- `tunnel_relays_bytes_through_the_program_stdio_and_reaps_it_on_drop` and
+  `a_tunnel_dropped_inside_a_cancelled_future_is_still_reaped` — the forward
+  is bidirectional and the child is killed and reaped (no zombie entry) when
+  the session ends, including when its future is cancelled.
 - `a_failed_tunnel_reports_the_cause_and_summary_lines` and
   `ssh_prefixed_diagnostics_are_not_prefixed_twice` — ssh's last two stderr
   lines are appended to the viewer error exactly once.

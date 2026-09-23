@@ -268,7 +268,21 @@ async fn connection(
     ctx: &Context,
 ) -> Result<(), ViewError> {
     // The tunnel process lives exactly as long as this connection.
-    let (client, _tunnel) = connect_client(route).await?;
+    let (client, mut tunnel) = connect_client(route).await?;
+    let result = stream_desktop(client, updates, latest_full, ctx).await;
+    match (result, tunnel.as_mut()) {
+        // A forward that dies mid-session ends the stream; ssh says why.
+        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
+        (result, _) => result,
+    }
+}
+
+async fn stream_desktop(
+    client: vnc::VncClient,
+    updates: &Mutex<Updates>,
+    latest_full: &Mutex<Option<ColorImage>>,
+    ctx: &Context,
+) -> Result<(), ViewError> {
     let mut framebuffer = Framebuffer::default();
     let mut received_pixels = false;
     // ServerInit queues resolution before the client is returned. Observe that
