@@ -63,16 +63,14 @@ impl SshConnection {
     /// `remote_endpoint` as seen from the SSH host. `-W` runs no remote
     /// command and allocates no TTY; batch mode fails instead of prompting,
     /// so a first contact accepts the host key while a changed key still
-    /// refuses. `extra_args` come later and can override that.
+    /// refuses. ssh keeps the first value it sees for an option, so that
+    /// default goes after the connection's own `extra_args`, which win.
     #[must_use]
     pub fn stdio_forward_args(&self, remote_endpoint: &str) -> Vec<String> {
-        let mut args = vec![
-            "-W".to_string(),
-            remote_endpoint.to_string(),
-            "-o".to_string(),
-            "StrictHostKeyChecking=accept-new".to_string(),
-        ];
-        args.extend(self.ssh_transport_args());
+        let mut args = vec!["-W".to_string(), remote_endpoint.to_string()];
+        args.extend(self.base_transport_args("-p", true));
+        args.extend(["-o".to_string(), "StrictHostKeyChecking=accept-new".to_string()]);
+        args.push(self.transport_target());
         args
     }
 
@@ -206,6 +204,7 @@ mod tests {
             port: Some(2222),
             user: Some("deploy".to_string()),
             remote_command: Some("tmux attach".to_string()),
+            extra_args: vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()],
             ..SshConnection::default()
         };
 
@@ -214,8 +213,6 @@ mod tests {
             vec![
                 "-W".to_string(),
                 "127.0.0.1:5900".to_string(),
-                "-o".to_string(),
-                "StrictHostKeyChecking=accept-new".to_string(),
                 "-p".to_string(),
                 "2222".to_string(),
                 "-o".to_string(),
@@ -224,9 +221,13 @@ mod tests {
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=yes".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=accept-new".to_string(),
                 "deploy@lab".to_string(),
             ],
-            "the remote command never runs behind a stdio forward"
+            "the connection's own options come first and win; the remote command never runs behind a stdio forward"
         );
     }
 
