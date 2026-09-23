@@ -373,11 +373,9 @@ fn host_liveness(host: &StandaloneHostRef) -> HostLiveness {
     match pid_probe(host.host_pid) {
         PidProbe::Dead => HostLiveness::Stale,
         PidProbe::Unknown => HostLiveness::Unknown,
-        PidProbe::Alive => match process_start_identity(host.host_pid) {
-            Some(identity) if identity == host.start_identity => HostLiveness::Current,
-            Some(_) => HostLiveness::Stale,
-            None => HostLiveness::Unknown,
-        },
+        PidProbe::Alive => {
+            liveness_from_identity(process_start_identity(host.host_pid).as_deref(), &host.start_identity)
+        }
     }
 }
 
@@ -396,6 +394,23 @@ fn process_start_identity(pid: u32) -> Option<String> {
         return None;
     }
     platform_process_start_identity(pid)
+}
+
+/// Compare a live process identity with the one stored on a lease.
+///
+/// PowerShell `ToString('o')` values were written before the numeric identity.
+/// A live pid carrying that older string is not evidence the pid was reused.
+fn liveness_from_identity(current: Option<&str>, stored: &str) -> HostLiveness {
+    match current {
+        Some(identity) if identity == stored => HostLiveness::Current,
+        Some(_) if is_legacy_powershell_identity(stored) => HostLiveness::Unknown,
+        Some(_) => HostLiveness::Stale,
+        None => HostLiveness::Unknown,
+    }
+}
+
+fn is_legacy_powershell_identity(identity: &str) -> bool {
+    identity.contains('T')
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -425,21 +440,24 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 fn platform_process_start_identity(pid: u32) -> Option<String> {
-    command_identity(
-        Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &format!(
-                    "(Get-Process -Id {pid} -ErrorAction SilentlyContinue).StartTime.ToUniversalTime().ToString('o')"
-                ),
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?,
-    )
+    let started = windows_process(pid)?.start_secs;
+    (started > 0).then(|| started.to_string())
+}
+
+#[cfg(windows)]
+struct WindowsProcess {
+    start_secs: u64,
+}
+
+#[cfg(windows)]
+fn windows_process(pid: u32) -> Option<WindowsProcess> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    let pid = Pid::from_u32(pid);
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
+    Some(WindowsProcess {
+        start_secs: system.process(pid)?.start_time(),
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -447,7 +465,7 @@ fn platform_process_start_identity(_pid: u32) -> Option<String> {
     None
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(target_os = "macos")]
 fn command_identity(output: std::process::Output) -> Option<String> {
     if !output.status.success() {
         return None;
@@ -486,15 +504,10 @@ fn pid_probe(pid: u32) -> PidProbe {
     }
     #[cfg(windows)]
     {
-        match Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-        {
-            Ok(output) if String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()) => PidProbe::Alive,
-            Ok(_) => PidProbe::Dead,
-            Err(_) => PidProbe::Unknown,
+        if windows_process(pid).is_some() {
+            PidProbe::Alive
+        } else {
+            PidProbe::Dead
         }
     }
 }
@@ -564,6 +577,23 @@ mod tests {
     fn linux_stat_starttime_uses_the_field_after_comm() {
         let stat = "1234 (chrome (helper)) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0";
         assert_eq!(linux_stat_starttime(stat), Some("98765"));
+    }
+
+    #[test]
+    fn powershell_round_trip_identity_is_not_treated_as_pid_reuse() {
+        assert_eq!(
+            liveness_from_identity(Some("1700000000"), "2026-09-23T05:18:26.1234567Z"),
+            HostLiveness::Unknown
+        );
+        assert_eq!(
+            liveness_from_identity(Some("1700000000"), "1700000000"),
+            HostLiveness::Current
+        );
+        assert_eq!(
+            liveness_from_identity(Some("1700000001"), "1700000000"),
+            HostLiveness::Stale
+        );
+        assert_eq!(liveness_from_identity(None, "1700000000"), HostLiveness::Unknown);
     }
 
     #[test]

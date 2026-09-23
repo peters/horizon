@@ -93,6 +93,9 @@ tempfile = "3.27.0"
 # descendants. The wrapper creates the child suspended, assigns it to a Job
 # Object, then resumes it, avoiding PID-based teardown and assignment races.
 process-wrap = { version = "10.0.0", default-features = false, features = ["std", "job-object"] }
+# Windows standalone-host liveness. `system` is the process list; the other
+# default features pull disk, network and sensor backends this call does not use.
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 # `std::fs::rename` cannot atomically replace an existing file on Windows.
 # Browser manifests need replace-existing semantics without exposing a gap to
 # lock-free readers.
