@@ -45,54 +45,43 @@ impl RemoteHostsConfig {
 }
 
 /// Rewrite only `remote_hosts.default_workspace` in config source text,
-/// leaving comments, ordering and unknown keys alone. Returns `None` when
-/// the text cannot be patched safely (a non-block `remote_hosts` value), in
-/// which case the caller falls back to serializing the config.
+/// leaving comments, ordering and unknown keys alone. Only the block's own
+/// two-space-indented key is touched, never a deeper one, and an inline
+/// comment on that key line is kept. Returns `None` when the text cannot be
+/// patched safely (a non-block `remote_hosts` value), in which case the
+/// caller falls back to serializing the config.
 #[must_use]
 pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String> {
     let value = serde_yaml::to_string(&name).ok()?;
     let value = value.trim_end_matches('\n').trim_start_matches("--- ").to_string();
-    let key_line = format!("  default_workspace: {value}");
     let lines: Vec<&str> = source.lines().collect();
-    let block = lines.iter().position(|line| {
-        let trimmed = line.trim_end();
-        trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
-    });
+    if lines
+        .iter()
+        .any(|line| line.starts_with("remote_hosts:") && !is_block_start(line))
+    {
+        return None;
+    }
     let mut out: Vec<String> = Vec::with_capacity(lines.len() + 2);
-    match block {
+    match lines.iter().position(|line| is_block_start(line)) {
         None => {
-            if lines
-                .iter()
-                .any(|line| line.starts_with("remote_hosts:") && !line.trim_end().ends_with(':'))
-            {
-                return None;
-            }
             out.extend(lines.iter().map(|line| (*line).to_string()));
             out.push("remote_hosts:".to_string());
-            out.push(key_line);
+            out.push(format!("  default_workspace: {value}"));
         }
         Some(start) => {
             let end = lines[start + 1..]
                 .iter()
                 .position(|line| !line.is_empty() && !line.starts_with(' ') && !line.starts_with('#'))
                 .map_or(lines.len(), |offset| start + 1 + offset);
-            let mut replaced = false;
+            let key_line = (start + 1..end).find(|index| is_direct_key(lines[*index], "default_workspace"));
             for (index, line) in lines.iter().enumerate() {
-                if index > start && index < end && line.trim_start().starts_with("default_workspace:") {
-                    let indent = &line[..line.len() - line.trim_start().len()];
-                    out.push(format!("{indent}default_workspace: {value}"));
-                    replaced = true;
+                if Some(index) == key_line {
+                    out.push(format!("  default_workspace: {value}{}", inline_comment(line)));
                 } else {
                     out.push((*line).to_string());
                 }
-                if index == start
-                    && !replaced
-                    && !lines[start + 1..end]
-                        .iter()
-                        .any(|line| line.trim_start().starts_with("default_workspace:"))
-                {
-                    out.push(key_line.clone());
-                    replaced = true;
+                if index == start && key_line.is_none() {
+                    out.push(format!("  default_workspace: {value}"));
                 }
             }
         }
@@ -100,6 +89,31 @@ pub fn patch_default_workspace_source(source: &str, name: &str) -> Option<String
     let mut text = out.join("\n");
     text.push('\n');
     Some(text)
+}
+
+fn is_block_start(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    trimmed == "remote_hosts:" || trimmed.starts_with("remote_hosts: #")
+}
+
+/// A key that belongs to the block itself: exactly two spaces of indentation.
+fn is_direct_key(line: &str, key: &str) -> bool {
+    line.strip_prefix("  ")
+        .is_some_and(|rest| !rest.starts_with(' ') && rest.starts_with(key) && rest[key.len()..].starts_with(':'))
+}
+
+/// The trailing ` # comment` of a scalar line, or nothing.
+fn inline_comment(line: &str) -> &str {
+    let mut in_quote = None;
+    for (index, character) in line.char_indices() {
+        match (character, in_quote) {
+            ('"' | '\'', None) => in_quote = Some(character),
+            (quote, Some(open)) if quote == open => in_quote = None,
+            ('#', None) if index > 0 && line[..index].ends_with(' ') => return line[index - 1..].trim_end(),
+            _ => {}
+        }
+    }
+    ""
 }
 
 impl Default for RemoteHostsConfig {
@@ -148,11 +162,12 @@ mod tests {
 
     #[test]
     fn patching_the_default_workspace_keeps_comments_and_unknown_keys() {
-        let source = "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Remote Sessions\n  vnc_port: 5901\n  future_key: true\npresets: []\n";
+        let source = "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Remote Sessions # inline\n  vnc_port: 5901\n  nested:\n    default_workspace: deeper\n  future_key: true\npresets: []\n";
         let patched = super::patch_default_workspace_source(source, "Ops").unwrap();
         assert_eq!(
             patched,
-            "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Ops\n  vnc_port: 5901\n  future_key: true\npresets: []\n"
+            "version: 11 # keep\nremote_hosts:\n  # which workspace\n  default_workspace: Ops # inline\n  vnc_port: 5901\n  nested:\n    default_workspace: deeper\n  future_key: true\npresets: []\n",
+            "the inline comment stays and a deeper key of the same name is untouched"
         );
         assert_eq!(
             Config::from_yaml(&patched)
@@ -183,6 +198,8 @@ mod tests {
         );
 
         assert_eq!(super::patch_default_workspace_source("remote_hosts: {}\n", "Ops"), None);
+        assert_eq!(super::inline_comment("  default_workspace: 'a # b' # note"), " # note");
+        assert_eq!(super::inline_comment("  default_workspace: Ops"), "");
     }
 
     #[test]
