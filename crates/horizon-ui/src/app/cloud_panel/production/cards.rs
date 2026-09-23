@@ -1,4 +1,4 @@
-use super::{Confirmation, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
+use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
@@ -269,7 +269,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     let mut action = None;
     ui.separator();
     if runtime.stage == Some(Stage::Deleted) {
-        ui.label("Worker and workspace storage deleted.");
+        ui.label(DELETED_RESOURCES_MESSAGE);
         return ui.button("Remove cloud").clicked().then_some(Action::Remove);
     }
     if runtime.state.as_ref().is_some_and(|state| {
@@ -279,7 +279,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         )
     }) {
         progress_output(ui, runtime);
-        ui.label("Worker deleted. Finish workspace storage cleanup to stop storage charges.");
+        ui.label("Worker deleted. Finish managed workspace storage cleanup to stop its storage charges.");
         return if runtime.receiver.is_some() {
             ui.spinner();
             None
@@ -383,7 +383,7 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
-                "Delete this worker and workspace storage? Running sessions and files cannot be recovered.",
+                "Delete this worker and its managed workspace storage? Running sessions and files in that storage cannot be recovered. Any separately attached network volumes retain their files and credentials and remain billable until deleted.",
             );
             if ui.button("Delete resources permanently").clicked() {
                 return Some(Action::Delete);

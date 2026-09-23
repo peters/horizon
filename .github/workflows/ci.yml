@@ -310,18 +310,6 @@ jobs:
         run: |
           pending=(
 
-            # horizon-core session fixtures keep Unix paths that loaders would
-            # normalize to `\repo` on Windows.
-            runtime_state::agent_sessions::tests::bootstrap_assigns_distinct_sessions_per_group
-            runtime_state::agent_sessions::tests::bootstrap_assigns_scoped_groups_before_cwd_less_groups
-            runtime_state::agent_sessions::tests::bootstrap_does_not_duplicate_a_root_resume
-            runtime_state::agent_sessions::tests::bootstrap_never_assigns_sessions_open_in_other_processes
-            runtime_state::agent_sessions::tests::grok::load_grok_sessions_reads_sessions_from_search_index
-            runtime_state::agent_sessions::tests::load_claude_project_session_summary_reads_head_and_tail_metadata
-            runtime_state::agent_sessions::tests::load_opencode_sessions_reads_root_sessions_from_sqlite
-            runtime_state::agent_sessions::tests::parse_claude_project_session_uses_resumable_jsonl_session_id
-            runtime_state::agent_sessions::tests::parse_pi_session_uses_header_metadata_and_latest_user_message
-            runtime_state::agent_sessions::tests::provider_scoping::bootstrap_allows_equal_session_ids_from_different_providers
 
             # horizon-core build snapshots inherit core.autocrlf, so git archive
             # writes CRLF text.
@@ -352,16 +340,7 @@ jobs:
             # XDG fixtures use Unix paths, which are not absolute on Windows.
             linux_desktop::tests::packaged_data_dirs_use_xdg_data_dirs_then_defaults
 
-            # horizon-browser-control audit rotation truncates through an append
-            # handle, which Windows opens without write-data access.
-            manifest::audit::tests::audit_rotation_bounds_storage_and_keeps_the_newest_segments
-            manifest::audit::tests::interrupted_copy_does_not_duplicate_event_ids_or_loop_pages
-            manifest::audit::tests::pending_drop_is_held_until_the_rotated_segment_is_replaced
-            manifest::audit::tests::rotation_counts_invalid_utf8_records_without_aborting
 
-            # horizon-browser-cli: the fixture joins `.horizon/browser-jobs` with a
-            # forward slash, so its expected path mixes separators.
-            run_persists_preflight_failure_before_any_browser_action
 
             # horizon-core agent work: tempfile's persist cannot rename onto a record
             # path longer than MAX_PATH, which a 128-character panel id reaches (#848).

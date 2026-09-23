@@ -258,13 +258,13 @@ fn write_entry(
     encoded.push(b'\n');
     let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     settle_pending_drop(path)?;
-    recover_interrupted_rotation(Some(file), path)?;
+    recover_interrupted_rotation(path)?;
     let current_len = file.metadata()?.len();
     if current_len > 0 && current_len.saturating_add(encoded_len) > max_segment_bytes {
         stage_drop_for_rotated_segment(path)?;
         write_rotation_marker(path)?;
         replace_file_atomically(path, &rotated_path(path))?;
-        file.set_len(0)?;
+        truncate_segment(path)?;
         clear_rotation_marker(path)?;
         settle_pending_drop(path)?;
     }
@@ -293,7 +293,7 @@ fn stage_drop_for_rotated_segment(path: &Path) -> std::io::Result<()> {
     request_queue::write_private_json(&pending_path, &pending)
 }
 
-fn recover_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -> std::io::Result<()> {
+fn recover_interrupted_rotation(path: &Path) -> std::io::Result<()> {
     if !rotation_marker_path(path).exists() {
         return Ok(());
     }
@@ -303,12 +303,17 @@ fn recover_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -
         Err(error) => return Err(error),
     }
     if live_segment_duplicates_rotated(path)? {
-        match file {
-            Some(file) => file.set_len(0)?,
-            None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
-        }
+        truncate_segment(path)?;
     }
     clear_rotation_marker(path)
+}
+
+/// Empties the live segment through a write handle of its own. Windows opens
+/// append handles without the write-data access that truncation needs, so the
+/// caller's append handle cannot do it; its later appends still land at the
+/// new end of the file.
+fn truncate_segment(path: &Path) -> std::io::Result<()> {
+    OpenOptions::new().write(true).open(path)?.set_len(0)
 }
 
 fn live_segment_duplicates_rotated(path: &Path) -> std::io::Result<bool> {
@@ -533,7 +538,7 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
         older_records_dropped: settle_pending_drop(path)?,
         ..AuditJournal::default()
     };
-    recover_interrupted_rotation(None, path)?;
+    recover_interrupted_rotation(path)?;
     read_segment(&rotated, &mut journal)?;
     read_segment(path, &mut journal)?;
     Ok(journal)
