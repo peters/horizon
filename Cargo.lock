@@ -2202,7 +2202,6 @@ dependencies = [
 name = "horizon-browser-cli"
 version = "0.2.7"
 dependencies = [
- "atomicwrites",
  "horizon-browser",
  "horizon-browser-control",
  "horizon-browser-mcp",

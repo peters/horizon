@@ -272,9 +272,9 @@ jobs:
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked -p horizon-ui --features speech
 
-  # Kept out of the rust-test matrix because its test step differs: it still
-  # skips the tests listed below. The job id and cache key predate the test
-  # run; renaming either would start the cache cold.
+  # Kept out of the rust-test matrix because its speech step only builds (see
+  # below). The job id and cache key predate the test run; renaming either
+  # would start the cache cold.
   windows-smoke:
     name: Tests (Windows x64)
     runs-on: windows-latest
@@ -299,50 +299,13 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      # These tests fail on Windows today, one block per follow-up. Each
-      # follow-up that fixes a cause, or gates a test that genuinely needs
-      # Unix with `#[cfg_attr(windows, ignore = "<reason>")]`, removes its
-      # block here (#841). Skipping by exact name rather than excluding crates keeps the
-      # workspace's feature resolution, so the job builds once, caches one
-      # copy and still runs every test that passes.
-      - name: Run tests
-        shell: bash
-        run: |
-          pending=(
-
-
-
-
-
-
-
-            # Intermittent: replacing a manifest or job file fails with access denied
-            # while another process has it open (#847). These horizon-browser-cli and
-            # horizon-browser-mcp tests poll such a file while the process under test
-            # rewrites it; three have failed that way so far. Two more that poll the
-            # same way are already Unix-only (#[cfg(unix)]) and need no entry.
-            browser_handoff_resume_preserves_a_concurrent_hand_back
-            browser_handoff_returns_the_replacement_request_id
-            browser_handoff_waits_until_the_user_hands_the_panel_back
-            resize_preserves_scope_user_control_and_measured_result_contract
-            resume_prunes_dead_hosts_without_a_sidecar
-            resume_refuses_a_dead_standalone_host
-            resume_refuses_an_uncertain_in_flight_step
-            resume_skip_runs_later_steps_without_replaying_or_succeeding
-            run_deadline_persists_a_partial_report_and_stable_exit_code
-            run_waits_for_hand_back_before_finishing_a_handoff_step
-          )
-          skip_args=()
-          for name in "${pending[@]}"; do
-            skip_args+=(--skip "$name")
-          done
-          cargo test --locked --workspace -- --exact "${skip_args[@]}"
+      - run: cargo test --locked --workspace
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Only the build
-      # is checked: the speech tests stay off here until horizon-ui runs clean
-      # without skips. horizon-ui owns the feature, so the rest of the
-      # workspace is already built by the pass above. `!cancelled()` keeps a
-      # test failure from hiding a speech build break.
+      # is checked: the speech tests have not been enabled on Windows yet.
+      # horizon-ui owns the feature, so the rest of the workspace is already
+      # built by the pass above. `!cancelled()` keeps a test failure from
+      # hiding a speech build break.
       - if: ${{ !cancelled() }}
         run: cargo test --locked -p horizon-ui --features speech --no-run
 

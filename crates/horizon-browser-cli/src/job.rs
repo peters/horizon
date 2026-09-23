@@ -4,9 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::BackendKind;
-use horizon_browser_control::BrowserRuntimePaths;
+use horizon_browser_control::{BrowserRuntimePaths, atomic_file};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -446,14 +445,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), JobError> {
 }
 
 fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), JobError> {
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| file.write_all(bytes).and_then(|()| file.sync_all()), options)
-        .map_err(std::io::Error::from)
-        .map_err(|source| io_error(format!("could not write {}", path.display()), &source))
+    atomic_file::replace(path, bytes).map_err(|source| io_error(format!("could not write {}", path.display()), &source))
 }
 
 fn emit_tool_event(tool: &str, json_output: bool) -> Result<(), JobError> {

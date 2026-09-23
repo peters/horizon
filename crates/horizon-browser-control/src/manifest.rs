@@ -28,15 +28,11 @@
 
 use std::collections::BTreeMap;
 use std::fs::{OpenOptions, TryLockError};
-use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
@@ -307,7 +303,7 @@ pub fn list_panels_in(dir: &Path) -> Vec<String> {
 /// Write a complete manifest atomically (temp file + rename), mode 0600.
 ///
 /// The adjacent inter-process lock serializes the replacement itself, and the
-/// pid-unique temp file keeps a crashed write from corrupting the live
+/// uniquely named temp file keeps a crashed write from corrupting the live
 /// manifest. Callers deriving the new value from an existing manifest must
 /// use [`update`] so the read is covered by the same lock.
 ///
@@ -424,13 +420,7 @@ fn mutate_at(
 
 fn write_at_locked(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> {
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| file.write_all(raw.as_bytes()), options)
-        .map_err(Into::into)
+    crate::atomic_file::replace(path, raw.as_bytes())
 }
 
 struct ManifestLock {

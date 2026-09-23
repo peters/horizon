@@ -1,12 +1,8 @@
 //! Private one-shot result files for externally queued browser actions.
 
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::AgentActionResult;
 
 use super::ManifestLock;
@@ -171,13 +167,7 @@ fn write_at(path: &Path, result: &AgentActionResult) -> std::io::Result<()> {
     std::fs::create_dir_all(parent)?;
     let _lock = ManifestLock::acquire(path)?;
     let encoded = serde_json::to_vec(result).map_err(std::io::Error::other)?;
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| std::io::Write::write_all(file, &encoded), options)
-        .map_err(std::io::Error::from)?;
+    crate::atomic_file::replace(path, &encoded)?;
     prune_results_at(parent, path, MAX_RETAINED_RESULTS, SystemTime::now() - RESULT_RETENTION)
 }
 
