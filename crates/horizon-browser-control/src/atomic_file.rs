@@ -25,7 +25,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// Replace `path` with `bytes`, creating it when it does not exist.
 ///
 /// The new file is created `0600` on Unix and its data is synced before the
-/// rename; the parent directory is synced afterwards so the replacement
+/// rename; the parent directory is flushed afterwards so the replacement
 /// survives a crash.
 ///
 /// # Errors
@@ -120,12 +120,23 @@ fn remove_staged(path: &Path) {
     }
 }
 
-// NTFS journals the rename itself, and syncing a directory on Windows needs a
-// write handle, so there the staged file is synced before publication only.
+/// Flush the directory entry so a published file survives a power loss; on
+/// Windows this replaces the write-through move `atomicwrites` used.
 fn sync_directory(directory: &Path) -> io::Result<()> {
     #[cfg(unix)]
     std::fs::File::open(directory)?.sync_all()?;
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        OpenOptions::new()
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(directory)?
+            .sync_all()?;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = directory;
     Ok(())
 }
