@@ -137,28 +137,27 @@ impl ScrollGesture {
             .enumerate()
         {
             // A Ctrl/Cmd wheel is a zoom step, exactly as the terminal treats
-            // it: it neither starts, continues nor chains a pan, and stays in
-            // the stream. Judged per event, since one frame can mix both. A
-            // modified `Start` still opens a new contact, which ends the old
-            // gesture, but leaves the pan unowned until a plain event moves;
-            // a modified `End` or `Cancel` ends a gesture like any other.
+            // it: whatever its phase or delta, it neither starts, continues,
+            // chains nor moves a pan, and stays in the stream. Judged per
+            // event, since one frame can mix both. Its phase still marks the
+            // contact: `End` or `Cancel` ends the pan gesture, and `Start`
+            // opens a new one that stays unowned until a plain event moves.
             if step.modifiers.ctrl || step.modifiers.command {
-                match phase {
-                    TouchPhase::Move => continue,
-                    TouchPhase::Start => {
-                        *self = Self {
-                            last_motion_at: input.time,
-                            has_touch_phase: true,
-                            ..Self::default()
-                        };
-                        continue;
+                if phase != TouchPhase::Move {
+                    // The old gesture's claimed motion still lands, in full.
+                    routing.pan += self.pan_backlog;
+                    *self = Self::default();
+                    if phase == TouchPhase::Start {
+                        self.last_motion_at = input.time;
+                        self.has_touch_phase = true;
                     }
-                    TouchPhase::End | TouchPhase::Cancel => {}
                 }
+                continue;
             }
             let delta = step.delta;
             match phase {
                 TouchPhase::Start => {
+                    routing.pan += self.pan_backlog;
                     self.latch(target);
                     self.last_motion_at = input.time;
                     self.has_touch_phase = true;

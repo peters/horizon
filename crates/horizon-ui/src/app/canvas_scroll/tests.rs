@@ -803,6 +803,87 @@ fn a_zoom_modified_start_never_owns_or_chains_the_pan() {
 }
 
 #[test]
+fn zoom_modified_gesture_boundaries_end_the_pan_but_stay_zoom_steps() {
+    // A Ctrl/Cmd `End`, `Cancel` or `Start` can carry a delta. It still ends
+    // the pan gesture and lands that gesture's eased motion in full, but its
+    // own delta is a zoom step: never judged, claimed or panned, whoever owns
+    // the gesture. A plain `Start` lands the old motion the same way.
+    let options = InputOptions::default();
+    let notch = Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    };
+    let boundary = |phase, modifiers, delta| Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta,
+        phase,
+        modifiers,
+    };
+    let mut cases = vec![boundary(TouchPhase::Start, Modifiers::NONE, Vec2::ZERO)];
+    for phase in [TouchPhase::End, TouchPhase::Cancel, TouchPhase::Start] {
+        for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+            cases.push(boundary(phase, modifiers, Vec2::new(0.0, -5.0)));
+        }
+    }
+    for event in cases {
+        let Event::MouseWheel { modifiers, .. } = event else {
+            unreachable!()
+        };
+        // A canvas gesture with a mouse-wheel notch still easing in.
+        let mut gesture = ScrollGesture::default();
+        let first = gesture.route(
+            &pass(1.0, vec![notch.clone()]),
+            &options,
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert!(first.pan.y > -options.line_scroll_speed, "the notch is still easing");
+        let last = gesture.route(
+            &pass(1.016, vec![event.clone()]),
+            &options,
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert!(
+            ((first.pan + last.pan).y + options.line_scroll_speed).abs() < 0.001,
+            "{event:?}: exactly one line lands"
+        );
+        if modifiers.is_none() {
+            continue;
+        }
+        assert!(last.claimed_wheels.is_empty(), "{event:?}");
+        assert_eq!(gesture.canvas_owned, None);
+        // A panel-owned gesture is never judged for chaining by it.
+        let mut gesture = ScrollGesture::default();
+        let _ = gesture.route(
+            &pass(2.0, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]),
+            &options,
+            ScrollTarget::Panel(PANEL),
+            true,
+            &mut |_, _| false,
+        );
+        let mut judged = false;
+        let routing = gesture.route(
+            &pass(2.016, vec![event.clone()]),
+            &options,
+            ScrollTarget::Panel(PANEL),
+            true,
+            &mut |_, _| {
+                judged = true;
+                true
+            },
+        );
+        assert!(!judged, "{event:?}");
+        assert!(!routing.pans_canvas);
+        assert_eq!(gesture.canvas_owned, None);
+    }
+}
+
+#[test]
 fn a_gesture_start_carrying_motion_pans_by_it() {
     // The first frame of a Wayland touchpad swipe is a `Start` with a delta.
     // Claiming it without panning would silently drop that motion.
