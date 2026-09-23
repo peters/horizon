@@ -169,7 +169,7 @@ A built-in **git status panel** watches the workspace repo. See changed files, i
 ### Remote Hosts
 **Ctrl+Shift+H** discovers hosts from SSH config and Tailscale. Search, filter, and connect. Type **user@filter** to override the SSH user.
 
-The **SSH | VNC** switch (or **Tab**) picks what opening a host creates: a terminal over SSH, or a read-only Device panel showing the host's desktop. VNC never crosses the network in the clear: Horizon runs `ssh -W 127.0.0.1:<port>` to the host and pipes that into its native VNC viewer, so the server only has to listen on the host's loopback interface (`remote_hosts.vnc_port`, default 5900).
+The **SSH | VNC** switch (or **Tab**) picks what opening a host creates: a terminal over SSH, or a read-only Device panel showing the host's desktop. VNC never crosses the network in the clear: Horizon runs `ssh -W 127.0.0.1:<port>` to the host and pipes that into its native VNC viewer, so the server only has to listen on the host's loopback interface (`remote_hosts.vnc_port`, default 5900). A host whose server listens elsewhere gets its own entry in `remote_hosts.vnc_ports`, keyed by the label the overlay shows or by its SSH host name; typing **:port** at the end of the filter (for example `lab:5901`) uses that port for one session, or for the shortcut being saved.
 
 The **in** picker chooses the workspace that receives the session. It defaults to `remote_hosts.default_workspace` (**Remote Sessions**, created as a grid on first use); pick any other workspace for one session (**Alt+↑/↓** cycles it from the keyboard), or **Set default** (**Alt+D**) to make it the new default in the config file Horizon loaded (`~/.horizon/config.yaml` unless `--config` named another). Set default waits while the Settings editor has unsaved edits, so the two never overwrite each other.
 
@@ -376,6 +376,8 @@ shortcuts:
 remote_hosts:
   default_workspace: Remote Sessions # receives SSH/VNC sessions from the Remote Hosts overlay
   vnc_port: 5900 # VNC server port on the host's loopback, reached through ssh -W
+  vnc_ports: # per-host exceptions, by overlay label or SSH host name
+    lab: 5901
 
 workspaces:
   - name: Backend

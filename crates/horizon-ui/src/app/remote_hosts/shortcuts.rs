@@ -1,42 +1,35 @@
 //! Saving a discovered host as a preset, so any workspace can add it later.
-use horizon_core::{Config, PanelKind, PanelResume, PresetConfig, RemoteHostsConfig, SshConnection};
+use horizon_core::{Config, PanelKind, PanelResume, PresetConfig, RemoteHostsConfig};
 
+use super::launch::RemoteLaunch;
 use crate::app::HorizonApp;
 use crate::remote_hosts_overlay::RemoteConnectMode;
 
 /// The preset a host row's "Save … shortcut" stores. Names follow the
 /// discovered `SSH: <alias>` presets so the two never duplicate each other.
-pub(in crate::app) fn remote_host_shortcut(
-    label: &str,
-    connection: SshConnection,
-    mode: RemoteConnectMode,
-    remote_hosts: &RemoteHostsConfig,
-) -> PresetConfig {
-    let (kind, command) = match mode {
+/// A VNC shortcut freezes the port the launch resolves to, so a later change
+/// of `remote_hosts` does not move an already saved preset.
+pub(in crate::app) fn remote_host_shortcut(launch: RemoteLaunch, remote_hosts: &RemoteHostsConfig) -> PresetConfig {
+    let (kind, command) = match launch.mode {
         RemoteConnectMode::Ssh => (PanelKind::Ssh, None),
-        RemoteConnectMode::Vnc => (PanelKind::Device, Some(remote_hosts.vnc_target())),
+        RemoteConnectMode::Vnc => (PanelKind::Device, Some(launch.vnc_target(remote_hosts))),
     };
     PresetConfig {
-        name: format!("{}: {}", mode.label(), label.trim()),
+        name: format!("{}: {}", launch.mode.label(), launch.label.trim()),
         alias: None,
         kind,
         command,
         args: Vec::new(),
         resume: PanelResume::Fresh,
-        ssh_connection: Some(connection),
+        ssh_connection: Some(launch.connection),
     }
 }
 
 impl HorizonApp {
     /// Persist the host as a preset and return the preset's name. A preset
     /// with that name is replaced, so re-saving updates its connection.
-    pub(in crate::app) fn save_remote_host_shortcut(
-        &mut self,
-        label: &str,
-        connection: SshConnection,
-        mode: RemoteConnectMode,
-    ) -> Option<String> {
-        if !connection.is_valid() {
+    pub(in crate::app) fn save_remote_host_shortcut(&mut self, launch: RemoteLaunch) -> Option<String> {
+        if !launch.connection.is_valid() {
             return None;
         }
         // Stage the change against the file as it is now, so an edit made
@@ -60,7 +53,7 @@ impl HorizonApp {
         let remote_hosts = on_disk
             .as_ref()
             .map_or(&self.template_config.remote_hosts, |config| &config.remote_hosts);
-        let preset = remote_host_shortcut(label, connection, mode, remote_hosts);
+        let preset = remote_host_shortcut(launch, remote_hosts);
         let name = preset.name.clone();
         let staged = match on_disk {
             Some(mut config) => {

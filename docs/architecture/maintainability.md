@@ -276,7 +276,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     context menu; the overlay only reports an `Open`, `SetDefaultWorkspace`
     or `SaveShortcut` action
   - `remote_hosts`: overlay lifecycle and catalog refresh, with workspace
-    resolution and panel creation in `remote_hosts/launch.rs`, config-backed
+    resolution, VNC port resolution (`RemoteLaunch`) and panel creation in
+    `remote_hosts/launch.rs`, config-backed
     preferences (the default workspace) in `remote_hosts/preferences.rs`, and
     host shortcuts saved as presets in `remote_hosts/shortcuts.rs`
   - `sidebar`: sidebar rendering and deferred sidebar actions
