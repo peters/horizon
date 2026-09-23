@@ -29,8 +29,9 @@ A VNC server on another machine's loopback is reached with optional `ssh` in
 create: `{ "host": "lab", "user": "deploy", "port": 2222 }` (user and port
 optional). `endpoint` is then the address as seen from that SSH host, typically
 `127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
-keys, so the host must already be trusted in `known_hosts` (open it over SSH
-once); never pass credentials, key paths or ssh options. Labels may only contain
+keys, with strict host-key checking pinned regardless of `ssh_config`, so the
+host must already be trusted in `known_hosts` (open it over SSH once); never
+pass credentials, key paths or ssh options. Labels may only contain
 letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host), at most 253
 characters for the host and 64 for the user, and are refused otherwise, so
 nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for

@@ -15,6 +15,12 @@ use super::{
     browser_requests::{ActorPanel, actor_panel},
 };
 
+/// Options every MCP-created SSH route carries: the host must already be
+/// trusted, whatever the machine's SSH configuration says.
+fn mcp_route_ssh_args() -> Vec<String> {
+    vec!["-o".to_string(), "StrictHostKeyChecking=yes".to_string()]
+}
+
 pub(super) struct PendingDeviceReveal {
     id: PanelId,
     restored_fullscreen: Option<WindowRestore>,
@@ -112,11 +118,15 @@ impl HorizonApp {
             return Outcome::failed("invalid_ssh_route", &error);
         }
         // Only the route's own fields reach ssh; keys and options come from
-        // this machine's SSH configuration, never from the caller.
+        // this machine's SSH configuration, never from the caller. Host-key
+        // checking is pinned strict on the command line, which ssh applies
+        // before any config file, so a permissive `StrictHostKeyChecking` in
+        // that configuration cannot let an unknown host use this machine's keys.
         let ssh_connection = ssh.map(|route| SshConnection {
             host: route.host,
             user: route.user,
             port: route.port,
+            extra_args: mcp_route_ssh_args(),
             ..SshConnection::default()
         });
         let options = PanelOptions {
@@ -765,8 +775,22 @@ mod tests {
         assert_eq!(tunnel.user.as_deref(), Some("deploy"));
         assert_eq!(tunnel.port, Some(2222));
         assert!(
-            tunnel.identity_file.is_none() && tunnel.proxy_jump.is_none() && tunnel.extra_args.is_empty(),
+            tunnel.identity_file.is_none() && tunnel.proxy_jump.is_none(),
             "only the route's own fields reach ssh"
+        );
+        assert_eq!(
+            tunnel.extra_args,
+            ["-o", "StrictHostKeyChecking=yes"],
+            "strict host-key checking is pinned, not inherited from ssh_config"
+        );
+        let argv = tunnel.stdio_forward_args("127.0.0.1:5901");
+        let strict = argv
+            .windows(2)
+            .position(|pair| pair == ["-o", "StrictHostKeyChecking=yes"])
+            .expect("strict host-key checking on the tunnel command line");
+        assert!(
+            argv.iter().position(|arg| arg == "deploy@lab.example") > Some(strict),
+            "the option precedes the destination, so ssh applies it before any config file: {argv:?}"
         );
         assert_eq!(
             panel.ssh_connection.as_ref(),

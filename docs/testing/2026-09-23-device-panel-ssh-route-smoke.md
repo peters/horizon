@@ -32,9 +32,11 @@ Must include:
   labels reach shell-executed `ProxyCommand`/`Match exec` lines through
   ssh's `%h`/`%r`.
 - `create_with_an_ssh_route_tunnels_the_viewer_and_reports_the_route` — the
-  created panel carries only host, user and port in its tunnel connection,
-  persists it like an SSH panel, `list` reports `ssh`, and a refused route
-  (`invalid_ssh_route`) creates nothing.
+  created panel carries only host, user and port in its tunnel connection
+  plus a pinned `-o StrictHostKeyChecking=yes` ahead of the destination on
+  the `ssh -W` command line (so a permissive `ssh_config` cannot admit an
+  unknown host), persists it like an SSH panel, `list` reports `ssh`, and a
+  refused route (`invalid_ssh_route`) creates nothing.
 
 Status: **PASS** (2026-09-23, Linux x64; 7 control-crate and 17 host tests).
 
@@ -84,6 +86,11 @@ message read "must be a plain host label" on that head; the allowlist wording
 "may only contain letters, digits…" landed in the review round with the
 same code and is covered by Lane A). B4: `closed`,
 zero `ssh -W` children afterwards.
+
+Rerun on the review-round head that pins strict host-key checking: the
+`ssh -W` child's command line carried `-o StrictHostKeyChecking=yes` before
+`smoke-node`, the viewer connected with `image_displayed: true` and
+`frame_sequence: 5`, and `close` left no tunnel child.
 
 ## Not covered
 
