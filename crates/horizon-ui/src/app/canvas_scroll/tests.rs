@@ -751,6 +751,75 @@ fn zoom_modified_wheels_are_judged_per_event() {
 }
 
 #[test]
+fn a_zoom_modified_start_never_owns_or_chains_the_pan() {
+    // winit's Wayland backend opens a touchpad gesture with a `Start` that
+    // already carries motion. A Ctrl/Cmd one is a zoom step: it must not latch
+    // the panel under the pointer, let alone ask whether that panel is
+    // exhausted and chain it.
+    let options = InputOptions::default();
+    for zoom_modifier in [Modifiers::CTRL, Modifiers::COMMAND] {
+        let zoom_wheel = |phase: TouchPhase, delta: Vec2| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta,
+            phase,
+            modifiers: zoom_modifier,
+        };
+        let mut gesture = ScrollGesture::default();
+        let mut judged = false;
+        let routing = gesture.route(
+            &pass(1.0, vec![zoom_wheel(TouchPhase::Start, Vec2::new(0.0, -5.0))]),
+            &options,
+            ScrollTarget::Panel(PANEL),
+            true,
+            &mut |_, _| {
+                judged = true;
+                true
+            },
+        );
+        assert!(!judged, "a zoom step is never judged for chaining");
+        assert!(routing.claimed_wheels.is_empty());
+        assert!(!routing.pans_canvas);
+        assert_eq!((gesture.canvas_owned, gesture.owner), (None, None));
+        // Ctrl released mid-gesture: the first plain move latches where it is.
+        let routing = gesture.route(
+            &pass(1.016, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]),
+            &options,
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert_eq!(routing.claimed_wheels, vec![0]);
+        assert_eq!(routing.pan, Vec2::new(0.0, -5.0));
+        // A modified `End` still ends the pan gesture.
+        let _ = gesture.route(
+            &pass(1.032, vec![zoom_wheel(TouchPhase::End, Vec2::ZERO)]),
+            &options,
+            ScrollTarget::Canvas,
+            true,
+            &mut |_, _| false,
+        );
+        assert_eq!(gesture.canvas_owned, None);
+    }
+}
+
+#[test]
+fn a_gesture_start_carrying_motion_pans_by_it() {
+    // The first frame of a Wayland touchpad swipe is a `Start` with a delta.
+    // Claiming it without panning would silently drop that motion.
+    let mut gesture = ScrollGesture::default();
+    let routing = gesture.route(
+        &pass(1.0, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Start)]),
+        &InputOptions::default(),
+        ScrollTarget::Canvas,
+        true,
+        &mut |_, _| false,
+    );
+    assert_eq!(routing.claimed_wheels, vec![0]);
+    assert!(routing.pans_canvas);
+    assert_eq!(routing.pan, Vec2::new(0.0, -5.0));
+}
+
+#[test]
 fn a_frame_mixing_plain_and_zoom_wheels_pans_and_zooms_in_either_order() {
     let plain = wheel(Vec2::new(0.0, -5.0), TouchPhase::Move);
     let zoom = Event::MouseWheel {
@@ -822,4 +891,13 @@ fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
     };
     let expected = (options.scroll_zoom_speed * -5.0).exp();
     assert!((zoom_at(4.0, vec![ctrl]) - expected).abs() < 1e-6);
+    // A Wayland touchpad gesture opens with a `Start` that already moves;
+    // egui drops that delta, the canvas zooms by it.
+    let start = Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -5.0),
+        phase: TouchPhase::Start,
+        modifiers: Modifiers::COMMAND,
+    };
+    assert!((zoom_at(5.0, vec![start]) - expected).abs() < 1e-6);
 }

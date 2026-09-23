@@ -138,9 +138,23 @@ impl ScrollGesture {
         {
             // A Ctrl/Cmd wheel is a zoom step, exactly as the terminal treats
             // it: it neither starts, continues nor chains a pan, and stays in
-            // the stream. Judged per event, since one frame can mix both.
-            if phase == TouchPhase::Move && (step.modifiers.ctrl || step.modifiers.command) {
-                continue;
+            // the stream. Judged per event, since one frame can mix both. A
+            // modified `Start` still opens a new contact, which ends the old
+            // gesture, but leaves the pan unowned until a plain event moves;
+            // a modified `End` or `Cancel` ends a gesture like any other.
+            if step.modifiers.ctrl || step.modifiers.command {
+                match phase {
+                    TouchPhase::Move => continue,
+                    TouchPhase::Start => {
+                        *self = Self {
+                            last_motion_at: input.time,
+                            has_touch_phase: true,
+                            ..Self::default()
+                        };
+                        continue;
+                    }
+                    TouchPhase::End | TouchPhase::Cancel => {}
+                }
             }
             let delta = step.delta;
             match phase {
@@ -163,8 +177,9 @@ impl ScrollGesture {
             // once *that* panel is at its scroll extent, and stays there for
             // the rest of the gesture. The owner decides, so a pointer that
             // drifts over some other panel mid-gesture changes nothing. Only
-            // an event carrying motion can chain: a phased gesture opens with a
-            // zero-delta `Start`, which has no direction to be exhausted in.
+            // an event carrying motion can chain: a phased gesture can open
+            // with a zero-delta `Start`, which has no direction to be
+            // exhausted in.
             // Each event is judged by its own delta, as the terminal applies
             // it, never by the frame's sum, where opposing events cancel out,
             // and in order, so `exhausted` can account for the events before.
@@ -176,8 +191,10 @@ impl ScrollGesture {
             }
             if self.canvas_owned == Some(true) {
                 routing.claimed_wheels.push(index);
-                has_canvas_motion |= delta != Vec2::ZERO;
-                if phase == TouchPhase::Move {
+                // Any phase can carry motion: winit's Wayland backend opens a
+                // touchpad gesture with a `Start` that already has a delta.
+                if delta != Vec2::ZERO {
+                    has_canvas_motion = true;
                     self.claim_motion(input, options, step, &mut routing.pan);
                 }
             }
@@ -232,7 +249,8 @@ struct WheelZoom {
 /// and a Ctrl/Cmd wheel would misroute one of them. Zoom-modified wheels are
 /// taken here one event at a time instead, converted and eased exactly as
 /// egui zooms with them, while native pinch and multi-touch pass through as
-/// egui reports them. Plain wheels are left to [`route_canvas_scroll`].
+/// egui reports them. Unlike egui, a `Start` or `End` that carries a delta
+/// zooms too. Plain wheels are left to [`route_canvas_scroll`].
 pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
     let id = Id::new(("canvas_wheel_zoom", ctx.viewport_id()));
     let mut state = ctx.data_mut(|data| data.get_temp::<WheelZoom>(id).unwrap_or_default());
@@ -248,13 +266,13 @@ pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
                     delta,
                     phase,
                     modifiers,
-                } => match phase {
-                    TouchPhase::Start => state.in_touch = true,
-                    TouchPhase::End | TouchPhase::Cancel => {
-                        immediate += std::mem::take(&mut state.backlog);
-                        state.in_touch = false;
+                } => {
+                    if *phase == TouchPhase::Start {
+                        state.in_touch = true;
                     }
-                    TouchPhase::Move if modifiers.matches_any(options.zoom_modifier) => {
+                    // Any phase can carry motion, as for the pan: a Wayland
+                    // touchpad gesture opens with a `Start` that has a delta.
+                    if *delta != Vec2::ZERO && modifiers.matches_any(options.zoom_modifier) {
                         let points = match unit {
                             MouseWheelUnit::Point => *delta,
                             MouseWheelUnit::Line => options.line_scroll_speed * *delta,
@@ -266,8 +284,11 @@ pub(super) fn canvas_zoom_delta(ctx: &Context) -> f32 {
                             state.backlog += points.x + points.y;
                         }
                     }
-                    TouchPhase::Move => {}
-                },
+                    if matches!(phase, TouchPhase::End | TouchPhase::Cancel) {
+                        immediate += std::mem::take(&mut state.backlog);
+                        state.in_touch = false;
+                    }
+                }
                 _ => {}
             }
         }
