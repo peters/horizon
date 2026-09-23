@@ -377,8 +377,9 @@ The standalone device CLI controls an explicitly configured target; viewer
 creation and identity are exposed through `device_panel` on the browser MCP.
 
 
-`device_panel` manages read-only native VNC viewers in the caller's current
-Horizon workspace. It does not forward input or provision a desktop. Use the
+`device_panel` manages native VNC viewers in the caller's current Horizon
+workspace. It does not forward input or provision a desktop: a person can turn
+the viewer's Interact toggle on in the UI, but no tool operation can. Use the
 standalone device CLI/MCP with an explicitly configured isolated target for input.
 
 ```json

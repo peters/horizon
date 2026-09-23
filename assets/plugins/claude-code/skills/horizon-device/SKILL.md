@@ -100,7 +100,8 @@ fresh geometry. Observe the result after each action. A `dispatched` receipt
 confirms input delivery, not application success. On stale geometry take another
 screenshot. On indeterminate input observe before deciding whether another
 action is appropriate; never replay blindly. The native Device panel is
-read-only.
+read-only for agents: a person may turn its Interact toggle on in the UI, but
+no tool operation can.
 
 The local CLI has the same contract:
 `horizon-device --target <private-target.json> doctor|screenshot|act|resize <JSON>`.
