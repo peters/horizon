@@ -346,7 +346,11 @@ presentation evidence for that reveal. When that does not happen within three
 seconds, it answers with the latest observation instead: `presentation` and
 `host.exclusion` name what kept the viewer off screen (for example another
 panel fullscreen or the viewer outside the canvas), and `applied_reveal_request`
-shows whether the reveal reached the canvas at all. Stopped and disconnected
+shows whether the reveal reached the canvas at all. A timed-out answer can still
+carry `image_displayed: true` from a pass drawn before the reveal applied; that
+is the current screen, not the reveal's success. Treat a reveal as established
+only when `image_displayed` is true and `applied_reveal_request` equals
+`reveal_requests`. Stopped and disconnected
 viewers answer with the request, because waiting cannot draw them. A viewer closed
 while its reveal is held answers `panel_unavailable` in the same host frame, and a
 reveal superseded by another viewer's before it reached the canvas answers on the
