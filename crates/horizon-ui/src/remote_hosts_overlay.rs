@@ -1024,7 +1024,6 @@ mod tests {
             egui::Id::new("remote_hosts_modal"),
             "the reopened card must sit above the backdrop"
         );
-        );
     }
 
     #[test]
@@ -1059,6 +1058,20 @@ mod tests {
         let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
         assert_eq!(overlay.selected, 1, "the right click selects the chevron's row");
         assert!(!overlay.is_expanded(&catalog.hosts[1]), "a right click does not expand");
+        text_center(&output, "Save VNC shortcut");
+
+        // The gap left of the chevron is painted row too.
+        let escape = vec![key_event(egui::Key::Escape, egui::Modifiers::NONE)];
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, escape);
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let gap = egui::Pos2::new(chevron.x - 12.0, chevron.y);
+        let mut right_click = button_events(gap, egui::PointerButton::Secondary, true);
+        right_click.extend(button_events(gap, egui::PointerButton::Secondary, false));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, right_click);
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        assert_eq!(overlay.selected, 1, "the right click in the gap selects the row");
         text_center(&output, "Save VNC shortcut");
     }
 

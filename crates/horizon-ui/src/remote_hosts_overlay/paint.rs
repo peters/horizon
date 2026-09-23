@@ -211,16 +211,21 @@ fn host_row_interaction(
     row_id: egui::Id,
     is_selected: bool,
 ) -> HostRowInteraction {
+    // The whole painted row answers a right click, including the gaps around
+    // the chevron; it is created first so the chevron and body stay on top
+    // for primary clicks.
+    let row_response = ui.interact(layout.row, row_id.with("row"), Sense::click());
     let chevron_response = ui.interact(layout.chevron, row_id.with("expand"), Sense::click());
     let body_response = ui.interact(layout.body, row_id.with("click"), Sense::click());
-    let menu = render_row_menu(ui, &body_response, &chevron_response);
+    let menu = render_row_menu(ui, &row_response, &[&body_response, &chevron_response]);
 
     HostRowInteraction {
         // A right click anywhere on the row selects the host its menu is about.
         select: chevron_response.clicked()
             || body_response.clicked()
             || body_response.secondary_clicked()
-            || chevron_response.secondary_clicked(),
+            || chevron_response.secondary_clicked()
+            || row_response.secondary_clicked(),
         connect: !chevron_response.clicked()
             && (body_response.double_clicked() || (body_response.clicked() && is_selected)),
         toggle_expand: chevron_response.clicked(),

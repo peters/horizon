@@ -62,12 +62,13 @@ fn show_card_popup<R>(
     shown
 }
 
-/// The menu belongs to the whole row: a right click on the expand chevron
-/// opens the same popup as one on the row body.
-pub(super) fn render_row_menu(ui: &Ui, row: &Response, chevron: &Response) -> Option<RowMenuChoice> {
-    let open = if row.secondary_clicked() || chevron.secondary_clicked() {
+/// The menu belongs to the whole row: a right click on the row background,
+/// the expand chevron or the body opens the same popup, anchored at the pointer.
+pub(super) fn render_row_menu(ui: &Ui, row: &Response, parts: &[&Response]) -> Option<RowMenuChoice> {
+    let responses = std::iter::once(row).chain(parts.iter().copied());
+    let open = if responses.clone().any(Response::secondary_clicked) {
         Some(egui::SetOpenCommand::Bool(true))
-    } else if row.clicked() || chevron.clicked() {
+    } else if responses.clone().any(Response::clicked) {
         Some(egui::SetOpenCommand::Bool(false))
     } else {
         None

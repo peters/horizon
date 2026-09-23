@@ -314,6 +314,7 @@ fn legacy_remote_workspaces_are_neither_listed_nor_used_as_destinations() {
                 || app.board.panel(panel_id).unwrap().kind == PanelKind::Ssh
         );
     }
+}
 
 #[test]
 fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
