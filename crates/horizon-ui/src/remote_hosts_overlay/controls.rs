@@ -20,27 +20,39 @@ pub(super) enum DestinationPickerAction {
     SetDefault,
 }
 
-/// The configured default first, then every other workspace by name. A
-/// workspace already named like the default is reachable through that entry.
+/// The configured default first, then every other workspace by name. The
+/// first workspace named like the default is what the default entry resolves
+/// to, so only that one is folded into it; names are not unique, and later
+/// duplicates stay selectable with a running number.
 pub(super) fn destination_entries(workspaces: &[WorkspaceOption], default_workspace: &str) -> Vec<DestinationEntry> {
-    let default_exists = workspaces.iter().any(|workspace| workspace.name == default_workspace);
+    let default_index = workspaces
+        .iter()
+        .position(|workspace| workspace.name == default_workspace);
     let mut entries = vec![DestinationEntry {
         choice: WorkspaceChoice::Default,
-        label: if default_exists {
+        label: if default_index.is_some() {
             default_workspace.to_string()
         } else {
             format!("{default_workspace} (new)")
         },
     }];
-    entries.extend(
-        workspaces
-            .iter()
-            .filter(|workspace| workspace.name != default_workspace)
-            .map(|workspace| DestinationEntry {
-                choice: WorkspaceChoice::Existing(workspace.id),
-                label: workspace.name.clone(),
-            }),
-    );
+    let mut seen: Vec<(&str, usize)> = vec![(default_workspace, 1)];
+    for (index, workspace) in workspaces.iter().enumerate() {
+        if Some(index) == default_index {
+            continue;
+        }
+        let label = if let Some((_, count)) = seen.iter_mut().find(|(name, _)| *name == workspace.name) {
+            *count += 1;
+            format!("{} ({count})", workspace.name)
+        } else {
+            seen.push((workspace.name.as_str(), 1));
+            workspace.name.clone()
+        };
+        entries.push(DestinationEntry {
+            choice: WorkspaceChoice::Existing(workspace.id),
+            label,
+        });
+    }
     entries
 }
 
@@ -200,6 +212,22 @@ mod tests {
             entries.iter().map(|entry| entry.label.as_str()).collect::<Vec<_>>(),
             vec!["Remote Sessions", "Ops"]
         );
+    }
+
+    #[test]
+    fn duplicate_names_stay_selectable_with_a_running_number() {
+        // Names are not unique; only the first default-named workspace folds
+        // into the default entry, which is the one `Default` resolves to.
+        let entries = destination_entries(
+            &workspaces(&["Remote Sessions", "Ops", "Remote Sessions", "Ops"]),
+            "Remote Sessions",
+        );
+        assert_eq!(
+            entries.iter().map(|entry| entry.label.as_str()).collect::<Vec<_>>(),
+            vec!["Remote Sessions", "Ops", "Remote Sessions (2)", "Ops (2)"]
+        );
+        assert_eq!(entries[2].choice, WorkspaceChoice::Existing(WorkspaceId(3)));
+        assert_eq!(entries[3].choice, WorkspaceChoice::Existing(WorkspaceId(4)));
     }
 
     #[test]
