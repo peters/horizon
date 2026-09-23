@@ -24,7 +24,11 @@ Must include:
   schema stays backward compatible; `identity_file` or any other key inside
   `ssh` is rejected.
 - `ssh_routes_are_trimmed_and_option_like_or_broken_labels_are_refused` —
-  blank labels, a leading `-`, whitespace, control characters and port zero.
+  labels are limited to letters, digits, `.`, `_`, `-` (and `:` in a host),
+  so a leading `-`, whitespace, control characters and shell metacharacters
+  (`;`, `$()`, backticks, `>`, `|`, `%`) are refused, as is port zero; the
+  labels reach shell-executed `ProxyCommand`/`Match exec` lines through
+  ssh's `%h`/`%r`.
 - `create_with_an_ssh_route_tunnels_the_viewer_and_reports_the_route` — the
   created panel carries only host, user and port in its tunnel connection,
   persists it like an SSH panel, `list` reports `ssh`, and a refused route
@@ -73,8 +77,10 @@ panel reported `endpoint 127.0.0.1:5997`, `ssh {host: smoke-node}`,
 `presentation: connecting`, and Horizon's child list showed `ssh -W
 127.0.0.1:5997 -o BatchMode=yes …`. B2: three inspections 4 s apart read
 `connected`, `image_received: true`, `image_displayed: true`,
-`frame_sequence: 5`, server `peters:97` at 1024×700. B3: `invalid_ssh_route`,
-"ssh.host must be a plain host label without options or spaces". B4: `closed`,
+`frame_sequence: 5`, server `peters:97` at 1024×700. B3: `invalid_ssh_route` (the
+message read "must be a plain host label" on that head; the allowlist wording
+"may only contain letters, digits…" landed in the review round with the
+same code and is covered by Lane A). B4: `closed`,
 zero `ssh -W` children afterwards.
 
 ## Not covered

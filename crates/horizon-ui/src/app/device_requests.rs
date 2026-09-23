@@ -777,7 +777,7 @@ mod tests {
         assert_eq!(listed.ssh, Some(normalized));
 
         let count = app.board.panels.len();
-        for host in ["-oProxyCommand=id", " ", "lab example"] {
+        for host in ["-oProxyCommand=id", " ", "lab example", "lab;id", "lab$(id)"] {
             let invalid = request(
                 &app,
                 Operation::Create {

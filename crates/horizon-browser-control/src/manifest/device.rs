@@ -77,28 +77,32 @@ pub struct SshRoute {
 }
 
 impl SshRoute {
-    /// Trim the labels and refuse anything `ssh` could read as an option or
-    /// that would not survive as one argument: blank, leading `-`, whitespace
-    /// or control characters, or a zero port.
+    /// Trim the labels and keep them to the characters a host name, address,
+    /// SSH config alias or user name is made of. `ssh` passes `%h` and `%r`
+    /// into shell-executed `ProxyCommand` and `Match exec` lines from the
+    /// machine's own configuration, so a label is never allowed to carry
+    /// shell metacharacters, options (leading `-`), whitespace or controls.
     ///
     /// # Errors
     /// Describes the first rejected field.
     pub fn normalize(&mut self) -> Result<(), String> {
-        fn label(value: &str, what: &str) -> Result<String, String> {
+        fn label(value: &str, what: &str, extra: &[char]) -> Result<String, String> {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Err(format!("ssh.{what} cannot be empty"));
             }
-            if trimmed.starts_with('-') || trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || extra.contains(&c);
+            if trimmed.starts_with('-') || !trimmed.chars().all(plain) {
                 return Err(format!(
-                    "ssh.{what} must be a plain host label without options or spaces"
+                    "ssh.{what} may only contain letters, digits, '.', '_' and '-'{}, and cannot start with '-'",
+                    if extra.is_empty() { "" } else { " (and ':' for IPv6)" }
                 ));
             }
             Ok(trimmed.to_owned())
         }
-        self.host = label(&self.host, "host")?;
+        self.host = label(&self.host, "host", &[':'])?;
         if let Some(user) = &self.user {
-            self.user = Some(label(user, "user")?);
+            self.user = Some(label(user, "user", &[])?);
         }
         if self.port == Some(0) {
             return Err("ssh.port must be nonzero".into());
@@ -440,12 +444,36 @@ mod tests {
             (route.host.as_str(), route.user.as_deref()),
             ("lab.example", Some("deploy"))
         );
+        for host in [
+            "lab",
+            "lab-01.example.ts.net",
+            "192.0.2.10",
+            "fd7a:115c::1",
+            "under_score",
+        ] {
+            let mut route = SshRoute {
+                host: host.into(),
+                ..Default::default()
+            };
+            assert!(route.normalize().is_ok(), "{host}");
+        }
+        // `%h` and `%r` reach shell-executed ProxyCommand and Match exec lines.
         for (host, user, port, field) in [
             ("  ", None, None, "ssh.host cannot be empty"),
-            ("-oProxyCommand=id", None, None, "ssh.host must be"),
-            ("lab example", None, None, "ssh.host must be"),
-            ("lab\u{7}", None, None, "ssh.host must be"),
-            ("lab", Some("-l root"), None, "ssh.user must be"),
+            ("-oProxyCommand=id", None, None, "ssh.host may only"),
+            ("lab example", None, None, "ssh.host may only"),
+            ("lab\u{7}", None, None, "ssh.host may only"),
+            ("lab;id", None, None, "ssh.host may only"),
+            ("lab$(id)", None, None, "ssh.host may only"),
+            ("lab`id`", None, None, "ssh.host may only"),
+            ("lab>out", None, None, "ssh.host may only"),
+            ("lab|id", None, None, "ssh.host may only"),
+            ("lab%h", None, None, "ssh.host may only"),
+            ("user@lab", None, None, "ssh.host may only"),
+            ("lab/", None, None, "ssh.host may only"),
+            ("lab", Some("-l root"), None, "ssh.user may only"),
+            ("lab", Some("deploy;id"), None, "ssh.user may only"),
+            ("lab", Some("a:b"), None, "ssh.user may only"),
             ("lab", Some(" "), None, "ssh.user cannot be empty"),
             ("lab", None, Some(0), "ssh.port must be nonzero"),
         ] {
