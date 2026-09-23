@@ -19,9 +19,13 @@ const STDERR_LINE_CHARS: usize = 200;
 const STDERR_TAIL_LINES: usize = 2;
 /// How long to wait for ssh's diagnostic after its pipe closed.
 const STDERR_FLUSH_GRACE: Duration = Duration::from_millis(300);
+/// A killed ssh exits at once; this only bounds a wedged one.
+const REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const REAP_POLL: Duration = Duration::from_millis(10);
 
 pub(super) struct SshTunnel {
-    // Killed on drop, so the tunnel never outlives the viewer connection.
+    // Killed and reaped on drop, so the tunnel never outlives the viewer
+    // connection and never lingers as a zombie.
     child: Child,
     stream: Option<Join<ChildStdout, ChildStdin>>,
     stderr_tail: Arc<Mutex<Vec<String>>>,
@@ -59,6 +63,24 @@ impl SshTunnel {
         })
     }
 
+    /// Kill the process and wait for it, so no zombie survives the session's
+    /// runtime. Runs synchronously because drop also happens when a cancelled
+    /// connection future is torn down.
+    fn kill_and_reap(&mut self) {
+        let _ = self.child.start_kill();
+        let deadline = std::time::Instant::now() + REAP_TIMEOUT;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(REAP_POLL),
+                Ok(None) => {
+                    tracing::warn!(pid = ?self.child.id(), "device tunnel did not exit after kill");
+                    return;
+                }
+            }
+        }
+    }
+
     pub(super) fn take_stream(&mut self) -> io::Result<Join<ChildStdout, ChildStdin>> {
         self.stream
             .take()
@@ -77,7 +99,9 @@ impl SshTunnel {
         tracing::debug!(pid = ?self.child.id(), %error, ssh = %tail, "device tunnel ended");
         if tail.is_empty() {
             error
-        } else if tail.contains("Host key verification failed") {
+        } else if tail.contains("host key is known") {
+            // Only an unknown key can be trusted by connecting once; a changed
+            // key is a verification failure that must stay a failure.
             ViewError::Tunnel(format!(
                 "{error}; ssh: {tail} (the tunnel never trusts a first-contact key; open the host over SSH once to trust it)"
             ))
@@ -86,6 +110,12 @@ impl SshTunnel {
         } else {
             ViewError::Tunnel(format!("{error}; ssh: {tail}"))
         }
+    }
+}
+
+impl Drop for SshTunnel {
+    fn drop(&mut self) {
+        self.kill_and_reap();
     }
 }
 
@@ -129,16 +159,11 @@ mod tests {
             assert_eq!(&echo, b"RFB 003.008\n");
             let pid = tunnel.child.id().expect("running child");
             drop(tunnel);
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while std::path::Path::new(&format!("/proc/{pid}")).exists()
-                && std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !stat.contains(" Z "))
-            {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "tunnel process outlived the session"
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            // Killed and reaped synchronously on drop: not merely a zombie.
+            assert!(
+                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+                "tunnel process outlived the session"
+            );
         });
     }
 
@@ -174,17 +199,46 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_host_key_explains_how_to_trust_it() {
+    fn a_tunnel_dropped_inside_a_cancelled_future_is_still_reaped() {
+        let runtime = runtime();
+        let pid = runtime.block_on(async {
+            let tunnel = SshTunnel::spawn("cat", &[]).unwrap();
+            let pid = tunnel.child.id().expect("running child");
+            let (cancel, cancelled) = tokio::sync::oneshot::channel::<()>();
+            let hold = async move {
+                let _tunnel = tunnel;
+                std::future::pending::<()>().await;
+            };
+            cancel.send(()).unwrap();
+            tokio::select! {
+                _ = cancelled => {}
+                () = hold => {}
+            }
+            pid
+        });
+        drop(runtime);
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "cancelled tunnel left a process behind"
+        );
+    }
+
+    #[test]
+    fn an_unknown_host_key_explains_how_to_trust_it_but_a_changed_key_does_not() {
         runtime().block_on(async {
-            let script = "echo 'Host key verification failed.' >&2; exit 255";
-            let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
-            let error = tunnel.explain(ViewError::Frame("early end of stream")).await;
-            let text = error.to_string();
-            assert!(
-                text.starts_with("early end of stream; ssh: Host key verification failed."),
-                "{text}"
-            );
+            let unknown = "echo 'No ED25519 host key is known for [lab]:22 and you have requested strict checking.' >&2; \
+                echo 'Host key verification failed.' >&2; exit 255";
+            let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), unknown.to_string()]).unwrap();
+            let text = tunnel.explain(ViewError::Frame("early end of stream")).await.to_string();
+            assert!(text.starts_with("early end of stream; ssh: No ED25519 host key is known"), "{text}");
             assert!(text.contains("open the host over SSH once"), "{text}");
+
+            let changed = "echo 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!' >&2; \
+                echo 'Host key verification failed.' >&2; exit 255";
+            let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), changed.to_string()]).unwrap();
+            let text = tunnel.explain(ViewError::Frame("early end of stream")).await.to_string();
+            assert!(text.contains("Host key verification failed."), "{text}");
+            assert!(!text.contains("open the host over SSH once"), "a changed key must not invite a bypass: {text}");
         });
     }
 

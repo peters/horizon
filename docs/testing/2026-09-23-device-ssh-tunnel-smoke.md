@@ -22,8 +22,9 @@ Must include:
 
 - `stdio_forward_args_relay_the_remote_endpoint_in_batch_mode` — `ssh -W`
   arguments carry the transport options, never the remote command, and never
-  relax host-key checking; `an_unknown_host_key_explains_how_to_trust_it` —
-  an unknown key fails with a hint to trust it over SSH first.
+  relax host-key checking; `an_unknown_host_key_explains_how_to_trust_it_but_a_changed_key_does_not`
+  — an unknown key fails with a hint to trust it over SSH first; a changed
+  key fails without that hint.
 - `tunnelled_device_keeps_its_ssh_host_across_restore` — the tunnel host is
   persisted with the panel and restored without reconnecting.
 - `tunnel_without_a_host_is_rejected_before_panel_creation` — an empty SSH
