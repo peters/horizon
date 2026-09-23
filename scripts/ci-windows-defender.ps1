@@ -1,5 +1,6 @@
-# Keep Windows Defender from scanning the compiler's output.
-# Object files land in the workspace, Cargo home, and rustup. The runner's
+# Keep Windows Defender from scanning compiler inputs and object files.
+# Object files land in the workspace target directory. Cargo home holds
+# registry and git sources, and rustup holds the toolchain. The runner's
 # shared temporary directories stay scanned so later steps are not exempt.
 # Exclusion failures are non-fatal: some hosted images deny the preference.
 $ErrorActionPreference = 'Continue'
