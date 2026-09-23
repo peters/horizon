@@ -387,7 +387,9 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      - run: cargo build --locked --release
+      # The uploaded asset is the horizon binary. The other workspace bins are
+      # outside its dependency graph, and each one repeated a thin-LTO link.
+      - run: cargo build --locked --release -p horizon-ui
       - name: Package release asset
         shell: bash
         run: |

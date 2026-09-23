@@ -13,6 +13,7 @@ members = [
     "crates/horizon-browser-routines",
     "crates/horizon-core",
     "crates/horizon-cursor",
+    "crates/horizon-process-time",
     "crates/horizon-ui",
 ]
 
@@ -93,6 +94,7 @@ tempfile = "3.27.0"
 # descendants. The wrapper creates the child suspended, assigns it to a Job
 # Object, then resumes it, avoiding PID-based teardown and assignment races.
 process-wrap = { version = "10.0.0", default-features = false, features = ["std", "job-object"] }
+horizon-process-time = { path = "crates/horizon-process-time" }
 # `std::fs::rename` cannot atomically replace an existing file on Windows.
 # Browser manifests need replace-existing semantics without exposing a gap to
 # lock-free readers.

@@ -2206,6 +2206,7 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-mcp",
  "horizon-browser-protocol",
+ "horizon-process-time",
  "rmcp",
  "serde",
  "serde_json",
@@ -2384,6 +2385,14 @@ dependencies = [
  "horizon-device",
  "tokio",
  "vnc-rs",
+]
+
+[[package]]
+name = "horizon-process-time"
+version = "0.2.7"
+dependencies = [
+ "time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

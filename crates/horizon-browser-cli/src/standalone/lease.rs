@@ -363,12 +363,11 @@ fn host_liveness(host: &StandaloneHostRef) -> HostLiveness {
     }
     match pid_probe(host.host_pid) {
         PidProbe::Dead => HostLiveness::Stale,
+        #[cfg(unix)]
         PidProbe::Unknown => HostLiveness::Unknown,
-        PidProbe::Alive => match process_start_identity(host.host_pid) {
-            Some(identity) if identity == host.start_identity => HostLiveness::Current,
-            Some(_) => HostLiveness::Stale,
-            None => HostLiveness::Unknown,
-        },
+        PidProbe::Alive => {
+            liveness_from_identity(process_start_identity(host.host_pid).as_deref(), &host.start_identity)
+        }
     }
 }
 
@@ -387,6 +386,19 @@ fn process_start_identity(pid: u32) -> Option<String> {
         return None;
     }
     platform_process_start_identity(pid)
+}
+
+/// Compare a live process identity with the one stored on a lease.
+///
+/// A different creation time means the pid was reused. Callers signal only a
+/// current host, so the mismatched lease is pruned and the new process is left
+/// alone.
+fn liveness_from_identity(current: Option<&str>, stored: &str) -> HostLiveness {
+    match current {
+        Some(identity) if identity == stored => HostLiveness::Current,
+        Some(_) => HostLiveness::Stale,
+        None => HostLiveness::Unknown,
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -416,21 +428,7 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 fn platform_process_start_identity(pid: u32) -> Option<String> {
-    command_identity(
-        Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &format!(
-                    "(Get-Process -Id {pid} -ErrorAction SilentlyContinue).StartTime.ToUniversalTime().ToString('o')"
-                ),
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?,
-    )
+    horizon_process_time::process_creation_identity(pid)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -438,7 +436,7 @@ fn platform_process_start_identity(_pid: u32) -> Option<String> {
     None
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(target_os = "macos")]
 fn command_identity(output: std::process::Output) -> Option<String> {
     if !output.status.success() {
         return None;
@@ -455,6 +453,8 @@ fn command_identity(output: std::process::Output) -> Option<String> {
 enum PidProbe {
     Alive,
     Dead,
+    /// `kill -0` could not be spawned. Windows queries do not have that failure.
+    #[cfg(unix)]
     Unknown,
 }
 
@@ -477,15 +477,10 @@ fn pid_probe(pid: u32) -> PidProbe {
     }
     #[cfg(windows)]
     {
-        match Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-        {
-            Ok(output) if String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()) => PidProbe::Alive,
-            Ok(_) => PidProbe::Dead,
-            Err(_) => PidProbe::Unknown,
+        if horizon_process_time::process_creation_identity(pid).is_some() {
+            PidProbe::Alive
+        } else {
+            PidProbe::Dead
         }
     }
 }
@@ -555,6 +550,22 @@ mod tests {
     fn linux_stat_starttime_uses_the_field_after_comm() {
         let stat = "1234 (chrome (helper)) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 98765 0 0";
         assert_eq!(linux_stat_starttime(stat), Some("98765"));
+    }
+
+    #[test]
+    fn a_different_creation_time_is_not_the_same_host() {
+        assert_eq!(
+            liveness_from_identity(Some("2026-09-23T05:18:26.2182731Z"), "2026-09-23T05:18:26.2182731Z"),
+            HostLiveness::Current
+        );
+        assert_eq!(
+            liveness_from_identity(Some("2026-09-23T05:18:26.9000000Z"), "2026-09-23T05:18:26.2182731Z"),
+            HostLiveness::Stale
+        );
+        assert_eq!(
+            liveness_from_identity(None, "2026-09-23T05:18:26.2182731Z"),
+            HostLiveness::Unknown
+        );
     }
 
     #[test]

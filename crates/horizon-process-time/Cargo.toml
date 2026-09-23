@@ -1,0 +1,15 @@
+[package]
+name = "horizon-process-time"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Process creation time precise enough to reject a reused pid"
+repository.workspace = true
+
+[dependencies]
+time.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
