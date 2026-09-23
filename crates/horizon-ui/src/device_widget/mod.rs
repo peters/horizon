@@ -67,7 +67,13 @@ impl DeviceUiState {
         self.rendered = false;
     }
 
-    pub(crate) fn finish_frame(&self) {
+    pub(crate) fn finish_frame(&mut self) {
+        // A viewer that was not drawn this frame (hidden, collapsed, closed
+        // workspace, another panel fullscreen) cannot see a release, so let go
+        // of everything now rather than leave a key or button held remotely.
+        if !self.rendered {
+            self.release_input();
+        }
         if let Some(session) = &self.session {
             session.set_visible(self.rendered);
         }
@@ -243,6 +249,11 @@ impl DeviceUiState {
                         };
                         events.extend(self.input.pointer(inside, buttons));
                     }
+                }
+                // The pointer left the window; a release there never reaches
+                // us, so end any drag at the last position the desktop saw.
+                egui::Event::PointerGone if self.input.buttons() != 0 => {
+                    events.extend(self.input.pointer(None, 0));
                 }
                 _ => {}
             }

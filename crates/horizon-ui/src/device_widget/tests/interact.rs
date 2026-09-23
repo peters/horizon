@@ -225,10 +225,19 @@ fn modifiers_and_wheel_reach_the_desktop_and_escape_drops_capture() {
         ],
     );
     let after = keys(&drain(&mut receiver));
-    assert!(
-        chord.contains(&(0xffe3, false)),
-        "Control_L went up with the frame's modifier state: {chord:?}"
-    );
+    // The test frames carry no modifier state, so Control_L goes up at the end
+    // of the chord's own frame; either way it must be released before `c` is.
+    let control_up = chord
+        .iter()
+        .chain(&after)
+        .position(|event| *event == (0xffe3, false))
+        .expect("Control_L released");
+    let c_up = chord
+        .iter()
+        .chain(&after)
+        .position(|event| *event == (u32::from('c'), false))
+        .expect("c released");
+    assert!(control_up < c_up, "{chord:?} then {after:?}");
     assert!(
         after.contains(&(u32::from('c'), false)),
         "c released after Ctrl: {after:?}"
@@ -284,4 +293,35 @@ fn pointer_positions_are_mapped_through_the_panel_layer_transform() {
         sent.contains(&(80, 40, 1)) && sent.last() == Some(&(80, 40, 0)),
         "the desktop centre is pressed and released through the transform: {sent:?}"
     );
+}
+
+#[test]
+fn a_drag_that_leaves_the_window_or_a_hidden_viewer_releases_what_is_held() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    drain(&mut receiver);
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerGone]);
+    assert_eq!(
+        pointers(&drain(&mut receiver)),
+        vec![(80, 40, 0)],
+        "the button goes up where the desktop last saw the pointer"
+    );
+
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::Enter, true, egui::Modifiers::NONE)],
+    );
+    drain(&mut receiver);
+    // A frame in which the panel is not drawn at all.
+    state.begin_frame();
+    state.finish_frame();
+    assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
+    assert!(!state.captured);
 }
