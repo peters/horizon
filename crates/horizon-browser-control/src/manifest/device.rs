@@ -305,7 +305,11 @@ pub fn enqueue(identity: AgentIdentity<'_>, operation: Operation, timeout: Durat
     enqueue_at(BrowserRuntimePaths::resolve().root(), identity, operation, timeout)
 }
 
-fn enqueue_at(
+/// Queue a request under an explicit runtime root.
+///
+/// # Errors
+/// Rejects missing host identity, invalid actors, full queues and storage failures.
+pub fn enqueue_at(
     root: &Path,
     identity: AgentIdentity<'_>,
     operation: Operation,
@@ -340,6 +344,39 @@ fn enqueue_at(
     Ok(request)
 }
 
+/// Whether this host has a request waiting. Does not claim or remove it.
+///
+/// # Errors
+/// Returns coordination I/O errors. Malformed individual requests are ignored.
+pub fn has_pending(host: &str) -> io::Result<bool> {
+    has_pending_at(BrowserRuntimePaths::resolve().root(), host)
+}
+
+/// Same as [`has_pending`], against an explicit runtime root.
+///
+/// # Errors
+/// Returns coordination I/O errors. Malformed individual requests are ignored.
+pub fn has_pending_at(root: &Path, host: &str) -> io::Result<bool> {
+    let dir = directory(root);
+    if !dir.exists() {
+        return Ok(false);
+    }
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().ends_with(".request.json") {
+            continue;
+        }
+        let Ok(Some(request)) = read_json::<Request>(&entry.path()) else {
+            continue;
+        };
+        if request.host_instance == host && entry.path() == path(root, &request.request_id, "request") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Atomically claim only requests addressed to this host. The UI checks live workspace and ownership.
 /// # Errors
 /// Returns coordination I/O errors. Malformed individual requests cannot block the queue.
@@ -347,7 +384,11 @@ pub fn claim(host: &str) -> io::Result<Vec<Request>> {
     claim_at(BrowserRuntimePaths::resolve().root(), host)
 }
 
-fn claim_at(root: &Path, host: &str) -> io::Result<Vec<Request>> {
+/// Same as [`claim`], against an explicit runtime root.
+///
+/// # Errors
+/// Returns coordination I/O errors. Malformed individual requests cannot block the queue.
+pub fn claim_at(root: &Path, host: &str) -> io::Result<Vec<Request>> {
     let dir = directory(root);
     if !dir.exists() {
         return Ok(Vec::new());
@@ -379,7 +420,11 @@ pub fn complete(request: &Request, outcome: Outcome) -> io::Result<()> {
     complete_at(BrowserRuntimePaths::resolve().root(), request, outcome)
 }
 
-fn complete_at(root: &Path, request: &Request, outcome: Outcome) -> io::Result<()> {
+/// Same as [`complete`], against an explicit runtime root.
+///
+/// # Errors
+/// Returns storage failures; callers must not replay a mutation on failure.
+pub fn complete_at(root: &Path, request: &Request, outcome: Outcome) -> io::Result<()> {
     write_private_json(
         &path(root, &request.request_id, "result"),
         &ResultEnvelope {
@@ -397,7 +442,11 @@ pub fn take_result(request: &Request) -> io::Result<Option<Outcome>> {
     take_result_at(BrowserRuntimePaths::resolve().root(), request)
 }
 
-fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>> {
+/// Same as [`take_result`], against an explicit runtime root.
+///
+/// # Errors
+/// Returns storage failures or a mismatched result identity.
+pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outcome>> {
     let path = path(root, &request.request_id, "result");
     let Some(result) = read_json::<ResultEnvelope>(&path)? else {
         return Ok(None);
@@ -567,9 +616,14 @@ mod tests {
     fn queue_is_host_bound_single_claim_and_result_is_identity_bound() {
         let root = tempfile::tempdir().unwrap();
         let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        assert!(!has_pending_at(root.path(), "host-a").unwrap());
         let request = enqueue_at(root.path(), identity, Operation::List, Duration::from_secs(5)).unwrap();
+        assert!(has_pending_at(root.path(), "host-a").unwrap());
+        assert!(!has_pending_at(root.path(), "host-b").unwrap());
         assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        assert!(has_pending_at(root.path(), "host-a").unwrap());
         assert_eq!(claim_at(root.path(), "host-a").unwrap().len(), 1);
+        assert!(!has_pending_at(root.path(), "host-a").unwrap());
         assert!(claim_at(root.path(), "host-a").unwrap().is_empty());
         complete_at(root.path(), &request, Outcome::Panels { panels: vec![] }).unwrap();
         let mut foreign = request.clone();
