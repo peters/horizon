@@ -617,3 +617,66 @@ fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
     );
     assert_eq!(notches(drain(&mut receiver)), 0);
 }
+
+#[test]
+fn window_focus_loss_releases_and_the_first_wheel_uses_the_current_pointer() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    // The pointer is already over the image when Interact is turned on.
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
+    click_label(&ctx, &mut state, &device, "Interact");
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    drain(&mut receiver);
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
+    drain(&mut receiver);
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        }],
+    );
+    assert!(
+        pointers(&drain(&mut receiver))
+            .iter()
+            .any(|(_, _, buttons)| *buttons == 16),
+        "a wheel with no move in its frame still scrolls"
+    );
+
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::Enter, true, egui::Modifiers::NONE)],
+    );
+    drain(&mut receiver);
+    // Alt-Tab away: the window loses OS focus while Enter is held.
+    state.begin_frame();
+    let _ = ctx
+        .run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::WindowFocused(false)],
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                viewports: std::iter::once((
+                    egui::ViewportId::ROOT,
+                    egui::ViewportInfo {
+                        focused: Some(false),
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, true),
+        )
+        .discard_textures();
+    state.finish_frame();
+    assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
+    assert!(!state.captured);
+}

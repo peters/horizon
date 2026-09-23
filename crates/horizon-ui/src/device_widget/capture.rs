@@ -43,7 +43,10 @@ impl DeviceUiState {
             response.request_focus();
         }
         let mut events = self.pointer_input(ui, response, &layout);
-        if response.has_focus() {
+        // Widget focus survives the window losing OS focus (Alt-Tab), after
+        // which no key-up is guaranteed; treat that as the end of capture.
+        let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
+        if window_focused && response.has_focus() {
             events.extend(self.keyboard_input(ui, response));
             self.captured = true;
         } else if self.captured {
@@ -97,8 +100,13 @@ impl DeviceUiState {
         let on_top_at =
             |global: egui::Pos2| ui.ctx().layer_id_at(global).unwrap_or_else(egui::LayerId::background) == this_layer;
         let mut events = Vec::new();
+        if self.pointer_global.is_none() {
+            // First frame of a capture (Interact just turned on, or the viewer
+            // drawn again): the best known position is the current one.
+            self.pointer_global = ui.input(|input| input.pointer.latest_pos());
+        }
         for event in pointer_events {
-            if let egui::Event::PointerMoved(pos) = event {
+            if let egui::Event::PointerMoved(pos) | egui::Event::PointerButton { pos, .. } = event {
                 self.pointer_global = Some(pos);
             }
             match event {
@@ -150,6 +158,11 @@ impl DeviceUiState {
                 }
                 _ => {}
             }
+        }
+        // The next frame's first wheel may arrive without a move; start it
+        // from where the pointer is now.
+        if let Some(latest) = ui.input(|input| input.pointer.latest_pos()) {
+            self.pointer_global = Some(latest);
         }
         events
     }
@@ -214,6 +227,7 @@ impl DeviceUiState {
     pub(super) fn release_input(&mut self) {
         let events = self.input.release_all();
         self.captured = false;
+        self.pointer_global = None;
         if let Some(session) = &self.session
             && !events.is_empty()
         {

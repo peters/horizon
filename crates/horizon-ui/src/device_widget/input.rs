@@ -252,6 +252,7 @@ impl InputState {
         // A partial wheel gesture must not carry into the next capture.
         self.scroll_remainder = egui::Vec2::ZERO;
         self.pending_clipboard.clear();
+        self.v_pressed = false;
         let mut events = Vec::new();
         for keysym in self.held_keys.drain(..) {
             events.push(key(keysym, false));
@@ -598,7 +599,14 @@ mod tests {
         // With a Paste event first, its release is swallowed instead.
         assert_eq!(keysyms(&state.clipboard_chord('v')), vec![(v, true), (v, false)]);
         assert!(state.key(Key::V, false, command).is_empty());
+        assert!(state.key(Key::V, true, Modifiers::NONE).is_empty());
         state.clipboard_chord('x');
+        state.release_all();
+        assert_eq!(
+            keysyms(&state.key(Key::V, false, Modifiers::NONE)),
+            vec![(control, true), (v, true), (v, false)],
+            "a plain V press before the end of capture does not hide the next paste"
+        );
         state.release_all();
         assert!(
             state.key(Key::X, false, Modifiers::NONE).is_empty(),

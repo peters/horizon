@@ -157,7 +157,9 @@ impl DeviceUiState {
             if self.image.displayed {
                 self.image.last_displayed = Some(std::time::Instant::now());
             }
-            if interact && matches!(self.status, Status::Connected) {
+            // Only a visible image takes input: a clipped or off-canvas one
+            // releases everything, as a hidden viewer does.
+            if interact && image_visible && matches!(self.status, Status::Connected) {
                 self.forward_input(ui, &response);
             } else {
                 self.release_input();
