@@ -270,6 +270,7 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
                     modifiers,
                 } => {
                     if *phase == TouchPhase::Start {
+                        immediate += std::mem::take(&mut state.backlog);
                         state.in_touch = true;
                     }
                     // Any phase can carry motion, as for the pan: a Wayland

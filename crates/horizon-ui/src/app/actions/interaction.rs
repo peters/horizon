@@ -336,10 +336,7 @@ impl HorizonApp {
             return false;
         };
         let mode = terminal.mode();
-        if !step.modifiers.shift
-            && (mode.intersects(TermMode::MOUSE_MODE)
-                || mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL))
-        {
+        if mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             return false;
         }
         let history = terminal.history_size();

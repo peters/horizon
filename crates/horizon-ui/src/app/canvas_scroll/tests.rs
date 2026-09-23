@@ -762,3 +762,60 @@ fn an_idle_relatch_lands_the_previous_notch_in_full() {
 }
 
 mod zoom;
+
+#[test]
+#[cfg_attr(windows, ignore = "uses a Unix shell to enable terminal application modes")]
+fn shift_never_chains_mouse_reporting_or_alternate_scroll_terminals() {
+    use alacritty_terminal::term::TermMode;
+    use horizon_core::{Panel, PanelId, PanelOptions, WorkspaceId};
+    use std::time::{Duration, Instant};
+
+    for (escape, expected_mode) in [
+        ("\x1b[?1000h", TermMode::MOUSE_REPORT_CLICK),
+        (
+            "\x1b[?1049h\x1b[?1007h",
+            TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL,
+        ),
+    ] {
+        let (_temp, ctx, mut app) = app_fixture();
+        let panel = Panel::spawn(
+            PanelId(99),
+            WorkspaceId(7),
+            PanelOptions {
+                command: Some("/bin/sh".to_string()),
+                args: vec!["-c".to_string(), format!("printf '{escape}'; read -r ignored")],
+                rows: 10,
+                cols: 40,
+                ..PanelOptions::default()
+            },
+        )
+        .expect("spawn application fixture");
+        let terminal = panel.terminal().expect("terminal");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !terminal.mode().contains(expected_mode) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            terminal.mode().contains(expected_mode),
+            "fixture must enable application mode"
+        );
+        assert_eq!(terminal.scrollback(), 0);
+        app.board.panels.push(panel);
+        for modifiers in [Modifiers::NONE, Modifiers::SHIFT] {
+            let step = WheelStep {
+                delta: Vec2::new(0.0, -1.0),
+                unit: MouseWheelUnit::Line,
+                modifiers,
+            };
+            assert!(
+                !app.panel_scroll_exhausted(
+                    PanelId(99),
+                    step,
+                    crate::terminal_widget::wheel_cell_size(&ctx),
+                    &mut None
+                ),
+                "{escape:?} {modifiers:?}"
+            );
+        }
+    }
+}

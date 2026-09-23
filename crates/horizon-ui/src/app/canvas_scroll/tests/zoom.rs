@@ -278,3 +278,25 @@ fn a_zoom_notch_off_the_canvas_never_zooms_it_later() {
         assert!((zoom - 1.0).abs() < f32::EPSILON, "frame {frame}: {zoom}");
     }
 }
+
+#[test]
+fn a_new_zoom_contact_lands_the_previous_notch_in_full() {
+    for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::COMMAND] {
+        let ctx = Context::default();
+        let first = zoom_frame(&ctx, 1.0, vec![zoom_notch()], true);
+        let boundary = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::ZERO,
+            phase: TouchPhase::Start,
+            modifiers,
+        };
+        let last = zoom_frame(&ctx, 1.016, vec![boundary], true);
+        let options = InputOptions::default();
+        let expected = (-options.line_scroll_speed * options.scroll_zoom_speed).exp();
+        assert!(
+            (first * last - expected).abs() < 1e-5,
+            "{modifiers:?}: the old notch lands at Start"
+        );
+        assert!((zoom_frame(&ctx, 1.032, Vec::new(), true) - 1.0).abs() < f32::EPSILON);
+    }
+}
