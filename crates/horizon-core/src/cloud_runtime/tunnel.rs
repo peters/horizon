@@ -22,7 +22,35 @@ const MAX_CONNECTIONS: usize = 4;
 pub struct DesktopTunnel {
     pub endpoint: SocketAddr,
     stop: Arc<AtomicBool>,
+    /// Set after the accept thread has closed the listening socket.
+    listener_released: Arc<AtomicBool>,
     server: Option<JoinHandle<()>>,
+}
+
+/// Listening socket owned by the accept thread.
+///
+/// The socket is closed before `released` flips, and both finish before that
+/// thread exits. `DesktopTunnel::drop` joins the thread, so the flag is stable
+/// for anyone still holding a clone.
+struct ListenerGuard {
+    listener: Option<TcpListener>,
+    released: Arc<AtomicBool>,
+}
+
+impl ListenerGuard {
+    fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
+        self.listener
+            .as_ref()
+            .ok_or_else(|| io::Error::other("desktop tunnel listener is closed"))?
+            .accept()
+    }
+}
+
+impl Drop for ListenerGuard {
+    fn drop(&mut self) {
+        drop(self.listener.take());
+        self.released.store(true, Ordering::Release);
+    }
 }
 
 impl DesktopTunnel {
@@ -44,16 +72,22 @@ impl DesktopTunnel {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let endpoint = listener.local_addr()?;
         listener.set_nonblocking(true)?;
+        let listener_released = Arc::new(AtomicBool::new(false));
+        let guard = ListenerGuard {
+            listener: Some(listener),
+            released: Arc::clone(&listener_released),
+        };
         let stop = Arc::new(AtomicBool::new(false));
-        let stopped = stop.clone();
-        // Keep this listener for the full lifetime; another service cannot take its endpoint.
+        let stopped = Arc::clone(&stop);
+        // The guard keeps this listener until the accept thread exits so another
+        // service cannot take its endpoint while the tunnel is alive.
         let server = thread::Builder::new()
             .name("cloud-desktop-relay".into())
             .spawn(move || {
                 let mut relays = Vec::<relay::Relay>::new();
                 while !stopped.load(Ordering::Acquire) {
                     relays.retain(|relay| !relay.finished());
-                    match listener.accept() {
+                    match guard.accept() {
                         Ok((socket, _)) if relays.len() < MAX_CONNECTIONS => {
                             if let Ok(relay) = relay::Relay::start(socket, launch()) {
                                 relays.push(relay);
@@ -72,6 +106,7 @@ impl DesktopTunnel {
         Ok(Self {
             endpoint,
             stop,
+            listener_released,
             server: Some(server),
         })
     }
@@ -125,6 +160,12 @@ impl Drop for DesktopTunnel {
         self.stop.store(true, Ordering::Release);
         if let Some(server) = self.server.take() {
             let _ = server.join();
+        }
+        if !self.listener_released.load(Ordering::Acquire) {
+            tracing::warn!(
+                endpoint = %self.endpoint,
+                "desktop tunnel accept thread ended without releasing its listener"
+            );
         }
     }
 }
