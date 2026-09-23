@@ -95,6 +95,7 @@ pub struct RemoteHostsOverlayInputs<'a> {
     pub default_workspace: &'a str,
 }
 
+#[derive(Debug)]
 pub enum RemoteHostsOverlayAction {
     None,
     Cancelled,
@@ -485,11 +486,12 @@ impl RemoteHostsOverlay {
             .map(RemoteHostsOverlayAction::SetDefaultWorkspace)
     }
 
+    /// The real name of the picked workspace, never its disambiguated label.
     fn selected_destination_name(&self, destinations: &[DestinationEntry]) -> Option<String> {
         destinations
             .iter()
             .find(|entry| entry.choice == self.destination && entry.choice != WorkspaceChoice::Default)
-            .map(|entry| entry.label.clone())
+            .map(|entry| entry.name.clone())
     }
 
     fn handle_keyboard(
@@ -938,6 +940,40 @@ mod tests {
             | RemoteHostsOverlayAction::Cancelled
             | RemoteHostsOverlayAction::SetDefaultWorkspace(_) => panic!("expected an open action"),
         }
+    }
+
+    #[test]
+    fn set_default_persists_the_real_name_of_a_duplicate_named_workspace() {
+        let ctx = egui::Context::default();
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = vec![
+            WorkspaceOption {
+                id: WorkspaceId(1),
+                name: "Ops".into(),
+            },
+            WorkspaceOption {
+                id: WorkspaceId(2),
+                name: "Ops".into(),
+            },
+        ];
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        overlay.destination = WorkspaceChoice::Existing(WorkspaceId(2));
+        let (_, _, action) = show_overlay_collecting(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![key_event(egui::Key::D, egui::Modifiers::ALT)],
+            None,
+        );
+        assert!(
+            matches!(action, RemoteHostsOverlayAction::SetDefaultWorkspace(ref name) if name == "Ops"),
+            "{action:?}"
+        );
     }
 
     #[test]

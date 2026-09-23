@@ -10,6 +10,9 @@ const DESTINATION_WIDTH: f32 = 190.0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DestinationEntry {
     pub(super) choice: WorkspaceChoice,
+    /// The workspace's real name, which is what a default persists.
+    pub(super) name: String,
+    /// Display text; duplicate names carry a running number here only.
     pub(super) label: String,
 }
 
@@ -30,6 +33,7 @@ pub(super) fn destination_entries(workspaces: &[WorkspaceOption], default_worksp
         .position(|workspace| workspace.name == default_workspace);
     let mut entries = vec![DestinationEntry {
         choice: WorkspaceChoice::Default,
+        name: default_workspace.to_string(),
         label: if default_index.is_some() {
             default_workspace.to_string()
         } else {
@@ -50,6 +54,7 @@ pub(super) fn destination_entries(workspaces: &[WorkspaceOption], default_worksp
         };
         entries.push(DestinationEntry {
             choice: WorkspaceChoice::Existing(workspace.id),
+            name: workspace.name.clone(),
             label,
         });
     }
@@ -228,6 +233,11 @@ mod tests {
         );
         assert_eq!(entries[2].choice, WorkspaceChoice::Existing(WorkspaceId(3)));
         assert_eq!(entries[3].choice, WorkspaceChoice::Existing(WorkspaceId(4)));
+        assert_eq!(
+            entries.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(),
+            vec!["Remote Sessions", "Ops", "Remote Sessions", "Ops"],
+            "the running number is display text only"
+        );
     }
 
     #[test]
