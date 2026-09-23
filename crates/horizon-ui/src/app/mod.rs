@@ -18,6 +18,7 @@ mod canvas_scroll;
 mod cloud_panel;
 mod detached_viewports;
 mod device_presentation;
+mod device_request_pump;
 mod device_requests;
 #[cfg(test)]
 mod device_tests;
@@ -65,6 +66,7 @@ use horizon_core::{
 
 use self::browser_requests::BrowserCreateHostState;
 use self::canvas::CanvasGridCache;
+pub(crate) use self::device_request_pump::{BridgeApp, DeviceRequestBridge, is_device_queue_wake};
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
 use super::dir_picker::DirPicker;

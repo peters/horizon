@@ -1,4 +1,5 @@
 //! Native viewer host lifecycle. Standalone device input never enters this path.
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use egui::Context;
@@ -32,6 +33,21 @@ pub(super) struct WindowRestore {
     pub size: egui::Vec2,
 }
 
+fn claim_device_requests(root: Option<&Path>) -> std::io::Result<Vec<Request>> {
+    let host = manifest::host_instance();
+    match root {
+        Some(root) => device::claim_at(root, host),
+        None => device::claim(host),
+    }
+}
+
+fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
+    match root {
+        Some(root) => device::complete_at(root, request, outcome),
+        None => device::complete(request, outcome),
+    }
+}
+
 impl HorizonApp {
     pub(super) fn poll_device_panel_requests(&mut self, ctx: &Context) -> bool {
         let now = Instant::now();
@@ -42,8 +58,18 @@ impl HorizonApp {
         {
             return false;
         }
-        self.panel_render_caches.device_request_poll = Some(now);
-        let requests = match device::claim(manifest::host_instance()) {
+        self.drain_device_panel_requests(ctx, None)
+    }
+
+    /// Claim and apply every queued request. `root` selects an explicit queue
+    /// directory; `None` uses the process runtime root.
+    ///
+    /// The frame poll skips calls closer than 250ms apart. This entry point
+    /// does not: the unpresented-host pump uses it when a request is already
+    /// waiting, and no later frame is guaranteed to notice the cadence.
+    pub(super) fn drain_device_panel_requests(&mut self, ctx: &Context, root: Option<&Path>) -> bool {
+        self.panel_render_caches.device_request_poll = Some(Instant::now());
+        let requests = match claim_device_requests(root) {
             Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(%error, "could not poll Device panel requests");
@@ -53,7 +79,7 @@ impl HorizonApp {
         let changed = !requests.is_empty();
         for request in requests {
             let outcome = self.apply_device_request(&request, ctx);
-            if let Err(error) = device::complete(&request, outcome) {
+            if let Err(error) = complete_device_request(root, &request, outcome) {
                 tracing::warn!(%error, "could not publish Device panel result");
             }
         }
@@ -420,6 +446,27 @@ mod tests {
         };
         assert_eq!(panels.len(), 1);
         panels.remove(0)
+    }
+
+    #[test]
+    fn a_queued_list_is_answered_without_running_a_frame() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let (_temp, ctx, app) = app();
+        let actor = format!("horizon:{}", app.board.panels[0].local_id);
+        let host = manifest::host_instance();
+        let request = device::enqueue_at(
+            root.path(),
+            manifest::AgentIdentity::new(&actor, Some(host)),
+            Operation::List,
+            Duration::from_secs(5),
+        )
+        .expect("enqueue");
+        let bridge = crate::app::DeviceRequestBridge::with_root(root.path().to_path_buf());
+        bridge.install(app, ctx);
+        assert!(bridge.poll_on_ui_thread());
+        let outcome = device::take_result_at(root.path(), &request).expect("result");
+        assert!(matches!(outcome, Some(Outcome::Panels { .. })));
+        assert!(!bridge.poll_on_ui_thread());
     }
 
     #[test]
