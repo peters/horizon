@@ -281,7 +281,7 @@ impl BrowserController {
     /// this identity was moved out of the workspace after the fast-path check,
     /// which deserves the workspace error rather than an ownership one.
     fn denied(&self, panel_id: &str, operation: &'static str, source: io::Error) -> ControlError {
-        if source.kind() == io::ErrorKind::PermissionDenied
+        if is_ownership_denial(&source)
             && manifest::read(panel_id).is_some_and(|manifest| !manifest.permits(self.identity()))
         {
             return ControlError::PanelOutsideWorkspace {
@@ -707,10 +707,8 @@ impl BrowserController {
         self.authorized_manifest(panel_id)?;
         let result = match manifest::heartbeat(panel_id, self.identity()) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                manifest::claim(panel_id, self.identity(), None)
-                    .map_err(|source| self.denied(panel_id, "could not claim browser panel", source))
-            }
+            Err(error) if is_ownership_denial(&error) => manifest::claim(panel_id, self.identity(), None)
+                .map_err(|source| self.denied(panel_id, "could not claim browser panel", source)),
             Err(source) => Err(ControlError::internal_io("could not refresh browser ownership", source)),
         };
         if result.is_ok()
@@ -767,7 +765,10 @@ impl ControlError {
             io::ErrorKind::WouldBlock => {
                 "would block while the user is steering, the action queue is full, or queued attachments leave no staging room"
             }
-            io::ErrorKind::PermissionDenied => "permission denied because browser panel ownership changed",
+            io::ErrorKind::PermissionDenied if is_ownership_denial(&source) => {
+                "permission denied because browser panel ownership changed"
+            }
+            io::ErrorKind::PermissionDenied => "the operating system denied access to a host coordination file",
             io::ErrorKind::NotFound => "browser panel is not live",
             io::ErrorKind::InvalidInput => "invalid browser control input",
             io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
@@ -785,6 +786,14 @@ impl ControlError {
     fn is_missing_panel(&self) -> bool {
         matches!(self, Self::Io { source, .. } if source.kind() == io::ErrorKind::NotFound)
     }
+}
+
+/// Coordination code refuses a claim, request or workspace with a synthesized
+/// `PermissionDenied`. One the operating system raised while touching a
+/// coordination file carries an OS error code and says nothing about
+/// ownership (#847).
+fn is_ownership_denial(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied && error.raw_os_error().is_none()
 }
 
 fn bounded_timeout(timeout_millis: Option<u64>) -> u64 {
@@ -1226,6 +1235,48 @@ mod tests {
 
         assert!(panel_belongs_to_actor(&panel, "horizon:agent-panel"));
         assert!(!panel_belongs_to_actor(&panel, "horizon:other-panel"));
+    }
+
+    fn os_permission_denied() -> io::Error {
+        #[cfg(windows)]
+        const ACCESS_DENIED: i32 = 5;
+        #[cfg(not(windows))]
+        const ACCESS_DENIED: i32 = 13;
+        let error = io::Error::from_raw_os_error(ACCESS_DENIED);
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        error
+    }
+
+    #[test]
+    fn only_coordination_refusals_report_an_ownership_change() {
+        let refused = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "agent does not have a live ownership claim",
+        );
+        assert!(is_ownership_denial(&refused));
+        assert!(!is_ownership_denial(&os_permission_denied()));
+        assert!(!is_ownership_denial(&io::Error::from(io::ErrorKind::NotFound)));
+        assert_eq!(
+            ControlError::internal_io("could not request browser handoff", refused).to_string(),
+            "could not request browser handoff: permission denied because browser panel ownership changed"
+        );
+        assert_eq!(
+            ControlError::internal_io("could not request browser handoff", os_permission_denied()).to_string(),
+            "could not request browser handoff: the operating system denied access to a host coordination file"
+        );
+
+        let controller = BrowserController::with_actor("horizon-mcp:4242");
+        let error = controller.denied(
+            "missing-panel",
+            "could not request browser handoff",
+            os_permission_denied(),
+        );
+        assert!(matches!(
+            error,
+            ControlError::Io { reason, ref source, .. }
+                if reason == "the operating system denied access to a host coordination file"
+                    && source.raw_os_error().is_some()
+        ));
     }
 
     #[test]

@@ -1,12 +1,8 @@
 //! Shared private-file helpers for bounded host request queues.
 
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) const MAX_PENDING_REQUESTS: usize = 32;
@@ -53,13 +49,7 @@ pub(super) fn write_private_json(path: &Path, value: &impl Serialize) -> std::io
         std::fs::create_dir_all(parent)?;
     }
     let encoded = serde_json::to_vec(value).map_err(std::io::Error::other)?;
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| std::io::Write::write_all(file, &encoded), options)
-        .map_err(std::io::Error::from)
+    crate::atomic_file::replace(path, &encoded)
 }
 
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {

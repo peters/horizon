@@ -1,10 +1,9 @@
 //! Optional JSON or CSV projection of a prior structured step result.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::Path;
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
+use horizon_browser_control::atomic_file;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -299,17 +298,7 @@ fn file_name(format: ProjectFormat) -> &'static str {
 }
 
 fn write_private_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    AtomicFile::new(path, AllowOverwrite)
-        .write_with_options(|file| file.write_all(bytes).and_then(|()| file.sync_all()), options)
-        .map_err(std::io::Error::from)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    atomic_file::replace(path, bytes).map_err(|error| format!("could not write {}: {error}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

@@ -4,14 +4,12 @@ mod checkpoint_artifacts;
 
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
-use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, OverwriteBehavior};
-use horizon_browser_control::BrowserRuntimePaths;
+use horizon_browser_control::{BrowserRuntimePaths, atomic_file};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -986,29 +984,22 @@ fn secure_directory(path: &Path) -> Result<(), RunStateError> {
 }
 
 fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
-    write_private_json_with(path, value, artifact, AllowOverwrite)
+    write_private_json_with(path, value, artifact, atomic_file::replace)
 }
 
 fn write_private_json_once(path: &Path, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
-    write_private_json_with(path, value, artifact, DisallowOverwrite)
+    write_private_json_with(path, value, artifact, atomic_file::create_new)
 }
 
 fn write_private_json_with(
     path: &Path,
     value: &impl Serialize,
     artifact: &'static str,
-    overwrite: OverwriteBehavior,
+    publish: fn(&Path, &[u8]) -> std::io::Result<()>,
 ) -> Result<(), RunStateError> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|source| RunStateError::Encode { artifact, source })?;
     bytes.push(b'\n');
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(path, overwrite)
-        .write_with_options(|file| file.write_all(&bytes).and_then(|()| file.sync_all()), options)
-        .map_err(std::io::Error::from)
-        .map_err(|source| io_error(format!("could not write {}", path.display()), source))?;
+    publish(path, &bytes).map_err(|source| io_error(format!("could not write {}", path.display()), source))?;
     #[cfg(unix)]
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|source| io_error(format!("could not secure {}", path.display()), source))?;

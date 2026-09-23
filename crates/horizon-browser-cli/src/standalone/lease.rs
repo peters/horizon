@@ -1,18 +1,15 @@
 //! Durable identity for a keep-alive standalone browser host.
 
-use std::fs::OpenOptions;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
-use horizon_browser_control::manifest;
+use horizon_browser_control::{atomic_file, manifest};
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::PermissionsExt as _;
 
 use super::StandaloneError;
 
@@ -112,13 +109,7 @@ pub(super) fn publish(root: &Path, host: &StandaloneHostRef) -> Result<(), Stand
     let mut bytes = serde_json::to_vec_pretty(host)
         .map_err(|error| StandaloneError::Startup(format!("could not encode standalone lease: {error}")))?;
     bytes.push(b'\n');
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    AtomicFile::new(&path, AllowOverwrite)
-        .write_with_options(|file| file.write_all(&bytes).and_then(|()| file.sync_all()), options)
-        .map_err(std::io::Error::from)
+    atomic_file::replace(&path, &bytes)
         .map_err(|error| StandaloneError::Startup(format!("could not write {}: {error}", path.display())))?;
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
