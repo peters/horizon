@@ -8,7 +8,7 @@ use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
-use crate::ssh::{SshConnection, discover_ssh_hosts};
+use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
 mod presets;
 mod remote_hosts;
@@ -445,42 +445,48 @@ impl Config {
     #[must_use]
     pub fn resolved_presets(&self) -> Vec<PresetConfig> {
         let mut presets = self.presets.clone();
-        let mut known_names: std::collections::HashSet<String> =
-            presets.iter().map(|preset| preset.name.to_ascii_lowercase()).collect();
-        let mut known_targets: std::collections::HashSet<String> = presets
-            .iter()
-            .filter_map(|preset| preset.ssh_connection.as_ref())
-            .map(normalized_ssh_target)
-            .collect();
-
         match discover_ssh_hosts(None) {
-            Ok(discovered_hosts) => {
-                for host in discovered_hosts {
-                    let name = format!("SSH: {}", host.alias);
-                    if !known_names.insert(name.to_ascii_lowercase()) {
-                        continue;
-                    }
-
-                    let target = normalized_ssh_target(&host.connection);
-                    if !known_targets.insert(target) {
-                        continue;
-                    }
-
-                    presets.push(PresetConfig {
-                        name,
-                        alias: None,
-                        kind: PanelKind::Ssh,
-                        command: None,
-                        args: Vec::new(),
-                        resume: PanelResume::Fresh,
-                        ssh_connection: Some(host.connection),
-                    });
-                }
-            }
+            Ok(discovered_hosts) => merge_discovered_ssh_presets(&mut presets, discovered_hosts),
             Err(error) => tracing::warn!(%error, "failed to discover ssh presets"),
         }
-
         presets
+    }
+}
+
+/// Add an `SSH: <alias>` preset for each discovered host unless the config
+/// already names it or already has an SSH preset for the same target. Only
+/// SSH presets count for the target check: a Device preset that tunnels VNC
+/// through the same host is a different panel and must not hide the terminal.
+fn merge_discovered_ssh_presets(presets: &mut Vec<PresetConfig>, discovered_hosts: Vec<DiscoveredSshHost>) {
+    let mut known_names: std::collections::HashSet<String> =
+        presets.iter().map(|preset| preset.name.to_ascii_lowercase()).collect();
+    let mut known_targets: std::collections::HashSet<String> = presets
+        .iter()
+        .filter(|preset| preset.kind == PanelKind::Ssh)
+        .filter_map(|preset| preset.ssh_connection.as_ref())
+        .map(normalized_ssh_target)
+        .collect();
+
+    for host in discovered_hosts {
+        let name = format!("SSH: {}", host.alias);
+        if !known_names.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+
+        let target = normalized_ssh_target(&host.connection);
+        if !known_targets.insert(target) {
+            continue;
+        }
+
+        presets.push(PresetConfig {
+            name,
+            alias: None,
+            kind: PanelKind::Ssh,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: Some(host.connection),
+        });
     }
 }
 
@@ -575,8 +581,53 @@ fn validate_distinct_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Config, FeaturesConfig, PresetConfig, config_candidates_with_env};
+    use super::{Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets};
     use crate::panel::PanelKind;
+    use crate::ssh::{DiscoveredSshHost, SshConnection};
+
+    #[test]
+    fn a_vnc_preset_for_a_host_does_not_hide_its_discovered_ssh_preset() {
+        let lab = SshConnection {
+            host: "lab".into(),
+            user: Some("deploy".into()),
+            ..SshConnection::default()
+        };
+        let preset = |name: &str, kind: PanelKind, command: Option<&str>| PresetConfig {
+            name: name.into(),
+            alias: None,
+            kind,
+            command: command.map(str::to_string),
+            args: Vec::new(),
+            resume: crate::panel::PanelResume::Fresh,
+            ssh_connection: Some(lab.clone()),
+        };
+        let discovered = || {
+            vec![DiscoveredSshHost {
+                alias: "lab".into(),
+                connection: lab.clone(),
+            }]
+        };
+
+        let mut presets = vec![preset("VNC: lab", PanelKind::Device, Some("127.0.0.1:5900"))];
+        merge_discovered_ssh_presets(&mut presets, discovered());
+        assert_eq!(
+            presets.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>(),
+            vec!["VNC: lab", "SSH: lab"],
+            "a Device preset is a different panel from the discovered terminal"
+        );
+
+        let mut presets = vec![preset("Lab shell", PanelKind::Ssh, None)];
+        merge_discovered_ssh_presets(&mut presets, discovered());
+        assert_eq!(presets.len(), 1, "an SSH preset for the same target still stands in");
+
+        let mut presets = vec![preset("ssh: LAB", PanelKind::Device, Some("127.0.0.1:5900"))];
+        merge_discovered_ssh_presets(&mut presets, discovered());
+        assert_eq!(
+            presets.len(),
+            1,
+            "a preset already using the discovered name still wins"
+        );
+    }
 
     #[test]
     fn includes_horizon_config_candidates() {

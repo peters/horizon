@@ -143,21 +143,8 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
                 changed |= render_resume_combo(ui, index, &mut preset.resume);
             });
 
-            // SSH validation error
             if preset.kind == PanelKind::Device {
-                ui.horizontal(|ui| {
-                    ui.label("VNC address");
-                    let address = preset.command.get_or_insert_default();
-                    changed |= ui
-                        .add(egui::TextEdit::singleline(address).hint_text("127.0.0.1:5900"))
-                        .changed();
-                });
-                if horizon_core::DeviceViewTarget::parse(preset.command.as_deref().unwrap_or_default()).is_err() {
-                    ui.colored_label(
-                        theme::PALETTE_RED(),
-                        "Enter a loopback IP and port for the local device.",
-                    );
-                }
+                changed |= render_device_address(ui, preset);
             }
 
             if preset.kind == PanelKind::Ssh
@@ -173,6 +160,40 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
             }
         });
 
+    changed
+}
+
+/// The VNC address of a Device preset, with its route when the preset
+/// tunnels through SSH; the red message is tied to an invalid target only.
+fn render_device_address(ui: &mut Ui, preset: &mut PresetConfig) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("VNC address");
+        let address = preset.command.get_or_insert_default();
+        changed |= ui
+            .add(egui::TextEdit::singleline(address).hint_text("127.0.0.1:5900"))
+            .changed();
+    });
+    if let Some(connection) = preset.ssh_connection.as_ref() {
+        ui.label(
+            egui::RichText::new(format!(
+                "Reached through ssh -W on {}; the address is as seen from that host.",
+                connection.display_label()
+            ))
+            .color(theme::FG_DIM())
+            .size(11.0),
+        );
+    }
+    if horizon_core::DeviceViewTarget::parse(preset.command.as_deref().unwrap_or_default()).is_err() {
+        ui.colored_label(
+            theme::PALETTE_RED(),
+            if preset.ssh_connection.is_some() {
+                "Enter the loopback IP and port as seen from the preset's SSH host."
+            } else {
+                "Enter a loopback IP and port for the local device."
+            },
+        );
+    }
     changed
 }
 

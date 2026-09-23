@@ -1,11 +1,94 @@
-//! Header controls: the SSH/VNC mode toggle and the destination workspace picker.
-use egui::{Button, CornerRadius, FontId, Popup, PopupKind, RichText, Ui, Vec2};
+//! Overlay controls: the SSH/VNC mode toggle, the destination workspace
+//! picker and the per-host context menu.
+use egui::{Button, CornerRadius, FontId, Popup, PopupKind, Response, RichText, Ui, Vec2};
 
 use super::{RemoteConnectMode, WorkspaceChoice, WorkspaceOption};
 use crate::theme;
 
 const MODE_BUTTON_SIZE: Vec2 = Vec2::new(44.0, 22.0);
 const DESTINATION_WIDTH: f32 = 190.0;
+const ROW_MENU_WIDTH: f32 = 200.0;
+
+/// What a host row's context menu can do; the destination is the header's choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RowMenuChoice {
+    Open(RemoteConnectMode),
+    /// Store the host as a preset so any workspace can add it later.
+    SaveShortcut(RemoteConnectMode),
+}
+
+impl RowMenuChoice {
+    const ALL: [Self; 4] = [
+        Self::Open(RemoteConnectMode::Ssh),
+        Self::Open(RemoteConnectMode::Vnc),
+        Self::SaveShortcut(RemoteConnectMode::Ssh),
+        Self::SaveShortcut(RemoteConnectMode::Vnc),
+    ];
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Open(RemoteConnectMode::Ssh) => "Open over SSH",
+            Self::Open(RemoteConnectMode::Vnc) => "Open over VNC",
+            Self::SaveShortcut(RemoteConnectMode::Ssh) => "Save SSH shortcut",
+            Self::SaveShortcut(RemoteConnectMode::Vnc) => "Save VNC shortcut",
+        }
+    }
+
+    const fn hint(self) -> &'static str {
+        match self {
+            Self::Open(_) => "Opens in the workspace picked in the header",
+            Self::SaveShortcut(_) => "Adds a preset; the command palette can then create it in any workspace",
+        }
+    }
+}
+
+/// Show `popup` as a sublayer of the card it belongs to. Same-order layers
+/// keep their previous relative order when both are raised in one frame, and
+/// a click that opens a popup also raises the card; a sublayer is spliced
+/// directly above its parent every pass instead.
+fn show_card_popup<R>(
+    ui: &Ui,
+    popup: Popup<'_>,
+    parent: egui::LayerId,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let popup_id = popup.get_id();
+    let shown = popup.kind(PopupKind::Tooltip).show(content).map(|inner| inner.inner);
+    if shown.is_some() {
+        let popup_layer = egui::LayerId::new(PopupKind::Tooltip.order(), popup_id);
+        ui.ctx()
+            .memory_mut(|memory| memory.areas_mut().set_sublayer(parent, popup_layer));
+    }
+    shown
+}
+
+/// The menu belongs to the whole row: a right click on the row background,
+/// the expand chevron or the body opens the same popup, anchored at the pointer.
+pub(super) fn render_row_menu(ui: &Ui, row: &Response, parts: &[&Response]) -> Option<RowMenuChoice> {
+    let responses = std::iter::once(row).chain(parts.iter().copied());
+    let open = if responses.clone().any(Response::secondary_clicked) {
+        Some(egui::SetOpenCommand::Bool(true))
+    } else if responses.clone().any(Response::clicked) {
+        Some(egui::SetOpenCommand::Bool(false))
+    } else {
+        None
+    };
+    let popup = Popup::context_menu(row).open_memory(open).width(ROW_MENU_WIDTH);
+    show_card_popup(ui, popup, row.layer_id, |ui| {
+        let mut picked = None;
+        for choice in RowMenuChoice::ALL {
+            if matches!(choice, RowMenuChoice::SaveShortcut(RemoteConnectMode::Ssh)) {
+                ui.separator();
+            }
+            if ui.button(choice.label()).on_hover_text(choice.hint()).clicked() {
+                picked = Some(choice);
+                ui.close();
+            }
+        }
+        picked
+    })
+    .flatten()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DestinationEntry {
@@ -182,26 +265,18 @@ pub(super) fn render_destination_picker(
         ));
     // The overlay card sits on the Tooltip layer, so a default (Foreground)
     // popup would open underneath it.
-    let popup_id = Popup::default_response_id(&button);
-    let shown = Popup::menu(&button)
-        .kind(PopupKind::Tooltip)
-        .width(DESTINATION_WIDTH)
-        .show(|ui| {
+    show_card_popup(
+        ui,
+        Popup::menu(&button).width(DESTINATION_WIDTH),
+        button.layer_id,
+        |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             for entry in entries {
                 ui.selectable_value(destination, entry.choice.clone(), &entry.label)
                     .on_hover_text(&entry.label);
             }
-        })
-        .is_some();
-    if shown {
-        // Same-order layers keep their previous relative order when both are
-        // raised in one frame, and clicking the picker also raises the card.
-        // A sublayer is spliced directly above its parent every pass instead.
-        let popup_layer = egui::LayerId::new(PopupKind::Tooltip.order(), popup_id);
-        ui.ctx()
-            .memory_mut(|memory| memory.areas_mut().set_sublayer(button.layer_id, popup_layer));
-    }
+        },
+    );
     ui.label(
         RichText::new("in")
             .font(FontId::proportional(11.5))
@@ -215,6 +290,19 @@ mod tests {
     use horizon_core::WorkspaceId;
 
     use super::*;
+
+    #[test]
+    fn row_menu_lists_open_and_save_for_both_modes() {
+        assert_eq!(
+            RowMenuChoice::ALL.map(RowMenuChoice::label),
+            [
+                "Open over SSH",
+                "Open over VNC",
+                "Save SSH shortcut",
+                "Save VNC shortcut"
+            ]
+        );
+    }
 
     fn workspaces(names: &[&str]) -> Vec<WorkspaceOption> {
         names

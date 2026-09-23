@@ -173,6 +173,8 @@ The **SSH | VNC** switch (or **Tab**) picks what opening a host creates: a termi
 
 The **in** picker chooses the workspace that receives the session. It defaults to `remote_hosts.default_workspace` (**Remote Sessions**, created as a grid on first use); pick any other workspace for one session (**Alt+↑/↓** cycles it from the keyboard), or **Set default** (**Alt+D**) to make it the new default in the config file Horizon loaded (`~/.horizon/config.yaml` unless `--config` named another). Set default waits while the Settings editor has unsaved edits, so the two never overwrite each other.
 
+Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut** and **Save VNC shortcut**. A saved shortcut is an ordinary preset (`SSH: <host>` or `VNC: <host>`, with the `user@` override applied) written to the config file, so the command palette and the preset picker can add that host to any workspace later.
+
 </td>
 <td>
 
