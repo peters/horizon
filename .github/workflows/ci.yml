@@ -272,9 +272,9 @@ jobs:
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked -p horizon-ui --features speech
 
-  # Kept out of the rust-test matrix because its test step differs: it still
-  # skips the tests listed below. The job id and cache key predate the test
-  # run; renaming either would start the cache cold.
+  # Kept out of the rust-test matrix because its speech step only builds (see
+  # below). The job id and cache key predate the test run; renaming either
+  # would start the cache cold.
   windows-smoke:
     name: Tests (Windows x64)
     runs-on: windows-latest
@@ -299,34 +299,13 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      # These tests fail on Windows today, one block per follow-up. Each
-      # follow-up that fixes a cause, or gates a test that genuinely needs
-      # Unix with `#[cfg_attr(windows, ignore = "<reason>")]`, removes its
-      # block here (#841). Skipping by exact name rather than excluding crates keeps the
-      # workspace's feature resolution, so the job builds once, caches one
-      # copy and still runs every test that passes.
-      - name: Run tests
-        shell: bash
-        run: |
-          pending=(
-
-
-
-
-
-
-          )
-          skip_args=()
-          for name in "${pending[@]}"; do
-            skip_args+=(--skip "$name")
-          done
-          cargo test --locked --workspace -- --exact "${skip_args[@]}"
+      - run: cargo test --locked --workspace
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Only the build
-      # is checked: the speech tests stay off here until horizon-ui runs clean
-      # without skips. horizon-ui owns the feature, so the rest of the
-      # workspace is already built by the pass above. `!cancelled()` keeps a
-      # test failure from hiding a speech build break.
+      # is checked: the speech tests have not been enabled on Windows yet.
+      # horizon-ui owns the feature, so the rest of the workspace is already
+      # built by the pass above. `!cancelled()` keeps a test failure from
+      # hiding a speech build break.
       - if: ${{ !cancelled() }}
         run: cargo test --locked -p horizon-ui --features speech --no-run
 
