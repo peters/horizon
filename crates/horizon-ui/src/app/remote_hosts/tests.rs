@@ -390,12 +390,21 @@ fn saving_a_shortcut_keeps_external_config_edits_and_refuses_a_broken_file() {
     assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
 
     assert_eq!(
-        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Ssh),
-        Some("SSH: lab".to_string())
+        app.save_remote_host_shortcut("lab", lab_connection(), RemoteConnectMode::Vnc),
+        Some("VNC: lab".to_string())
     );
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
     assert_eq!(saved.remote_hosts.vnc_port, 5999, "the external edit survives");
-    assert!(saved.presets.iter().any(|preset| preset.name == "SSH: lab"));
+    let vnc = saved
+        .presets
+        .iter()
+        .find(|preset| preset.name == "VNC: lab")
+        .expect("vnc preset");
+    assert_eq!(
+        vnc.command.as_deref(),
+        Some("127.0.0.1:5999"),
+        "the port comes from the file, not memory"
+    );
     assert_eq!(
         app.template_config.remote_hosts.vnc_port, 5999,
         "what was written is what applies"
