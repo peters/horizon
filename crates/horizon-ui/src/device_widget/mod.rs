@@ -39,6 +39,9 @@ pub(crate) struct DeviceUiState {
     input: InputState,
     /// The image had keyboard focus last frame, so a loss must release keys.
     captured: bool,
+    /// Where the pointer last was, in global coordinates, carried across
+    /// frames so each wheel event is routed by the position it happened at.
+    pointer_global: Option<egui::Pos2>,
 }
 
 #[derive(Default)]

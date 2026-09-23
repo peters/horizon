@@ -577,3 +577,43 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
         "a composed commit is sent as Unicode keysyms"
     );
 }
+
+#[test]
+fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
+    let (ctx, device, mut state, mut receiver) = viewer_with_input();
+    click_label(&ctx, &mut state, &device, "Interact");
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    let outside = egui::Pos2::new(SCREEN.x - 4.0, SCREEN.y - 4.0);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -1.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    };
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
+    drain(&mut receiver);
+    let notches = |events: Vec<X11Event>| {
+        pointers(&events)
+            .iter()
+            .filter(|(_, _, buttons)| *buttons == 16)
+            .count()
+    };
+
+    // Scrolled over the image, then left it before the repaint: still ours.
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![wheel.clone(), egui::Event::PointerMoved(outside)],
+    );
+    assert_eq!(notches(drain(&mut receiver)), 1);
+    // Scrolled elsewhere, then entered the image before the repaint: not ours.
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![wheel, egui::Event::PointerMoved(middle)],
+    );
+    assert_eq!(notches(drain(&mut receiver)), 0);
+}

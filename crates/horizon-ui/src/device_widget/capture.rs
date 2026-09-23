@@ -59,19 +59,21 @@ impl DeviceUiState {
     /// a click whose press and release land in one frame, or several moves
     /// coalesced by a slow repaint, must all reach the desktop.
     fn pointer_input(&mut self, ui: &Ui, response: &egui::Response, layout: &DeviceImageLayout) -> Vec<X11Event> {
-        let (pointer_events, scroll) = ui.input(|input| {
-            let pointer: Vec<egui::Event> = input
+        let pointer_events: Vec<egui::Event> = ui.input(|input| {
+            input
                 .events
                 .iter()
                 .filter(|event| {
                     matches!(
                         event,
-                        egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone
+                        egui::Event::PointerMoved(_)
+                            | egui::Event::PointerButton { .. }
+                            | egui::Event::PointerGone
+                            | egui::Event::MouseWheel { .. }
                     )
                 })
                 .cloned()
-                .collect();
-            (pointer, wheel_travel(input))
+                .collect()
         });
         // Event positions are global; the image rect lives in this panel's
         // layer, which the canvas pans and zooms.
@@ -96,11 +98,14 @@ impl DeviceUiState {
             |global: egui::Pos2| ui.ctx().layer_id_at(global).unwrap_or_else(egui::LayerId::background) == this_layer;
         let mut events = Vec::new();
         for event in pointer_events {
+            if let egui::Event::PointerMoved(pos) = event {
+                self.pointer_global = Some(pos);
+            }
             match event {
                 egui::Event::PointerMoved(pos) => {
-                    // Over the image only while egui routes the pointer here, so
+                    // Over the image only while this panel is on top there, so
                     // hovering a popup or panel on top does not move the desktop.
-                    let inside = mapped(pos).filter(|_| owns_pointer);
+                    let inside = mapped(pos).filter(|_| owns_pointer || on_top_at(pos));
                     if inside.is_some() || self.input.buttons() != 0 {
                         let buttons = self.input.buttons();
                         events.extend(self.input.pointer(inside, buttons));
@@ -127,14 +132,24 @@ impl DeviceUiState {
                 }
                 // The pointer left the window; a release there never reaches
                 // us, so end any drag at the last position the desktop saw.
-                egui::Event::PointerGone if self.input.buttons() != 0 => {
-                    events.extend(self.input.pointer(None, 0));
+                egui::Event::PointerGone => {
+                    self.pointer_global = None;
+                    if self.input.buttons() != 0 {
+                        events.extend(self.input.pointer(None, 0));
+                    }
+                }
+                // A wheel event belongs to whatever was under the pointer when
+                // it happened, not where the pointer ended the frame.
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    let over_image = self
+                        .pointer_global
+                        .is_some_and(|pos| mapped(pos).is_some() && on_top_at(pos));
+                    if over_image {
+                        events.extend(self.input.scroll(wheel_points(unit, delta)));
+                    }
                 }
                 _ => {}
             }
-        }
-        if response.hovered() {
-            events.extend(self.input.scroll(scroll));
         }
         events
     }
@@ -222,19 +237,12 @@ fn publish_ime_output(ui: &Ui, image: egui::Rect) {
     });
 }
 
-/// This frame's wheel travel in points, from raw events rather than egui's
+/// One wheel event's travel in points, from raw events rather than egui's
 /// smoothed delta, which hands out only a fraction of it per repaint.
-fn wheel_travel(input: &egui::InputState) -> egui::Vec2 {
-    input
-        .events
-        .iter()
-        .filter_map(|event| match event {
-            egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
-                egui::MouseWheelUnit::Point => *delta,
-                egui::MouseWheelUnit::Line => *delta * SCROLL_NOTCH_POINTS,
-                egui::MouseWheelUnit::Page => *delta * SCROLL_NOTCH_POINTS * 3.0,
-            }),
-            _ => None,
-        })
-        .fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
+fn wheel_points(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> egui::Vec2 {
+    match unit {
+        egui::MouseWheelUnit::Point => delta,
+        egui::MouseWheelUnit::Line => delta * SCROLL_NOTCH_POINTS,
+        egui::MouseWheelUnit::Page => delta * SCROLL_NOTCH_POINTS * 3.0,
+    }
 }
