@@ -90,6 +90,7 @@ impl HorizonApp {
             } => {
                 let notice = match self.save_remote_host_shortcut(&label, connection, mode) {
                     Some(name) => format!("Saved preset \"{name}\""),
+                    None if self.settings_has_unsaved_edits() => "Save or discard the Settings edits first".to_string(),
                     None => "Could not save the shortcut; see the log".to_string(),
                 };
                 if let Some(overlay) = self.remote_hosts_overlay.as_mut() {

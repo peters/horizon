@@ -642,7 +642,6 @@ impl RemoteHostsOverlay {
                         ui,
                         &HostRowRenderContext {
                             width: render.layout.inner.width(),
-                            index: filtered_idx,
                             host,
                             summary,
                             is_selected,
@@ -1024,6 +1023,39 @@ mod tests {
             layer.expect("a layer under the card").id,
             egui::Id::new("remote_hosts_modal"),
             "the reopened card must sit above the backdrop"
+        );
+    }
+
+    #[test]
+    fn an_open_row_menu_disappears_when_the_filter_drops_its_host() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429), remote_host("live-b", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut overlay = RemoteHostsOverlay::new();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let row = text_center(&output, "live-a");
+        let mut right_click = button_events(row, egui::PointerButton::Secondary, true);
+        right_click.extend(button_events(row, egui::PointerButton::Secondary, false));
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, right_click);
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        text_center(&output, "Save VNC shortcut");
+
+        // The filter now leaves only live-b, which takes the first row.
+        overlay.query = "live-b".into();
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let output = show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            text_shapes(&shape.shape, &mut texts);
+        }
+        assert!(
+            !texts.iter().any(|text| text.galley.text() == "Save VNC shortcut"),
+            "the menu must not survive on another host's row"
         );
     }
 
