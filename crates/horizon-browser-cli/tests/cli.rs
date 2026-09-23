@@ -260,7 +260,7 @@ fn run_persists_preflight_failure_before_any_browser_action() {
     let output = run_command(root.path(), ["run", plan.to_str().expect("UTF-8 path")]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    let jobs = root.path().join(".horizon/browser-jobs");
+    let jobs = root.path().join(".horizon").join("browser-jobs");
     let entries = std::fs::read_dir(&jobs)
         .expect("job directory")
         .collect::<Result<Vec<_>, _>>()

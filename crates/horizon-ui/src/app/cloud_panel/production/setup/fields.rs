@@ -3,6 +3,10 @@ use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::setup::{Agent, Authentication, Draft};
 
 pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
+    render_profile(ui, draft, false);
+}
+
+pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
     let saved_compute = draft.has_saved_settings();
     ui.label(RichText::new("Compute account").size(16.0).strong());
     ui.label("RunPod API key");
@@ -11,6 +15,7 @@ pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
     ui.add_space(18.0);
     ui.label(RichText::new("Coding agents").size(16.0).strong());
     ui.label(RichText::new("Choose one or both. Each agent gets its own worktree.").color(theme::FG_SOFT()));
+    let selected_agents = draft.selected_agents().to_vec();
     for (agent, label, mode, value, saved) in [
         (
             Agent::Codex,
@@ -29,8 +34,8 @@ pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
     ] {
         ui.push_id(label, |ui| {
             ui.add_space(10.0);
-            let mut selected = draft.settings.default_agents.contains(&agent);
-            if ui.checkbox(&mut selected, RichText::new(label).strong()).changed() {
+            let mut selected = selected_agents.contains(&agent);
+            if ui.add_enabled(!fixed_agents, egui::Checkbox::new(&mut selected, RichText::new(label).strong())).changed() {
                 draft.settings.default_agents.retain(|item| *item != agent);
                 if selected { draft.settings.default_agents.push(agent); }
             }

@@ -64,6 +64,59 @@ fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
 }
 
 #[test]
+fn opening_workspace_cloud_focuses_title_without_an_extra_click() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
+    app.cloud_prototype.ready = true;
+    let workspace = app.board.create_workspace("Sample project");
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    app.pending_preset_pick = Some((Some(workspace), [400.0, 300.0], Instant::now()));
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cloud = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "Cloud" && text.pos.y > 200.0 => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                Event::PointerMoved(cloud),
+                Event::PointerButton {
+                    pos: cloud,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            Modifiers::NONE,
+        );
+    }
+    assert!(app.cloud_creation_open());
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("Feature workspace".into())],
+        Modifiers::NONE,
+    );
+    assert_eq!(app.cloud_prototype.production.title, "Feature workspace");
+}
+
+#[test]
 fn creation_tab_navigation_never_activates_the_toolbar() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
@@ -87,16 +140,25 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
             );
         }
     }
-    for _ in 0..16 {
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cancel = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "Cancel" => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        .unwrap();
+    for _ in 0..32 {
         key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-        key(&ctx, &mut app, Key::Space, Modifiers::NONE);
-        if app.dir_picker.is_some() {
-            key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-            assert!(app.dir_picker.is_none(), "Escape must close the repository picker");
-        }
+        let focused = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id));
         assert!(app.command_palette.is_none(), "modal focus reached Quick Nav");
         assert!(app.settings.is_none(), "modal focus reached Settings");
-        if !app.cloud_creation_open() {
+        if focused.is_some_and(|response| response.rect.contains(cancel)) {
+            key(&ctx, &mut app, Key::Space, Modifiers::NONE);
+            assert!(!app.cloud_creation_open());
             return;
         }
     }
@@ -148,6 +210,7 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     frame(&ctx, &mut app, vec![Event::Text("Deployment".into())], Modifiers::NONE);
     let repository = temp.path().join("committed-repository");
     std::fs::create_dir(&repository).unwrap();
+    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     frame(

@@ -13,6 +13,7 @@ use super::{
 };
 use crate::error::Error;
 use crate::panel::PanelResume;
+use cwd::stored_cwd;
 
 mod cwd;
 mod grok;
@@ -160,7 +161,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
             local_id: "workspace".to_string(),
             remote_workspace: None,
             name: "termgalore".to_string(),
-            cwd: Some("/repo".to_string()),
+            cwd: stored_cwd("/repo"),
             position: None,
             template: None,
             layout: None,
@@ -169,7 +170,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
                     local_id: "a".to_string(),
                     name: "Claude A".to_string(),
                     kind: PanelKind::Claude,
-                    cwd: Some("/repo".to_string()),
+                    cwd: stored_cwd("/repo"),
                     resume: PanelResume::Last,
                     ..PanelState::default()
                 },
@@ -177,7 +178,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
                     local_id: "b".to_string(),
                     name: "Claude B".to_string(),
                     kind: PanelKind::Claude,
-                    cwd: Some("/repo".to_string()),
+                    cwd: stored_cwd("/repo"),
                     resume: PanelResume::Last,
                     ..PanelState::default()
                 },
@@ -190,7 +191,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "session-1".to_string(),
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 label: None,
                 updated_at: 2,
                 interactive: true,
@@ -198,7 +199,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "session-2".to_string(),
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 label: None,
                 updated_at: 1,
                 interactive: true,
@@ -234,7 +235,7 @@ fn bootstrap_assigns_scoped_groups_before_cwd_less_groups() {
                     local_id: "scoped".to_string(),
                     name: "Scoped Claude".to_string(),
                     kind: PanelKind::Claude,
-                    cwd: Some("/repo".to_string()),
+                    cwd: stored_cwd("/repo"),
                     resume: PanelResume::Last,
                     ..PanelState::default()
                 },
@@ -248,7 +249,7 @@ fn bootstrap_assigns_scoped_groups_before_cwd_less_groups() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "repo-session".to_string(),
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 label: None,
                 updated_at: 2,
                 interactive: true,
@@ -256,7 +257,7 @@ fn bootstrap_assigns_scoped_groups_before_cwd_less_groups() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "other-session".to_string(),
-                cwd: Some("/other".to_string()),
+                cwd: stored_cwd("/other"),
                 label: None,
                 updated_at: 1,
                 interactive: true,
@@ -279,7 +280,7 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
             local_id: "workspace".to_string(),
             remote_workspace: None,
             name: "termgalore".to_string(),
-            cwd: Some("/repo".to_string()),
+            cwd: stored_cwd("/repo"),
             position: None,
             template: None,
             layout: None,
@@ -287,12 +288,12 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
                 local_id: "a".to_string(),
                 name: "Claude A".to_string(),
                 kind: PanelKind::Claude,
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 resume: PanelResume::Last,
                 session_binding: Some(AgentSessionBinding::new(
                     PanelKind::Claude,
                     "session-live".to_string(),
-                    Some("/repo".to_string()),
+                    stored_cwd("/repo"),
                     None,
                     None,
                 )),
@@ -306,7 +307,7 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "session-live".to_string(),
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 label: None,
                 updated_at: 2,
                 interactive: true,
@@ -314,7 +315,7 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
             AgentSessionRecord {
                 kind: PanelKind::Claude,
                 session_id: "session-free".to_string(),
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 label: None,
                 updated_at: 1,
                 interactive: true,
@@ -338,7 +339,7 @@ fn bootstrap_repairs_persisted_codex_child_bindings() {
     let root = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-root".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Root session".to_string()),
         updated_at: 42,
         interactive: true,
@@ -346,7 +347,7 @@ fn bootstrap_repairs_persisted_codex_child_bindings() {
     let fallback = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-fallback".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Fallback session".to_string()),
         updated_at: 41,
         interactive: true,
@@ -366,12 +367,12 @@ fn bootstrap_repairs_persisted_codex_child_bindings() {
                 local_id: "panel".to_string(),
                 name: "Codex".to_string(),
                 kind: PanelKind::Codex,
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 resume: PanelResume::Fresh,
                 session_binding: Some(AgentSessionBinding::new(
                     PanelKind::Codex,
                     "session-child".to_string(),
-                    Some("/repo".to_string()),
+                    stored_cwd("/repo"),
                     None,
                     Some(50),
                 )),
@@ -408,7 +409,7 @@ fn bootstrap_repairs_an_explicit_codex_child_resume() {
     let root = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-root".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Root session".to_string()),
         updated_at: 42,
         interactive: true,
@@ -416,7 +417,7 @@ fn bootstrap_repairs_an_explicit_codex_child_resume() {
     let fallback = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-fallback".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Fallback session".to_string()),
         updated_at: 41,
         interactive: true,
@@ -436,7 +437,7 @@ fn bootstrap_repairs_an_explicit_codex_child_resume() {
                 local_id: "panel".to_string(),
                 name: "Codex".to_string(),
                 kind: PanelKind::Codex,
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 resume: PanelResume::Session {
                     session_id: "session-child".to_string(),
                 },
@@ -469,7 +470,7 @@ fn bootstrap_does_not_duplicate_a_root_resume() {
     let root = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-root".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Root session".to_string()),
         updated_at: 42,
         interactive: true,
@@ -477,7 +478,7 @@ fn bootstrap_does_not_duplicate_a_root_resume() {
     let fallback = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-fallback".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Fallback session".to_string()),
         updated_at: 41,
         interactive: true,
@@ -503,7 +504,7 @@ fn bootstrap_does_not_duplicate_a_root_resume() {
         AgentSessionBinding::new(
             PanelKind::Codex,
             session_id.to_string(),
-            Some("/repo".to_string()),
+            stored_cwd("/repo"),
             None,
             Some(50),
         )
@@ -512,7 +513,7 @@ fn bootstrap_does_not_duplicate_a_root_resume() {
         local_id: local_id.to_string(),
         name: local_id.to_string(),
         kind: PanelKind::Codex,
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         resume: PanelResume::Last,
         session_binding: Some(binding(session_id)),
         ..PanelState::default()
@@ -570,7 +571,7 @@ fn bootstrap_retains_the_later_duplicate_direct_root_without_resuming_it() {
         session_binding: Some(AgentSessionBinding::new(
             PanelKind::Codex,
             "session-root".to_string(),
-            Some("/repo".to_string()),
+            stored_cwd("/repo"),
             None,
             None,
         )),
@@ -610,7 +611,7 @@ fn bootstrap_retains_an_unresolved_codex_child_binding() {
                 local_id: "panel".to_string(),
                 name: "Codex".to_string(),
                 kind: PanelKind::Codex,
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 resume: PanelResume::Session {
                     session_id: "session-child".to_string(),
                 },
@@ -638,7 +639,7 @@ fn bootstrap_preserves_last_for_an_unresolved_codex_child_binding() {
     let fallback = AgentSessionRecord {
         kind: PanelKind::Codex,
         session_id: "session-fallback".to_string(),
-        cwd: Some("/repo".to_string()),
+        cwd: stored_cwd("/repo"),
         label: Some("Fallback session".to_string()),
         updated_at: 41,
         interactive: true,
@@ -658,12 +659,12 @@ fn bootstrap_preserves_last_for_an_unresolved_codex_child_binding() {
                 local_id: "panel".to_string(),
                 name: "Codex".to_string(),
                 kind: PanelKind::Codex,
-                cwd: Some("/repo".to_string()),
+                cwd: stored_cwd("/repo"),
                 resume: PanelResume::Last,
                 session_binding: Some(AgentSessionBinding::new(
                     PanelKind::Codex,
                     "session-child".to_string(),
-                    Some("/repo".to_string()),
+                    stored_cwd("/repo"),
                     None,
                     None,
                 )),
@@ -705,7 +706,7 @@ fn bootstrap_discards_a_stale_exact_binding_without_pinning_last() {
                 session_binding: Some(AgentSessionBinding::new(
                     PanelKind::Codex,
                     "archived-session".to_string(),
-                    Some("/repo".to_string()),
+                    stored_cwd("/repo"),
                     None,
                     None,
                 )),
@@ -728,7 +729,7 @@ fn explicit_recovery_neutralizes_only_scoped_unverified_ids() {
     let binding = AgentSessionBinding::new(
         PanelKind::Codex,
         "session-child".to_string(),
-        Some("/repo".to_string()),
+        stored_cwd("/repo"),
         None,
         None,
     );
@@ -795,7 +796,7 @@ fn parse_claude_project_session_uses_resumable_jsonl_session_id() {
 
     assert_eq!(session.kind, PanelKind::Claude);
     assert_eq!(session.session_id, "session-123");
-    assert_eq!(session.cwd.as_deref(), Some("/repo"));
+    assert_eq!(session.cwd, stored_cwd("/repo"));
     assert_eq!(session.label.as_deref(), Some("reply with ok only"));
     assert_eq!(session.updated_at, 42);
 }
@@ -873,7 +874,7 @@ fn load_claude_project_session_summary_reads_head_and_tail_metadata() {
 
     assert_eq!(session.kind, PanelKind::Claude);
     assert_eq!(session.session_id, "session-123");
-    assert_eq!(session.cwd.as_deref(), Some("/repo"));
+    assert_eq!(session.cwd, stored_cwd("/repo"));
     assert_eq!(session.label.as_deref(), Some("reply with ok only"));
     assert_eq!(session.updated_at, 9);
 }
@@ -907,9 +908,9 @@ INSERT INTO session (id, title, directory, parent_id, time_updated, time_archive
     assert_eq!(sessions.len(), 2);
     assert_eq!(sessions[0].kind, PanelKind::OpenCode);
     assert_eq!(sessions[0].session_id, "session-other");
-    assert_eq!(sessions[0].cwd.as_deref(), Some("/other"));
+    assert_eq!(sessions[0].cwd, stored_cwd("/other"));
     assert_eq!(sessions[1].session_id, "session-root");
-    assert_eq!(sessions[1].cwd.as_deref(), Some("/repo"));
+    assert_eq!(sessions[1].cwd, stored_cwd("/repo"));
 }
 
 #[test]
@@ -925,7 +926,7 @@ fn parse_pi_session_uses_header_metadata_and_latest_user_message() {
 
     assert_eq!(session.kind, PanelKind::Pi);
     assert_eq!(session.session_id, "pi-session-123");
-    assert_eq!(session.cwd.as_deref(), Some("/repo"));
+    assert_eq!(session.cwd, stored_cwd("/repo"));
     assert_eq!(session.label.as_deref(), Some("latest prompt"));
     assert_eq!(session.updated_at, 42);
 }

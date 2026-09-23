@@ -1,4 +1,5 @@
 use super::*;
+mod inspection;
 mod recovery;
 mod storage;
 use std::{

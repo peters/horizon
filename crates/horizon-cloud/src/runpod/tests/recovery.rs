@@ -65,7 +65,7 @@ fn maximum_length_verified_operator_hint_recovers_an_unlisted_worker() {
     assert!(!encoded.contains("publicIp"));
     assert!(!encoded.contains("env"));
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[1].starts_with(&format!("GET /pods/{worker_id} ")));
+    assert!(requests.lock().unwrap()[1].starts_with(&format!("GET /pods/{worker_id}?includeNetworkVolume=true ")));
 }
 
 #[test]

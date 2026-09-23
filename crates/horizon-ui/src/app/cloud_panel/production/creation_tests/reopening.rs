@@ -83,7 +83,7 @@ fn creation_dialog_and_actions_fit_after_shrinking_with_scrolling_content() {
             viewport.contains_rect(dialog),
             "{size:?}: dialog {dialog:?} exceeds {viewport:?}"
         );
-        for label in ["Create cloud", "Cancel"] {
+        for label in ["Start cloud", "Cancel"] {
             let shape = output
                 .shapes
                 .iter()

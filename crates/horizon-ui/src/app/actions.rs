@@ -37,6 +37,10 @@ fn add_panel_position(
 }
 
 enum PresetPickerAction {
+    #[cfg(feature = "cloud-workspaces")]
+    CreateCloud {
+        workspace_id: WorkspaceId,
+    },
     CreatePanel {
         workspace_id: WorkspaceId,
         preset: PresetConfig,
