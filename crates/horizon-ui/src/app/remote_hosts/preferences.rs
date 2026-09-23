@@ -20,14 +20,29 @@ impl HorizonApp {
         if self.template_config.remote_hosts.default_workspace_name() == name {
             return true;
         }
-        // Patch the one key in the file's own text when it can be read and
-        // parsed, so comments, ordering and unknown keys survive; a missing or
-        // unparsable file is written from the config instead.
-        let patched = std::fs::read_to_string(&self.config_path)
-            .ok()
-            .filter(|source| Config::from_yaml(source).is_ok())
-            .and_then(|source| horizon_core::patch_default_workspace_source(&source, name))
-            .filter(|patched| Config::from_yaml(patched).is_ok());
+        // Patch the one key in the file's own text so comments, ordering and
+        // unknown keys survive. An existing file that cannot be patched that
+        // way (unreadable, currently invalid, or a flow-style section) is left
+        // alone rather than overwritten from memory; only a genuinely absent
+        // file is written from the config.
+        let patched = match std::fs::read_to_string(&self.config_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                tracing::warn!(%error, path = %self.config_path.display(), "config file unreadable; default workspace not changed");
+                return false;
+            }
+            Ok(source) => {
+                let patched = Config::from_yaml(&source)
+                    .ok()
+                    .and_then(|_| horizon_core::patch_default_workspace_source(&source, name))
+                    .filter(|patched| Config::from_yaml(patched).is_ok());
+                let Some(patched) = patched else {
+                    tracing::warn!(path = %self.config_path.display(), "config file cannot be patched in place; default workspace not changed");
+                    return false;
+                };
+                Some(patched)
+            }
+        };
         self.persist_config_change("remote_hosts.default_workspace", patched, |config| {
             config.remote_hosts.default_workspace = name.to_string();
         })

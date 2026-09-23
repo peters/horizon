@@ -216,6 +216,36 @@ fn setting_the_default_workspace_patches_the_file_text_in_place() {
     assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
 }
 
+#[test]
+fn set_default_never_overwrites_a_file_it_cannot_patch_in_place() {
+    let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
+
+    // A flow-style section is valid YAML the patcher does not rewrite.
+    let flow = "version: 11 # keep\nremote_hosts: { vnc_port: 5901 }\nworkspaces: []\n";
+    std::fs::write(&app.config_path, flow).unwrap();
+    assert!(!app.set_remote_hosts_default_workspace("Ops"));
+    assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), flow);
+
+    // A file that is currently invalid keeps its external edits.
+    let broken = "version: 11\nremote_hosts:\n  vnc_port: [\n";
+    std::fs::write(&app.config_path, broken).unwrap();
+    assert!(!app.set_remote_hosts_default_workspace("Ops"));
+    assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), broken);
+    assert_eq!(
+        app.template_config.remote_hosts.default_workspace_name(),
+        "Remote Sessions"
+    );
+
+    // Only a genuinely absent file is written from the config.
+    std::fs::remove_file(&app.config_path).unwrap();
+    assert!(app.set_remote_hosts_default_workspace("Ops"));
+    assert!(
+        std::fs::read_to_string(&app.config_path)
+            .unwrap()
+            .contains("default_workspace: Ops")
+    );
+}
+
 mod picker_in_full_app {
     use horizon_core::{RemoteHost, RemoteHostCatalog, RemoteHostSources, RemoteHostStatus, SshConnection};
 
