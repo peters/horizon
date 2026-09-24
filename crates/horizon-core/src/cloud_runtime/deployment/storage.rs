@@ -60,8 +60,8 @@ pub(super) fn expected(store: &Store, worker: &WorkerSpec) -> Result<Option<Volu
     }
 }
 
-pub(in crate::cloud_runtime) fn retained(store: &Store, worker: &WorkerSpec) -> Result<bool> {
-    Ok(load(store, worker)?.is_some_and(|record| record.state != State::Deleted))
+pub(in crate::cloud_runtime) fn retained(store: &Store, deployment: &Deployment) -> Result<bool> {
+    Ok(load_owned(store.root(), deployment)?.is_some_and(|record| record.state != State::Deleted))
 }
 
 /// Drops a journal only after this worker's storage is confirmed deleted.
@@ -95,11 +95,11 @@ pub(in crate::cloud_runtime) fn release_deleted_journal(store: &Store, worker: &
 pub(super) fn terminate(
     provider: &RunPod,
     store: &Store,
-    worker: &WorkerSpec,
+    deployment: &Deployment,
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> Result<()> {
-    let Some(mut record) = load(store, worker)? else {
+    let Some(mut record) = load_owned(store.root(), deployment)? else {
         return Ok(());
     };
     let mut operation = record.state.clone();
@@ -116,15 +116,47 @@ pub(super) fn terminate(
     Ok(())
 }
 
-pub(in crate::cloud_runtime) fn validate_migration(root: &std::path::Path, worker: &WorkerSpec) -> Result<()> {
-    load_at(root, worker).map(|_| ())
+pub(in crate::cloud_runtime) fn validate_migration(root: &std::path::Path, deployment: &Deployment) -> Result<()> {
+    load_owned(root, deployment).map(|_| ())
+}
+
+/// Moves the journal from `from` to `to`, which differ only in the image and its
+/// registry credential. An image replacement calls this before saving the deployment
+/// record that switches (or restores) its worker specification, so a crash in between
+/// leaves a journal that the still-pending replacement accepts. Idempotent.
+pub(in crate::cloud_runtime) fn rebind(store: &Store, from: &WorkerSpec, to: &WorkerSpec) -> Result<()> {
+    from.verify_replacement(to)?;
+    let Some(mut record) = load_at(store.root(), from, Some(to))? else {
+        return Ok(());
+    };
+    if record.worker != *to {
+        record.worker = to.clone();
+        save(store, &record)?;
+    }
+    Ok(())
 }
 
 fn load(store: &Store, worker: &WorkerSpec) -> Result<Option<Record>> {
-    load_at(store.root(), worker)
+    load_at(store.root(), worker, None)
 }
 
-fn load_at(root: &std::path::Path, worker: &WorkerSpec) -> Result<Option<Record>> {
+/// Loads the journal of the deployment's worker or, while a journaled image replacement
+/// has a built image, of the same worker on that image (see `rebind`).
+fn load_owned(root: &std::path::Path, deployment: &Deployment) -> Result<Option<Record>> {
+    let worker = deployment
+        .spec
+        .as_ref()
+        .ok_or(Error::Invalid("Storage journal has no worker specification"))?;
+    load_at(root, worker, deployment.replacement_worker()?.as_ref())
+}
+
+/// The journal records `worker` exactly. Only a journaled replacement's worker may
+/// differ, in the image digest and registry credential alone and only to its values.
+fn records_worker(recorded: &WorkerSpec, worker: &WorkerSpec, replacement: Option<&WorkerSpec>) -> bool {
+    recorded == worker || replacement.is_some_and(|next| recorded == next && worker.verify_replacement(next).is_ok())
+}
+
+fn load_at(root: &std::path::Path, worker: &WorkerSpec, replacement: Option<&WorkerSpec>) -> Result<Option<Record>> {
     let bytes = match std::fs::read(root.join("workspace-volume.json")) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -139,7 +171,7 @@ fn load_at(root: &std::path::Path, worker: &WorkerSpec) -> Result<Option<Record>
     };
     let record: Record = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
     if record.version != 1
-        || record.worker != *worker
+        || !records_worker(&record.worker, worker, replacement)
         || record.spec.operation_id != worker.operation_id
         || record.spec.size != u32::from(worker.profile.storage.volume_gb)
         || worker.profile.gpu
@@ -173,6 +205,7 @@ fn save(store: &Store, record: &Record) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::cloud_runtime::state::{OperationId, ReplacementImage};
     use crate::cloud_runtime::{Event, Stage};
     fn record() -> Record {
         let worker: WorkerSpec = serde_json::from_value(serde_json::json!({
@@ -191,6 +224,44 @@ mod tests {
             state: State::Prepared,
         }
     }
+    fn deployment(worker: &WorkerSpec) -> Deployment {
+        serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":worker.operation_id,"repository":"/synthetic","revision":"a",
+            "profile":worker.profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":worker,"worker":null,"sessions":[]
+        }))
+        .unwrap()
+    }
+    /// A deployment whose provider update to image `b` may be in flight.
+    fn replacing(worker: &WorkerSpec) -> (Deployment, WorkerSpec) {
+        let mut state = deployment(worker);
+        state
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
+            .unwrap();
+        state
+            .replacement_built(ReplacementImage {
+                digest: format!("example/worker@sha256:{}", "b".repeat(64)),
+                registry_auth_id: Some("pull-b".into()),
+                registry_generation: None,
+            })
+            .unwrap();
+        state.request_replacement().unwrap();
+        let next = state.replacement_worker().unwrap().unwrap();
+        (state, next)
+    }
+    fn bound(record: &mut Record) -> Volume {
+        let volume = Volume {
+            id: "volume1".into(),
+            name: record.spec.name(),
+            size: record.spec.size,
+            data_center_id: record.spec.data_center_id.clone(),
+        };
+        record.state = State::Bound {
+            volume: volume.clone(),
+            creation: None,
+        };
+        volume
+    }
     #[test]
     fn journal_survives_restart_and_refuses_corruption_or_another_operation() {
         let root = tempfile::tempdir().unwrap();
@@ -200,7 +271,7 @@ mod tests {
             save(&store, &original).unwrap();
         }
         let store = Store::lock(root.path()).unwrap();
-        assert!(retained(&store, &original.worker).unwrap());
+        assert!(retained(&store, &deployment(&original.worker)).unwrap());
         assert!(expected(&store, &original.worker).is_err());
         let mut other = original.worker.clone();
         other.operation_id = "another-operation".into();
@@ -235,7 +306,7 @@ mod tests {
         assert!(expected(&store, &record.worker).is_err());
         record.state = State::Deleted;
         save(&store, &record).unwrap();
-        assert!(!retained(&store, &record.worker).unwrap());
+        assert!(!retained(&store, &deployment(&record.worker)).unwrap());
         assert!(expected(&store, &record.worker).is_err());
     }
     #[test]
@@ -266,7 +337,7 @@ mod tests {
         )
         .unwrap();
         assert!(expected(&store, &record.worker).is_err());
-        assert!(validate_migration(store.root(), &record.worker).is_err());
+        assert!(validate_migration(store.root(), &deployment(&record.worker)).is_err());
     }
     #[test]
     fn removal_requires_storage_cleanup_even_without_a_live_worker() {
@@ -349,7 +420,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
         assert_eq!(expected(&store, &record().worker).unwrap(), None);
-        assert!(!retained(&store, &record().worker).unwrap());
+        assert!(!retained(&store, &deployment(&record().worker)).unwrap());
     }
     #[test]
     fn prepared_cleanup_recovers_when_storage_finished_before_deployment_save() {
@@ -452,5 +523,122 @@ mod tests {
             assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &deployment).is_err());
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn replacement_commit_rebinds_the_journal_before_the_deployment() {
+        for interrupted in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::lock(root.path()).unwrap();
+            let mut record = record();
+            let volume = bound(&mut record);
+            save(&store, &record).unwrap();
+            let (mut state, next) = replacing(&record.worker);
+            store.save(&state).unwrap();
+            assert!(expected(&store, &next).is_err());
+            assert!(retained(&store, &state).unwrap());
+            if interrupted {
+                // The commit's journal write landed but its deployment write did not.
+                rebind(&store, &record.worker, &next).unwrap();
+                let rebound = std::fs::read(root.path().join("workspace-volume.json")).unwrap();
+                assert!(load(&store, &record.worker).is_err());
+                assert!(retained(&store, &state).unwrap());
+                validate_migration(root.path(), &state).unwrap();
+                let mut unjournaled = state.clone();
+                unjournaled.image_replacement = None;
+                unjournaled.stage = crate::cloud_runtime::Stage::Ready;
+                assert!(retained(&store, &unjournaled).is_err());
+                rebind(&store, &record.worker, &next).unwrap();
+                assert_eq!(
+                    std::fs::read(root.path().join("workspace-volume.json")).unwrap(),
+                    rebound
+                );
+            }
+            let operation = state.image_replacement.as_ref().unwrap().operation;
+            assert_eq!(super::super::commit_replacement(&store, &mut state).unwrap(), operation);
+            let saved = store.load().unwrap().unwrap();
+            assert_eq!(saved.spec.as_ref(), Some(&next));
+            assert!(saved.image_replacement.is_none());
+            assert_eq!(saved.session_restart, Some(operation));
+            assert_eq!(saved.stage, crate::cloud_runtime::Stage::Readiness);
+            assert_eq!(expected(&store, &next).unwrap(), Some(volume));
+            assert!(super::super::commit_replacement(&store, &mut state).is_err());
+            assert_eq!(store.load().unwrap().unwrap().session_restart, Some(operation));
+        }
+    }
+    #[test]
+    fn journal_accepts_only_the_worker_on_its_journaled_replacement_image() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut record = record();
+        let (state, next) = replacing(&record.worker);
+        rebind(&store, &record.worker, &next).unwrap();
+        assert!(!root.path().join("workspace-volume.json").exists());
+        let mut third = next.clone();
+        third.image_digest = format!("example/worker@sha256:{}", "c".repeat(64));
+        record.worker = third.clone();
+        save(&store, &record).unwrap();
+        assert!(retained(&store, &state).is_err());
+        // A journal that cannot be rebound keeps the replacement requested.
+        store.save(&state).unwrap();
+        let mut committing = state.clone();
+        assert!(super::super::commit_replacement(&store, &mut committing).is_err());
+        assert_eq!(committing.spec, state.spec);
+        assert_eq!(
+            store.load().unwrap().unwrap().image_replacement,
+            state.image_replacement
+        );
+        let mut rekeyed = next.clone();
+        rekeyed.public_key = "another-key".into();
+        record.worker = next.clone();
+        save(&store, &record).unwrap();
+        let journal = std::fs::read(root.path().join("workspace-volume.json")).unwrap();
+        for (from, to) in [
+            (&next, &rekeyed),
+            (&next, &next),
+            (&third, &state.spec.clone().unwrap()),
+        ] {
+            assert!(rebind(&store, from, to).is_err());
+            assert_eq!(
+                std::fs::read(root.path().join("workspace-volume.json")).unwrap(),
+                journal
+            );
+        }
+        let mut prepared = deployment(state.spec.as_ref().unwrap());
+        prepared
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
+            .unwrap();
+        assert!(
+            retained(&store, &prepared).is_err(),
+            "no image was built for the journal to switch to"
+        );
+        // Cancelling a switched replacement restores the previous binding.
+        let current = state.spec.clone().unwrap();
+        rebind(&store, &next, &current).unwrap();
+        assert!(load(&store, &current).unwrap().is_some());
+        assert!(retained(&store, &deployment(&current)).unwrap());
+    }
+    #[test]
+    fn deletion_accepts_a_journal_rebound_by_an_interrupted_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut record = record();
+        let (mut state, next) = replacing(&record.worker);
+        state.operation = CreateState::Terminated {
+            worker_id: "worker1".into(),
+        };
+        record.worker = next;
+        record.state = State::Deleted;
+        save(&store, &record).unwrap();
+        let provider = RunPod::new(horizon_cloud::Credential::new("synthetic-test-key".into()).unwrap());
+        terminate(&provider, &store, &state, &Cancellation::default(), &|_| {}).unwrap();
+        assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &state).unwrap());
+        // Finishing the deletion drops the journal; removal and a later redeploy then
+        // compare the storage journal with the recorded worker only.
+        super::super::drop_replacement(&store, &mut state).unwrap();
+        state.stage = crate::cloud_runtime::Stage::Deleted;
+        assert!(state.image_replacement.is_none());
+        assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &state).unwrap());
+        release_deleted_journal(&store, state.spec.as_ref().unwrap()).unwrap();
     }
 }

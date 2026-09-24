@@ -538,6 +538,8 @@ before allocation and project locks, with exclusive mutable handle access. These
 local APIs perform no provider I/O and are not called by runtime entry points yet;
 credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
+`state` defines and persists the deployment aggregate; `state::replacement` owns its
+journaled image-replacement state machine and the transition checks.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate

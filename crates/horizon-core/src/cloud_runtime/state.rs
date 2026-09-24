@@ -1,8 +1,13 @@
 //! Durable allocation fence and per-cloud ownership lock.
 pub mod migration;
+mod replacement;
 mod transaction;
 use super::{Error, Result, Stage};
 use horizon_cloud::{CreateState, Worker, WorkerSpec};
+pub use horizon_cloud_protocol::OperationId;
+#[cfg(all(test, unix))]
+pub(super) use replacement::REPLACEMENT_PENDING;
+pub use replacement::{ImageReplacement, ReplacementImage, ReplacementPhase};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -54,7 +59,14 @@ pub struct Deployment {
     pub browserstack_released: bool,
     #[serde(default)]
     pub browserstack_targets: std::collections::BTreeSet<String>,
+    /// Journals a switch of the bound worker to a rebuilt image until it commits or is cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_replacement: Option<ImageReplacement>,
+    /// A committed image replacement reset the worker's container; its sessions must relaunch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_restart: Option<OperationId>,
 }
+
 impl Deployment {
     pub(super) fn normalize_readiness_history(&mut self) {
         if self.stage == Stage::Ready {
@@ -199,5 +211,63 @@ mod tests {
         assert!(matches!(Store::lock(temp.path()), Err(Error::Busy)));
         drop(store);
         assert!(Store::lock(temp.path()).is_ok());
+    }
+
+    /// `deployment.json` as written before image replacement existed.
+    const LEGACY_ENCODING: &str = r#"{
+  "version": 1,
+  "cloud_id": "golden",
+  "repository": "/synthetic",
+  "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": {
+    "provider": "runpod",
+    "image": "registry.example/worker",
+    "cpu": 4,
+    "memory_gb": 8,
+    "gpu": false,
+    "build": null,
+    "storage": {
+      "container_gb": 20,
+      "volume_gb": 20
+    },
+    "bootstrap": {
+      "readiness_seconds": 600,
+      "contract_version": 1
+    },
+    "capabilities": {
+      "agents": [
+        "codex",
+        "claude",
+        "grok"
+      ],
+      "browsers": [
+        "chromium"
+      ],
+      "desktop": true
+    }
+  },
+  "stage": "Ready",
+  "operation": {
+    "state": "bound",
+    "worker_id": "worker1"
+  },
+  "spec": null,
+  "registry_generation": null,
+  "worker": null,
+  "sessions": [],
+  "source_ready": false,
+  "ready_after_seconds": null,
+  "ready_history": "Unobserved",
+  "stop_requested": false,
+  "browserstack_released": false,
+  "browserstack_targets": []
+}"#;
+
+    #[test]
+    fn records_without_a_replacement_keep_their_exact_encoding() {
+        let state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        assert!(state.image_replacement.is_none() && state.session_restart.is_none());
+        let encoded = serde_json::to_vec_pretty(&state).unwrap();
+        assert_eq!(String::from_utf8(encoded).unwrap(), LEGACY_ENCODING);
     }
 }
