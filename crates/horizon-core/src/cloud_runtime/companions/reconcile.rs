@@ -61,10 +61,13 @@ pub(super) fn run(
             Ok((status, access)) => {
                 row.companion.status = status;
                 row.companion.access = access;
-                if status == Status::Changed
-                    && let Err(error) = revoke(store, state, &alias, &mut grant, transport)
-                {
-                    row.error = Some(error.to_string());
+                if status == Status::Changed {
+                    if let Err(error) = revoke(store, state, &alias, &mut grant, transport) {
+                        row.error = Some(error.to_string());
+                    }
+                    if !grant.source_disconnected || !grant.target_revoked {
+                        row.companion.status = Status::RevocationPending;
+                    }
                 }
             }
             Err(error) => {

@@ -251,7 +251,10 @@ fn changed_yaml_and_replaced_workers_cannot_redirect_a_selected_grant() {
     fixture.select();
     fixture.transport.calls.clear();
     fixture.transport.workers.get_mut("target").unwrap().id = "replacement-worker".into();
-    assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Changed);
+    let snapshot = fixture.run(&Action::Refresh);
+    assert_eq!(snapshot.rows[0].companion.status, Status::RevocationPending);
+    assert_eq!(snapshot.catalog.companions[0].status, Status::RevocationPending);
+    assert!(snapshot.catalog.companions[0].access.is_none());
     assert_eq!(fixture.transport.calls, [("source".into(), "disconnect".into())]);
 }
 
@@ -294,6 +297,47 @@ fn invalid_scope_ambiguity_and_competing_controllers_fail_closed() {
     let mut owner = fixture.owner.clone();
     owner.cloud_id = "../escape".into();
     assert!(journal::Store::open(fixture.root.path(), &owner).is_err());
+}
+
+#[test]
+fn contradictory_access_and_duplicate_grants_fail_before_ssh_or_journal_mutation() {
+    for corruption in ["source", "target", "duplicate", "source_pin", "target_pin", "revision"] {
+        let mut fixture = Fixture::new();
+        fixture.transport.fail_authorize = corruption.ends_with("_pin") || corruption == "revision";
+        fixture.select();
+        fixture.transport.calls.clear();
+        let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+        let mut state = store.load().unwrap();
+        let grant = state.grants.get_mut("app").unwrap();
+        match corruption {
+            "source" => grant.source_disconnected = true,
+            "target" => grant.target_revoked = true,
+            "source_pin" => grant.source_worker = None,
+            "target_pin" => grant.target_worker = None,
+            "revision" => grant.revision = None,
+            _ => {
+                let mut duplicate = grant.clone();
+                duplicate.selection =
+                    Selection::new(&fixture.context.source, "utility", &fixture.context.inventory[1]).unwrap();
+                duplicate.access.as_mut().unwrap().ssh_alias = "companion-utility".into();
+                state.grants.insert("utility".into(), duplicate);
+            }
+        }
+        store.save(&state).unwrap();
+        let before = std::fs::read(&fixture.transport.journal).unwrap();
+        assert!(
+            execute(
+                &store,
+                &fixture.owner,
+                Some(&fixture.context),
+                &Action::Clear { alias: "app".into() },
+                &mut fixture.transport,
+            )
+            .is_err()
+        );
+        assert!(fixture.transport.calls.is_empty());
+        assert_eq!(std::fs::read(&fixture.transport.journal).unwrap(), before);
+    }
 }
 
 #[test]

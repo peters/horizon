@@ -1,7 +1,7 @@
 use super::{Error, Owner, Result, Selection, Target};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -89,6 +89,7 @@ impl Store {
         {
             return Err(Error::Invalid("Companion journal ownership or version differs"));
         }
+        let mut ids = BTreeSet::new();
         for (alias, grant) in &state.grants {
             if grant.access.as_ref().is_some_and(|access| {
                 access.grant != grant.id
@@ -97,11 +98,16 @@ impl Store {
                     || grant.source_worker.is_none()
                     || grant.target_worker.is_none()
                     || grant.revision.is_none()
+                    || grant.source_disconnected
+                    || grant.target_revoked
             }) {
                 return Err(Error::Invalid("Invalid persisted companion connection"));
             }
             if !horizon_cloud::valid_id(alias)
                 || !horizon_cloud::valid_id(&grant.id)
+                || !ids.insert(&grant.id)
+                || (!grant.source_disconnected && grant.source_worker.is_none())
+                || (!grant.target_revoked && (grant.target_worker.is_none() || grant.revision.is_none()))
                 || grant.target.scope != state.owner.scope
                 || grant.target.cloud_id == self.owner.cloud_id
                 || !horizon_cloud::valid_id(&grant.target.cloud_id)
