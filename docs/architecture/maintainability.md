@@ -453,7 +453,11 @@ Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those dut
 separate. `allocation` re-exports the typed allocation/project/controller identities
 and machine-local placement bindings from `horizon-cloud-protocol`. That small
 contract crate can be used by the host and worker without importing core/UI; it
-contains no runtime or ownership authority.
+contains no runtime or ownership authority. Its `signed` module authenticates bounded
+management envelopes against a previously pinned controller key, binding project
+membership, operation, action, revision and exact payload bytes. It does not load
+signing credentials or replace worker membership checks. Host registration and
+worker dispatch are separate consumers and are not connected yet.
 The host `allocation::legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership

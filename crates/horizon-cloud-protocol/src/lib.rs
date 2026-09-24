@@ -3,8 +3,9 @@
 #![forbid(unsafe_code)]
 mod identity;
 mod placement;
+pub mod signed;
 
-pub use identity::{AllocationId, ControllerId, ProjectId, ProjectIdentity};
+pub use identity::{AllocationId, ControllerId, OperationId, ProjectId, ProjectIdentity};
 pub use placement::{ExistingWorker, Placement, PlacementBinding, SharingMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

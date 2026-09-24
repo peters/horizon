@@ -2296,6 +2296,7 @@ name = "horizon-cloud-protocol"
 version = "0.2.7"
 dependencies = [
  "horizon-cloud",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
