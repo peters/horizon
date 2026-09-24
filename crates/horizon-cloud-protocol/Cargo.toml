@@ -1,0 +1,19 @@
+[package]
+name = "horizon-cloud-protocol"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared cloud allocation identity and coordination contracts"
+
+[lints]
+workspace = true
+
+[dependencies]
+horizon-cloud = { path = "../horizon-cloud" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

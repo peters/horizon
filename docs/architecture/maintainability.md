@@ -450,9 +450,11 @@ Git, settings storage or a provider CLI.
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
-separate. `allocation` defines typed allocation/project/controller identities and
-versioned machine-local placement bindings for the shared-worker coordinator.
-Its `legacy` module converts the complete v1 deployment payload into a validated
+separate. `allocation` re-exports the typed allocation/project/controller identities
+and machine-local placement bindings from `horizon-cloud-protocol`. That small
+contract crate can be used by the host and worker without importing core/UI; it
+contains no runtime or ownership authority.
+The host `allocation::legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership
 authority. `state::migration` provides opt-in local publication with an old-reader

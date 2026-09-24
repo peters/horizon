@@ -2292,6 +2292,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-cloud-protocol"
+version = "0.2.7"
+dependencies = [
+ "horizon-cloud",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-cloud-worker"
 version = "0.2.7"
 dependencies = [
@@ -2300,6 +2311,7 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-protocol",
  "horizon-cloud",
+ "horizon-cloud-protocol",
  "png",
  "serde",
  "serde_json",
@@ -2322,6 +2334,7 @@ dependencies = [
  "horizon-browser-protocol",
  "horizon-browser-routines",
  "horizon-cloud",
+ "horizon-cloud-protocol",
  "keyring-core",
  "libc",
  "profiling",
