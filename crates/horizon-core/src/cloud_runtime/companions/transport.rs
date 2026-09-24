@@ -63,7 +63,13 @@ impl<'a> Live<'a> {
             .ok_or(Error::Invalid("Missing companion state"))
     }
 
-    fn exchange(&mut self, cloud: &str, command: &str, payload: &impl serde::Serialize) -> Result<String> {
+    fn exchange(
+        &mut self,
+        cloud: &str,
+        command: &str,
+        payload: &impl serde::Serialize,
+        timeout: Duration,
+    ) -> Result<String> {
         let state = self
             .load(cloud)?
             .as_ref()
@@ -95,13 +101,7 @@ impl<'a> Live<'a> {
             secrets: Vec::new(),
         };
         runner
-            .to_file(
-                "Companion SSH operation",
-                &mut ssh,
-                &input,
-                &output,
-                Duration::from_secs(45),
-            )
+            .to_file("Companion SSH operation", &mut ssh, &input, &output, timeout)
             .map_err(|_| Error::Invalid("Companion SSH command failed; check connectivity and worker image support"))?;
         let mut response = String::new();
         std::fs::File::open(output)?
@@ -145,13 +145,24 @@ impl Transport for Live<'_> {
     }
 
     fn call(&mut self, cloud: &str, request: &Request) -> Result<Response> {
-        serde_json::from_str(&self.exchange(cloud, "horizon-cloud-worker companion-control", request)?)
+        let timeout = if matches!(request, Request::Authorize { .. }) {
+            // Two 300-second checkout phases plus bounded worktree and host-key verification.
+            Duration::from_secs(690)
+        } else {
+            Duration::from_secs(45)
+        };
+        serde_json::from_str(&self.exchange(cloud, "horizon-cloud-worker companion-control", request, timeout)?)
             .map_err(|_| Error::Invalid("Worker returned an unsupported companion response"))
     }
 
     fn publish(&mut self, cloud: &str, catalog: &Catalog) -> Result<()> {
         catalog.validate().map_err(Error::Invalid)?;
-        self.exchange(cloud, "horizon-cloud-worker companions publish", catalog)?;
+        self.exchange(
+            cloud,
+            "horizon-cloud-worker companions publish",
+            catalog,
+            Duration::from_secs(45),
+        )?;
         Ok(())
     }
 }
