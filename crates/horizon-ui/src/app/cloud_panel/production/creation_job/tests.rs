@@ -114,10 +114,15 @@ fn creation_captures_only_an_offered_size_for_a_cpu_profile() {
     let ctx = egui::Context::default();
     let form = &mut app.cloud_prototype.production;
     form.title = "Sized".into();
-    form.profiles = Some(CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  accelerated:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 8\n    memory_gb: 32\n    gpu: true\n").unwrap());
-    for (profile, size) in [("dev", (3, 8)), ("dev", (4, 64)), ("accelerated", (8, 32))] {
+    form.profiles = Some(CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  unoffered:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 3\n    memory_gb: 8\n  accelerated:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 8\n    memory_gb: 32\n    gpu: true\n").unwrap());
+    for (profile, size) in [
+        ("dev", Some((3, 8))),
+        ("dev", Some((4, 64))),
+        ("accelerated", Some((8, 32))),
+        ("unoffered", None),
+    ] {
         app.cloud_prototype.production.selected_profile = profile.into();
-        app.cloud_prototype.production.size = Some(size);
+        app.cloud_prototype.production.size = size;
         assert!(
             app.create_production_cloud(&ctx).is_err(),
             "{profile} accepted {size:?}"
