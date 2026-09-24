@@ -353,3 +353,62 @@ fn readiness_preview_resets_user_host_scope_before_system_configuration() {
     let observed = ssh::checked(Command::new("ssh").args(["-G", "-F"]).arg(&path).arg("companion-app")).unwrap();
     assert!(observed.contains("proxycommand false"));
 }
+
+#[test]
+fn inspection_serializes_connection_metadata_and_live_probe_with_mutations() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    let access = Access {
+        grant: "one".into(),
+        ssh_alias: "companion-app".into(),
+        worktree: "/workspace/companions/worktrees/one".into(),
+    };
+    let directory = runtime.key_directory(&access.grant);
+    files::directory(&directory).unwrap();
+    let connection = Response::Connected {
+        ssh_alias: access.ssh_alias.clone(),
+        worktree: access.worktree.clone(),
+    };
+    files::write(
+        &directory.join("connection.json"),
+        &serde_json::to_vec(&connection).unwrap(),
+    )
+    .unwrap();
+    let disconnect = Request::Disconnect { grant: "one".into() };
+    std::thread::scope(|scope| {
+        let (probing, started) = std::sync::mpsc::sync_channel(0);
+        let (resume, wait) = std::sync::mpsc::sync_channel(0);
+        let runtime = &runtime;
+        let access = &access;
+        let inspection = scope.spawn(move || {
+            runtime.probe_access(access, || {
+                probing.send(()).unwrap();
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(true)
+            })
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(runtime.apply(&disconnect).unwrap_err().to_string().contains("busy"));
+        resume.send(()).unwrap();
+        assert!(inspection.join().unwrap().unwrap());
+    });
+    runtime
+        .with_lock(|| {
+            assert!(
+                runtime
+                    .probe_access(&access, || panic!("probe ran during replacement"))
+                    .is_err()
+            );
+            files::write(
+                &directory.join("connection.json"),
+                &serde_json::to_vec(&Response::Disconnected)?,
+            )
+        })
+        .unwrap();
+    assert!(
+        !runtime
+            .probe_access(&access, || panic!("probe ran against replaced metadata"))
+            .unwrap()
+    );
+    runtime.apply(&disconnect).unwrap();
+}

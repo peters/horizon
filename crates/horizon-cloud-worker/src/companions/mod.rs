@@ -53,25 +53,33 @@ pub(crate) fn publish_catalog(catalog: &Catalog) -> io::Result<()> {
 }
 
 pub(crate) fn probe_access(access: &Access) -> io::Result<bool> {
-    let directory = runtime().key_directory(&access.grant);
-    let response: Response = serde_json::from_slice(&std::fs::read(directory.join("connection.json"))?)?;
-    if response
-        != (Response::Connected {
-            ssh_alias: access.ssh_alias.clone(),
-            worktree: access.worktree.clone(),
-        })
-    {
-        return Ok(false);
-    }
-    let output = ssh::checked(
-        std::process::Command::new("ssh")
-            .arg(&access.ssh_alias)
-            .arg(format!("git -C {} rev-parse --is-inside-work-tree", access.worktree)),
-    )?;
-    Ok(output.trim() == "true")
+    runtime().probe_access(access, || {
+        let output = ssh::checked(
+            std::process::Command::new("ssh")
+                .arg(&access.ssh_alias)
+                .arg(format!("git -C {} rev-parse --is-inside-work-tree", access.worktree)),
+        )?;
+        Ok(output.trim() == "true")
+    })
 }
 
 impl Runtime {
+    fn probe_access(&self, access: &Access, probe: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+        self.with_lock(|| {
+            let directory = self.key_directory(&access.grant);
+            let response: Response = serde_json::from_slice(&std::fs::read(directory.join("connection.json"))?)?;
+            if response
+                != (Response::Connected {
+                    ssh_alias: access.ssh_alias.clone(),
+                    worktree: access.worktree.clone(),
+                })
+            {
+                return Ok(false);
+            }
+            probe()
+        })
+    }
+
     fn apply(&self, request: &Request) -> io::Result<Response> {
         if !horizon_cloud::valid_id(request.grant()) {
             return Err(io::Error::other("Invalid companion grant"));
