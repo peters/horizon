@@ -235,6 +235,13 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 
 const URL_SCHEMES: [&str; 3] = ["https://", "http://", "file://"];
 
+pub(super) fn starts_with_url_scheme(chars: &(impl Iterator<Item = char> + Clone)) -> bool {
+    URL_SCHEMES.iter().any(|scheme| {
+        let mut chars = chars.clone();
+        scheme.chars().all(|expected| chars.next() == Some(expected))
+    })
+}
+
 pub(super) fn find_url_at_column(chars: &[char], col: usize) -> Option<String> {
     for scheme in URL_SCHEMES {
         let scheme_chars: Vec<char> = scheme.chars().collect();
