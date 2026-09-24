@@ -471,6 +471,12 @@ effects. Callers supply the owning host's trusted inventory; the serialized
 selection itself is not authentication. Runtime grants and readiness belong in
 the host coordinator, not the portable selection contract.
 
+`horizon-cloud-protocol::companion` defines owner-invoked worker SSH grants.
+`horizon-cloud-worker::companions` serializes grant changes; its `files` leaf owns
+durable runtime writes and `ssh` owns key validation, bounded probes, and alias
+publication. The existing worker run/source helpers prepare and enter separate
+companion worktrees. These transport operations have no provider lifecycle authority.
+
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation

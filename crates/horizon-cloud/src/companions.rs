@@ -116,7 +116,9 @@ pub fn validate_declarations(declarations: &BTreeMap<String, Declaration>) -> Re
     Ok(())
 }
 
-fn valid_alias(alias: &str) -> bool {
+/// Canonical aliases also serve as SSH host names, so uppercase variants are forbidden.
+#[must_use]
+pub fn valid_alias(alias: &str) -> bool {
     !alias.is_empty()
         && alias.len() <= 64
         && alias.bytes().next().is_some_and(|byte| byte.is_ascii_lowercase())

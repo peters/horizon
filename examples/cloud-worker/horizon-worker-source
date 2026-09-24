@@ -80,7 +80,7 @@ def import_source():
 
 def checkout(worktree):
     root = Path(worktree).resolve()
-    if root.parent != Path('/workspace/agents'):
+    if root.parent not in (Path('/workspace/agents'), Path('/workspace/companions/worktrees')):
         raise ValueError('Invalid agent worktree')
     if not (ROOT / 'manifest.json').exists():
         raise ValueError('Source dependencies have not been imported')
