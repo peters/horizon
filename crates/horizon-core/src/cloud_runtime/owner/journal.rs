@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Read,
+    io::Write,
     path::Path,
 };
 
 pub(super) const MARKER: &str = "owner.json";
 pub(super) const JOURNAL: &str = "journal.json";
 pub(super) const CANDIDATE: &str = "candidate.json";
-const LIMIT: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -42,36 +41,13 @@ pub(super) fn hash(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+#[cfg(all(test, unix))]
 pub(super) fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
-    let path = root.join(name);
-    if !fs::symlink_metadata(&path)?.is_file() {
-        return Err(Error::Journal);
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(Error::Journal);
-    }
-    let mut bytes = Vec::new();
-    file.take(LIMIT + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::Journal);
-    }
-    Ok(bytes)
+    super::directory::Directory::open(&root.canonicalize()?)?.read(name)
 }
-
+#[cfg(all(test, unix))]
 pub(super) fn write(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {
-    if bytes.len() as u64 > LIMIT {
-        return Err(Error::Journal);
-    }
-    horizon_browser_control::atomic_file::replace(&root.join(name), bytes)?;
-    Ok(())
+    super::directory::Directory::open(&root.canonicalize()?)?.write(name, bytes)
 }
 
 pub(super) fn decode(bytes: &[u8], marker: &Marker, anchor: &Anchor) -> Result<Journal> {
@@ -92,19 +68,24 @@ pub(super) struct Lock(File);
 pub(super) struct LockIdentity {
     device: u64,
     inode: u64,
+    nonce: [u8; 16],
 }
 
 impl LockIdentity {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Result<Self> {
-        if !metadata.is_file() {
+    fn from_file(file: &File) -> Result<Self> {
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != 16 {
             return Err(Error::Ownership);
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::MetadataExt;
+            use std::os::unix::fs::{FileExt, MetadataExt};
+            let mut nonce = [0; 16];
+            file.read_exact_at(&mut nonce, 0)?;
             Ok(Self {
                 device: metadata.dev(),
                 inode: metadata.ino(),
+                nonce,
             })
         }
         #[cfg(not(unix))]
@@ -112,19 +93,36 @@ impl LockIdentity {
     }
 
     pub(super) fn at_path(path: &Path) -> Result<Self> {
-        Self::from_metadata(&std::fs::symlink_metadata(path)?)
+        if !std::fs::symlink_metadata(path)?.is_file() {
+            return Err(Error::Ownership);
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        Self::from_file(&options.open(path)?)
     }
 }
 
 impl Lock {
     pub(super) fn acquire(path: &Path, create: bool) -> Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(create)
-            .open(path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(create);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let mut file = options.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(Error::Ownership);
+        }
         file.try_lock().map_err(|_| Error::Busy)?;
         if create {
+            file.write_all(uuid::Uuid::new_v4().as_bytes())?;
             file.sync_all()?;
             File::open(path.parent().ok_or(Error::Ownership)?)?.sync_all()?;
         }
@@ -132,7 +130,7 @@ impl Lock {
     }
 
     pub(super) fn identity(&self) -> Result<LockIdentity> {
-        LockIdentity::from_metadata(&self.0.metadata()?)
+        LockIdentity::from_file(&self.0)
     }
 
     pub(super) fn verify(&self, path: &Path, expected: LockIdentity) -> Result<()> {
@@ -155,5 +153,13 @@ pub(super) fn create_root(root: &Path) -> Result<()> {
     }
     fs::create_dir(root)?;
     File::open(root.parent().ok_or(Error::Journal)?)?.sync_all()?;
+    Ok(())
+}
+
+pub(super) fn create_lock_root(root: &Path) -> Result<()> {
+    fs::create_dir_all(root)?;
+    for directory in root.ancestors() {
+        File::open(directory)?.sync_all()?;
+    }
     Ok(())
 }

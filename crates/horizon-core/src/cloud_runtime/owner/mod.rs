@@ -1,10 +1,12 @@
 //! Owning-host registration and anchored provider journal for the shared protocol.
 //! This API performs no provider I/O and is not connected to runtime entry points.
+mod directory;
 mod journal;
 mod machine;
 mod registration;
 mod vault;
 
+use directory::Directory;
 use ed25519_dalek::{Signer, SigningKey};
 use horizon_cloud_protocol::{
     AllocationId, ControllerId,
@@ -47,6 +49,7 @@ pub enum Error {
 /// There is no key import, ownership transfer or file-store fallback.
 pub struct Owner {
     root: PathBuf,
+    directory: Directory,
     lock_path: PathBuf,
     marker: Marker,
     machine: MachineReader,
@@ -158,14 +161,15 @@ impl Owner {
         }
         journal::create_root(root)?;
         let root = root.canonicalize()?;
-        std::fs::create_dir_all(lock_root)?;
+        let directory = Directory::open(&root)?;
+        journal::create_lock_root(lock_root)?;
         let lock_root = lock_root.canonicalize()?;
         if lock_root.starts_with(&root) {
             return Err(Error::Ownership);
         }
         let lock_path = lock_root.join(format!("{}.lock", marker.registration));
         let lock = Lock::acquire(&lock_path, true)?;
-        journal::write(&root, MARKER, &serde_json::to_vec(&marker).map_err(|_| Error::Journal)?)?;
+        directory.write(MARKER, &serde_json::to_vec(&marker).map_err(|_| Error::Journal)?)?;
         let mut registration = Registration {
             version: 1,
             machine: machine_id,
@@ -179,6 +183,7 @@ impl Owner {
         };
         let mut owner = Self {
             root,
+            directory,
             lock_path,
             marker,
             machine,
@@ -194,7 +199,8 @@ impl Owner {
     fn open_with(root: &Path, vault: Box<dyn Vault>, machine: MachineReader) -> Result<Self> {
         crate::session_store::require_directory_durability()?;
         let root = root.canonicalize()?;
-        let marker: Marker = serde_json::from_slice(&journal::read(&root, MARKER)?).map_err(|_| Error::Journal)?;
+        let directory = Directory::open(&root)?;
+        let marker: Marker = serde_json::from_slice(&directory.read(MARKER)?).map_err(|_| Error::Journal)?;
         if marker.version != 1 || marker.registration.is_nil() {
             return Err(Error::Journal);
         }
@@ -204,6 +210,7 @@ impl Owner {
         lock.verify(&registration.lock_path, registration.lock_identity)?;
         let mut owner = Self {
             root,
+            directory,
             lock_path: registration.lock_path.clone(),
             marker,
             machine,
@@ -227,7 +234,7 @@ impl Owner {
         if !self.ready {
             return Err(Error::Registration);
         }
-        let marker: Marker = serde_json::from_slice(&journal::read(&self.root, MARKER)?).map_err(|_| Error::Journal)?;
+        let marker: Marker = serde_json::from_slice(&self.directory.read(MARKER)?).map_err(|_| Error::Journal)?;
         if marker != self.marker {
             return Err(Error::Ownership);
         }
@@ -241,7 +248,7 @@ impl Owner {
             return Err(Error::Registration);
         }
         let anchor = registration.committed.as_ref().ok_or(Error::Registration)?;
-        let journal = journal::decode(&journal::read(&self.root, JOURNAL)?, &self.marker, anchor)?;
+        let journal = journal::decode(&self.directory.read(JOURNAL)?, &self.marker, anchor)?;
         Ok((registration, journal))
     }
 
@@ -277,7 +284,7 @@ impl Owner {
             generation,
             hash: journal::hash(&bytes),
         };
-        journal::write(&self.root, CANDIDATE, &bytes)?;
+        self.directory.write(CANDIDATE, &bytes)?;
         checkpoint(Boundary::Candidate)?;
         registration.pending = Some(Transition {
             previous: registration.committed.clone(),
@@ -285,7 +292,7 @@ impl Owner {
         });
         registration.write(self.vault.as_ref())?;
         checkpoint(Boundary::Pending)?;
-        journal::write(&self.root, JOURNAL, &bytes)?;
+        self.directory.write(JOURNAL, &bytes)?;
         checkpoint(Boundary::Published)?;
         registration.committed = Some(next);
         registration.pending = None;
@@ -297,22 +304,21 @@ impl Owner {
         let Some(pending) = &registration.pending else {
             return Ok(());
         };
-        let candidate = journal::read(&self.root, CANDIDATE)?;
+        let candidate = self.directory.read(CANDIDATE)?;
         journal::decode(&candidate, &self.marker, &pending.next)?;
-        match journal::read(&self.root, JOURNAL) {
+        match self.directory.read(JOURNAL) {
             Ok(bytes) if journal::hash(&bytes) == pending.next.hash => {
                 journal::decode(&bytes, &self.marker, &pending.next)?;
             }
             Ok(bytes) => {
                 let previous = pending.previous.as_ref().ok_or(Error::Journal)?;
                 journal::decode(&bytes, &self.marker, previous)?;
-                journal::write(&self.root, JOURNAL, &candidate)?;
             }
-            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && pending.previous.is_none() => {
-                journal::write(&self.root, JOURNAL, &candidate)?;
-            }
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && pending.previous.is_none() => {}
             _ => return Err(Error::Journal),
         }
+        // A visible rename may still need its durability barrier after a crash.
+        self.directory.write(JOURNAL, &candidate)?;
         registration.committed = Some(pending.next.clone());
         registration.pending = None;
         registration.write(self.vault.as_ref())

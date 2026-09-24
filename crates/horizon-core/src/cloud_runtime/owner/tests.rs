@@ -20,11 +20,22 @@ impl Vault for MemoryVault {
     }
 }
 
+fn inspect_intent(binding: &ControllerBinding) -> Intent {
+    Intent::new(
+        binding,
+        horizon_cloud_protocol::OperationId::generate(),
+        0,
+        horizon_cloud_protocol::signed::Target::Allocation {},
+        horizon_cloud_protocol::signed::Action::InspectAllocation,
+        b"{}",
+    )
+    .unwrap()
+}
+
 fn machine(value: u128) -> MachineReader {
     Box::new(move || serde_json::from_value(json!(uuid::Uuid::from_u128(value))).map_err(|_| Error::Machine))
 }
 
-#[cfg(unix)]
 fn create(root: &Path, vault: &MemoryVault) -> Owner {
     Owner::create_with(
         root,
@@ -38,7 +49,6 @@ fn create(root: &Path, vault: &MemoryVault) -> Owner {
 }
 
 #[test]
-#[cfg(unix)]
 fn exclusive_owner_reopens_the_exact_anchored_journal_and_signs() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("allocation");
@@ -49,15 +59,7 @@ fn exclusive_owner_reopens_the_exact_anchored_journal_and_signs() {
         Err(Error::Busy)
     ));
     let binding = owner.binding().unwrap();
-    let intent = Intent::new(
-        &binding,
-        horizon_cloud_protocol::OperationId::generate(),
-        0,
-        horizon_cloud_protocol::signed::Target::Allocation {},
-        horizon_cloud_protocol::signed::Action::InspectAllocation,
-        b"{}",
-    )
-    .unwrap();
+    let intent = inspect_intent(&binding);
     assert!(owner.sign(intent).unwrap().verify(&binding, b"{}").is_ok());
     owner.save(json!({"state":"stopped"})).unwrap();
     drop(owner);
@@ -66,7 +68,6 @@ fn exclusive_owner_reopens_the_exact_anchored_journal_and_signs() {
 }
 
 #[test]
-#[cfg(unix)]
 fn copies_missing_registrations_and_rolled_back_same_path_journals_fail_closed() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("allocation");
@@ -101,7 +102,6 @@ fn copies_missing_registrations_and_rolled_back_same_path_journals_fail_closed()
 }
 
 #[test]
-#[cfg(unix)]
 fn interrupted_updates_recover_only_the_registered_transition() {
     for boundary in [
         Boundary::Candidate,
@@ -122,7 +122,16 @@ fn interrupted_updates_recover_only_the_registered_transition() {
         );
         assert!(matches!(owner.load(), Err(Error::Registration)));
         assert!(matches!(owner.binding(), Err(Error::Registration)));
+        let marker = owner.marker.clone();
         drop(owner);
+        if boundary == Boundary::Published {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let blocked = Owner::open_with(&root, Box::new(vault.clone()), machine(1));
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(blocked.is_err());
+            assert!(Registration::read(&vault, &marker).unwrap().pending.is_some());
+        }
         let owner = Owner::open_with(&root, Box::new(vault), machine(1)).unwrap();
         let expected = if boundary == Boundary::Candidate {
             "prepared"
@@ -134,7 +143,6 @@ fn interrupted_updates_recover_only_the_registered_transition() {
 }
 
 #[test]
-#[cfg(unix)]
 fn interrupted_initial_registration_never_adopts_an_existing_directory() {
     for boundary in [
         Boundary::Candidate,
@@ -177,7 +185,6 @@ fn interrupted_initial_registration_never_adopts_an_existing_directory() {
 }
 
 #[test]
-#[cfg(unix)]
 fn missing_or_conflicting_recovery_files_remain_fenced() {
     for file in [CANDIDATE, JOURNAL] {
         for corrupt in [false, true] {
@@ -208,22 +215,13 @@ fn missing_or_conflicting_recovery_files_remain_fenced() {
 }
 
 #[test]
-#[cfg(unix)]
 fn live_handle_rechecks_registration_machine_and_journal_before_signing() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("allocation");
     let vault = MemoryVault::default();
     let mut owner = create(&root, &vault);
     let binding = owner.binding().unwrap();
-    let intent = Intent::new(
-        &binding,
-        horizon_cloud_protocol::OperationId::generate(),
-        0,
-        horizon_cloud_protocol::signed::Target::Allocation {},
-        horizon_cloud_protocol::signed::Action::InspectAllocation,
-        b"{}",
-    )
-    .unwrap();
+    let intent = inspect_intent(&binding);
     owner.machine = machine(2);
     assert!(matches!(owner.sign(intent.clone()), Err(Error::Ownership)));
     owner.machine = machine(1);
@@ -392,11 +390,11 @@ fn journal_artifacts_reject_links_and_special_files_before_reading_or_recovery()
         let external = temp.path().join("outside.json");
         std::fs::rename(root.join(file), &external).unwrap();
         std::os::unix::fs::symlink(&external, root.join(file)).unwrap();
-        assert!(matches!(journal::read(&root, file), Err(Error::Journal)));
+        assert!(journal::read(&root, file).is_err());
         assert!(Owner::open_with(&root, Box::new(vault.clone()), machine(1)).is_err());
         std::fs::remove_file(root.join(file)).unwrap();
         let _socket = std::os::unix::net::UnixListener::bind(root.join(file)).unwrap();
-        assert!(matches!(journal::read(&root, file), Err(Error::Journal)));
+        assert!(journal::read(&root, file).is_err());
         assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_err());
     }
 }
@@ -408,19 +406,69 @@ fn signing_backend_wipes_keys_and_rejects_a_foreign_signature() {
     let temp = tempfile::tempdir().unwrap();
     let owner = create(&temp.path().join("allocation"), &MemoryVault::default());
     let binding = owner.binding().unwrap();
-    let intent = Intent::new(
-        &binding,
-        horizon_cloud_protocol::OperationId::generate(),
-        0,
-        horizon_cloud_protocol::signed::Target::Allocation {},
-        horizon_cloud_protocol::signed::Action::InspectAllocation,
-        b"{}",
-    )
-    .unwrap();
+    let intent = inspect_intent(&binding);
     let foreign = SigningKey::from_bytes(&[99; 32]);
     assert!(matches!(
         SignedIntent::sign_with(intent, &binding, |bytes| foreign.sign(bytes).to_bytes().to_vec()),
         Err(horizon_cloud_protocol::signed::Error::Signature)
+    ));
+}
+
+#[test]
+fn live_owner_refuses_replaced_root_and_ancestor_directories() {
+    for ancestor in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let root = parent.join("allocation");
+        let vault = MemoryVault::default();
+        let mut owner = Owner::create_with(
+            &root,
+            &temp.path().join("locks/nested"),
+            json!({}),
+            Box::new(vault.clone()),
+            machine(1),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let intent = inspect_intent(&owner.binding().unwrap());
+        let before = vault.0.borrow().clone();
+        let moved = temp.path().join("moved");
+        let copied = temp.path().join("copied");
+        let replaced = if ancestor { &parent } else { &root };
+        std::fs::rename(replaced, &moved).unwrap();
+        let source = if ancestor { moved.join("allocation") } else { moved };
+        let destination = if ancestor {
+            copied.join("allocation")
+        } else {
+            copied.clone()
+        };
+        std::fs::create_dir_all(&destination).unwrap();
+        for file in [MARKER, JOURNAL, CANDIDATE] {
+            std::fs::copy(source.join(file), destination.join(file)).unwrap();
+        }
+        std::os::unix::fs::symlink(&copied, replaced).unwrap();
+        assert!(owner.load().is_err());
+        assert!(owner.binding().is_err());
+        assert!(owner.sign(intent).is_err());
+        assert!(owner.save(json!({"changed":true})).is_err());
+        assert_eq!(*vault.0.borrow(), before);
+    }
+}
+
+#[test]
+fn lock_nonce_changes_fence_even_an_unchanged_inode() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("allocation");
+    let vault = MemoryVault::default();
+    let owner = create(&root, &vault);
+    let registration = Registration::read(&vault, &owner.marker).unwrap();
+    std::fs::write(&registration.lock_path, [0; 16]).unwrap();
+    assert!(matches!(owner.binding(), Err(Error::Ownership)));
+    drop(owner);
+    assert!(matches!(
+        Owner::open_with(&root, Box::new(vault), machine(1)),
+        Err(Error::Ownership)
     ));
 }
 
@@ -467,15 +515,7 @@ fn native_store_fixture() {
             let owner = Owner::open(&journal_root).unwrap();
             assert_eq!(owner.load().unwrap(), json!({"state":"stopped"}));
             let binding = owner.binding().unwrap();
-            let intent = Intent::new(
-                &binding,
-                horizon_cloud_protocol::OperationId::generate(),
-                0,
-                horizon_cloud_protocol::signed::Target::Allocation {},
-                horizon_cloud_protocol::signed::Action::InspectAllocation,
-                b"{}",
-            )
-            .unwrap();
+            let intent = inspect_intent(&binding);
             assert!(owner.sign(intent).unwrap().verify(&binding, b"{}").is_ok());
         }
         _ => panic!("unsupported private fixture phase"),

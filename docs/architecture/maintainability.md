@@ -483,7 +483,9 @@ signing credentials or replace worker membership checks. Host registration and
 worker dispatch are separate consumers and are not connected yet.
 `cloud_runtime::owner` supplies an opt-in owning-host journal API: native machine
 identity, a cloud-specific OS-store registration, a signing key and a canonical
-lock outside transferable journal state, pinned by native file identity. Its journal
+lock outside transferable journal state, pinned by native file identity and a nonce.
+Artifact reads, publication and directory synchronization use a retained directory
+handle and reject replacement of its registered path. Its journal
 generation/hash is anchored in the registration; candidate, pending, published and committed boundaries keep
 crash recovery exact and copied or rolled-back journals fenced. This API is not
 called by runtime entry points yet. It currently supports Linux Secret Service
