@@ -10,6 +10,52 @@ fn mixed_zoom_then_plain_wheels_scroll_a_panel_by_plain_motion_only() {
     assert_mixed_scroll(true);
 }
 
+#[test]
+fn modified_boundaries_preserve_plain_panel_motion_and_queued_notches() {
+    for phase in [TouchPhase::End, TouchPhase::Cancel] {
+        for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::COMMAND] {
+            for unit in [MouseWheelUnit::Point, MouseWheelUnit::Line] {
+                let ctx = Context::default();
+                let target = ScrollTarget::Panel(PANEL);
+                for time in [0.0, 0.016, 0.032] {
+                    let _ = scroll_area_frame(&ctx, time, target, Vec::new());
+                }
+                let plain = |unit, delta| Event::MouseWheel {
+                    unit,
+                    delta: Vec2::new(0.0, delta),
+                    phase: TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                };
+                let before = scroll_area_frame(&ctx, 1.0, target, vec![plain(MouseWheelUnit::Line, -1.0)]).0;
+                let delta = if unit == MouseWheelUnit::Line { -1.0 } else { -5.0 };
+                let boundary = Event::MouseWheel {
+                    unit: MouseWheelUnit::Point,
+                    delta: if modifiers == Modifiers::NONE {
+                        Vec2::ZERO
+                    } else {
+                        Vec2::new(0.0, -3.0)
+                    },
+                    phase,
+                    modifiers,
+                };
+                let actual = scroll_area_frame(&ctx, 1.016, target, vec![plain(unit, delta), boundary]).0;
+                let line = InputOptions::default().line_scroll_speed;
+                let expected = if modifiers == Modifiers::NONE {
+                    before
+                } else {
+                    line + if unit == MouseWheelUnit::Line { line } else { 5.0 }
+                };
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "{phase:?} {modifiers:?} {unit:?}: {actual} vs {expected}"
+                );
+                let idle = scroll_area_frame(&ctx, 1.032, target, Vec::new()).0;
+                assert!((idle - actual).abs() < 0.001, "the boundary leaves no queued motion");
+            }
+        }
+    }
+}
+
 fn assert_mixed_scroll(zoom_first: bool) {
     for unit in [MouseWheelUnit::Point, MouseWheelUnit::Line] {
         let mixed = Context::default();
@@ -77,6 +123,47 @@ fn displaced_panel_wheels_do_not_reach_another_panels_scroll_area() {
 #[test]
 fn displaced_surface_wheels_do_not_reach_a_panels_scroll_area() {
     assert_displaced_wheels_stay_with_owner(ScrollTarget::Surface);
+}
+
+#[test]
+fn modified_boundaries_discard_displaced_backlog_but_keep_fresh_panel_motion() {
+    for phase in [TouchPhase::Start, TouchPhase::End, TouchPhase::Cancel] {
+        for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+            for fresh_motion in [false, true] {
+                let ctx = Context::default();
+                for time in [0.0, 0.016, 0.032] {
+                    let _ = scroll_area_frame(&ctx, time, ScrollTarget::Panel(PANEL), Vec::new());
+                }
+                let notch = Event::MouseWheel {
+                    unit: MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                };
+                let before = scroll_area_frame(&ctx, 1.0, ScrollTarget::Panel(PANEL), vec![notch]).0;
+                let mut events = vec![Event::MouseWheel {
+                    unit: MouseWheelUnit::Point,
+                    delta: Vec2::ZERO,
+                    phase,
+                    modifiers,
+                }];
+                if fresh_motion {
+                    events.push(wheel(Vec2::new(0.0, -5.0), TouchPhase::Move));
+                }
+                let target = ScrollTarget::Panel(OTHER_PANEL);
+                let actual = scroll_area_frame(&ctx, 1.016, target, events).0;
+                let expected = before + if fresh_motion { 5.0 } else { 0.0 };
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "{phase:?} {modifiers:?} fresh={fresh_motion}: {actual} vs {expected}"
+                );
+                for step in 2..20 {
+                    let idle = scroll_area_frame(&ctx, 1.0 + f64::from(step) * 0.016, target, Vec::new()).0;
+                    assert!((idle - expected).abs() < 0.001, "the displaced tail must not replay");
+                }
+            }
+        }
+    }
 }
 
 fn assert_displaced_wheels_stay_with_owner(owner: ScrollTarget) {

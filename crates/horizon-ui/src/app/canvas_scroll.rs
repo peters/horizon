@@ -53,7 +53,15 @@ pub(super) struct ScrollRouting {
     owns_smooth_scroll: bool,
     claimed_wheels: Vec<usize>,
     absorbed_wheels: Vec<(usize, PanelId, WheelStep)>,
-    plain_scroll_enabled: bool,
+    panel_scroll_delivery: PanelScrollDelivery,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PanelScrollDelivery {
+    #[default]
+    Disabled,
+    RetainBacklog,
+    DiscardBacklog,
 }
 
 impl ScrollGesture {
@@ -116,7 +124,16 @@ impl ScrollGesture {
 
         let mut routing = ScrollRouting {
             pan: std::mem::take(&mut self.deferred_pan),
-            plain_scroll_enabled: true,
+            // A boundary below can release the old owner before smoothing is
+            // delivered. Its queued motion must not follow the new pointer
+            // target, while fresh retained events can still reach that target.
+            panel_scroll_delivery: if self.displaced_surface(target)
+                || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner))
+            {
+                PanelScrollDelivery::DiscardBacklog
+            } else {
+                PanelScrollDelivery::RetainBacklog
+            },
             ..ScrollRouting::default()
         };
         let mut has_canvas_motion = false;
@@ -295,8 +312,12 @@ impl PanelWheelScroll {
             match phase {
                 TouchPhase::Start => self.in_touch = true,
                 TouchPhase::End | TouchPhase::Cancel => {
+                    if step.modifiers.ctrl || step.modifiers.command {
+                        motion += self.backlog;
+                    } else {
+                        motion = Vec2::ZERO;
+                    }
                     *self = Self::default();
-                    motion = Vec2::ZERO;
                 }
                 TouchPhase::Move => {
                     if step.modifiers.ctrl || step.modifiers.command || claimed.binary_search(&index).is_ok() {
@@ -468,11 +489,15 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 impl ScrollRouting {
     fn panel_scroll_delta(&self, ctx: &Context) -> Option<Vec2> {
         let id = Id::new(("panel_wheel_scroll", ctx.viewport_id()));
-        if !self.plain_scroll_enabled || self.owns_smooth_scroll {
+        if self.panel_scroll_delivery == PanelScrollDelivery::Disabled || self.owns_smooth_scroll {
             ctx.data_mut(|data| data.remove::<PanelWheelScroll>(id));
-            return self.plain_scroll_enabled.then_some(Vec2::ZERO);
+            return (self.panel_scroll_delivery != PanelScrollDelivery::Disabled).then_some(Vec2::ZERO);
         }
-        let mut state = ctx.data_mut(|data| data.get_temp::<PanelWheelScroll>(id).unwrap_or_default());
+        let mut state = if self.panel_scroll_delivery == PanelScrollDelivery::DiscardBacklog {
+            PanelWheelScroll::default()
+        } else {
+            ctx.data_mut(|data| data.get_temp::<PanelWheelScroll>(id).unwrap_or_default())
+        };
         let options = ctx.options(|options| options.input_options);
         let delta = ctx.input(|input| state.advance(input, &options, &self.claimed_wheels));
         if state.backlog != Vec2::ZERO {
