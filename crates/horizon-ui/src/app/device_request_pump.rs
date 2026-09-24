@@ -100,8 +100,14 @@ impl DeviceRequestBridge {
     /// Frames and pump wakes both hold and settle reveals, so either may be
     /// the last to run before the host stops presenting.
     fn sync_held_reveals(&self, app: &HorizonApp) {
-        self.reveals_pending
-            .store(app.holds_device_reveals(), Ordering::Relaxed);
+        let held = app.holds_device_reveals();
+        let was_held = self.reveals_pending.swap(held, Ordering::Relaxed);
+        if held && !was_held {
+            // The watcher may be parked on a persistence backoff of seconds.
+            if let Some(handle) = lock(&self.watcher).as_ref() {
+                handle.thread().unpark();
+            }
+        }
     }
 
     #[cfg(test)]

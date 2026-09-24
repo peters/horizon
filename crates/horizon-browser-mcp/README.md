@@ -356,7 +356,8 @@ reveal superseded by another viewer's before it reached the canvas answers on th
 next host frame. A pass egui discarded is not
 presentation evidence. A session switch or host exit answers held reveals with
 `panel_unavailable`. A host that runs no UI frames cannot draw
-the viewer; it still answers when the bound expires.
+the viewer; it still answers when the bound expires, and omits `host` when no
+pass has run since the viewer was created.
 
 Host context describes an egui UI pass, not operating-system presentation.
 `ui_pass` is viewport-local; `discarded` samples `will_discard` at callback
