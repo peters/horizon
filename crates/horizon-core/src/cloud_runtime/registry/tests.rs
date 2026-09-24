@@ -67,6 +67,29 @@ fn exact_scope_rejects_neighbors_and_preserves_unbound_public_registries() {
 }
 
 #[test]
+fn duplicate_repository_aliases_are_rejected_but_distinct_paths_and_ports_are_allowed() {
+    for (first, alias) in [
+        ("docker.io/team/worker", "index.docker.io/team/worker"),
+        ("ghcr.io/team/worker", "GHCR.IO./team/worker"),
+        ("ghcr.io/team/worker", "ghcr.io:0443/team/worker"),
+        ("localhost:5000/team/worker", "localhost:05000/team/worker"),
+    ] {
+        let (_root, mut settings) = fixture();
+        let config = settings.registries.as_mut().unwrap();
+        config.bindings[0].repository = first.into();
+        let mut duplicate = config.bindings[0].clone();
+        duplicate.repository = alias.into();
+        duplicate.generation = "generation2".into();
+        config.bindings.push(duplicate);
+        assert!(config.validate().is_err(), "{first} and {alias}");
+        config.bindings[1].repository = format!("{alias}-other");
+        assert!(config.validate().is_ok());
+        config.bindings[1].repository = "ghcr.io:5001/team/worker".into();
+        assert!(config.validate().is_ok());
+    }
+}
+
+#[test]
 fn independent_registry_ports_retain_their_own_scope() {
     let (_root, mut settings) = fixture();
     binding(&mut settings).repository = "localhost:5000/team/worker".into();

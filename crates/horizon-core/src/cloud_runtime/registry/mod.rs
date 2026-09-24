@@ -64,7 +64,12 @@ impl Config {
                     return Err(Error::Invalid("Registry generations must be globally unique"));
                 }
             }
-            if !repositories.insert(&binding.repository) {
+            let (_, path) = binding
+                .repository
+                .split_once('/')
+                .ok_or(Error::Invalid("Use an explicit registry hostname and repository"))?;
+            let key = (credentials::registry_authority(&binding.repository), path);
+            if !repositories.insert(key) {
                 return Err(Error::Invalid("Duplicate registry repository binding"));
             }
         }
