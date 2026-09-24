@@ -14,7 +14,7 @@ RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdir
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openssh-server tmux git git-lfs gh ca-certificates curl python3 tini util-linux \
+    openssh-server tmux git git-lfs gh rsync ca-certificates curl python3 tini util-linux \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=agent-runtime /output/ /
 ARG HORIZON_DESKTOP=false
