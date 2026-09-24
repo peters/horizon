@@ -310,8 +310,9 @@ recipe. Horizon resolves the repository's latest committed `HEAD` (uncommitted
 changes are not used) and reads `.horizon/cloud.yml` there. It refuses when the
 cloud's profile is missing there or differs from the one the cloud was created
 with, naming the change: a running worker's size, capabilities, image repository
-and build section are fixed. A profile without a build section has no recipe to
-rebuild. Otherwise Horizon builds the recipe with the newest agent CLIs under a
+and build section are fixed. A CPU cloud's vCPU and memory are chosen when the
+cloud is created, so different committed values for them are not a change. A
+profile without a build section has no recipe to rebuild. Otherwise Horizon builds the recipe with the newest agent CLIs under a
 new tag, validates the worker contract, pushes the image and verifies the
 worker's pull binding. An unchanged image digest is reported, and nothing restarts.
 

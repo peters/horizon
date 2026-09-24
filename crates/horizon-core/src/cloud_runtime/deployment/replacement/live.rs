@@ -1,6 +1,6 @@
 //! Production steps: Git, Docker and the registry build the image, the provider API
 //! switches the worker, and SSH releases hosted devices.
-use super::{Head, Provider, Steps, pair};
+use super::{Head, Provider, Recipe, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
@@ -182,12 +182,6 @@ impl Provider for Live<'_> {
 }
 
 impl Steps for Live<'_> {
-    fn head(&self, repository: &Path) -> Result<Head> {
-        let revision = repository::resolve_with_runner(repository, "HEAD", &self.runner)?;
-        let config = repository::launch::committed_config(repository, &revision, &self.runner)?;
-        Ok(Head { revision, config })
-    }
-
     fn build(&self, state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage> {
         let root = tempfile::tempdir_in(self.store.root())?;
         let source = repository::snapshot(&state.repository, revision, root.path(), &self.runner)?;
@@ -229,5 +223,13 @@ impl Steps for Live<'_> {
         worker.verify(spec)?;
         let connection = Connection::new(&worker, &self.request.settings, self.store.root())?;
         browser_auth::revoke(&connection, &self.runner)
+    }
+}
+
+impl Recipe for Runner<'_> {
+    fn head(&self, repository: &Path) -> Result<Head> {
+        let revision = repository::resolve_with_runner(repository, "HEAD", self)?;
+        let config = repository::launch::committed_config(repository, &revision, self)?;
+        Ok(Head { revision, config })
     }
 }

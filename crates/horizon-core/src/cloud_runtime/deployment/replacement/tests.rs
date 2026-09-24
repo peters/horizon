@@ -164,13 +164,15 @@ impl Provider for Script {
     }
 }
 
-impl Steps for Script {
+impl Recipe for Script {
     fn head(&self, repository: &Path) -> Result<Head> {
         assert_eq!(repository, Path::new("/synthetic"));
         self.log("head");
         Ok(self.head.clone())
     }
+}
 
+impl Steps for Script {
     fn build(&self, _state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage> {
         assert_eq!(revision, self.head.revision);
         assert!(tag.starts_with("horizon-rebuilt-"));
@@ -200,7 +202,8 @@ fn rebuild_with(fixture: &Fixture, script: &Script) -> Result<Driven> {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     ready(&state)?;
-    begin(script, &store, &mut state, "dev", &|_| {})?;
+    let revision = committed_revision(script, &state, "dev", &|_| {})?;
+    begin(script, &store, &mut state, revision)?;
     drive(script, &store, &mut state, &|_| {})
 }
 
@@ -246,7 +249,8 @@ fn rebuild_switches_the_worker_once_and_asks_its_sessions_to_relaunch() {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     let events = RefCell::new(Vec::new());
-    begin(&script, &store, &mut state, "dev", &stages(&events)).unwrap();
+    let revision = committed_revision(&script, &state, "dev", &stages(&events)).unwrap();
+    begin(&script, &store, &mut state, revision).unwrap();
     let journal = state.image_replacement.clone().unwrap();
     assert_eq!(journal.recipe_revision, "c".repeat(40));
     assert_eq!(
@@ -524,10 +528,30 @@ fn cancelling_a_refused_switch_after_the_device_release_reconnects() {
         .borrow_mut()
         .push_back((false, Some(CloudError::Unauthorized)));
     assert!(rebuild_with(&fixture, &script).is_err());
+    // Also when a crash lost the record of the release.
+    fixture.edit(|state| state.browserstack_released = false);
+    assert!(may_have_released_devices(&fixture.state()));
     recover(&fixture, &script, Recovery::Cancel).unwrap();
-    let state = fixture.state();
-    assert!(state.image_replacement.is_none() && devices_released(&state));
-    assert!(!devices_released(&Fixture::new().state()));
+    assert!(fixture.state().image_replacement.is_none());
+    let unbuilt = Fixture::with(&json!({"browserstack":{"targets":["phone"]}}));
+    let script = Script::new(&unbuilt);
+    script.fail_at.set(Some(Boundary::Begun));
+    assert!(rebuild_with(&unbuilt, &script).is_err());
+    assert!(!may_have_released_devices(&unbuilt.state()));
+    assert!(!may_have_released_devices(&Fixture::new().state()));
+}
+
+#[test]
+fn a_foreign_worker_spec_is_refused_before_the_provider_is_read() {
+    let fixture = Fixture::new();
+    let script = Script::new(&fixture);
+    script.fail_at.set(Some(Boundary::Requested));
+    assert!(rebuild_with(&fixture, &script).is_err());
+    fixture.edit(|state| state.spec.as_mut().unwrap().operation_id = "foreign".into());
+    let calls = script.calls.borrow().len();
+    let error = recover(&fixture, &script, Recovery::Settle).unwrap_err().to_string();
+    assert!(error.contains("identities differ"), "{error}");
+    assert_eq!(script.calls.borrow().len(), calls, "no provider read");
 }
 
 #[test]

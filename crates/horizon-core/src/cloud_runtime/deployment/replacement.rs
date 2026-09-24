@@ -15,6 +15,7 @@ use super::{
     },
     Error, Event, Request, Result, Stage, Store,
 };
+use crate::cloud_runtime::command::Runner;
 use horizon_cloud::{
     Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
     runpod::{
@@ -73,8 +74,12 @@ trait Provider {
 }
 
 /// The rest of a rebuild outside its record.
-trait Steps: Provider {
+/// Reads the repository's committed recipe; needs no credentials.
+trait Recipe {
     fn head(&self, repository: &Path) -> Result<Head>;
+}
+
+trait Steps: Provider {
     /// Builds `revision`'s recipe under `tag`, validates the worker contract, pushes the
     /// image and verifies that the worker's pull binding can read it.
     fn build(&self, state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage>;
@@ -106,8 +111,15 @@ pub fn rebuild(
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
     ready(&state)?;
+    // Checked before credentials load, so a changed profile is refused with its reason.
+    let checkout = Runner {
+        cancel,
+        emit,
+        secrets: Vec::new(),
+    };
+    let revision = committed_revision(&checkout, &state, profile_name, emit)?;
     let steps = live::Live::new(request, &store, &state, true, cancel, emit)?;
-    begin(&steps, &store, &mut state, profile_name, emit)?;
+    begin(&steps, &store, &mut state, revision)?;
     let driven = drive(&steps, &store, &mut state, emit)?;
     drop(steps);
     drop(store);
@@ -126,6 +138,13 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
         .image_replacement
         .as_ref()
         .ok_or(Error::Invalid(NOTHING_PENDING))?;
+    if journal.requested() {
+        // Finishing a switch needs only the provider, not the checkout or registry.
+        let provider = RunPod::new(request.settings.credential()?);
+        resume(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
+        drop(store);
+        return finish(request, Driven::Committed, state, cancel, emit);
+    }
     let building = journal.phase == ReplacementPhase::Prepared {};
     let steps = live::Live::new(request, &store, &state, building, cancel, emit)?;
     let driven = drive(&steps, &store, &mut state, emit)?;
@@ -145,11 +164,12 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
         .as_ref()
         .is_some_and(ImageReplacement::requested)
     {
+        let rearm = may_have_released_devices(&state);
         discard(&store, &mut state, emit)?;
-        if !devices_released(&state) {
+        if !rearm {
             return Ok(state);
         }
-        // The switch released hosted devices; reconnecting arms them again.
+        // Reconnecting arms hosted devices again, as every reconnect does.
         drop(store);
         return tail(request, cancel, emit);
     }
@@ -178,9 +198,11 @@ fn settle_with(steps: &impl Provider, store: &Store, state: &mut Deployment) -> 
             .image_replacement
             .as_ref()
             .is_some_and(ImageReplacement::requested)
-        && steps.observe(state, None)? == Observed::Next
     {
-        return commit(steps, store, state);
+        same_worker(state)?;
+        if steps.observe(state, None)? == Observed::Next {
+            return commit(steps, store, state);
+        }
     }
     state.refuse_unsettled_replacement()
 }
@@ -255,7 +277,20 @@ fn open(request: &Request) -> Result<(Store, Deployment)> {
             "Cloud is permanently bound to its repository, revision and profile",
         ));
     }
+    same_worker(&state)?;
     Ok((store, state))
+}
+
+/// The recorded worker specification belongs to this deployment.
+fn same_worker(state: &Deployment) -> Result<()> {
+    if state
+        .spec
+        .as_ref()
+        .is_some_and(|spec| spec.operation_id != state.cloud_id || spec.profile != state.profile)
+    {
+        return Err(Error::Invalid("Deployment and worker identities differ"));
+    }
+    Ok(())
 }
 
 fn ready(state: &Deployment) -> Result<()> {
@@ -273,17 +308,21 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-fn begin(
-    steps: &impl Steps,
-    store: &Store,
-    state: &mut Deployment,
+/// The committed revision to rebuild, once its profile named `profile_name` equals the bound one.
+fn committed_revision(
+    recipe: &impl Recipe,
+    state: &Deployment,
     profile_name: &str,
     emit: &dyn Fn(Event),
-) -> Result<()> {
+) -> Result<String> {
     emit(activity("Reading the latest committed recipe"));
-    let head = steps.head(&state.repository)?;
+    let head = recipe.head(&state.repository)?;
     unchanged_profile(&state.profile, head.config.as_ref(), profile_name)?;
-    state.begin_replacement(OperationId::generate(), head.revision)?;
+    Ok(head.revision)
+}
+
+fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, revision: String) -> Result<()> {
+    state.begin_replacement(OperationId::generate(), revision)?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
 }
@@ -503,9 +542,14 @@ fn tail(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Resul
     })
 }
 
-/// Hosted devices released for a switch that never happened stay released until a reconnect.
-fn devices_released(state: &Deployment) -> bool {
-    state.profile.capabilities.browserstack.is_some() && state.browserstack_released
+/// Hosted devices are released once a replacement is built, and a crash can lose the record
+/// of that release, so dropping a built replacement reconnects to arm them again.
+fn may_have_released_devices(state: &Deployment) -> bool {
+    state.profile.capabilities.browserstack.is_some()
+        && state
+            .image_replacement
+            .as_ref()
+            .is_some_and(|journal| journal.image().is_some())
 }
 
 fn activity(detail: &'static str) -> Event {
