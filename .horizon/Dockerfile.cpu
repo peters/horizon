@@ -22,12 +22,21 @@ COPY --from=agent-runtime /usr/local/LICENSE /usr/local/share/licenses/node/LICE
 COPY --from=agent-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
-COPY install-build-tools.sh retain-component-sources.py component-sources.json /usr/local/lib/horizon/
+COPY install-build-tools.sh /usr/local/lib/horizon/
 COPY THIRD-PARTY.md /usr/local/share/licenses/horizon/THIRD-PARTY.md
 ENV RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo \
     PATH="/usr/local/cargo/bin:${PATH}"
 ENV LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan
 RUN bash /usr/local/lib/horizon/install-build-tools.sh cpu
+# Each agent gets its own layer after the toolchain, keyed on the release Horizon
+# passes, so a new release rebuilds only that layer and the ones after it. Claude
+# changes most often and goes last. The worker check needs both agents installed.
+COPY retain-component-sources.py component-sources.json /usr/local/lib/horizon/
+ARG HORIZON_CODEX_VERSION=
+RUN bash /usr/local/lib/horizon/install-build-tools.sh codex "$HORIZON_CODEX_VERSION"
+ARG HORIZON_CLAUDE_VERSION=
+RUN bash /usr/local/lib/horizon/install-build-tools.sh claude "$HORIZON_CLAUDE_VERSION" \
+    && horizon-worker-check --git-auth
 ENV LANG=C.UTF-8 PATH="${CARGO_HOME}/bin:${PATH}"
 RUN printf 'export RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH="%s"\n' "$PATH" \
         > /etc/profile.d/horizon-development.sh \
