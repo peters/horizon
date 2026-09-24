@@ -1,120 +1,239 @@
 //! Bounded asynchronous discovery; creating a session never performs a catalog HTTP request.
-use super::{CatalogDevice, CatalogError, CatalogPage, CatalogQuery, target_provider};
+//!
+//! One provider binding (name, profile and credential generation) has at most
+//! one healthy job in flight, and consumers share it instead of starting
+//! duplicates. A job whose current stage exceeds its budget is reported as
+//! stalled but kept, so a late result for the same binding is still accepted.
+//! A replacement starts only after `RETRY` and within the provider's budget.
+//! Changing the binding drops the old receivers at once, so stale rows are
+//! never served.
+use super::{
+    CatalogDevice, CatalogError, CatalogPage, CatalogQuery,
+    budget::{Permit, ProviderBudget},
+    progress::{CatalogProgress, CatalogStage, Job},
+    target_provider,
+};
 use crate::remote::RemoteProviderProfile;
 use std::{
     collections::BTreeMap,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc::{Receiver, TryRecvError, channel},
-    },
+    sync::mpsc::{Receiver, TryRecvError, channel},
     time::{Duration, Instant},
 };
 
 const FRESH: Duration = Duration::from_secs(300);
 const RETRY: Duration = Duration::from_secs(15);
-static ACTIVE_FETCHES: AtomicUsize = AtomicUsize::new(0);
-struct Permit;
-impl Permit {
-    fn acquire() -> Option<Self> {
-        ACTIVE_FETCHES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < 32).then_some(n + 1))
-            .ok()
-            .map(|_| Self)
-    }
-}
-impl Drop for Permit {
-    fn drop(&mut self) {
-        ACTIVE_FETCHES.fetch_sub(1, Ordering::Release);
-    }
+const MAX_ENTRIES: usize = 32;
+
+type Outcome = Result<Vec<CatalogDevice>, CatalogError>;
+
+struct Attempt {
+    job: Job,
+    receiver: Receiver<Outcome>,
+    started: Instant,
 }
 
 struct Entry {
     profile: RemoteProviderProfile,
-    started: Instant,
-    pending: Option<Receiver<Result<Vec<CatalogDevice>, CatalogError>>>,
-    result: Option<Result<Vec<CatalogDevice>, CatalogError>>,
+    attempts: Vec<Attempt>,
+    /// The latest completed outcome and the start of the attempt that produced it.
+    result: Option<(Outcome, Instant)>,
+    last_start: Option<Instant>,
+}
+
+impl Entry {
+    fn new(profile: &RemoteProviderProfile) -> Self {
+        Self {
+            profile: profile.clone(),
+            attempts: Vec::new(),
+            result: None,
+            last_start: None,
+        }
+    }
+
+    fn fresh_rows(&self, now: Instant) -> Option<&[CatalogDevice]> {
+        match &self.result {
+            Some((Ok(rows), started)) if now.saturating_duration_since(*started) < FRESH => Some(rows),
+            _ => None,
+        }
+    }
+
+    /// A job within its stage budget, or one that finished and awaits `poll`.
+    fn in_flight(&self, now: Instant) -> bool {
+        self.attempts.iter().any(|attempt| attempt.job.stall(now).is_none())
+    }
+
+    fn wants_start(&self, now: Instant) -> bool {
+        self.fresh_rows(now).is_none()
+            && !self.in_flight(now)
+            && self
+                .last_start
+                .is_none_or(|at| now.saturating_duration_since(at) >= RETRY)
+    }
+
+    fn poll(&mut self, now: Instant) {
+        let mut completed = Vec::new();
+        self.attempts.retain(|attempt| match attempt.receiver.try_recv() {
+            Err(TryRecvError::Empty) => true,
+            Ok(outcome) => {
+                completed.push((outcome, attempt.started));
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                completed.push((Err(CatalogError::Unavailable), attempt.started));
+                false
+            }
+        });
+        for (outcome, started) in completed {
+            // Rows from any attempt of this binding beat a failure; between two
+            // answers of the same kind the newer attempt wins. A failure never
+            // replaces rows that are still fresh.
+            let replace = match (&outcome, &self.result) {
+                (_, None) | (Ok(_), Some((Err(_), _))) => true,
+                (Ok(_), Some((Ok(_), at))) => started >= *at,
+                (Err(_), Some((_, at))) => started >= *at && self.fresh_rows(now).is_none(),
+            };
+            if replace {
+                self.result = Some((outcome, started));
+            }
+        }
+    }
+
+    /// The newest known failure: a completed error, expired rows or a stalled stage.
+    fn failure(&self, now: Instant) -> Option<CatalogError> {
+        let completed = match &self.result {
+            Some((Err(error), at)) => Some((*at, *error)),
+            Some((Ok(_), at)) => Some((*at, CatalogError::RefreshRequired)),
+            None => None,
+        };
+        let stalled = self
+            .attempts
+            .iter()
+            .rev()
+            .find_map(|attempt| attempt.job.stall(now).map(|error| (attempt.started, error)));
+        stalled
+            .into_iter()
+            .chain(completed)
+            .max_by_key(|(at, _)| *at)
+            .map(|(_, error)| error)
+    }
 }
 
 #[derive(Default)]
 pub struct CatalogCache {
     credential_generation: u64,
     entries: BTreeMap<String, Entry>,
+    budgets: BTreeMap<String, ProviderBudget>,
+    skew: Duration,
 }
+
 impl CatalogCache {
     /// Discard completed and pending rows after an in-process credential change.
     pub fn invalidate_credentials(&mut self, generation: u64) {
         if self.credential_generation != generation {
-            self.entries.clear();
+            self.clear();
             self.credential_generation = generation;
         }
     }
 
-    /// Returns true when a new bounded fetch is needed. Changed account bindings invalidate cached rows.
+    /// Drop every binding and late result. Jobs that are still running keep
+    /// counting against their provider's budget until they exit.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Returns true when `start` would launch a job now. A changed binding
+    /// replaces the old one at once; a healthy job for the same binding is
+    /// never duplicated.
     pub fn needs_refresh(&mut self, name: &str, profile: &RemoteProviderProfile) -> bool {
         self.poll();
-        self.entries.get(name).is_none_or(|entry| {
-            entry.profile != *profile
-                || entry.started.elapsed()
-                    >= if matches!(entry.result, Some(Ok(_))) {
-                        FRESH
-                    } else {
-                        RETRY
-                    }
-        })
+        let now = self.now();
+        self.admits(name, profile, now)
     }
 
     pub fn start(
         &mut self,
         name: &str,
         profile: &RemoteProviderProfile,
-        fetch: impl FnOnce() -> Result<Vec<CatalogDevice>, CatalogError> + Send + 'static,
+        fetch: impl FnOnce(&CatalogProgress) -> Outcome + Send + 'static,
     ) {
-        if !self.needs_refresh(name, profile) {
+        self.poll();
+        let now = self.now();
+        if !self.admits(name, profile, now) {
             return;
         }
-        // Completed entries can be evicted; active workers stay bounded independently of the request queue.
-        if self.entries.len() >= 32 && !self.entries.contains_key(name) {
-            if let Some(old) = self
-                .entries
-                .iter()
-                .find(|(_, e)| e.pending.is_none())
-                .map(|(n, _)| n.clone())
-            {
-                self.entries.remove(&old);
-            } else {
-                return;
-            }
-        }
         let Some(permit) = Permit::acquire() else { return };
+        let (Some(entry), Some(budget)) = (self.entries.get_mut(name), self.budgets.get_mut(name)) else {
+            return;
+        };
+        let (job, progress) = Job::start(self.skew);
         let (tx, rx) = channel();
-        let job = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("provider-catalog".into())
             .spawn(move || {
                 let _permit = permit;
-                let _ = tx.send(fetch());
+                let outcome = fetch(&progress);
+                // Finish before answering, so a received answer never finds its job still running.
+                drop(progress);
+                let _ = tx.send(outcome);
             });
-        self.entries.insert(
-            name.into(),
-            Entry {
-                profile: profile.clone(),
-                started: Instant::now(),
-                pending: job.is_ok().then_some(rx),
-                result: job.err().map(|_| Err(CatalogError::Unavailable)),
-            },
-        );
+        entry.last_start = Some(now);
+        if spawned.is_ok() {
+            budget.record(Some(job.clone()), now);
+            entry.attempts.push(Attempt {
+                job,
+                receiver: rx,
+                started: now,
+            });
+        } else {
+            budget.record(None, now);
+            entry.result = Some((Err(CatalogError::Unavailable), now));
+        }
+    }
+
+    /// Records the binding, then decides whether it may start a job now.
+    fn admits(&mut self, name: &str, profile: &RemoteProviderProfile, now: Instant) -> bool {
+        if self.entries.get(name).is_some_and(|entry| entry.profile != *profile) {
+            self.entries.remove(name);
+        }
+        if !self.make_room(name, now) {
+            return false;
+        }
+        let entry = self.entries.entry(name.into()).or_insert_with(|| Entry::new(profile));
+        entry.wants_start(now) && self.budgets.entry(name.into()).or_default().admits(now)
+    }
+
+    /// Completed entries can be evicted; running jobs stay bounded by their budgets.
+    fn make_room(&mut self, name: &str, now: Instant) -> bool {
+        self.budgets
+            .retain(|provider, budget| provider == name || !budget.idle(now));
+        if self.entries.len() < MAX_ENTRIES || self.entries.contains_key(name) {
+            return true;
+        }
+        let idle = self
+            .entries
+            .iter()
+            .find(|(_, entry)| entry.attempts.is_empty())
+            .map(|(name, _)| name.clone());
+        idle.is_some_and(|name| self.entries.remove(&name).is_some())
     }
 
     pub fn poll(&mut self) {
+        let now = self.now();
         for entry in self.entries.values_mut() {
-            let Some(rx) = &entry.pending else { continue };
-            let result = match rx.try_recv() {
-                Ok(result) => result,
-                Err(TryRecvError::Empty) => continue,
-                Err(TryRecvError::Disconnected) => Err(CatalogError::Unavailable),
-            };
-            entry.pending = None;
-            entry.result = Some(result);
+            entry.poll(now);
         }
+    }
+
+    /// The stage of the newest running job for this provider, for diagnostics.
+    #[must_use]
+    pub fn stage(&self, name: &str) -> Option<CatalogStage> {
+        self.entries
+            .get(name)?
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| attempt.job.running())
+            .map(|attempt| attempt.job.stage())
     }
 
     /// # Errors
@@ -138,131 +257,38 @@ impl CatalogCache {
     }
 
     fn rows(&self, profile: &RemoteProviderProfile, provider: &str) -> Result<Option<&[CatalogDevice]>, CatalogError> {
+        let now = self.now();
         let entry = self
             .entries
             .get(provider)
-            .filter(|entry| entry.profile == *profile && entry.started.elapsed() < FRESH)
+            .filter(|entry| entry.profile == *profile)
             .ok_or(CatalogError::RefreshRequired)?;
-        match &entry.result {
-            Some(Ok(rows)) => Ok(Some(rows)),
-            Some(Err(error)) => Err(*error),
-            None if entry.started.elapsed() < RETRY => Ok(None),
+        if let Some(rows) = entry.fresh_rows(now) {
+            return Ok(Some(rows));
+        }
+        if entry.in_flight(now) {
+            return Ok(None);
+        }
+        if let Some(error) = entry.failure(now) {
+            return Err(error);
+        }
+        // This binding is waiting for admission behind jobs from an earlier one.
+        match self.budgets.get(provider) {
+            Some(budget) => budget.refusal(now).map_or(Ok(None), Err),
             None => Err(CatalogError::Unavailable),
         }
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now() + self.skew
+    }
+
+    /// Moves this cache's clock forward so budgets can be tested without sleeping.
+    #[doc(hidden)]
+    pub fn advance_clock(&mut self, by: Duration) {
+        self.skew += by;
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn profile() -> RemoteProviderProfile {
-        serde_json::from_str(r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub"}"#)
-            .unwrap()
-    }
-    #[test]
-    fn credential_change_discards_ready_rows_and_late_results() {
-        let profile = profile();
-        let mut cache = CatalogCache::default();
-        let rows = super::super::decode(
-            "account",
-            br#"[{"os":"ios","os_version":"18","browser":"iphone","device":"iPhone 16","real_mobile":true}]"#,
-        )
-        .unwrap();
-        let target = rows[0].target.clone();
-        cache.entries.insert(
-            "account".into(),
-            Entry {
-                profile: profile.clone(),
-                started: Instant::now(),
-                pending: None,
-                result: Some(Ok(rows.clone())),
-            },
-        );
-        assert!(cache.target(&profile, &target).is_ok());
-        cache.invalidate_credentials(1);
-        assert!(cache.entries.is_empty());
-        assert_eq!(
-            cache.target(&profile, &target).unwrap_err(),
-            CatalogError::RefreshRequired
-        );
-        let (old_result, old_receiver) = channel();
-        cache.entries.insert(
-            "account".into(),
-            Entry {
-                profile: profile.clone(),
-                started: Instant::now(),
-                pending: Some(old_receiver),
-                result: None,
-            },
-        );
-        cache.invalidate_credentials(2);
-        assert!(
-            old_result.send(Ok(rows)).is_err(),
-            "an old credential fetch cannot repopulate the cache"
-        );
-        cache.poll();
-        assert!(cache.needs_refresh("account", &profile));
-        assert_eq!(
-            cache
-                .page(
-                    &profile,
-                    &CatalogQuery {
-                        provider: "account".into(),
-                        ..Default::default()
-                    }
-                )
-                .unwrap_err(),
-            CatalogError::RefreshRequired
-        );
-    }
-    #[test]
-    fn bounded_rebinding_recovers_while_old_fetch_waits_and_expiry_invalidates_targets() {
-        let profile = profile();
-        let mut cache = CatalogCache::default();
-        let rows = super::super::decode(
-            "account",
-            br#"[{"os":"ios","os_version":"18","browser":"iphone","device":"iPhone 16","real_mobile":true}]"#,
-        )
-        .unwrap();
-        let target = rows[0].target.clone();
-        let (release, wait) = channel();
-        cache.start("account", &profile, move || {
-            wait.recv().unwrap();
-            Ok(rows)
-        });
-        cache.entries.get_mut("account").unwrap().started -= RETRY * 2;
-        let mut changed = profile.clone();
-        changed.limits.max_session_seconds += 1;
-        assert!(
-            cache.needs_refresh("account", &changed),
-            "rebinding may replace the consumer while the old worker retains its permit"
-        );
-        assert_eq!(
-            cache.target(&changed, &target).unwrap_err(),
-            CatalogError::RefreshRequired
-        );
-        let replacement = super::super::decode(
-            "account",
-            br#"[{"os":"ios","os_version":"18","browser":"iphone","device":"iPhone 16","real_mobile":true}]"#,
-        )
-        .unwrap();
-        cache.start("account", &changed, move || Ok(replacement));
-        release.send(()).unwrap();
-        let end = Instant::now() + Duration::from_secs(2);
-        while cache.entries["account"].pending.is_some() {
-            cache.poll();
-            assert!(Instant::now() < end);
-            std::thread::yield_now();
-        }
-        assert_eq!(
-            cache.target(&changed, &target).unwrap().device.as_deref(),
-            Some("iPhone 16")
-        );
-        assert!(!cache.needs_refresh("account", &changed));
-        cache.entries.get_mut("account").unwrap().started -= FRESH;
-        assert_eq!(
-            cache.target(&changed, &target).unwrap_err(),
-            CatalogError::RefreshRequired
-        );
-    }
-}
+mod tests;

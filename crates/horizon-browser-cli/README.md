@@ -349,3 +349,18 @@ Results contain up to 50 combinations, `total`, and `next_offset`. Pass a return
 Discovery does not allocate a device or reserve capacity. Account access and
 availability are verified when creating the session. Cloud workers use only their
 repository-declared, locally granted account and keep operating after disconnect.
+
+Concurrent requests for the same account share one lookup. Reading the
+credential (for example waiting on an OS keychain prompt), the provider request
+and decoding the catalog each have their own time budget. A credential store
+that does not answer within 10 seconds returns
+`provider_catalog_credentials_timed_out`; a stalled request returns
+`provider_catalog_unavailable`. Rows that arrive late for the same account
+binding are still used. For an unchanged binding, a retry starts no sooner than
+15 seconds after the previous lookup. Changing the account's profile or
+credentials discards earlier results immediately and may start a new lookup at
+once. Across retries and changes, each account runs at most two lookups at once,
+including superseded ones, and starts at most four per minute. When a stuck
+credential read eventually returns, discovery resumes without restarting
+Horizon. While two reads for an account never return, that account's
+discovery keeps reporting the stall.

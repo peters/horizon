@@ -7,8 +7,12 @@ pub use horizon_browser_protocol::provider_catalog::{CatalogDevice, CatalogPage,
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Duration};
+mod budget;
 mod cache;
+mod progress;
 pub use cache::CatalogCache;
+use progress::REQUEST_BUDGET;
+pub use progress::{CatalogProgress, CatalogStage};
 
 const ENDPOINT: &str = "https://api.browserstack.com/automate/browsers.json";
 
@@ -18,6 +22,8 @@ pub enum CatalogError {
     Unsupported,
     #[error("provider_catalog_credentials: provider credentials are unavailable")]
     Credentials,
+    #[error("provider_catalog_credentials_timed_out: the credential store did not answer in time")]
+    CredentialsTimedOut,
     #[error("provider_catalog_access_denied: the provider refused this account")]
     AccessDenied,
     #[error("provider_catalog_unavailable: device discovery is temporarily unavailable")]
@@ -46,15 +52,28 @@ pub fn fetch(
     provider: &str,
     profile: &RemoteProviderProfile,
     authorization: &str,
+    progress: &CatalogProgress,
+) -> Result<Vec<CatalogDevice>, CatalogError> {
+    fetch_from(ENDPOINT, REQUEST_BUDGET, provider, profile, authorization, progress)
+}
+
+fn fetch_from(
+    endpoint: &str,
+    budget: Duration,
+    provider: &str,
+    profile: &RemoteProviderProfile,
+    authorization: &str,
+    progress: &CatalogProgress,
 ) -> Result<Vec<CatalogDevice>, CatalogError> {
     validate_provider(profile)?;
+    progress.enter(CatalogStage::Request);
     let config = ureq::Agent::config_builder()
         .max_redirects(0)
         .http_status_as_error(false)
-        .timeout_global(Some(Duration::from_secs(10)))
+        .timeout_global(Some(budget))
         .build();
     let mut response = ureq::Agent::new_with_config(config)
-        .get(ENDPOINT)
+        .get(endpoint)
         .header("Authorization", authorization)
         .header("Accept", "application/json")
         .call()
@@ -69,7 +88,12 @@ pub fn fetch(
         .with_config()
         .limit(8 * 1024 * 1024)
         .read_to_vec()
-        .map_err(|_| CatalogError::InvalidResponse)?;
+        .map_err(|error| match error {
+            ureq::Error::Timeout(_) => CatalogError::Unavailable,
+            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => CatalogError::Unavailable,
+            _ => CatalogError::InvalidResponse,
+        })?;
+    progress.enter(CatalogStage::Decode);
     decode(provider, &bytes)
 }
 
@@ -214,5 +238,64 @@ mod tests {
         assert_eq!(page.devices[0], *mobile);
         assert!(decode("account", br#"[{"os":"bad\n","os_version":"1","browser":"chrome"}]"#).is_err());
         assert!(target_provider("catalog.account.forged").is_none());
+    }
+
+    /// Serves one connection: writes `reply`, then holds the socket open until the test ends.
+    fn server(reply: &'static [u8]) -> (String, std::sync::mpsc::Sender<()>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/automate/browsers.json", listener.local_addr().unwrap());
+        let (finish, hold) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(reply);
+            let _ = hold.recv();
+        });
+        (endpoint, finish)
+    }
+
+    fn fetch_stage(reply: &'static [u8]) -> (Result<Vec<CatalogDevice>, CatalogError>, CatalogStage) {
+        let profile = serde_json::from_str(
+            r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub"}"#,
+        )
+        .unwrap();
+        let (endpoint, _finish) = server(reply);
+        let (job, progress) = progress::Job::start(Duration::ZERO);
+        let started = std::time::Instant::now();
+        let result = fetch_from(
+            &endpoint,
+            Duration::from_millis(300),
+            "account",
+            &profile,
+            "Basic fixture",
+            &progress,
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the request budget bounds the wait"
+        );
+        (result, job.stage())
+    }
+
+    #[test]
+    fn slow_headers_and_bodies_time_out_in_the_request_stage() {
+        assert_eq!(
+            fetch_stage(b""),
+            (Err(CatalogError::Unavailable), CatalogStage::Request),
+            "headers never arrive"
+        );
+        assert_eq!(
+            fetch_stage(b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n[{"),
+            (Err(CatalogError::Unavailable), CatalogStage::Request),
+            "a stalled body is unavailable, not an invalid catalog"
+        );
+        let (devices, stage) = fetch_stage(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]");
+        assert_eq!((devices, stage), (Ok(Vec::new()), CatalogStage::Decode));
+        assert_eq!(
+            fetch_stage(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").0,
+            Err(CatalogError::AccessDenied)
+        );
     }
 }
