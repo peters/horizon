@@ -671,16 +671,26 @@ fn billing_at(seconds: u64) -> std::time::SystemTime {
     std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
 }
 
+fn billing_server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+    let (mut provider, requests, task) = server(responses);
+    // Billing history is the v2 API, not the v1 REST host the other tests stub.
+    provider.api_endpoint.clone_from(&provider.endpoint);
+    (provider, requests, task)
+}
+
 #[test]
 fn billing_requests_one_workers_buckets_with_the_bearer_credential() {
     use billing::{BillingBucket, BucketSize};
-    let body = json!([
-        {"amount":0.69,"time":"2024-07-11T00:00:00Z","timeBilledMs":3_600_000,"diskSpaceBilledGb":20,"podId":"worker1"},
-        {"amount":0,"time":"2024-07-11T01:00:00.000Z","timeBilledMs":0,"podId":"worker1","gpuTypeId":null},
-        {"amount":5.0,"time":"2024-07-11T01:00:00Z","timeBilledMs":1,"podId":"other-worker"},
-        {"amount":0.1,"time":"2024-07-11T04:00:00+02:00"}
-    ]);
-    let (provider, requests, task) = server(vec![(200, body.to_string())]);
+    let body = json!({
+        "records": [
+            {"startTime":"2024-07-11T00:00:00Z","endTime":"2024-07-11T01:00:00Z","podId":"worker1","totalAmount":0.69,"cpuAmount":0.5,"gpuAmount":0.0,"diskAmount":0.19},
+            {"startTime":"2024-07-11T01:00:00.000Z","endTime":"2024-07-11T02:00:00Z","podId":"worker1","totalAmount":0,"cpuAmount":0,"gpuAmount":0,"diskAmount":0},
+            {"startTime":"2024-07-11T01:00:00Z","endTime":"2024-07-11T02:00:00Z","podId":"other-worker","totalAmount":5.0,"cpuAmount":5.0,"gpuAmount":0,"diskAmount":0},
+            {"startTime":"2024-07-11T04:00:00+02:00","endTime":"2024-07-11T05:00:00+02:00","totalAmount":0.1,"cpuAmount":0.1,"gpuAmount":0,"diskAmount":0}
+        ],
+        "metadata": {"recordCount": 4, "totals": {"totalAmount": 5.79}}
+    });
+    let (provider, requests, task) = billing_server(vec![(200, body.to_string())]);
     let end = billing_at(BILLING_DAY + 45_296) + Duration::from_millis(789);
     let buckets = provider
         .billing(
@@ -692,23 +702,23 @@ fn billing_requests_one_workers_buckets_with_the_bearer_credential() {
         )
         .unwrap();
     task.join().unwrap();
-    let bucket = |time: &str, amount, time_billed_ms| BillingBucket {
+    let bucket = |time: &str, amount| BillingBucket {
         time: time.into(),
         size: BucketSize::Hour,
         amount,
-        time_billed_ms,
+        time_billed_ms: 0,
     };
     assert_eq!(
         buckets,
         [
-            bucket("2024-07-11T00:00:00Z", 0.69, 3_600_000),
-            bucket("2024-07-11T01:00:00.000Z", 0.0, 0),
-            bucket("2024-07-11T04:00:00+02:00", 0.1, 0),
+            bucket("2024-07-11T00:00:00Z", 0.69),
+            bucket("2024-07-11T01:00:00.000Z", 0.0),
+            bucket("2024-07-11T04:00:00+02:00", 0.1),
         ]
     );
     let request = &requests.lock().unwrap()[0];
     assert!(request.starts_with(
-        "GET /billing/pods?bucketSize=hour&startTime=2024-07-11T00:00:00Z&endTime=2024-07-11T12:34:56Z&grouping=podId&podId=worker1 HTTP/1.1\r\n"
+        "GET /billing/pods?bucketSize=hour&startTime=2024-07-11T00:00:00Z&endTime=2024-07-11T12:34:56Z&podId=worker1 HTTP/1.1\r\n"
     ));
     assert!(
         request
@@ -721,7 +731,7 @@ fn billing_requests_one_workers_buckets_with_the_bearer_credential() {
 #[test]
 fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
     let fetch = |status: u16, body: &str| {
-        let (provider, _, task) = server(vec![(status, body.into())]);
+        let (provider, _, task) = billing_server(vec![(status, body.into())]);
         let result = provider.billing(
             "worker1",
             billing::BucketSize::Day,
@@ -737,19 +747,21 @@ fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
     assert!(matches!(fetch(400, "{}"), Err(CloudError::Rejected(_))));
     assert!(matches!(fetch(422, "{}"), Err(CloudError::Rejected(_))));
     assert!(matches!(fetch(500, "{}"), Err(CloudError::Http(500, _))));
-    assert!(fetch(200, "[]").unwrap().is_empty());
+    assert!(fetch(200, r#"{"records":[]}"#).unwrap().is_empty());
     for invalid in [
         "not json",
+        "[]",
+        "{}",
         r#"{"data":[]}"#,
-        r#"[{"amount":-0.01,"time":"2024-07-11T00:00:00Z"}]"#,
-        r#"[{"amount":"0.5","time":"2024-07-11T00:00:00Z"}]"#,
-        r#"[{"amount":1e400,"time":"2024-07-11T00:00:00Z"}]"#,
-        r#"[{"amount":0.5,"time":"2024-07-11 00:00:00"}]"#,
-        r#"[{"amount":0.5}]"#,
-        r#"[{"time":"2024-07-11T00:00:00Z"}]"#,
-        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","timeBilledMs":-1}]"#,
-        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","podId":"worker1"},{"amount":-1,"time":"2024-07-11T00:00:00Z","podId":"other-worker"}]"#,
-        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","podId":"worker1"},{"amount":1,"time":"yesterday","podId":"other-worker"}]"#,
+        r#"{"records":[{"totalAmount":-0.01,"startTime":"2024-07-11T00:00:00Z"}]}"#,
+        r#"{"records":[{"totalAmount":"0.5","startTime":"2024-07-11T00:00:00Z"}]}"#,
+        r#"{"records":[{"totalAmount":1e400,"startTime":"2024-07-11T00:00:00Z"}]}"#,
+        // The v1 feed's bucket time, which has no offset.
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11 00:00:00"}]}"#,
+        r#"{"records":[{"totalAmount":0.5}]}"#,
+        r#"{"records":[{"startTime":"2024-07-11T00:00:00Z"}]}"#,
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":"worker1"},{"totalAmount":-1,"startTime":"2024-07-11T00:00:00Z","podId":"other-worker"}]}"#,
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":"worker1"},{"totalAmount":1,"startTime":"yesterday","podId":"other-worker"}]}"#,
     ] {
         assert!(
             matches!(fetch(200, invalid), Err(CloudError::InvalidResponse)),
@@ -760,7 +772,7 @@ fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
 
 #[test]
 fn invalid_billing_requests_never_reach_the_provider() {
-    let (provider, requests, task) = server(vec![]);
+    let (provider, requests, task) = billing_server(vec![]);
     let day = billing::BucketSize::Day;
     let cancelled = Cancellation::default();
     cancelled.cancel();

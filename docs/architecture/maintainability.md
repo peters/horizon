@@ -498,8 +498,9 @@ The receipt alone does not prove current storage freshness or authorize bootstra
 stock for placement. `runpod::replacement` switches a verified, running worker to a
 new image digest through the pod update and observes which image of the pair the
 provider reports; it keeps no journal, so callers record intent first.
-`runpod::billing` reads one worker's validated billing buckets. The crate must
-not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
+`runpod::billing` reads one worker's validated billing buckets from RunPod v2
+pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
+The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 `startup::StartupMetadata` is bounded opaque, non-secret creation data saved in
 `WorkerSpec`. The RunPod request passes it through one environment value, and the
 shared worker-identity check requires its exact echo before adoption or lifecycle

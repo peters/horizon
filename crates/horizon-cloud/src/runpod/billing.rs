@@ -1,6 +1,10 @@
 //! Per-worker billing history. `RunPod` bills compute and the worker's own disk
 //! in whole buckets that trail the running worker. Network volumes are billed
 //! per account and cannot be attributed to one worker.
+//!
+//! History comes from `GET /v2/billing/pods`. The v1 feed omits CPU workers and
+//! reports bucket times as `YYYY-MM-DD HH:MM:SS` with no offset, which cannot
+//! be summed without either dropping the worker or rejecting the page.
 use super::RunPod;
 use crate::{Cancellation, CloudError, valid_id};
 use serde::Deserialize;
@@ -64,18 +68,19 @@ impl RunPod {
             return Err(INVALID_WINDOW);
         }
         let path = format!(
-            "/billing/pods?bucketSize={}&startTime={}&endTime={}&grouping=podId&podId={pod_id}",
+            "/billing/pods?bucketSize={}&startTime={}&endTime={}&podId={pod_id}",
             size.query(),
             timestamp(start)?,
             timestamp(end)?,
         );
-        let buckets: Vec<Bucket> = serde_json::from_value(self.request("GET", &path, None, cancel)?)
+        let url = format!("{}{path}", self.api_endpoint);
+        let page: Page = serde_json::from_value(self.request_url("GET", &url, None, cancel, None)?)
             .map_err(|_| CloudError::InvalidResponse)?;
-        // Every bucket must be valid, including another worker's, before those are dropped.
-        let mut own = Vec::with_capacity(buckets.len());
-        for bucket in buckets {
-            let mine = bucket.pod_id.as_deref().is_none_or(|id| id == pod_id);
-            let bucket = bucket.validate(size)?;
+        // Every record must be valid, including another worker's, before those are dropped.
+        let mut own = Vec::with_capacity(page.records.len());
+        for record in page.records {
+            let mine = record.pod_id.as_deref().is_none_or(|id| id == pod_id);
+            let bucket = record.validate(size)?;
             if mine {
                 own.push(bucket);
             }
@@ -85,26 +90,35 @@ impl RunPod {
 }
 
 #[derive(Deserialize)]
+struct Page {
+    records: Vec<Record>,
+}
+
+/// One v2 billing record. `totalAmount` already includes the worker's disk.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Bucket {
-    amount: f64,
-    time: String,
-    #[serde(default)]
-    time_billed_ms: Option<u64>,
+struct Record {
+    start_time: String,
+    total_amount: f64,
     #[serde(default)]
     pod_id: Option<String>,
 }
 
-impl Bucket {
+impl Record {
     fn validate(self, size: BucketSize) -> Result<BillingBucket, CloudError> {
-        if !self.amount.is_finite() || self.amount < 0.0 || OffsetDateTime::parse(&self.time, &Rfc3339).is_err() {
+        if !self.total_amount.is_finite()
+            || self.total_amount < 0.0
+            || OffsetDateTime::parse(&self.start_time, &Rfc3339).is_err()
+        {
             return Err(CloudError::InvalidResponse);
         }
         Ok(BillingBucket {
-            time: self.time,
+            time: self.start_time,
             size,
-            amount: self.amount,
-            time_billed_ms: self.time_billed_ms.unwrap_or_default(),
+            amount: self.total_amount,
+            // v2 does not report billed milliseconds. The cost total uses the
+            // bucket amount and its start, not this field.
+            time_billed_ms: 0,
         })
     }
 }
