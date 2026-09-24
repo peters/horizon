@@ -493,3 +493,112 @@ fn native_store_fixture() {
         _ => panic!("unsupported private fixture phase"),
     }
 }
+
+#[test]
+fn native_commits_recheck_ownership_and_the_exact_predecessor() {
+    for boundary in [Boundary::Candidate, Boundary::Pending, Boundary::Published] {
+        for mutation in ["machine", "lock", "marker", "delete", "replace"] {
+            let (_temp, root, vault) = fixture();
+            let mut owner = create(&root, &vault);
+            let lock = owner.lock_path.clone();
+            let marker = owner.marker.clone();
+            let slot = marker.registration.to_string();
+            let machine_id = Rc::new(std::cell::Cell::new(1));
+            let reader = machine_id.clone();
+            owner.machine = Box::new(move || machine(reader.get())());
+            let mut expected = HashMap::new();
+            let result = owner.save_with(json!({"next":true}), &mut |step| {
+                if step == boundary {
+                    match mutation {
+                        "machine" => machine_id.set(2),
+                        "lock" => std::fs::write(&lock, [0; 16]).unwrap(),
+                        "marker" => std::fs::write(root.join(MARKER), b"{}").unwrap(),
+                        "delete" => {
+                            vault.0.borrow_mut().remove(&slot);
+                        }
+                        "replace" => {
+                            let mut changed = Registration::read(&vault, &marker).unwrap();
+                            changed.committed.as_mut().unwrap().hash = [0; 32];
+                            changed.write(&vault).unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                    expected = vault.0.borrow().clone();
+                }
+                Ok(())
+            });
+            assert!(result.is_err(), "{boundary:?} {mutation}");
+            assert!(!owner.ready);
+            assert_eq!(*vault.0.borrow(), expected, "{boundary:?} {mutation}");
+        }
+    }
+}
+
+#[test]
+fn recovery_never_recreates_or_overwrites_a_changed_native_predecessor() {
+    for deleted in [false, true] {
+        let (_temp, root, vault) = fixture();
+        let mut owner = create(&root, &vault);
+        assert!(
+            owner
+                .save_with(json!({"next":true}), &mut |step| interrupt_at(step, Boundary::Pending))
+                .is_err()
+        );
+        let mut registration = Registration::read(&vault, &owner.marker).unwrap();
+        let mut expected = HashMap::new();
+        assert!(
+            owner
+                .recover(&mut registration, &mut |_| {
+                    if deleted {
+                        vault.0.borrow_mut().clear();
+                    } else {
+                        let mut changed = Registration::read(&vault, &owner.marker).unwrap();
+                        changed.pending.as_mut().unwrap().next.hash = [0; 32];
+                        changed.write(&vault).unwrap();
+                    }
+                    expected = vault.0.borrow().clone();
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(!owner.ready);
+        assert_eq!(*vault.0.borrow(), expected);
+    }
+}
+
+#[test]
+fn relative_lock_roots_are_canonicalized_before_syncing_ancestors() {
+    let temp = tempfile::tempdir_in(".").unwrap();
+    let relative = PathBuf::from(temp.path().file_name().unwrap()).join("locks/nested");
+    assert!(relative.is_relative());
+    assert_eq!(
+        journal::create_lock_root(&relative).unwrap(),
+        relative.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn an_unavailable_store_is_reported_before_creating_journal_state() {
+    struct Unavailable;
+    impl Vault for Unavailable {
+        fn read(&self, _: &str) -> Result<Zeroizing<Vec<u8>>> {
+            Err(Error::Store)
+        }
+        fn write(&self, _: &str, _: &[u8]) -> Result<()> {
+            panic!("unavailable store was written")
+        }
+    }
+    let (_temp, root, _) = fixture();
+    assert!(matches!(
+        Owner::create_with(
+            &root,
+            &root.with_extension("locks"),
+            json!({}),
+            Box::new(Unavailable),
+            machine(1),
+            &mut |_| Ok(())
+        ),
+        Err(Error::Store)
+    ));
+    assert!(!root.exists());
+}

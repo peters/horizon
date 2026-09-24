@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Registration {
     pub version: u32,
@@ -24,7 +24,7 @@ pub(super) struct Registration {
     pub pending: Option<Transition>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Transition {
     pub previous: Option<Anchor>,

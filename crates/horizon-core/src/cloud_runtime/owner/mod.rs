@@ -157,13 +157,13 @@ impl Owner {
         };
         match vault.read(&marker.registration.to_string()) {
             Err(Error::MissingRegistration) => {}
-            _ => return Err(Error::Registration),
+            Err(error) => return Err(error),
+            Ok(_) => return Err(Error::Registration),
         }
         journal::create_root(root)?;
         let root = root.canonicalize()?;
         let directory = Directory::open(&root)?;
-        journal::create_lock_root(lock_root)?;
-        let lock_root = lock_root.canonicalize()?;
+        let lock_root = journal::create_lock_root(lock_root)?;
         if lock_root.starts_with(&root) {
             return Err(Error::Ownership);
         }
@@ -224,7 +224,7 @@ impl Owner {
             return Err(Error::Ownership);
         }
         owner.lock.verify(&owner.lock_path, registration.lock_identity)?;
-        owner.recover(&mut registration)?;
+        owner.recover(&mut registration, &mut |_| Ok(()))?;
         owner.ready = true;
         owner.current()?;
         Ok(owner)
@@ -270,6 +270,7 @@ impl Owner {
         payload: serde_json::Value,
         checkpoint: &mut impl FnMut(Boundary) -> Result<()>,
     ) -> Result<()> {
+        let previous = registration.committed.as_ref().map(|_| registration.clone());
         let generation = match &registration.committed {
             Some(anchor) => anchor.generation.checked_add(1).ok_or(Error::Registration)?,
             None => 0,
@@ -290,20 +291,44 @@ impl Owner {
             previous: registration.committed.clone(),
             next: next.clone(),
         });
-        registration.write(self.vault.as_ref())?;
+        self.register(registration, previous.as_ref())?;
+        let pending = registration.clone();
         checkpoint(Boundary::Pending)?;
         self.directory.write(JOURNAL, &bytes)?;
         checkpoint(Boundary::Published)?;
         registration.committed = Some(next);
         registration.pending = None;
-        registration.write(self.vault.as_ref())?;
+        self.register(registration, Some(&pending))?;
         checkpoint(Boundary::Committed)
     }
 
-    fn recover(&self, registration: &mut Registration) -> Result<()> {
+    fn register(&self, next: &Registration, previous: Option<&Registration>) -> Result<()> {
+        next.verify(&self.root, &self.marker, &(self.machine)()?)?;
+        self.lock.verify(&self.lock_path, next.lock_identity)?;
+        let marker: Marker = serde_json::from_slice(&self.directory.read(MARKER)?).map_err(|_| Error::Journal)?;
+        if marker != self.marker || next.lock_path != self.lock_path {
+            return Err(Error::Ownership);
+        }
+        // The canonical lock serializes cooperative writers; never recreate a
+        // missing native predecessor from cached signing material.
+        match (previous, Registration::read(self.vault.as_ref(), &self.marker)) {
+            (Some(expected), Ok(current)) if current == *expected => {}
+            (None, Err(Error::MissingRegistration)) if next.committed.is_none() && next.pending.is_some() => {}
+            (_, Err(error)) => return Err(error),
+            _ => return Err(Error::Registration),
+        }
+        next.write(self.vault.as_ref())
+    }
+
+    fn recover(
+        &self,
+        registration: &mut Registration,
+        checkpoint: &mut impl FnMut(Boundary) -> Result<()>,
+    ) -> Result<()> {
         let Some(pending) = &registration.pending else {
             return Ok(());
         };
+        let previous = registration.clone();
         let candidate = self.directory.read(CANDIDATE)?;
         journal::decode(&candidate, &self.marker, &pending.next)?;
         match self.directory.read(JOURNAL) {
@@ -319,9 +344,10 @@ impl Owner {
         }
         // A visible rename may still need its durability barrier after a crash.
         self.directory.write(JOURNAL, &candidate)?;
+        checkpoint(Boundary::Published)?;
         registration.committed = Some(pending.next.clone());
         registration.pending = None;
-        registration.write(self.vault.as_ref())
+        self.register(registration, Some(&previous))
     }
 }
 

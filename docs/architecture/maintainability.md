@@ -487,7 +487,9 @@ lock outside transferable journal state, pinned by native file identity and a no
 Artifact reads, publication and directory synchronization use a retained directory
 handle and reject replacement of its registered path. Its journal
 generation/hash is anchored in the registration; candidate, pending, published and committed boundaries keep
-crash recovery exact and copied or rolled-back journals fenced. This API is not
+crash recovery exact and copied or rolled-back journals fenced. Every native write
+rechecks ownership and the exact preceding registration; deleted or changed native
+state cannot be recreated from cached credentials. This API is not
 called by runtime entry points yet. It currently supports Linux Secret Service
 and macOS Keychain; other hosts remain blocked by the existing Unix directory
 durability requirement. Synthetic tests never access the user's credential store.

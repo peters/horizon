@@ -156,10 +156,11 @@ pub(super) fn create_root(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn create_lock_root(root: &Path) -> Result<()> {
+pub(super) fn create_lock_root(root: &Path) -> Result<std::path::PathBuf> {
     fs::create_dir_all(root)?;
+    let root = root.canonicalize()?;
     for directory in root.ancestors() {
         File::open(directory)?.sync_all()?;
     }
-    Ok(())
+    Ok(root)
 }
