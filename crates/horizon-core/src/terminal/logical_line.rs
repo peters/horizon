@@ -153,12 +153,14 @@ fn joint_after(grid: &Grid<Cell>, cols: usize, line: Line, join: RowJoin) -> Opt
 ///
 /// The continuation must start no further right than the segment and must
 /// not look like a new URL, a list item or a shell prompt. A segment that
-/// fills its row up to the right edge (give or take a padding column) is a
-/// broken URL when it is the row's only content. After other words, word
-/// wrappers only break a URL longer than a row, so the continuation must hold
-/// URL delimiters and be too long to have fit on the segment's row. Line
-/// breakers that split URLs after punctuation leave a ragged edge instead;
-/// those rows join only when the continuation row is a single URL-shaped word.
+/// fills its row up to the right edge (give or take a padding column) and is
+/// the row's only content continues onto URL-delimited text or onto a row
+/// holding nothing but one word, which may be a letters-only URL tail but not
+/// a sentence. After other words, word wrappers only break a URL longer than
+/// a row, so the continuation must hold URL delimiters and be too long to
+/// have fit on the segment's row. Line breakers that split URLs after
+/// punctuation leave a ragged edge instead; those rows join only when the
+/// continuation row is a single URL-shaped word.
 fn url_continues_on_next_row(upper: &Row<Cell>, lower: &Row<Cell>, cols: usize) -> bool {
     let (Some(upper_start), Some(upper_end), Some(lower_start), Some(lower_end)) = (
         first_content_column(upper, cols),
@@ -184,18 +186,24 @@ fn url_continues_on_next_row(upper: &Row<Cell>, lower: &Row<Cell>, cols: usize) 
 
     let segment = segment_start..upper_end + 1;
     let segment_is_row_content = only_marker_before(upper, upper_start, segment_start);
+    let continuation_is_row_content = continuation.end == lower_end + 1;
+    let continuation_ends_sentence = SENTENCE_PUNCTUATION.contains(&lower[Column(continuation.end - 1)].c);
+    let continuation_has_delimiters =
+        row_chars(lower, continuation.clone()).any(|character| URL_DELIMITERS.contains(&character));
     if cols - 1 - upper_end <= MAX_WRAP_PADDING {
-        return segment_is_row_content
-            || (row_chars(lower, continuation).any(|character| URL_DELIMITERS.contains(&character))
-                && segment.len() + continuation_len > cols - lower_start);
+        return if segment_is_row_content {
+            continuation_has_delimiters || (continuation_is_row_content && !continuation_ends_sentence)
+        } else {
+            continuation_has_delimiters && segment.len() + continuation_len > cols - lower_start
+        };
     }
 
     (segment_is_row_content || contains_scheme_separator(row_chars(upper, segment)))
         && URL_BREAK_CHARS.contains(&upper[Column(upper_end)].c)
-        && continuation.end == lower_end + 1
-        && row_chars(lower, continuation.clone())
-            .any(|character| URL_DELIMITERS.contains(&character) || URL_WORD_JOINERS.contains(&character))
-        && !SENTENCE_PUNCTUATION.contains(&lower[Column(lower_end)].c)
+        && continuation_is_row_content
+        && (continuation_has_delimiters
+            || row_chars(lower, continuation).any(|character| URL_WORD_JOINERS.contains(&character)))
+        && !continuation_ends_sentence
 }
 
 /// Whether the row's first word is a list marker (`-`, `*`, `12.`) or ends a
@@ -468,6 +476,25 @@ mod tests {
             assert_eq!(url_at(&term, cols, 0, 30).as_deref(), Some(url), "next row {next:?}");
             assert_eq!(url_at(&term, cols, 1, 3), None, "next row {next:?}");
         }
+    }
+
+    #[test]
+    fn row_filling_url_does_not_absorb_the_next_sentence() {
+        let first = format!("https://example.com/{}", "a".repeat(COLS - 20));
+        for next in ["Thanks for reading.", "Thanks.", "see the docs for more"] {
+            let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
+
+            assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");
+            assert_eq!(url_at(&term, COLS, 1, 2), None, "next row {next:?}");
+        }
+    }
+
+    #[test]
+    fn row_filling_url_joins_a_letters_only_tail() {
+        let first = format!("https://example.com/state={}", "a".repeat(COLS - 26));
+        let term = term_with_rows(COLS, 4, &[first.clone(), "Yrc".to_string(), String::new()]);
+
+        assert_eq!(url_at(&term, COLS, 1, 1), Some(format!("{first}Yrc")));
     }
 
     #[test]
