@@ -30,7 +30,8 @@ const MAX_PATH_ROWS: usize = 4;
 /// Characters that join words inside a URL path segment.
 const URL_WORD_JOINERS: [char; 3] = ['-', '_', '.'];
 const SENTENCE_PUNCTUATION: [char; 5] = ['.', ',', ';', ':', '!'];
-const PROMPT_TERMINATORS: [char; 2] = ['$', '#'];
+/// Characters that end sh (`$`), root (`#`) and zsh/csh (`%`) prompts.
+const PROMPT_TERMINATORS: [char; 3] = ['$', '#', '%'];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RowJoin {
@@ -249,10 +250,15 @@ fn path_row_reaches_query(grid: &Grid<Cell>, cols: usize, mut line: Line) -> boo
 
 /// Whether the row's first word is a list marker (`-`, `*`, `12.`) or ends a
 /// shell prompt (`user@host:~$`) rather than continuing a URL.
+///
+/// A URL row that fills its width can also end in `%` or `#` before the wrap
+/// padding, so a prompt terminator only counts short of the wrap edge.
 fn starts_list_item_or_prompt(row: &Row<Cell>, word: Range<usize>, cols: usize) -> bool {
     let followed_by_blank = word.end < cols && is_blank(&row[Column(word.end)]);
+    let ends_before_wrap_edge = cols - word.end > MAX_WRAP_PADDING;
     followed_by_blank
-        && (is_marker(row_chars(row, word.clone())) || PROMPT_TERMINATORS.contains(&row[Column(word.end - 1)].c))
+        && (is_marker(row_chars(row, word.clone()))
+            || (ends_before_wrap_edge && PROMPT_TERMINATORS.contains(&row[Column(word.end - 1)].c)))
 }
 
 /// Start of the run of URL characters ending at `end`, if `end` holds one.
@@ -620,8 +626,28 @@ mod tests {
         assert_eq!(url_at(&term, COLS, 0, 5).as_deref(), Some("https://example.com/api/"));
 
         let first = format!("https://a.example/{}", "a".repeat(COLS - 18));
-        let term = term_with_rows(COLS, 4, &[first.clone(), "root@box:/workspace# ls".to_string()]);
-        assert_eq!(url_at(&term, COLS, 0, 5), Some(first));
+        for prompt in ["root@box:/workspace# ls", "host% ls", "host%"] {
+            let term = term_with_rows(COLS, 4, &[first.clone(), prompt.to_string()]);
+            assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "prompt {prompt:?}");
+        }
+    }
+
+    #[test]
+    fn padded_url_row_ending_in_a_percent_escape_still_joins() {
+        let url = format!(
+            "https://example.com/{}{}%3Aprofile+user",
+            "a".repeat(COLS - 23),
+            "b".repeat(COLS - 4)
+        );
+        let rows: Vec<String> = hard_wrap(&url, "  ", "  ", COLS - 3, COLS - 3)
+            .into_iter()
+            .map(|row| format!("{row:<width$}", width = COLS - 1))
+            .collect();
+        assert!(rows[1].trim_end().ends_with('%'), "middle row {:?}", rows[1]);
+        let term = term_with_rows(COLS, 4, &rows);
+
+        assert_eq!(url_at(&term, COLS, 0, 5).as_deref(), Some(url.as_str()));
+        assert_eq!(url_at(&term, COLS, 2, 3), Some(url));
     }
 
     #[test]
