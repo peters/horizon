@@ -727,6 +727,8 @@ mod tests {
                 let ordinary = app.board.create_panel(editor([20.0, 1100.0]), ws).unwrap();
                 let local = app.board.workspace(ws).unwrap().local_id.clone();
                 let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
+                // Manual placement, so the child keeps the cloud's next free slot.
+                group.layout = None;
                 group.size = [1800.0, 900.0];
                 group.attach(&mut app.board, actor);
                 app.cloud_prototype.groups = CloudGroups(vec![group]);
