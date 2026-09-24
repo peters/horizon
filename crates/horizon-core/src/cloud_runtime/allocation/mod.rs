@@ -1,0 +1,24 @@
+//! Local identities and explicit placement for the shared-worker coordinator.
+//! These records do not authorize provider calls or enable worker sharing.
+mod identity;
+mod placement;
+
+pub use identity::{AllocationId, ControllerId, ProjectId, ProjectIdentity};
+pub use placement::{ExistingWorker, Placement, PlacementBinding, SharingMode};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BindingError {
+    #[error("Invalid cloud allocation identity")]
+    Identity,
+    #[error("Invalid cloud project membership")]
+    Membership,
+    #[error("Worker credential bindings require absolute local paths")]
+    CredentialPath,
+    #[error("Unsupported cloud placement version")]
+    Version,
+    #[error("Invalid cloud placement binding")]
+    Encoding,
+}
+
+#[cfg(test)]
+mod tests;
