@@ -269,3 +269,16 @@ fn closing_delimiter_balances_an_opener_two_rows_up() {
         );
     }
 }
+
+#[test]
+fn path_rows_reach_a_query_five_rows_down() {
+    let first = format!("https://example.com/{}", "v".repeat(COLS - 20));
+    let mut rows = vec![first];
+    rows.extend((0..4).map(|index| format!("/segment{index}/{}", "p".repeat(COLS - 10))));
+    rows.push("?client_id=0123456789".to_string());
+    let url: String = rows.concat();
+    let term = term_with_rows(COLS, 8, &rows);
+
+    assert_eq!(url_at(&term, COLS, 0, 3).as_deref(), Some(url.as_str()));
+    assert_eq!(url_at(&term, COLS, 3, 3).as_deref(), Some(url.as_str()));
+}

@@ -126,3 +126,13 @@ fn deeper_indented_row_is_not_a_continuation() {
     assert_eq!(url_at(&term, COLS, 0, 5), Some(first));
     assert_eq!(url_at(&term, COLS, 1, 6), None);
 }
+
+#[test]
+fn path_below_a_web_url_that_embeds_a_file_url_stays_a_path() {
+    let first = format!("https://example.com/?u=file:///{}", "a".repeat(COLS - 31));
+    assert_eq!(first.chars().count(), COLS);
+    let term = term_with_rows(COLS, 4, &[first.clone(), "/tmp/file.rs".to_string()]);
+
+    assert_eq!(url_at(&term, COLS, 0, 5), Some(first));
+    assert_eq!(url_at(&term, COLS, 1, 3), None);
+}

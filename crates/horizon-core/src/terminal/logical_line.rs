@@ -26,8 +26,9 @@ const URL_DELIMITERS: [char; 6] = ['/', '?', '#', '&', '=', '%'];
 /// Query and fragment syntax, the only URL evidence a path-shaped row can give.
 const URL_QUERY_DELIMITERS: [char; 5] = ['?', '#', '&', '=', '%'];
 /// Rows followed away from a joint for URL context: the query syntax below a
-/// path-shaped row, or the scheme and open delimiters above a segment.
-const MAX_URL_CONTEXT_ROWS: usize = 4;
+/// path-shaped row, or the scheme and open delimiters above a segment. It
+/// matches the hard-wrap limit so that context reaches as far as a join does.
+const MAX_URL_CONTEXT_ROWS: usize = MAX_HARD_WRAPPED_ROWS;
 /// Characters that join words inside a URL path segment.
 const URL_WORD_JOINERS: [char; 3] = ['-', '_', '.'];
 const SENTENCE_PUNCTUATION: [char; 5] = ['.', ',', ';', ':', '!'];
@@ -199,7 +200,7 @@ fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool
     let continuation_body = continuation.start..continuation.end - usize::from(continuation_ends_sentence);
     let continuation_has_delimiters = if continuation_is_path {
         path_row_reaches_query(grid, cols, line + 1)
-            || (continuation_is_row_content && !continuation_ends_sentence && segment_text().contains("file://"))
+            || (continuation_is_row_content && !continuation_ends_sentence && segment_text().starts_with("file://"))
     } else {
         row_chars(lower, continuation_body).any(|character| URL_DELIMITERS.contains(&character))
     };
@@ -405,8 +406,9 @@ fn is_marker(mut chars: impl Iterator<Item = char>) -> bool {
 
 /// The URL segment starting at `segment_start` on row `line`, preceded by the
 /// full-width rows of URL text that wrap into it, up to
-/// [`MAX_URL_CONTEXT_ROWS`] rows in all. It carries the URL's scheme and any
-/// delimiters a continuation might close.
+/// [`MAX_URL_CONTEXT_ROWS`] rows in all. It starts with the URL's scheme when
+/// the URL begins within that reach, and carries any delimiters a
+/// continuation might close.
 fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, mut segment_start: usize) -> String {
     let mut text = String::new();
     for _ in 0..MAX_URL_CONTEXT_ROWS {
