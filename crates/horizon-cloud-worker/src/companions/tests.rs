@@ -205,3 +205,101 @@ fn rejected_alias_collision_does_not_poison_other_connections() {
         published
     );
 }
+
+#[test]
+fn command_deadline_stops_descendants_even_after_the_parent_exits() {
+    use std::time::{Duration, Instant};
+    for parent in ["wait", "exit 0"] {
+        let root = tempfile::tempdir().unwrap();
+        let late = root.path().join("late-write");
+        let started = root.path().join("started");
+        let script = format!("printf started > \"$2\"; (sleep 1; printf escaped > \"$1\") & {parent}");
+        let before = Instant::now();
+        let result = ssh::checked_with_timeout(
+            Command::new("sh")
+                .args(["-c", &script, "fixture"])
+                .arg(&late)
+                .arg(&started),
+            Duration::from_millis(300),
+        );
+        assert!(result.is_err());
+        assert!(before.elapsed() < Duration::from_secs(2));
+        assert!(started.exists());
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(!late.exists(), "descendant mutated the worktree after timeout");
+    }
+}
+
+#[test]
+fn readiness_preview_uses_the_preserved_user_transport_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    files::directory(&runtime.ssh_home).unwrap();
+    let grant = runtime.key_directory("one");
+    files::directory(&grant).unwrap();
+    let user_config = runtime.ssh_home.join("config");
+    files::write(
+        &user_config,
+        b"Host *\n  ProxyCommand false\n  RemoteCommand inherited-command\n",
+    )
+    .unwrap();
+    let candidate = "Host companion-app\n  HostName 127.0.0.1\n  Port 22002\n  User root\n";
+    let preview = runtime.preview_config(&grant.join("config"), candidate).unwrap();
+    let preview_path = grant.join("probe");
+    files::write(&preview_path, preview.as_bytes()).unwrap();
+    let observed = ssh::checked(
+        Command::new("ssh")
+            .args(["-G", "-F"])
+            .arg(&preview_path)
+            .arg("companion-app"),
+    )
+    .unwrap();
+    assert!(observed.contains("proxycommand false"));
+    assert!(observed.contains("remotecommand inherited-command"));
+    files::write(&grant.join("config"), candidate.as_bytes()).unwrap();
+    runtime.update_config().unwrap();
+    assert_eq!(
+        runtime.preview_config(&grant.join("config"), candidate).unwrap(),
+        preview
+    );
+    let published = ssh::checked(
+        Command::new("ssh")
+            .args(["-G", "-F"])
+            .arg(&user_config)
+            .arg("companion-app"),
+    )
+    .unwrap();
+    for field in ["hostname", "port", "user", "proxycommand", "remotecommand"] {
+        let value = |text: &str| {
+            text.lines()
+                .find(|line| line.starts_with(&format!("{field} ")))
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(value(&observed), value(&published));
+    }
+}
+
+#[test]
+fn readiness_preview_resets_user_host_scope_before_system_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    files::directory(&runtime.ssh_home).unwrap();
+    let grant = runtime.key_directory("one");
+    files::directory(&grant).unwrap();
+    files::write(
+        &runtime.ssh_home.join("config"),
+        b"Host unrelated\n  HostName unrelated.invalid\n",
+    )
+    .unwrap();
+    let system = root.path().join("system-config");
+    files::write(&system, b"Host *\n  ProxyCommand false\n").unwrap();
+    let preview = runtime
+        .preview_config(&grant.join("config"), "Host companion-app\n  HostName 127.0.0.1\n")
+        .unwrap();
+    let preview = preview.replace("/etc/ssh/ssh_config", system.to_str().unwrap());
+    let path = grant.join("probe");
+    files::write(&path, preview.as_bytes()).unwrap();
+    let observed = ssh::checked(Command::new("ssh").args(["-G", "-F"]).arg(&path).arg("companion-app")).unwrap();
+    assert!(observed.contains("proxycommand false"));
+}
