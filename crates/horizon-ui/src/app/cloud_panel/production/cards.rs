@@ -482,7 +482,12 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     egui::CollapsingHeader::new("Verbose output")
         .id_salt(("cloud-verbose", id))
         .show(ui, |ui| {
-            // Bounded so build output cannot move the card scroll away from its heading.
+            // The painted log stays at the follow-mode tail. Newer lines wait in
+            // `pending_logs` until the reader returns to the end, so this frame
+            // does not lay out the unread tail or shift the lines on screen.
+            if !runtime.verbose_unpinned {
+                runtime.accept_followed_logs();
+            }
             let log = egui::ScrollArea::vertical()
                 .id_salt(("cloud-verbose-log", id))
                 .max_height(220.0)

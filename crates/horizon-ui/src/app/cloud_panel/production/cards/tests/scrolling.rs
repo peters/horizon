@@ -333,9 +333,13 @@ fn scrolled_up_verbose_output_keeps_its_first_line_while_more_lines_arrive() {
     assert!(label_pos(&latest, "LOG-LINE-000").is_some());
     {
         let runtime = app.cloud_prototype.production.runtimes.get_mut(&901).unwrap();
-        for line in 0..40 {
+        // More than the 150-line follow cap, so a trim of the visible log would drop the first line.
+        for line in 0..100 {
             runtime.push_log(format!("BURST-{line}"));
         }
+        assert_eq!(runtime.logs.front().map(String::as_str), Some("LOG-LINE-000"));
+        assert_eq!(runtime.logs.len(), 80);
+        assert_eq!(runtime.pending_logs.len(), 100);
     }
     time += 0.05;
     latest = frame(&ctx, &mut app, time, pointer, 0.0);

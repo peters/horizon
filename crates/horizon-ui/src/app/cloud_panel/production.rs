@@ -74,7 +74,10 @@ pub(super) struct Runtime {
     stage: Option<Stage>,
     progress: progress::Timeline,
     logs: std::collections::VecDeque<String>,
-    /// The reader scrolled away from the latest line, so retain older lines.
+    /// Lines that arrived after the reader scrolled up. They join `logs` when
+    /// follow mode resumes, so the visible history does not shift.
+    pending_logs: std::collections::VecDeque<String>,
+    /// The reader scrolled away from the latest line.
     verbose_unpinned: bool,
     state: Option<Deployment>,
     error: Option<String>,
@@ -92,11 +95,35 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
-    /// Follow mode keeps a short tail. Scrolling up keeps the lines being read.
+    const FOLLOW_LOG_LINES: usize = 150;
+    const PENDING_LOG_LINES: usize = 4_000;
+
+    /// Follow mode keeps a short tail. While the reader is scrolled up, new
+    /// lines wait aside so the lines on screen are neither dropped nor shifted.
     fn push_log(&mut self, line: String) {
+        if self.verbose_unpinned {
+            self.pending_logs.push_back(line);
+            while self.pending_logs.len() > Self::PENDING_LOG_LINES {
+                self.pending_logs.pop_front();
+            }
+            return;
+        }
+        self.accept_followed_logs();
         self.logs.push_back(line);
-        let cap = if self.verbose_unpinned { 4_000 } else { 150 };
-        while self.logs.len() > cap {
+        self.trim_followed_logs();
+    }
+
+    fn accept_followed_logs(&mut self) {
+        if self.pending_logs.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_logs);
+        self.logs.extend(pending);
+        self.trim_followed_logs();
+    }
+
+    fn trim_followed_logs(&mut self) {
+        while self.logs.len() > Self::FOLLOW_LOG_LINES {
             self.logs.pop_front();
         }
     }
