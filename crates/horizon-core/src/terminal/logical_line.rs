@@ -12,8 +12,6 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, viewport_to_point};
 
-use super::support::starts_with_url_scheme;
-
 /// Hard line breaks followed from the clicked row in each direction.
 const MAX_HARD_WRAPPED_ROWS: usize = 64;
 /// Blank columns a wrapping program may leave after a URL segment that fills
@@ -232,7 +230,7 @@ fn continuation_word(row: &Row<Cell>, segment_start: usize, cols: usize) -> Opti
     (start <= segment_start
         && !word.is_empty()
         && starts_url_continuation(row[Column(start)].c)
-        && !starts_with_url_scheme(&row_chars(row, word.clone()))
+        && !starts_with_scheme(row_chars(row, word.clone()))
         && !starts_list_item_or_prompt(row, word.clone(), cols))
     .then_some(word)
 }
@@ -419,7 +417,7 @@ fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, 
             break;
         };
         let segment = row_chars(row, segment_start..end + 1);
-        let starts_url = starts_with_url_scheme(&segment);
+        let starts_url = starts_with_scheme(segment.clone());
         text.insert_str(0, &segment.collect::<String>());
         // A segment that starts its own URL is where that URL begins, just as
         // a continuation that starts a new URL never joins the row above.
@@ -437,6 +435,23 @@ fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, 
         segment_start = above_start;
     }
     text
+}
+
+/// Whether text starts with a URI scheme and `://`, such as `https://` or
+/// `ssh://`: the start of a new URL, even one Horizon does not open.
+fn starts_with_scheme(mut chars: impl Iterator<Item = char>) -> bool {
+    if !chars.next().is_some_and(|first| first.is_ascii_alphabetic()) {
+        return false;
+    }
+    for character in chars.by_ref() {
+        if character == ':' {
+            return chars.next() == Some('/') && chars.next() == Some('/');
+        }
+        if !(character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')) {
+            return false;
+        }
+    }
+    false
 }
 
 /// Whether text starts like an absolute or home-relative file path.

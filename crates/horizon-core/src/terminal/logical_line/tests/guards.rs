@@ -156,3 +156,13 @@ fn url_context_stops_at_the_start_of_a_new_url() {
     assert_eq!(url_at(&term, COLS, 1, 5), Some(web_url));
     assert_eq!(url_at(&term, COLS, 2, 3), None);
 }
+
+#[test]
+fn a_url_with_another_scheme_on_the_next_row_starts_a_new_line() {
+    let first = format!("https://a.example/{}", "a".repeat(COLS - 18));
+    for next in ["ssh://host/path", "git+ssh://host/repo.git"] {
+        let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
+
+        assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");
+    }
+}
