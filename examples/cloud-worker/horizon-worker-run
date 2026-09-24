@@ -17,6 +17,8 @@ unset HORIZON
 export HORIZON_BROWSER_HOST_INSTANCE="$(cat "$HORIZON_BROWSER_ROOT/cloud-host-instance")"
 [ "$agent" != shell ] || agent=bash
 if [ "$agent" = claude ]; then
+    # Readiness requires the runtime version recorded by the image.
+    export DISABLE_AUTOUPDATER=1
     if [ -f /workspace/credentials/anthropic-api-key ]; then
         ANTHROPIC_API_KEY="$(cat /workspace/credentials/anthropic-api-key)"
         export ANTHROPIC_API_KEY
