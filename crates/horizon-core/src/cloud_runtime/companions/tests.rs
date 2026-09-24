@@ -13,6 +13,7 @@ struct Fake {
     workers: BTreeMap<String, Worker>,
     calls: Vec<(String, String)>,
     fail_authorize: bool,
+    cancel_on_call: Option<Cancellation>,
     journal: PathBuf,
 }
 
@@ -36,6 +37,10 @@ impl Transport for Fake {
                 .unwrap()
                 .into(),
         ));
+        if let Some(cancel) = self.cancel_on_call.take() {
+            cancel.cancel();
+            return Err(horizon_cloud::CloudError::Cancelled.into());
+        }
         match request {
             WorkerRequest::Identity { .. } => {
                 assert!(saved.contains("worker-source") && saved.contains("worker-target"));
@@ -112,6 +117,7 @@ impl Fixture {
             workers,
             calls: Vec::new(),
             fail_authorize: false,
+            cancel_on_call: None,
             journal: root.path().join("source/companions.json"),
         };
         Self {
@@ -152,7 +158,10 @@ fn declarations_and_stopped_selection_never_issue_worker_commands() {
     assert_eq!(snapshot.rows[0].companion.status, Status::Stopped);
     assert!(fixture.transport.calls.is_empty());
     let grant = fixture.saved().grants.remove("app").unwrap();
-    assert!(grant.source_worker.is_none() && grant.target_worker.is_none());
+    assert_eq!(grant.source_worker.as_deref(), Some("worker-source"));
+    assert_eq!(grant.target_worker.as_deref(), Some("worker-target"));
+    assert_eq!(grant.revision, Some("a".repeat(40)));
+    assert!(grant.source_disconnected && grant.target_revoked);
     assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Stopped);
 }
 
@@ -285,4 +294,80 @@ fn invalid_scope_ambiguity_and_competing_controllers_fail_closed() {
     let mut owner = fixture.owner.clone();
     owner.cloud_id = "../escape".into();
     assert!(journal::Store::open(fixture.root.path(), &owner).is_err());
+}
+
+#[test]
+fn stopped_selection_fences_replacements_and_clears_without_remote_cleanup() {
+    for change in ["source", "target", "revision"] {
+        let mut fixture = Fixture::new();
+        fixture.transport.workers.get_mut("target").unwrap().status = Status::Stopped;
+        fixture.select();
+        let worker = fixture
+            .transport
+            .workers
+            .get_mut(if change == "revision" { "target" } else { change })
+            .unwrap();
+        if change == "revision" {
+            worker.revision = "b".repeat(40);
+        } else {
+            worker.id = "replacement".into();
+        }
+        fixture.transport.workers.get_mut("target").unwrap().status = Status::Ready;
+        assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Changed);
+        assert!(fixture.transport.calls.is_empty());
+    }
+    let mut fixture = Fixture::new();
+    fixture.transport.workers.get_mut("target").unwrap().status = Status::Stopped;
+    fixture.select();
+    assert_eq!(
+        fixture.run(&Action::Clear { alias: "app".into() }).rows[0]
+            .companion
+            .status,
+        Status::Unselected
+    );
+    assert!(fixture.saved().grants.is_empty());
+    assert!(fixture.transport.calls.is_empty());
+}
+
+#[test]
+fn observed_target_is_pinned_even_when_the_source_is_missing() {
+    let mut fixture = Fixture::new();
+    let source = fixture.transport.workers.remove("source").unwrap();
+    assert_eq!(fixture.select().rows[0].companion.status, Status::Unavailable);
+    assert_eq!(
+        fixture.saved().grants["app"].target_worker.as_deref(),
+        Some("worker-target")
+    );
+    fixture.transport.workers.insert("source".into(), source);
+    fixture.transport.workers.get_mut("target").unwrap().id = "replacement".into();
+    assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Changed);
+    assert!(fixture.transport.calls.is_empty());
+}
+
+#[test]
+fn cancellation_is_observable_before_state_creation_and_after_remote_work() {
+    let mut fixture = Fixture::new();
+    let request = Request {
+        root: fixture.root.path().into(), owner: fixture.owner.clone(), context: Some(fixture.context.clone()),
+        action: Action::Select { alias: "app".into(), target_cloud_id: "target".into() },
+        settings: serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+        })).unwrap(),
+    };
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    assert!(matches!(
+        refresh(&request, &cancel),
+        Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+    ));
+    assert_eq!(std::fs::read_dir(fixture.root.path()).unwrap().count(), 0);
+    let cancel = Cancellation::default();
+    fixture.transport.cancel_on_call = Some(cancel.clone());
+    assert!(matches!(
+        refresh_with_transport(&request, &cancel, &mut fixture.transport),
+        Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+    ));
+    let grant = fixture.saved().grants.remove("app").unwrap();
+    assert!(grant.selected && !grant.source_disconnected && !grant.target_revoked);
+    assert_eq!(grant.target_worker.as_deref(), Some("worker-target"));
 }

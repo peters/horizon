@@ -155,21 +155,42 @@ fn connect(
     transport: &mut impl Transport,
 ) -> Result<(Status, Option<Access>)> {
     let source_id = state.owner.cloud_id.clone();
-    let Some(target) = transport.worker(&grant.target.cloud_id)? else {
-        return Ok((Status::Missing, None));
-    };
-    let Some(source) = transport.worker(&source_id)? else {
-        return Ok((Status::Unavailable, None));
-    };
-    if grant.source_worker.as_ref().is_some_and(|id| id != &source.id)
-        || grant.target_worker.as_ref().is_some_and(|id| id != &target.id)
-        || grant
-            .revision
-            .as_ref()
-            .is_some_and(|revision| revision != &target.revision)
+    let target = transport.worker(&grant.target.cloud_id)?;
+    let source = transport.worker(&source_id)?;
+    if source
+        .as_ref()
+        .is_some_and(|worker| grant.source_worker.as_ref().is_some_and(|id| id != &worker.id))
+        || target.as_ref().is_some_and(|worker| {
+            grant.target_worker.as_ref().is_some_and(|id| id != &worker.id)
+                || grant
+                    .revision
+                    .as_ref()
+                    .is_some_and(|revision| revision != &worker.revision)
+        })
     {
         return Ok((Status::Changed, None));
     }
+    if let Some(source) = &source
+        && grant.source_worker.is_none()
+    {
+        grant.source_worker = Some(source.id.clone());
+        grant.source_disconnected = true;
+    }
+    if let Some(target) = &target {
+        if grant.target_worker.is_none() {
+            grant.target_worker = Some(target.id.clone());
+            grant.target_revoked = true;
+        }
+        grant.revision = Some(target.revision.clone());
+    }
+    // Remember observed identities even while stopped or before the other worker exists.
+    persist(store, state, alias, grant)?;
+    let Some(target) = target else {
+        return Ok((Status::Missing, None));
+    };
+    let Some(source) = source else {
+        return Ok((Status::Unavailable, None));
+    };
     if target.status != Status::Ready {
         return Ok((target.status, None));
     }
@@ -179,12 +200,9 @@ fn connect(
     let address = target
         .address
         .ok_or(Error::Invalid("Companion target has no SSH endpoint"))?;
-    grant.source_worker = Some(source.id);
-    grant.target_worker = Some(target.id);
-    grant.revision = Some(target.revision.clone());
     grant.source_disconnected = false;
     grant.target_revoked = false;
-    // A durable identity fence precedes even the first potentially successful remote operation.
+    // Arm cleanup durably before the first potentially successful remote operation.
     persist(store, state, alias, grant)?;
     let Response::Identity { public_key } = transport.call(
         &source_id,

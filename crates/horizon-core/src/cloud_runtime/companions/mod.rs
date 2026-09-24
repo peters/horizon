@@ -67,15 +67,26 @@ pub struct Snapshot {
 /// # Errors
 /// Refuses malformed ownership, conflicting controllers and corrupt journals before SSH changes.
 pub fn refresh(request: &Request, cancel: &Cancellation) -> Result<Snapshot> {
-    let journal = journal::Store::open(&request.root, &request.owner)?;
     let mut transport = transport::Live::new(&request.root, &request.settings, cancel);
-    execute(
+    refresh_with_transport(request, cancel, &mut transport)
+}
+
+fn refresh_with_transport(
+    request: &Request,
+    cancel: &Cancellation,
+    transport: &mut impl transport::Transport,
+) -> Result<Snapshot> {
+    cancel.check()?;
+    let journal = journal::Store::open(&request.root, &request.owner)?;
+    let result = execute(
         &journal,
         &request.owner,
         request.context.as_ref(),
         &request.action,
-        &mut transport,
-    )
+        transport,
+    );
+    cancel.check()?;
+    result
 }
 
 fn execute(
@@ -164,8 +175,8 @@ fn apply_action(state: &mut journal::State, context: Option<&Context>, action: &
                     source_worker: None,
                     target_worker: None,
                     revision: None,
-                    source_disconnected: false,
-                    target_revoked: false,
+                    source_disconnected: true,
+                    target_revoked: true,
                     access: None,
                 },
             );
