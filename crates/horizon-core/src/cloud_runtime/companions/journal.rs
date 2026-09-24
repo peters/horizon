@@ -111,15 +111,10 @@ impl Store {
             }) {
                 return Err(Error::Invalid("Invalid persisted companion connection"));
             }
-            if !horizon_cloud::valid_id(alias)
-                || !horizon_cloud::valid_id(&grant.id)
+            if !horizon_cloud::valid_id(&grant.id)
                 || !ids.insert(&grant.id)
                 || (!grant.source_disconnected && grant.source_worker.is_none())
                 || (!grant.target_revoked && (grant.target_worker.is_none() || grant.revision.is_none()))
-                || grant.target.scope != state.owner.scope
-                || grant.target.cloud_id == self.owner.cloud_id
-                || !horizon_cloud::valid_id(&grant.target.cloud_id)
-                || grant.target.declaration.validate().is_err()
                 || [&grant.source_worker, &grant.target_worker]
                     .into_iter()
                     .flatten()

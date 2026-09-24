@@ -165,17 +165,28 @@ fn connect(
 ) -> Result<(Status, Option<Access>)> {
     let source_id = state.owner.cloud_id.clone();
     let target = transport.worker(&grant.target.cloud_id)?;
+    if target.as_ref().is_some_and(|worker| {
+        grant.target_worker.as_ref().is_some_and(|id| id != &worker.id)
+            || grant
+                .revision
+                .as_ref()
+                .is_some_and(|revision| revision != &worker.revision)
+    }) {
+        return Ok((Status::Changed, None));
+    }
+    if let Some(target) = &target {
+        if grant.target_worker.is_none() {
+            grant.target_worker = Some(target.id.clone());
+            grant.target_revoked = true;
+        }
+        grant.revision = Some(target.revision.clone());
+    }
+    // Fence each observed identity before another lookup can fail or be cancelled.
+    persist(store, state, alias, grant)?;
     let source = transport.worker(&source_id)?;
     if source
         .as_ref()
         .is_some_and(|worker| grant.source_worker.as_ref().is_some_and(|id| id != &worker.id))
-        || target.as_ref().is_some_and(|worker| {
-            grant.target_worker.as_ref().is_some_and(|id| id != &worker.id)
-                || grant
-                    .revision
-                    .as_ref()
-                    .is_some_and(|revision| revision != &worker.revision)
-        })
     {
         return Ok((Status::Changed, None));
     }
@@ -185,14 +196,6 @@ fn connect(
         grant.source_worker = Some(source.id.clone());
         grant.source_disconnected = true;
     }
-    if let Some(target) = &target {
-        if grant.target_worker.is_none() {
-            grant.target_worker = Some(target.id.clone());
-            grant.target_revoked = true;
-        }
-        grant.revision = Some(target.revision.clone());
-    }
-    // Remember observed identities even while stopped or before the other worker exists.
     persist(store, state, alias, grant)?;
     let Some(target) = target else {
         return Ok((Status::Missing, None));

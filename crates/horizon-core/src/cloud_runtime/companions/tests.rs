@@ -15,6 +15,7 @@ struct Fake {
     held: BTreeSet<String>,
     calls: Vec<(String, String)>,
     fail_authorize: bool,
+    fail_source_lookup: bool,
     cancel_on_call: Option<Cancellation>,
     journal: PathBuf,
 }
@@ -24,6 +25,9 @@ impl Transport for Fake {
         self.held.remove(cloud);
     }
     fn worker(&mut self, cloud: &str) -> Result<Option<Worker>> {
+        if cloud == "source" && self.fail_source_lookup {
+            return Err(Error::Busy);
+        }
         if cloud != "source" {
             assert!(self.held.iter().all(|id| id == "source" || id == cloud));
         }
@@ -128,6 +132,7 @@ impl Fixture {
             held: BTreeSet::new(),
             calls: Vec::new(),
             fail_authorize: false,
+            fail_source_lookup: false,
             cancel_on_call: None,
             journal: root.path().join("source/companions.json"),
         };
@@ -425,18 +430,33 @@ fn stopped_selection_fences_replacements_and_clears_without_remote_cleanup() {
 }
 
 #[test]
-fn observed_target_is_pinned_even_when_the_source_is_missing() {
-    let mut fixture = Fixture::new();
-    let source = fixture.transport.workers.remove("source").unwrap();
-    assert_eq!(fixture.select().rows[0].companion.status, Status::Unavailable);
-    assert_eq!(
-        fixture.saved().grants["app"].target_worker.as_deref(),
-        Some("worker-target")
-    );
-    fixture.transport.workers.insert("source".into(), source);
-    fixture.transport.workers.get_mut("target").unwrap().id = "replacement".into();
-    assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Changed);
-    assert!(fixture.transport.calls.is_empty());
+fn observed_target_is_pinned_when_the_source_is_missing_or_busy() {
+    for source_busy in [false, true] {
+        let mut fixture = Fixture::new();
+        let source = fixture.transport.workers.remove("source").unwrap();
+        fixture.transport.fail_source_lookup = source_busy;
+        assert_eq!(
+            fixture.select().rows[0].companion.status,
+            if source_busy {
+                Status::Unreachable
+            } else {
+                Status::Unavailable
+            }
+        );
+        assert_eq!(
+            fixture.saved().grants["app"].target_worker.as_deref(),
+            Some("worker-target")
+        );
+        assert_eq!(
+            fixture.saved().grants["app"].revision.as_deref(),
+            Some("a".repeat(40).as_str())
+        );
+        fixture.transport.fail_source_lookup = false;
+        fixture.transport.workers.insert("source".into(), source);
+        fixture.transport.workers.get_mut("target").unwrap().id = "replacement".into();
+        assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Changed);
+        assert!(fixture.transport.calls.is_empty());
+    }
 }
 
 #[test]
