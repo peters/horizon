@@ -236,7 +236,7 @@ mod tests {
     fn replacing(worker: &WorkerSpec) -> (Deployment, WorkerSpec) {
         let mut state = deployment(worker);
         state
-            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-fixture".into())
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
             .unwrap();
         state
             .replacement_built(ReplacementImage {
@@ -606,7 +606,7 @@ mod tests {
         }
         let mut prepared = deployment(state.spec.as_ref().unwrap());
         prepared
-            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-fixture".into())
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
             .unwrap();
         assert!(
             retained(&store, &prepared).is_err(),

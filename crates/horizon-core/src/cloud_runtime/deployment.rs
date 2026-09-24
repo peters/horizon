@@ -1075,7 +1075,7 @@ mod tests {
         }))
         .unwrap();
         state
-            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-reconnect".into())
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
             .unwrap();
         state
             .replacement_built(super::super::state::ReplacementImage {

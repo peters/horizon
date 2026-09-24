@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub(in crate::cloud_runtime) const REPLACEMENT_PENDING: &str = "Image replacement pending; continue or cancel it";
 const REPLACEMENT_MISMATCH: &str = "Image replacement journal does not match this cloud's worker";
 const REPLACEMENT_UNBOUND: &str = "Only a bound worker's image can be replaced";
+const TAG_TOO_LONG: &str = "This cloud's identity is too long for an image tag";
 
 /// A journaled switch of a dedicated cloud's bound worker to a rebuilt image. It is
 /// saved before each provider mutation and kept until the replacement commits or is
@@ -24,7 +25,7 @@ pub struct ImageReplacement {
     pub previous_registry_generation: Option<String>,
     /// Commit whose `.horizon` recipe builds the replacement image.
     pub recipe_revision: String,
-    /// The replacement image's unique registry tag.
+    /// The replacement image's unique registry tag, `horizon-<cloud>-<operation>`.
     pub tag: String,
     pub phase: ReplacementPhase,
 }
@@ -49,6 +50,13 @@ pub struct ReplacementImage {
     pub digest: String,
     pub registry_auth_id: Option<String>,
     pub registry_generation: Option<String>,
+}
+
+/// The registry tag of the replacement journaled as `operation`: unique per replacement
+/// and within Docker's tag grammar of at most 128 word characters, dots and dashes.
+fn replacement_tag(cloud_id: &str, operation: OperationId) -> Option<String> {
+    let tag = format!("horizon-{cloud_id}-{}", uuid::Uuid::from(operation).simple());
+    (tag.len() <= 128 && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))).then_some(tag)
 }
 
 impl ImageReplacement {
@@ -94,6 +102,7 @@ impl Deployment {
             || replacement.previous_registry_generation != self.registry_generation
             || replacement.requested() != (self.stage == Stage::Replace)
             || !repository::is_commit_id(&replacement.recipe_revision)
+            || replacement_tag(&self.cloud_id, replacement.operation).as_ref() != Some(&replacement.tag)
         {
             return Err(Error::Invalid(REPLACEMENT_MISMATCH));
         }
@@ -129,10 +138,12 @@ impl Deployment {
         Ok(())
     }
 
-    /// Journals a replacement of a ready, bound worker. Nothing is built or sent yet.
+    /// Journals a replacement of a ready, bound worker under its unique image tag.
+    /// Nothing is built or sent yet.
     /// # Errors
-    /// Refuses unless the cloud is ready on its bound worker with nothing pending.
-    pub fn begin_replacement(&mut self, operation: OperationId, recipe_revision: String, tag: String) -> Result<()> {
+    /// Refuses unless the cloud is ready on its bound worker with nothing pending, and
+    /// a cloud identity too long for an image tag.
+    pub fn begin_replacement(&mut self, operation: OperationId, recipe_revision: String) -> Result<()> {
         let CreateState::Bound { worker_id } = &self.operation else {
             return Err(Error::Invalid(REPLACEMENT_UNBOUND));
         };
@@ -149,6 +160,7 @@ impl Deployment {
                 "Only a ready cloud without a pending replacement can replace its image",
             ));
         }
+        let tag = replacement_tag(&self.cloud_id, operation).ok_or(Error::Invalid(TAG_TOO_LONG))?;
         let replacement = ImageReplacement {
             version: ImageReplacement::VERSION,
             operation,

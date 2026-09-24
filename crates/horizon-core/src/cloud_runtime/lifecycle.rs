@@ -223,7 +223,7 @@ mod tests {
         }))
         .unwrap();
         state
-            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-pending".into())
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
             .unwrap();
         state
             .replacement_built(ReplacementImage {

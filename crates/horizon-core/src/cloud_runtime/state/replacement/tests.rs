@@ -29,9 +29,7 @@ fn ready() -> Deployment {
 fn begun() -> (Deployment, OperationId) {
     let mut state = ready();
     let operation = OperationId::generate();
-    state
-        .begin_replacement(operation, "c".repeat(40), "horizon-replaced-fixture".into())
-        .unwrap();
+    state.begin_replacement(operation, "c".repeat(40)).unwrap();
     (state, operation)
 }
 
@@ -143,22 +141,16 @@ fn premature_or_inconsistent_transitions_leave_the_record_unchanged() {
         |state| state.stop_requested = true,
         |state| state.operation = CreateState::Requested,
         |state| state.session_restart = Some(OperationId::generate()),
+        // Too long for the replacement's image tag.
+        |state| state.cloud_id = "c".repeat(90),
     ] {
         let mut refused = ready();
         change(&mut refused);
         let operation = OperationId::generate();
-        assert!(
-            refused
-                .begin_replacement(operation, "c".repeat(40), "tag".into())
-                .is_err()
-        );
+        assert!(refused.begin_replacement(operation, "c".repeat(40)).is_err());
         assert!(refused.image_replacement.is_none());
     }
-    assert!(
-        state
-            .begin_replacement(OperationId::generate(), "HEAD".into(), "tag".into())
-            .is_err()
-    );
+    assert!(state.begin_replacement(OperationId::generate(), "HEAD".into()).is_err());
     let (mut state, _) = begun();
     assert!(state.request_replacement().is_err());
     assert!(state.commit_replacement().is_err());
@@ -179,7 +171,7 @@ fn premature_or_inconsistent_transitions_leave_the_record_unchanged() {
     }
     assert!(
         state
-            .begin_replacement(OperationId::generate(), "c".repeat(40), "tag".into())
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
             .is_err()
     );
     state.replacement_built(image('b')).unwrap();
@@ -210,6 +202,8 @@ fn journal_must_describe_the_bound_worker_and_its_recorded_image() {
         |state| state.spec.as_mut().unwrap().registry_auth_id = None,
         |state| state.image_replacement.as_mut().unwrap().version = 2,
         |state| state.image_replacement.as_mut().unwrap().recipe_revision = "HEAD".into(),
+        |state| state.image_replacement.as_mut().unwrap().tag = String::new(),
+        |state| state.image_replacement.as_mut().unwrap().tag = "horizon-replaced-other".into(),
         |state| state.image_replacement = None,
     ] {
         let mut state = valid.clone();
