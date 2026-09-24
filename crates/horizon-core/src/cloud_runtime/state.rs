@@ -5,7 +5,7 @@ mod transaction;
 use super::{Error, Result, Stage};
 use horizon_cloud::{CreateState, Worker, WorkerSpec};
 pub use horizon_cloud_protocol::OperationId;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) use replacement::REPLACEMENT_PENDING;
 pub use replacement::{ImageReplacement, ReplacementImage, ReplacementPhase};
 use serde::{Deserialize, Serialize};

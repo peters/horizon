@@ -500,6 +500,17 @@ fn only_a_ready_bound_cloud_with_a_recipe_and_nothing_pending_can_rebuild() {
         assert!(script.calls.borrow().is_empty());
         assert_eq!(fixture.state().image_replacement, before.image_replacement);
     }
+    // Continuing checks the whole journal before building anything.
+    let fixture = Fixture::new();
+    fixture.edit(|state| {
+        state
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
+            .unwrap();
+        state.image_replacement.as_mut().unwrap().recipe_revision = "HEAD".into();
+    });
+    let script = Script::new(&fixture);
+    assert!(recover(&fixture, &script, Recovery::Continue).is_err());
+    assert!(script.calls.borrow().is_empty());
 }
 
 #[test]

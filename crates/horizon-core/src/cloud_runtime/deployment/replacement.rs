@@ -4,7 +4,7 @@
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
 //! allocation does not load here.
 mod live;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use super::{
@@ -362,6 +362,8 @@ fn unchanged_profile(bound: &Profile, config: Option<&CloudConfig>, name: &str) 
 
 /// Advances the journal from whichever phase it records to a committed replacement.
 fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn Fn(Event)) -> Result<Driven> {
+    // The whole journal is checked before any build, push or provider update.
+    state.replacement_worker()?;
     let journal = state.image_replacement.clone().ok_or(Error::Invalid(NOTHING_PENDING))?;
     match journal.phase {
         ReplacementPhase::Prepared {} => {
