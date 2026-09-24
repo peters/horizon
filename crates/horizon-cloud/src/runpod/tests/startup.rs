@@ -133,7 +133,7 @@ fn absent_or_different_metadata_blocks_reconnect_and_provider_mutations() {
             let result = match action {
                 "stop" => provider.stop(&spec, "worker1", &cancel),
                 "start" => provider.start(&spec, "worker1", &cancel),
-                "delete" => provider.terminate(&spec, &mut state, &cancel, |_| Ok(())),
+                "delete" => provider.terminate(&spec, &mut state, &cancel, |_| Ok(()), |_| {}),
                 "reconcile" => provider
                     .reconcile(&spec, &mut state, None, &cancel, |_| Ok(()))
                     .map(|_| ()),
