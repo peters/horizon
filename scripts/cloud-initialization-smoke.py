@@ -152,10 +152,13 @@ def run(options):
 
     thread = threading.Thread(target=accept)
     thread.start()
+    test_exit = None
     try:
         environment = dict(os.environ, HORIZON_INITIALIZATION_FIXTURE=str(root))
         with open(root / "test.log", "w") as output:
-            test = subprocess.run(["cargo", "test", "-p", "horizon-core", "native_ssh_worker_initialization", "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300)
+            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", "native_ssh_worker_initialization", "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300).returncode
+    except (subprocess.TimeoutExpired, OSError) as error:
+        errors.append(type(error).__name__ + ": " + str(error))
     finally:
         stop.set()
         thread.join(timeout=5)
@@ -165,9 +168,9 @@ def run(options):
         (root / "id_ed25519").unlink(missing_ok=True)
         for path in [root / "run/horizon-allocation/ssh-host-key", root / "workspace/.horizon-allocation/ssh-host-key"]:
             path.unlink(missing_ok=True)
-    report = {"worker_sha256": worker_hash, "test_exit": test.returncode, "same_host_key": len(set(host_keys)) == 1, "sessions": sessions, "errors": errors, "threads_stopped": not thread.is_alive() and all(not child.is_alive() for child in children)}
+    report = {"worker_sha256": worker_hash, "test_exit": test_exit, "same_host_key": len(set(host_keys)) == 1, "sessions": sessions, "errors": errors, "threads_stopped": not thread.is_alive() and all(not child.is_alive() for child in children)}
     (root / "ssh-report.json").write_text(json.dumps(report, indent=2))
-    assert test.returncode == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
+    assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
     assert [session["exit_code"] for session in sessions] == [0, 0, 0, 0, 0, 0, 0, 1, 1]
     assert report["same_host_key"]
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1
