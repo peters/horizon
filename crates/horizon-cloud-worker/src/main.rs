@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod bootstrap;
 mod browser;
 mod catalog;
 mod configuration;
@@ -25,8 +26,9 @@ fn main() -> std::process::ExitCode {
         Some("serve") => serve(),
         Some("connect") => connect(),
         Some("configure-agent-tools") => configuration::run(),
+        Some("recover-allocation") => bootstrap::run(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools",
+            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation",
         )),
     };
     match result {

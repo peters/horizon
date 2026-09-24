@@ -19,5 +19,9 @@ toml_edit.workspace = true
 base64.workspace = true
 png.workspace = true
 [dev-dependencies]
+ring.workspace = true
 horizon-browser = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true

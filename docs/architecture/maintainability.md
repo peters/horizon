@@ -582,3 +582,12 @@ worker-local ports only. `horizon-browser::remote_config` and `provider_usage`
 share provider adaptation and capacity policy across desktop and worker hosts.
 The worker retains remote allocation recovery and teardown ownership; disconnecting
 its presentation client never releases a hosted device or ends the private tunnel.
+
+Worker bootstrap recovery is separate from browser/tool requests. The protocol
+crate defines only bounded recovery wire data; `horizon-cloud-worker/bootstrap`
+loads existing pinned state at the fixed worker path, authenticates the request
+under its allocation lock, and recovers the revision-zero manifest through synced
+receipt, manifest and initialized publications. The store never creates its root
+or lock. Missing state and admitted/nonempty manifests fail closed. There is no
+production first-initialization path or sharing activation; provider/mount
+qualification and anchored host bootstrap permission remain prerequisites.

@@ -318,6 +318,7 @@ mod tests {
                 size: record.spec.size,
                 data_center_id: record.spec.data_center_id.clone(),
             },
+            creation: None,
         };
         save(&store, &record).unwrap();
         assert!(release_deleted_journal(&store, &record.worker).is_err());

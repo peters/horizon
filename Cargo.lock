@@ -2370,6 +2370,8 @@ dependencies = [
  "horizon-cloud",
  "horizon-cloud-protocol",
  "png",
+ "ring",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tempfile",
