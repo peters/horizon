@@ -199,9 +199,8 @@ fn machine_size(
     launch: &horizon_core::cloud_panel::CloudLaunch,
     runtime: &super::Runtime,
 ) -> Option<(u16, u16)> {
-    use horizon_core::cloud_runtime::flavors::{memory_options, offered, resize_vcpu, vcpu_options};
+    use super::machine_size;
     let profile = &launch.profile;
-    let kind = if profile.gpu { "GPU" } else { "CPU only" };
     let idle = runtime.receiver.is_none() && runtime.recovery_receiver.is_none() && !runtime.state_unavailable;
     if profile.gpu
         || !idle
@@ -213,7 +212,7 @@ fn machine_size(
         // A requested worker's saved size is authoritative.
         let fixed = runtime.state.as_ref().filter(|state| !state.resizable());
         let shown = fixed.map_or(profile, |state| &state.profile);
-        let label = ui.label(format!("{} vCPU · {} GB · {kind}", shown.cpu, shown.memory_gb));
+        let label = ui.label(machine_size::fixed((shown.cpu, shown.memory_gb), profile.gpu));
         if fixed.is_some() {
             label.on_hover_text("RunPod cannot resize a requested worker. Create a new cloud for a different size.");
         }
@@ -223,44 +222,33 @@ fn machine_size(
         "CPU-only RunPod worker. Only sizes offered with this cloud's {} GB container disk are listed.",
         profile.storage.container_gb
     );
+    let current = (profile.cpu, profile.memory_gb);
+    let disk = profile.storage.container_gb;
     let mut size = None;
     // Top alignment keeps equally tall drop-downs level when the theme pads them above row height.
     ui.horizontal_top(|ui| {
         egui::ComboBox::from_id_salt(("cloud-vcpu", id))
             .selected_text(format!("{} vCPU", profile.cpu))
             .show_ui(ui, |ui| {
-                for cpu in vcpu_options(profile.storage.container_gb) {
-                    if ui.selectable_label(cpu == profile.cpu, format!("{cpu} vCPU")).clicked() && cpu != profile.cpu {
-                        size = resize_vcpu(profile, cpu);
-                    }
-                }
+                size = machine_size::vcpu(current, disk, |label, selected| {
+                    ui.selectable_label(selected, label).clicked()
+                });
             })
             .response
             .on_hover_text(&hint);
         egui::ComboBox::from_id_salt(("cloud-memory", id))
             .selected_text(format!("{} GB", profile.memory_gb))
             .show_ui(ui, |ui| {
-                for (memory, family) in memory_options(profile.cpu, profile.storage.container_gb) {
-                    if ui
-                        .selectable_label(memory == profile.memory_gb, format!("{memory} GB · {family}"))
-                        .clicked()
-                        && memory != profile.memory_gb
-                    {
-                        size = Some((profile.cpu, memory));
-                    }
-                }
+                size = machine_size::memory(current, disk, |label, selected| {
+                    ui.selectable_label(selected, label).clicked()
+                })
+                .or(size);
             })
             .response
             .on_hover_text(&hint);
     });
-    if !offered(profile) {
-        ui.colored_label(
-            egui::Color32::LIGHT_RED,
-            format!(
-                "RunPod offers no CPU worker with this size and {} GB container disk",
-                profile.storage.container_gb
-            ),
-        );
+    if let Some(warning) = machine_size::unoffered(current, disk) {
+        ui.colored_label(egui::Color32::LIGHT_RED, warning);
     }
     size
 }

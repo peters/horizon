@@ -81,8 +81,13 @@ impl HorizonApp {
             .profiles
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
-            .cloned()
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
+        let profile = match form.size {
+            Some(size) => cloud_runtime::flavors::sized(profile, size)?,
+            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
+            None if profile.gpu => profile.clone(),
+            None => cloud_runtime::flavors::sized(profile, (profile.cpu, profile.memory_gb))?,
+        };
         let repository = horizon_core::Config::expand_tilde(&form.repository);
         let revision = if let Some(revision) = &form.launch.revision {
             revision.clone()

@@ -52,6 +52,7 @@ impl HorizonApp {
         form.revision.clear();
         form.profiles = None;
         form.selected_profile.clear();
+        form.size = None;
         form.creating = true;
         form.focus_title_on_open = true;
         self.read_cloud_profiles(ctx);
@@ -124,7 +125,13 @@ impl HorizonApp {
                     form.repository = prepared.repository.to_string_lossy().into_owned();
                     if !prepared.config.profiles.contains_key(&form.selected_profile) {
                         form.selected_profile.clone_from(&prepared.config.default);
+                        form.size = None;
                     }
+                    // A reread profile keeps a chosen size only while it still offers it.
+                    let profile = prepared.config.profiles.get(&form.selected_profile);
+                    form.size = form.size.filter(|&size| {
+                        profile.is_some_and(|profile| cloud_runtime::flavors::sized(profile, size).is_ok())
+                    });
                     form.profiles = Some(prepared.config);
                     form.launch.revision = Some(prepared.revision);
                 }
@@ -301,6 +308,37 @@ mod tests {
         sender.send(Ok(result)).unwrap();
         app.poll_cloud_launch(&ctx);
         assert_eq!(app.cloud_prototype.production.selected_profile, "other");
+    }
+
+    #[test]
+    fn rereading_profiles_keeps_only_a_size_the_selected_profile_still_offers() {
+        let (temp, mut app) = test_app();
+        let ctx = Context::default();
+        let workspace = app.board.ensure_workspace();
+        let mut reread = |selected: &str, size, container_gb| {
+            let (sender, receiver) = channel();
+            let form = &mut app.cloud_prototype.production;
+            form.launch.receiver = Some(receiver);
+            form.selected_profile = selected.into();
+            form.size = Some(size);
+            let mut result = loaded(temp.path());
+            if let Some(profile) = result.prepared.config.profiles.get_mut("dev") {
+                profile.storage.container_gb = container_gb;
+            }
+            sender.send(Ok(result)).unwrap();
+            app.poll_cloud_launch(&ctx);
+            app.cloud_prototype.production.size
+        };
+        assert_eq!(reread("dev", (16, 32), 20), Some((16, 32)));
+        assert_eq!(reread("dev", (2, 4), 40), None, "the reread disk needs more vCPU");
+        assert_eq!(
+            reread("removed", (16, 32), 20),
+            None,
+            "a replaced profile starts at its size"
+        );
+        app.cloud_prototype.production.size = Some((16, 32));
+        app.open_workspace_cloud(&ctx, workspace);
+        assert_eq!(app.cloud_prototype.production.size, None);
     }
 
     #[test]

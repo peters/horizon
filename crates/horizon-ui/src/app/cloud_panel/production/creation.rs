@@ -1,5 +1,5 @@
 //! Presentation of the existing repository-backed cloud creation flow.
-use super::{HorizonApp, Production};
+use super::{HorizonApp, Production, machine_size};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
@@ -159,6 +159,7 @@ impl HorizonApp {
             form.repository = repository.into_owned();
             form.profiles = None;
             form.selected_profile.clear();
+            form.size = None;
             form.launch.accounts_checked = false;
             self.cloud_prototype.error = None;
         }
@@ -248,10 +249,11 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if let Some(config) = &form.profiles {
         ui.small(&form.repository);
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
-            ui.small(format!(
-                "{} · {} vCPU · {} GB",
-                form.selected_profile, profile.cpu, profile.memory_gb
-            ));
+            let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
+            ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
+            if let Some(size) = size_field(ui, profile.gpu, profile.storage.container_gb, (cpu, memory_gb)) {
+                form.size = Some(size);
+            }
         }
     }
     ui.small("Only committed files are transferred. Local changes stay on this computer.");
@@ -307,17 +309,19 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                     )
                     .clicked()
                 {
+                    if form.selected_profile != *name {
+                        form.size = None;
+                    }
                     form.selected_profile.clone_from(name);
                     form.launch.accounts_checked = false;
                 }
             }
         });
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
+            let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.label(
                 RichText::new(format!(
-                    "{} vCPU · {} GB memory · {}",
-                    profile.cpu,
-                    profile.memory_gb,
+                    "{cpu} vCPU · {memory_gb} GB memory · {}",
                     if profile.gpu { "GPU" } else { "CPU only" }
                 ))
                 .size(13.0)
@@ -338,6 +342,48 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
     } else {
         RepositoryAction::None
     }
+}
+
+/// Offered CPU worker sizes; a GPU profile's size is fixed. Buttons and inline notes rather
+/// than drop-downs and tooltips, which would draw below this Tooltip-order modal.
+fn size_field(ui: &mut Ui, gpu: bool, container_gb: u16, current: machine_size::Size) -> Option<machine_size::Size> {
+    ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
+    if gpu {
+        ui.label(
+            RichText::new(machine_size::fixed(current, true))
+                .size(13.0)
+                .color(theme::FG_SOFT()),
+        );
+        ui.small("GPU workers use the size set by their profile.");
+        return None;
+    }
+    let option = |ui: &mut Ui, label: String, selected: bool| {
+        ui.add(
+            Button::new(RichText::new(label).size(13.0))
+                .selected(selected)
+                .min_size(Vec2::new(0.0, 30.0))
+                .corner_radius(8),
+        )
+        .clicked()
+    };
+    let cpu = ui
+        .horizontal_wrapped(|ui| {
+            machine_size::vcpu(current, container_gb, |label, selected| option(ui, label, selected))
+        })
+        .inner;
+    let memory = ui
+        .horizontal_wrapped(|ui| {
+            machine_size::memory(current, container_gb, |label, selected| option(ui, label, selected))
+        })
+        .inner;
+    if let Some(warning) = machine_size::unoffered(current, container_gb) {
+        ui.colored_label(theme::PALETTE_RED(), warning);
+    } else {
+        ui.small(format!(
+            "RunPod CPU sizes offered with this profile's {container_gb} GB container disk."
+        ));
+    }
+    cpu.or(memory)
 }
 
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {

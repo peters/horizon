@@ -7,6 +7,7 @@ mod creation_job;
 mod creation_tests;
 mod launch;
 mod lifecycle;
+mod machine_size;
 mod presentation;
 mod progress;
 mod repository_setup;
@@ -49,6 +50,8 @@ pub(super) struct Production {
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,
+    /// A CPU worker size chosen for the selected profile; `None` keeps the profile's size.
+    size: Option<machine_size::Size>,
     setup_agent: Option<PanelKind>,
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
     session_id: Option<String>,
