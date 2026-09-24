@@ -79,9 +79,8 @@ impl RunPod {
         // Every record must be valid, including another worker's, before those are dropped.
         let mut own = Vec::with_capacity(page.records.len());
         for record in page.records {
-            let mine = record.pod_id.as_deref().is_none_or(|id| id == pod_id);
-            let bucket = record.validate(size)?;
-            if mine {
+            let (id, bucket) = record.validate(size)?;
+            if id == pod_id {
                 own.push(bucket);
             }
         }
@@ -100,26 +99,31 @@ struct Page {
 struct Record {
     start_time: String,
     total_amount: f64,
-    #[serde(default)]
-    pod_id: Option<String>,
+    pod_id: String,
 }
 
 impl Record {
-    fn validate(self, size: BucketSize) -> Result<BillingBucket, CloudError> {
-        if !self.total_amount.is_finite()
+    /// v2 requires `podId` on every record. An empty id rejects the page.
+    /// A different worker is returned so the caller can drop it after validation.
+    fn validate(self, size: BucketSize) -> Result<(String, BillingBucket), CloudError> {
+        if self.pod_id.is_empty()
+            || !self.total_amount.is_finite()
             || self.total_amount < 0.0
             || OffsetDateTime::parse(&self.start_time, &Rfc3339).is_err()
         {
             return Err(CloudError::InvalidResponse);
         }
-        Ok(BillingBucket {
-            time: self.start_time,
-            size,
-            amount: self.total_amount,
-            // v2 does not report billed milliseconds. The cost total uses the
-            // bucket amount and its start, not this field.
-            time_billed_ms: 0,
-        })
+        Ok((
+            self.pod_id,
+            BillingBucket {
+                time: self.start_time,
+                size,
+                amount: self.total_amount,
+                // v2 does not report billed milliseconds. The cost total uses the
+                // bucket amount and its start, not this field.
+                time_billed_ms: 0,
+            },
+        ))
     }
 }
 

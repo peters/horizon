@@ -686,7 +686,7 @@ fn billing_requests_one_workers_buckets_with_the_bearer_credential() {
             {"startTime":"2024-07-11T00:00:00Z","endTime":"2024-07-11T01:00:00Z","podId":"worker1","totalAmount":0.69,"cpuAmount":0.5,"gpuAmount":0.0,"diskAmount":0.19},
             {"startTime":"2024-07-11T01:00:00.000Z","endTime":"2024-07-11T02:00:00Z","podId":"worker1","totalAmount":0,"cpuAmount":0,"gpuAmount":0,"diskAmount":0},
             {"startTime":"2024-07-11T01:00:00Z","endTime":"2024-07-11T02:00:00Z","podId":"other-worker","totalAmount":5.0,"cpuAmount":5.0,"gpuAmount":0,"diskAmount":0},
-            {"startTime":"2024-07-11T04:00:00+02:00","endTime":"2024-07-11T05:00:00+02:00","totalAmount":0.1,"cpuAmount":0.1,"gpuAmount":0,"diskAmount":0}
+            {"startTime":"2024-07-11T04:00:00+02:00","endTime":"2024-07-11T05:00:00+02:00","podId":"worker1","totalAmount":0.1,"cpuAmount":0.1,"gpuAmount":0,"diskAmount":0}
         ],
         "metadata": {"recordCount": 4, "totals": {"totalAmount": 5.79}}
     });
@@ -760,6 +760,9 @@ fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
         r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11 00:00:00"}]}"#,
         r#"{"records":[{"totalAmount":0.5}]}"#,
         r#"{"records":[{"startTime":"2024-07-11T00:00:00Z"}]}"#,
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z"}]}"#,
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":""}]}"#,
+        r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":"worker1"},{"totalAmount":0.1,"startTime":"2024-07-11T04:00:00Z"}]}"#,
         r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":"worker1"},{"totalAmount":-1,"startTime":"2024-07-11T00:00:00Z","podId":"other-worker"}]}"#,
         r#"{"records":[{"totalAmount":0.5,"startTime":"2024-07-11T00:00:00Z","podId":"worker1"},{"totalAmount":1,"startTime":"yesterday","podId":"other-worker"}]}"#,
     ] {
