@@ -99,6 +99,25 @@ impl Fixture {
 }
 
 #[test]
+fn v1_direct_recovery_remains_supported_without_granting_cold_start_authority() {
+    let f = Fixture::new();
+    let request = f.request();
+    let original = fs::read(f.root.path().join(BOOTSTRAP)).unwrap();
+    let mut startup = f.runtime.clone();
+    startup.source = Source::StartupCapture;
+    {
+        let store = Store::open(f.root.path()).unwrap();
+        assert!(f.bootstrap().validate(&store, &startup).is_err());
+        assert!(recover(&store, &startup, &request, &mut |_| Ok(())).is_err());
+    }
+    assert_eq!(fs::read(f.root.path().join(BOOTSTRAP)).unwrap(), original);
+    assert!(!f.root.path().join(MANIFEST).exists());
+    assert!(!f.root.path().join(keys::HOST_KEY).exists());
+    f.recover(&request).unwrap();
+    assert_eq!(f.bootstrap().phase, Phase::Initialized);
+}
+
+#[test]
 fn recovery_publishes_once_and_retries_return_the_same_receipt() {
     let f = Fixture::new();
     let request = f.request();

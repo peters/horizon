@@ -593,14 +593,14 @@ fn enrollment_pin_substitution_and_growth_fail_promptly() {
             }
             "fifo" => {
                 fs::remove_file(file.path()).unwrap();
-                rustix::fs::mknodat(
-                    rustix::fs::CWD,
-                    file.path(),
-                    rustix::fs::FileType::Fifo,
-                    rustix::fs::Mode::RUSR,
-                    0,
-                )
-                .unwrap();
+                assert!(
+                    Command::new("mkfifo")
+                        .args(["-m", "600"])
+                        .arg(file.path())
+                        .status()
+                        .unwrap()
+                        .success()
+                );
             }
             _ => file.as_file().set_len(65 * 1024).unwrap(),
         }

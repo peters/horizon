@@ -325,8 +325,13 @@ Allocation startup metadata selects an experimental SSH-only entrypoint before
 legacy workspace writes. `prepare-allocation-ssh` captures the independent runtime
 identities at a fixed private `/run/sshd/horizon-allocation/runtime.json` path and
 prepares the exact Ed25519 key. The v2 commands never fall back to SSH login
-environment variables if that capture is absent. Explicitly retained v1 recovery
-records retain their legacy environment-based behavior.
+environment variables if that capture is absent. Experimental v1 records remain
+supported only by direct `recover-allocation` with the original runtime environment.
+They had no production initialization or entrypoint integration and lack retained
+host-key provenance: v1 cold start through `prepare-allocation-ssh` and automatic
+image upgrade are unsupported and rejected before workspace or key publication.
+They never fall back to the legacy startup path, which would create workspace
+directories and start services outside the pre-admission fence.
 
 The host library's `bootstrap_initialization::create` is the first-initialization
 producer. It requires a CPU profile, immutable image, explicit sharing mode,
