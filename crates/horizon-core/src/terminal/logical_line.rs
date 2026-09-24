@@ -30,6 +30,7 @@ const MAX_PATH_ROWS: usize = 4;
 /// Characters that join words inside a URL path segment.
 const URL_WORD_JOINERS: [char; 3] = ['-', '_', '.'];
 const SENTENCE_PUNCTUATION: [char; 5] = ['.', ',', ';', ':', '!'];
+const DELIMITER_PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
 /// Characters that end sh (`$`), root (`#`) and zsh/csh (`%`) prompts.
 const PROMPT_TERMINATORS: [char; 3] = ['$', '#', '%'];
 
@@ -189,7 +190,8 @@ fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool
     let segment_is_row_content = only_marker_before(upper, upper_start, segment_start);
     let continuation_is_path = starts_path(row_chars(lower, continuation.clone()));
     let continuation_is_row_content = continuation.end == lower_end + 1;
-    let continuation_ends_sentence = word_ends_sentence(lower, &continuation, cols);
+    let segment_opens = unmatched_openers(row_chars(upper, segment.clone()));
+    let continuation_ends_sentence = word_ends_sentence(lower, &continuation, cols, segment_opens);
     // A sentence's closing punctuation, such as the `?` of `Continue?`, is no
     // evidence of URL syntax.
     let continuation_body = continuation.start..continuation.end - usize::from(continuation_ends_sentence);
@@ -255,31 +257,87 @@ fn path_row_reaches_query(grid: &Grid<Cell>, cols: usize, mut line: Line) -> boo
     false
 }
 
-/// Whether the row's first word is a list marker (`-`, `*`, `12.`) or ends a
-/// shell prompt (`user@host:~$`) rather than continuing a URL.
+/// Whether the row's first word is a list marker (`-`, `*`, `12.`) or a
+/// shell prompt (`user@host:~$`, or `user@host:~$pwd` with the command typed
+/// right after it) rather than continuing a URL.
 ///
 /// A URL row that fills its width can also end in `%` or `#` before the wrap
 /// padding, so a prompt terminator only counts short of the wrap edge.
 fn starts_list_item_or_prompt(row: &Row<Cell>, word: Range<usize>, cols: usize) -> bool {
     let followed_by_blank = word.end < cols && is_blank(&row[Column(word.end)]);
-    followed_by_blank
+    (followed_by_blank
         && (is_marker(row_chars(row, word.clone()))
-            || (ends_before_wrap_edge(&word, cols) && PROMPT_TERMINATORS.contains(&row[Column(word.end - 1)].c)))
+            || (ends_before_wrap_edge(&word, cols) && PROMPT_TERMINATORS.contains(&row[Column(word.end - 1)].c))))
+        || is_prompt_with_command(row_chars(row, word))
+}
+
+/// Whether a word has the shape `user@host:path` followed by a prompt
+/// terminator and a command typed without a space, such as `user@host:~$pwd`.
+fn is_prompt_with_command(chars: impl Iterator<Item = char>) -> bool {
+    #[derive(Clone, Copy)]
+    enum Part {
+        User,
+        Host,
+        Path,
+        Command,
+    }
+    let mut part = Part::User;
+    let mut part_len = 0;
+    for character in chars {
+        let name_char = character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-');
+        part = match part {
+            Part::User if character == '@' && part_len > 0 => Part::Host,
+            Part::Host if character == ':' && part_len > 0 => Part::Path,
+            Part::User | Part::Host if name_char => {
+                part_len += 1;
+                continue;
+            }
+            Part::Path if PROMPT_TERMINATORS.contains(&character) => Part::Command,
+            Part::Path => Part::Path,
+            Part::Command => return true,
+            Part::User | Part::Host => return false,
+        };
+        part_len = 0;
+    }
+    false
 }
 
 /// Whether `word` ends a sentence rather than a wrapped URL chunk: it stops
 /// short of the wrap edge and ends in sentence punctuation, or in a question
-/// mark with no other URL syntax before it. Line breakers also split URLs
-/// after `?`, but such chunks carry other delimiters or joiners.
-fn word_ends_sentence(row: &Row<Cell>, word: &Range<usize>, cols: usize) -> bool {
+/// mark or a closing delimiter with no other URL syntax before it. Line
+/// breakers also split URLs after `?`, but such chunks carry other delimiters
+/// or joiners, and a closer that `segment_opens` left open balances the URL.
+fn word_ends_sentence(row: &Row<Cell>, word: &Range<usize>, cols: usize, segment_opens: [bool; 3]) -> bool {
     if !ends_before_wrap_edge(word, cols) {
         return false;
     }
-    match row[Column(word.end - 1)].c {
-        '?' => !row_chars(row, word.start..word.end - 1)
-            .any(|character| URL_DELIMITERS.contains(&character) || URL_WORD_JOINERS.contains(&character)),
-        last => SENTENCE_PUNCTUATION.contains(&last),
+    let bare = || {
+        !row_chars(row, word.start..word.end - 1)
+            .any(|character| URL_DELIMITERS.contains(&character) || URL_WORD_JOINERS.contains(&character))
+    };
+    let last = row[Column(word.end - 1)].c;
+    if let Some(pair) = DELIMITER_PAIRS.iter().position(|(_, close)| *close == last) {
+        return !segment_opens[pair] && bare();
     }
+    if last == '?' {
+        return bare();
+    }
+    SENTENCE_PUNCTUATION.contains(&last)
+}
+
+/// For each of [`DELIMITER_PAIRS`], whether `chars` leave an opener unmatched.
+fn unmatched_openers(chars: impl Iterator<Item = char>) -> [bool; 3] {
+    let mut depth = [0usize; 3];
+    for character in chars {
+        for (pair, (open, close)) in DELIMITER_PAIRS.iter().enumerate() {
+            if character == *open {
+                depth[pair] += 1;
+            } else if character == *close {
+                depth[pair] = depth[pair].saturating_sub(1);
+            }
+        }
+    }
+    depth.map(|open| open > 0)
 }
 
 /// Whether `word` stops short of the wrap edge. A word that runs into the

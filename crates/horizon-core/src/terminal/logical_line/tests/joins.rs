@@ -246,3 +246,11 @@ fn ragged_middle_row_ending_in_a_question_mark_joins() {
         assert_eq!(url_at(&term, cols, row, 8).as_deref(), Some(url), "row {row}");
     }
 }
+
+#[test]
+fn closing_delimiter_that_balances_the_row_above_joins() {
+    let first = format!("https://en.example.org/wiki/{}(", "x".repeat(COLS - 29));
+    let term = term_with_rows(COLS, 4, &[first.clone(), "bar)".to_string()]);
+
+    assert_eq!(url_at(&term, COLS, 1, 1), Some(format!("{first}bar)")));
+}

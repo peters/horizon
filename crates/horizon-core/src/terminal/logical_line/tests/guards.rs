@@ -38,6 +38,8 @@ fn row_filling_url_does_not_absorb_the_next_sentence() {
         "see the docs for more",
         "Continue?",
         "Overwrite? [y/N]",
+        "Thanks)",
+        "done]",
     ] {
         let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
 
@@ -73,7 +75,13 @@ fn shell_prompt_after_a_url_is_not_a_continuation() {
     assert_eq!(url_at(&term, COLS, 0, 5).as_deref(), Some("https://example.com/api/"));
 
     let first = format!("https://a.example/{}", "a".repeat(COLS - 18));
-    for prompt in ["root@box:/workspace# ls", "host% ls", "host%"] {
+    for prompt in [
+        "root@box:/workspace# ls",
+        "host% ls",
+        "host%",
+        "user@host:~$pwd",
+        "root@box:/srv#ls",
+    ] {
         let term = term_with_rows(COLS, 4, &[first.clone(), prompt.to_string()]);
         assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "prompt {prompt:?}");
     }
