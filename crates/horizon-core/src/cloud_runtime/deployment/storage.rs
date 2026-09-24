@@ -76,11 +76,19 @@ pub(super) fn terminate(provider: &RunPod, store: &Store, worker: &WorkerSpec, c
     Ok(())
 }
 
+pub(in crate::cloud_runtime) fn validate_migration(root: &std::path::Path, worker: &WorkerSpec) -> Result<()> {
+    load_at(root, worker).map(|_| ())
+}
+
 fn load(store: &Store, worker: &WorkerSpec) -> Result<Option<Record>> {
-    let bytes = match std::fs::read(store.root().join("workspace-volume.json")) {
+    load_at(store.root(), worker)
+}
+
+fn load_at(root: &std::path::Path, worker: &WorkerSpec) -> Result<Option<Record>> {
+    let bytes = match std::fs::read(root.join("workspace-volume.json")) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if store.root().join("workspace-volume.required").try_exists()? {
+            if root.join("workspace-volume.required").try_exists()? {
                 return Err(Error::Invalid(
                     "Workspace storage journal is missing; restore it before cleanup",
                 ));

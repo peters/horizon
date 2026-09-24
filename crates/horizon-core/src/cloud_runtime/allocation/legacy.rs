@@ -83,6 +83,11 @@ impl Records {
     }
 
     #[must_use]
+    pub const fn controller_id(&self) -> ControllerId {
+        self.allocation.controller
+    }
+
+    #[must_use]
     pub const fn project_id(&self) -> ProjectId {
         self.project.identity.project_id()
     }
