@@ -508,7 +508,8 @@ binding transitions and never decides credential policy. Publishing credentials
 stay in local temporary Docker configs; only verified pull material is transferred.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
-layout calculations. UI modules render controls, consume progress and attach the
+layout calculations. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
+UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.
 
 `horizon-cloud-worker` hosts the existing browser runtime and public MCP queues

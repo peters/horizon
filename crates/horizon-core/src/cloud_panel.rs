@@ -4,6 +4,7 @@ mod fixture;
 #[cfg(test)]
 mod placement;
 mod reordering;
+mod resize;
 
 pub use horizon_cloud::Connection as CloudConnection;
 use std::collections::HashMap;
@@ -266,13 +267,21 @@ impl CloudGroup {
             .iter()
             .filter_map(|id| board.panels.iter().find(|p| &p.local_id == id && p.visible));
         let first = members.next();
-        let size = first.map_or(CHILD_SIZE, |p| p.layout.size);
         let count = usize::from(first.is_some()) + members.count();
         let origin = [
             self.position[0] + PAD - crate::layout::WS_INNER_PAD,
             self.position[1] + HEADER - crate::layout::WS_INNER_PAD,
         ];
-        self.size = [CHILD_SIZE[0] + PAD * 2.0, CHILD_SIZE[1] + HEADER + PAD];
+        // An empty cloud keeps at least the default frame, including a larger
+        // size chosen from the corner. Occupied presets start from chrome and
+        // grow to their cells, so that same corner can shrink the frame.
+        if count == 0 {
+            let floor = resize::default_frame();
+            self.size = [self.size[0].max(floor[0]), self.size[1].max(floor[1])];
+            return;
+        }
+        let size = first.map_or(CHILD_SIZE, |panel| panel.layout.size);
+        self.size = [PAD * 2.0, HEADER + PAD];
         let mut index = 0;
         for id in &self.panels {
             let Some(panel) = board.panels.iter_mut().find(|p| &p.local_id == id && p.visible) else {
