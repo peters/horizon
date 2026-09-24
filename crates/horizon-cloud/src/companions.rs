@@ -68,11 +68,7 @@ impl Declaration {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
         };
-        if !component(owner)
-            || !owner.bytes().next().is_some_and(|byte| byte.is_ascii_alphanumeric())
-            || !component(repository)
-            || !valid_id(&self.profile)
-        {
+        if !valid_github_owner(owner) || !component(repository) || !valid_id(&self.profile) {
             return Err(ProfileError::Invalid("Invalid companion repository or profile"));
         }
         Ok(())
@@ -83,6 +79,26 @@ impl Declaration {
     pub fn matches(&self, other: &Self) -> bool {
         self.repository.eq_ignore_ascii_case(&other.repository) && self.profile == other.profile
     }
+}
+
+fn valid_github_owner(owner: &str) -> bool {
+    if owner.len() > 39 {
+        return false;
+    }
+    // Managed users append a single underscore and a 3-8 character enterprise shortcode.
+    let login = if let Some((login, shortcode)) = owner.split_once('_') {
+        if !(3..=8).contains(&shortcode.len()) || !shortcode.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return false;
+        }
+        login
+    } else {
+        owner
+    };
+    !login.is_empty()
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+        && !login.contains("--")
+        && login.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 /// # Errors

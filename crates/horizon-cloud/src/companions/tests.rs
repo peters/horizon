@@ -185,3 +185,38 @@ fn copied_inventory_ids_in_other_scopes_do_not_shadow_the_selected_target() {
         );
     }
 }
+
+#[test]
+fn owner_names_follow_login_constraints_including_managed_user_suffixes() {
+    let declaration = |owner: &str| Declaration {
+        repository: format!("{owner}/.github"),
+        profile: "cpu".into(),
+    };
+    for owner in [
+        "a",
+        "Example-Owner",
+        "mona-cat_octo",
+        "octo_admin",
+        "foo_bar",
+        &"a".repeat(39),
+    ] {
+        assert!(declaration(owner).validate().is_ok(), "rejected {owner}");
+    }
+    for owner in [
+        "",
+        "foo.bar",
+        "foo--bar",
+        "foo-",
+        "-foo",
+        "foo__bar",
+        "foo_ab",
+        "foo_abcdefghi",
+        "foo_bar_baz",
+        "foo-_bar",
+        &"a".repeat(40),
+    ] {
+        assert!(declaration(owner).validate().is_err(), "accepted {owner}");
+    }
+    assert!(declaration(&format!("{}_abc", "a".repeat(35))).validate().is_ok());
+    assert!(declaration(&format!("{}_abc", "a".repeat(36))).validate().is_err());
+}
