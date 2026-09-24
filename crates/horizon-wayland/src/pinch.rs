@@ -249,10 +249,14 @@ impl PinchSequence {
         }
         let previous = self.scale?;
         let surface = self.surface?;
+        let ratio = scale / previous;
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return None;
+        }
         self.scale = Some(scale);
         Some(Pinch {
             surface,
-            delta: (scale / previous).ln(),
+            delta: ratio.ln(),
         })
     }
 }
@@ -399,6 +403,20 @@ mod tests {
         assert_eq!(pinch.surface, 7);
         state.end();
         assert!(state.advance(2.5).is_none());
+    }
+
+    #[test]
+    fn invalid_scale_ratios_preserve_the_previous_baseline() {
+        for (previous, invalid, valid) in [
+            (f64::MIN_POSITIVE, f64::MAX, f64::MIN_POSITIVE * 2.0),
+            (f64::MAX, f64::MIN_POSITIVE, f64::MAX * 0.5),
+        ] {
+            let mut state = sequence();
+            assert!(state.advance(previous).is_some());
+            assert!(state.advance(invalid).is_none());
+            let step = state.advance(valid).expect("valid ratio after rejection");
+            assert!((step.delta.exp() - valid / previous).abs() < 0.0001);
+        }
     }
 
     #[test]

@@ -300,3 +300,119 @@ fn a_new_zoom_contact_lands_the_previous_notch_in_full() {
         assert!((zoom_frame(&ctx, 1.032, Vec::new(), true) - 1.0).abs() < f32::EPSILON);
     }
 }
+
+fn zoom_contact(phase: TouchPhase, modifiers: Modifiers) -> Event {
+    Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -5.0),
+        phase,
+        modifiers,
+    }
+}
+
+#[test]
+fn a_zoom_contact_started_outside_stays_rejected_until_its_boundary() {
+    for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::COMMAND] {
+        for end in [TouchPhase::End, TouchPhase::Cancel] {
+            let ctx = Context::default();
+            let _ = zoom_frame(&ctx, 1.0, vec![zoom_contact(TouchPhase::Start, modifiers)], false);
+            for (time, phase) in [(1.016, TouchPhase::Move), (1.032, end)] {
+                let zoom = zoom_frame(&ctx, time, vec![zoom_contact(phase, Modifiers::CTRL)], true);
+                assert!((zoom - 1.0).abs() < f32::EPSILON, "rejected contact at {phase:?}");
+            }
+            assert!(
+                zoom_frame(
+                    &ctx,
+                    1.048,
+                    vec![zoom_contact(TouchPhase::Start, Modifiers::CTRL)],
+                    true
+                ) < 1.0
+            );
+        }
+    }
+}
+
+#[test]
+fn a_zoom_contact_cannot_resume_after_leaving_the_canvas() {
+    let ctx = Context::default();
+    assert!(zoom_frame(&ctx, 1.0, vec![zoom_contact(TouchPhase::Start, Modifiers::CTRL)], true) < 1.0);
+    let _ = zoom_frame(&ctx, 1.016, Vec::new(), false);
+    let zoom = zoom_frame(&ctx, 1.032, vec![zoom_contact(TouchPhase::Move, Modifiers::CTRL)], true);
+    assert!((zoom - 1.0).abs() < f32::EPSILON);
+    assert!(
+        zoom_frame(
+            &ctx,
+            1.048,
+            vec![zoom_contact(TouchPhase::Start, Modifiers::CTRL)],
+            true
+        ) < 1.0
+    );
+
+    let unphased = Context::default();
+    let _ = zoom_frame(&unphased, 1.0, vec![zoom_notch()], false);
+    assert!(zoom_frame(&unphased, 1.016, vec![zoom_notch()], true) < 1.0);
+}
+
+#[test]
+fn a_suppressed_zoom_contact_observes_boundaries_without_reaccepting_moves() {
+    for boundary in [
+        None,
+        Some(TouchPhase::Start),
+        Some(TouchPhase::End),
+        Some(TouchPhase::Cancel),
+    ] {
+        let ctx = Context::default();
+        let _ = zoom_frame(&ctx, 1.0, vec![zoom_contact(TouchPhase::Start, Modifiers::CTRL)], true);
+        let input = RawInput {
+            time: Some(1.016),
+            events: boundary
+                .map(|phase| zoom_contact(phase, Modifiers::CTRL))
+                .into_iter()
+                .collect(),
+            ..RawInput::default()
+        };
+        let _ = ctx
+            .run_ui(input, |ui| super::super::reset_canvas_scroll(ui.ctx()))
+            .discard_textures();
+        let zoom = zoom_frame(&ctx, 1.032, vec![zoom_contact(TouchPhase::Move, Modifiers::CTRL)], true);
+        if matches!(boundary, Some(TouchPhase::End | TouchPhase::Cancel)) {
+            assert!(zoom < 1.0, "a closed contact permits later unphased wheels");
+        } else {
+            assert!((zoom - 1.0).abs() < f32::EPSILON, "suppressed {boundary:?} contact");
+        }
+    }
+}
+
+#[test]
+fn losing_focus_rejects_a_zoom_contact_and_discards_unphased_easing() {
+    for phased in [false, true] {
+        let ctx = Context::default();
+        let initial = if phased {
+            zoom_contact(TouchPhase::Start, Modifiers::CTRL)
+        } else {
+            zoom_notch()
+        };
+        assert!(zoom_frame(&ctx, 1.0, vec![initial], true) < 1.0);
+        let mut zoom = 0.0;
+        let _ = ctx
+            .run_ui(
+                RawInput {
+                    time: Some(1.016),
+                    focused: false,
+                    ..RawInput::default()
+                },
+                |ui| {
+                    zoom = canvas_zoom_delta(ui.ctx(), true);
+                },
+            )
+            .discard_textures();
+        assert!((zoom - 1.0).abs() < f32::EPSILON);
+        assert!((zoom_frame(&ctx, 1.032, Vec::new(), true) - 1.0).abs() < f32::EPSILON);
+        let zoom = zoom_frame(&ctx, 1.048, vec![zoom_contact(TouchPhase::Move, Modifiers::CTRL)], true);
+        if phased {
+            assert!((zoom - 1.0).abs() < f32::EPSILON);
+        } else {
+            assert!(zoom < 1.0);
+        }
+    }
+}

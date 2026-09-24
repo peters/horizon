@@ -252,22 +252,51 @@ pub(super) fn route_canvas_scroll(
     routing
 }
 
-/// Suppressed viewports must discard ownership and easing, since they cannot
-/// observe the contact ending while a dialog or fullscreen view handles input.
+/// Suppressed viewports discard canvas ownership and easing. Phased zoom stays
+/// rejected until an observed boundary, including boundaries handled here while
+/// a dialog or fullscreen view bypasses normal canvas input.
 pub(super) fn reset_canvas_scroll(ctx: &Context) {
     let viewport = ctx.viewport_id();
+    let boundary = ctx.input(|input| {
+        input.raw.events.iter().rev().find_map(|event| match event {
+            Event::MouseWheel { phase, .. } if *phase != TouchPhase::Move => Some(*phase),
+            _ => None,
+        })
+    });
     ctx.data_mut(|data| {
         data.remove::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)));
-        data.remove::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
+        let zoom = data.get_temp_mut_or_default::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
+        zoom.reject_contact();
+        match boundary {
+            Some(TouchPhase::Start) => zoom.contact = ZoomContact::Rejected,
+            Some(TouchPhase::End | TouchPhase::Cancel) => zoom.contact = ZoomContact::Unphased,
+            Some(TouchPhase::Move) | None => {}
+        }
     });
 }
 
-/// Ctrl/Cmd wheel zoom still being eased in, and whether a phased wheel
-/// gesture is in progress.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ZoomContact {
+    #[default]
+    Unphased,
+    Accepted,
+    Rejected,
+}
+
+/// Ctrl/Cmd wheel zoom still being eased in, and ownership of a phased contact.
 #[derive(Clone, Copy, Default)]
 struct WheelZoom {
     backlog: f32,
-    in_touch: bool,
+    contact: ZoomContact,
+}
+
+impl WheelZoom {
+    fn reject_contact(&mut self) {
+        self.backlog = 0.0;
+        if self.contact != ZoomContact::Unphased {
+            self.contact = ZoomContact::Rejected;
+        }
+    }
 }
 
 /// Canvas zoom from this frame's input. egui sums a frame's wheel deltas and
@@ -284,6 +313,10 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
     let mut state = ctx.data_mut(|data| data.get_temp::<WheelZoom>(id).unwrap_or_default());
     let options = ctx.options(|options| options.input_options);
     let zoom = ctx.input(|input| {
+        let allowed = over_canvas && input.focused;
+        if !allowed {
+            state.reject_contact();
+        }
         let mut factor = 1.0;
         let mut immediate = 0.0;
         for event in &input.raw.events {
@@ -297,17 +330,27 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
                 } => {
                     if *phase == TouchPhase::Start {
                         immediate += std::mem::take(&mut state.backlog);
-                        state.in_touch = true;
+                        state.contact = if allowed {
+                            ZoomContact::Accepted
+                        } else {
+                            ZoomContact::Rejected
+                        };
                     }
                     // Any phase can carry motion, as for the pan: a Wayland
                     // touchpad gesture opens with a `Start` that has a delta.
-                    if over_canvas && *delta != Vec2::ZERO && modifiers.matches_any(options.zoom_modifier) {
+                    if allowed
+                        && state.contact != ZoomContact::Rejected
+                        && *delta != Vec2::ZERO
+                        && modifiers.matches_any(options.zoom_modifier)
+                    {
                         let points = match unit {
                             MouseWheelUnit::Point => *delta,
                             MouseWheelUnit::Line => options.line_scroll_speed * *delta,
                             MouseWheelUnit::Page => input.viewport_rect().height() * *delta,
                         };
-                        if state.in_touch || (*unit == MouseWheelUnit::Point && points.length() < 8.0) {
+                        if state.contact == ZoomContact::Accepted
+                            || (*unit == MouseWheelUnit::Point && points.length() < 8.0)
+                        {
                             immediate += points.x + points.y;
                         } else {
                             state.backlog += points.x + points.y;
@@ -315,14 +358,14 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
                     }
                     if matches!(phase, TouchPhase::End | TouchPhase::Cancel) {
                         immediate += std::mem::take(&mut state.backlog);
-                        state.in_touch = false;
+                        state.contact = ZoomContact::Unphased;
                     }
                 }
                 _ => {}
             }
         }
-        if !over_canvas {
-            state.backlog = 0.0;
+        if !allowed {
+            return 1.0;
         }
         let t = egui::emath::exponential_smooth_factor(0.90, 0.1, input.stable_dt.min(0.1));
         let eased = if state.backlog.abs() < 1.0 {

@@ -123,3 +123,61 @@ fn overlap_fixture(focused: bool, overlaps: bool) -> (tempfile::TempDir, egui::C
     app.board.focused = focused.then_some(id);
     (temp, ctx, app)
 }
+
+#[test]
+fn overlapping_unfocused_panels_route_to_the_visible_middle_layer() {
+    let (_temp, ctx, mut app) = overlap_fixture(false, false);
+    let terminal = app.board.panels[0].id;
+    let mut editor = Panel::spawn(
+        horizon_core::PanelId(99),
+        app.board.panels[0].workspace_id,
+        PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("editor");
+    editor.layout.position = app.board.panels[0].layout.position;
+    editor.layout.size = app.board.panels[0].layout.size;
+    app.board.panels.push(editor);
+    let terminal_layer = LayerId::new(Order::Middle, Id::new(("panel", terminal.0)));
+    let mut pointer = Pos2::ZERO;
+    for time in [0.0, 0.016, 0.032] {
+        let mut input = raw_input([1400.0, 1000.0], None);
+        input.time = Some(time);
+        let _ = ctx
+            .run_ui(input, |ui| {
+                let canvas = app.canvas_rect(ui.ctx());
+                let geometry = app.visible_panel_geometry_for_canvas_view(canvas, None);
+                pointer = geometry[0].1.terminal_body_screen_rect.expect("body").center();
+                for (id, geometry) in geometry {
+                    egui::Area::new(Id::new(("panel", id.0)))
+                        .order(Order::Middle)
+                        .fixed_pos(geometry.screen_rect.min)
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_exact_size(geometry.screen_rect.size(), Sense::hover());
+                        });
+                }
+                ui.ctx().move_to_top(terminal_layer);
+            })
+            .discard_textures();
+    }
+    assert_eq!(ctx.layer_id_at(pointer), Some(terminal_layer));
+    let before = app.canvas_view.pan_offset;
+    let mut input = raw_input([1400.0, 1000.0], None);
+    input.time = Some(1.0);
+    input.events = vec![
+        Event::PointerMoved(pointer),
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -5.0),
+            phase: TouchPhase::Start,
+            modifiers: Modifiers::NONE,
+        },
+    ];
+    let _ = ctx
+        .run_ui(input, |ui| app.handle_canvas_pan(ui.ctx()))
+        .discard_textures();
+    assert!(app.canvas_pan_input_claimed);
+    assert!((app.canvas_view.pan_offset[1] - (before[1] - 5.0)).abs() < f32::EPSILON);
+}

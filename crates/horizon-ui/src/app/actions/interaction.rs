@@ -258,9 +258,9 @@ impl HorizonApp {
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
-        // Topmost panel under the pointer. `panel_geometry` follows board
-        // order, while rendering draws the focused panel last, so mirror that:
-        // the focused panel wins, then the last board-order panel that hits.
+        // Focused panels are Foreground. Other overlapping panels follow
+        // egui's persisted Middle-layer order, with board order as a fallback
+        // before egui has registered their areas.
         let panel_under_pointer = pointer_position.and_then(|position| {
             let hits = |id: PanelId| {
                 panel_geometry
@@ -268,6 +268,13 @@ impl HorizonApp {
                     .any(|(candidate, geometry)| *candidate == id && geometry.screen_rect.contains(position))
             };
             self.board.focused.filter(|id| hits(*id)).or_else(|| {
+                if let Some(layer) = ctx.layer_id_at(position)
+                    && let Some((id, _)) = panel_geometry.iter().find(|(id, geometry)| {
+                        layer.id == egui::Id::new(("panel", id.0)) && geometry.screen_rect.contains(position)
+                    })
+                {
+                    return Some(*id);
+                }
                 panel_geometry
                     .iter()
                     .rev()
