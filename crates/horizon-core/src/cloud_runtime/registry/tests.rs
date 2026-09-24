@@ -119,6 +119,42 @@ fn rejected_registry_root_does_not_create_directories_in_source() {
 }
 
 #[test]
+fn scope_authorization_uses_the_actual_secret_without_debug_masking() {
+    let (_root, settings) = fixture();
+    let binding = &settings.registries.as_ref().unwrap().bindings[0];
+    let material = credentials::Material::load(&binding.pull, &binding.repository, None).unwrap();
+    let header = material.authorization_header();
+    assert_eq!(header.split_once(' '), Some(("Bearer", "synthetic-pull")));
+}
+
+#[test]
+#[cfg(unix)]
+fn existing_registry_root_permissions_are_verified_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, mut settings) = fixture();
+    let shared = root.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    settings.registries.as_mut().unwrap().root = shared.clone();
+    let action = Action::Status {
+        repository: "registry.example/team/worker".into(),
+        generation: "generation1".into(),
+    };
+    assert!(manage(&settings, &action, &Cancellation::default()).is_err());
+    assert_eq!(std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(std::fs::read_dir(&shared).unwrap().count(), 0);
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&shared, &alias).unwrap();
+    settings.registries.as_mut().unwrap().root = alias;
+    assert!(manage(&settings, &action, &Cancellation::default()).is_err());
+    assert_eq!(std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777, 0o755);
+    let fresh = root.path().join("fresh/registry");
+    settings.registries.as_mut().unwrap().root = fresh.clone();
+    assert!(manage(&settings, &action, &Cancellation::default()).is_ok());
+    assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777, 0o700);
+}
+
+#[test]
 fn generations_must_be_persisted_and_metadata_contains_no_secret() {
     let (_root, settings) = fixture();
     let json = serde_json::to_string(&settings).unwrap();

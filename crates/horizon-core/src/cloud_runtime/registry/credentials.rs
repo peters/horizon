@@ -54,6 +54,10 @@ impl Material {
         vec![self.secret.to_string(), self.encoded.to_string()]
     }
 
+    pub(super) fn authorization_header(&self) -> Zeroizing<String> {
+        Zeroizing::new(format!("Bearer {}", self.secret.as_str()))
+    }
+
     pub fn verify_scope(&self, repository: &str, cancel: &Cancellation) -> Result<Option<String>> {
         cancel.check()?;
         let mut observed_expiry = None;
@@ -63,7 +67,7 @@ impl Material {
                 .max_redirects(0)
                 .http_status_as_error(false)
                 .build();
-            let auth = Zeroizing::new(format!("Bearer {}", self.secret.as_str()));
+            let auth = self.authorization_header();
             let response = ureq::Agent::new_with_config(config)
                 .get("https://api.github.com/user")
                 .header("User-Agent", "Horizon-registry-validation")
