@@ -19,12 +19,12 @@ impl HorizonApp {
         // Keep the grip about one panel-handle wide on screen. Canvas zoom would
         // otherwise shrink an 18-point corner until it could not be grabbed.
         let zoom = self.canvas_view.zoom.max(0.05);
-        let handles: Vec<(u32, [f32; 2], Rect)> = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .filter_map(|group| {
+        let count = self.cloud_prototype.groups.0.len();
+        let mut commit = None;
+        let mut changed = false;
+        for index in 0..count {
+            let Some((issue, size, corner)) = (|| {
+                let group = &self.cloud_prototype.groups.0[index];
                 if group.collapsed || fullscreen.is_some_and(|id| id != group.issue) {
                     return None;
                 }
@@ -35,12 +35,9 @@ impl HorizonApp {
                 (transform * corner)
                     .intersects(canvas)
                     .then_some((group.issue, group.size, corner))
-            })
-            .collect();
-        let scope = self.workspace_collision_scope(None);
-        let mut commit = None;
-        let mut changed = false;
-        for (issue, size, corner) in handles {
+            })() else {
+                continue;
+            };
             let response = egui::Area::new(Id::new(("cloud-resize", issue)))
                 .order(Order::Foreground)
                 .fixed_pos(corner.min)
@@ -67,9 +64,11 @@ impl HorizonApp {
                 .inner;
             if interactive && response.dragged() {
                 let delta = response.drag_delta();
-                if delta != Vec2::ZERO && self.resize_cloud_frame(issue, [size[0] + delta.x, size[1] + delta.y], &scope)
-                {
-                    changed = true;
+                if delta != Vec2::ZERO {
+                    let scope = self.workspace_collision_scope(None);
+                    if self.resize_cloud_frame(issue, [size[0] + delta.x, size[1] + delta.y], &scope) {
+                        changed = true;
+                    }
                 }
             }
             if interactive && response.drag_stopped() {
@@ -193,6 +192,7 @@ fn paint_corner(ui: &egui::Ui, rect: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_egui::DiscardTextures;
     use horizon_core::cloud_panel::CloudGroup;
     use horizon_core::{PanelKind, PanelOptions};
 
@@ -284,5 +284,77 @@ mod tests {
             !cloud.intersects(neighbour_frame),
             "neighbour {neighbour_frame:?} overlaps cloud {cloud:?}"
         );
+    }
+
+    #[test]
+    fn zoomed_corner_drag_resizes_by_the_canvas_delta_without_panning() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("fixture");
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        app.cloud_prototype.groups.0.push(CloudGroup::new(
+            101,
+            "Open".into(),
+            local,
+            temp.path().into(),
+            [80.0, 120.0],
+        ));
+        app.cloud_prototype.ready = true;
+        app.canvas_view.zoom = 0.5;
+        app.canvas_view.pan_offset = [0.0, 0.0];
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
+        let mut step = 0.0_f64;
+        let mut frame = |app: &mut crate::app::HorizonApp, events: Vec<egui::Event>| {
+            step += 1.0;
+            let mut input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(step),
+                events,
+                ..Default::default()
+            };
+            input.viewport_id = egui::ViewportId::ROOT;
+            ctx.begin_pass(input);
+            let canvas = app.canvas_rect(&ctx);
+            app.render_cloud_resize_handles(&ctx);
+            let _ = ctx.end_pass().discard_textures();
+            canvas
+        };
+        let canvas = frame(&mut app, Vec::new());
+        let transform = crate::app::view::canvas_scene_transform(canvas, app.canvas_view);
+        // The first resize reconciles the cloud onto its workspace. Later drags
+        // must not move it again.
+        let initial = app.cloud_prototype.groups.0[0].size;
+        assert!(app.resize_cloud_frame(101, initial, &[]));
+        let (before, origin, press) = {
+            let group = &app.cloud_prototype.groups.0[0];
+            let (_, max) = group.bounds();
+            let limit = (group.size[0].min(group.size[1]) * 0.35).max(8.0);
+            let handle = (super::super::super::RESIZE_HANDLE_SIZE / app.canvas_view.zoom).clamp(8.0, limit);
+            let corner =
+                egui::Rect::from_min_size(egui::pos2(max[0] - handle, max[1] - handle), egui::vec2(handle, handle));
+            (group.size, group.position, (transform * corner).center())
+        };
+        let screen_delta = egui::vec2(24.0, 10.0);
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(press)]);
+        frame(&mut app, vec![button(press, true)]);
+        frame(&mut app, vec![egui::Event::PointerMoved(press + screen_delta)]);
+        let dragged = app.cloud_prototype.groups.0[0].size;
+        let canvas_delta = screen_delta / app.canvas_view.zoom;
+        assert!(
+            (dragged[0] - before[0] - canvas_delta.x).abs() < 0.5
+                && (dragged[1] - before[1] - canvas_delta.y).abs() < 0.5,
+            "frame {before:?} -> {dragged:?}, expected canvas delta {canvas_delta:?}"
+        );
+        assert_eq!(app.cloud_prototype.groups.0[0].position, origin);
+        assert!(!app.canvas_pan_input_claimed);
+        frame(&mut app, vec![button(press + screen_delta, false)]);
+        assert_eq!(app.cloud_prototype.groups.0[0].size, dragged);
+        assert_eq!(app.cloud_prototype.groups.0[0].position, origin);
     }
 }
