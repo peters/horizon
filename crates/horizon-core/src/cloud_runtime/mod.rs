@@ -8,6 +8,7 @@ pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
 pub mod progress;
+pub mod registry;
 pub mod repository;
 pub mod settings;
 pub mod setup;

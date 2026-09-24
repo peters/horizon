@@ -40,6 +40,9 @@ authentication in a private configuration directory using `docker login` with
 give the provider only the pull binding. Build the generic image using
 [`examples/cloud-worker`](../examples/cloud-worker/README.md).
 
+For guided private-image setup, rotation, revocation and shared CLI/MCP controls,
+see [private registry bindings](private-registry-bindings.md).
+
 For manual setup, create an Ed25519 SSH identity and store the provider API key in a
 private file (0600 on Unix). Put bindings in `~/.horizon/cloud/settings.json`; all file paths
 are absolute. This file contains paths and references, never literal API keys:

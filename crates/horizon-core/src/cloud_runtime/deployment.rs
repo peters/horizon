@@ -46,11 +46,6 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     let store = Store::lock(&request.state_root)?;
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
-    let runner = Runner {
-        cancel,
-        emit,
-        secrets: Vec::new(),
-    };
     let mut state = initial_state(request, &store)?;
     if state.stage == Stage::Deleted {
         return Err(Error::Invalid(
@@ -58,6 +53,14 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         ));
     }
     let started = attempt_started(&state, started);
+    let mut registry = prepare_registry(request, &state)?;
+    let runner = Runner {
+        cancel,
+        emit,
+        secrets: registry
+            .as_ref()
+            .map_or_else(Vec::new, super::registry::Prepared::redactions),
+    };
     let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
     let browser_auth = super::browser_auth::Prepared::for_repository(
         &request.settings.browserstack_credentials,
@@ -86,15 +89,16 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         )?);
     }
     if state.spec.is_none() {
-        prepare_image(request, &store, &runner, &mut state)?;
+        prepare_image(request, &store, &runner, &mut state, registry.as_ref())?;
     }
+    verify_registry(&provider, &store, &mut state, registry.as_mut(), cancel)?;
     let spec = state
         .spec
         .clone()
         .ok_or(Error::Invalid("Deployment has no worker specification"))?;
     // Opt-in may be added after a definite provisioning rejection saved a spec.
     // Validate that exact digest on every path that can still allocate a worker.
-    validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner)?;
+    validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner, registry.as_ref())?;
     state.stage = Stage::Provision;
     store.save(&state)?;
     emit(Event::stage(state.stage));
@@ -131,6 +135,38 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         browser_auth.install(&connection, &runner)?;
     }
     finish_ready(state, &store, started, emit)
+}
+
+fn prepare_registry(request: &Request, state: &Deployment) -> Result<Option<super::registry::Prepared>> {
+    if state.resizable() {
+        super::registry::Prepared::for_image(
+            &request.settings,
+            &state.profile.image,
+            Some(&state.repository),
+            state.spec.is_none() && state.profile.build.is_some(),
+        )
+    } else {
+        Ok(None)
+    }
+}
+
+fn verify_registry(
+    provider: &RunPod,
+    store: &Store,
+    state: &mut Deployment,
+    registry: Option<&mut super::registry::Prepared>,
+    cancel: &Cancellation,
+) -> Result<()> {
+    if let Some(registry) = registry {
+        let spec = state
+            .spec
+            .as_mut()
+            .ok_or(Error::Invalid("Deployment has no image to validate"))?;
+        registry.verify_image(&spec.image_digest, cancel)?;
+        spec.registry_auth_id = Some(registry.ensure_provider(provider, cancel)?);
+        store.save(state)?;
+    }
+    Ok(())
 }
 
 fn provision(
@@ -196,11 +232,14 @@ fn validate_allocation_image(
     spec: &WorkerSpec,
     git_auth: bool,
     runner: &Runner<'_>,
+    registry: Option<&super::registry::Prepared>,
 ) -> Result<()> {
     if state.operation == CreateState::Prepared {
         Images {
             docker_host: request.settings.docker_host.as_deref(),
-            docker_config: &request.settings.docker_config,
+            docker_config: registry.map_or(request.settings.docker_config.as_path(), |registry| {
+                registry.docker_config(false)
+            }),
             runner,
         }
         .validate_contract(
@@ -322,7 +361,13 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     store.save(&state)?;
     Ok(state)
 }
-fn prepare_image(request: &Request, store: &Store, runner: &Runner<'_>, state: &mut Deployment) -> Result<()> {
+fn prepare_image(
+    request: &Request,
+    store: &Store,
+    runner: &Runner<'_>,
+    state: &mut Deployment,
+    registry: Option<&super::registry::Prepared>,
+) -> Result<()> {
     let build_root = tempfile::tempdir_in(store.root())?;
     let source = if state.profile.build.is_some() {
         repository::snapshot(&state.repository, &state.revision, build_root.path(), runner)?
@@ -331,7 +376,9 @@ fn prepare_image(request: &Request, store: &Store, runner: &Runner<'_>, state: &
     };
     let images = Images {
         docker_host: request.settings.docker_host.as_deref(),
-        docker_config: &request.settings.docker_config,
+        docker_config: registry.map_or(request.settings.docker_config.as_path(), |registry| {
+            registry.docker_config(state.profile.build.is_some())
+        }),
         runner,
     };
     let digest = images.prepare(&state.profile, &source, &state.cloud_id)?;

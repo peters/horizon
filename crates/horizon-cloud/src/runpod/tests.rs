@@ -2,6 +2,7 @@ use super::*;
 mod inspection;
 mod placement;
 mod recovery;
+mod registry;
 mod storage;
 use std::{
     io::{Read, Write},
