@@ -275,10 +275,19 @@ impl HorizonApp {
                     .map(|(id, _)| *id)
             })
         });
-        // Cloud runtime cards paint after the panels, so they win an overlap.
+        // Runtime cards share the Middle layer with unfocused panels. Focused
+        // panels are Foreground; otherwise use egui's persisted area ordering
+        // for overlaps rather than inferring it from rendering call order.
         #[cfg(feature = "cloud-workspaces")]
-        let over_cloud_runtime =
-            pointer_position.is_some_and(|position| self.pointer_over_cloud_runtime(ctx, position));
+        let over_cloud_runtime = pointer_position.is_some_and(|position| {
+            self.pointer_over_cloud_runtime(ctx, position)
+                && !panel_under_pointer.is_some_and(|panel| {
+                    self.board.focused == Some(panel)
+                        || ctx
+                            .layer_id_at(position)
+                            .is_some_and(|layer| layer.id == egui::Id::new(("panel", panel.0)))
+                })
+        });
         #[cfg(not(feature = "cloud-workspaces"))]
         let over_cloud_runtime = false;
         let scroll_target = if over_cloud_runtime {

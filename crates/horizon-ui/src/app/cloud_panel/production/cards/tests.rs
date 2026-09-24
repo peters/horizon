@@ -68,6 +68,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
     }
 }
 
+mod overlap;
 mod scrolling;
 
 #[test]
