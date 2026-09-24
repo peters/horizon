@@ -4,6 +4,7 @@ pub mod allocation;
 pub mod billing;
 pub mod browser_auth;
 pub mod command;
+pub mod companions;
 pub mod cost;
 pub mod deployment;
 pub mod git_auth;

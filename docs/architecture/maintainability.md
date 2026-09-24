@@ -480,6 +480,13 @@ companion worktrees. These transport operations have no provider lifecycle autho
 its MCP leaf only adapts requests. Readiness expiration and grant probes stay
 in the shared worker service, and neither interface starts compute.
 
+`cloud_runtime::companions` owns machine-local selection and grant reconciliation.
+`inventory` reads committed declarations and repository identity away from UI
+frames; `journal` durably pins ownership and grant identities; `transport` uses
+existing verified SSH connections under deployment locks; `reconcile` connects
+or revokes those grants and publishes discovery. This module has no provider
+lifecycle API. An ownership change retires old grants before new selections.
+
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
