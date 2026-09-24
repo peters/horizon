@@ -10,6 +10,7 @@ use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 struct Runtime {
@@ -102,13 +103,12 @@ impl Runtime {
         let path = self.live.join("horizon-authorized-keys");
         let original = std::fs::read_to_string(&path)?;
         let marker = format!("horizon-companion:{grant}");
+        let prefix = format!("restrict,pty,command=\"/usr/local/bin/horizon-worker-run {grant} companion\" ");
         let mut lines: Vec<_> = original
             .lines()
-            .filter(|line| line.split_whitespace().last() != Some(&marker))
+            .filter(|line| !(line.starts_with(&prefix) && line.split_whitespace().last() == Some(&marker)))
             .collect();
-        let added = key.map(|key| {
-            format!("restrict,pty,command=\"/usr/local/bin/horizon-worker-run {grant} companion\" {key} {marker}")
-        });
+        let added = key.map(|key| format!("{prefix}{key} {marker}"));
         if let Some(added) = &added {
             lines.push(added);
         }
@@ -142,19 +142,22 @@ impl Runtime {
         let parent = worktree.parent().ok_or_else(|| io::Error::other("Invalid worktree"))?;
         files::directory(parent)?;
         if !worktree.exists() {
-            ssh::checked(
+            let checkout_timeout = Duration::from_secs(300);
+            ssh::checked_with_timeout(
                 std::process::Command::new("git")
                     .arg(format!("--git-dir={}", self.workspace.join("repository.git").display()))
                     .args(["worktree", "add", "--detach"])
                     .arg(&worktree)
                     .arg(revision)
                     .env("HOME", self.workspace.join("home")),
+                checkout_timeout,
             )?;
-            ssh::checked(
+            ssh::checked_with_timeout(
                 std::process::Command::new(&self.source_helper)
                     .arg("checkout")
                     .arg(&worktree)
                     .env("HOME", self.workspace.join("home")),
+                checkout_timeout,
             )?;
             files::directory(&self.workspace.join("companions/prepared"))?;
             files::write(&prepared, revision.as_bytes())?;

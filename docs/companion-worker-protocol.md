@@ -25,7 +25,10 @@ workers must already have their source objects and dependencies imported. The
 target prepares submodules and LFS assets through the same helper as agent
 worktrees, and records successful preparation before granting access. An
 incomplete checkout requires explicit recovery; retries never reset existing
-work. Worktrees live at `/workspace/companions/worktrees/<grant>`.
+work. Initial Git checkout and source-material preparation each allow up to
+300 seconds; authorization callers must allow those phases plus verification.
+SSH readiness probes retain their shorter 30-second deadline. Worktrees live at
+`/workspace/companions/worktrees/<grant>`.
 
 Agents can run ordinary commands such as `ssh companion-app 'git status'` or
 `rsync -az ./library/ companion-app:./library/`. The forced SSH entrypoint sets

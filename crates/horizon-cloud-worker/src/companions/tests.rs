@@ -52,7 +52,9 @@ fn revoke_keeps_owner_and_other_grants_and_never_deletes_work() {
     let runtime = runtime(root.path());
     files::directory(&runtime.live).unwrap();
     let path = runtime.live.join("horizon-authorized-keys");
-    std::fs::write(&path, "owner-key owner\n").unwrap();
+    let owner_keys =
+        "owner-key owner\nowner-key horizon-companion:one\ncommand=\"owner-task\" owner-key horizon-companion:one\n";
+    std::fs::write(&path, owner_keys).unwrap();
     runtime.authorized_key("one", Some("key-one")).unwrap();
     runtime.authorized_key("two", Some("key-two")).unwrap();
     runtime.authorized_key("one", Some("replacement-key")).unwrap();
@@ -62,7 +64,7 @@ fn revoke_keeps_owner_and_other_grants_and_never_deletes_work() {
     runtime.apply(&Request::Revoke { grant: "one".into() }).unwrap();
     runtime.apply(&Request::Revoke { grant: "one".into() }).unwrap();
     let keys = std::fs::read_to_string(path).unwrap();
-    assert!(keys.contains("owner-key owner"));
+    assert!(keys.starts_with(owner_keys));
     assert!(keys.contains("key-two"));
     assert!(!keys.contains("key-one") && !keys.contains("replacement-key"));
     assert_eq!(std::fs::read_to_string(work.join("dirty.txt")).unwrap(), "preserve");
