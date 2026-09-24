@@ -254,8 +254,8 @@ impl HorizonApp {
                     Event::Browsers(browsers) => {
                         runtime.browsers = Some(browsers);
                     }
-                    Event::Deleted => {
-                        runtime.progress.stage(Stage::Deleted, std::time::Instant::now());
+                    Event::Deleted(at) => {
+                        runtime.progress.stage(Stage::Deleted, at);
                         runtime.stage = Some(Stage::Deleted);
                         runtime.desktop = None;
                         runtime.error = Some(DELETED_RESOURCES_MESSAGE.into());

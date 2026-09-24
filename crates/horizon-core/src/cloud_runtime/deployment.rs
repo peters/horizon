@@ -483,67 +483,127 @@ fn cpu_flavors(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<
 }
 /// # Errors
 /// Terminates only the persisted, identity-checked worker; never called on UI drop.
-pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
+/// Each step is emitted as a deletion stage; the saved record moves straight to `Deleted`.
+pub fn terminate(
+    root: &std::path::Path,
+    settings: &Settings,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let provider = RunPod::new(settings.credential()?);
-    let mut operation = state.operation.clone();
-    if operation == CreateState::Prepared {
-        storage::terminate(&provider, &store, &spec, cancel)?;
-        state.stage = Stage::Deleted;
-        state.worker = None;
-        return store.save(&state);
+    if state.operation != CreateState::Prepared {
+        let runner = Runner {
+            cancel,
+            emit,
+            secrets: Vec::new(),
+        };
+        terminate_worker(&provider, &store, &mut state, &spec, settings, &runner)?;
     }
+    deletion_step(
+        emit,
+        Stage::DeleteStorage,
+        "Deleting managed workspace storage and confirming its removal",
+    );
+    storage::terminate(&provider, &store, &spec, &committed())?;
+    state.stage = Stage::Deleted;
+    state.worker = None;
+    store.save(&state)
+}
+
+fn terminate_worker(
+    provider: &RunPod,
+    store: &Store,
+    state: &mut Deployment,
+    spec: &WorkerSpec,
+    settings: &Settings,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    let cancel = runner.cancel;
+    let release = state.requires_browserstack_release();
+    let mut operation = state.operation.clone();
     if operation == CreateState::Requested {
+        let step = if release {
+            Stage::ReleaseDevices
+        } else {
+            Stage::DeleteWorker
+        };
+        deletion_step(runner.emit, step, "Reconciling the requested worker");
         provider.ensure(
-            &spec,
+            spec,
             &mut operation,
             cancel,
             |next| {
                 state.operation = next.clone();
-                store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
+                store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
             },
             |_| {},
         )?;
     }
-    if state.requires_browserstack_release()
-        && let CreateState::Bound { worker_id } = &operation
-    {
+    if release && let CreateState::Bound { worker_id } = &operation {
+        deletion_step(runner.emit, Stage::ReleaseDevices, "Confirming worker identity");
         let worker = provider.inspect(worker_id, cancel)?.ok_or(Error::Invalid(
             "Worker is lost; remote-device release must be verified before cleanup can be confirmed",
         ))?;
-        worker.verify(&spec)?;
+        worker.verify(spec)?;
         if worker.status() == horizon_cloud::WorkerStatus::Stopped {
             return Err(Error::Invalid(
                 "Resume the worker to release its hosted devices before deletion",
             ));
         }
         let connection = Connection::new(&worker, settings, store.root())?;
-        super::browser_auth::revoke(
-            &connection,
-            &Runner {
-                cancel,
-                emit: &|_| {},
-                secrets: Vec::new(),
-            },
-        )?;
+        super::browser_auth::revoke(&connection, runner)?;
         state.browserstack_released = true;
-        store.save(&state)?;
+        store.save(state)?;
     }
-    provider.terminate(&spec, &mut operation, cancel, |next| {
+    let committed = commit_deletion(cancel)?;
+    deletion_step(
+        runner.emit,
+        Stage::DeleteWorker,
+        "Deleting the worker and confirming its removal",
+    );
+    provider.terminate(spec, &mut operation, &committed, |next| {
         state.operation = next.clone();
-        store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
+        store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
     })?;
-    storage::terminate(&provider, &store, &spec, cancel)?;
-    state.stage = Stage::Deleted;
-    state.worker = None;
-    store.save(&state)
+    Ok(())
+}
+
+/// The token for delete requests. A sent delete cannot be recalled, and a cancelled
+/// confirmation would report an accepted delete as failed, so cancellation ends once
+/// deletion starts; the provider timeout still bounds every request.
+fn committed() -> Cancellation {
+    Cancellation::default()
+}
+
+/// Ends the cancellable part of a worker deletion. A cancellation requested while
+/// an earlier step was shown stops here, before the irreversible delete request.
+fn commit_deletion(cancel: &Cancellation) -> Result<Cancellation> {
+    cancel.check()?;
+    Ok(committed())
+}
+
+fn deletion_step(emit: &dyn Fn(Event), stage: Stage, detail: &str) {
+    emit(Event::stage(stage));
+    emit(Event::Progress(super::progress::Progress::activity(detail)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn worker_deletion_commits_only_before_its_caller_cancels() {
+        let cancel = Cancellation::default();
+        let committed = commit_deletion(&cancel).unwrap();
+        cancel.cancel();
+        assert!(!committed.is_cancelled(), "a sent delete ignores later cancellation");
+        assert!(matches!(
+            commit_deletion(&cancel),
+            Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+        ));
+    }
     #[test]
     #[cfg(unix)]
     fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {

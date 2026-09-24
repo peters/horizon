@@ -428,3 +428,208 @@ fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
     assert_eq!(app.board.focused, Some(remaining));
     assert_eq!(app.board.active_workspace, Some(local));
 }
+
+/// A cloud whose worker was never requested, so deletion needs no provider request.
+fn seed_unallocated_cloud(
+    app: &mut crate::app::HorizonApp,
+    root: &std::path::Path,
+) -> (tempfile::NamedTempFile, cloud_runtime::state::Deployment) {
+    let workspace = app.board.create_workspace("cloud fixture");
+    let mut group = CloudGroup::new(
+        1,
+        "Fixture".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        root.into(),
+        [0.0, 0.0],
+    );
+    let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+    let profile = config.profiles["dev"].clone();
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: profile.clone(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype.root = Some(root.into());
+    let mut key = tempfile::NamedTempFile::new_in(root).unwrap();
+    std::io::Write::write_all(&mut key, b"synthetic-test-key").unwrap();
+    let settings = serde_json::json!({
+        "runpod_key_file": key.path(), "ssh_identity_file": root.join("ssh"),
+        "docker_config": root.join("docker"), "registry_pull_auth_id": null,
+        "cpu_flavors": [], "gpu_types": []
+    });
+    std::fs::write(root.join("settings.json"), settings.to_string()).unwrap();
+    let state = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": "fixture", "repository": root, "revision": "a".repeat(40),
+        "profile": profile, "stage": "Provision", "operation": {"state": "prepared"},
+        "spec": null, "worker": null, "sessions": []
+    }))
+    .unwrap();
+    Store::lock(&root.join("fixture")).unwrap().save(&state).unwrap();
+    (key, state)
+}
+
+/// Starts a deletion after a failed deployment attempt and waits for its result.
+fn delete_after_a_stale_attempt(app: &mut crate::app::HorizonApp, ctx: &egui::Context) {
+    use std::time::{Duration, Instant};
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.stage = Some(Stage::Provision);
+    runtime.error = Some("Earlier deployment failure".into());
+    runtime.remote_release_error = Some("Earlier hosted-device release failure".into());
+    runtime.progress.stage(
+        Stage::Provision,
+        Instant::now().checked_sub(Duration::from_secs(60)).unwrap(),
+    );
+    app.change_production_worker(1, Action::Delete, ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    // No hosted devices to release, so the stand-in step never offers Cancel.
+    assert!(
+        runtime
+            .stage
+            .is_some_and(|stage| Stage::DELETION.contains(&stage) && stage != Stage::ReleaseDevices)
+    );
+    assert!(runtime.error.is_none());
+    assert!(runtime.remote_release_error.is_none());
+    assert_eq!(runtime.progress.stage_label(Stage::Provision), "Provision worker");
+    assert!(runtime.needs_repaint(), "the elapsed time stays live");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while app.cloud_prototype.production.runtimes[&1].receiver.is_some() {
+        assert!(Instant::now() < deadline, "deletion must finish");
+        std::thread::sleep(Duration::from_millis(10));
+        app.prepare_production_clouds(ctx);
+    }
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "cloud control requires durable directory updates, which are Unix-only"
+)]
+fn deletion_replaces_a_stale_attempt_and_reports_its_steps_and_total_time() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let (_key, mut state) = seed_unallocated_cloud(&mut app, temp.path());
+    let root = temp.path().join("fixture");
+
+    delete_after_a_stale_attempt(&mut app, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(
+        runtime.stage,
+        Some(Stage::Provision),
+        "a failed deletion shows the saved stage"
+    );
+    assert!(runtime.error.as_ref().unwrap().contains("No worker was requested"));
+    assert!(runtime.progress.ended_in(Stage::Deleted).is_none());
+    assert!(
+        runtime.progress.is_deletion(),
+        "the card keeps the deletion steps beside the error"
+    );
+
+    state.spec = Some(
+        serde_json::from_value(serde_json::json!({
+            "operation_id": "fixture", "image_digest": format!("example/worker@sha256:{}", "a".repeat(64)),
+            "profile": state.profile, "public_key": "unused-fixture-key", "registry_auth_id": null,
+            "gpu_types": [], "cpu_flavors": ["cpu3c"], "data_centers": []
+        }))
+        .unwrap(),
+    );
+    Store::lock(&root).unwrap().save(&state).unwrap();
+    delete_after_a_stale_attempt(&mut app, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert_eq!(runtime.error.as_deref(), Some(super::super::DELETED_RESOURCES_MESSAGE));
+    assert!(runtime.cancel.is_none());
+    assert!(!runtime.needs_repaint());
+    assert!(runtime.progress.ended_in(Stage::Deleted).is_some());
+    assert!(
+        runtime
+            .progress
+            .stage_label(Stage::DeleteStorage)
+            .starts_with("Delete workspace storage · 0m")
+    );
+    // Only core's events enter the timeline: the stand-in first step and the skipped
+    // worker step show no duration.
+    assert_eq!(
+        runtime.progress.stage_label(Stage::ReleaseDevices),
+        "Release hosted devices"
+    );
+    assert_eq!(runtime.progress.stage_label(Stage::DeleteWorker), "Delete worker");
+    assert_eq!(
+        Store::lock(&root).unwrap().load().unwrap().unwrap().stage,
+        Stage::Deleted
+    );
+    app.remove_deleted_cloud(1, &ctx);
+    assert!(app.cloud_prototype.groups.0.is_empty());
+}
+
+#[test]
+fn deletion_offers_cancel_only_while_hosted_devices_can_still_be_released() {
+    let state =
+        |operation: serde_json::Value, browserstack: bool, released: bool| -> cloud_runtime::state::Deployment {
+            let mut capabilities = serde_json::json!({});
+            if browserstack {
+                capabilities["browserstack"] = serde_json::json!({"targets": []});
+            }
+            serde_json::from_value(serde_json::json!({
+                "version": 1, "cloud_id": "fixture", "repository": "/synthetic", "revision": "a",
+                "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8,
+                    "capabilities": capabilities},
+                "stage": "Ready", "operation": operation, "spec": null, "worker": null, "sessions": [],
+                "browserstack_released": released
+            }))
+            .unwrap()
+        };
+    let bound = serde_json::json!({"state": "bound", "worker_id": "worker1"});
+    let prepared = serde_json::json!({"state": "prepared"});
+    for (record, first) in [
+        (Some(state(bound.clone(), true, false)), Stage::ReleaseDevices),
+        (Some(state(bound.clone(), true, true)), Stage::DeleteWorker),
+        (Some(state(bound, false, false)), Stage::DeleteWorker),
+        (Some(state(prepared.clone(), true, false)), Stage::DeleteStorage),
+        (Some(state(prepared, false, false)), Stage::DeleteStorage),
+        (None, Stage::DeleteWorker),
+    ] {
+        assert_eq!(super::first_deletion_step(record.as_ref()), first);
+    }
+}
+
+#[test]
+fn another_operation_after_a_failed_deletion_drops_its_steps() {
+    for (action, name) in [(Action::Stop, "Stop"), (Action::Resume, "Resume")] {
+        let mut runtime = Runtime::default();
+        runtime.progress.begin_deletion();
+        runtime.progress.stage(Stage::DeleteWorker, std::time::Instant::now());
+        runtime.progress.finish(std::time::Instant::now());
+        assert!(runtime.progress.is_deletion());
+        super::begin_operation(&mut runtime, action);
+        assert!(!runtime.progress.is_deletion(), "{name} shows its own progress");
+        assert_eq!(runtime.stage, Some(Stage::Provision));
+    }
+    let mut runtime = Runtime::default();
+    super::begin_operation(&mut runtime, Action::Delete);
+    assert!(runtime.progress.is_deletion());
+}
+
+#[test]
+fn deletion_time_ends_when_the_worker_finished_not_when_the_ui_caught_up() {
+    use std::time::{Duration, Instant};
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    app.prepare_production_clouds(&ctx);
+    let started = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
+    let mut runtime = Runtime::default();
+    runtime.progress.begin_deletion();
+    runtime.progress.stage(Stage::DeleteWorker, started);
+    let (sender, receiver) = channel();
+    runtime.receiver = Some(receiver);
+    app.cloud_prototype.production.runtimes.insert(1, runtime);
+    // The deletion finished 12 s in; the UI only processes it now, 48 s later.
+    sender.send(Event::Deleted(started + Duration::from_secs(12))).unwrap();
+    app.prepare_production_clouds(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert_eq!(runtime.stage, Some(Stage::Deleted));
+    assert_eq!(runtime.progress.ended_in(Stage::Deleted), Some(Duration::from_secs(12)));
+}

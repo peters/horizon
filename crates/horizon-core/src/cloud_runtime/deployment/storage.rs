@@ -161,6 +161,7 @@ fn save(store: &Store, record: &Record) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::cloud_runtime::{Event, Stage};
     fn record() -> Record {
         let worker: WorkerSpec = serde_json::from_value(serde_json::json!({
             "operation_id":"owned-operation", "image_digest":format!("example/worker@sha256:{}", "a".repeat(64)),
@@ -318,6 +319,7 @@ mod tests {
                 size: record.spec.size,
                 data_center_id: record.spec.data_center_id.clone(),
             },
+            creation: None,
         };
         save(&store, &record).unwrap();
         assert!(release_deleted_journal(&store, &record.worker).is_err());
@@ -364,15 +366,60 @@ mod tests {
                 "cpu_flavors":[],"gpu_types":[]
             }))
             .unwrap();
-            for _ in 0..2 {
-                super::super::terminate(root.path(), &settings, &Cancellation::default()).unwrap();
+            // The second pass is cancelled from the start: cancellation ends once
+            // deletion starts, so it cannot fail an accepted storage delete.
+            for cancelled in [false, true] {
+                let cancel = Cancellation::default();
+                if cancelled {
+                    cancel.cancel();
+                }
+                let events = std::cell::RefCell::new(Vec::new());
+                super::super::terminate(root.path(), &settings, &cancel, &|event| {
+                    events.borrow_mut().push(event);
+                })
+                .unwrap();
+                let reported: Vec<_> = events
+                    .into_inner()
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::Stage(stage, _) => Some(stage.label().to_owned()),
+                        Event::Progress(progress) => Some(progress.detail),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    reported,
+                    [
+                        "Delete workspace storage",
+                        "Deleting managed workspace storage and confirming its removal"
+                    ]
+                );
                 let store = Store::lock(root.path()).unwrap();
                 let saved = store.load().unwrap().unwrap();
-                assert_eq!(saved.stage, crate::cloud_runtime::Stage::Deleted);
+                assert_eq!(saved.stage, Stage::Deleted);
                 assert_eq!(saved.operation, CreateState::Prepared);
                 assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &saved).unwrap());
             }
         }
+    }
+    #[test]
+    fn deletion_steps_are_never_saved() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let record = record();
+        let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":record.worker.operation_id,"repository":"/synthetic","revision":"a",
+            "profile":record.worker.profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":record.worker,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        store.save(&deployment).unwrap();
+        for stage in Stage::DELETION {
+            deployment.stage = stage;
+            assert!(matches!(store.save(&deployment), Err(Error::Json)));
+            assert!(serde_json::from_value::<Stage>(serde_json::json!(format!("{stage:?}"))).is_err());
+        }
+        assert_eq!(store.load().unwrap().unwrap().stage, Stage::Ready);
     }
     #[cfg(unix)]
     #[test]

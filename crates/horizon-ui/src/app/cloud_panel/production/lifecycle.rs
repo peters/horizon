@@ -105,6 +105,36 @@ impl Runtime {
     }
 }
 
+/// Resets what the card shows for a newly started worker operation.
+fn begin_operation(runtime: &mut Runtime, action: Action) {
+    if action == Action::Delete {
+        // Until core reports its first step, the step it will start with stands
+        // in, so Cancel shows only when that step can still be cancelled.
+        runtime.progress.begin_deletion();
+        // Both error channels the card shows belong to earlier attempts.
+        runtime.error = None;
+        runtime.remote_release_error = None;
+        runtime.stage = Some(first_deletion_step(runtime.state.as_ref()));
+    } else {
+        // A failed deletion's frozen steps must not stand in for another operation.
+        if runtime.progress.is_deletion() {
+            runtime.progress.reset();
+        }
+        runtime.stage = Some(Stage::Provision);
+    }
+}
+
+/// The deletion step core starts with for this record. Only hosted-device release
+/// for a requested worker can still be cancelled; every other deletion starts with
+/// a request that cannot be recalled.
+fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stage {
+    match state {
+        Some(state) if state.operation == cloud_runtime::CreateState::Prepared => Stage::DeleteStorage,
+        Some(state) if state.requires_browserstack_release() => Stage::ReleaseDevices,
+        _ => Stage::DeleteWorker,
+    }
+}
+
 impl HorizonApp {
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
         let Some(launch) = self
@@ -173,19 +203,23 @@ impl HorizonApp {
         let (tx, rx) = channel();
         runtime.receiver = Some(rx);
         runtime.sender = Some(tx.clone());
-        runtime.stage = Some(Stage::Provision);
+        begin_operation(runtime, action);
         let cancel = cloud_runtime::Cancellation::default();
         runtime.cancel = Some(cancel.clone());
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let root = state_root;
+            let emit = |event| {
+                let _ = tx.send(event);
+                ctx.request_repaint();
+            };
             let result = match action {
                 Action::Stop => cloud_runtime::lifecycle::stop(&root, &settings, &cancel)
                     .map(|state| Event::Stopped(Box::new(state))),
                 Action::Resume => cloud_runtime::lifecycle::resume(&root, &settings, &cancel).map(|()| Event::Resumed),
                 Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
                     .map(|state| Event::Snapshot(Box::new(state))),
-                Action::Delete => deployment::terminate(&root, &settings, &cancel).map(|()| Event::Deleted),
+                Action::Delete => deployment::terminate(&root, &settings, &cancel, &emit).map(|()| Event::deleted()),
                 Action::Deploy | Action::Desktop | Action::Remove | Action::Reconcile => return,
             };
             if let Ok(store) = Store::lock(&root)

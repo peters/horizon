@@ -45,7 +45,7 @@ fn run() -> cloud_runtime::Result<()> {
         return Ok(());
     }
     if args[0] == "delete" && args.len() == 3 {
-        return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel);
+        return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel, &print_event);
     }
     if args[0] == "stop" && args.len() == 3 {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
@@ -79,7 +79,16 @@ fn run() -> cloud_runtime::Result<()> {
         state_root: PathBuf::from(&args[4]),
         settings,
     };
-    let emit = |event| match event {
+    if args[0] == "prepare-image" {
+        prepare_image(&request, &cancel, &print_event)?;
+    } else {
+        deployment::deploy(&request, &cancel, &print_event)?;
+    }
+    Ok(())
+}
+
+fn print_event(event: Event) {
+    match event {
         Event::Stage(stage, _) => println!("Stage: {}", stage.label()),
         Event::Progress(progress) => println!(
             "Progress: {} completed={} total={:?}",
@@ -92,13 +101,7 @@ fn run() -> cloud_runtime::Result<()> {
             }
         }
         _ => {}
-    };
-    if args[0] == "prepare-image" {
-        prepare_image(&request, &cancel, &emit)?;
-    } else {
-        deployment::deploy(&request, &cancel, &emit)?;
     }
-    Ok(())
 }
 
 fn prepare_image(

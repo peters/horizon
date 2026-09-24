@@ -261,6 +261,9 @@ fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
 
 fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     ui.label(DELETED_RESOURCES_MESSAGE);
+    if let Some(elapsed) = runtime.progress.ended_in(Stage::Deleted) {
+        ui.small(format!("Deleted in {}", cloud_runtime::progress::duration(elapsed)));
+    }
     if let Some(error) = runtime
         .error
         .as_ref()
@@ -293,14 +296,11 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> O
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
-    // A stage event can arrive before the deleted snapshot is replaced.
-    let redeploying = runtime.stage == Some(Stage::Deleted)
-        || (runtime.receiver.is_some()
-            && runtime
-                .state
-                .as_ref()
-                .is_some_and(|state| state.stage == Stage::Deleted));
-    if redeploying {
+    if deleting(runtime) {
+        deletion_progress(ui, id, runtime);
+        return None;
+    }
+    if deleted_or_redeploying(runtime) {
         return deleted_runtime_actions(ui, runtime);
     }
     if runtime.state.as_ref().is_some_and(|state| {
@@ -509,8 +509,52 @@ fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
     .clicked()
 }
 
-fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
-    for stage in Stage::ALL {
+fn deleting(runtime: &super::Runtime) -> bool {
+    runtime.receiver.is_some() && runtime.stage.is_some_and(|stage| Stage::DELETION.contains(&stage))
+}
+
+fn deleted_or_redeploying(runtime: &super::Runtime) -> bool {
+    // A stage event can arrive before the deleted snapshot is replaced.
+    runtime.stage == Some(Stage::Deleted)
+        || (runtime.receiver.is_some()
+            && runtime
+                .state
+                .as_ref()
+                .is_some_and(|state| state.stage == Stage::Deleted))
+}
+
+/// A running deletion replaces the deployment checklist and every other action.
+/// Cancel ends once the worker delete starts: a sent delete request cannot be recalled.
+fn deletion_progress(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.label(runtime.progress.elapsed().map_or_else(
+            || "Deleting cloud resources".to_owned(),
+            |elapsed| {
+                format!(
+                    "Deleting cloud resources · {}",
+                    cloud_runtime::progress::duration(elapsed)
+                )
+            },
+        ));
+    });
+    stage_rows(ui, runtime, &Stage::DELETION);
+    if let Some(detail) = runtime.progress.activity() {
+        ui.add_space(5.0);
+        ui.small(detail);
+    }
+    ui.add_space(8.0);
+    if runtime.stage == Some(Stage::ReleaseDevices)
+        && ui.button("Cancel operation").clicked()
+        && let Some(cancel) = &runtime.cancel
+    {
+        cancel.cancel();
+    }
+    verbose_output(ui, id, runtime);
+}
+
+fn stage_rows(ui: &mut egui::Ui, runtime: &super::Runtime, stages: &[Stage]) {
+    for &stage in stages {
         let current = runtime.stage == Some(stage);
         ui.label(
             RichText::new(runtime.progress.stage_label(stage))
@@ -522,21 +566,9 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
                 }),
         );
     }
-    if runtime.stage == Some(Stage::Ready)
-        && let Some(seconds) = runtime.state.as_ref().and_then(|state| state.ready_after_seconds)
-    {
-        ui.small(format!(
-            "Worker ready in {}",
-            horizon_core::cloud_runtime::progress::duration(std::time::Duration::from_secs(seconds))
-        ))
-        .on_hover_text(
-            "Time for the successful deployment attempt. Application startup and reconnect are measured separately.",
-        );
-    }
-    runtime.progress.render(ui);
-    for error in runtime.error.iter().chain(&runtime.remote_release_error) {
-        ui.colored_label(egui::Color32::LIGHT_RED, error);
-    }
+}
+
+fn verbose_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     egui::CollapsingHeader::new("Verbose output")
         .id_salt(("cloud-verbose", id))
         .show(ui, |ui| {
@@ -558,4 +590,30 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
             let max_offset = (log.content_size.y - log.inner_rect.height()).max(0.0);
             runtime.verbose_unpinned = log.state.offset.y + 1.0 < max_offset;
         });
+}
+
+fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
+    // A failed deletion keeps its own steps beside the error until another attempt starts.
+    let stages: &[Stage] = if runtime.progress.is_deletion() {
+        &Stage::DELETION
+    } else {
+        &Stage::ALL
+    };
+    stage_rows(ui, runtime, stages);
+    if runtime.stage == Some(Stage::Ready)
+        && let Some(seconds) = runtime.state.as_ref().and_then(|state| state.ready_after_seconds)
+    {
+        ui.small(format!(
+            "Worker ready in {}",
+            horizon_core::cloud_runtime::progress::duration(std::time::Duration::from_secs(seconds))
+        ))
+        .on_hover_text(
+            "Time for the successful deployment attempt. Application startup and reconnect are measured separately.",
+        );
+    }
+    runtime.progress.render(ui);
+    for error in runtime.error.iter().chain(&runtime.remote_release_error) {
+        ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
+    verbose_output(ui, id, runtime);
 }

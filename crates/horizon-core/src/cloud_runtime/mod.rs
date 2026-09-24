@@ -49,7 +49,8 @@ pub enum Event {
     Failed(String, std::time::Instant),
     Desktop(std::sync::Arc<tunnel::DesktopTunnel>),
     Browsers(Vec<horizon_browser_protocol::cloud_view::CloudViewState>),
-    Deleted,
+    /// When the worker thread saw the deletion finish, like `Ready` and `Failed`.
+    Deleted(std::time::Instant),
     Stopped(Box<state::Deployment>),
     Resumed,
     ClosedBrowsers(Vec<String>),
@@ -71,6 +72,10 @@ impl Event {
     pub fn failed(error: String) -> Self {
         Self::Failed(error, std::time::Instant::now())
     }
+    #[must_use]
+    pub fn deleted() -> Self {
+        Self::Deleted(std::time::Instant::now())
+    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -86,8 +91,17 @@ pub enum Stage {
     Stopped,
     Stopping,
     Deleted,
+    // Deletion steps are progress events only. Saving one fails, so older
+    // binaries never read a stage they do not know; the record goes straight to `Deleted`.
+    #[serde(skip)]
+    ReleaseDevices,
+    #[serde(skip)]
+    DeleteWorker,
+    #[serde(skip)]
+    DeleteStorage,
 }
 impl Stage {
+    pub const DELETION: [Self; 3] = [Self::ReleaseDevices, Self::DeleteWorker, Self::DeleteStorage];
     pub const ALL: [Self; 8] = [
         Self::Validate,
         Self::Build,
@@ -112,6 +126,9 @@ impl Stage {
             Self::Stopped => "Stopped",
             Self::Stopping => "Stop requested",
             Self::Deleted => "Worker deleted",
+            Self::ReleaseDevices => "Release hosted devices",
+            Self::DeleteWorker => "Delete worker",
+            Self::DeleteStorage => "Delete workspace storage",
         }
     }
 }

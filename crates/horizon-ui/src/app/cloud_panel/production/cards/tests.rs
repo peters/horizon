@@ -25,7 +25,12 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                     ..Default::default()
                 },
                 |ui| {
-                    for (id, confirmation) in [Confirmation::Stop, Confirmation::Delete].into_iter().enumerate() {
+                    let cases = [
+                        (Confirmation::Stop, false),
+                        (Confirmation::Delete, false),
+                        (Confirmation::None, true),
+                    ];
+                    for (id, (confirmation, deleting)) in cases.into_iter().enumerate() {
                         let mut runtime = super::super::Runtime {
                             stage: Some(Stage::Ready),
                             error: Some("Detailed retryable failure ".repeat(200)),
@@ -53,6 +58,21 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                             }),
                             ..Default::default()
                         };
+                        let _sender = deleting.then(|| {
+                            let (sender, receiver) = std::sync::mpsc::channel();
+                            runtime.receiver = Some(receiver);
+                            runtime.stage = Some(Stage::DeleteWorker);
+                            runtime.progress.stage(Stage::DeleteWorker, std::time::Instant::now());
+                            runtime
+                                .progress
+                                .update(horizon_core::cloud_runtime::progress::Progress::activity(
+                                    "Deleting the worker and confirming its removal ".repeat(40),
+                                ));
+                            runtime
+                                .logs
+                                .extend(std::iter::repeat_n("Detailed release output ".repeat(20), 40));
+                            sender
+                        });
                         let id = u32::try_from(id).unwrap();
                         let response = runtime_frame(ui, id, |ui| {
                             assert!(profile_details(ui, id, &launch, &runtime).is_none());
@@ -65,10 +85,11 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                 },
             )
             .discard_textures();
-        assert!(rects[0].bottom() <= rects[1].top());
+        assert!(rects.windows(2).all(|pair| pair[0].bottom() <= pair[1].top()));
     }
 }
 
+mod deletion;
 mod overlap;
 mod scrolling;
 
