@@ -176,9 +176,21 @@ impl ControllerBinding {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+/// Decode only through [`Self::parse`] so callers cannot bypass the wire-size bound.
+///
+/// ```compile_fail
+/// use horizon_cloud_protocol::signed::SignedIntent;
+/// let request: SignedIntent = serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Clone, Debug, Serialize)]
 pub struct SignedIntent {
+    intent: Intent,
+    signature: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EncodedIntent {
     intent: Intent,
     signature: Vec<u8>,
 }
@@ -207,7 +219,11 @@ impl SignedIntent {
         if bytes.len() > MAX_MESSAGE_BYTES {
             return Err(Error::Encoding);
         }
-        serde_json::from_slice(bytes).map_err(|_| Error::Encoding)
+        let encoded: EncodedIntent = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
+        Ok(Self {
+            intent: encoded.intent,
+            signature: encoded.signature,
+        })
     }
 
     /// Authenticate under the worker allocation lock, then validate the full project
