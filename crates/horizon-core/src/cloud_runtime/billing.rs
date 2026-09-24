@@ -89,22 +89,28 @@ pub fn fetch(settings: &Path, pod_id: &str, now: SystemTime, cancel: &Cancellati
     let days = provider.billing(pod_id, BucketSize::Day, first, today, cancel)?;
     let hours = provider.billing(pod_id, BucketSize::Hour, today, now, cancel)?;
     Ok(History {
-        buckets: combine(days, hours, today),
+        buckets: combine(days, hours, first, today, now),
         from: first,
     })
 }
 
-/// A window end may be inclusive, so each granularity keeps only its own span
-/// and no charge is read twice.
-fn combine(days: Vec<BillingBucket>, hours: Vec<BillingBucket>, today: SystemTime) -> Vec<BillingBucket> {
-    let starts = |bucket: &BillingBucket| cost::started_at(&bucket.time);
+/// Keeps day buckets that start in `first..today` and hour buckets that start in
+/// `today..now`. The provider may treat window ends as inclusive or return
+/// buckets outside them, so each granularity keeps only its own span: nothing is
+/// read twice, and nothing outside the window inflates the total or its coverage.
+fn combine(
+    days: Vec<BillingBucket>,
+    hours: Vec<BillingBucket>,
+    first: SystemTime,
+    today: SystemTime,
+    now: SystemTime,
+) -> Vec<BillingBucket> {
+    let within = |span: std::ops::Range<SystemTime>| {
+        move |bucket: &BillingBucket| cost::started_at(&bucket.time).is_some_and(|start| span.contains(&start))
+    };
     days.into_iter()
-        .filter(|bucket| starts(bucket).is_some_and(|start| start < today))
-        .chain(
-            hours
-                .into_iter()
-                .filter(|bucket| starts(bucket).is_some_and(|start| start >= today)),
-        )
+        .filter(within(first..today))
+        .chain(hours.into_iter().filter(within(today..now)))
         .collect()
 }
 
@@ -579,9 +585,34 @@ mod tests {
             bucket("2024-07-12T00:00:00Z", BucketSize::Hour, 0.69),
             bucket("2024-07-12T02:00:00+02:00", BucketSize::Hour, 0.69),
         ];
-        let combined = combine(days, hours, today);
+        let first = today.checked_sub(HISTORY).unwrap();
+        let combined = combine(days, hours, first, today, now);
         let kept: Vec<_> = combined.iter().map(|bucket| bucket.amount).collect();
         assert_eq!(kept, [12.0, 0.69, 0.69]);
+    }
+
+    #[test]
+    fn buckets_outside_the_requested_window_are_dropped() {
+        let now = at("2024-07-12T19:14:40.144Z");
+        let today = at("2024-07-12T00:00:00Z");
+        let first = at("2023-07-13T00:00:00Z");
+        let days = vec![
+            bucket("2023-07-12T00:00:00Z", BucketSize::Day, 40.0),
+            bucket("2023-07-13T00:00:00Z", BucketSize::Day, 1.0),
+            bucket("2024-07-11T00:00:00Z", BucketSize::Day, 2.0),
+        ];
+        let hours = vec![
+            bucket("2024-07-12T19:00:00Z", BucketSize::Hour, 0.25),
+            bucket("2024-07-12T19:14:40.144Z", BucketSize::Hour, 7.0),
+            bucket("2024-07-12T20:00:00Z", BucketSize::Hour, 9.0),
+        ];
+        let combined = combine(days, hours, first, today, now);
+        let kept: Vec<_> = combined.iter().map(|bucket| bucket.amount).collect();
+        assert_eq!(
+            kept,
+            [1.0, 2.0, 0.25],
+            "a day before the window and hours starting at or after now are not read"
+        );
     }
 
     #[test]
