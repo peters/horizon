@@ -23,6 +23,8 @@ const MAX_WRAP_PADDING: usize = 1;
 const URL_BREAK_CHARS: [char; 3] = ['/', '-', '?'];
 /// Delimiters that mark continuation text as part of a URL rather than prose.
 const URL_DELIMITERS: [char; 6] = ['/', '?', '#', '&', '=', '%'];
+/// Query and fragment syntax, the only URL evidence a path-shaped row can give.
+const URL_QUERY_DELIMITERS: [char; 5] = ['?', '#', '&', '=', '%'];
 /// Characters that join words inside a URL path segment.
 const URL_WORD_JOINERS: [char; 3] = ['-', '_', '.'];
 const SENTENCE_PUNCTUATION: [char; 5] = ['.', ',', ';', ':', '!'];
@@ -160,7 +162,9 @@ fn joint_after(grid: &Grid<Cell>, cols: usize, line: Line, join: RowJoin) -> Opt
 /// a row, so the continuation must hold URL delimiters and be too long to
 /// have fit on the segment's row. Line breakers that split URLs after
 /// punctuation leave a ragged edge instead; those rows join only when the
-/// continuation row is a single URL-shaped word.
+/// continuation row is a single URL-shaped word. A continuation that starts
+/// like a file path counts as URL text only when it carries query syntax, so
+/// a path printed below a URL stays clickable on its own.
 fn url_continues_on_next_row(upper: &Row<Cell>, lower: &Row<Cell>, cols: usize) -> bool {
     let (Some(upper_start), Some(upper_end), Some(lower_start), Some(lower_end)) = (
         first_content_column(upper, cols),
@@ -186,13 +190,20 @@ fn url_continues_on_next_row(upper: &Row<Cell>, lower: &Row<Cell>, cols: usize) 
 
     let segment = segment_start..upper_end + 1;
     let segment_is_row_content = only_marker_before(upper, upper_start, segment_start);
+    let continuation_is_path = starts_path(row_chars(lower, continuation.clone()));
     let continuation_is_row_content = continuation.end == lower_end + 1;
     let continuation_ends_sentence = SENTENCE_PUNCTUATION.contains(&lower[Column(continuation.end - 1)].c);
+    let delimiters: &[char] = if continuation_is_path {
+        &URL_QUERY_DELIMITERS
+    } else {
+        &URL_DELIMITERS
+    };
     let continuation_has_delimiters =
-        row_chars(lower, continuation.clone()).any(|character| URL_DELIMITERS.contains(&character));
+        row_chars(lower, continuation.clone()).any(|character| delimiters.contains(&character));
+    let continuation_is_url_word = !continuation_is_path && continuation_is_row_content && !continuation_ends_sentence;
     if cols - 1 - upper_end <= MAX_WRAP_PADDING {
         return if segment_is_row_content {
-            continuation_has_delimiters || (continuation_is_row_content && !continuation_ends_sentence)
+            continuation_has_delimiters || continuation_is_url_word
         } else {
             continuation_has_delimiters && segment.len() + continuation_len > cols - lower_start
         };
@@ -201,9 +212,10 @@ fn url_continues_on_next_row(upper: &Row<Cell>, lower: &Row<Cell>, cols: usize) 
     (segment_is_row_content || contains_scheme_separator(row_chars(upper, segment)))
         && URL_BREAK_CHARS.contains(&upper[Column(upper_end)].c)
         && continuation_is_row_content
-        && (continuation_has_delimiters
-            || row_chars(lower, continuation).any(|character| URL_WORD_JOINERS.contains(&character)))
         && !continuation_ends_sentence
+        && (continuation_has_delimiters
+            || (continuation_is_url_word
+                && row_chars(lower, continuation).any(|character| URL_WORD_JOINERS.contains(&character))))
 }
 
 /// Whether the row's first word is a list marker (`-`, `*`, `12.`) or ends a
@@ -262,6 +274,15 @@ fn is_marker(mut chars: impl Iterator<Item = char>) -> bool {
             }
             false
         }
+        _ => false,
+    }
+}
+
+/// Whether text starts like an absolute or home-relative file path.
+fn starts_path(mut chars: impl Iterator<Item = char>) -> bool {
+    match chars.next() {
+        Some('/') => true,
+        Some('~') => chars.next() == Some('/'),
         _ => false,
     }
 }
@@ -487,6 +508,28 @@ mod tests {
             assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");
             assert_eq!(url_at(&term, COLS, 1, 2), None, "next row {next:?}");
         }
+    }
+
+    #[test]
+    fn path_below_a_row_filling_url_stays_a_path() {
+        let first = format!("https://example.com/{}", "a".repeat(COLS - 20));
+        for next in ["/tmp/file.rs", "~/work/notes-v2.md"] {
+            let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
+
+            assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");
+            assert_eq!(url_at(&term, COLS, 1, 3), None, "next row {next:?}");
+        }
+    }
+
+    #[test]
+    fn url_broken_before_a_path_segment_with_a_query_joins() {
+        let first = format!("https://example.com/{}", "a".repeat(COLS - 20));
+        let term = term_with_rows(COLS, 4, &[first.clone(), "/authorize?client_id=1".to_string()]);
+
+        assert_eq!(
+            url_at(&term, COLS, 1, 3),
+            Some(format!("{first}/authorize?client_id=1"))
+        );
     }
 
     #[test]
