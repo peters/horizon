@@ -30,6 +30,13 @@ pub(super) struct Store {
     fail_sync_after: std::cell::Cell<Option<usize>>,
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        // A concurrent fork can retain the file description until exec closes it.
+        let _ = self.lock.unlock();
+    }
+}
+
 impl Store {
     pub(super) fn open(root: &Path) -> io::Result<Self> {
         let directory = open_directory(root)?;
@@ -176,4 +183,29 @@ fn open_directory(path: &Path) -> io::Result<File> {
     }
     private(&file.metadata()?)?;
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn dropping_store_releases_lock_even_when_another_descriptor_remains_open() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join(LOCK);
+        std::fs::write(&path, b"existing lock").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let inherited = store.lock.try_clone().unwrap();
+        assert!(Store::open(root.path()).is_err());
+        drop(store);
+        let reopened = Store::open(root.path()).unwrap();
+        assert!(Store::open(root.path()).is_err());
+        drop(inherited);
+        assert!(Store::open(root.path()).is_err());
+        drop(reopened);
+        assert!(Store::open(root.path()).is_ok());
+    }
 }
