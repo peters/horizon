@@ -254,3 +254,18 @@ fn closing_delimiter_that_balances_the_row_above_joins() {
 
     assert_eq!(url_at(&term, COLS, 1, 1), Some(format!("{first}bar)")));
 }
+
+#[test]
+fn closing_delimiter_balances_an_opener_two_rows_up() {
+    let first = format!("https://en.example.org/wiki/{}(", "x".repeat(COLS - 29));
+    let middle = "m".repeat(COLS);
+    let term = term_with_rows(COLS, 4, &[first.clone(), middle.clone(), "bar)".to_string()]);
+
+    for row in 0..3 {
+        assert_eq!(
+            url_at(&term, COLS, row, 1),
+            Some(format!("{first}{middle}bar)")),
+            "row {row}"
+        );
+    }
+}

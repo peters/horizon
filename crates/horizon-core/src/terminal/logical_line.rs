@@ -25,8 +25,9 @@ const URL_BREAK_CHARS: [char; 3] = ['/', '-', '?'];
 const URL_DELIMITERS: [char; 6] = ['/', '?', '#', '&', '=', '%'];
 /// Query and fragment syntax, the only URL evidence a path-shaped row can give.
 const URL_QUERY_DELIMITERS: [char; 5] = ['?', '#', '&', '=', '%'];
-/// Rows a path-shaped continuation may fill while searching for query syntax.
-const MAX_PATH_ROWS: usize = 4;
+/// Rows followed away from a joint for URL context: the query syntax below a
+/// path-shaped row, or the scheme and open delimiters above a segment.
+const MAX_URL_CONTEXT_ROWS: usize = 4;
 /// Characters that join words inside a URL path segment.
 const URL_WORD_JOINERS: [char; 3] = ['-', '_', '.'];
 const SENTENCE_PUNCTUATION: [char; 5] = ['.', ',', ';', ':', '!'];
@@ -190,16 +191,15 @@ fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool
     let segment_is_row_content = only_marker_before(upper, upper_start, segment_start);
     let continuation_is_path = starts_path(row_chars(lower, continuation.clone()));
     let continuation_is_row_content = continuation.end == lower_end + 1;
-    let segment_opens = unmatched_openers(row_chars(upper, segment.clone()));
-    let continuation_ends_sentence = word_ends_sentence(lower, &continuation, cols, segment_opens);
+    let segment_text = || segment_text_with_rows_above(grid, cols, line, segment_start);
+    let continuation_ends_sentence =
+        word_ends_sentence(lower, &continuation, cols, || unmatched_openers(segment_text().chars()));
     // A sentence's closing punctuation, such as the `?` of `Continue?`, is no
     // evidence of URL syntax.
     let continuation_body = continuation.start..continuation.end - usize::from(continuation_ends_sentence);
     let continuation_has_delimiters = if continuation_is_path {
         path_row_reaches_query(grid, cols, line + 1)
-            || (continuation_is_row_content
-                && !continuation_ends_sentence
-                && segment_in_file_url(grid, cols, line, segment_start))
+            || (continuation_is_row_content && !continuation_ends_sentence && segment_text().contains("file://"))
     } else {
         row_chars(lower, continuation_body).any(|character| URL_DELIMITERS.contains(&character))
     };
@@ -237,9 +237,9 @@ fn continuation_word(row: &Row<Cell>, segment_start: usize, cols: usize) -> Opti
 
 /// Whether a row that starts like a file path is URL text: its first word has
 /// query or fragment syntax, or it fills its row and wraps onto rows that
-/// reach such syntax within [`MAX_PATH_ROWS`] rows.
+/// reach such syntax within [`MAX_URL_CONTEXT_ROWS`] rows.
 fn path_row_reaches_query(grid: &Grid<Cell>, cols: usize, mut line: Line) -> bool {
-    for _ in 0..MAX_PATH_ROWS {
+    for _ in 0..MAX_URL_CONTEXT_ROWS {
         let row = &grid[line];
         let (Some(start), Some(end)) = (first_content_column(row, cols), last_content_column(row, cols)) else {
             return false;
@@ -306,8 +306,13 @@ fn is_prompt_with_command(chars: impl Iterator<Item = char>) -> bool {
 /// short of the wrap edge and ends in sentence punctuation, or in a question
 /// mark or a closing delimiter with no other URL syntax before it. Line
 /// breakers also split URLs after `?`, but such chunks carry other delimiters
-/// or joiners, and a closer that `segment_opens` left open balances the URL.
-fn word_ends_sentence(row: &Row<Cell>, word: &Range<usize>, cols: usize, segment_opens: [bool; 3]) -> bool {
+/// or joiners, and a closer that `segment_opens` reports open balances the URL.
+fn word_ends_sentence(
+    row: &Row<Cell>,
+    word: &Range<usize>,
+    cols: usize,
+    segment_opens: impl FnOnce() -> [bool; 3],
+) -> bool {
     if !ends_before_wrap_edge(word, cols) {
         return false;
     }
@@ -317,7 +322,7 @@ fn word_ends_sentence(row: &Row<Cell>, word: &Range<usize>, cols: usize, segment
     };
     let last = row[Column(word.end - 1)].c;
     if let Some(pair) = DELIMITER_PAIRS.iter().position(|(_, close)| *close == last) {
-        return !segment_opens[pair] && bare();
+        return bare() && !segment_opens()[pair];
     }
     if last == '?' {
         return bare();
@@ -398,38 +403,32 @@ fn is_marker(mut chars: impl Iterator<Item = char>) -> bool {
     }
 }
 
-/// Whether the URL segment starting at `segment_start` on row `line` belongs
-/// to a `file://` URL whose scheme is on this row or on the full-width rows
-/// that wrap into it, up to [`MAX_PATH_ROWS`] rows up.
-fn segment_in_file_url(grid: &Grid<Cell>, cols: usize, mut line: Line, mut segment_start: usize) -> bool {
-    for _ in 0..MAX_PATH_ROWS {
+/// The URL segment starting at `segment_start` on row `line`, preceded by the
+/// full-width rows of URL text that wrap into it, up to
+/// [`MAX_URL_CONTEXT_ROWS`] rows in all. It carries the URL's scheme and any
+/// delimiters a continuation might close.
+fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, mut segment_start: usize) -> String {
+    let mut text = String::new();
+    for _ in 0..MAX_URL_CONTEXT_ROWS {
         let row = &grid[line];
         let Some(end) = last_content_column(row, cols) else {
-            return false;
+            break;
         };
-        if row_chars(row, segment_start..end + 1)
-            .collect::<String>()
-            .contains("file://")
-        {
-            return true;
-        }
+        text.insert_str(0, &row_chars(row, segment_start..end + 1).collect::<String>());
         if first_content_column(row, cols) != Some(segment_start) || line <= grid.topmost_line() {
-            return false;
+            break;
         }
+        let above = &grid[line - 1];
+        let Some(above_start) = last_content_column(above, cols)
+            .filter(|&above_end| cols - 1 - above_end <= MAX_WRAP_PADDING)
+            .and_then(|above_end| url_segment_start(above, above_end))
+        else {
+            break;
+        };
         line -= 1;
-        let above = &grid[line];
-        let Some(above_end) = last_content_column(above, cols) else {
-            return false;
-        };
-        let Some(above_start) = url_segment_start(above, above_end) else {
-            return false;
-        };
-        if cols - 1 - above_end > MAX_WRAP_PADDING {
-            return false;
-        }
         segment_start = above_start;
     }
-    false
+    text
 }
 
 /// Whether text starts like an absolute or home-relative file path.
