@@ -515,7 +515,8 @@ fn accept_before(listener: &TcpListener, deadline: std::time::Instant) -> Option
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                // Accepted sockets inherit the listener's nonblocking mode.
+                // `accept` does not copy the listener's nonblocking flag on every
+                // platform. Force blocking mode so the timeouts below apply.
                 stream.set_nonblocking(false).unwrap();
                 return Some(stream);
             }
