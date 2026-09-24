@@ -191,12 +191,12 @@ fn connect(
     let Some(target) = target else {
         return Ok((Status::Missing, None));
     };
-    let Some(source) = source else {
-        return Ok((Status::Unavailable, None));
-    };
     if target.status != Status::Ready {
         return Ok((target.status, None));
     }
+    let Some(source) = source else {
+        return Ok((Status::Unavailable, None));
+    };
     if source.status != Status::Ready {
         return Ok((Status::Unavailable, None));
     }

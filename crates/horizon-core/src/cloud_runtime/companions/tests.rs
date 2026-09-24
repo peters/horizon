@@ -415,3 +415,13 @@ fn cancellation_is_observable_before_state_creation_and_after_remote_work() {
     assert!(grant.selected && !grant.source_disconnected && !grant.target_revoked);
     assert_eq!(grant.target_worker.as_deref(), Some("worker-target"));
 }
+
+#[test]
+fn stopped_target_remains_stopped_when_the_source_worker_is_missing() {
+    let mut fixture = Fixture::new();
+    fixture.transport.workers.remove("source");
+    fixture.transport.workers.get_mut("target").unwrap().status = Status::Stopped;
+    assert_eq!(fixture.select().rows[0].companion.status, Status::Stopped);
+    assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Stopped);
+    assert!(fixture.transport.calls.is_empty());
+}
