@@ -32,6 +32,9 @@ pub struct Deployment {
     pub stage: Stage,
     pub operation: CreateState,
     pub spec: Option<WorkerSpec>,
+    /// Retains private-image intent across failed preparation and settings changes.
+    #[serde(default)]
+    pub registry_generation: Option<String>,
     pub worker: Option<Worker>,
     pub sessions: Vec<Session>,
     #[serde(default)]

@@ -97,3 +97,8 @@ not a guarantee that the issuer has not revoked the token since. Deployment vali
 again. Docker with buildx and network access to the registry are required for image
 validation. The helper uses the workspace's existing MCP/runtime dependencies only
 for its development executable; no new runtime dependency is added to horizon-core.
+
+Deployment retries retain the selected private registry generation. Removing its
+binding cannot switch a prepared private image to ambient authentication: restore
+or rotate the binding before retrying. Existing worker reconciliation does not
+require the removed local credential.

@@ -187,6 +187,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         stage: Stage::Provision,
         operation: cloud_runtime::CreateState::Requested,
         spec: None,
+        registry_generation: None,
         worker: None,
         sessions: Vec::new(),
         source_ready: false,

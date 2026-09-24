@@ -53,7 +53,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         ));
     }
     let started = attempt_started(&state, started);
-    let mut registry = prepare_registry(request, &state)?;
+    let mut registry = prepare_registry(request, &store, &mut state)?;
     let runner = Runner {
         cancel,
         emit,
@@ -137,17 +137,37 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     finish_ready(state, &store, started, emit)
 }
 
-fn prepare_registry(request: &Request, state: &Deployment) -> Result<Option<super::registry::Prepared>> {
-    if state.resizable() {
-        super::registry::Prepared::for_image(
-            &request.settings,
-            &state.profile.image,
-            Some(&state.repository),
-            state.spec.is_none() && state.profile.build.is_some(),
-        )
-    } else {
-        Ok(None)
+fn prepare_registry(
+    request: &Request,
+    store: &Store,
+    state: &mut Deployment,
+) -> Result<Option<super::registry::Prepared>> {
+    if !state.resizable() {
+        return Ok(None);
     }
+    let binding = request
+        .settings
+        .registries
+        .as_ref()
+        .map(|config| config.select(&state.profile.image))
+        .transpose()?
+        .flatten();
+    if state.registry_generation.is_some() && binding.is_none() {
+        return Err(Error::Invalid(
+            "Private image registry binding is missing; restore or rotate it before retrying",
+        ));
+    }
+    if let Some(binding) = binding {
+        // Persist private intent before credential loading or image preparation can fail.
+        state.registry_generation = Some(binding.generation.clone());
+        store.save(state)?;
+    }
+    super::registry::Prepared::for_image(
+        &request.settings,
+        &state.profile.image,
+        Some(&state.repository),
+        state.spec.is_none() && state.profile.build.is_some(),
+    )
 }
 
 fn verify_registry(
@@ -349,6 +369,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             stage: Stage::Validate,
             operation: CreateState::Prepared,
             spec: None,
+            registry_generation: None,
             worker: None,
             sessions: Vec::new(),
             source_ready: false,
@@ -490,6 +511,91 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"registry-retry","repository":root.path(),"revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/team/worker","cpu":4,"memory_gb":8},
+            "stage":"Validate","operation":{"state":"prepared"},"spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":root.path().join("compute"),"ssh_identity_file":root.path().join("identity"),
+            "docker_config":root.path().join("docker"),"cpu_flavors":[],"gpu_types":[],
+            "registries":{"root":root.path().join("registry"),"bindings":[{
+                "repository":"registry.example/team/worker","generation":"generation1","read_only_confirmed":true,
+                "pull":{"username":"reader","secret_file":root.path().join("missing"),"expires_at":null},
+                "publish":null
+            }]}
+        }))
+        .unwrap();
+        let mut request = Request {
+            cloud_id: state.cloud_id.clone(),
+            repository: state.repository.clone(),
+            revision: state.revision.clone(),
+            profile: state.profile.clone(),
+            state_root: root.path().into(),
+            settings,
+        };
+        assert!(state.registry_generation.is_none(), "legacy state remains readable");
+        assert!(prepare_registry(&request, &store, &mut state).is_err());
+        state = store.load().unwrap().unwrap();
+        assert_eq!(state.registry_generation.as_deref(), Some("generation1"));
+        let config = request.settings.registries.take().unwrap();
+        for omitted in [
+            None,
+            Some(super::super::registry::Config {
+                root: config.root.clone(),
+                bindings: Vec::new(),
+            }),
+        ] {
+            request.settings.registries = omitted;
+            assert!(
+                matches!(prepare_registry(&request, &store, &mut state), Err(Error::Invalid(message)) if message.contains("binding is missing"))
+            );
+            state.spec = Some(WorkerSpec {
+                operation_id: state.cloud_id.clone(),
+                image_digest: format!("{}@sha256:{}", state.profile.image, "a".repeat(64)),
+                profile: state.profile.clone(),
+                public_key: "fixture".into(),
+                registry_auth_id: None,
+                gpu_types: Vec::new(),
+                cpu_flavors: Vec::new(),
+                data_centers: Vec::new(),
+            });
+            store.save(&state).unwrap();
+            state = store.load().unwrap().unwrap();
+            assert!(
+                matches!(prepare_registry(&request, &store, &mut state), Err(Error::Invalid(message)) if message.contains("binding is missing"))
+            );
+        }
+        request.settings.registries = Some(config);
+        request.settings.registries.as_mut().unwrap().bindings[0].generation = "generation2".into();
+        assert!(
+            prepare_registry(&request, &store, &mut state).is_err(),
+            "replacement must still load its credential"
+        );
+        assert_eq!(
+            store.load().unwrap().unwrap().registry_generation.as_deref(),
+            Some("generation2")
+        );
+        request.settings.registries = None;
+        state.operation = CreateState::Requested;
+        assert!(
+            prepare_registry(&request, &store, &mut state).unwrap().is_none(),
+            "reconciliation must not require a removed local grant"
+        );
+        state.operation = CreateState::Prepared;
+        state.registry_generation = None;
+        assert!(
+            prepare_registry(&request, &store, &mut state).unwrap().is_none(),
+            "legacy unbound images retain their behavior"
+        );
+    }
+
     #[test]
     #[cfg(unix)]
     fn completed_source_is_durable_before_session_configuration() {

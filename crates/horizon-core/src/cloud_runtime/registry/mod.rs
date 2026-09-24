@@ -76,7 +76,7 @@ impl Config {
         Ok(())
     }
 
-    fn select(&self, image: &str) -> Result<Option<&Binding>> {
+    pub(super) fn select(&self, image: &str) -> Result<Option<&Binding>> {
         self.validate()?;
         let first = image.split('/').next().unwrap_or_default();
         if horizon_cloud::valid_image(image)
