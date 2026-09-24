@@ -13,7 +13,8 @@ and project state. Provider operation IDs equal cloud IDs. The worker scripts us
 one `/workspace/repository.git`, `/workspace/home`, capability manifest, browser
 host and desktop. Changing only allocation lookup would overwrite sibling source,
 credentials and tools. A per-cloud local file lock cannot serialize two projects
-or controllers on different machines.
+or independent local controllers. The initial shared mode has one owning host;
+remote-controller enrollment and cross-machine mutation are out of scope.
 
 The first shared mode supports one RunPod CPU worker and mutually trusted projects
 of the same user. Dedicated placement remains the default. Sharing has a common
@@ -195,16 +196,40 @@ journal generation, including while the worker is unreachable. Test restoring an
 old same-path journal after a completed stop/resume cycle, plus every registration
 advancement crash boundary.
 
-Only that controller may invoke provider lifecycle operations; other
-machines can request worker-side project operations but cannot stop, resume or
-delete compute. The owner holds its OS allocation lock across provider intent,
+Only that controller may invoke provider or worker project management mutations
+(membership, lifecycle, source/credential provisioning and session/route allocation). All local
+UI, CLI and MCP clients route through the same core controller, canonical journals
+and locks. Apply calling-workspace/agent ownership checks before resolving the
+immutable project/session binding, then sign worker requests with the registered
+controller credential. The signature binds protocol version, allocation, project,
+immutable session/workspace/cloud tuple, operation ID, action/payload fingerprint
+and expected manifest revision. The worker verifies the pinned key and every
+target's project ownership under its allocation lock before recording intent or
+returning a receipt. Reusing an operation ID with a different fingerprint is
+rejected. Session, route, process and credential targets cannot address sibling
+namespaces through caller-supplied IDs. Read/status requests follow the same
+project ownership checks and return no credential material. Local callers never
+receive the controller signing key through the public API. Already admitted worker
+supervision and ordinary project tool actions continue under persisted project
+capability grants while every client is disconnected. They cannot mint management
+authority or bypass signed management endpoints.
+
+Other machines may display copied presentation state, but cannot use it to mutate
+or reconnect to shared worker projects. Report an owning-host requirement; never
+auto-enroll, infer authority from shared SSH access, or fall back to another
+controller. Cross-machine project control, controller enrollment and ownership
+transfer require a separate design. Losing the registered signing credential
+blocks worker mutations as well as provider mutations; it never permits replacing
+the worker's pinned controller key. The legacy dedicated compatibility path below
+keeps its existing single-host mechanism. The owner holds its OS allocation lock
+across provider intent,
 I/O and verified completion. Uncertainty leaves a durable pending operation that
 blocks any successor action after a crash. There is no automatic controller
 transfer or recovery from a copied journal; loss of the owning journal blocks
 provider mutations pending a separately designed ownership-recovery procedure.
 This is a cooperative same-user contract, not protection against arbitrary use
 of the provider account outside Horizon. The worker manifest serializes membership
-across machines. Never hold two project
+across local clients and survives every client disconnect. Never hold two project
 locks while requesting an allocation lock: acquire allocation then project lock,
 and communicate through bounded worker commands without lock-order inversions.
 
@@ -394,6 +419,8 @@ structured incompatibility, pending operation, lost-worker and resource failure
 reasons. The current `cloud_deploy` example and browser-only MCP are not equivalent
 public coverage; sharing must not ship with UI-only attachment. Apply existing
 calling-workspace/agent ownership checks before resolving project references.
+All three interfaces enforce the same owning-host requirement; this delivery does
+not add a remotely callable controller service or remote-client enrollment.
 
 ## Alternatives and consequences
 
@@ -420,6 +447,8 @@ Cloud Workspaces contract.
 3. Add worker-authoritative membership, fenced actions and project namespaces in
    focused slices; test conflicting controllers, lost replies, cancellation,
    port/desktop reservation and sibling preservation before host integration.
+   Reject a copied journal or project binding on a non-owning machine, mismatched
+   project targets and unsigned worker commands before any project side effect.
    Crash before/after each bootstrap write, lose the initialization reply and
    remove an initialized manifest: only proven pre-admission bootstrap can finish
    an empty manifest; lost membership must never be replaced with an empty set.
