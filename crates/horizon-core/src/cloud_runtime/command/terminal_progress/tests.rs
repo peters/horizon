@@ -3,6 +3,60 @@ use horizon_cloud::Cancellation;
 use std::cell::RefCell;
 
 #[test]
+fn transfers_remove_inherited_auth_without_changing_the_parent_environment() {
+    const CHILD: &str = "HORIZON_TRANSFER_ENV_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cloud_runtime::command::terminal_progress::tests::transfers_remove_inherited_auth_without_changing_the_parent_environment",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("DOCKER_AUTH_CONFIG", "synthetic-ambient-auth")
+            .env("HORIZON_TRANSFER_REMOVE", "synthetic-inherited-value")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let literal = "literal spaces ' \" ; $(exit 9)";
+    for kind in [Transfer::Image, Transfer::Pull, Transfer::File(1)] {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                "test -t 1 && test -z \"${DOCKER_AUTH_CONFIG+x}\" && test -z \"${HORIZON_TRANSFER_REMOVE+x}\" && test \"$HORIZON_TRANSFER_KEEP\" = \"$1\" && test \"$PWD\" = \"$2\"",
+                "transfer",
+                literal,
+                directory.to_str().unwrap(),
+            ])
+            .current_dir(&directory)
+            .env("HORIZON_TRANSFER_KEEP", literal)
+            .env_remove("DOCKER_AUTH_CONFIG")
+            .env_remove("HORIZON_TRANSFER_REMOVE");
+        runner
+            .transfer("upload", &command, kind, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(std::env::var("DOCKER_AUTH_CONFIG").unwrap(), "synthetic-ambient-auth");
+        assert_eq!(
+            std::env::var("HORIZON_TRANSFER_REMOVE").unwrap(),
+            "synthetic-inherited-value"
+        );
+    }
+}
+
+#[test]
 fn real_terminal_exposes_transfer_counters_and_preserves_exit_failures() {
     let cancel = Cancellation::default();
     let events = RefCell::new(Vec::new());
@@ -13,6 +67,7 @@ fn real_terminal_exposes_transfer_counters_and_preserves_exit_failures() {
         secrets: vec!["synthetic-secret".into()],
     };
     let mut command = Command::new("sh");
+    command.env_remove("DOCKER_AUTH_CONFIG");
     command.args([
         "-c",
         "test -t 1 || exit 9; printf 'aaaaaaaaaaaa: Pushing [==>] 2MB/10MB\r\nsynthetic-secret\r\n'; sleep 0.4; exit 7",
@@ -48,6 +103,7 @@ fn cancellation_stops_the_owned_transfer_promptly() {
         secrets: Vec::new(),
     };
     let mut command = Command::new("sh");
+    command.env_remove("DOCKER_AUTH_CONFIG");
     command.args(["-c", "sleep 30 & printf 'transfer-started %s\r\n' \"$!\"; wait"]);
     let started = Instant::now();
     assert!(matches!(

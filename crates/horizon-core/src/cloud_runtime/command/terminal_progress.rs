@@ -107,13 +107,37 @@ fn options(command: &Command) -> Result<TerminalSpawnOptions> {
             .ok_or(Error::Invalid("Transfer command is not UTF-8"))
     };
     let mut env = HashMap::from([("TERM".into(), "xterm-256color".into())]);
+    let mut removals = Vec::new();
     for (key, value) in command.get_envs() {
-        let value = value.ok_or(Error::Invalid("Transfer environment removal is unsupported"))?;
-        env.insert(text(key)?, text(value)?);
+        if let Some(value) = value {
+            env.insert(text(key)?, text(value)?);
+        } else {
+            removals.push(text(key)?);
+        }
     }
+    let program = text(command.get_program())?;
+    let args = command.get_args().map(text).collect::<Result<Vec<_>>>()?;
+    let (program, args) = if removals.is_empty() {
+        (program, args)
+    } else {
+        // The PTY API only supports environment additions. env removes bindings
+        // in the owned child, then execs the transfer without a shell or parent mutation.
+        #[cfg(unix)]
+        {
+            let mut prefix = Vec::new();
+            for key in removals {
+                prefix.extend(["-u".into(), key]);
+            }
+            prefix.extend(["--".into(), program]);
+            prefix.extend(args);
+            ("/usr/bin/env".into(), prefix)
+        }
+        #[cfg(not(unix))]
+        return Err(Error::Invalid("Transfer environment removal requires a Unix host"));
+    };
     Ok(TerminalSpawnOptions {
-        program: text(command.get_program())?,
-        args: command.get_args().map(text).collect::<Result<Vec<_>>>()?,
+        program,
+        args,
         cwd: command.get_current_dir().map(std::path::Path::to_path_buf),
         rows: 128,
         cols: 200,
