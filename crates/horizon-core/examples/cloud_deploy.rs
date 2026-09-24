@@ -126,6 +126,7 @@ fn prepare_image(
     let snapshot = repository::snapshot(&request.repository, &request.revision, root.path(), &runner)?;
     let images = cloud_runtime::image::Images {
         docker_host: request.settings.docker_host.as_deref(),
+        isolated_registry: registry.is_some(),
         docker_config: registry
             .as_ref()
             .map_or(request.settings.docker_config.as_path(), |registry| {

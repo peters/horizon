@@ -164,12 +164,17 @@ pub(super) fn verify_github_scopes(scopes: Option<&str>) -> Result<()> {
 // Issuer policy follows the DNS hostname, including equivalent case, port and FQDN spellings.
 pub(super) fn registry_host(repository: &str) -> String {
     let authority = repository.split('/').next().unwrap_or_default();
-    authority
+    let host = authority
         .split(':')
         .next()
         .unwrap_or_default()
         .trim_end_matches('.')
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+    if host == "index.docker.io" {
+        "docker.io".into()
+    } else {
+        host
+    }
 }
 
 pub(super) fn is_github_registry(repository: &str) -> bool {

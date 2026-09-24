@@ -314,3 +314,45 @@ fn status_exposes_configured_expiry_before_verification_without_mislabeling_reti
     assert_eq!(current.configured_pull_expiry.as_deref(), Some("2030-01-01T00:00:00Z"));
     assert!(status("previous").configured_pull_expiry.is_none());
 }
+
+#[test]
+fn docker_hub_aliases_and_shorthand_cannot_escape_explicit_bindings() {
+    for bound in ["docker.io/team/worker", "index.docker.io/team/worker"] {
+        let (_root, mut settings) = fixture();
+        binding(&mut settings).repository = bound.into();
+        let config = settings.registries.as_ref().unwrap();
+        assert!(config.select(&format!("{bound}:latest")).unwrap().is_some());
+        for image in [
+            "docker.io/team/other:latest",
+            "index.docker.io/team/other:latest",
+            "team/worker:latest",
+            "ubuntu:latest",
+        ] {
+            assert!(config.select(image).is_err(), "{bound}: {image}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelled_pull_probe_preserves_cancellation_instead_of_reporting_authentication_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, settings) = fixture();
+    let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
+    let script = root.path().join("slow-probe");
+    std::fs::write(&script, "#!/bin/sh\nsleep 5\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let cancel = Cancellation::default();
+    let trigger = cancel.clone();
+    let cancellation = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        trigger.cancel();
+    });
+    let error = prepared
+        .verify_image_with(&image(), &cancel, Command::new(&script))
+        .unwrap_err();
+    cancellation.join().unwrap();
+    assert!(matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled)));
+    assert!(!prepared.verified);
+    assert!(prepared.journal.validation().is_none());
+}

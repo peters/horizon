@@ -237,6 +237,7 @@ fn validate_allocation_image(
     if state.operation == CreateState::Prepared {
         Images {
             docker_host: request.settings.docker_host.as_deref(),
+            isolated_registry: registry.is_some(),
             docker_config: registry.map_or(request.settings.docker_config.as_path(), |registry| {
                 registry.docker_config(false)
             }),
@@ -376,6 +377,7 @@ fn prepare_image(
     };
     let images = Images {
         docker_host: request.settings.docker_host.as_deref(),
+        isolated_registry: registry.is_some(),
         docker_config: registry.map_or(request.settings.docker_config.as_path(), |registry| {
             registry.docker_config(state.profile.build.is_some())
         }),

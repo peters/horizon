@@ -80,7 +80,7 @@ impl Config {
             if self
                 .bindings
                 .iter()
-                .any(|binding| binding.repository.starts_with("docker.io/"))
+                .any(|binding| credentials::registry_host(&binding.repository) == "docker.io")
             {
                 return Err(Error::Invalid(
                     "Use an explicit docker.io repository when Docker Hub bindings are configured",
@@ -269,7 +269,10 @@ impl Prepared {
         let output = runner.run("Registry pull validation", command
             .arg("--config").arg(self.pull.config.path())
             .args(["buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"]), Duration::from_secs(60))
-            .map_err(|_| Error::Invalid("Worker pull credential cannot read the immutable image; check expiry, scope and image availability"))?;
+            .map_err(|error| match error {
+                Error::Provider(horizon_cloud::CloudError::Cancelled) => error,
+                _ => Error::Invalid("Worker pull credential cannot read the immutable image; check expiry, scope and image availability"),
+            })?;
         let manifest: serde_json::Value = serde_json::from_str(&output).map_err(|_| Error::Json)?;
         if image.split_once('@').map(|(_, digest)| digest) != manifest["digest"].as_str() {
             return Err(Error::Invalid("Registry returned a different image digest"));
