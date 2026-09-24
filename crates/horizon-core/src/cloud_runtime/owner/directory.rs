@@ -63,7 +63,7 @@ impl Directory {
                     openat(
                         &directory,
                         name,
-                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                         Mode::empty(),
                     )
                     .map_err(std::io::Error::from)?,
@@ -81,7 +81,7 @@ impl Directory {
             let fd = openat(
                 &self.file,
                 name,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .map_err(std::io::Error::from)?;
@@ -114,7 +114,7 @@ impl Directory {
             let fd = openat(
                 &self.file,
                 &staged,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::RUSR | Mode::WUSR,
             )
             .map_err(std::io::Error::from)?;
@@ -134,5 +134,20 @@ impl Directory {
             let _ = name;
             Err(Error::Ownership)
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn retained_directory_is_not_inherited_by_executed_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = Directory::open(&temp.path().canonicalize().unwrap()).unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&directory.file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
     }
 }
