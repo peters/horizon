@@ -546,6 +546,11 @@ credential binding, runtime activation and sharing remain integration work. `dep
 per-cloud lock; explicit cleanup and local removal account for both resources.
 `state` defines and persists the deployment aggregate; `state::replacement` owns its
 journaled image-replacement state machine and the transition checks.
+`deployment::replacement` rebuilds a dedicated cloud's image from its latest committed
+recipe, drives the journaled switch of its bound worker, settles an interrupted switch
+on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
+SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
+tested offline.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate

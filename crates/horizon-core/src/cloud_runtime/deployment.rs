@@ -1,10 +1,11 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod readiness;
 mod redeploy;
+pub mod replacement;
 pub(super) mod storage;
 
 use super::{
-    Error, Event, Result, Stage,
+    Error, Event, Result, Stage, WorkerContract,
     command::Runner,
     image::Images,
     repository,
@@ -17,6 +18,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+const RELAUNCH: Duration = Duration::from_mins(1);
 pub struct Request {
     pub cloud_id: String,
     pub repository: PathBuf,
@@ -55,7 +57,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     if assign_requested_size(request, &mut state)? {
         store.save(&state)?;
     }
-    state.refuse_unsettled_replacement()?;
+    replacement::settle(&provider, &store, &mut state, cancel)?;
     let started = attempt_started(&state, started);
     let mut registry = prepare_registry(request, &store, &mut state)?;
     let runner = Runner {
@@ -110,7 +112,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         "Requesting or reconciling worker capacity",
     )));
     provision(&provider, &store, &mut state, &spec, cancel, emit)?;
-    let connection = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
+    let (connection, contract) = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
     if !state.source_ready {
         state.stage = Stage::Worktrees;
         store.save(&state)?;
@@ -138,6 +140,8 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         store.arm_browserstack(&mut state)?;
         browser_auth.install(&connection, &runner)?;
     }
+    let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
+    replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
     finish_ready(state, &store, started, emit)
 }
 
@@ -624,6 +628,11 @@ fn request_detail(emit: &dyn Fn(Event)) -> impl FnMut(horizon_cloud::Progress) {
 /// # Errors
 /// Refuses unless the replacement was requested, and reports persistence failures.
 pub fn commit_replacement(store: &Store, state: &mut Deployment) -> Result<OperationId> {
+    commit_with(store, state, || Ok(()))
+}
+
+/// `rebound` runs between the storage and deployment writes.
+fn commit_with(store: &Store, state: &mut Deployment, rebound: impl FnOnce() -> Result<()>) -> Result<OperationId> {
     let previous = state
         .spec
         .clone()
@@ -635,6 +644,7 @@ pub fn commit_replacement(store: &Store, state: &mut Deployment) -> Result<Opera
         .as_ref()
         .ok_or(Error::Invalid("Missing worker specification"))?;
     storage::rebind(store, &previous, next)?;
+    rebound()?;
     store.save(&committed)?;
     *state = committed;
     Ok(operation)
@@ -1043,7 +1053,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn reconnect_refuses_an_image_update_that_may_be_in_flight() {
+    fn reconnect_observes_an_image_update_that_may_be_in_flight() {
         let root = tempfile::tempdir().unwrap();
         let mut key = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         std::io::Write::write_all(&mut key, b"synthetic-test-key").unwrap();
@@ -1084,14 +1094,18 @@ mod tests {
                 registry_generation: None,
             })
             .unwrap();
-        let pending = |error: &Error| matches!(error, Error::Invalid(message) if *message == super::super::state::REPLACEMENT_PENDING);
+        // Cancelled, so the provider observation stops before sending a request.
+        let cancel = Cancellation::default();
+        cancel.cancel();
         for requested in [false, true] {
             if requested {
                 state.request_replacement().unwrap();
             }
             Store::lock(&request.state_root).unwrap().save(&state).unwrap();
-            let error = deploy(&request, &Cancellation::default(), &|_| {}).unwrap_err();
-            assert_eq!(pending(&error), requested, "{error}");
+            let error = deploy(&request, &cancel, &|_| {}).unwrap_err();
+            // Only an update that may have been sent is settled through the provider.
+            let observed = matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled));
+            assert_eq!(observed, requested, "{error}");
             let saved = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
             assert_eq!(saved.image_replacement, state.image_replacement);
             assert_eq!(saved.stage, state.stage);

@@ -1,5 +1,5 @@
 //! One deadline for provider inspection, SSH probes and retry delays.
-use super::{Connection, Error, Event, Request, Result, Runner, Stage, Store};
+use super::{Connection, Error, Event, Request, Result, Runner, Stage, Store, WorkerContract};
 use horizon_cloud::{Cancellation, Worker, WorkerSpec, runpod::RunPod};
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,7 @@ pub(super) fn wait(
     runner: &Runner<'_>,
     state: &mut super::Deployment,
     spec: &WorkerSpec,
-) -> Result<Connection> {
+) -> Result<(Connection, WorkerContract)> {
     let deadline = Deadline(Instant::now() + Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds)));
     state.stage = Stage::Readiness;
     store.save(state)?;
@@ -51,11 +51,8 @@ pub(super) fn wait(
                 (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
                     "Waiting for SSH and worker services",
                 )));
-                if connection
-                    .ready(runner, &capabilities, deadline.remaining(runner.cancel)?)
-                    .is_ok()
-                {
-                    return Ok(Some(connection));
+                if let Ok(contract) = connection.ready(runner, &capabilities, deadline.remaining(runner.cancel)?) {
+                    return Ok(Some((connection, contract)));
                 }
             } else {
                 (runner.emit)(Event::Progress(super::super::progress::Progress::activity(

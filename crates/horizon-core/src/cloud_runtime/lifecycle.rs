@@ -37,12 +37,12 @@ pub fn reconcile(
 ) -> Result<ReconciledDeployment> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
-    state.refuse_unsettled_replacement()?;
+    let provider = RunPod::new(settings.credential()?);
+    super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
-    let provider = RunPod::new(settings.credential()?);
     let mut operation = state.operation.clone();
     let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
         if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
@@ -259,8 +259,8 @@ mod tests {
             assert!(refused(&stop(&root, &settings, &cancel)));
             assert!(refused(&resume(&root, &settings, &cancel)));
             assert!(refused(&revoke_browserstack(&root, &settings, &cancel)));
-            // The provider check reads the worker as recorded until an update may be in flight.
-            assert_eq!(refused(&reconcile(&root, &settings, None, &cancel)), requested);
+            // The provider check needs the provider, which these settings cannot reach.
+            assert!(reconcile(&root, &settings, None, &cancel).is_err());
             assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), saved);
         }
     }
