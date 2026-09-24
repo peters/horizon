@@ -46,6 +46,13 @@ def capabilities(value):
         result['browserstack'] = {'provider': provider, 'targets': sorted(set(targets)), 'local_ports': sorted(set(ports))}
     return result
 
+# Semantic Versioning 2.0.0: no leading zeros in numeric core or pre-release
+# identifiers, and no empty dot-separated identifiers.
+SEMVER = re.compile(
+    r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    r'(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+    r'(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?')
+
 def recorded_versions():
     path = Path('/etc/horizon-worker/agent-versions.json')
     if not path.exists():
@@ -53,7 +60,7 @@ def recorded_versions():
     value = json.loads(path.read_text())
     if not isinstance(value, dict) or any(
             agent not in {'codex', 'claude', 'grok'} or not isinstance(version, str)
-            or len(version) > 64 or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?', version)
+            or len(version) > 64 or not SEMVER.fullmatch(version)
             for agent, version in value.items()):
         raise ValueError('Invalid recorded agent versions')
     return value

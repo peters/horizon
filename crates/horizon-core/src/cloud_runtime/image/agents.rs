@@ -182,18 +182,20 @@ fn valid_version(value: &str) -> bool {
     let numeric = |part: &str| {
         !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()) && (part == "0" || !part.starts_with('0'))
     };
-    let identifiers = |part: &str| {
-        part.split('.')
-            .all(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-    };
+    let identifier = |id: &str| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    // Numeric pre-release identifiers take no leading zeros; build identifiers may.
+    let prerelease_identifier = |id: &str| identifier(id) && (!id.bytes().all(|b| b.is_ascii_digit()) || numeric(id));
     let (prerelease, build) = suffix
         .split_once('+')
         .map_or((suffix, None), |(pre, build)| (pre, Some(build)));
     let parts = core.split('.').collect::<Vec<_>>();
     parts.len() == 3
         && parts.iter().all(|part| numeric(part))
-        && (prerelease.is_empty() || prerelease.strip_prefix('-').is_some_and(identifiers))
-        && build.is_none_or(identifiers)
+        && (prerelease.is_empty()
+            || prerelease
+                .strip_prefix('-')
+                .is_some_and(|pre| pre.split('.').all(prerelease_identifier)))
+        && build.is_none_or(|build| build.split('.').all(identifier))
 }
 
 #[cfg(test)]
@@ -339,6 +341,9 @@ mod tests {
             "1.0.0-rc-1",
             "1.0.0+build.5",
             "1.0.0-0.3.7+x",
+            "1.0.0-x.7.z.92",
+            "1.0.0-0a",
+            "1.0.0+001",
         ] {
             assert!(valid_version(version), "{version}");
         }
@@ -353,6 +358,9 @@ mod tests {
             "1.2.3-",
             "1.2.3+",
             "1.2.3-a..b",
+            "1.2.3-01",
+            "1.2.3-rc.01",
+            "1.2.3+a..b",
             "1.2.3 ",
             "1.2.3\n",
             "1.2.3;id",

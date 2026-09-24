@@ -149,7 +149,9 @@ class CapabilitiesTests(unittest.TestCase):
         reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
         for record in [{'codex': '0.156.1'}, [], {'claude': '2.1.281', 'codex': '$(id)'},
                        {'claude': '2.1.281', 'codex': '0.156.1', 'other': '1.0.0'},
-                       {'claude': '2.1.281', 'codex': '0.156.1-'}, {'claude': '2.1.281', 'codex': 156}]:
+                       {'claude': '2.1.281', 'codex': '0.156.1-'}, {'claude': '2.1.281', 'codex': 156},
+                       {'claude': '2.1.281', 'codex': '01.2.3'}, {'claude': '2.1.281', 'codex': '1.2.3-01'},
+                       {'claude': '2.1.281', 'codex': '1.2.3-a..b'}, {'claude': '2.1.281', 'codex': '1.2.3+a..b'}]:
             self.write('/etc/horizon-worker/agent-versions.json', record)
             status, _, commands = self.run_check(reported=reported)
             self.assertEqual(status, 1, record)
