@@ -12,18 +12,31 @@ copyright notices when redistributing the image.
   `/usr/local/rustup/toolchains/`. Node retains its license and third-party
   notices under `/usr/local/share/licenses/node/`; package licenses remain in
   `/usr/local/lib/node_modules/`.
-- The unmodified agent clients are pinned in the installer. The Apache-2.0
+- The unmodified agent clients are the releases resolved for each build,
+  recorded in `/etc/horizon-worker/agent-versions.json`. Builds that request no
+  release install the reviewed releases named in the installer. The Apache-2.0
   client retains its package license. Preinstalling the other client requires
   the applicable Commercial Terms, an unmodified binary, unrestricted built-in
   authentication, and each end user's own account and billing. See
   https://code.claude.com/docs/en/legal-and-compliance . No credentials are
   supplied with these images. Supplemental bundled-client notices are retained
-  under `/usr/local/share/licenses/agent-client/`. Exact source archives for the
-  bundled sandbox helper and native voice libraries, including the corresponding
-  build scripts, are under `/usr/local/share/sources/agent-components/`. Its
-  manifest records immutable source identities and verified archive checksums.
-  Preserve these archives with the binaries; the voice libraries remain separate
-  replaceable shared objects. Other component terms continue to apply.
+  under `/usr/local/share/licenses/agent-client/`, with the exact source revision
+  in its `SOURCE` file. Exact source archives for the bundled sandbox helper and
+  native voice libraries, including the corresponding build scripts, are under
+  `/usr/local/share/sources/agent-components/`. Its manifest records immutable
+  source identities and verified archive checksums. Preserve these archives with
+  the binaries; the voice libraries remain separate replaceable shared objects.
+  Other component terms continue to apply.
+- The Apache-2.0 client's sources and notices are derived from the installed
+  release. Its `rust-v<version>` tag identifies the source revision, whose
+  archive is retained with its checksum recorded. The voice-library archives come
+  from that revision's `third_party/voice/sources.json` and libcap from its musl
+  build script, each verified against the checksum listed there. The client,
+  sandbox and terminal notices come from the revision archive; the ripgrep and
+  zsh notices follow the revisions that release bundles. If a release lacks that
+  layout, the build warns and installs the last reviewed release with its
+  reviewed sources and notices instead. A checksum mismatch or failed download
+  stops the build, so the client never ships without its matching sources.
 - Chromium, its common files and sandbox, libdav1d6 and libjpeg62-turbo come
   from signed Debian and security snapshots dated 2026-09-22. The exact versions are pinned
   in the recipes; their copyright and source information remain under

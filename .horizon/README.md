@@ -12,6 +12,21 @@ excluded from the advertised capabilities even though its CLI remains installed
 in the tooling image. Enable it only after normal protected execution passes on
 a compatible runtime; broader agent qualification remains tracked in issue #813.
 
+Horizon looks up the newest Codex and Claude Code releases before each image
+build and passes them as `HORIZON_CODEX_VERSION` and `HORIZON_CLAUDE_VERSION`.
+Each agent installs in its own layer after the toolchain layer, Claude last
+because it changes most often, so a new release rebuilds only that agent's layer
+and the steps after it. Each layer checks that the agent reports the release it
+installed and records it in `/etc/horizon-worker/agent-versions.json`. Codex
+installs only together with the corresponding sources derived from its release
+tag, as described in [THIRD-PARTY.md](THIRD-PARTY.md). If a release no longer
+has the source layout that derivation reads, the build prints a `WARNING` and
+installs the last verified Codex, 0.155.1, instead; review the pin in
+`retain-component-sources.py` then. A checksum mismatch or failed download stops
+the build. Manual builds without these arguments install Codex 0.155.1 and
+Claude Code 2.1.278, so they stay reproducible. After changing the derivation,
+run `python3 -B .horizon/test_retain_component_sources.py`.
+
 The public images target `ghcr.io/peters/horizon-development`. Configure provider
 credentials, GPU selection and publishing credentials in machine-local settings.
 Repository YAML cannot choose credentials. The recipes use only public upstream
