@@ -560,21 +560,23 @@ fn card_falls_back_to_the_hourly_rate_without_a_live_run() {
     assert!(cost_texts(&super::super::Runtime::default(), std::time::Duration::ZERO).is_empty());
 }
 
+/// The repaint delay a runtime requests after its first idle passes.
+fn delay(runtime: &mut super::super::Runtime) -> std::time::Duration {
+    let ctx = egui::Context::default();
+    // A new context repaints its first passes immediately.
+    for _ in 0..2 {
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+    }
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        runtime.poll_release_and_repaint(ui.ctx());
+    })
+    .discard_textures()
+    .viewport_output[&egui::ViewportId::ROOT]
+        .repaint_delay
+}
+
 #[test]
 fn only_a_ready_running_worker_schedules_the_one_second_refresh() {
-    let delay = |runtime: &mut super::super::Runtime| {
-        let ctx = egui::Context::default();
-        // A new context repaints its first passes immediately.
-        for _ in 0..2 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
-        }
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            runtime.poll_release_and_repaint(ui.ctx());
-        })
-        .discard_textures()
-        .viewport_output[&egui::ViewportId::ROOT]
-            .repaint_delay
-    };
     let mut running = cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({})));
     // egui subtracts the expected frame time from the requested delay.
     let refresh = delay(&mut running);
@@ -589,4 +591,189 @@ fn only_a_ready_running_worker_schedules_the_one_second_refresh() {
     ] {
         assert!(delay(&mut idle) > std::time::Duration::from_secs(60));
     }
+}
+
+/// Two completed charges and a partial latest hour that the run has been filling since 19:14:40.
+fn billing() -> Vec<horizon_core::cloud_runtime::billing::BillingBucket> {
+    use horizon_core::cloud_runtime::billing::{BillingBucket, BucketSize};
+    [
+        ("2024-07-11T00:00:00Z", BucketSize::Day, 2.0),
+        ("2024-07-12T18:00:00Z", BucketSize::Hour, 0.69),
+        ("2024-07-12T19:00:00Z", BucketSize::Hour, 0.1),
+    ]
+    .into_iter()
+    .map(|(time, size, amount)| BillingBucket {
+        time: time.into(),
+        size,
+        amount,
+        time_billed_ms: 0,
+    })
+    .collect()
+}
+
+/// 2024-07-11T00:00:00Z, the fixture's first charge.
+const FIRST_CHARGE: u64 = 1_720_656_000;
+
+/// Billing read since `from` (Unix seconds).
+fn billed_since(mut runtime: super::super::Runtime, from: u64) -> super::super::Runtime {
+    let history = horizon_core::cloud_runtime::billing::History {
+        buckets: billing(),
+        from: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(from),
+    };
+    runtime
+        .billing
+        .record("worker1", Ok(history), std::time::Instant::now());
+    runtime
+}
+
+fn billed(runtime: super::super::Runtime) -> super::super::Runtime {
+    billed_since(runtime, FIRST_CHARGE - 365 * 86_400)
+}
+
+fn badge(runtime: &super::super::Runtime, elapsed: std::time::Duration) -> Option<String> {
+    let started = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(RUN_STARTED_MS);
+    runtime.cost_badge(started + elapsed)
+}
+
+#[test]
+fn card_and_header_add_the_total_since_creation_to_a_live_run() {
+    let running = billed(cost_runtime(
+        Stage::Ready,
+        &cost_worker("RUNNING", &serde_json::json!({})),
+    ));
+    let elapsed = std::time::Duration::from_mins(72);
+    assert_eq!(
+        cost_texts(&running, elapsed),
+        [
+            "This run · 1h 12m · $0.83 · $0.690/h",
+            "Since creation · $3.52 (billed $2.69 + $0.83 estimated)"
+        ]
+    );
+    assert_eq!(badge(&running, elapsed).as_deref(), Some("$0.83 run · $3.52 total"));
+    let reconnecting = billed(cost_runtime(
+        Stage::Readiness,
+        &cost_worker("RUNNING", &serde_json::json!({})),
+    ));
+    assert_eq!(badge(&reconnecting, elapsed).as_deref(), Some("$3.52 total"));
+}
+
+#[test]
+fn a_stopped_cloud_keeps_showing_its_billed_total() {
+    let stopped = billed(cost_runtime(
+        Stage::Stopped,
+        &cost_worker("EXITED", &serde_json::json!({})),
+    ));
+    let elapsed = std::time::Duration::from_hours(3);
+    assert_eq!(
+        cost_texts(&stopped, elapsed),
+        [
+            "Worker rate: $0.690/h",
+            "Since creation · $2.79 (billed $2.79 + $0.00 estimated)"
+        ]
+    );
+    assert_eq!(badge(&stopped, elapsed).as_deref(), Some("$2.79 total"));
+    assert_eq!(
+        badge(
+            &cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
+            elapsed
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_worker_billed_before_the_read_window_shows_the_window_instead_of_a_lifetime() {
+    let elapsed = std::time::Duration::from_mins(72);
+    let stopped = billed_since(
+        cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
+        FIRST_CHARGE,
+    );
+    assert_eq!(
+        cost_texts(&stopped, elapsed),
+        [
+            "Worker rate: $0.690/h",
+            "Past 12 months · $2.79 (billed $2.79 + $0.00 estimated)"
+        ]
+    );
+    assert_eq!(badge(&stopped, elapsed).as_deref(), Some("$2.79 12 mo"));
+    let running = billed_since(
+        cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({}))),
+        FIRST_CHARGE,
+    );
+    assert_eq!(badge(&running, elapsed).as_deref(), Some("$0.83 run · $3.52 12 mo"));
+}
+
+#[test]
+fn an_idle_followed_cloud_repaints_when_its_next_billing_refresh_is_due() {
+    use horizon_core::cloud_runtime::billing::REFRESH_INTERVAL;
+    let mut stopped = billed(cost_runtime(
+        Stage::Stopped,
+        &cost_worker("EXITED", &serde_json::json!({})),
+    ));
+    let due = delay(&mut stopped);
+    assert!(due <= REFRESH_INTERVAL && due + std::time::Duration::from_secs(10) > REFRESH_INTERVAL);
+    let mut running = billed(cost_runtime(
+        Stage::Ready,
+        &cost_worker("RUNNING", &serde_json::json!({})),
+    ));
+    assert!(
+        delay(&mut running) <= super::super::RUN_COST_REFRESH,
+        "the run meter's refresh still wins"
+    );
+    stopped.billing.stop();
+    assert!(delay(&mut stopped) > REFRESH_INTERVAL, "an unfollowed cloud stays idle");
+}
+
+#[test]
+fn billing_failures_hide_only_the_total_and_keep_the_run_meter() {
+    let mut running = cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({})));
+    let failure = Err(horizon_core::cloud_runtime::billing::BillingError::Unreachable);
+    running
+        .billing
+        .record("worker1", failure.clone(), std::time::Instant::now());
+    let elapsed = std::time::Duration::from_secs(307);
+    assert_eq!(
+        cost_texts(&running, elapsed),
+        [
+            "This run · 5m 07s · $0.06 · $0.690/h",
+            "Total unavailable: RunPod is unreachable"
+        ]
+    );
+    assert_eq!(badge(&running, elapsed).as_deref(), Some("$0.06 run"));
+    let mut stale = billed(cost_runtime(
+        Stage::Ready,
+        &cost_worker("RUNNING", &serde_json::json!({})),
+    ));
+    stale.billing.record("worker1", failure, std::time::Instant::now());
+    assert_eq!(
+        cost_texts(&stale, std::time::Duration::from_mins(72))[1],
+        "Since creation · $3.52 (billed $2.69 + $0.83 estimated)",
+        "a failed refresh keeps the last billing"
+    );
+}
+
+#[test]
+fn the_first_refresh_shows_that_billing_is_being_read() {
+    let stalled: horizon_core::cloud_runtime::billing::Fetch = |_, _, _, cancel| {
+        while !cancel.is_cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Err(horizon_core::cloud_runtime::billing::BillingError::Unavailable)
+    };
+    let mut running = cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({})));
+    running.billing.follow(
+        running.state.as_ref(),
+        Some(std::path::Path::new("/synthetic/cloud")),
+        stalled,
+        &|| {},
+    );
+    assert_eq!(
+        cost_texts(&running, std::time::Duration::from_secs(60)),
+        [
+            "This run · 1m 00s · $0.01 · $0.690/h",
+            "Since creation · reading RunPod billing…"
+        ]
+    );
+    running.billing.stop();
+    assert_eq!(cost_texts(&running, std::time::Duration::from_secs(60)).len(), 1);
 }

@@ -471,7 +471,8 @@ caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocati
 fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
 stock for placement. `runpod::replacement` switches a verified, running worker to a
 new image digest through the pod update and observes which image of the pair the
-provider reports; it keeps no journal, so callers record intent first. The crate must
+provider reports; it keeps no journal, so callers record intent first.
+`runpod::billing` reads one worker's validated billing buckets. The crate must
 not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
@@ -501,7 +502,13 @@ per-cloud lock; explicit cleanup and local removal account for both resources.
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate
 and latest start time without I/O, so any surface can reuse it; the UI only formats
-it and schedules the refresh.
+it and schedules the refresh. `cost::total` combines billing buckets with that run
+so the latest, possibly partial, bucket is never counted twice, and labels a worker
+billed before the one-year read window with that window instead of its lifetime.
+`billing` owns the per-cloud background refresh: settings, credential and provider
+reads run on a short-lived thread every few minutes, bounded by the provider timeout
+and cancelled when the cloud is unbound or its runtime is dropped; the UI schedules
+a frame for the next refresh even while the cloud is idle.
 `repository::launch` discovers the selected checkout, parses its default profile
 and resolves the committed revision; the UI launch coordinator captures workspace
 identity and performs preparation while the user enters a title. Credential

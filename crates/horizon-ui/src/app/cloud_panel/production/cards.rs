@@ -350,7 +350,20 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         .or(action)
 }
 
-/// The current run's live cost while Ready, otherwise the worker's hourly rate.
+impl super::Runtime {
+    /// The bound worker's cost since creation once its billing has been read.
+    fn total_cost(&self, now: std::time::SystemTime) -> Option<cloud_runtime::cost::TotalCost> {
+        self.billing.total(self.state.as_ref()?.worker.as_ref()?, now)
+    }
+
+    /// Frame header text, for example `$0.83 run · $4.20 total`.
+    pub(in crate::app::cloud_panel) fn cost_badge(&self, now: std::time::SystemTime) -> Option<String> {
+        cloud_runtime::cost::badge(self.current_run_cost(now).as_ref(), self.total_cost(now).as_ref())
+    }
+}
+
+/// The current run's live cost while Ready, otherwise the worker's hourly rate,
+/// then the cost since creation.
 fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::SystemTime) {
     if let Some(run) = runtime.current_run_cost(now) {
         ui.label(run.summary())
@@ -362,6 +375,21 @@ fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syst
         .and_then(cloud_runtime::cost::hourly_rate)
     {
         ui.label(format!("Worker rate: {}", cloud_runtime::cost::format_rate(rate)));
+    }
+    total_cost(ui, runtime, now);
+}
+
+/// Billing failures only hide the total; the run above never depends on billing.
+fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::SystemTime) {
+    if let Some(total) = runtime.total_cost(now) {
+        ui.label(total.summary()).on_hover_ui(|ui| {
+            ui.label(runtime.billing.explanation(&total, std::time::Instant::now()));
+        });
+    } else if let Some(error) = runtime.billing.error() {
+        ui.label(format!("Total unavailable: {error}"))
+            .on_hover_text("RunPod billing could not be read. Horizon tries again every few minutes.");
+    } else if runtime.billing.refreshing() {
+        ui.small("Since creation · reading RunPod billing…");
     }
 }
 
