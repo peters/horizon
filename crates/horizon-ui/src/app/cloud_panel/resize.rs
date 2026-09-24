@@ -351,10 +351,19 @@ mod tests {
                 && (dragged[1] - before[1] - canvas_delta.y).abs() < 0.5,
             "frame {before:?} -> {dragged:?}, expected canvas delta {canvas_delta:?}"
         );
-        assert_eq!(app.cloud_prototype.groups.0[0].position, origin);
+        assert_eq!(
+            app.cloud_prototype.groups.0[0].position.map(f32::to_bits),
+            origin.map(f32::to_bits)
+        );
         assert!(!app.canvas_pan_input_claimed);
         frame(&mut app, vec![button(press + screen_delta, false)]);
-        assert_eq!(app.cloud_prototype.groups.0[0].size, dragged);
-        assert_eq!(app.cloud_prototype.groups.0[0].position, origin);
+        assert_eq!(
+            app.cloud_prototype.groups.0[0].size.map(f32::to_bits),
+            dragged.map(f32::to_bits)
+        );
+        assert_eq!(
+            app.cloud_prototype.groups.0[0].position.map(f32::to_bits),
+            origin.map(f32::to_bits)
+        );
     }
 }
