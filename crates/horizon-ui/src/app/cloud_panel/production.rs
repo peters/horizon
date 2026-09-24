@@ -32,6 +32,8 @@ use std::{
 };
 
 const DELETED_RESOURCES_MESSAGE: &str = "Worker deleted; managed workspace storage cleanup is complete. Any separately attached network volumes retain their files and credentials and remain billable until deleted.";
+/// A live run cost shows elapsed seconds, so it advances once per second.
+const RUN_COST_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Default)]
 pub(super) struct Production {
@@ -118,11 +120,24 @@ impl Runtime {
         std::thread::spawn(move || run_deployment(&request, &cancel, &tx, &ctx));
     }
 
+    /// Only a Ready cloud shows its current run; other stages report their own progress.
+    pub(in crate::app::cloud_panel) fn current_run_cost(
+        &self,
+        now: std::time::SystemTime,
+    ) -> Option<cloud_runtime::cost::RunCost> {
+        if self.stage != Some(Stage::Ready) {
+            return None;
+        }
+        cloud_runtime::cost::current_run(self.state.as_ref()?.worker.as_ref()?, now)
+    }
+
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
         self.poll_recovery();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else if self.current_run_cost(std::time::SystemTime::now()).is_some() {
+            ctx.request_repaint_after(RUN_COST_REFRESH);
         }
     }
 

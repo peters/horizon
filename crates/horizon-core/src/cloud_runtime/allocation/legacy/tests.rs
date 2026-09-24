@@ -296,6 +296,7 @@ fn supported_legacy_spellings_and_normalized_values_preserve_the_existing_runtim
         original["worker"]["image"] = image;
         original["worker"]["publicIp"] = json!(address);
         original["worker"]["costPerHr"] = json!("0.100");
+        original["worker"]["adjustedCostPerHr"] = json!("0.090");
         original["profile"]["capabilities"]["browserstack"] = Value::Null;
         original["profile"]["capabilities"]["agents"] = json!(["grok", "claude", "codex"]);
         original["spec"]["profile"]["capabilities"]["browserstack"] = json!({"targets":[]});
@@ -317,6 +318,44 @@ fn supported_legacy_spellings_and_normalized_values_preserve_the_existing_runtim
             serde_json::to_value(restored.deployment()).unwrap(),
             serde_json::to_value(pair.deployment()).unwrap()
         );
+    }
+}
+
+#[test]
+fn run_timing_survives_the_split_verbatim_and_saved_records_reencode_identically() {
+    for timing in [
+        None,
+        Some(json!({"adjustedCostPerHr":0.09,"lastStartedAt":"2024-07-12T19:14:40.144Z"})),
+        Some(json!({"lastStartedAt":"2024-07-12T15:14:40.1440-04:00"})),
+    ] {
+        let mut original = legacy();
+        // A record saved before run timing existed has neither key.
+        assert!(original["worker"].get("adjustedCostPerHr").is_none());
+        assert!(original["worker"].get("lastStartedAt").is_none());
+        for (key, value) in timing.iter().flat_map(|fields| fields.as_object().unwrap()) {
+            original["worker"][key] = value.clone();
+        }
+        let pair = convert(&original).unwrap();
+        let (allocation, project) = (pair.allocation_bytes().unwrap(), pair.project_bytes().unwrap());
+        let restored = Records::decode(&allocation, &project).unwrap();
+        assert_eq!(serde_json::to_value(restored.deployment()).unwrap(), original);
+        assert_eq!(restored.allocation_bytes().unwrap(), allocation);
+        assert_eq!(restored.project_bytes().unwrap(), project);
+        let saved: Value = serde_json::from_slice(&allocation).unwrap();
+        assert_eq!(saved["worker"]["lastStartedAt"], original["worker"]["lastStartedAt"]);
+    }
+}
+
+#[test]
+fn explicit_null_run_timing_splits_as_absent() {
+    for key in ["adjustedCostPerHr", "lastStartedAt"] {
+        let mut original = legacy();
+        original["worker"][key] = Value::Null;
+        let pair = convert(&original).unwrap();
+        let saved: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        assert!(saved["worker"].get(key).is_none(), "{key} null is saved as absent");
+        original["worker"].as_object_mut().unwrap().remove(key);
+        assert_eq!(serde_json::to_value(pair.deployment()).unwrap(), original);
     }
 }
 
