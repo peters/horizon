@@ -257,7 +257,7 @@ fn scroll_area_frame_with_routing(
 }
 
 #[test]
-fn plain_panel_smoothing_matches_native_egui_units_phases_and_easing() {
+fn plain_panel_smoothing_matches_native_egui_for_zero_delta_starts() {
     let routed = Context::default();
     let native = Context::default();
     let target = ScrollTarget::Panel(PANEL);
@@ -274,7 +274,7 @@ fn plain_panel_smoothing_matches_native_egui_units_phases_and_easing() {
         vec![event(MouseWheelUnit::Line, -1.0, TouchPhase::Move)],
         Vec::new(),
         vec![event(MouseWheelUnit::Point, -2.0, TouchPhase::Move)],
-        vec![event(MouseWheelUnit::Point, -9.0, TouchPhase::Start)],
+        vec![event(MouseWheelUnit::Point, 0.0, TouchPhase::Start)],
         vec![event(MouseWheelUnit::Line, -1.0, TouchPhase::Move)],
         vec![event(MouseWheelUnit::Point, -9.0, TouchPhase::End)],
         Vec::new(),
@@ -289,6 +289,47 @@ fn plain_panel_smoothing_matches_native_egui_units_phases_and_easing() {
             (actual - expected).abs() < 0.001,
             "frame {step}: {actual} vs native {expected}"
         );
+    }
+}
+
+#[test]
+fn panel_start_motion_is_delivered_once_and_modified_starts_are_excluded() {
+    for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::COMMAND] {
+        for (unit, delta) in [
+            (MouseWheelUnit::Point, 0.0),
+            (MouseWheelUnit::Point, -5.0),
+            (MouseWheelUnit::Point, -9.0),
+            (MouseWheelUnit::Line, -1.0),
+        ] {
+            let ctx = Context::default();
+            let target = ScrollTarget::Panel(PANEL);
+            for time in [0.0, 0.016, 0.032] {
+                let _ = scroll_area_frame(&ctx, time, target, Vec::new());
+            }
+            let start = Event::MouseWheel {
+                unit,
+                delta: Vec2::new(0.0, delta),
+                phase: TouchPhase::Start,
+                modifiers,
+            };
+            let actual = scroll_area_frame(&ctx, 1.0, target, vec![start]).0;
+            let expected = if modifiers != Modifiers::NONE {
+                0.0
+            } else if unit == MouseWheelUnit::Line {
+                -delta * InputOptions::default().line_scroll_speed
+            } else {
+                -delta
+            };
+            assert!(
+                (actual - expected).abs() < 0.001,
+                "{modifiers:?}: {actual} vs {expected}"
+            );
+            let idle = scroll_area_frame(&ctx, 1.016, target, Vec::new()).0;
+            assert!((idle - expected).abs() < 0.001, "Start must not queue duplicate motion");
+            let after_move =
+                scroll_area_frame(&ctx, 1.032, target, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]).0;
+            assert!((after_move - expected - 5.0).abs() < 0.001);
+        }
     }
 }
 

@@ -296,7 +296,7 @@ fn last_wheel_boundary(events: &[Event]) -> Option<TouchPhase> {
     })
 }
 
-/// egui's wheel phases and easing, applied only to the plain motion retained
+/// Wheel phases and egui easing, applied only to the plain motion retained
 /// for panels. A separate backlog prevents zoom-modified wheels from being
 /// classified together with plain wheels by egui's frame-wide accumulator.
 #[derive(Clone, Default)]
@@ -310,7 +310,6 @@ impl PanelWheelScroll {
         let mut motion = Vec2::ZERO;
         for (index, (step, phase)) in wheel_steps(&input.events).enumerate() {
             match phase {
-                TouchPhase::Start => self.in_touch = true,
                 TouchPhase::End | TouchPhase::Cancel => {
                     if step.modifiers.ctrl || step.modifiers.command {
                         motion += self.backlog;
@@ -319,7 +318,9 @@ impl PanelWheelScroll {
                     }
                     *self = Self::default();
                 }
-                TouchPhase::Move => {
+                TouchPhase::Start | TouchPhase::Move => {
+                    // Wayland may include the first movement in Start.
+                    self.in_touch |= phase == TouchPhase::Start;
                     if step.modifiers.ctrl || step.modifiers.command || claimed.binary_search(&index).is_ok() {
                         continue;
                     }
