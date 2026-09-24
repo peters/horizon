@@ -617,3 +617,128 @@ fn caller_inspection_budget_bounds_headers_and_body() {
         task.join().unwrap();
     }
 }
+
+/// 2024-07-11T00:00:00Z.
+const BILLING_DAY: u64 = 1_720_656_000;
+
+fn billing_at(seconds: u64) -> std::time::SystemTime {
+    std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
+}
+
+#[test]
+fn billing_requests_one_workers_buckets_with_the_bearer_credential() {
+    use billing::{BillingBucket, BucketSize};
+    let body = json!([
+        {"amount":0.69,"time":"2024-07-11T00:00:00Z","timeBilledMs":3_600_000,"diskSpaceBilledGb":20,"podId":"worker1"},
+        {"amount":0,"time":"2024-07-11T01:00:00.000Z","timeBilledMs":0,"podId":"worker1","gpuTypeId":null},
+        {"amount":5.0,"time":"2024-07-11T01:00:00Z","timeBilledMs":1,"podId":"other-worker"},
+        {"amount":0.1,"time":"2024-07-11T04:00:00+02:00"}
+    ]);
+    let (provider, requests, task) = server(vec![(200, body.to_string())]);
+    let end = billing_at(BILLING_DAY + 45_296) + Duration::from_millis(789);
+    let buckets = provider
+        .billing(
+            "worker1",
+            BucketSize::Hour,
+            billing_at(BILLING_DAY),
+            end,
+            &Cancellation::default(),
+        )
+        .unwrap();
+    task.join().unwrap();
+    let bucket = |time: &str, amount, time_billed_ms| BillingBucket {
+        time: time.into(),
+        size: BucketSize::Hour,
+        amount,
+        time_billed_ms,
+    };
+    assert_eq!(
+        buckets,
+        [
+            bucket("2024-07-11T00:00:00Z", 0.69, 3_600_000),
+            bucket("2024-07-11T01:00:00.000Z", 0.0, 0),
+            bucket("2024-07-11T04:00:00+02:00", 0.1, 0),
+        ]
+    );
+    let request = &requests.lock().unwrap()[0];
+    assert!(request.starts_with(
+        "GET /billing/pods?bucketSize=hour&startTime=2024-07-11T00:00:00Z&endTime=2024-07-11T12:34:56Z&grouping=podId&podId=worker1 HTTP/1.1\r\n"
+    ));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("\r\nauthorization: bearer secret-test-key\r\n")
+    );
+    assert_eq!(BucketSize::Day.duration(), Duration::from_hours(24));
+}
+
+#[test]
+fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
+    let fetch = |status: u16, body: &str| {
+        let (provider, _, task) = server(vec![(status, body.into())]);
+        let result = provider.billing(
+            "worker1",
+            billing::BucketSize::Day,
+            billing_at(BILLING_DAY),
+            billing_at(BILLING_DAY + 86_400),
+            &Cancellation::default(),
+        );
+        task.join().unwrap();
+        result
+    };
+    assert!(matches!(fetch(401, "{}"), Err(CloudError::Unauthorized)));
+    assert!(matches!(fetch(403, "{}"), Err(CloudError::Unauthorized)));
+    assert!(matches!(fetch(400, "{}"), Err(CloudError::Rejected(_))));
+    assert!(matches!(fetch(422, "{}"), Err(CloudError::Rejected(_))));
+    assert!(matches!(fetch(500, "{}"), Err(CloudError::Http(500, _))));
+    assert!(fetch(200, "[]").unwrap().is_empty());
+    for invalid in [
+        "not json",
+        r#"{"data":[]}"#,
+        r#"[{"amount":-0.01,"time":"2024-07-11T00:00:00Z"}]"#,
+        r#"[{"amount":"0.5","time":"2024-07-11T00:00:00Z"}]"#,
+        r#"[{"amount":1e400,"time":"2024-07-11T00:00:00Z"}]"#,
+        r#"[{"amount":0.5,"time":"2024-07-11 00:00:00"}]"#,
+        r#"[{"amount":0.5}]"#,
+        r#"[{"time":"2024-07-11T00:00:00Z"}]"#,
+        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","timeBilledMs":-1}]"#,
+    ] {
+        assert!(
+            matches!(fetch(200, invalid), Err(CloudError::InvalidResponse)),
+            "{invalid} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn invalid_billing_requests_never_reach_the_provider() {
+    let (provider, requests, task) = server(vec![]);
+    let day = billing::BucketSize::Day;
+    let cancelled = Cancellation::default();
+    cancelled.cancel();
+    for (pod, start, end, cancel) in [
+        (
+            "../pods",
+            billing_at(BILLING_DAY),
+            billing_at(BILLING_DAY),
+            Cancellation::default(),
+        ),
+        (
+            "worker1",
+            billing_at(BILLING_DAY + 1),
+            billing_at(BILLING_DAY),
+            Cancellation::default(),
+        ),
+        (
+            "worker1",
+            std::time::SystemTime::UNIX_EPOCH - Duration::from_secs(1),
+            billing_at(BILLING_DAY),
+            Cancellation::default(),
+        ),
+        ("worker1", billing_at(BILLING_DAY), billing_at(BILLING_DAY), cancelled),
+    ] {
+        assert!(provider.billing(pod, day, start, end, &cancel).is_err());
+    }
+    task.join().unwrap();
+    assert!(requests.lock().unwrap().is_empty());
+}

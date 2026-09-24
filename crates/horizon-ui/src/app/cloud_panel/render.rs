@@ -1,6 +1,5 @@
 use egui::{Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use horizon_core::cloud_panel::{CloudGroup, HEADER};
-use horizon_core::format_cost;
 
 use super::super::HorizonApp;
 use crate::app::view::canvas_scene_transform;
@@ -83,13 +82,12 @@ impl HorizonApp {
             let accent = cloud_accent(group.issue);
             frame_background(ctx, group.issue, rect, transform, clip, accent);
             let editing = self.cloud_prototype.renaming == Some(group.issue);
-            let run_cost = self
+            let cost = self
                 .cloud_prototype
                 .production
                 .runtimes
                 .get(&group.issue)
-                .and_then(|runtime| runtime.current_run_cost(now))
-                .map(|run| format_cost(run.amount));
+                .and_then(|runtime| runtime.cost_badge(now));
             let response = egui::Area::new(Id::new(("cloud-header", group.issue)))
                 .order(Order::Middle)
                 .fixed_pos(rect.min)
@@ -98,7 +96,7 @@ impl HorizonApp {
                     ui.ctx().set_transform_layer(ui.layer_id(), transform);
                     ui.set_clip_rect(clip);
                     let (header, _) = ui.allocate_exact_size(Vec2::new(rect.width(), HEADER), Sense::hover());
-                    let cost_width = paint_header(ui, group, header, accent, editing, run_cost);
+                    let cost_width = paint_header(ui, group, header, accent, editing, cost);
                     if editing {
                         let field = Rect::from_min_size(
                             header.min + Vec2::new(64.0, 16.0),
@@ -256,14 +254,14 @@ fn cloud_accent(id: u32) -> Color32 {
     theme::workspace_accent(id.saturating_sub(101) as usize)
 }
 
-/// Returns the width the optional run-cost badge takes from the title.
+/// Returns the width the optional cost badge takes from the title.
 fn paint_header(
     ui: &egui::Ui,
     group: &CloudGroup,
     rect: Rect,
     accent: Color32,
     editing: bool,
-    run_cost: Option<String>,
+    cost: Option<String>,
 ) -> f32 {
     let painter = ui.painter();
     painter.rect_filled(
@@ -289,7 +287,7 @@ fn paint_header(
     cloud_glyph(painter, mark, accent);
     let badge = Rect::from_min_size(rect.right_top() + Vec2::new(-110.0, 23.0), Vec2::new(90.0, 25.0));
     let fill = theme::blend(theme::PANEL_BG(), accent, 0.09);
-    let reserved = run_cost.map_or(0.0, |cost| run_cost_badge(painter, badge, cost, fill));
+    let reserved = cost.map_or(0.0, |cost| cost_badge(painter, badge, cost, fill));
     if !editing {
         let title_rect = Rect::from_min_size(
             rect.min + Vec2::new(64.0, 16.0),
@@ -336,8 +334,8 @@ fn paint_header(
     reserved
 }
 
-/// Paints the current run's cost left of the panel badge and returns the width it occupies.
-fn run_cost_badge(painter: &egui::Painter, panels: Rect, cost: String, fill: Color32) -> f32 {
+/// Paints the run and total cost left of the panel badge and returns the width it occupies.
+fn cost_badge(painter: &egui::Painter, panels: Rect, cost: String, fill: Color32) -> f32 {
     const GAP: f32 = 8.0;
     let galley = painter.layout_no_wrap(cost, FontId::proportional(12.0), theme::FG_SOFT());
     let width = galley.size().x + 20.0;
@@ -433,13 +431,13 @@ mod tests {
         "Synthetic cloud with a long title ".repeat(8)
     }
 
-    fn header(run_cost: Option<&str>) -> Header {
+    fn header(cost: Option<&str>) -> Header {
         let group = CloudGroup::new(101, title(), "workspace".into(), "/synthetic".into(), [0.0, 0.0]);
         let mut reserved = f32::NAN;
         let output = egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(900.0, HEADER), Sense::hover());
-                reserved = paint_header(ui, &group, rect, cloud_accent(101), false, run_cost.map(str::to_owned));
+                reserved = paint_header(ui, &group, rect, cloud_accent(101), false, cost.map(str::to_owned));
             })
             .discard_textures();
         let texts = output
@@ -465,21 +463,26 @@ mod tests {
     }
 
     #[test]
-    fn run_cost_badge_sits_before_the_panel_badge_and_narrows_the_title() {
+    fn cost_badge_sits_before_the_panel_badge_and_narrows_the_title() {
         let (plain, none) = header(None);
         assert!(none.abs() < f32::EPSILON);
         assert!(!plain.iter().any(|(text, ..)| text.starts_with('$')));
-        let (costed, reserved) = header(Some("$0.83"));
-        let (_, cost, _) = find(&costed, "$0.83");
-        let (_, panels, _) = find(&costed, "Empty");
-        assert!(cost.right() < panels.left(), "the cost precedes the panel count");
-        let title_clip = |texts: &[(String, Rect, Rect)]| find(texts, &title()).2;
-        assert!(
-            title_clip(&costed).right() < cost.left(),
-            "the title never runs under the cost"
-        );
-        assert!((title_clip(&plain).right() - title_clip(&costed).right() - reserved).abs() < 0.5);
-        assert!(reserved > cost.width());
+        let mut widths = Vec::new();
+        for badge in ["$0.83 run", "$4.20 total", "$0.83 run · $4.20 total"] {
+            let (costed, reserved) = header(Some(badge));
+            let (_, cost, _) = find(&costed, badge);
+            let (_, panels, _) = find(&costed, "Empty");
+            assert!(cost.right() < panels.left(), "the cost precedes the panel count");
+            let title_clip = |texts: &[(String, Rect, Rect)]| find(texts, &title()).2;
+            assert!(
+                title_clip(&costed).right() < cost.left(),
+                "the title never runs under the cost"
+            );
+            assert!((title_clip(&plain).right() - title_clip(&costed).right() - reserved).abs() < 0.5);
+            assert!(reserved > cost.width());
+            widths.push(reserved);
+        }
+        assert!(widths[2] > widths[0].max(widths[1]), "both figures take more room");
     }
 
     #[test]

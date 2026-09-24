@@ -6,8 +6,9 @@ use std::{io::Read, time::Duration};
 /// Larger error bodies are not provider explanations worth parsing.
 const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 /// Default per-request budget and the ceiling for caller-supplied budgets.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub mod billing;
 pub mod flavors;
 pub mod recovery;
 pub mod registry;

@@ -35,6 +35,11 @@ use std::{
 const DELETED_RESOURCES_MESSAGE: &str = "Worker deleted; managed workspace storage cleanup is complete. Any separately attached network volumes retain their files and credentials and remain billable until deleted.";
 /// A live run cost shows elapsed seconds, so it advances once per second.
 const RUN_COST_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
+/// UI tests resolve the developer's real Horizon home, so they must never reach the provider with its credential.
+#[cfg(not(test))]
+const BILLING: cloud_runtime::billing::Fetch = cloud_runtime::billing::fetch;
+#[cfg(test)]
+const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::billing::BillingError::Unavailable);
 
 #[derive(Default)]
 pub(super) struct Production {
@@ -96,6 +101,7 @@ pub(super) struct Runtime {
     pub(in crate::app::cloud_panel) desktop_last_input: Option<String>,
     desktop: Option<std::sync::Arc<cloud_runtime::tunnel::DesktopTunnel>>,
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
+    billing: cloud_runtime::billing::BillingMonitor,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
@@ -275,6 +281,7 @@ impl HorizonApp {
             }
             runtime.poll_release_and_repaint(ctx);
         }
+        self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);
         for id in resumed {
             self.start_production_deployment(id, ctx);
@@ -287,6 +294,17 @@ impl HorizonApp {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);
             }
+        }
+    }
+    /// Keeps each bound worker's billing fresh in the background; other clouds forget theirs.
+    fn follow_cloud_billing(&mut self, ctx: &egui::Context) {
+        let repaint = {
+            let ctx = ctx.clone();
+            move || ctx.request_repaint()
+        };
+        let root = self.cloud_prototype.root.as_deref();
+        for runtime in self.cloud_prototype.production.runtimes.values_mut() {
+            runtime.billing.follow(runtime.state.as_ref(), root, BILLING, &repaint);
         }
     }
     fn finish_failed_cloud_operations(&mut self, finished: Vec<u32>) {
