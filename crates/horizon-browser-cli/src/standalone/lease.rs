@@ -266,11 +266,11 @@ pub(super) fn prune_dead_at(root: &Path) -> Vec<String> {
 
 fn list_leases(root: &Path) -> Vec<StandaloneHostRef> {
     let directory = root.join("runtime").join("browsers");
-    let Ok(entries) = std::fs::read_dir(&directory) else {
+    let Ok(entries) = atomic_file::read_dir(&directory) else {
         return Vec::new();
     };
     let mut hosts = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
@@ -296,7 +296,7 @@ fn read_lease(root: &Path, panel_id: &str) -> Option<StandaloneHostRef> {
 }
 
 fn decode_lease(root: &Path, path: &Path) -> Option<StandaloneHostRef> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = atomic_file::read(path).ok()?;
     let host = serde_json::from_slice::<StandaloneHostRef>(&bytes).ok()?;
     (lease_path_for_root(root, &host.panel_id) == path).then_some(host)
 }

@@ -529,11 +529,16 @@ impl DurableRun {
     /// Returns when the sidecar exists but cannot be decoded.
     pub fn recorded_standalone(&self) -> Result<Option<StandaloneHostRef>, ResumeError> {
         let path = self.directory.join(STANDALONE_FILE);
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let bytes = std::fs::read(&path)
-            .map_err(|source| ResumeError::Decode(format!("could not read {}: {source}", path.display())))?;
+        let bytes = match atomic_file::read(&path) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(ResumeError::Decode(format!(
+                    "could not read {}: {source}",
+                    path.display()
+                )));
+            }
+        };
         serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|source| ResumeError::Decode(source.to_string()))
@@ -903,7 +908,7 @@ fn acquire_resume_lock_file(path: &Path) -> Result<std::fs::File, std::io::Error
 }
 
 fn read_run_state(state_path: &Path, job_id: &str) -> Result<RunState, ResumeError> {
-    let bytes = std::fs::read(state_path).map_err(|source| {
+    let bytes = atomic_file::read(state_path).map_err(|source| {
         if source.kind() == std::io::ErrorKind::NotFound {
             ResumeError::NotFound(job_id.to_string())
         } else {
