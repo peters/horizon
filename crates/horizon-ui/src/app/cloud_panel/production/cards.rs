@@ -67,7 +67,7 @@ impl HorizonApp {
                         {
                             action = Some((group.issue, Action::RevokeBrowserstack));
                         }
-                        if let Some(next) = runtime_actions(ui, runtime) {
+                        if let Some(next) = runtime_actions(ui, group.issue, runtime) {
                             action = Some((group.issue, next));
                         }
                     });
@@ -265,7 +265,7 @@ fn machine_size(
     size
 }
 
-fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
     if runtime.stage == Some(Stage::Deleted) {
@@ -278,7 +278,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             horizon_core::cloud_runtime::CreateState::Terminated { .. }
         )
     }) {
-        progress_output(ui, runtime);
+        progress_output(ui, id, runtime);
         ui.label("Worker deleted. Finish managed workspace storage cleanup to stop its storage charges.");
         return if runtime.receiver.is_some() {
             ui.spinner();
@@ -287,7 +287,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
             deletion_action(ui, runtime)
         };
     }
-    progress_output(ui, runtime);
+    progress_output(ui, id, runtime);
     ui.add_space(8.0);
     if runtime.remote_release.is_some() {
         ui.spinner();
@@ -451,7 +451,7 @@ fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
     .clicked()
 }
 
-fn progress_output(ui: &mut egui::Ui, runtime: &super::Runtime) {
+fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     for stage in Stage::ALL {
         let current = runtime.stage == Some(stage);
         ui.label(
@@ -479,9 +479,20 @@ fn progress_output(ui: &mut egui::Ui, runtime: &super::Runtime) {
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
-    egui::CollapsingHeader::new("Verbose output").show(ui, |ui| {
-        for line in &runtime.logs {
-            ui.label(RichText::new(line).monospace().size(11.0));
-        }
-    });
+    egui::CollapsingHeader::new("Verbose output")
+        .id_salt(("cloud-verbose", id))
+        .show(ui, |ui| {
+            // Bounded so build output cannot move the card scroll away from its heading.
+            let log = egui::ScrollArea::vertical()
+                .id_salt(("cloud-verbose-log", id))
+                .max_height(220.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for line in &runtime.logs {
+                        ui.label(RichText::new(line).monospace().size(11.0));
+                    }
+                });
+            let max_offset = (log.content_size.y - log.inner_rect.height()).max(0.0);
+            runtime.verbose_unpinned = log.state.offset.y + 1.0 < max_offset;
+        });
 }

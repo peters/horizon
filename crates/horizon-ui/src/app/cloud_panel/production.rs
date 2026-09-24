@@ -74,6 +74,8 @@ pub(super) struct Runtime {
     stage: Option<Stage>,
     progress: progress::Timeline,
     logs: std::collections::VecDeque<String>,
+    /// The reader scrolled away from the latest line, so retain older lines.
+    verbose_unpinned: bool,
     state: Option<Deployment>,
     error: Option<String>,
     confirmation: Confirmation,
@@ -90,6 +92,15 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    /// Follow mode keeps a short tail. Scrolling up keeps the lines being read.
+    fn push_log(&mut self, line: String) {
+        self.logs.push_back(line);
+        let cap = if self.verbose_unpinned { 4_000 } else { 150 };
+        while self.logs.len() > cap {
+            self.logs.pop_front();
+        }
+    }
+
     fn needs_provider_check(state: &Deployment) -> bool {
         state.operation == cloud_runtime::CreateState::Requested
             || (matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
@@ -215,12 +226,7 @@ impl HorizonApp {
                         runtime.stage = Some(stage);
                     }
                     Event::Progress(progress) => runtime.progress.update(progress),
-                    Event::Output(line) => {
-                        runtime.logs.push_back(line);
-                        while runtime.logs.len() > 150 {
-                            runtime.logs.pop_front();
-                        }
-                    }
+                    Event::Output(line) => runtime.push_log(line),
                     Event::Ready(state, at) => {
                         runtime.progress.stage(Stage::Ready, at);
                         runtime.browsers = None;

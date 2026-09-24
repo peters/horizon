@@ -66,10 +66,7 @@ impl Runtime {
                     .outcome
                     .needs_attention()
                     .then(|| recovered.report.outcome.explanation().into());
-                self.logs.push_back(recovered.report.outcome.explanation().into());
-                while self.logs.len() > 150 {
-                    self.logs.pop_front();
-                }
+                self.push_log(recovered.report.outcome.explanation().into());
             }
             Err(error) => self.error = Some(error.to_string()),
         }
@@ -101,11 +98,7 @@ impl Runtime {
             Ok(state) => {
                 self.remote_release_error = None;
                 self.state = Some(state);
-                self.logs
-                    .push_back("Remote devices released and copied credentials removed".into());
-                while self.logs.len() > 150 {
-                    self.logs.pop_front();
-                }
+                self.push_log("Remote devices released and copied credentials removed".into());
             }
             Err(error) => self.remote_release_error = Some(error.to_string()),
         }
