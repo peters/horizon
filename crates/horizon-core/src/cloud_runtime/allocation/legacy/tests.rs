@@ -326,9 +326,12 @@ fn run_timing_survives_the_split_verbatim_and_saved_records_reencode_identically
     for timing in [
         None,
         Some(json!({"adjustedCostPerHr":0.09,"lastStartedAt":"2024-07-12T19:14:40.144Z"})),
-        Some(json!({"adjustedCostPerHr":null,"lastStartedAt":"2024-07-12T15:14:40.1440-04:00"})),
+        Some(json!({"lastStartedAt":"2024-07-12T15:14:40.1440-04:00"})),
     ] {
         let mut original = legacy();
+        // A record saved before run timing existed has neither key.
+        assert!(original["worker"].get("adjustedCostPerHr").is_none());
+        assert!(original["worker"].get("lastStartedAt").is_none());
         for (key, value) in timing.iter().flat_map(|fields| fields.as_object().unwrap()) {
             original["worker"][key] = value.clone();
         }

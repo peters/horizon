@@ -181,12 +181,14 @@ pub struct Worker {
     #[serde(default)]
     #[serde(deserialize_with = "optional_number")]
     pub cost_per_hr: Option<f64>,
-    /// Effective hourly rate after the account's savings plans.
-    #[serde(default)]
+    /// Effective hourly rate after the account's savings plans. Omitted when
+    /// absent, so records saved before this field existed re-encode byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "optional_number")]
     pub adjusted_cost_per_hr: Option<f64>,
-    /// RFC 3339 time of the latest start or resume, kept verbatim for lossless records.
-    #[serde(default)]
+    /// RFC 3339 time of the latest start or resume, kept verbatim for lossless
+    /// records and omitted when absent like the adjusted rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_started_at: Option<String>,
     #[serde(default)]
     pub memory_in_gb: Option<u32>,
