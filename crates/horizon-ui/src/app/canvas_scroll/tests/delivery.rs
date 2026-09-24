@@ -209,3 +209,46 @@ fn a_new_terminal_app_gesture_receives_input_before_the_canvas_tail_moves_it() {
     );
     assert_offset(app.canvas_view.pan_offset, [pan[0], pan[1] - 7.0]);
 }
+
+#[test]
+fn a_runtime_surface_receives_fresh_motion_before_the_canvas_tail() {
+    let ctx = Context::default();
+    let frame = |time, target, events| {
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.time = Some(time);
+        input.events = events;
+        let mut pan = Vec2::ZERO;
+        let _ = ctx
+            .run_ui(input, |ui| {
+                let mut routing = route_canvas_scroll(ui.ctx(), target, true, |_, _| false);
+                routing.discard_displaced_wheels(target);
+                routing.defer_for_panel_delivery(ui.ctx());
+                pan = routing.pan;
+                routing.consume(ui.ctx(), &mut Vec::new());
+            })
+            .discard_textures();
+        pan
+    };
+    let _ = frame(
+        1.0,
+        ScrollTarget::Canvas,
+        vec![wheel(Vec2::new(0.0, -3.0), TouchPhase::Start)],
+    );
+    assert_eq!(
+        frame(
+            1.016,
+            ScrollTarget::Surface(901),
+            vec![
+                wheel(Vec2::new(0.0, -7.0), TouchPhase::End),
+                wheel(Vec2::new(0.0, -5.0), TouchPhase::Start),
+            ]
+        ),
+        Vec2::ZERO,
+        "runtime receives its wheel at the original geometry"
+    );
+    assert_eq!(
+        frame(1.032, ScrollTarget::Surface(901), Vec::new()),
+        Vec2::new(0.0, -7.0)
+    );
+    assert_eq!(frame(1.048, ScrollTarget::Surface(901), Vec::new()), Vec2::ZERO);
+}

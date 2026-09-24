@@ -14,17 +14,17 @@ enum Action {
 }
 
 impl HorizonApp {
-    pub(in crate::app) fn pointer_over_cloud_runtime(&self, ctx: &egui::Context, position: Pos2) -> bool {
+    pub(in crate::app) fn cloud_runtime_under_pointer(&self, ctx: &egui::Context, position: Pos2) -> Option<u32> {
         if !self.cloud_prototype.ready || ctx.viewport_id() != egui::ViewportId::ROOT {
-            return false;
+            return None;
         }
         let canvas = self.canvas_rect(ctx);
         if !canvas.contains(position) {
-            return false;
+            return None;
         }
         let transform = canvas_scene_transform(canvas, self.canvas_view);
         let fixture_mode = std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some();
-        self.cloud_prototype.groups.0.iter().any(|group| {
+        let mut candidates = self.cloud_prototype.groups.0.iter().filter(|group| {
             if self
                 .cloud_prototype
                 .fullscreen
@@ -40,7 +40,18 @@ impl HorizonApp {
             }
             let (min, max) = group.runtime_bounds();
             (transform * Rect::from_min_max(Pos2::from(min), Pos2::from(max))).contains(position)
-        })
+        });
+        let layer = ctx.layer_id_at(position);
+        candidates
+            .clone()
+            .find(|group| layer.is_some_and(|layer| layer.id == Id::new(("cloud-runtime", group.issue))))
+            .or_else(|| candidates.next_back())
+            .map(|group| group.issue)
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn pointer_over_cloud_runtime(&self, ctx: &egui::Context, position: Pos2) -> bool {
+        self.cloud_runtime_under_pointer(ctx, position).is_some()
     }
 
     pub(in crate::app) fn render_cloud_frames(&mut self, ctx: &egui::Context) {

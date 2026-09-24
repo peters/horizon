@@ -16,7 +16,7 @@ pub(super) enum ScrollTarget {
     Panel(PanelId),
     /// A canvas-drawn surface with no known scroll extent, such as a cloud
     /// runtime card. It keeps every gesture it starts.
-    Surface,
+    Surface(u32),
 }
 
 /// One wheel event, carrying what the terminal needs to apply it.
@@ -30,9 +30,9 @@ pub(super) struct WheelStep {
 #[derive(Clone, Default)]
 struct ScrollGesture {
     canvas_owned: Option<bool>,
-    /// The panel the gesture latched onto, so chaining is decided for its
-    /// owner rather than whatever the pointer happens to be over later.
-    owner: Option<PanelId>,
+    /// The panel or runtime surface the gesture latched onto. Chaining is
+    /// decided for that owner even when the pointer moves elsewhere.
+    owner: Option<ScrollTarget>,
     last_motion_at: f64,
     has_touch_phase: bool,
     rejected_contact: bool,
@@ -53,15 +53,7 @@ pub(super) struct ScrollRouting {
     owns_smooth_scroll: bool,
     claimed_wheels: Vec<usize>,
     absorbed_wheels: Vec<(usize, PanelId, WheelStep)>,
-    panel_scroll_delivery: PanelScrollDelivery,
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum PanelScrollDelivery {
-    #[default]
-    Disabled,
-    RetainBacklog,
-    DiscardBacklog,
+    panel_scroll_target: Option<ScrollTarget>,
 }
 
 impl ScrollGesture {
@@ -86,8 +78,8 @@ impl ScrollGesture {
         self.rejected_contact = false;
         self.canvas_owned = Some(target == ScrollTarget::Canvas);
         self.owner = match target {
-            ScrollTarget::Panel(panel) => Some(panel),
-            ScrollTarget::Canvas | ScrollTarget::Surface => None,
+            ScrollTarget::Canvas => None,
+            ScrollTarget::Panel(_) | ScrollTarget::Surface(_) => Some(target),
         };
         std::mem::take(&mut self.pan_backlog)
     }
@@ -124,16 +116,7 @@ impl ScrollGesture {
 
         let mut routing = ScrollRouting {
             pan: std::mem::take(&mut self.deferred_pan),
-            // A boundary below can release the old owner before smoothing is
-            // delivered. Its queued motion must not follow the new pointer
-            // target, while fresh retained events can still reach that target.
-            panel_scroll_delivery: if self.displaced_surface(target)
-                || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner))
-            {
-                PanelScrollDelivery::DiscardBacklog
-            } else {
-                PanelScrollDelivery::RetainBacklog
-            },
+            panel_scroll_target: Some(target),
             ..ScrollRouting::default()
         };
         let mut has_canvas_motion = false;
@@ -195,7 +178,7 @@ impl ScrollGesture {
             // and in order, so `exhausted` can account for the events before.
             if delta != Vec2::ZERO
                 && self.canvas_owned == Some(false)
-                && let Some(owner) = self.owner
+                && let Some(ScrollTarget::Panel(owner)) = self.owner
             {
                 if exhausted(owner, step) {
                     self.canvas_owned = Some(true);
@@ -227,7 +210,7 @@ impl ScrollGesture {
         routing.owns_smooth_scroll = canvas_owned
             || self.rejected_contact
             || self.displaced_surface(target)
-            || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner));
+            || self.owner.is_some_and(|owner| target != owner);
         if canvas_owned {
             routing.pan += self.ease_backlog(input.stable_dt);
         }
@@ -236,7 +219,10 @@ impl ScrollGesture {
     }
 
     fn displaced_surface(&self, target: ScrollTarget) -> bool {
-        self.canvas_owned == Some(false) && self.owner.is_none() && target != ScrollTarget::Surface
+        self.canvas_owned == Some(false)
+            && self
+                .owner
+                .is_some_and(|owner| matches!(owner, ScrollTarget::Surface(_)) && target != owner)
     }
 }
 
@@ -301,6 +287,7 @@ fn last_wheel_boundary(events: &[Event]) -> Option<TouchPhase> {
 /// classified together with plain wheels by egui's frame-wide accumulator.
 #[derive(Clone, Default)]
 struct PanelWheelScroll {
+    target: Option<ScrollTarget>,
     backlog: Vec2,
     in_touch: bool,
 }
@@ -490,17 +477,24 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 impl ScrollRouting {
     fn panel_scroll_delta(&self, ctx: &Context) -> Option<Vec2> {
         let id = Id::new(("panel_wheel_scroll", ctx.viewport_id()));
-        if self.panel_scroll_delivery == PanelScrollDelivery::Disabled || self.owns_smooth_scroll {
+        let Some(target) = self.panel_scroll_target else {
             ctx.data_mut(|data| data.remove::<PanelWheelScroll>(id));
-            return (self.panel_scroll_delivery != PanelScrollDelivery::Disabled).then_some(Vec2::ZERO);
-        }
-        let mut state = if self.panel_scroll_delivery == PanelScrollDelivery::DiscardBacklog {
-            PanelWheelScroll::default()
-        } else {
-            ctx.data_mut(|data| data.get_temp::<PanelWheelScroll>(id).unwrap_or_default())
+            return None;
         };
+        if self.owns_smooth_scroll {
+            ctx.data_mut(|data| data.remove::<PanelWheelScroll>(id));
+            return Some(Vec2::ZERO);
+        }
+        let mut state = ctx.data_mut(|data| data.get_temp::<PanelWheelScroll>(id).unwrap_or_default());
+        // Gesture boundaries can release ownership before easing finishes.
+        // Bind the queued motion independently, preserving contact precision.
+        if state.target != Some(target) {
+            state.backlog = Vec2::ZERO;
+            state.target = Some(target);
+        }
         let options = ctx.options(|options| options.input_options);
         let delta = ctx.input(|input| state.advance(input, &options, &self.claimed_wheels));
+        state.target = Some(target);
         if state.backlog != Vec2::ZERO {
             ctx.request_repaint();
         }
@@ -518,16 +512,19 @@ impl ScrollRouting {
         self.claimed_wheels.sort_unstable();
     }
 
-    /// Keep the original geometry and interaction enabled while a panel takes
-    /// its wheels through the normal renderer. Continuous panel input can hold
+    /// Keep the original geometry and interaction enabled while a panel or
+    /// runtime surface takes its wheels. Continuous retained input can hold
     /// the old canvas tail until the first idle frame; no displacement is lost.
     pub(super) fn defer_for_panel_delivery(&mut self, ctx: &Context) {
-        if !self.pans_canvas
-            || !self
-                .absorbed_wheels
-                .iter()
-                .any(|(index, _, _)| self.claimed_wheels.binary_search(index).is_err())
-        {
+        let has_retained_motion = ctx.input(|input| {
+            wheel_steps(&input.events).enumerate().any(|(index, (step, _))| {
+                step.delta != Vec2::ZERO
+                    && !step.modifiers.ctrl
+                    && !step.modifiers.command
+                    && self.claimed_wheels.binary_search(&index).is_err()
+            })
+        });
+        if !self.pans_canvas || !has_retained_motion {
             return;
         }
         let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));

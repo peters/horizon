@@ -7,7 +7,7 @@ fn a_surface_contact_cannot_deliver_raw_wheels_to_a_panel() {
     let _ = gesture.route(
         &pass(1.0, vec![wheel(Vec2::ZERO, TouchPhase::Start)]),
         &options,
-        ScrollTarget::Surface,
+        ScrollTarget::Surface(901),
         true,
         &mut |_, _| false,
     );

@@ -568,7 +568,7 @@ fn a_surface_without_a_scroll_extent_keeps_its_gesture() {
     let routing = gesture.route(
         &input,
         &InputOptions::default(),
-        ScrollTarget::Surface,
+        ScrollTarget::Surface(901),
         true,
         &mut |_, _| true,
     );

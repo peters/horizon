@@ -122,7 +122,7 @@ fn displaced_panel_wheels_do_not_reach_another_panels_scroll_area() {
 
 #[test]
 fn displaced_surface_wheels_do_not_reach_a_panels_scroll_area() {
-    assert_displaced_wheels_stay_with_owner(ScrollTarget::Surface);
+    assert_displaced_wheels_stay_with_owner(ScrollTarget::Surface(901));
 }
 
 #[test]
@@ -392,5 +392,97 @@ fn clearing_panel_smoothing_preserves_outside_input_and_fresh_notches() {
         let actual = scroll_area_frame(&ctx, 1.048, target, vec![notch.clone()]).0 - before;
         let expected = scroll_area_frame(&fresh, 1.048, target, vec![notch]).0;
         assert!((actual - expected).abs() < 0.001, "fresh notch: {actual} vs {expected}");
+    }
+}
+
+#[test]
+fn a_modified_start_cannot_detach_queued_easing_from_its_panel_owner() {
+    let ctx = Context::default();
+    let target = ScrollTarget::Panel(PANEL);
+    for time in [0.0, 0.016, 0.032] {
+        let _ = scroll_area_frame(&ctx, time, target, Vec::new());
+    }
+    let _ = scroll_area_frame(
+        &ctx,
+        1.0,
+        target,
+        vec![Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }],
+    );
+    let before = scroll_area_frame(
+        &ctx,
+        1.016,
+        target,
+        vec![Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::ZERO,
+            phase: TouchPhase::Start,
+            modifiers: Modifiers::CTRL,
+        }],
+    )
+    .0;
+    let other = ScrollTarget::Panel(OTHER_PANEL);
+    for step in 2..20 {
+        let after = scroll_area_frame(&ctx, 1.0 + f64::from(step) * 0.016, other, Vec::new()).0;
+        assert!(
+            (after - before).abs() < 0.001,
+            "old panel easing leaked: {after} vs {before}"
+        );
+    }
+    let fresh = scroll_area_frame(
+        &ctx,
+        1.32,
+        other,
+        vec![Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        }],
+    )
+    .0;
+    assert!(
+        (fresh - before - InputOptions::default().line_scroll_speed).abs() < 0.001,
+        "the phased contact remains precise after changing targets"
+    );
+}
+
+#[test]
+fn a_new_notch_after_a_boundary_keeps_its_target_until_easing_finishes() {
+    for phase in [TouchPhase::End, TouchPhase::Cancel] {
+        for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::COMMAND] {
+            let ctx = Context::default();
+            let target = ScrollTarget::Panel(PANEL);
+            for time in [0.0, 0.016, 0.032] {
+                let _ = scroll_area_frame(&ctx, time, target, Vec::new());
+            }
+            let events = vec![
+                Event::MouseWheel {
+                    unit: MouseWheelUnit::Point,
+                    delta: Vec2::ZERO,
+                    phase,
+                    modifiers,
+                },
+                Event::MouseWheel {
+                    unit: MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+            ];
+            let _ = scroll_area_frame(&ctx, 1.0, target, events);
+            let mut actual = 0.0;
+            for step in 1..40 {
+                actual = scroll_area_frame(&ctx, 1.0 + f64::from(step) * 0.016, target, Vec::new()).0;
+            }
+            assert!(
+                (actual - InputOptions::default().line_scroll_speed).abs() < 0.001,
+                "{phase:?} {modifiers:?}: the new notch must land in full, got {actual}"
+            );
+        }
     }
 }

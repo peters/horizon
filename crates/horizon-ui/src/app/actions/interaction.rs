@@ -286,24 +286,24 @@ impl HorizonApp {
         // panels are Foreground; otherwise use egui's persisted area ordering
         // for overlaps rather than inferring it from rendering call order.
         #[cfg(feature = "cloud-workspaces")]
-        let over_cloud_runtime = pointer_position.is_some_and(|position| {
-            self.pointer_over_cloud_runtime(ctx, position)
-                && !panel_under_pointer.is_some_and(|panel| {
+        let cloud_runtime = pointer_position.and_then(|position| {
+            self.cloud_runtime_under_pointer(ctx, position).filter(|_| {
+                !panel_under_pointer.is_some_and(|panel| {
                     self.board.focused == Some(panel)
                         || ctx
                             .layer_id_at(position)
                             .is_some_and(|layer| layer.id == egui::Id::new(("panel", panel.0)))
                 })
+            })
         });
         #[cfg(not(feature = "cloud-workspaces"))]
-        let over_cloud_runtime = false;
-        let scroll_target = if over_cloud_runtime {
-            ScrollTarget::Surface
-        } else {
-            panel_under_pointer.map_or(ScrollTarget::Canvas, ScrollTarget::Panel)
-        };
+        let cloud_runtime: Option<u32> = None;
+        let scroll_target = cloud_runtime.map_or_else(
+            || panel_under_pointer.map_or(ScrollTarget::Canvas, ScrollTarget::Panel),
+            ScrollTarget::Surface,
+        );
         let terminal_under_pointer = panel_under_pointer.filter(|panel| {
-            !over_cloud_runtime && {
+            cloud_runtime.is_none() && {
                 panel_geometry.iter().any(|(id, geometry)| {
                     id == panel
                         && geometry
