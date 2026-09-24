@@ -174,6 +174,12 @@ impl PreparedUsage {
         Ok(snapshot)
     }
 
+    #[cfg(test)]
+    pub(super) fn with_keychain(mut self, opener: StoreOpener) -> Self {
+        self.keychain = Some(opener);
+        self
+    }
+
     pub(super) fn authorization(mut self) -> Result<ProviderAuthorization, UsageError> {
         let keychain = self
             .keychain

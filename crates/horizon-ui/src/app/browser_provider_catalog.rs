@@ -61,9 +61,8 @@ impl HorizonApp {
 mod tests {
     use super::*;
     use horizon_core::{Board, PanelKind, PanelState, RuntimeState, WorkspaceState};
-    #[test]
-    fn authenticated_minimum_deadline_times_out_before_provider_lookup() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
+    fn app_with_agent() -> (tempfile::TempDir, HorizonApp) {
+        let (temp, mut app) = crate::app::test_support::test_app();
         app.board = Board::from_runtime_state(&RuntimeState {
             workspaces: vec![WorkspaceState {
                 local_id: "fixture".into(),
@@ -77,6 +76,12 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        (temp, app)
+    }
+
+    #[test]
+    fn authenticated_minimum_deadline_times_out_before_provider_lookup() {
+        let (_temp, mut app) = app_with_agent();
         let request: UsageRequest = serde_json::from_value(serde_json::json!({
             "request_id":"expired", "actor":"horizon:agent",
             "host_instance":manifest::host_instance(), "deadline_at_millis":i64::MIN,
@@ -87,5 +92,57 @@ mod tests {
         let result = app.provider_catalog_result(&request).unwrap();
         assert_eq!(result.error.as_deref(), Some("provider_catalog_timed_out"));
         assert!(result.catalog.is_none());
+    }
+
+    #[test]
+    fn public_requests_share_a_blocked_credential_read_then_report_its_stall() {
+        use horizon_core::browser::provider_catalog::CatalogStage;
+        let (_temp, mut app) = app_with_agent();
+        let profile: horizon_core::browser::remote::RemoteProviderProfile = serde_json::from_str(
+            r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub"}"#,
+        )
+        .unwrap();
+        app.template_config
+            .browser
+            .remote
+            .providers
+            .insert("account".into(), profile.clone());
+        let cache = &mut app.browser_create_host.catalog.cache;
+        cache.invalidate_credentials(app.remote_browser_credentials.generation());
+        let (release, resume) = std::sync::mpsc::channel::<()>();
+        cache.start("account", &profile, move |_| {
+            let _ = resume.recv();
+            Err(horizon_core::browser::remote_catalog::CatalogError::Credentials)
+        });
+        let request: UsageRequest = serde_json::from_value(serde_json::json!({
+            "request_id":"pending", "actor":"horizon:agent",
+            "host_instance":manifest::host_instance(), "deadline_at_millis":i64::MAX,
+            "catalog":{"provider":"account"}, "claimed":true
+        }))
+        .unwrap();
+        for _ in 0..5 {
+            assert!(
+                app.provider_catalog_result(&request).is_none(),
+                "request waits for the shared read"
+            );
+        }
+        let cache = &mut app.browser_create_host.catalog.cache;
+        assert_eq!(cache.stage("account"), Some(CatalogStage::Credentials));
+        cache.advance_clock(std::time::Duration::from_secs(10));
+        let result = app.provider_catalog_result(&request).unwrap();
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("provider_catalog_credentials_timed_out:")),
+            "{result:?}"
+        );
+        assert!(result.catalog.is_none());
+        assert_eq!(
+            app.browser_create_host.catalog.cache.stage("account"),
+            Some(CatalogStage::Credentials),
+            "no replacement starts before the retry interval"
+        );
+        release.send(()).unwrap();
     }
 }

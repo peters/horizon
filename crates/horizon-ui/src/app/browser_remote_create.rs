@@ -382,7 +382,7 @@ mod tests {
         };
         let cache = &mut app.browser_create_host.catalog.cache;
         cache.invalidate_credentials(app.remote_browser_credentials.generation());
-        cache.start("grid", &profile, move || Ok(vec![row]));
+        cache.start("grid", &profile, move |_| Ok(vec![row]));
         let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let query = CatalogQuery {
             provider: "grid".into(),

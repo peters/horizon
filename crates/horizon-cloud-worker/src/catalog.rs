@@ -13,7 +13,7 @@ pub struct Host {
 impl Host {
     pub fn revoke(&mut self, fence: &Path) -> io::Result<()> {
         std::fs::write(fence, "revoked")?;
-        self.cache = CatalogCache::default();
+        self.cache.clear();
         Ok(())
     }
 
@@ -36,14 +36,16 @@ impl Host {
             .ok_or_else(|| io::Error::other("Remote provider is not granted to this cloud"))?;
         self.cache.poll();
         if self.cache.needs_refresh(&query.provider, profile) {
+            // The worker's credential is part of the private configuration read
+            // above, so its job starts at the provider request.
             let header = config
                 .authorization
                 .remove(&query.provider)
                 .ok_or_else(|| io::Error::other("Remote credentials are unavailable"))?;
             let provider = query.provider.clone();
             let cloned = profile.clone();
-            self.cache.start(&query.provider, profile, move || {
-                provider_catalog::fetch(&provider, &cloned, &header)
+            self.cache.start(&query.provider, profile, move |progress| {
+                provider_catalog::fetch(&provider, &cloned, &header, progress)
             });
         }
         self.cache.page(profile, query).map_err(io::Error::other)
@@ -95,7 +97,7 @@ mod tests {
         .unwrap();
         let mut host = Host::default();
         let (release, wait) = std::sync::mpsc::channel();
-        host.cache.start("account", &profile, move || {
+        host.cache.start("account", &profile, move |_| {
             wait.recv().unwrap();
             Ok(Vec::new())
         });
@@ -113,11 +115,26 @@ mod tests {
         );
         let fence = root.path().join("revoked");
         host.revoke(&fence).unwrap();
-        assert_eq!(std::fs::read_to_string(fence).unwrap(), "revoked");
+        assert_eq!(std::fs::read_to_string(&fence).unwrap(), "revoked");
         assert_eq!(host.pending.len(), 1, "pending callers must still receive a result");
-        release.send(()).unwrap();
-        host.cache.poll();
         assert!(host.cache.needs_refresh("account", &profile));
+        let (second, held) = std::sync::mpsc::channel();
+        host.cache.start("account", &profile, move |_| {
+            held.recv().unwrap();
+            Ok(Vec::new())
+        });
+        host.revoke(&fence).unwrap();
+        assert!(
+            !host.cache.needs_refresh("account", &profile),
+            "revocation drops results but running jobs stay counted"
+        );
+        release.send(()).unwrap();
+        second.send(()).unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !host.cache.needs_refresh("account", &profile) {
+            assert!(std::time::Instant::now() < end, "finished jobs release their budget");
+            std::thread::yield_now();
+        }
     }
     #[test]
     fn authenticated_minimum_deadline_times_out_without_requesting_a_catalog() {
