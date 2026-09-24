@@ -11,6 +11,9 @@ pub struct CloudConfig {
     pub version: u32,
     pub default: String,
     pub profiles: BTreeMap<String, Profile>,
+    /// Portable declarations only; selecting and authorizing a target is machine-local.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub companions: BTreeMap<String, crate::companions::Declaration>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -104,6 +107,7 @@ impl CloudConfig {
                 "cloud.yml requires version 1 and a named default profile",
             ));
         }
+        crate::companions::validate_declarations(&config.companions)?;
         for (name, profile) in &config.profiles {
             if !valid_id(name) {
                 return Err(ProfileError::Invalid("Invalid profile name"));

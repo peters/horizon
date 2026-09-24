@@ -463,6 +463,12 @@ and credential logic must not be copied into either transport or UI rendering.
 
 ## Cloud workspaces
 
+`horizon-cloud::companions` owns passive repository declarations and pure,
+scope-checked target selection. It has no provider, filesystem, SSH or UI side
+effects. Callers supply the owning host's trusted inventory; the serialized
+selection itself is not authentication. Runtime grants and readiness belong in
+the host coordinator, not the portable selection contract.
+
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation

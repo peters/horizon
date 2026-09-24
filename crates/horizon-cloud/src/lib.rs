@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod capabilities;
+pub mod companions;
 mod profile;
 mod reason;
 pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};

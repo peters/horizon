@@ -12,6 +12,29 @@ sessions and preserved cloud metadata remain available. The standalone provider
 crate remains portable. Windows cloud durability is tracked in #823; native Device
 platform qualification remains separately tracked in #741.
 
+## Companion declarations (preparatory support)
+
+Version 1 configuration accepts optional companion repository metadata:
+
+```yaml
+companions:
+  app:
+    repository: example/application
+    profile: cpu
+```
+
+Repository identities currently use GitHub `owner/repository` notation. Aliases
+start with a lowercase letter and contain lowercase letters, digits, `_` or `-`.
+Profiles refer to the companion's configuration, not the declaring repository's
+profiles. Local checkout paths and target cloud IDs belong in machine-local state.
+
+This parser and selection contract is a prerequisite for #910. It does not yet
+add the companion UI, CLI/MCP discovery, SSH grants, or remote execution. A
+declaration never starts a cloud or authorizes access. The selection contract pins
+the source session/workspace, source cloud, alias, declaration, and target cloud.
+A changed declaration or missing target requires a new explicit selection rather
+than rebinding to another matching repository. Multiple matches stay distinct.
+
 ## One-time machine setup
 
 In an existing workspace, choose **Cloud** from the panel-creation menu (or
