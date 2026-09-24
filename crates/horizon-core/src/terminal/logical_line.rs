@@ -166,8 +166,9 @@ fn joint_after(grid: &Grid<Cell>, cols: usize, line: Line, join: RowJoin) -> Opt
 /// leave a ragged edge instead; those rows join only when the continuation
 /// row is a single URL-shaped word. A continuation that starts like a file
 /// path counts as URL text only when it leads to query syntax, see
-/// [`path_row_reaches_query`], so a path printed below a URL stays clickable
-/// on its own.
+/// [`path_row_reaches_query`], or when it is the single word on its row and
+/// continues a `file://` URL, so a path printed below a web URL stays
+/// clickable on its own.
 fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool {
     let (upper, lower) = (&grid[line], &grid[line + 1]);
     let (Some(upper_start), Some(upper_end), Some(lower_end)) = (
@@ -192,6 +193,9 @@ fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool
         && SENTENCE_PUNCTUATION.contains(&lower[Column(continuation.end - 1)].c);
     let continuation_has_delimiters = if continuation_is_path {
         path_row_reaches_query(grid, cols, line + 1)
+            || (continuation_is_row_content
+                && !continuation_ends_sentence
+                && segment_in_file_url(grid, cols, line, segment_start))
     } else {
         row_chars(lower, continuation.clone()).any(|character| URL_DELIMITERS.contains(&character))
     };
@@ -317,6 +321,40 @@ fn is_marker(mut chars: impl Iterator<Item = char>) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the URL segment starting at `segment_start` on row `line` belongs
+/// to a `file://` URL whose scheme is on this row or on the full-width rows
+/// that wrap into it, up to [`MAX_PATH_ROWS`] rows up.
+fn segment_in_file_url(grid: &Grid<Cell>, cols: usize, mut line: Line, mut segment_start: usize) -> bool {
+    for _ in 0..MAX_PATH_ROWS {
+        let row = &grid[line];
+        let Some(end) = last_content_column(row, cols) else {
+            return false;
+        };
+        if row_chars(row, segment_start..end + 1)
+            .collect::<String>()
+            .contains("file://")
+        {
+            return true;
+        }
+        if first_content_column(row, cols) != Some(segment_start) || line <= grid.topmost_line() {
+            return false;
+        }
+        line -= 1;
+        let above = &grid[line];
+        let Some(above_end) = last_content_column(above, cols) else {
+            return false;
+        };
+        let Some(above_start) = url_segment_start(above, above_end) else {
+            return false;
+        };
+        if cols - 1 - above_end > MAX_WRAP_PADDING {
+            return false;
+        }
+        segment_start = above_start;
+    }
+    false
 }
 
 /// Whether text starts like an absolute or home-relative file path.

@@ -215,3 +215,15 @@ fn full_width_row_ending_in_punctuation_keeps_joining() {
         );
     }
 }
+
+#[test]
+fn file_url_continues_onto_path_shaped_rows() {
+    let first = format!("file:///very/long/{}", "x".repeat(COLS - 18));
+    let middle = format!("/next-segment/{}", "y".repeat(COLS - 14));
+    let term = term_with_rows(COLS, 4, &[first.clone(), middle.clone(), "/final.txt".to_string()]);
+    let url = format!("{first}{middle}/final.txt");
+
+    for row in 0..3 {
+        assert_eq!(url_at(&term, COLS, row, 3).as_deref(), Some(url.as_str()), "row {row}");
+    }
+}
