@@ -247,9 +247,22 @@ fn cents(amount: f64) -> f64 {
     (amount * 100.0).round() / 100.0
 }
 
+/// Accepts RFC 3339 and the provider pod API's `lastStartedAt` text.
 pub(super) fn started_at(value: &str) -> Option<SystemTime> {
-    let since_epoch = OffsetDateTime::parse(value, &Rfc3339).ok()? - OffsetDateTime::UNIX_EPOCH;
-    SystemTime::UNIX_EPOCH.checked_add(since_epoch.try_into().ok()?)
+    let at = OffsetDateTime::parse(value, &Rfc3339).ok().or_else(|| go_time(value))?;
+    SystemTime::UNIX_EPOCH.checked_add((at - OffsetDateTime::UNIX_EPOCH).try_into().ok()?)
+}
+
+/// Go's default time text, which the pod API uses: `2024-07-12 19:14:40.144 +0000 UTC`.
+/// Fractional seconds are optional, and the zone name only repeats the numeric offset.
+fn go_time(value: &str) -> Option<OffsetDateTime> {
+    let mut parts = value.split(' ');
+    let (date, time, offset) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.nth(1).is_some() || offset.len() != 5 || !offset.is_char_boundary(3) {
+        return None;
+    }
+    let (hours, minutes) = offset.split_at(3);
+    OffsetDateTime::parse(&format!("{date}T{time}{hours}:{minutes}"), &Rfc3339).ok()
 }
 
 #[cfg(test)]
@@ -302,18 +315,29 @@ mod tests {
     }
 
     #[test]
-    fn start_times_accept_rfc3339_offsets_and_fractions_only() {
+    fn start_times_accept_rfc3339_and_the_pod_api_text_only() {
         let now = started() + Duration::from_secs(60);
-        for same_instant in [STARTED, "2024-07-12T15:14:40.144-04:00"] {
+        for same_instant in [
+            STARTED,
+            "2024-07-12T15:14:40.144-04:00",
+            // The pod API reports `lastStartedAt` as Go's default time text.
+            "2024-07-12 19:14:40.144 +0000 UTC",
+            "2024-07-12 15:14:40.144 -0400 EDT",
+        ] {
             let run = current_run(&worker(&json!({"lastStartedAt": same_instant})), now).unwrap();
-            assert_eq!(run.elapsed, Duration::from_secs(60));
+            assert_eq!(run.elapsed, Duration::from_secs(60), "{same_instant}");
         }
-        let whole = current_run(&worker(&json!({"lastStartedAt": "2024-07-12T19:14:40Z"})), now).unwrap();
-        assert_eq!(whole.elapsed, Duration::from_millis(60_144));
+        for whole_second in ["2024-07-12T19:14:40Z", "2024-07-12 19:14:40 +0000 UTC"] {
+            let whole = current_run(&worker(&json!({"lastStartedAt": whole_second})), now).unwrap();
+            assert_eq!(whole.elapsed, Duration::from_millis(60_144), "{whole_second}");
+        }
         for invalid in [
             json!(null),
             json!(""),
             json!("2024-07-12 19:14:40.144"),
+            json!("2024-07-12 19:14:40.144 UTC"),
+            json!("2024-07-12 19:14:40.144 +00:00 UTC"),
+            json!("2024-07-12 19:14:40.144 +0000 UTC trailing"),
             json!("Fri Jul 12 2024 15:14:40 GMT-0400"),
             json!("1969-12-31T23:59:59Z"),
         ] {
