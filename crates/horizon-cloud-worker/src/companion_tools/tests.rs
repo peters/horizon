@@ -142,3 +142,20 @@ fn missing_catalog_is_an_explicit_discovery_error() {
     assert!(list(&root.path().join("missing"), 100).is_err());
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn catalog_rejects_invalid_declarations_and_self_targets() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    for repository in ["../app", "/local/app", "a/b/c", "-owner/app", "owner/.."] {
+        let mut snapshot = catalog(Status::Ready);
+        snapshot.companions[0].repository = repository.into();
+        save(file.path(), &snapshot);
+        assert!(list(file.path(), 100).is_err());
+        assert!(inspect(file.path(), "app", 100, |_| panic!("invalid identity was probed")).is_err());
+    }
+    let mut snapshot = catalog(Status::Ready);
+    snapshot.companions[0].target_cloud_id = Some(snapshot.source_cloud_id.clone());
+    save(file.path(), &snapshot);
+    assert!(list(file.path(), 100).is_err());
+    assert!(inspect(file.path(), "app", 100, |_| panic!("self target was probed")).is_err());
+}

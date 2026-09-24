@@ -111,17 +111,16 @@ impl Catalog {
         for entry in &self.companions {
             if !horizon_cloud::companions::valid_alias(&entry.alias)
                 || !aliases.insert(&entry.alias)
-                || !horizon_cloud::valid_id(&entry.profile)
-                || entry.repository.len() > 201
-                || entry.repository.is_empty()
-                || !entry
-                    .repository
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+                || (horizon_cloud::companions::Declaration {
+                    repository: entry.repository.clone(),
+                    profile: entry.profile.clone(),
+                })
+                .validate()
+                .is_err()
                 || entry
                     .target_cloud_id
                     .as_deref()
-                    .is_some_and(|id| !horizon_cloud::valid_id(id))
+                    .is_some_and(|id| !horizon_cloud::valid_id(id) || id == self.source_cloud_id)
             {
                 return Err("Invalid companion identity in catalog");
             }
