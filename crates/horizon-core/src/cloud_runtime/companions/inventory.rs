@@ -2,7 +2,7 @@
 use super::super::{Cancellation, command::Runner, repository};
 use super::{Context, Declaration, Error, Owner, Result, Target};
 use crate::cloud_panel::CloudGroups;
-use std::{path::Path, process::Command, time::Duration};
+use std::{collections::BTreeSet, path::Path, process::Command, time::Duration};
 
 /// # Errors
 /// The source must remain in the current owning workspace and have committed configuration.
@@ -14,37 +14,34 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
     };
     let mut inventory = Vec::new();
     let mut source = None;
+    let mut ids = BTreeSet::new();
     for group in &groups.0 {
         if group.workspace != owner.scope.workspace_id {
             continue;
         }
         let Some(launch) = &group.remote else { continue };
-        let identity = identity(&group.cwd, &runner);
-        if launch.id == owner.cloud_id {
-            if source.is_some() {
-                return Err(Error::Invalid("Source cloud identity is ambiguous"));
-            }
-            let prepared = repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner)?;
-            let target = Target {
-                scope: owner.scope.clone(),
-                cloud_id: launch.id.clone(),
-                declaration: Declaration {
-                    repository: identity?,
-                    profile: launch.profile_name.clone(),
-                },
-            };
-            source = Some((target.clone(), prepared.config.companions));
-            inventory.push(target);
-        } else if let Ok(repository) = identity {
-            inventory.push(Target {
-                scope: owner.scope.clone(),
-                cloud_id: launch.id.clone(),
-                declaration: Declaration {
-                    repository,
-                    profile: launch.profile_name.clone(),
-                },
-            });
+        cancel.check()?;
+        if !ids.insert(&launch.id) {
+            return Err(Error::Invalid("Cloud identity is ambiguous"));
         }
+        let repository = match identity(&group.cwd, &runner) {
+            Ok(repository) => repository,
+            Err(error) if launch.id == owner.cloud_id => return Err(error),
+            Err(_) => continue,
+        };
+        let target = Target {
+            scope: owner.scope.clone(),
+            cloud_id: launch.id.clone(),
+            declaration: Declaration {
+                repository,
+                profile: launch.profile_name.clone(),
+            },
+        };
+        if launch.id == owner.cloud_id {
+            let prepared = repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner)?;
+            source = Some((target.clone(), prepared.config.companions));
+        }
+        inventory.push(target);
     }
     cancel.check()?;
     let (source, declarations) = source.ok_or(Error::Invalid("Source cloud is missing from its owning workspace"))?;
@@ -89,7 +86,7 @@ fn from_remote(remote: &str) -> Result<String> {
 mod tests {
     use super::*;
     #[test]
-    fn cancelled_inventory_never_returns_a_partial_or_missing_source_result() {
+    fn inventory_rejects_cancellation_and_duplicate_ids_despite_failed_repository_probes() {
         let cancel = Cancellation::default();
         cancel.cancel();
         let owner = Owner {
@@ -99,9 +96,23 @@ mod tests {
             },
             cloud_id: "source".into(),
         };
+        let mut group =
+            crate::cloud_panel::CloudGroup::new(1, "Target".into(), "workspace".into(), "/missing".into(), [0.0, 0.0]);
+        group.remote = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": "target", "revision": "a".repeat(40), "profile_name": "cpu",
+                "profile": {"provider": "runpod", "image": "example/worker", "cpu": 8, "memory_gb": 32}
+            }))
+            .unwrap(),
+        );
+        let groups = CloudGroups(vec![group.clone(), group]);
         assert!(matches!(
-            prepare(&owner, &CloudGroups::default(), &cancel),
+            prepare(&owner, &groups, &cancel),
             Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+        ));
+        assert!(matches!(
+            prepare(&owner, &groups, &Cancellation::default()),
+            Err(Error::Invalid("Cloud identity is ambiguous"))
         ));
     }
 
