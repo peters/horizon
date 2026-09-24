@@ -2,6 +2,7 @@
 pub use horizon_cloud::{Cancellation, CreateState, runpod::flavors};
 pub mod allocation;
 pub mod billing;
+pub mod bootstrap_recovery;
 pub mod browser_auth;
 pub mod command;
 pub mod cost;

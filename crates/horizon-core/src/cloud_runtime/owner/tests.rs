@@ -1,10 +1,14 @@
 use super::*;
 use serde_json::json;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Default)]
-struct MemoryVault(Rc<RefCell<HashMap<String, Vec<u8>>>>);
+pub(crate) struct MemoryVault(Rc<RefCell<HashMap<String, Vec<u8>>>>, Rc<Cell<Option<usize>>>);
 impl Vault for MemoryVault {
     fn read(&self, slot: &str) -> Result<Zeroizing<Vec<u8>>> {
         self.0
@@ -15,8 +19,20 @@ impl Vault for MemoryVault {
             .ok_or(Error::MissingRegistration)
     }
     fn write(&self, slot: &str, value: &[u8]) -> Result<()> {
+        if let Some(left) = self.1.get() {
+            if left == 0 {
+                return Err(Error::Store);
+            }
+            self.1.set(Some(left - 1));
+        }
         self.0.borrow_mut().insert(slot.into(), value.to_vec());
         Ok(())
+    }
+}
+
+impl MemoryVault {
+    pub(crate) fn fail_after(&self, writes: Option<usize>) {
+        self.1.set(writes);
     }
 }
 
@@ -36,7 +52,7 @@ fn machine(value: u128) -> MachineReader {
     Box::new(move || serde_json::from_value(json!(uuid::Uuid::from_u128(value))).map_err(|_| Error::Machine))
 }
 
-fn open(root: &Path, vault: &MemoryVault) -> Result<Owner> {
+pub(crate) fn open(root: &Path, vault: &MemoryVault) -> Result<Owner> {
     Owner::open_with(root, Box::new(vault.clone()), machine(1))
 }
 
@@ -44,13 +60,13 @@ fn interrupt_at(step: Boundary, expected: Boundary) -> Result<()> {
     if step == expected { Err(Error::Journal) } else { Ok(()) }
 }
 
-fn fixture() -> (tempfile::TempDir, PathBuf, MemoryVault) {
+pub(crate) fn fixture() -> (tempfile::TempDir, PathBuf, MemoryVault) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("allocation");
     (temp, root, MemoryVault::default())
 }
 
-fn create(root: &Path, vault: &MemoryVault) -> Owner {
+pub(crate) fn create(root: &Path, vault: &MemoryVault) -> Owner {
     Owner::create_with(
         root,
         &root.parent().unwrap().join("locks"),
