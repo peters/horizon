@@ -5,7 +5,7 @@ mod ssh;
 #[cfg(all(test, unix))]
 mod tests;
 
-use horizon_cloud_protocol::companion::{Request, Response};
+use horizon_cloud_protocol::companion::{Access, Catalog, Request, Response};
 use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
@@ -27,23 +27,67 @@ pub(super) fn run() -> io::Result<()> {
         return Err(io::Error::other("Companion request too large"));
     }
     let request: Request = serde_json::from_slice(&input).map_err(|_| io::Error::other("Invalid companion request"))?;
-    let runtime = Runtime {
+    let response = runtime().apply(&request)?;
+    serde_json::to_writer(io::stdout().lock(), &response)?;
+    io::stdout().write_all(b"\n")
+}
+
+fn runtime() -> Runtime {
+    Runtime {
         workspace: "/workspace".into(),
         live: "/run/sshd".into(),
         // OpenSSH looks up the login's home in passwd, not the agent's HOME override.
         ssh_home: "/root/.ssh".into(),
         source_helper: "/usr/local/bin/horizon-worker-source".into(),
-    };
-    let response = runtime.apply(&request)?;
-    serde_json::to_writer(io::stdout().lock(), &response)?;
-    io::stdout().write_all(b"\n")
+    }
+}
+
+pub(crate) fn publish_catalog(catalog: &Catalog) -> io::Result<()> {
+    catalog.validate().map_err(io::Error::other)?;
+    let runtime = runtime();
+    runtime.with_lock(|| {
+        let root = runtime.live.join("companions");
+        files::directory(&root)?;
+        files::write(&root.join("catalog.json"), &serde_json::to_vec(catalog)?)
+    })
+}
+
+pub(crate) fn probe_access(access: &Access) -> io::Result<bool> {
+    runtime().probe_access(access, || {
+        let output = ssh::checked(
+            std::process::Command::new("ssh")
+                .arg(&access.ssh_alias)
+                .arg(format!("git -C {} rev-parse --is-inside-work-tree", access.worktree)),
+        )?;
+        Ok(output.trim() == "true")
+    })
 }
 
 impl Runtime {
+    fn probe_access(&self, access: &Access, probe: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
+        self.with_lock(|| {
+            let directory = self.key_directory(&access.grant);
+            let response: Response = serde_json::from_slice(&std::fs::read(directory.join("connection.json"))?)?;
+            if response
+                != (Response::Connected {
+                    ssh_alias: access.ssh_alias.clone(),
+                    worktree: access.worktree.clone(),
+                })
+            {
+                return Ok(false);
+            }
+            probe()
+        })
+    }
+
     fn apply(&self, request: &Request) -> io::Result<Response> {
         if !horizon_cloud::valid_id(request.grant()) {
             return Err(io::Error::other("Invalid companion grant"));
         }
+        self.with_lock(|| self.apply_locked(request))
+    }
+
+    fn with_lock<T>(&self, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
         std::fs::create_dir_all(&self.live)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -53,7 +97,7 @@ impl Runtime {
             .open(self.live.join("companion.lock"))?;
         lock.try_lock()
             .map_err(|_| io::Error::other("Companion setup busy; retry"))?;
-        let result = self.apply_locked(request);
+        let result = operation();
         let unlock = lock.unlock();
         let response = result?;
         unlock?;

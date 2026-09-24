@@ -1,7 +1,8 @@
 # Companion worker transport
 
-This is the worker transport prerequisite for issue #910 M0. It does not yet
-expose companion selection, agent discovery, or cloud lifecycle controls.
+This is the worker transport and discovery prerequisite for issue #910 M0.
+Controller selection and automatic tool configuration are separate integration
+work; these commands do not expose cloud lifecycle controls.
 
 An owner invokes `horizon-cloud-worker companion-control` over the existing
 authenticated SSH connection with one JSON request on stdin. It returns one
@@ -42,3 +43,27 @@ authentication, preserves dirty work, and cannot undo copied data or terminate
 an already established shell. Runtime grants are temporary; a controller must
 reconcile selections after worker replacement or restart. Host identity changes
 must be verified through the owner's authenticated connection.
+
+## Read-only discovery
+
+The owning controller publishes a bounded, validated catalog using
+`horizon-cloud-worker companions publish` with JSON on stdin. Publication updates
+discovery data only; it does not install grants, change connections, or start
+compute. No catalog is inferred from repository files.
+
+Agents use `horizon-cloud-worker companions list` or
+`horizon-cloud-worker companions inspect <alias>`. The stdio MCP server,
+`horizon-cloud-worker companions mcp`, exposes `cloud_companions_list` and
+`cloud_companion_inspect` through the same implementation. MCP receives no
+provider credentials, endpoint, filesystem path, or lifecycle operation from
+the caller. These tools require a current worker; this slice does not yet
+advertise the server automatically in agent configuration.
+
+List returns the controller's observation time, selection, repository/profile,
+pinned cloud identity, status, and any existing SSH alias and separate worktree.
+Ready observations expire after 60 seconds. Inspect checks an existing grant's
+direct SSH connection and worktree and can verify access even when the controller
+snapshot is old. It does not contact stopped, unselected, or unavailable targets.
+Failures report unreachable, and selection changes during a probe require a
+fresh inspection. Existing SSH can work while the controller is offline; a
+snapshot's non-ready lifecycle state remains the last controller observation.

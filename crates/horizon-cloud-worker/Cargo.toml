@@ -18,6 +18,9 @@ serde_json.workspace = true
 toml_edit.workspace = true
 base64.workspace = true
 png.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt-multi-thread"] }
 [dev-dependencies]
 ring.workspace = true
 horizon-browser = { workspace = true, features = ["test-support"] }
