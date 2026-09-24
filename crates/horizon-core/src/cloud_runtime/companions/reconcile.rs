@@ -19,6 +19,7 @@ pub(super) fn run(
             .get(&alias)
             .cloned()
             .ok_or(Error::Invalid("Missing companion grant"))?;
+        let declaration_row = rows.get(&alias).cloned();
         let row = rows.entry(alias.clone()).or_insert_with(|| Row {
             companion: Companion {
                 alias: alias.clone(),
@@ -52,8 +53,11 @@ pub(super) fn run(
             if !grant.selected && grant.source_disconnected && grant.target_revoked {
                 state.grants.remove(&alias);
                 store.save(state)?;
-                row.companion.status = Status::Unselected;
-                row.companion.target_cloud_id = None;
+                if let Some(declaration_row) = declaration_row {
+                    rows.insert(alias, declaration_row);
+                } else {
+                    rows.remove(&alias);
+                }
             }
             continue;
         }

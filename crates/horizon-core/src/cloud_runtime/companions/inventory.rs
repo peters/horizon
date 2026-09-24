@@ -46,6 +46,7 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
             });
         }
     }
+    cancel.check()?;
     let (source, declarations) = source.ok_or(Error::Invalid("Source cloud is missing from its owning workspace"))?;
     Ok(Context {
         source,
@@ -87,6 +88,23 @@ fn from_remote(remote: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_inventory_never_returns_a_partial_or_missing_source_result() {
+        let cancel = Cancellation::default();
+        cancel.cancel();
+        let owner = Owner {
+            scope: horizon_cloud::companions::Scope {
+                session_id: "session".into(),
+                workspace_id: "workspace".into(),
+            },
+            cloud_id: "source".into(),
+        };
+        assert!(matches!(
+            prepare(&owner, &CloudGroups::default(), &cancel),
+            Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+        ));
+    }
+
     #[test]
     fn identity_accepts_supported_transports_and_rejects_credentials_and_paths() {
         for remote in [

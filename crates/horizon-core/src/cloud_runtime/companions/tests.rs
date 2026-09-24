@@ -267,6 +267,7 @@ fn moving_source_to_another_workspace_cleans_old_grants_before_accepting_new_one
     fixture.context.source.scope = fixture.owner.scope.clone();
     let snapshot = fixture.select();
     assert!(snapshot.notice.is_some());
+    assert!(snapshot.catalog.companions.is_empty());
     assert!(fixture.saved().grants.is_empty());
     assert_eq!(fixture.saved().owner, fixture.owner);
     assert!(
@@ -424,4 +425,40 @@ fn stopped_target_remains_stopped_when_the_source_worker_is_missing() {
     assert_eq!(fixture.select().rows[0].companion.status, Status::Stopped);
     assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Stopped);
     assert!(fixture.transport.calls.is_empty());
+}
+
+#[test]
+fn cleanup_restores_current_declarations_instead_of_old_grant_rows() {
+    for status in [Status::Missing, Status::Ambiguous, Status::Changed] {
+        let mut fixture = Fixture::new();
+        fixture.select();
+        let declaration = Declaration {
+            repository: "example/new".into(),
+            profile: "cpu".into(),
+        };
+        if status == Status::Changed {
+            fixture.context.declarations.clear();
+        } else {
+            fixture.context.declarations.insert("app".into(), declaration.clone());
+        }
+        if status == Status::Ambiguous {
+            for cloud_id in ["new-one", "new-two"] {
+                fixture.context.inventory.push(Target {
+                    scope: fixture.owner.scope.clone(),
+                    cloud_id: cloud_id.into(),
+                    declaration: declaration.clone(),
+                });
+            }
+        }
+        let snapshot = fixture.run(&Action::Clear { alias: "app".into() });
+        assert!(fixture.saved().grants.is_empty());
+        if status == Status::Changed {
+            assert!(snapshot.catalog.companions.is_empty());
+        } else {
+            let row = &snapshot.catalog.companions[0];
+            assert_eq!(row.repository, declaration.repository);
+            assert_eq!(row.status, status);
+            assert!(!row.selected && row.target_cloud_id.is_none() && row.access.is_none());
+        }
+    }
 }
