@@ -1,6 +1,7 @@
 mod content;
 mod events;
 mod lifecycle;
+mod logical_line;
 mod replay;
 mod resize;
 mod selection;
@@ -622,6 +623,27 @@ mod tests {
         assert_eq!(terminal.hyperlink_at_point(0, 0), None);
         assert!(!terminal.has_hyperlink_at_point(0, 0));
         assert_eq!(terminal.clickable_at_point(0, 0), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn clickable_at_point_joins_hard_wrapped_url_rows_but_not_paths() {
+        let mut terminal = spawn_test_terminal();
+        let url = format!("https://example.com/{}", "a".repeat(100));
+        let (url_head, url_tail) = url.split_at(80);
+        let path = format!("/tmp/{}", "b".repeat(75));
+        let row_filling_url = format!("https://example.com/{}", "c".repeat(60));
+        replay_terminal_bytes(
+            &terminal.term,
+            format!("{url_head}\r\n{url_tail}\r\n{path}\r\nc/file.rs\r\n{row_filling_url}\r\n/tmp/file.rs").as_bytes(),
+        );
+
+        assert_eq!(terminal.clickable_at_point(0, 79), Some(url.clone()));
+        assert_eq!(terminal.clickable_at_point(1, 3), Some(url));
+        assert_eq!(terminal.clickable_at_point(2, 10), Some(path));
+        assert_eq!(terminal.clickable_at_point(3, 3), None);
+        assert_eq!(terminal.clickable_at_point(4, 30), Some(row_filling_url));
+        assert_eq!(terminal.clickable_at_point(5, 3), Some("/tmp/file.rs".to_string()));
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
     }
 

@@ -1,5 +1,6 @@
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
+use super::logical_line::{RowJoin, logical_line_at_viewport_point};
 use super::{
     Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, TermDamage, Terminal, TerminalEventProxy,
     current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
@@ -204,6 +205,8 @@ impl Terminal {
 
     /// Return a clickable target at the given viewport-relative row and
     /// column. OSC 8 hyperlinks take priority over in-band URL or path text.
+    /// URL text may continue across rows a program hard-wrapped; paths follow
+    /// only the terminal's own soft wraps.
     #[must_use]
     pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
@@ -211,9 +214,19 @@ impl Terminal {
         if let Some(uri) = hyperlink_uri_at_viewport_point(&term, cols, row, col) {
             return Some(uri);
         }
-        let (line_chars, logical_col) = wrapped_line_chars_at_viewport_point(&term, cols, row, col)?;
+        // Hard-wrap joints only ever drop blank cells, so a click they leave
+        // without a position has no path under it either.
+        let line = logical_line_at_viewport_point(&term, cols, row, col, RowJoin::UrlHardWraps)?;
+        if let Some(url) = find_url_at_column(&line.chars, line.column) {
+            return Some(url);
+        }
+        let line = if line.joins_hard_wraps {
+            logical_line_at_viewport_point(&term, cols, row, col, RowJoin::SoftWraps)?
+        } else {
+            line
+        };
 
-        find_url_at_column(&line_chars, logical_col).or_else(|| find_file_path_at_column(&line_chars, logical_col))
+        find_file_path_at_column(&line.chars, line.column)
     }
 
     /// Return the OSC 8 hyperlink URI at the given viewport-relative cell.
@@ -257,47 +270,6 @@ fn hyperlink_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: 
 fn nonempty_hyperlink(cell: &Cell) -> Option<Hyperlink> {
     let hyperlink = cell.hyperlink()?;
     (!hyperlink.uri().is_empty()).then_some(hyperlink)
-}
-
-fn wrapped_line_chars_at_viewport_point<T>(
-    term: &Term<T>,
-    cols: usize,
-    row: usize,
-    col: usize,
-) -> Option<(Vec<char>, usize)> {
-    if col >= cols {
-        return None;
-    }
-
-    let grid = term.grid();
-    if row >= grid.screen_lines() {
-        return None;
-    }
-
-    let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
-    let start = term.line_search_left(point);
-    let end = term.line_search_right(point);
-    let mut line_chars = Vec::with_capacity(cols);
-    let mut logical_col = 0;
-    let mut line = start.line;
-
-    loop {
-        if line == point.line {
-            logical_col = line_chars.len() + col;
-        }
-
-        for column in 0..cols {
-            line_chars.push(grid[line][Column(column)].c);
-        }
-
-        if line == end.line {
-            break;
-        }
-
-        line += 1;
-    }
-
-    Some((line_chars, logical_col))
 }
 
 /// Text of the non-empty rows within the bottom `max_rows` rows of a visible
@@ -375,7 +347,7 @@ mod tests {
     use alacritty_terminal::vte::ansi;
 
     use super::{
-        append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, wrapped_line_chars_at_viewport_point,
+        RowJoin, append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, logical_line_at_viewport_point,
     };
     use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust, find_url_at_column};
 
@@ -509,10 +481,10 @@ mod tests {
         let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
         parser.advance(&mut term, url.as_bytes());
 
-        let (line_chars, logical_col) =
-            wrapped_line_chars_at_viewport_point(&term, 12, 2, 4).expect("wrapped line should be present");
+        let line = logical_line_at_viewport_point(&term, 12, 2, 4, RowJoin::SoftWraps)
+            .expect("wrapped line should be present");
 
-        assert_eq!(find_url_at_column(&line_chars, logical_col), Some(url.to_string()));
+        assert_eq!(find_url_at_column(&line.chars, line.column), Some(url.to_string()));
     }
 
     #[test]

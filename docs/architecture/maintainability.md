@@ -176,7 +176,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   creation restores an inert transcript and restart refuses local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
-  `terminal/` leaf modules.
+  `terminal/` leaf modules. `terminal/logical_line.rs` assembles the text under
+  a click from soft-wrapped rows and from URL rows a program hard-wrapped; its
+  row-shape heuristics are tested under `terminal/logical_line/tests/`.
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
