@@ -181,7 +181,7 @@ fn contained(root: &Path, value: &str) -> Result<PathBuf> {
 }
 
 /// Docker's tag grammar: at most 128 word characters, dots and dashes, not led by either.
-pub(super) fn valid_tag(tag: &str) -> bool {
+fn valid_tag(tag: &str) -> bool {
     tag.len() <= 128
         && tag
             .bytes()

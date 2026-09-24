@@ -283,12 +283,7 @@ fn begin(
     emit(activity("Reading the latest committed recipe"));
     let head = steps.head(&state.repository)?;
     unchanged_profile(&state.profile, head.config.as_ref(), profile_name)?;
-    let operation = OperationId::generate();
-    let tag = format!("horizon-{}-{}", state.cloud_id, uuid::Uuid::from(operation).simple());
-    if !super::super::image::valid_tag(&tag) {
-        return Err(Error::Invalid("This cloud's identity is too long for an image tag"));
-    }
-    state.begin_replacement(operation, head.revision, tag)?;
+    state.begin_replacement(OperationId::generate(), head.revision)?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
 }

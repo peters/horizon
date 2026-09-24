@@ -477,7 +477,7 @@ fn only_a_ready_bound_cloud_with_a_recipe_and_nothing_pending_can_rebuild() {
         |state| state.profile.build = None,
         |state| {
             state
-                .begin_replacement(OperationId::generate(), "c".repeat(40), "tag".into())
+                .begin_replacement(OperationId::generate(), "c".repeat(40))
                 .unwrap();
         },
     ] {
