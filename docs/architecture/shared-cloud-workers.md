@@ -59,8 +59,8 @@ central default when omitted) or `existing_worker` with an allocation ID.
 `new_worker` carries a `sharing` mode: `dedicated` is the central default, while
 `trusted_shared` is an explicit user choice for a new compatible CPU allocation.
 Copy the resolved sharing mode into the durable allocation record before provider
-I/O. After worker identity and readiness verification, initialize its manifest
-with that same mode before first-project bootstrap. Only `trusted_shared` can
+I/O. For the shared runtime protocol, initialize its manifest with that same mode
+after worker identity/readiness verification and before first-project bootstrap. Only `trusted_shared` can
 admit a second member; an existing-worker choice never upgrades a dedicated
 allocation. Legacy migration records `dedicated` explicitly. Image capability
 alone is not sharing consent, and no in-place sharing-mode conversion is supported
@@ -90,6 +90,16 @@ services to repair a mismatch. A repository can declare a separate image-only
 profile for a prebuilt common image. New workers still use existing build/push
 resolution and validate the shared contract before allocation when sharing is
 explicitly enabled.
+
+Persist a separate immutable runtime protocol at image validation: `shared_v1`
+when the image verifies the shared contract, or `legacy_dedicated` when a dedicated
+request uses an otherwise supported older image. `trusted_shared` requires
+`shared_v1`; there is no fallback on failed verification. New `legacy_dedicated`
+allocations preserve the existing dedicated image contract and local-journal
+lifecycle. They never initialize a membership manifest or accept another member.
+The protocol is selected before provider I/O and cannot be inferred afresh from a
+later failed readiness probe. Thus existing YAML/images remain usable without
+silently gaining sharing or losing their lifecycle operations.
 
 Requested agent/browser sets must be subsets of verified installed capabilities;
 project-enabled tools are exactly the requested subset, not the worker union.
@@ -172,7 +182,8 @@ cleans only resources owned by that operation. Uncertain cleanup retains the
 member and reservations. Tombstones prevent a late request recreating a removed
 member or recycling its namespace; an explicit new project uses a new identity.
 
-Provider stop/restart/delete requires a fresh authoritative member snapshot and
+For `shared_v1` allocations, provider stop/restart/delete requires a fresh
+authoritative member snapshot and
 a separate worker action. First atomically persist a worker-wide transition fence
 on the worker containing the operation, full member set, manifest revision and
 all action consequences: affected processes/sessions and unsaved in-memory work,
@@ -293,6 +304,27 @@ their exact old paths, tmux identity and credentials. Do not relocate live files
 reconfigure tools, restart sessions or modify the remote worker during local
 migration. Their allocation has exactly one member and stays ineligible for
 sharing. Existing dedicated behavior remains usable through the migrated model.
+Legacy dedicated stop/resume/delete uses its durable provider and
+storage journals under the owning controller's allocation lock. This compatibility
+path has exactly one fixed member and no attachment API, so it requires no remote
+membership manifest or bootstrap marker. Its worker-action confirmation still
+names that sole member and the full process/storage consequences. Preserve all
+uncertain-create, pending-stop and storage-cleanup fences. Project-only actions
+cannot call the provider lifecycle implicitly. Never select this path because a
+shared worker's manifest is missing: eligibility is the immutable
+`legacy_dedicated` protocol recorded by migration or preallocation image validation,
+not runtime probe failure. New `shared_v1` allocations use the worker manifest
+protocol even when their sharing mode is dedicated.
+
+Where old records lack a durable credential/account reference, retain that absence
+rather than fabricate historical ownership from current defaults. Treat configured
+settings only as a candidate binding and require read-only verification against
+the saved worker/specification before enabling provider mutations, then durably pin
+the verified binding in the allocation journal before mutation. Unresolved or
+conflicting identity remains fenced; later defaults cannot replace a pinned binding. Preserve the original SSH trust files and
+never replace their pins merely to make a candidate connection succeed. A legacy
+preallocation request still needs explicit local bindings before its first I/O.
+
 A share-capable worker must be created explicitly with the new image/contract;
 there is no in-place image upgrade or silent sharing of existing allocations.
 
