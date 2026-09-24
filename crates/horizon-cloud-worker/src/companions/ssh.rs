@@ -118,7 +118,7 @@ impl Runtime {
         let known_hosts = directory.join(format!("known_hosts-{key_id}"));
         files::write(&known_hosts, format!("{binding} {host_key}\n").as_bytes())?;
         let config = format!(
-            "Host {ssh_alias}\n  HostName {host}\n  Port {port}\n  User root\n  IdentityFile {}\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  HostKeyAlias {binding}\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  BatchMode yes\n  ConnectTimeout 10\n  ServerAliveInterval 5\n  ServerAliveCountMax 2\n  ForwardAgent no\n  ControlMaster no\n  ControlPath none\n",
+            "Host {ssh_alias}\n  HostName {host}\n  Port {port}\n  User root\n  IdentityFile {}\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  HostKeyAlias {binding}\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n  BatchMode yes\n  RequestTTY auto\n  ConnectTimeout 10\n  ServerAliveInterval 5\n  ServerAliveCountMax 2\n  ForwardAgent no\n  ControlMaster no\n  ControlPath none\n",
             path_text(&identity)?,
             path_text(&known_hosts)?,
         );
