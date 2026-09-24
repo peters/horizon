@@ -131,12 +131,18 @@ impl Entry {
 }
 
 impl State {
-    fn sync(&mut self, session: Option<&str>, groups: &CloudGroups) {
-        let session_changed = self.session.as_deref() != session;
-        if session_changed {
+    pub(super) fn set_session(&mut self, session: Option<&str>) -> bool {
+        let changed = self.session.as_deref() != session;
+        if changed {
             self.entries.clear();
+            self.inventory.clear();
             self.session = session.map(str::to_owned);
         }
+        changed
+    }
+
+    fn sync(&mut self, session: Option<&str>, groups: &CloudGroups) {
+        let session_changed = self.set_session(session);
         let Some(session) = session else { return };
         let changed = self.inventory.len() != groups.0.iter().filter(|group| group.remote.is_some()).count()
             || self
@@ -261,6 +267,13 @@ impl State {
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn sync_cloud_companion_session(&mut self) {
+        self.cloud_prototype
+            .production
+            .companions
+            .set_session(self.active_session.as_ref().map(|session| session.session_id.as_str()));
+    }
+
     pub(super) fn prepare_cloud_companions(&mut self, ctx: &egui::Context) {
         let state = &mut self.cloud_prototype.production.companions;
         state.sync(

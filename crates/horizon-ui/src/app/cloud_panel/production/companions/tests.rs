@@ -52,6 +52,49 @@ fn switching_sessions_cancels_inflight_results_and_queued_consent() {
 }
 
 #[test]
+fn session_bootstrap_cancels_old_jobs_without_using_the_old_inventory() {
+    for blocked in ["runtime", "receiver", "failed"] {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.cloud_prototype.groups = groups();
+        let state = &mut app.cloud_prototype.production.companions;
+        state.sync(Some("first"), &app.cloud_prototype.groups);
+        let entry = state.entries.get_mut("source").unwrap();
+        entry.queue(Action::Select {
+            alias: "app".into(),
+            target_cloud_id: "target".into(),
+        });
+        let (cancel, sender) = pending_job(entry);
+        app.active_session = Some(crate::app::ActiveSession {
+            session_id: "second".into(),
+            lease: None,
+            last_lease_refresh: None,
+            persistent: false,
+        });
+        app.pending_startup_runtime_state = (blocked == "runtime").then(horizon_core::RuntimeState::default);
+        let (_bootstrap_sender, bootstrap_receiver) = channel();
+        app.startup_receiver = (blocked == "receiver").then_some(bootstrap_receiver);
+        app.startup_bootstrap_failure =
+            (blocked == "failed").then_some(crate::app::StartupBootstrapFailure::WorkerDisconnected);
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            crate::app::test_support::run_app_frame(&ctx, &mut app);
+            let state = &app.cloud_prototype.production.companions;
+            assert!(state.entries.is_empty() && state.inventory.is_empty());
+            assert_eq!(state.session.as_deref(), Some("second"));
+        }
+        assert!(cancel.check().is_err());
+        assert!(
+            sender
+                .send(job::Outcome {
+                    snapshot: None,
+                    error: None
+                })
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn moving_source_drops_presentation_and_rebinds_ownership() {
     let mut state = State::default();
     let mut groups = groups();

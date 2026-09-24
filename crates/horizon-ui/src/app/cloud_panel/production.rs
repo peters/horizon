@@ -226,6 +226,7 @@ impl Runtime {
 }
 impl HorizonApp {
     pub(super) fn prepare_production_clouds(&mut self, ctx: &egui::Context) {
+        self.sync_cloud_companion_session();
         if self.pending_startup_runtime_state.is_some() || self.startup_receiver.is_some() {
             return;
         }
