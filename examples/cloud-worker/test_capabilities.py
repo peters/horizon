@@ -70,6 +70,7 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(missing=('grok', 'firefox', 'geckodriver', 'horizon-browser'))
         self.assertEqual(status, 0, output)
         self.assertIn('horizon-capabilities-contract=1', output)
+        self.assertIn('horizon-session-restart-contract=1', output.splitlines())
         self.assertNotIn('grok', str(commands))
         self.assertNotIn('firefox', str(commands))
         self.assertIn('horizon-device', str(commands))

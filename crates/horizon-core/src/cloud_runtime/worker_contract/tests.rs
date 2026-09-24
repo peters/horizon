@@ -11,6 +11,27 @@ fn legacy_markers_accept_only_the_original_effective_capabilities() {
     assert!(validate(&format!("{legacy}{CAPABILITIES_MARKER}\n"), &remote, false).is_err());
 }
 
+#[test]
+fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    assert_eq!(WorkerContract::reported(current), WorkerContract::default());
+    assert!(!WorkerContract::reported(current).session_restart);
+    assert!(validate(current, &Capabilities::default(), false).is_ok());
+    let restartable = format!("{current}{SESSION_RESTART_MARKER}\n");
+    assert!(WorkerContract::reported(&restartable).session_restart);
+    assert!(validate(&restartable, &Capabilities::default(), false).is_ok());
+    for incidental in [
+        "prefix-horizon-session-restart-contract=1",
+        "horizon-session-restart-contract=1-suffix",
+        "horizon-session-restart-contract=2",
+        " horizon-session-restart-contract=1",
+    ] {
+        assert!(!WorkerContract::reported(&format!("{current}{incidental}\n")).session_restart);
+    }
+    // The feature marker never substitutes for a required contract marker.
+    assert!(validate(SESSION_RESTART_MARKER, &Capabilities::default(), false).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() {
@@ -22,7 +43,7 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
     // No system utilities: marker recognition must use only shell built-ins.
     let path = root.path();
     let legacy = "#!/bin/sh\n[ $# -eq 0 ] || exit 77\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\n'\n";
-    let modern = "#!/bin/sh\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nif [ $# -gt 0 ]; then\n [ \"$1\" = --ready ] || exit 78\n printf ready > \"$READY\"\n [ \"$READY_FAIL\" != 1 ] || exit 79\nfi\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\nhorizon-capabilities-contract=1\\nhorizon-extra-contract=1\\n'\n";
+    let modern = "#!/bin/sh\nprintf '%s' \"$HORIZON_WORKER_CAPABILITIES\" > \"$OBSERVED\"\nif [ $# -gt 0 ]; then\n [ \"$1\" = --ready ] || exit 78\n printf ready > \"$READY\"\n [ \"$READY_FAIL\" != 1 ] || exit 79\nfi\nprintf 'horizon-worker-contract=1\\nhorizon-source-contract=1\\nhorizon-capabilities-contract=1\\nhorizon-session-restart-contract=1\\nhorizon-extra-contract=1\\n'\n";
     for script in [legacy, modern] {
         std::fs::write(&checker, script).unwrap();
         std::fs::set_permissions(&checker, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -41,10 +62,13 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
                 capabilities
             );
             assert_eq!(ready.exists(), script == modern);
+            let output = String::from_utf8(output.stdout).unwrap();
             assert_eq!(
-                validate(&String::from_utf8(output.stdout).unwrap(), &capabilities, false).is_ok(),
+                validate(&output, &capabilities, false).is_ok(),
                 script == modern || capabilities == Capabilities::default()
             );
+            // Readiness relays the running image's report, so a legacy image never claims restart.
+            assert_eq!(WorkerContract::reported(&output).session_restart, script == modern);
         }
     }
     let failed = Command::new("/bin/sh")

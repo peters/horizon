@@ -4,6 +4,27 @@ use horizon_cloud::Capabilities;
 
 pub(super) const CAPABILITIES_ENV: &str = "HORIZON_WORKER_CAPABILITIES";
 const CAPABILITIES_MARKER: &str = "horizon-capabilities-contract=1";
+const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
+
+/// Optional worker features the checker reports beside the required markers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkerContract {
+    /// `horizon-worker-session --relaunch` can replace a session process lost in a
+    /// container reset, in its existing worktree. Older images report such sessions lost.
+    pub session_restart: bool,
+}
+
+impl WorkerContract {
+    pub(super) fn reported(output: &str) -> Self {
+        Self {
+            session_restart: reports(output, SESSION_RESTART_MARKER),
+        }
+    }
+}
+
+fn reports(output: &str, marker: &str) -> bool {
+    output.lines().any(|line| line == marker)
+}
 
 pub(super) fn environment(capabilities: &Capabilities) -> Result<String> {
     serde_json::to_string(capabilities)
@@ -12,7 +33,7 @@ pub(super) fn environment(capabilities: &Capabilities) -> Result<String> {
 }
 
 pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool) -> Result<()> {
-    let contains = |marker| output.lines().any(|line| line == marker);
+    let contains = |marker| reports(output, marker);
     if !contains("horizon-source-contract=1") {
         return Err(Error::Invalid(
             "Worker image does not support committed source dependencies",

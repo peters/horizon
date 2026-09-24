@@ -77,7 +77,8 @@ credential-bearing bases fail before any context is written. The base digest
 must actually contain the required GPU libraries; its name alone proves nothing.
 
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
-`horizon-capabilities-contract=1`. Source transfer carries verified LFS objects and
+`horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
+([session relaunch](#session-relaunch-after-a-container-reset)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -95,6 +96,40 @@ and device MCP processes run on the worker and retain their injected agent ident
 Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
+
+## Session relaunch after a container reset
+
+A container reset, such as an image replacement, keeps `/workspace` but ends tmux
+and every session process; attaching then reports the session lost. An image whose
+checker reports `horizon-session-restart-contract=1` can start the process again:
+
+```
+horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
+```
+
+Relaunch needs ready worker services and the session's persisted agent and revision
+binding. It runs the original launch command, `horizon-worker-run SESSION AGENT`, in
+the existing `/workspace/agents/SESSION` worktree. It never creates, resets or checks
+out that worktree and never imports source again, so commits, uncommitted files and
+agent logins under `/workspace` survive. The process builds its environment from the
+worker volume and the new container's services, so Horizon sends no credentials for
+it. A session whose process had already exited starts again; its stale `exit-status`
+is removed.
+
+Before starting the process, relaunch persists `relaunch-requested-OPERATION` in the
+session directory, so each operation starts at most one process per session:
+
+| Exit | Meaning |
+|------|---------|
+| 0 | Relaunched, or this operation's relaunched process is still running |
+| 3 | Unknown session, binding mismatch or missing worktree; nothing started |
+| 4 | This operation's relaunch was lost, or its launch failed or was interrupted after the fence was persisted; either way it is not replayed |
+| 5 | Nothing to relaunch: a process is running or was never launched; attach normally |
+
+Any other failure, such as services that are not ready, starts nothing. A launch
+that fails after the fence is persisted is not replayed. A later operation with a new
+identifier can relaunch the session again. Images without the marker keep reporting
+such sessions lost.
 
 ## Optional Git credentials
 

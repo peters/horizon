@@ -158,7 +158,9 @@ try:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
-    print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1')
+    # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
+    print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
+          'horizon-session-restart-contract=1')
 except (ValueError, AttributeError, OSError, subprocess.SubprocessError):
     print('Worker validation failed: requested capability runtime is missing, disabled or unusable', file=sys.stderr)
     sys.exit(1)
