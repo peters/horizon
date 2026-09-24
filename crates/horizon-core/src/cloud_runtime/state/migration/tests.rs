@@ -16,6 +16,7 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("legacy-cloud");
         std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let deployment: Deployment = serde_json::from_value(json!({
             "version":1,"cloud_id":"legacy-cloud","repository":"/synthetic/repository","revision":"initial-commit",
             "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
@@ -495,4 +496,46 @@ fn retained_trust_cannot_be_truncated_or_replaced() {
         drop(store);
         assert!(fixture.migrate().is_err());
     }
+}
+
+#[test]
+fn recreated_workerless_project_cannot_bypass_its_orphaned_allocation() {
+    for operation in [json!({"state":"prepared"}), json!({"state":"requested"})] {
+        let fixture = Fixture::new();
+        drop(fixture.migrate().unwrap());
+        let mut legacy = serde_json::from_slice::<serde_json::Value>(&fixture.intent().legacy).unwrap();
+        let allocation = required(&fixture.allocation_root().join("allocation.json")).unwrap();
+        std::fs::remove_dir_all(&fixture.root).unwrap();
+        std::fs::create_dir(&fixture.root).unwrap();
+        legacy["operation"] = operation;
+        std::fs::write(fixture.root.join(DEPLOYMENT), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(fixture.migrate().is_err());
+        assert_eq!(Store::lock(&fixture.root).unwrap().load().unwrap().unwrap().version, 1);
+        let original = fixture.root.parent().unwrap().join(".allocations");
+        assert!(std::fs::read_dir(original).unwrap().any(|entry| {
+            transaction::read_optional(&entry.unwrap().path().join("allocation.json"))
+                .unwrap()
+                .as_ref()
+                == Some(&allocation)
+        }));
+    }
+}
+
+#[test]
+fn public_migration_canonicalizes_a_symlinked_parent_on_every_reopen() {
+    let fixture = Fixture::new();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("linked-parent");
+    std::os::unix::fs::symlink(fixture.root.parent().unwrap(), &alias).unwrap();
+    let path = alias.join("legacy-cloud");
+    let first = MigratedStore::migrate(&path, "saved-session", "workspace", fixture.controller)
+        .unwrap()
+        .load()
+        .unwrap();
+    let restored = MigratedStore::migrate(&path, "saved-session", "workspace", fixture.controller)
+        .unwrap()
+        .load()
+        .unwrap();
+    assert_eq!(first.allocation_id(), restored.allocation_id());
+    assert_eq!(first.identity(), restored.identity());
 }

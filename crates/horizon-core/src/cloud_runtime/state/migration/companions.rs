@@ -34,9 +34,6 @@ pub(super) fn capture(root: &Path, deployment: &Deployment) -> Result<BTreeMap<S
 // locks. Never silently coalesce two legacy controllers with the same provider ID.
 pub(super) fn reject_duplicate_workers(root: &Path, deployment: &Deployment) -> Result<()> {
     let owned = worker_ids(deployment);
-    if owned.is_empty() {
-        return Ok(());
-    }
     let parent = root.parent().ok_or(Error::Invalid("Missing cloud parent"))?;
     let own = super::read_intent(root)?.ok_or(Error::Invalid("Missing migration ownership"))?;
     for records in transaction::registered_records(parent)? {
@@ -45,6 +42,9 @@ pub(super) fn reject_duplicate_workers(root: &Path, deployment: &Deployment) -> 
                 "Another migrated allocation references the same provider worker",
             ));
         }
+    }
+    if owned.is_empty() {
+        return Ok(());
     }
     for entry in std::fs::read_dir(parent)? {
         let entry = entry?;
