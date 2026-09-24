@@ -102,7 +102,7 @@ fn definite_refusals_stay_distinguishable_from_uncertain_updates() {
     let current = spec();
     let next = next(&current);
     let inspected = pod(&current, &current).to_string();
-    for status in [400, 422, 401, 403, 500, 502, 503] {
+    for status in [400, 422, 401, 403, 404, 405, 409, 429, 500, 502, 503] {
         let (provider, requests, task) = server(vec![(200, inspected.clone()), (status, "{}".into())]);
         let error = provider
             .replace_image(&current, &next, "worker1", &Cancellation::default())

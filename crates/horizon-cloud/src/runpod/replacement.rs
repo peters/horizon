@@ -21,11 +21,16 @@ impl From<ImageSide> for Observed {
     }
 }
 
-/// Whether a failed `RunPod::replace_image` may still have applied the update.
-/// Every other error means the provider did not apply it.
+/// Whether a failed `RunPod::replace_image` may still have applied the update: a
+/// lost response or a server failure. A client error (4xx) is the provider's refusal,
+/// and every other error is raised before the update is sent.
 #[must_use]
 pub const fn may_have_applied(error: &CloudError) -> bool {
-    matches!(error, CloudError::Transport | CloudError::Http(..))
+    match error {
+        CloudError::Transport => true,
+        CloudError::Http(status, _) => *status < 400 || *status >= 500,
+        _ => false,
+    }
 }
 
 impl RunPod {
