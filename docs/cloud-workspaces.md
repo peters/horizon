@@ -164,7 +164,8 @@ profiles, listing only sizes RunPod offers with the profile's container disk.
 The next attempt reuses the built image and applies the new size and the current
 `cpu_flavors`, `gpu_types` and `data_centers` settings. Once a worker is
 requested the size is fixed: RunPod cannot change an existing pod's vCPU or
-memory, so create a new cloud for a different size.
+memory, so create a new cloud for a different size. After confirmed deletion,
+the drop-downs return until the replacement worker is requested.
 
 Add normal panels inside the cloud using the existing panel picker. Choose
 Default, Rows, Cols or Grid independently for each cloud. Cloud and workspace
@@ -234,6 +235,13 @@ starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any
 retry; Horizon never allocates a replacement for a missing worker automatically.
+After managed workspace storage cleanup is confirmed, **Redeploy cloud** on the
+same card allocates a new worker and managed storage for that cloud. It keeps
+the repository, revision, profile, panels and saved sessions, uploads source
+again, and reuses the recorded image. vCPU and memory can change before the new
+worker is requested. Redeploy is refused while worker termination, hosted-device
+release, or managed storage cleanup is unfinished. Separately attached network
+volumes stay untouched.
 
 When creation needs confirmation, choose **Check provider** on the cloud card.
 This action queries the original operation without building images, preparing
@@ -255,7 +263,9 @@ errors cannot provide that permission. A previously bound worker that disappears
 is reported as missing. A non-running match retains its verified worker ID but
 is reported as inactive: a desired termination status is not proof that deletion
 has finished. Check again or explicitly delete that same worker. Only the
-explicit deletion flow confirms cleanup; termination retains its identity permanently.
+explicit deletion flow confirms cleanup. The terminated worker identity remains
+until that cleanup is confirmed; **Redeploy cloud** is the later explicit action
+that starts a new allocation.
 
 After a worker-service crash, a private journal that durably confirms a remote
 device was released can be cleaned up without the old provider credentials.
@@ -285,6 +295,9 @@ deletion and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints 
 structured outcome without worker environment or credentials and an explanation;
 the UI and this harness use the same locked coordinator and provider policy.
 An unresolved outcome is a successful check, not permission to deploy again.
+`deploy` on a cloud whose worker and managed storage are confirmed deleted
+starts the same explicit redeploy as the card; it does not replace a missing or
+unresolved worker.
 Cloud provisioning/reconciliation has no public MCP operation yet; the worker's
 browser/device MCP tools do not allocate or reconcile compute. This example is
 an integration harness, not an installed user command.
