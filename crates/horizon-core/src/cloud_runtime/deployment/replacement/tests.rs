@@ -144,7 +144,7 @@ impl Provider for Script {
         error.map_or(Ok(()), |error| Err(error.into()))
     }
 
-    fn observe(&self, state: &Deployment) -> Result<Observed> {
+    fn observe(&self, state: &Deployment, _deadline: Option<Instant>) -> Result<Observed> {
         pair(state)?;
         self.log("observe");
         let scripted = self.observations.borrow_mut().pop_front();
@@ -626,4 +626,15 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
     state.session_restart = Some(operation);
     state.sessions[0].panel_id = "agent1; reboot".into();
     assert!(relaunch_sessions(&store, &mut state, restart, &|_| {}, |_| panic!("invalid")).is_err());
+}
+
+#[test]
+fn provider_reads_never_wait_past_the_deadline() {
+    let now = Instant::now();
+    let unbounded = live::observe_timeout(None, now).unwrap();
+    let late = now + unbounded + Duration::from_secs(60);
+    assert_eq!(live::observe_timeout(Some(late), now), Some(unbounded));
+    let soon = now + Duration::from_secs(10);
+    assert_eq!(live::observe_timeout(Some(soon), now), Some(Duration::from_secs(10)));
+    assert_eq!(live::observe_timeout(Some(now), now), None);
 }

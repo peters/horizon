@@ -61,8 +61,9 @@ struct Head {
 trait Provider {
     /// Sends the pod update that switches `worker_id` from `from`'s image to `to`'s.
     fn replace(&self, worker_id: &str, from: &WorkerSpec, to: &WorkerSpec) -> Result<()>;
-    /// Which image of the journaled pair every provider API reports.
-    fn observe(&self, state: &Deployment) -> Result<Observed>;
+    /// Which image of the journaled pair every provider API reports, read before
+    /// `deadline` when one is given.
+    fn observe(&self, state: &Deployment, deadline: Option<Instant>) -> Result<Observed>;
     /// Waits before observing again; `false` once `deadline` has passed.
     fn pause(&self, deadline: Instant) -> Result<bool>;
     /// Runs after each durable write.
@@ -177,7 +178,7 @@ fn settle_with(steps: &impl Provider, store: &Store, state: &mut Deployment) -> 
             .image_replacement
             .as_ref()
             .is_some_and(ImageReplacement::requested)
-        && steps.observe(state)? == Observed::Next
+        && steps.observe(state, None)? == Observed::Next
     {
         return commit(steps, store, state);
     }
@@ -385,7 +386,7 @@ fn request(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn
 /// worker that already switched is not reset twice.
 fn resume(steps: &impl Provider, store: &Store, state: &mut Deployment, emit: &dyn Fn(Event)) -> Result<()> {
     emit(Event::stage(Stage::Replace));
-    if steps.observe(state)? == Observed::Previous {
+    if steps.observe(state, None)? == Observed::Previous {
         let (worker_id, current, next) = pair(state)?;
         send(steps, &worker_id, &current, &next, emit)?;
     }
@@ -419,7 +420,7 @@ fn revert(steps: &impl Provider, store: &Store, state: &mut Deployment, emit: &d
         .as_ref()
         .ok_or(Error::Invalid(NOTHING_PENDING))?
         .operation;
-    if steps.observe(state)? != Observed::Previous {
+    if steps.observe(state, None)? != Observed::Previous {
         send(steps, &worker_id, &next, &current, emit)?;
         await_image(steps, state, Observed::Previous, emit)?;
     }
@@ -460,7 +461,7 @@ fn await_image(steps: &impl Provider, state: &Deployment, target: Observed, emit
     emit(activity("Waiting for the provider to report the switched image"));
     let deadline = Instant::now() + Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds));
     loop {
-        match steps.observe(state) {
+        match steps.observe(state, Some(deadline)) {
             Ok(observed) if observed == target => return Ok(()),
             Ok(_) | Err(Error::Provider(CloudError::Transport | CloudError::Http(..))) => {}
             Err(error) => return Err(error),

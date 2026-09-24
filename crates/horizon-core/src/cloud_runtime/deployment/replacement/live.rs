@@ -41,22 +41,27 @@ impl<'a> Pod<'a> {
     }
 }
 
+/// A provider read waits at most `OBSERVE_TIMEOUT` and never past `deadline`; `None`
+/// once the deadline has passed.
+pub(super) fn observe_timeout(deadline: Option<Instant>, now: Instant) -> Option<Duration> {
+    let timeout = deadline.map_or(OBSERVE_TIMEOUT, |deadline| {
+        deadline.saturating_duration_since(now).min(OBSERVE_TIMEOUT)
+    });
+    (!timeout.is_zero()).then_some(timeout)
+}
+
 impl Provider for Pod<'_> {
     fn replace(&self, worker_id: &str, from: &WorkerSpec, to: &WorkerSpec) -> Result<()> {
         Ok(self.provider.replace_image(from, to, worker_id, self.cancel)?)
     }
 
-    fn observe(&self, state: &Deployment) -> Result<Observed> {
+    fn observe(&self, state: &Deployment, deadline: Option<Instant>) -> Result<Observed> {
+        let timeout = observe_timeout(deadline, Instant::now()).ok_or(CloudError::Transport)?;
         let (worker_id, current, next) = pair(state)?;
         let volume = storage::expected_owned(self.store, state)?;
-        Ok(self.provider.observe_image(
-            &worker_id,
-            &current,
-            &next,
-            volume.as_ref(),
-            self.cancel,
-            OBSERVE_TIMEOUT,
-        )?)
+        Ok(self
+            .provider
+            .observe_image(&worker_id, &current, &next, volume.as_ref(), self.cancel, timeout)?)
     }
 
     fn pause(&self, deadline: Instant) -> Result<bool> {
@@ -167,8 +172,8 @@ impl Provider for Live<'_> {
         self.pod().replace(worker_id, from, to)
     }
 
-    fn observe(&self, state: &Deployment) -> Result<Observed> {
-        self.pod().observe(state)
+    fn observe(&self, state: &Deployment, deadline: Option<Instant>) -> Result<Observed> {
+        self.pod().observe(state, deadline)
     }
 
     fn pause(&self, deadline: Instant) -> Result<bool> {
