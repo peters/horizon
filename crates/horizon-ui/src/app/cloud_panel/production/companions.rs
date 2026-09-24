@@ -44,6 +44,7 @@ struct Entry {
     error: Option<String>,
     job: Option<Job>,
     pending: Option<Action>,
+    selecting: BTreeSet<String>,
     clearing: BTreeSet<String>,
     due: Instant,
     choices: HashMap<String, String>,
@@ -69,6 +70,7 @@ impl Entry {
             error: None,
             job: None,
             pending: None,
+            selecting: BTreeSet::new(),
             clearing: BTreeSet::new(),
             due: Instant::now(),
             choices: HashMap::new(),
@@ -78,10 +80,14 @@ impl Entry {
 
     fn queue(&mut self, action: Action) {
         if let Action::Clear { alias } = action {
+            self.selecting.remove(&alias);
             self.clearing.insert(alias);
             self.job = None;
             self.pending = None;
         } else {
+            if let Action::Select { alias, .. } = &action {
+                self.selecting.insert(alias.clone());
+            }
             self.pending = Some(action);
         }
         self.due = Instant::now();
@@ -99,6 +105,8 @@ impl Entry {
         };
         self.job = None;
         if let Some(snapshot) = &outcome.snapshot {
+            // Keep uncertain selections cancellable until an authoritative result arrives.
+            self.selecting.clear();
             self.clearing.retain(|alias| {
                 snapshot
                     .rows

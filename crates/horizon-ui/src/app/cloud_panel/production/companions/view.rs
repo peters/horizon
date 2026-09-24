@@ -36,11 +36,14 @@ pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
         let choice = entry.choices.entry(companion.alias.clone()).or_default();
         ui.push_id(&companion.alias, |ui| {
             let clearing = entry.clearing.contains(&companion.alias);
-            if let Some(action) = render_row(ui, row, choice, busy, stale || clearing) {
+            let selecting = entry.selecting.contains(&companion.alias);
+            if let Some(action) = render_row(ui, row, choice, busy, stale || clearing || selecting, selecting) {
                 requested = Some(action);
             }
             if clearing {
                 ui.small("Removing access…");
+            } else if selecting {
+                ui.small("Selection pending · uncheck to cancel");
             }
         });
     }
@@ -49,7 +52,14 @@ pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
     }
 }
 
-fn render_row(ui: &mut egui::Ui, row: &Row, choice: &mut String, busy: bool, stale: bool) -> Option<Action> {
+pub(super) fn render_row(
+    ui: &mut egui::Ui,
+    row: &Row,
+    choice: &mut String,
+    busy: bool,
+    stale: bool,
+    selecting: bool,
+) -> Option<Action> {
     let companion = &row.companion;
     let mut action = None;
     let target = if row.candidates.len() == 1 {
@@ -60,7 +70,7 @@ fn render_row(ui: &mut egui::Ui, row: &Row, choice: &mut String, busy: bool, sta
             .find(|target| target.cloud_id == *choice)
             .map(|target| target.cloud_id.as_str())
     };
-    let mut selected = companion.selected;
+    let mut selected = companion.selected || selecting;
     let enabled = selected || (!busy && target.is_some() && companion.target_cloud_id.is_none() && !stale);
     let checkbox = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, &companion.alias));
     if checkbox.changed() {

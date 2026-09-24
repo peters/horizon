@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_egui::DiscardTextures as _;
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
 use std::sync::mpsc::channel;
 
@@ -134,6 +135,85 @@ fn unchecking_cancels_refresh_and_remains_queued_until_persisted() {
         .unwrap();
     entry.poll();
     assert!(entry.clearing.contains("app"));
+}
+
+#[test]
+fn first_selection_remains_cancellable_while_connecting_and_after_an_uncertain_failure() {
+    use horizon_core::cloud_runtime::companions::{Companion, Row, Status};
+    for fail in [false, true] {
+        let mut state = State::default();
+        state.sync(Some("session"), &groups());
+        let entry = state.entries.get_mut("source").unwrap();
+        entry.queue(Action::Select {
+            alias: "app".into(),
+            target_cloud_id: "target".into(),
+        });
+        assert!(matches!(entry.pending.take(), Some(Action::Select { .. })));
+        let (cancel, sender) = pending_job(entry);
+        if fail {
+            sender
+                .send(job::Outcome {
+                    snapshot: None,
+                    error: Some("Connection lost".into()),
+                })
+                .unwrap();
+            entry.poll();
+        }
+        let row = Row {
+            companion: Companion {
+                alias: "app".into(),
+                repository: "example/app".into(),
+                profile: "cpu".into(),
+                selected: false,
+                status: Status::Unselected,
+                target_cloud_id: None,
+                access: None,
+            },
+            candidates: vec![],
+            error: None,
+        };
+        let ctx = egui::Context::default();
+        let target = egui::pos2(8.0, 8.0);
+        let mut action = None;
+        for pressed in [None, None, Some(true), Some(false)] {
+            let events = pressed.map_or_else(Vec::new, |pressed| {
+                vec![
+                    egui::Event::PointerMoved(target),
+                    egui::Event::PointerButton {
+                        pos: target,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            });
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = view::render_row(
+                            ui,
+                            &row,
+                            &mut String::new(),
+                            true,
+                            true,
+                            entry.selecting.contains("app"),
+                        );
+                    },
+                )
+                .discard_textures();
+        }
+        assert!(matches!(&action, Some(Action::Clear { alias }) if alias == "app"));
+        entry.queue(action.unwrap());
+        assert!(cancel.check().is_err());
+        assert!(entry.job.is_none());
+        assert!(entry.selecting.is_empty());
+        assert!(entry.clearing.contains("app"));
+    }
 }
 
 #[test]
