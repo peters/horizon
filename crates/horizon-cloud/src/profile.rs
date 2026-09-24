@@ -109,6 +109,12 @@ impl CloudConfig {
                 return Err(ProfileError::Invalid("Invalid profile name"));
             }
             profile.validate(fixture)?;
+            if profile.provider == "runpod"
+                && !profile.gpu
+                && !crate::runpod::volumes::REQUEST_SIZE_GB.contains(&u32::from(profile.storage.volume_gb))
+            {
+                return Err(ProfileError::Invalid(crate::runpod::volumes::INVALID_REQUEST_SIZE));
+            }
         }
         Ok(config)
     }
@@ -197,6 +203,31 @@ pub const DESIGN_EXAMPLE: &str = include_str!("../examples/design-fixtures.yml")
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_cpu_profiles_enforce_network_volume_limits_without_changing_gpu_storage() {
+        for size in [1, 9, 10, 4000, 4001] {
+            for gpu in [false, true] {
+                let mut config = CloudConfig::parse(EXAMPLE).unwrap();
+                let profile = config.profiles.get_mut("image-only").unwrap();
+                profile.storage.volume_gb = size;
+                profile.gpu = gpu;
+                // Saved profiles remain valid for reconciliation and cleanup.
+                assert!(profile.validate(false).is_ok());
+                let yaml = serde_yaml::to_string(&config).unwrap();
+                let accepted = gpu || (10..=4000).contains(&size);
+                assert_eq!(CloudConfig::parse(&yaml).is_ok(), accepted, "size={size}, gpu={gpu}");
+                assert_eq!(CloudConfig::parse_design_fixture(&yaml).is_ok(), accepted);
+            }
+        }
+        let mut fixture = CloudConfig::parse_design_fixture(DESIGN_EXAMPLE).unwrap();
+        for profile in fixture.profiles.values_mut() {
+            if profile.provider != "runpod" {
+                profile.storage.volume_gb = 1;
+            }
+        }
+        assert!(CloudConfig::parse_design_fixture(&serde_yaml::to_string(&fixture).unwrap()).is_ok());
+    }
+
     #[test]
     fn defaults_and_build_selection() {
         let config = CloudConfig::parse(EXAMPLE).unwrap();

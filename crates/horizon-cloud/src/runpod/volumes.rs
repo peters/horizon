@@ -6,6 +6,16 @@ use std::time::Duration;
 
 type Result<T> = std::result::Result<T, CloudError>;
 
+pub(crate) const REQUEST_SIZE_GB: std::ops::RangeInclusive<u32> = 10..=4000;
+pub(crate) const INVALID_REQUEST_SIZE: &str = "CPU workspace volume must be between 10 and 4000 GB";
+
+pub(crate) fn validate_request_size(size: u32) -> Result<()> {
+    if !REQUEST_SIZE_GB.contains(&size) {
+        return Err(CloudError::Invalid(INVALID_REQUEST_SIZE));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Spec {
     pub operation_id: String,
@@ -89,6 +99,7 @@ impl RunPod {
                 "Automatic network storage is only used for CPU workers",
             ));
         }
+        validate_request_size(u32::from(worker.profile.storage.volume_gb))?;
         let url = format!(
             "{}/datacenters?include=CPU_AVAILABILITY&networkVolumeTypes=STANDARD",
             self.catalog_endpoint
@@ -142,7 +153,9 @@ impl RunPod {
                     "Workspace volume deletion was requested; finish cleanup before creating a new cloud",
                 ));
             }
-            State::Prepared | State::Requested => {}
+            // New limits must not prevent recovery or deletion of saved allocations.
+            State::Prepared => validate_request_size(spec.size)?,
+            State::Requested => {}
         }
         let matches: Vec<_> = self
             .list_volumes(cancel)?
