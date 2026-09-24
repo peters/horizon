@@ -507,7 +507,7 @@ pub fn terminate(
         Stage::DeleteStorage,
         "Deleting managed workspace storage and confirming its removal",
     );
-    storage::terminate(&provider, &store, &spec, &committed())?;
+    storage::terminate(&provider, &store, &spec, &committed(), emit)?;
     state.stage = Stage::Deleted;
     state.worker = None;
     store.save(&state)
@@ -564,10 +564,16 @@ fn terminate_worker(
         Stage::DeleteWorker,
         "Deleting the worker and confirming its removal",
     );
-    provider.terminate(spec, &mut operation, &committed, |next| {
-        state.operation = next.clone();
-        store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
-    })?;
+    provider.terminate(
+        spec,
+        &mut operation,
+        &committed,
+        |next| {
+            state.operation = next.clone();
+            store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
+        },
+        request_detail(runner.emit),
+    )?;
     Ok(())
 }
 
@@ -588,6 +594,15 @@ fn commit_deletion(cancel: &Cancellation) -> Result<Cancellation> {
 fn deletion_step(emit: &dyn Fn(Event), stage: Stage, detail: &str) {
     emit(Event::stage(stage));
     emit(Event::Progress(super::progress::Progress::activity(detail)));
+}
+
+/// Replaces the current step's detail with each provider request before it is sent.
+fn request_detail(emit: &dyn Fn(Event)) -> impl FnMut(horizon_cloud::Progress) {
+    move |request| {
+        emit(Event::Progress(super::progress::Progress::activity(
+            request.to_string(),
+        )));
+    }
 }
 
 #[cfg(test)]
@@ -943,5 +958,41 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cpu_flavors(&profile, &settings).unwrap(), ["cpu3c"]);
+    }
+    #[test]
+    fn each_provider_deletion_request_becomes_the_current_detail() {
+        use horizon_cloud::Progress;
+        let details = std::cell::RefCell::new(Vec::new());
+        let emit = |event: Event| {
+            if let Event::Progress(progress) = event {
+                details.borrow_mut().push(progress.detail);
+            }
+        };
+        let mut forward = request_detail(&emit);
+        for request in [
+            Progress::ConfirmingWorker,
+            Progress::Terminating,
+            Progress::ConfirmingTermination,
+            Progress::ConfirmingVolume,
+            Progress::CheckingAttachments,
+            Progress::InspectingMounts { worker: 2, workers: 3 },
+            Progress::DeletingVolume,
+            Progress::ConfirmingVolumeDeletion,
+        ] {
+            forward(request);
+        }
+        assert_eq!(
+            details.take(),
+            [
+                "Confirming worker identity",
+                "Requesting worker deletion",
+                "Confirming worker removal",
+                "Confirming workspace storage identity",
+                "Checking workspace storage attachments",
+                "Checking workspace storage attachments · worker 2 of 3",
+                "Requesting workspace storage deletion",
+                "Confirming workspace storage removal",
+            ]
+        );
     }
 }

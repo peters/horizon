@@ -129,7 +129,7 @@ fn rejected_storage_keeps_allocation_bound_and_explicit_deletion_available() {
     assert!(retried.verify_resources(&spec).is_err());
     assert_eq!(state, bound);
     provider
-        .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+        .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
         .unwrap();
     assert!(matches!(state, CreateState::Terminated { .. }));
     task.join().unwrap();
@@ -220,7 +220,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .is_err()
         );
         task.join().unwrap();
@@ -243,7 +243,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .is_err()
         );
         task.join().unwrap();
@@ -268,7 +268,7 @@ mod volumes {
                 creation: None,
             };
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .unwrap();
             task.join().unwrap();
             assert_eq!(state, State::Deleted);
@@ -282,6 +282,55 @@ mod volumes {
                 1
             );
         }
+    }
+
+    #[test]
+    fn volume_deletion_names_each_request_before_sending_it() {
+        let listed = |id: &str| {
+            let mut pod = worker(&spec());
+            pod["id"] = json!(id);
+            pod
+        };
+        let unmounted = |id: &str| {
+            let mut current = mounted_worker();
+            current["id"] = json!(id);
+            current["mounts"] = json!({});
+            current
+        };
+        let (provider, requests, task) = server(vec![
+            (200, value()),
+            (200, json!([listed("worker1"), listed("worker2")]).to_string()),
+            (200, unmounted("worker1").to_string()),
+            (200, unmounted("worker2").to_string()),
+            (204, String::new()),
+            (404, String::new()),
+        ]);
+        let mut state = State::Bound { volume: volume() };
+        let mut reported = Vec::new();
+        provider
+            .terminate_volume(
+                &volume_spec(),
+                &mut state,
+                &Cancellation::default(),
+                |_| Ok(()),
+                |progress| reported.push((progress, requests.lock().unwrap().len())),
+            )
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(state, State::Deleted);
+        // Each step is named before its request reaches the provider.
+        assert_eq!(
+            reported,
+            [
+                (Progress::ConfirmingVolume, 0),
+                (Progress::CheckingAttachments, 1),
+                (Progress::InspectingMounts { worker: 1, workers: 2 }, 2),
+                (Progress::InspectingMounts { worker: 2, workers: 2 }, 3),
+                (Progress::DeletingVolume, 4),
+                (Progress::ConfirmingVolumeDeletion, 5),
+            ]
+        );
+        assert!(requests.lock().unwrap()[4].starts_with("DELETE /networkvolumes/volume1 "));
     }
 
     fn volume_spec() -> Spec {
@@ -430,12 +479,12 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .is_err()
         );
         assert!(matches!(state, State::Deleting { .. }));
         provider
-            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
             .unwrap();
         task.join().unwrap();
         assert_eq!(state, State::Deleted);
@@ -467,7 +516,7 @@ mod volumes {
             };
             assert!(
                 provider
-                    .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                    .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                     .is_err()
             );
             task.join().unwrap();
@@ -493,7 +542,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .is_err()
         );
         task.join().unwrap();
@@ -503,7 +552,7 @@ mod volumes {
         let (provider, requests, task) = server(vec![(200, serde_json::to_string(&wrong).unwrap())]);
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
                 .is_err()
         );
         task.join().unwrap();

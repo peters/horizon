@@ -215,17 +215,21 @@ impl RunPod {
         state: &mut CreateState,
         cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        mut progress: impl FnMut(Progress),
     ) -> Result<(), CloudError> {
         let id = match state {
             CreateState::Bound { worker_id } | CreateState::Terminated { worker_id } => worker_id.clone(),
             _ => return Err(CloudError::CreationUnresolved),
         };
+        progress(Progress::ConfirmingWorker);
         if let Some(worker) = self.inspect(&id, cancel)? {
             worker.verify(spec)?;
+            progress(Progress::Terminating);
             match self.request("DELETE", &format!("/pods/{id}"), None, cancel) {
                 Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(e) => return Err(e),
             }
+            progress(Progress::ConfirmingTermination);
             if self.inspect(&id, cancel)?.is_some() {
                 return Err(CloudError::Invalid("Termination pending; reconcile again"));
             }

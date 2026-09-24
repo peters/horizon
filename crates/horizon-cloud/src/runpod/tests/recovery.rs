@@ -185,7 +185,7 @@ fn inactive_matches_bind_identity_without_confirming_cleanup() {
         );
         assert!(matches!(state, CreateState::Bound { .. }));
         provider
-            .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+            .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
             .unwrap();
         assert!(matches!(state, CreateState::Terminated { .. }));
         task.join().unwrap();
