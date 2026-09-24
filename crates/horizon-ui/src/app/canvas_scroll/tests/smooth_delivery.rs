@@ -2,6 +2,15 @@ use super::*;
 
 #[test]
 fn displaced_panel_wheels_do_not_reach_another_panels_scroll_area() {
+    assert_displaced_wheels_stay_with_owner(ScrollTarget::Panel(PANEL));
+}
+
+#[test]
+fn displaced_surface_wheels_do_not_reach_a_panels_scroll_area() {
+    assert_displaced_wheels_stay_with_owner(ScrollTarget::Surface);
+}
+
+fn assert_displaced_wheels_stay_with_owner(owner: ScrollTarget) {
     let ctx = Context::default();
     let frame = |time, target, events| {
         let mut input = raw_input([400.0, 300.0], None);
@@ -33,15 +42,7 @@ fn displaced_panel_wheels_do_not_reach_another_panels_scroll_area() {
     for time in [0.0, 0.016, 0.032] {
         assert!(frame(time, ScrollTarget::Panel(OTHER_PANEL), Vec::new()).abs() < f32::EPSILON);
     }
-    assert!(
-        frame(
-            1.0,
-            ScrollTarget::Panel(PANEL),
-            vec![wheel(Vec2::new(0.0, 1.0), TouchPhase::Move)]
-        )
-        .abs()
-            < f32::EPSILON
-    );
+    assert!(frame(1.0, owner, vec![wheel(Vec2::new(0.0, 1.0), TouchPhase::Move)]).abs() < f32::EPSILON);
     let notch = Event::MouseWheel {
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),

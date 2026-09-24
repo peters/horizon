@@ -750,6 +750,7 @@ fn an_idle_relatch_lands_the_previous_notch_in_full() {
 }
 
 mod delivery;
+mod pan_ownership;
 mod smooth_delivery;
 mod suppression;
 mod zoom;

@@ -35,6 +35,7 @@ struct ScrollGesture {
     owner: Option<PanelId>,
     last_motion_at: f64,
     has_touch_phase: bool,
+    rejected_contact: bool,
     /// Claimed wheel motion still being eased in, so a claimed mouse-wheel
     /// notch pans as smoothly as egui would have scrolled it.
     pan_backlog: Vec2,
@@ -55,11 +56,25 @@ pub(super) struct ScrollRouting {
 }
 
 impl ScrollGesture {
+    fn reject_contact(&mut self, boundary: Option<TouchPhase>) {
+        let phased = match boundary {
+            Some(TouchPhase::Start) => true,
+            Some(TouchPhase::End | TouchPhase::Cancel) => false,
+            Some(TouchPhase::Move) | None => self.has_touch_phase,
+        };
+        *self = Self {
+            has_touch_phase: phased,
+            rejected_contact: phased,
+            ..Self::default()
+        };
+    }
+
     /// Bind the gesture to the surface it started over. A gesture that starts
     /// over empty canvas belongs to the canvas outright. Returns the previous
     /// gesture's claimed motion still easing in, which lands rather than being
     /// dropped.
     fn latch(&mut self, target: ScrollTarget) -> Vec2 {
+        self.rejected_contact = false;
         self.canvas_owned = Some(target == ScrollTarget::Canvas);
         self.owner = match target {
             ScrollTarget::Panel(panel) => Some(panel),
@@ -115,7 +130,7 @@ impl ScrollGesture {
         exhausted: &mut impl FnMut(PanelId, WheelStep) -> bool,
     ) -> ScrollRouting {
         if !allowed || !input.focused || input.pointer.any_pressed() {
-            *self = Self::default();
+            self.reject_contact(last_wheel_boundary(&input.events));
             return ScrollRouting::default();
         }
 
@@ -124,27 +139,14 @@ impl ScrollGesture {
             ..ScrollRouting::default()
         };
         let mut has_canvas_motion = false;
-        for (index, (step, phase)) in input
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                Event::MouseWheel {
-                    unit,
-                    delta,
-                    phase,
-                    modifiers,
-                } => Some((
-                    WheelStep {
-                        delta: *delta,
-                        unit: *unit,
-                        modifiers: *modifiers,
-                    },
-                    *phase,
-                )),
-                _ => None,
-            })
-            .enumerate()
-        {
+        for (index, (step, phase)) in wheel_steps(&input.events).enumerate() {
+            if self.rejected_contact && phase != TouchPhase::Start {
+                routing.claimed_wheels.push(index);
+                if matches!(phase, TouchPhase::End | TouchPhase::Cancel) {
+                    *self = Self::default();
+                }
+                continue;
+            }
             // A Ctrl/Cmd wheel is a zoom step, exactly as the terminal treats
             // it: whatever its phase or delta, it neither starts, continues,
             // chains nor moves a pan, and stays in the stream. Judged per
@@ -179,6 +181,9 @@ impl ScrollGesture {
                     self.last_motion_at = input.time;
                 }
                 TouchPhase::End | TouchPhase::Cancel | TouchPhase::Move => {}
+            }
+            if self.displaced_surface(target) {
+                routing.claimed_wheels.push(index);
             }
             // Scroll chaining: a gesture latched to a panel moves to the canvas
             // once *that* panel is at its scroll extent, and stays there for
@@ -221,14 +226,46 @@ impl ScrollGesture {
         // egui scroll areas use smoothed motion rather than the raw events
         // removed below. Keep a displaced owner's easing away from the new
         // hover target, including idle frames with no wheel events to remove.
-        routing.owns_smooth_scroll =
-            canvas_owned || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner));
+        routing.owns_smooth_scroll = canvas_owned
+            || self.rejected_contact
+            || self.displaced_surface(target)
+            || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner));
         if canvas_owned {
             routing.pan += self.ease_backlog(input.stable_dt);
         }
         routing.pans_canvas = has_canvas_motion || routing.pan != Vec2::ZERO;
         routing
     }
+
+    fn displaced_surface(&self, target: ScrollTarget) -> bool {
+        self.canvas_owned == Some(false) && self.owner.is_none() && target != ScrollTarget::Surface
+    }
+}
+
+fn wheel_steps(events: &[Event]) -> impl Iterator<Item = (WheelStep, TouchPhase)> + '_ {
+    events.iter().filter_map(|event| match event {
+        Event::MouseWheel {
+            unit,
+            delta,
+            phase,
+            modifiers,
+        } => Some((
+            WheelStep {
+                delta: *delta,
+                unit: *unit,
+                modifiers: *modifiers,
+            },
+            *phase,
+        )),
+        _ => None,
+    })
+}
+
+fn last_wheel_boundary(events: &[Event]) -> Option<TouchPhase> {
+    events.iter().rev().find_map(|event| match event {
+        Event::MouseWheel { phase, .. } if *phase != TouchPhase::Move => Some(*phase),
+        _ => None,
+    })
 }
 
 /// Route this frame's scroll. `target` is the surface under the pointer, used
@@ -252,19 +289,15 @@ pub(super) fn route_canvas_scroll(
     routing
 }
 
-/// Suppressed viewports discard canvas ownership and easing. Phased zoom stays
+/// Suppressed viewports discard canvas ownership and easing. Phased contacts stay
 /// rejected until an observed boundary, including boundaries handled here while
 /// a dialog or fullscreen view bypasses normal canvas input.
 pub(super) fn reset_canvas_scroll(ctx: &Context) {
     let viewport = ctx.viewport_id();
-    let boundary = ctx.input(|input| {
-        input.raw.events.iter().rev().find_map(|event| match event {
-            Event::MouseWheel { phase, .. } if *phase != TouchPhase::Move => Some(*phase),
-            _ => None,
-        })
-    });
+    let boundary = ctx.input(|input| last_wheel_boundary(&input.raw.events));
     ctx.data_mut(|data| {
-        data.remove::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)));
+        data.get_temp_mut_or_default::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)))
+            .reject_contact(boundary);
         let zoom = data.get_temp_mut_or_default::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
         zoom.reject_contact();
         match boundary {
