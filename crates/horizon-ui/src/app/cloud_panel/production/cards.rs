@@ -210,7 +210,7 @@ fn machine_size(
             .is_none_or(horizon_core::cloud_runtime::state::Deployment::accepts_next_size)
     {
         // A requested worker's saved size is authoritative.
-        let fixed = runtime.state.as_ref().filter(|state| !state.resizable());
+        let fixed = runtime.state.as_ref().filter(|state| !state.accepts_next_size());
         let shown = fixed.map_or(profile, |state| &state.profile);
         let label = ui.label(machine_size::fixed((shown.cpu, shown.memory_gb), profile.gpu));
         if fixed.is_some() {
@@ -293,7 +293,14 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> O
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
-    if runtime.stage == Some(Stage::Deleted) {
+    // A stage event can arrive before the deleted snapshot is replaced.
+    let redeploying = runtime.stage == Some(Stage::Deleted)
+        || (runtime.receiver.is_some()
+            && runtime
+                .state
+                .as_ref()
+                .is_some_and(|state| state.stage == Stage::Deleted));
+    if redeploying {
         return deleted_runtime_actions(ui, runtime);
     }
     if runtime.state.as_ref().is_some_and(|state| {

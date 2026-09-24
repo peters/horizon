@@ -869,3 +869,46 @@ fn deleted_cloud_can_redeploy_without_removing_the_card() {
     runtime.confirmation = Confirmation::None;
     assert!(click(&mut runtime, "Remove cloud") == Some(Action::Remove));
 }
+
+#[test]
+fn an_active_redeploy_keeps_the_selected_size_and_status() {
+    let mut launch = size_launch();
+    launch.profile.cpu = 16;
+    let ctx = egui::Context::default();
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = super::super::Runtime {
+        stage: Some(Stage::Validate),
+        receiver: Some(receiver),
+        state: Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"resize","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"example.invalid/team/worker","cpu":8,"memory_gb":32,"gpu":false},
+                "stage":"Deleted","operation":{"state":"terminated","worker_id":"worker1"},
+                "spec":null,"worker":null,"sessions":[]
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            assert!(profile_details(ui, 1, &launch, &runtime).is_none());
+            assert!(runtime_actions(ui, 1, &mut runtime).is_none());
+        })
+        .discard_textures();
+    let texts: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|text| text == "16 vCPU · 32 GB · CPU only"));
+    assert!(texts.iter().any(|text| text == "Redeploying cloud…"));
+    assert!(
+        texts
+            .iter()
+            .all(|text| !text.contains("Finish managed workspace storage cleanup"))
+    );
+}
