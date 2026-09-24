@@ -371,6 +371,60 @@ fn replacement_lock_cannot_authorize_a_second_owner_or_keep_the_old_handle_usabl
 }
 
 #[test]
+fn journal_artifacts_reject_links_and_special_files_before_reading_or_recovery() {
+    for file in [MARKER, JOURNAL, CANDIDATE] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("allocation");
+        let vault = MemoryVault::default();
+        let mut owner = create(&root, &vault);
+        assert!(
+            owner
+                .save_with(json!({"next":true}), &mut |step| {
+                    if step == Boundary::Pending {
+                        Err(Error::Journal)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+        );
+        drop(owner);
+        let external = temp.path().join("outside.json");
+        std::fs::rename(root.join(file), &external).unwrap();
+        std::os::unix::fs::symlink(&external, root.join(file)).unwrap();
+        assert!(matches!(journal::read(&root, file), Err(Error::Journal)));
+        assert!(Owner::open_with(&root, Box::new(vault.clone()), machine(1)).is_err());
+        std::fs::remove_file(root.join(file)).unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(root.join(file)).unwrap();
+        assert!(matches!(journal::read(&root, file), Err(Error::Journal)));
+        assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_err());
+    }
+}
+
+#[test]
+fn signing_backend_wipes_keys_and_rejects_a_foreign_signature() {
+    fn requires_wipe<T: zeroize::ZeroizeOnDrop>() {}
+    requires_wipe::<SigningKey>();
+    let temp = tempfile::tempdir().unwrap();
+    let owner = create(&temp.path().join("allocation"), &MemoryVault::default());
+    let binding = owner.binding().unwrap();
+    let intent = Intent::new(
+        &binding,
+        horizon_cloud_protocol::OperationId::generate(),
+        0,
+        horizon_cloud_protocol::signed::Target::Allocation {},
+        horizon_cloud_protocol::signed::Action::InspectAllocation,
+        b"{}",
+    )
+    .unwrap();
+    let foreign = SigningKey::from_bytes(&[99; 32]);
+    assert!(matches!(
+        SignedIntent::sign_with(intent, &binding, |bytes| foreign.sign(bytes).to_bytes().to_vec()),
+        Err(horizon_cloud_protocol::signed::Error::Signature)
+    ));
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 #[ignore = "requires scripts/cloud-smoke/controller-keyring.sh private credential-store fixture"]
 fn native_store_fixture() {

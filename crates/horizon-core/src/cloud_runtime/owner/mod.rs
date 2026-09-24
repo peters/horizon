@@ -5,6 +5,7 @@ mod machine;
 mod registration;
 mod vault;
 
+use ed25519_dalek::{Signer, SigningKey};
 use horizon_cloud_protocol::{
     AllocationId, ControllerId,
     signed::{ControllerBinding, Intent, SignedIntent},
@@ -12,10 +13,7 @@ use horizon_cloud_protocol::{
 use journal::{Anchor, CANDIDATE, JOURNAL, Journal, Lock, MARKER, Marker};
 use machine::MachineId;
 use registration::{Registration, Transition};
-use ring::{
-    rand::SystemRandom,
-    signature::{Ed25519KeyPair, KeyPair},
-};
+use ring::rand::{SecureRandom, SystemRandom};
 use std::path::{Path, PathBuf};
 use vault::{NativeVault, Vault};
 
@@ -98,7 +96,7 @@ impl Owner {
     pub fn binding(&self) -> Result<ControllerBinding> {
         let (registration, _) = self.current()?;
         let key = registration.verify(&self.root, &self.marker, &(self.machine)()?)?;
-        let public = key.public_key().as_ref().try_into().map_err(|_| Error::Registration)?;
+        let public = key.verifying_key().to_bytes();
         Ok(ControllerBinding::new(
             self.marker.allocation,
             self.marker.controller,
@@ -120,13 +118,16 @@ impl Owner {
 
     /// Sign only after local caller ownership and typed action validation. This
     /// method does not grant project membership or permission for provider I/O.
+    /// The expected revision belongs to the worker's membership manifest, not
+    /// this host journal's generation; the worker must check it under its lock.
     ///
     /// # Errors
     /// Rechecks native registration and journal freshness and rejects mismatched intents.
     pub fn sign(&self, intent: Intent) -> Result<SignedIntent> {
         let (registration, _) = self.current()?;
         let key = registration.verify(&self.root, &self.marker, &(self.machine)()?)?;
-        SignedIntent::sign(intent, &self.binding()?, &key).map_err(|_| Error::Signature)
+        SignedIntent::sign_with(intent, &self.binding()?, |bytes| key.sign(bytes).to_bytes().to_vec())
+            .map_err(|_| Error::Signature)
     }
 
     fn create_with(
@@ -139,14 +140,17 @@ impl Owner {
     ) -> Result<Self> {
         let machine_id = machine()?;
         crate::session_store::require_directory_durability()?;
-        let key = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).map_err(|_| Error::Registration)?;
-        let decoded = Ed25519KeyPair::from_pkcs8(key.as_ref()).map_err(|_| Error::Registration)?;
+        let mut key = zeroize::Zeroizing::new([0_u8; 32]);
+        SystemRandom::new()
+            .fill(key.as_mut())
+            .map_err(|_| Error::Registration)?;
+        let decoded = SigningKey::from_bytes(&key);
         let marker = Marker {
             version: 1,
             allocation: AllocationId::generate(),
             controller: ControllerId::generate(),
             registration: uuid::Uuid::new_v4(),
-            public_key_hash: journal::hash(decoded.public_key().as_ref()),
+            public_key_hash: journal::hash(decoded.verifying_key().as_bytes()),
         };
         match vault.read(&marker.registration.to_string()) {
             Err(Error::MissingRegistration) => {}

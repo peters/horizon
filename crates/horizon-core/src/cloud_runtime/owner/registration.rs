@@ -4,7 +4,7 @@ use super::{
     machine::MachineId,
     vault::Vault,
 };
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
@@ -49,7 +49,7 @@ impl Registration {
         Ok(())
     }
 
-    pub(super) fn verify(&self, root: &Path, marker: &Marker, machine: &MachineId) -> Result<Ed25519KeyPair> {
+    pub(super) fn verify(&self, root: &Path, marker: &Marker, machine: &MachineId) -> Result<SigningKey> {
         if self.version != 1 || self.root != root || self.marker != *marker || self.machine != *machine {
             return Err(Error::Ownership);
         }
@@ -63,8 +63,9 @@ impl Registration {
         if LockIdentity::at_path(&self.lock_path)? != self.lock_identity {
             return Err(Error::Ownership);
         }
-        let key = Ed25519KeyPair::from_pkcs8(&self.key).map_err(|_| Error::Registration)?;
-        if hash(key.public_key().as_ref()) != marker.public_key_hash {
+        let seed: &[u8; 32] = self.key.as_slice().try_into().map_err(|_| Error::Registration)?;
+        let key = SigningKey::from_bytes(seed);
+        if hash(key.verifying_key().as_bytes()) != marker.public_key_hash {
             return Err(Error::Ownership);
         }
         if let Some(pending) = &self.pending {
@@ -83,7 +84,10 @@ impl Registration {
 }
 
 mod key_material {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{
+        Deserializer, Serialize, Serializer,
+        de::{Error, SeqAccess, Visitor},
+    };
     use zeroize::Zeroizing;
 
     pub(super) fn serialize<S: Serializer>(value: &Zeroizing<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error> {
@@ -91,6 +95,26 @@ mod key_material {
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Zeroizing<Vec<u8>>, D::Error> {
-        Vec::<u8>::deserialize(deserializer).map(Zeroizing::new)
+        struct Seed;
+        impl<'de> Visitor<'de> for Seed {
+            type Value = Zeroizing<Vec<u8>>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a 32-byte signing seed")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+                let mut seed = Zeroizing::new(Vec::with_capacity(32));
+                while let Some(byte) = sequence.next_element::<u8>()? {
+                    if seed.len() == 32 {
+                        return Err(A::Error::custom("invalid signing seed"));
+                    }
+                    seed.push(byte);
+                }
+                if seed.len() != 32 {
+                    return Err(A::Error::custom("invalid signing seed"));
+                }
+                Ok(seed)
+            }
+        }
+        deserializer.deserialize_seq(Seed)
     }
 }

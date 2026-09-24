@@ -43,8 +43,23 @@ pub(super) fn hash(bytes: &[u8]) -> [u8; 32] {
 }
 
 pub(super) fn read(root: &Path, name: &str) -> Result<Vec<u8>> {
+    let path = root.join(name);
+    if !fs::symlink_metadata(&path)?.is_file() {
+        return Err(Error::Journal);
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::Journal);
+    }
     let mut bytes = Vec::new();
-    File::open(root.join(name))?.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    file.take(LIMIT + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > LIMIT {
         return Err(Error::Journal);
     }
