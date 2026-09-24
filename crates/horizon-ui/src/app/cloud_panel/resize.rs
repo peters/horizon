@@ -29,8 +29,7 @@ impl HorizonApp {
                     return None;
                 }
                 let (_, max) = group.bounds();
-                let limit = (group.size[0].min(group.size[1]) * 0.35).max(8.0);
-                let handle = (super::super::RESIZE_HANDLE_SIZE / zoom).clamp(8.0, limit);
+                let handle = corner_span(group.size, zoom);
                 let corner = Rect::from_min_size(Pos2::new(max[0] - handle, max[1] - handle), Vec2::splat(handle));
                 (transform * corner)
                     .intersects(canvas)
@@ -162,8 +161,15 @@ impl HorizonApp {
     }
 }
 
+/// Canvas size of the corner. It is one panel handle wide on screen, and it
+/// may use the whole frame when that frame is smaller than the grip.
+fn corner_span(frame: [f32; 2], zoom: f32) -> f32 {
+    let extent = frame[0].min(frame[1]).max(1.0);
+    (super::super::RESIZE_HANDLE_SIZE / zoom.max(0.05)).min(extent)
+}
+
 fn paint_corner(ui: &egui::Ui, rect: Rect) {
-    let weight = (rect.width().min(rect.height()) * 0.08).clamp(1.0, 2.5);
+    let weight = rect.width().min(rect.height()) * 0.08;
     let stroke = Stroke::new(weight, theme::alpha(theme::FG_DIM(), 190));
     let inset = rect.width().min(rect.height()) * 0.12;
     let span = rect.width().min(rect.height()) * 0.62;
@@ -328,8 +334,7 @@ mod tests {
         let (before, origin, press) = {
             let group = &app.cloud_prototype.groups.0[0];
             let (_, max) = group.bounds();
-            let limit = (group.size[0].min(group.size[1]) * 0.35).max(8.0);
-            let handle = (super::super::super::RESIZE_HANDLE_SIZE / app.canvas_view.zoom).clamp(8.0, limit);
+            let handle = super::corner_span(group.size, app.canvas_view.zoom);
             let corner =
                 egui::Rect::from_min_size(egui::pos2(max[0] - handle, max[1] - handle), egui::vec2(handle, handle));
             (group.size, group.position, (transform * corner).center())
@@ -365,5 +370,19 @@ mod tests {
             app.cloud_prototype.groups.0[0].position.map(f32::to_bits),
             origin.map(f32::to_bits)
         );
+    }
+
+    #[test]
+    fn minimum_zoom_grip_uses_the_whole_minimum_frame() {
+        let frame = [348.0, 318.0];
+        let zoom = 0.05;
+        let span = super::corner_span(frame, zoom);
+        let screen = span * zoom;
+        assert!(span <= frame[0].min(frame[1]));
+        assert!(
+            (screen - frame[1] * zoom).abs() < 0.05,
+            "screen grip {screen} should use the 318-point frame"
+        );
+        assert!((super::corner_span([1088.0, 598.0], 1.0) - super::super::super::RESIZE_HANDLE_SIZE).abs() < 0.05);
     }
 }
