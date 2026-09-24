@@ -23,14 +23,23 @@ use time::OffsetDateTime;
 
 /// Billing arrives in hourly buckets, so refreshing faster would show little new.
 pub const REFRESH_INTERVAL: Duration = Duration::from_mins(5);
-/// How far back a total reads; [`COVERAGE`] names this window.
+/// How far back billing is read. A total of a worker billed before this window
+/// is labelled with it; see [`TotalCost::summary`].
 pub const HISTORY: Duration = Duration::from_hours(365 * 24);
 /// A refresh makes two provider requests, each bounded by the provider timeout.
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT.as_secs() * 2 + 5);
-const COVERAGE: &str = "Compute and the worker's disk as billed by RunPod, plus the hourly rate for running time its billing has not reached yet. Network volume storage is not included because RunPod does not report it per volume, and neither are charges older than one year.";
+const COVERAGE: &str = "Compute and the worker's disk as billed by RunPod, plus the hourly rate for running time its billing has not reached yet. Network volume storage is not included because RunPod does not report it per volume.";
 
 /// The refresh work, so callers can substitute the provider.
-pub type Fetch = fn(&Path, &str, SystemTime, &Cancellation) -> Result<Vec<BillingBucket>, BillingError>;
+pub type Fetch = fn(&Path, &str, SystemTime, &Cancellation) -> Result<History, BillingError>;
+
+/// Billing read for one window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct History {
+    pub buckets: Vec<BillingBucket>,
+    /// Start of the window; charges before it were not read.
+    pub from: SystemTime,
+}
 
 /// Short reasons, shown as `Total unavailable: <reason>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -72,19 +81,17 @@ impl From<CloudError> for BillingError {
 /// the start of the current UTC day and hour buckets since.
 /// # Errors
 /// Reports unreadable settings or credentials and provider failures.
-pub fn fetch(
-    settings: &Path,
-    pod_id: &str,
-    now: SystemTime,
-    cancel: &Cancellation,
-) -> Result<Vec<BillingBucket>, BillingError> {
+pub fn fetch(settings: &Path, pod_id: &str, now: SystemTime, cancel: &Cancellation) -> Result<History, BillingError> {
     let settings = Settings::load(settings).map_err(|_| BillingError::Settings)?;
     let provider = RunPod::new(settings.credential().map_err(|_| BillingError::Credential)?);
     let today = start_of_day(now).ok_or(BillingError::Unavailable)?;
     let first = today.checked_sub(HISTORY).ok_or(BillingError::Unavailable)?;
     let days = provider.billing(pod_id, BucketSize::Day, first, today, cancel)?;
     let hours = provider.billing(pod_id, BucketSize::Hour, today, now, cancel)?;
-    Ok(combine(days, hours, today))
+    Ok(History {
+        buckets: combine(days, hours, today),
+        from: first,
+    })
 }
 
 /// A window end may be inclusive, so each granularity keeps only its own span
@@ -110,8 +117,8 @@ fn start_of_day(now: SystemTime) -> Option<SystemTime> {
 /// Billing as last read successfully.
 #[derive(Debug)]
 pub struct Sample {
-    pub buckets: Vec<BillingBucket>,
-    /// The buckets reduced once, for totals on every frame.
+    pub history: History,
+    /// The history reduced once, for totals on every frame.
     pub billing: Billing,
     pub fetched: Instant,
 }
@@ -127,7 +134,7 @@ pub struct BillingMonitor {
 }
 
 struct Pending {
-    receiver: Receiver<Result<Vec<BillingBucket>, BillingError>>,
+    receiver: Receiver<Result<History, BillingError>>,
     cancel: Cancellation,
     started: Instant,
 }
@@ -172,7 +179,7 @@ impl BillingMonitor {
     /// only called to start a refresh.
     fn update<F>(&mut self, pod_id: &str, now: Instant, job: impl FnOnce() -> F)
     where
-        F: FnOnce(&Cancellation) -> Result<Vec<BillingBucket>, BillingError> + Send + 'static,
+        F: FnOnce(&Cancellation) -> Result<History, BillingError> + Send + 'static,
     {
         self.select(pod_id);
         self.poll(now);
@@ -214,10 +221,25 @@ impl BillingMonitor {
         self.store(result, now);
     }
 
-    /// Stores a finished refresh of `pod_id`. A failure keeps the last billing.
-    pub fn record(&mut self, pod_id: &str, result: Result<Vec<BillingBucket>, BillingError>, now: Instant) {
+    /// Stores a finished refresh of `pod_id`, which counts as its latest attempt.
+    /// A failure keeps the last billing.
+    pub fn record(&mut self, pod_id: &str, result: Result<History, BillingError>, now: Instant) {
         self.select(pod_id);
+        self.last_attempt = Some(now);
         self.store(result, now);
+    }
+
+    /// When the caller should next call [`Self::follow`]: once the running refresh
+    /// may time out, or once the next refresh is due. `None` while no worker is
+    /// followed.
+    #[must_use]
+    pub fn next_update_in(&self, now: Instant) -> Option<Duration> {
+        self.pod_id.as_ref()?;
+        Some(match (&self.pending, self.last_attempt) {
+            (Some(pending), _) => REFRESH_TIMEOUT.saturating_sub(now.saturating_duration_since(pending.started)),
+            (None, Some(at)) => REFRESH_INTERVAL.saturating_sub(now.saturating_duration_since(at)),
+            (None, None) => Duration::ZERO,
+        })
     }
 
     fn select(&mut self, pod_id: &str) {
@@ -227,12 +249,12 @@ impl BillingMonitor {
         }
     }
 
-    fn store(&mut self, result: Result<Vec<BillingBucket>, BillingError>, now: Instant) {
+    fn store(&mut self, result: Result<History, BillingError>, now: Instant) {
         match result {
-            Ok(buckets) => {
+            Ok(history) => {
                 self.sample = Some(Sample {
-                    billing: Billing::new(&buckets),
-                    buckets,
+                    billing: Billing::new(&history.buckets, history.from),
+                    history,
                     fetched: now,
                 });
                 self.error = None;
@@ -274,6 +296,12 @@ impl BillingMonitor {
     #[must_use]
     pub fn explanation(&self, total: &TotalCost, now: Instant) -> String {
         let mut text = String::from(COVERAGE);
+        if let Some(before) = total.excludes_before.and_then(utc_minute) {
+            let _ = write!(
+                text,
+                "\nCharges before {before} are not included: Horizon reads the past 12 months of billing."
+            );
+        }
         if let Some(through) = total.billed_through.and_then(utc_minute) {
             let _ = write!(text, "\nBilled through {through}.");
         }
@@ -311,7 +339,15 @@ mod tests {
         mpsc,
     };
 
-    type Result = std::result::Result<Vec<BillingBucket>, BillingError>;
+    type Result = std::result::Result<History, BillingError>;
+
+    /// A window that starts long before the synthetic worker was first billed.
+    fn history(buckets: Vec<BillingBucket>) -> History {
+        History {
+            buckets,
+            from: at("2023-07-14T00:00:00Z"),
+        }
+    }
 
     fn bucket(time: &str, size: BucketSize, amount: f64) -> BillingBucket {
         BillingBucket {
@@ -356,10 +392,15 @@ mod tests {
         let mut monitor = BillingMonitor::default();
         let start = Instant::now();
         let first = vec![bucket("2024-07-12T19:00:00Z", BucketSize::Hour, 0.25)];
-        monitor.update("worker1", start, answer(Ok(first.clone())));
+        monitor.update("worker1", start, answer(Ok(history(first.clone()))));
         assert!(monitor.refreshing());
+        assert_eq!(monitor.next_update_in(start), Some(REFRESH_TIMEOUT));
         settle(&mut monitor, start);
-        assert_eq!(monitor.sample().unwrap().buckets, first);
+        assert_eq!(monitor.sample().unwrap().history.buckets, first);
+        assert_eq!(
+            monitor.next_update_in(start + Duration::from_mins(1)),
+            Some(Duration::from_mins(4))
+        );
         assert_eq!(monitor.error(), None);
 
         let starts = AtomicUsize::new(0);
@@ -375,17 +416,24 @@ mod tests {
         settle(&mut monitor, later);
         assert_eq!(monitor.error(), Some(BillingError::Unreachable));
         assert_eq!(
-            monitor.sample().unwrap().buckets,
+            monitor.sample().unwrap().history.buckets,
             first,
             "a failure keeps the last billing"
         );
         assert_eq!(monitor.sample().unwrap().fetched, start);
 
         let latest = start + REFRESH_INTERVAL * 2;
-        monitor.update("worker1", latest, answer(Ok(Vec::new())));
+        monitor.update("worker1", latest, answer(Ok(history(Vec::new()))));
         settle(&mut monitor, latest);
         assert_eq!(monitor.error(), None);
-        assert!(monitor.sample().unwrap().buckets.is_empty());
+        assert!(monitor.sample().unwrap().history.buckets.is_empty());
+        assert_eq!(
+            monitor.next_update_in(latest + REFRESH_INTERVAL * 2),
+            Some(Duration::ZERO),
+            "an overdue refresh is due now"
+        );
+        monitor.stop();
+        assert_eq!(monitor.next_update_in(latest), None, "nothing to refresh");
     }
 
     #[test]
@@ -420,7 +468,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 let _ = observed.send(());
-                Ok(Vec::new())
+                Ok(history(Vec::new()))
             }
         });
         drop(dropped);
@@ -432,7 +480,7 @@ mod tests {
         let fetch: Fetch = |settings, pod, _, _| {
             assert!(settings.ends_with("cloud/settings.json"));
             assert_eq!(pod, "worker1");
-            Ok(vec![bucket("2024-07-12T19:00:00Z", BucketSize::Hour, 0.25)])
+            Ok(history(vec![bucket("2024-07-12T19:00:00Z", BucketSize::Hour, 0.25)]))
         };
         let notified = Arc::new(AtomicUsize::new(0));
         let notify = {
@@ -453,15 +501,15 @@ mod tests {
         monitor.follow(Some(&bound), Some(root), fetch, &notify);
         settle(&mut monitor, Instant::now());
         assert_eq!(notified.load(Ordering::Relaxed), 1);
-        assert_eq!(monitor.sample().unwrap().buckets.len(), 1);
+        assert_eq!(monitor.sample().unwrap().history.buckets.len(), 1);
 
         monitor.record("worker2", Err(BillingError::Rejected), Instant::now());
         assert!(monitor.sample().is_none(), "another worker's billing is never reused");
-        monitor.record("worker1", Ok(Vec::new()), Instant::now());
+        monitor.record("worker1", Ok(history(Vec::new())), Instant::now());
         let terminated = deployment(&json!({"state":"terminated","worker_id":"worker1"}));
         monitor.follow(Some(&terminated), Some(root), fetch, &notify);
         assert!(monitor.sample().is_none() && monitor.error().is_none());
-        monitor.record("worker1", Ok(Vec::new()), Instant::now());
+        monitor.record("worker1", Ok(history(Vec::new())), Instant::now());
         monitor.follow(None, Some(root), fetch, &notify);
         assert!(monitor.sample().is_none());
     }
@@ -529,16 +577,26 @@ mod tests {
     fn the_explanation_names_coverage_freshness_and_the_last_failure() {
         let fetched = Instant::now();
         let mut monitor = BillingMonitor::default();
-        monitor.record("worker1", Ok(Vec::new()), fetched);
+        monitor.record("worker1", Ok(history(Vec::new())), fetched);
         let total = TotalCost {
             billed: 3.37,
             estimated: 0.83,
             billed_through: Some(at("2024-07-12T19:00:00Z")),
+            excludes_before: None,
         };
         let text = monitor.explanation(&total, fetched + Duration::from_secs(130));
         assert!(text.starts_with(COVERAGE));
         assert!(text.contains("Network volume storage is not included"));
+        assert!(!text.contains("past 12 months"), "a lifetime total names no window");
         assert!(text.ends_with("\nBilled through 2024-07-12 19:00 UTC.\nRefreshed 2m 10s ago."));
+        let windowed = TotalCost {
+            excludes_before: Some(at("2023-07-14T00:00:00Z")),
+            ..total
+        };
+        let text = monitor.explanation(&windowed, fetched + Duration::from_secs(130));
+        assert!(text.ends_with(
+            "\nCharges before 2023-07-14 00:00 UTC are not included: Horizon reads the past 12 months of billing.\nBilled through 2024-07-12 19:00 UTC.\nRefreshed 2m 10s ago."
+        ));
         monitor.record("worker1", Err(BillingError::Unreachable), fetched);
         let text = monitor.explanation(
             &TotalCost {

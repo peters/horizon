@@ -185,6 +185,9 @@ impl Runtime {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.current_run_cost(std::time::SystemTime::now()).is_some() {
             ctx.request_repaint_after(RUN_COST_REFRESH);
+        } else if let Some(due) = self.billing.next_update_in(std::time::Instant::now()) {
+            // Billing only refreshes during a frame, and an idle cloud requests none.
+            ctx.request_repaint_after(due);
         }
     }
 

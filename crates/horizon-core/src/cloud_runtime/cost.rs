@@ -2,7 +2,10 @@
 //! provider's billing currency, which `RunPod` prices in US dollars.
 use super::progress;
 use crate::usage_stats::format_cost;
-use horizon_cloud::{Worker, WorkerStatus, runpod::billing::BillingBucket};
+use horizon_cloud::{
+    Worker, WorkerStatus,
+    runpod::billing::{BillingBucket, BucketSize},
+};
 use std::time::{Duration, SystemTime};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -53,8 +56,9 @@ pub fn current_run(worker: &Worker, now: SystemTime) -> Option<RunCost> {
     })
 }
 
-/// A worker's cost since creation: the provider's billing plus an estimate for
-/// the time its billing has not reached yet.
+/// A worker's cost since creation, or over the read window when it was billed
+/// before that window: the provider's billing plus an estimate for the time its
+/// billing has not reached yet.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TotalCost {
     pub billed: f64,
@@ -62,6 +66,9 @@ pub struct TotalCost {
     /// Where the billed span ends: the latest bucket's start when that bucket is
     /// estimated instead, otherwise its end, never after `now`. `None` without billing.
     pub billed_through: Option<SystemTime>,
+    /// The window start when charges before it may exist and are not included;
+    /// `None` when billing began inside the window, so the total is lifetime.
+    pub excludes_before: Option<SystemTime>,
 }
 
 impl TotalCost {
@@ -70,17 +77,33 @@ impl TotalCost {
         self.billed + self.estimated
     }
 
-    /// For example `Since creation · $4.20 (billed $3.37 + $0.83 estimated)`.
-    /// The parts are rounded to cents first, so the shown sum adds up.
+    /// For example `Since creation · $4.20 (billed $3.37 + $0.83 estimated)`, or
+    /// `Past 12 months · …` when older charges are not included. The parts are
+    /// rounded to cents first, so the shown sum adds up.
     #[must_use]
     pub fn summary(&self) -> String {
         let (billed, estimated) = (cents(self.billed), cents(self.estimated));
         format!(
-            "Since creation · {} (billed {} + {} estimated)",
+            "{} · {} (billed {} + {} estimated)",
+            if self.excludes_before.is_some() {
+                "Past 12 months"
+            } else {
+                "Since creation"
+            },
             format_cost(billed + estimated),
             format_cost(billed),
             format_cost(estimated)
         )
+    }
+
+    /// `$4.20 total` for a lifetime total, `$4.20 12 mo` for the read window.
+    fn badge(&self) -> String {
+        let span = if self.excludes_before.is_some() {
+            "12 mo"
+        } else {
+            "total"
+        };
+        format!("{} {span}", format_cost(self.shown_total()))
     }
 
     fn shown_total(&self) -> f64 {
@@ -88,10 +111,11 @@ impl TotalCost {
     }
 }
 
-/// Combines non-overlapping billing buckets with the current run; see [`Billing::total`].
+/// Combines non-overlapping billing buckets read since `from` with the current
+/// run; see [`Billing::new`] and [`Billing::total`].
 #[must_use]
-pub fn total(buckets: &[BillingBucket], worker: &Worker, now: SystemTime) -> TotalCost {
-    Billing::new(buckets).total(worker, now)
+pub fn total(buckets: &[BillingBucket], from: SystemTime, worker: &Worker, now: SystemTime) -> TotalCost {
+    Billing::new(buckets, from).total(worker, now)
 }
 
 /// Billing buckets reduced once to what a total needs, so repeated totals parse nothing.
@@ -100,6 +124,7 @@ pub struct Billing {
     /// Buckets that start before the latest one.
     earlier: f64,
     latest: Option<Latest>,
+    excludes_before: Option<SystemTime>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,9 +135,14 @@ struct Latest {
 }
 
 impl Billing {
-    /// Buckets without an RFC 3339 start are ignored rather than risk counting them twice.
+    /// Reduces the buckets of a window that starts at `from`. The total counts as
+    /// lifetime only when the window's first day has no charges, so billing began
+    /// inside the window; otherwise older charges may exist and it covers the
+    /// window. A worker that was billed nothing at all for that first day, such as
+    /// one stopped without its own disk, is taken to have started later. Buckets
+    /// without an RFC 3339 start are ignored rather than risk counting them twice.
     #[must_use]
-    pub fn new(buckets: &[BillingBucket]) -> Self {
+    pub fn new(buckets: &[BillingBucket], from: SystemTime) -> Self {
         let dated = || {
             buckets
                 .iter()
@@ -121,6 +151,10 @@ impl Billing {
         let Some((start, bucket)) = dated().max_by_key(|(start, _)| *start) else {
             return Self::default();
         };
+        let first_day_end = from.checked_add(BucketSize::Day.duration());
+        let excludes_before = dated()
+            .any(|(start, _)| first_day_end.is_none_or(|end| start < end))
+            .then_some(from);
         let (mut earlier, mut amount) = (0.0, 0.0);
         for (bucket_start, bucket) in dated() {
             if bucket_start < start {
@@ -136,6 +170,7 @@ impl Billing {
                 end: start.checked_add(bucket.size.duration()),
                 amount,
             }),
+            excludes_before,
         }
     }
 
@@ -157,33 +192,33 @@ impl Billing {
                 billed: 0.0,
                 estimated: run.map_or(0.0, |(started, rate)| estimate(rate, started, now)),
                 billed_through: None,
+                excludes_before: self.excludes_before,
             };
         };
         match run {
             Some((started, rate)) if latest.end.is_none_or(|end| started < end) => TotalCost {
                 billed: self.earlier,
                 estimated: estimate(rate, started.max(latest.start), now),
-                billed_through: Some(latest.start),
+                billed_through: Some(latest.start.min(now)),
+                excludes_before: self.excludes_before,
             },
             run => TotalCost {
                 billed: self.earlier + latest.amount,
                 estimated: run.map_or(0.0, |(started, rate)| estimate(rate, started, now)),
                 billed_through: latest.end.map(|end| end.min(now)),
+                excludes_before: self.excludes_before,
             },
         }
     }
 }
 
-/// Compact header text: `$0.83 run · $4.20 total`, `$4.20 total` or `$0.83 run`.
+/// Compact header text: `$0.83 run · $4.20 total`, `$4.20 total` or `$0.83 run`,
+/// with `12 mo` instead of `total` when older charges are not included.
 #[must_use]
 pub fn badge(run: Option<&RunCost>, total: Option<&TotalCost>) -> Option<String> {
     match (run, total) {
-        (Some(run), Some(total)) => Some(format!(
-            "{} run · {} total",
-            format_cost(run.amount),
-            format_cost(total.shown_total())
-        )),
-        (None, Some(total)) => Some(format!("{} total", format_cost(total.shown_total()))),
+        (Some(run), Some(total)) => Some(format!("{} run · {}", format_cost(run.amount), total.badge())),
+        (None, Some(total)) => Some(total.badge()),
         (Some(run), None) => Some(format!("{} run", format_cost(run.amount))),
         (None, None) => None,
     }
@@ -220,7 +255,6 @@ pub(super) fn started_at(value: &str) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_cloud::runpod::billing::BucketSize;
     use serde_json::{Value, json};
 
     const STARTED: &str = "2024-07-12T19:14:40.144Z";
@@ -321,6 +355,11 @@ mod tests {
         }
     }
 
+    /// A window that starts long before the synthetic worker was first billed.
+    fn window() -> SystemTime {
+        at("2023-07-14T00:00:00Z")
+    }
+
     /// Two whole days, then hours of the current day with a partial latest hour.
     fn history() -> Vec<BillingBucket> {
         vec![
@@ -344,7 +383,7 @@ mod tests {
         let running = worker(&json!({"lastStartedAt": "2024-07-12T09:00:00Z"}));
         let now = at("2024-07-12T19:30:00Z");
         assert_total(
-            total(&history(), &running, now),
+            total(&history(), window(), &running, now),
             18.38,
             0.345,
             Some("2024-07-12T19:00:00Z"),
@@ -353,7 +392,7 @@ mod tests {
         shuffled.reverse();
         shuffled.push(bucket("yesterday", BucketSize::Hour, 99.0));
         assert_total(
-            total(&shuffled, &running, now),
+            total(&shuffled, window(), &running, now),
             18.38,
             0.345,
             Some("2024-07-12T19:00:00Z"),
@@ -364,7 +403,7 @@ mod tests {
     fn a_run_that_started_inside_the_latest_bucket_is_estimated_from_its_start() {
         let now = started() + Duration::from_mins(30);
         assert_total(
-            total(&history(), &worker(&json!({})), now),
+            total(&history(), window(), &worker(&json!({})), now),
             18.38,
             0.345,
             Some("2024-07-12T19:00:00Z"),
@@ -377,7 +416,7 @@ mod tests {
         billed.truncate(3);
         let now = started() + Duration::from_hours(1);
         assert_total(
-            total(&billed, &worker(&json!({})), now),
+            total(&billed, window(), &worker(&json!({})), now),
             17.69,
             0.69,
             Some("2024-07-12T18:00:00Z"),
@@ -389,13 +428,13 @@ mod tests {
         let stopped = worker(&json!({"desiredStatus": "EXITED"}));
         let now = at("2024-07-12T19:30:00Z");
         assert_total(
-            total(&history(), &stopped, now),
+            total(&history(), window(), &stopped, now),
             18.63,
             0.0,
             Some("2024-07-12T19:30:00Z"),
         );
         assert_total(
-            total(&history(), &stopped, at("2024-07-13T08:00:00Z")),
+            total(&history(), window(), &stopped, at("2024-07-13T08:00:00Z")),
             18.63,
             0.0,
             Some("2024-07-12T20:00:00Z"),
@@ -405,13 +444,13 @@ mod tests {
     #[test]
     fn without_billing_only_the_current_run_is_estimated() {
         let now = started() + Duration::from_mins(72);
-        let running = total(&[], &worker(&json!({})), now);
+        let running = total(&[], window(), &worker(&json!({})), now);
         assert_total(running, 0.0, 0.828, None);
-        let stopped = total(&[], &worker(&json!({"desiredStatus": "EXITED"})), now);
+        let stopped = total(&[], window(), &worker(&json!({"desiredStatus": "EXITED"})), now);
         assert_total(stopped, 0.0, 0.0, None);
         let unpriced = worker(&json!({"costPerHr": null, "adjustedCostPerHr": null}));
         assert_total(
-            total(&history(), &unpriced, now),
+            total(&history(), window(), &unpriced, now),
             18.63,
             0.0,
             Some("2024-07-12T20:00:00Z"),
@@ -424,14 +463,14 @@ mod tests {
         days.truncate(2);
         let running = worker(&json!({"lastStartedAt": "2024-07-11T20:00:00Z"}));
         assert_total(
-            total(&days, &running, at("2024-07-12T00:30:00Z")),
+            total(&days, window(), &running, at("2024-07-12T00:30:00Z")),
             5.0,
             0.69 * 4.5,
             Some("2024-07-11T00:00:00Z"),
         );
         let since_before = worker(&json!({"lastStartedAt": "2024-07-09T12:00:00Z"}));
         assert_total(
-            total(&days, &since_before, at("2024-07-11T06:00:00Z")),
+            total(&days, window(), &since_before, at("2024-07-11T06:00:00Z")),
             5.0,
             0.69 * 6.0,
             Some("2024-07-11T00:00:00Z"),
@@ -442,26 +481,27 @@ mod tests {
     fn clock_skew_never_estimates_negative_time() {
         let future_start = worker(&json!({"lastStartedAt": "2024-07-12T19:45:00Z"}));
         assert_total(
-            total(&history(), &future_start, at("2024-07-12T19:30:00Z")),
+            total(&history(), window(), &future_start, at("2024-07-12T19:30:00Z")),
             18.38,
             0.0,
             Some("2024-07-12T19:00:00Z"),
         );
         let running = worker(&json!({"lastStartedAt": "2024-07-12T09:00:00Z"}));
         assert_total(
-            total(&history(), &running, at("2024-07-12T18:40:00Z")),
+            total(&history(), window(), &running, at("2024-07-12T18:40:00Z")),
             18.38,
             0.0,
-            Some("2024-07-12T19:00:00Z"),
+            Some("2024-07-12T18:40:00Z"),
         );
     }
 
     #[test]
     fn totals_and_badges_show_cent_rounded_parts_that_add_up() {
-        let total = TotalCost {
+        let mut total = TotalCost {
             billed: 3.374,
             estimated: 0.834,
             billed_through: None,
+            excludes_before: None,
         };
         assert_eq!(
             total.summary(),
@@ -479,6 +519,45 @@ mod tests {
         assert_eq!(badge(None, Some(&total)).as_deref(), Some("$4.20 total"));
         assert_eq!(badge(Some(&run), None).as_deref(), Some("$0.83 run"));
         assert_eq!(badge(None, None), None);
+        total.excludes_before = Some(window());
+        assert_eq!(
+            total.summary(),
+            "Past 12 months · $4.20 (billed $3.37 + $0.83 estimated)"
+        );
+        assert_eq!(
+            badge(Some(&run), Some(&total)).as_deref(),
+            Some("$0.83 run · $4.20 12 mo")
+        );
+        assert_eq!(badge(None, Some(&total)).as_deref(), Some("$4.20 12 mo"));
+    }
+
+    #[test]
+    fn a_total_is_lifetime_only_when_billing_began_after_the_first_day_of_the_window() {
+        let running = worker(&json!({"lastStartedAt": "2024-07-12T09:00:00Z"}));
+        let now = at("2024-07-12T19:30:00Z");
+        let lifetime = |from: &str| total(&history(), at(from), &running, now).excludes_before;
+        assert_eq!(lifetime("2023-07-14T00:00:00Z"), None);
+        assert_eq!(
+            lifetime("2024-07-09T00:00:00Z"),
+            None,
+            "the first charge is a day later"
+        );
+        assert_eq!(lifetime("2024-07-10T00:00:00Z"), Some(at("2024-07-10T00:00:00Z")));
+        assert_eq!(
+            lifetime("2024-07-09T12:00:00Z"),
+            Some(at("2024-07-09T12:00:00Z")),
+            "a charge within a day of the window start may continue before it"
+        );
+        let windowed = total(&history(), at("2024-07-10T00:00:00Z"), &running, now);
+        assert_total(windowed, 18.38, 0.345, Some("2024-07-12T19:00:00Z"));
+        let stopped = worker(&json!({"desiredStatus": "EXITED"}));
+        for from in ["2023-07-14T00:00:00Z", "2024-07-10T00:00:00Z"] {
+            let empty = total(&[], at(from), &stopped, now);
+            assert_eq!(
+                empty.excludes_before, None,
+                "no billing in the window means none before it"
+            );
+        }
     }
 
     #[test]

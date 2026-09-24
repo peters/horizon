@@ -503,10 +503,12 @@ between local image checks and SSH readiness, including legacy full-image suppor
 `cost` estimates a worker's current run from the provider's effective hourly rate
 and latest start time without I/O, so any surface can reuse it; the UI only formats
 it and schedules the refresh. `cost::total` combines billing buckets with that run
-so the latest, possibly partial, bucket is never counted twice. `billing` owns the
-per-cloud background refresh: settings, credential and provider reads run on a
-short-lived thread every few minutes, bounded by the provider timeout and cancelled
-when the cloud is unbound or its runtime is dropped.
+so the latest, possibly partial, bucket is never counted twice, and labels a worker
+billed before the one-year read window with that window instead of its lifetime.
+`billing` owns the per-cloud background refresh: settings, credential and provider
+reads run on a short-lived thread every few minutes, bounded by the provider timeout
+and cancelled when the cloud is unbound or its runtime is dropped; the UI schedules
+a frame for the next refresh even while the cloud is idle.
 `repository::launch` discovers the selected checkout, parses its default profile
 and resolves the committed revision; the UI launch coordinator captures workspace
 identity and performs preparation while the user enters a title. Credential
