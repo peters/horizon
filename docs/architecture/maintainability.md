@@ -490,12 +490,17 @@ generation/hash is anchored in the registration; candidate, pending, published a
 crash recovery exact and copied or rolled-back journals fenced. Every native write
 rechecks ownership and the exact preceding registration; deleted or changed native
 state cannot be recreated from cached credentials. This API is not
-called by runtime entry points yet. It currently supports Linux Secret Service
+called by runtime entry points yet. Backends are implemented for Linux Secret Service
 and macOS Keychain; other hosts remain blocked by the existing Unix directory
 durability requirement. Synthetic tests never access the user's credential store.
 On Linux, `scripts/cloud-smoke/controller-keyring.sh` qualifies registration and
 signing against a disposable Secret Service backend across crash/restart, using a
 private D-Bus session, private data directories and the exact foreground daemon PID.
+The macOS backend remains unqualified: native create/save/reopen/sign and
+locked/unavailable-Keychain checks on an isolated target must pass before macOS
+runtime activation or a support claim. Synthetic macOS filesystem tests do not
+qualify native Keychain behavior. Secret serialization writes directly into a
+fixed zeroizing buffer, including partial output on an encoding failure.
 The host `allocation::legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership

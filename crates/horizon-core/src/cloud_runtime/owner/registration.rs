@@ -2,7 +2,7 @@ use super::{
     Error, Result,
     journal::{Anchor, LockIdentity, Marker, hash},
     machine::MachineId,
-    vault::Vault,
+    vault::{MAX_REGISTRATION, Vault},
 };
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
@@ -34,16 +34,20 @@ pub(super) struct Transition {
 impl Registration {
     pub(super) fn read(vault: &dyn Vault, marker: &Marker) -> Result<Self> {
         let bytes = vault.read(&marker.registration.to_string())?;
-        if bytes.len() > 16 * 1024 {
+        if bytes.len() > MAX_REGISTRATION {
             return Err(Error::Registration);
         }
         serde_json::from_slice(&bytes).map_err(|_| Error::Registration)
     }
 
     pub(super) fn write(&self, vault: &dyn Vault) -> Result<()> {
-        let bytes = Zeroizing::new(serde_json::to_vec(self).map_err(|_| Error::Registration)?);
-        vault.write(&self.marker.registration.to_string(), &bytes)?;
-        if vault.read(&self.marker.registration.to_string())?.as_slice() != bytes.as_slice() {
+        let mut storage = Zeroizing::new([0; MAX_REGISTRATION]);
+        let mut remaining = storage.as_mut_slice();
+        serde_json::to_writer(&mut remaining, self).map_err(|_| Error::Registration)?;
+        let length = MAX_REGISTRATION - remaining.len();
+        let bytes = &storage[..length];
+        vault.write(&self.marker.registration.to_string(), bytes)?;
+        if vault.read(&self.marker.registration.to_string())?.as_slice() != bytes {
             return Err(Error::Registration);
         }
         Ok(())

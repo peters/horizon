@@ -4,7 +4,7 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 const SERVICE: &str = "horizon-cloud-controller-v1";
-const MAX_REGISTRATION: usize = 16 * 1024;
+pub(super) const MAX_REGISTRATION: usize = 16 * 1024;
 
 pub(super) trait Vault {
     fn read(&self, slot: &str) -> Result<Zeroizing<Vec<u8>>>;

@@ -366,11 +366,15 @@ fn journal_artifacts_reject_links_and_special_files_before_reading_or_recovery()
 }
 
 #[test]
-fn signing_backend_wipes_keys_and_rejects_a_foreign_signature() {
+fn signing_backend_bounds_secret_encoding_wipes_keys_and_rejects_foreign_signatures() {
     fn requires_wipe<T: zeroize::ZeroizeOnDrop>() {}
     requires_wipe::<SigningKey>();
-    let temp = tempfile::tempdir().unwrap();
-    let owner = create(&temp.path().join("allocation"), &MemoryVault::default());
+    let (_temp, root, vault) = fixture();
+    let owner = create(&root, &vault);
+    let mut registration = Registration::read(&vault, &owner.marker).unwrap();
+    registration.key.resize(vault::MAX_REGISTRATION, 42);
+    assert!(matches!(registration.write(&vault), Err(Error::Registration)));
+    assert!(owner.binding().is_ok());
     let binding = owner.binding().unwrap();
     let intent = inspect_intent(&binding);
     let foreign = SigningKey::from_bytes(&[99; 32]);
