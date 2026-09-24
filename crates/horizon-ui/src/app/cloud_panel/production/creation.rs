@@ -3,7 +3,7 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::dir_search;
+use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, dir_search};
 use std::path::Path;
 
 #[derive(Default)]
@@ -90,24 +90,7 @@ impl HorizonApp {
                 footer(ui, &self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
-        // The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
-        let dismissed = if picking {
-            if response.backdrop_response.clicked() {
-                self.dir_picker = None;
-            }
-            false
-        } else {
-            response.should_close()
-        };
-        if dismissed && escape {
-            self.consume_navigation_key(
-                ctx,
-                horizon_core::ShortcutBinding::new(
-                    horizon_core::ShortcutModifiers::NONE,
-                    horizon_core::ShortcutKey::Escape,
-                ),
-            );
-        }
+        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
         if dismissed || actions.cancel {
             self.cloud_prototype.production.creating = false;
             self.cloud_prototype.production.pending_creation = None;
@@ -115,7 +98,7 @@ impl HorizonApp {
             return;
         }
         match actions.repository {
-            RepositoryAction::Choose => self.choose_cloud_repository(),
+            RepositoryAction::Choose => self.choose_cloud_repository(ctx),
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
             RepositoryAction::None => {}
@@ -127,7 +110,42 @@ impl HorizonApp {
         self.poll_cloud_creation(ctx);
     }
 
-    fn choose_cloud_repository(&mut self) {
+    /// The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
+    fn cloud_creation_dismissed(
+        &mut self,
+        ctx: &Context,
+        response: &egui::ModalResponse<()>,
+        picking: bool,
+        escape: bool,
+    ) -> bool {
+        if !picking {
+            let dismissed = response.should_close();
+            if dismissed && escape {
+                self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
+            }
+            return dismissed;
+        }
+        if escape {
+            // The picker, drawn later this frame, still cancels on this press; held repeats must not
+            // reach the dialog once the picker has closed.
+            self.hold_navigation_key(navigation_key(ShortcutKey::Escape));
+        }
+        let clicked_body = ctx
+            .input(|input| input.pointer.primary_clicked().then(|| input.pointer.interact_pos()))
+            .flatten()
+            .is_some_and(|position| ctx.layer_id_at(position) == Some(response.response.layer_id));
+        if response.backdrop_response.clicked() || clicked_body {
+            self.dir_picker = None;
+        }
+        false
+    }
+
+    fn choose_cloud_repository(&mut self, ctx: &Context) {
+        // Keyboard activation (Enter with any modifiers) must neither confirm the picker drawn later this
+        // frame nor, held, confirm it on a repeat.
+        if ctx.input(|input| input.key_pressed(Key::Enter)) {
+            self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Enter));
+        }
         let form = &mut self.cloud_prototype.production;
         form.choosing_repository = true;
         let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
@@ -142,8 +160,13 @@ impl HorizonApp {
             form.profiles = None;
             form.selected_profile.clear();
             form.launch.accounts_checked = false;
+            self.cloud_prototype.error = None;
         }
     }
+}
+
+fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
+    ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
 
 fn heading(ui: &mut Ui) {
@@ -249,21 +272,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
         repository.request_focus();
     }
     let choose = repository.clicked();
-    if choose {
-        // Keyboard activation (Enter with any modifiers) must not also confirm the picker opening this frame.
-        ui.input_mut(|input| {
-            input.events.retain(|event| {
-                !matches!(
-                    event,
-                    egui::Event::Key {
-                        key: Key::Enter,
-                        pressed: true,
-                        ..
-                    }
-                )
-            });
-        });
-    }
     ui.add_space(8.0);
     changed |= field(
         ui,

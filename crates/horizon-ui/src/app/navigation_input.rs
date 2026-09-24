@@ -6,8 +6,14 @@ use super::shortcuts::{event_uses_shortcut_key, shortcut_key_may_emit_text};
 
 impl HorizonApp {
     pub(super) fn consume_navigation_key(&mut self, ctx: &Context, binding: ShortcutBinding) {
-        self.held_navigation_keys.push(binding);
+        self.hold_navigation_key(binding);
         self.filter_navigation_events(ctx, false);
+    }
+
+    /// Swallows the key's repeats from the next frame until its release, and
+    /// leaves this frame's press to a consumer that has not run yet.
+    pub(super) fn hold_navigation_key(&mut self, binding: ShortcutBinding) {
+        self.held_navigation_keys.push(binding);
     }
 
     pub(super) fn filter_held_navigation_keys(&mut self, ctx: &Context) {
