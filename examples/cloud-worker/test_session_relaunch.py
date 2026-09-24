@@ -164,6 +164,12 @@ class SessionRelaunchTests(unittest.TestCase):
         self.assertEqual(len(self.launches()), 3)
         self.assert_worktree_intact(head)
 
+        # A delayed retry of the first operation sees a running process it did not start.
+        late = self.relaunch()
+        self.assertEqual(late.returncode, 4, late.stderr)
+        self.assertEqual(len(self.launches()), 3)
+        self.assertEqual(self.relaunch('next-operation').returncode, 0)
+
     def test_running_session_is_refused_without_a_fence(self):
         self.launch_with_agent_work()
         refused = self.relaunch()

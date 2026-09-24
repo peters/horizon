@@ -30,12 +30,14 @@ if [ -n "$operation" ]; then
     flock 9
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
     fence="$session/relaunch-requested-$operation"
-    if running; then
-        if [ -f "$fence" ]; then exit 0; fi
-        echo 'Session process is running. No replacement process was started.' >&2; exit 5
-    fi
+    # The operation that started the current process; an older operation's fence alone proves nothing.
+    current="$session/relaunch-operation"
     if [ -f "$fence" ]; then
+        if running && [ "$(cat "$current" 2>/dev/null)" = "$operation" ]; then exit 0; fi
         echo 'The process relaunched by this operation was lost. No replacement process was started.' >&2; exit 4
+    fi
+    if running; then
+        echo 'Session process is running. No replacement process was started.' >&2; exit 5
     fi
     if [ ! -f "$session/launch-requested" ] && [ -f "$session/preparing" ]; then
         echo 'Session was never launched; attaching starts it. No process was started.' >&2; exit 5
@@ -46,6 +48,9 @@ if [ -n "$operation" ]; then
     # Persist the fence before starting: a retry of this operation never starts a second process.
     touch "$fence"
     sync -f "$fence"
+    printf '%s\n' "$operation" > "$current.new"
+    sync -f "$current.new"
+    mv "$current.new" "$current"
     rm -f "$session/exit-status"
     launch
     rm -f "$session/preparing"
