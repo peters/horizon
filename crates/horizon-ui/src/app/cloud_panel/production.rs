@@ -1,6 +1,7 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
 mod capabilities;
 mod cards;
+mod companions;
 mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
@@ -62,6 +63,7 @@ pub(super) struct Production {
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
+    companions: companions::State,
 }
 #[derive(Default, PartialEq, Eq)]
 pub(super) enum Confirmation {
@@ -314,6 +316,7 @@ impl HorizonApp {
         self.sync_cloud_presentations();
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
+        self.prepare_cloud_companions(ctx);
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);

@@ -366,3 +366,32 @@ Explicit sharing of a compatible CPU worker across trusted projects is tracked i
 [shared-worker contract](architecture/shared-cloud-workers.md) defines the proposed
 identity, migration and lifecycle design. This is not yet a supported placement
 choice; existing clouds continue to use dedicated workers.
+
+### Companion access in cloud panels
+
+In a saved session, each cloud panel lists the companions declared in its
+committed `.horizon/cloud.yml`. Check a repository to allow access to an existing
+cloud with that repository and profile in the same workspace. When more than
+one cloud matches, choose its stable cloud ID first. A missing cloud cannot be
+selected. The selection does not create, start, resume, or keep a worker running.
+
+Running workers establish a dedicated SSH alias and a separate target worktree.
+Ready means source-to-target SSH was verified. Stopped and unreachable states
+remain visible; checking a stopped cloud leaves it stopped. Refresh retries
+access through the existing SSH endpoints without contacting provider lifecycle
+APIs. No overlay network is needed when those endpoints are reachable.
+
+Workers with enabled agents automatically advertise `horizon-cloud-companions`.
+The read-only `cloud_companions_list` and `cloud_companion_inspect` tools expose
+the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`.
+Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
+stale catalog loses Ready status; inspection can verify an unchanged connection
+independently. M0 has no agent tool for starting or provisioning a cloud.
+
+Uncheck to remove access. If either worker is offline, removal stays pending
+until that original worker can confirm cleanup. Dirty worktrees are preserved;
+existing shells and copied data cannot be recalled. Clear old selections before
+retiring their source cloud. Changing the workspace, declaration, target worker,
+or initial revision requires cleanup and explicit selection again. These clouds
+share trusted shell access; this is not credential isolation. Both workers need
+an image containing the updated companion helper and rsync.

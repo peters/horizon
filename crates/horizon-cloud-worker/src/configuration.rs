@@ -2,7 +2,7 @@
 use std::io::{self, Read, Write};
 use toml_edit::{DocumentMut, Item, Table};
 
-const MANAGED: [&str; 2] = ["horizon-browser", "horizon-device"];
+const MANAGED: [&str; 3] = ["horizon-browser", "horizon-device", "horizon-cloud-companions"];
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
