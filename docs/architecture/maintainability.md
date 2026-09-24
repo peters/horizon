@@ -452,8 +452,11 @@ transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
 separate. `allocation` defines typed allocation/project/controller identities and
 versioned machine-local placement bindings for the shared-worker coordinator.
-It performs no I/O and grants no provider or membership authority; runtime sharing
-and storage migration remain separate integration work. `deployment::storage` persists a separate volume journal under the same
+Its `legacy` module converts the complete v1 deployment payload into a validated
+allocation/project pair and reconstructs the old runtime view without dropping
+cleanup fences. The module performs no I/O and grants no provider or membership
+authority; publishing these records transactionally, companion storage journals,
+and runtime sharing remain separate integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
