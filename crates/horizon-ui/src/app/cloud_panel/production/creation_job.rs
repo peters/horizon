@@ -81,8 +81,11 @@ impl HorizonApp {
             .profiles
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
-            .cloned()
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
+        let profile = match form.size {
+            Some(size) => cloud_runtime::flavors::sized(profile, size)?,
+            None => profile.clone(),
+        };
         let repository = horizon_core::Config::expand_tilde(&form.repository);
         let revision = if let Some(revision) = &form.launch.revision {
             revision.clone()

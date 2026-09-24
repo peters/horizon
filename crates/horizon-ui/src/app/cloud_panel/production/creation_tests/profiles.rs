@@ -22,6 +22,13 @@ fn label_rect(output: &egui::FullOutput, label: &str) -> Rect {
         .unwrap_or_else(|| panic!("Missing visible label: {label}"))
 }
 
+fn has_label(output: &egui::FullOutput, label: &str) -> bool {
+    output
+        .shapes
+        .iter()
+        .any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.job.text == label))
+}
+
 fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
     for pressed in [true, false] {
         dialog_frame(
@@ -148,6 +155,145 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
             .profile_name,
         "prebuilt"
     );
+    assert_eq!(
+        created_size(&app),
+        (4, 8),
+        "an unchanged choice keeps the profile's size"
+    );
+}
+
+fn scroll(ctx: &egui::Context, app: &mut HorizonApp, delta: f32) {
+    dialog_frame(
+        ctx,
+        app,
+        vec![
+            Event::PointerMoved(egui::pos2(450.0, 300.0)),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, delta),
+                modifiers: Modifiers::NONE,
+            },
+        ],
+    );
+    for _ in 0..8 {
+        dialog_frame(ctx, app, Vec::new());
+    }
+}
+
+fn created_size(app: &HorizonApp) -> (u16, u16) {
+    let profile = &app
+        .cloud_prototype
+        .groups
+        .0
+        .last()
+        .unwrap()
+        .remote
+        .as_ref()
+        .unwrap()
+        .profile;
+    (profile.cpu, profile.memory_gb)
+}
+
+#[test]
+fn chosen_size_starts_the_cloud_at_that_size() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(
+        has_label(&output, "Size"),
+        "the size row is outside the collapsed Advanced section"
+    );
+    assert!(has_label(&output, "development · 4 vCPU · 8 GB"));
+    assert!(has_label(&output, "8 GB · compute-optimized"));
+    // Tooltips would draw below this modal, so the offer rule is shown inline.
+    assert!(has_label(
+        &output,
+        "RunPod CPU sizes offered with this profile's 20 GB container disk."
+    ));
+    assert!(
+        !has_label(&output, "1 vCPU"),
+        "RunPod CPU pods need a power of two from 2 vCPU"
+    );
+    assert_eq!(
+        app.cloud_prototype.production.size, None,
+        "the profile's size is the default"
+    );
+    click(&ctx, &mut app, label_rect(&output, "16 vCPU").center());
+    assert_eq!(
+        app.cloud_prototype.production.size,
+        Some((16, 32)),
+        "vCPU changes keep the memory family"
+    );
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "development · 16 vCPU · 32 GB"));
+    assert!(
+        !has_label(&output, "8 GB · compute-optimized"),
+        "memory choices follow the vCPU count"
+    );
+    click(&ctx, &mut app, label_rect(&output, "64 GB · general purpose").center());
+    assert_eq!(app.cloud_prototype.production.size, Some((16, 64)));
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "development · 16 vCPU · 64 GB"));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    assert!(!app.cloud_creation_open());
+    assert_eq!(created_size(&app), (16, 64));
+    let launch = app.cloud_prototype.groups.0[0].remote.as_ref().unwrap();
+    assert_eq!(launch.profile_name, "development");
+    assert_eq!(launch.profile.image, "example.invalid/worker");
+}
+
+#[test]
+fn size_choice_resets_with_the_profile_or_repository_and_gpu_size_is_fixed() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let config = app.cloud_prototype.production.profiles.as_mut().unwrap();
+    let mut accelerated = config.profiles["development"].clone();
+    accelerated.gpu = true;
+    config.profiles.insert("accelerated".into(), accelerated);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "16 vCPU").center());
+    assert_eq!(app.cloud_prototype.production.size, Some((16, 32)));
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
+    for _ in 0..8 {
+        dialog_frame(&ctx, &mut app, Vec::new());
+    }
+    scroll(&ctx, &mut app, -240.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "16 vCPU · 32 GB memory · CPU only"));
+    click(&ctx, &mut app, label_rect(&output, "development").center());
+    assert_eq!(
+        app.cloud_prototype.production.size,
+        Some((16, 32)),
+        "reselecting the same profile keeps its size"
+    );
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "accelerated").center());
+    assert_eq!(app.cloud_prototype.production.selected_profile, "accelerated");
+    assert_eq!(app.cloud_prototype.production.size, None);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "4 vCPU · 8 GB memory · GPU"));
+    // Offscreen labels are not painted, so return to the size row before checking absences.
+    scroll(&ctx, &mut app, 480.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "Size"));
+    assert!(has_label(&output, "4 vCPU · 8 GB · GPU"), "GPU size is shown as text");
+    assert!(has_label(&output, "GPU workers use the size set by their profile."));
+    for choice in ["2 vCPU", "4 vCPU", "16 vCPU", "8 GB · compute-optimized"] {
+        assert!(!has_label(&output, choice), "GPU profiles offer no {choice} choice");
+    }
+    app.cloud_prototype.production.selected_profile = "development".into();
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "32 vCPU").center());
+    assert_eq!(app.cloud_prototype.production.size, Some((32, 64)));
+    app.set_cloud_repository(&temp.path().join("another-repository"));
+    assert_eq!(app.cloud_prototype.production.size, None);
 }
 
 #[test]

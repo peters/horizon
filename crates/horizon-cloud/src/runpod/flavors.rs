@@ -49,12 +49,10 @@ impl Flavor {
     }
 }
 
-/// Whether any flavor offers the profile's vCPU count, memory and container disk.
+/// Whether any flavor offers `(cpu, memory_gb)` with this container disk.
 #[must_use]
-pub fn offered(profile: &Profile) -> bool {
-    FLAVORS
-        .iter()
-        .any(|flavor| flavor.fits(profile.cpu, profile.memory_gb, profile.storage.container_gb))
+pub fn offered((cpu, memory_gb): (u16, u16), container_gb: u16) -> bool {
+    FLAVORS.iter().any(|flavor| flavor.fits(cpu, memory_gb, container_gb))
 }
 /// vCPU counts that some flavor offers with this container disk.
 pub fn vcpu_options(container_gb: u16) -> impl Iterator<Item = u16> {
@@ -74,20 +72,40 @@ pub fn memory_options(cpu: u16, container_gb: u16) -> Vec<(u16, &'static str)> {
     }
     options
 }
-/// Size after choosing `cpu` vCPUs, keeping at least the current memory per vCPU where offered.
+/// Size after changing `(current_cpu, memory_gb)` to `cpu` vCPUs, keeping at least the
+/// current memory per vCPU where offered.
 #[must_use]
-pub fn resize_vcpu(profile: &Profile, cpu: u16) -> Option<(u16, u16)> {
+pub fn resize_vcpu((current_cpu, memory_gb): (u16, u16), container_gb: u16, cpu: u16) -> Option<(u16, u16)> {
     let per_vcpu = FLAVORS
         .iter()
         .map(|flavor| flavor.memory_per_vcpu)
-        .find(|&ratio| u32::from(profile.cpu) * u32::from(ratio) >= u32::from(profile.memory_gb))
+        .find(|&ratio| u32::from(current_cpu) * u32::from(ratio) >= u32::from(memory_gb))
         .unwrap_or(8);
-    let options = memory_options(cpu, profile.storage.container_gb);
+    let options = memory_options(cpu, container_gb);
     options
         .iter()
         .find(|(memory, _)| *memory >= cpu * per_vcpu)
         .or(options.last())
         .map(|&(memory, _)| (cpu, memory))
+}
+/// The profile at a CPU worker size chosen before its worker is requested.
+/// # Errors
+/// Rejects GPU profiles, whose size is fixed, and sizes that no flavor offers with the
+/// profile's container disk.
+pub fn sized(profile: &Profile, (cpu, memory_gb): (u16, u16)) -> Result<Profile, CloudError> {
+    if profile.gpu {
+        return Err(CloudError::Invalid("A GPU profile's worker size is fixed"));
+    }
+    if !offered((cpu, memory_gb), profile.storage.container_gb) {
+        return Err(CloudError::Invalid(
+            "RunPod offers no CPU worker with this size and container disk",
+        ));
+    }
+    Ok(Profile {
+        cpu,
+        memory_gb,
+        ..profile.clone()
+    })
 }
 
 /// Preferred flavors that offer the profile. When none do, the flavor with the
@@ -159,10 +177,26 @@ mod tests {
         assert_eq!(memory(8, 30), [16, 32, 64]);
         assert_eq!(memory(2, 30), [4, 8, 16]);
         assert!(memory(1, 1).is_empty());
-        assert_eq!(resize_vcpu(&profile(8, 32, 30), 16), Some((16, 64)));
-        assert_eq!(resize_vcpu(&profile(8, 32, 30), 2), Some((2, 8)));
-        assert_eq!(resize_vcpu(&profile(8, 32, 50), 2), None);
-        assert!(offered(&profile(8, 32, 30)) && !offered(&profile(1, 2, 10)));
+        assert_eq!(resize_vcpu((8, 32), 30, 16), Some((16, 64)));
+        assert_eq!(resize_vcpu((8, 32), 30, 2), Some((2, 8)));
+        assert_eq!(resize_vcpu((8, 32), 50, 2), None);
+        assert!(offered((8, 32), 30) && !offered((1, 2), 10));
+    }
+    #[test]
+    fn sizing_applies_only_offered_cpu_sizes() {
+        let base = profile(4, 8, 20);
+        let resized = sized(&base, (16, 64)).unwrap();
+        assert_eq!((resized.cpu, resized.memory_gb), (16, 64));
+        assert_eq!(resized.storage, base.storage, "only vCPU and memory change");
+        assert_eq!(resized.image, base.image);
+        assert!(sized(&base, (3, 8)).is_err(), "RunPod needs a power of two vCPU");
+        assert!(sized(&base, (4, 64)).is_err(), "no flavor offers 16 GB per vCPU");
+        assert!(
+            sized(&profile(2, 4, 31), (2, 4)).is_err(),
+            "container disk limits small workers"
+        );
+        let gpu = Profile { gpu: true, ..base };
+        assert!(sized(&gpu, (4, 8)).is_err(), "GPU sizes are fixed");
     }
     #[test]
     fn instance_ids_name_the_memory_the_flavor_assigns() {

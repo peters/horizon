@@ -109,6 +109,30 @@ fn completed_cloud_starts_with_grid_and_arranges_panels_added_later() {
 }
 
 #[test]
+fn creation_captures_only_an_offered_size_for_a_cpu_profile() {
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let form = &mut app.cloud_prototype.production;
+    form.title = "Sized".into();
+    form.profiles = Some(CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  accelerated:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 8\n    memory_gb: 32\n    gpu: true\n").unwrap());
+    for (profile, size) in [("dev", (3, 8)), ("dev", (4, 64)), ("accelerated", (8, 32))] {
+        app.cloud_prototype.production.selected_profile = profile.into();
+        app.cloud_prototype.production.size = Some(size);
+        assert!(
+            app.create_production_cloud(&ctx).is_err(),
+            "{profile} accepted {size:?}"
+        );
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+    }
+    app.cloud_prototype.production.selected_profile = "dev".into();
+    app.cloud_prototype.production.size = Some((16, 64));
+    app.create_production_cloud(&ctx).unwrap();
+    let pending = app.cloud_prototype.production.pending_creation.as_ref().unwrap();
+    assert_eq!((pending.launch.profile.cpu, pending.launch.profile.memory_gb), (16, 64));
+    assert_eq!(pending.launch.profile_name, "dev");
+}
+
+#[test]
 fn stale_session_or_detached_destination_cannot_create_a_cloud() {
     for stale_session in [true, false] {
         let (temp, mut app) = test_app();
