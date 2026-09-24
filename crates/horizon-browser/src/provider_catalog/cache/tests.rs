@@ -174,6 +174,23 @@ fn a_late_answer_beats_a_newer_failure_for_the_same_binding() {
 }
 
 #[test]
+fn rows_age_from_completion_so_a_very_late_answer_is_still_fresh() {
+    let profile = profile();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let mut cache = CatalogCache::default();
+    let (stuck, reached, job) = held(CatalogStage::Credentials, &starts);
+    cache.start("account", &profile, job);
+    reached.recv().unwrap();
+    cache.advance_clock(FRESH + RETRY);
+    assert_eq!(state(&cache, &profile), Err(CatalogError::CredentialsTimedOut));
+    stuck.send(Ok(rows())).unwrap();
+    settle(&mut cache, |cache| state(cache, &profile) == Ok(Some(1)));
+    assert!(!cache.needs_refresh("account", &profile));
+    cache.advance_clock(FRESH);
+    assert_eq!(state(&cache, &profile), Err(CatalogError::RefreshRequired));
+}
+
+#[test]
 fn slow_requests_and_decoding_stall_separately_from_credentials() {
     let profile = profile();
     let starts = Arc::new(AtomicUsize::new(0));

@@ -32,11 +32,18 @@ struct Attempt {
     started: Instant,
 }
 
+struct Completed {
+    outcome: Outcome,
+    /// Orders answers from overlapping attempts of one binding.
+    started: Instant,
+    /// Ages rows, so an answer that arrives late is still fresh.
+    finished: Instant,
+}
+
 struct Entry {
     profile: RemoteProviderProfile,
     attempts: Vec<Attempt>,
-    /// The latest completed outcome and the start of the attempt that produced it.
-    result: Option<(Outcome, Instant)>,
+    result: Option<Completed>,
     last_start: Option<Instant>,
 }
 
@@ -52,7 +59,11 @@ impl Entry {
 
     fn fresh_rows(&self, now: Instant) -> Option<&[CatalogDevice]> {
         match &self.result {
-            Some((Ok(rows), started)) if now.saturating_duration_since(*started) < FRESH => Some(rows),
+            Some(Completed {
+                outcome: Ok(rows),
+                finished,
+                ..
+            }) if now.saturating_duration_since(*finished) < FRESH => Some(rows),
             _ => None,
         }
     }
@@ -88,23 +99,26 @@ impl Entry {
             // answers of the same kind the newer attempt wins. A failure never
             // replaces rows that are still fresh.
             let replace = match (&outcome, &self.result) {
-                (_, None) | (Ok(_), Some((Err(_), _))) => true,
-                (Ok(_), Some((Ok(_), at))) => started >= *at,
-                (Err(_), Some((_, at))) => started >= *at && self.fresh_rows(now).is_none(),
+                (_, None) | (Ok(_), Some(Completed { outcome: Err(_), .. })) => true,
+                (Ok(_), Some(current)) => started >= current.started,
+                (Err(_), Some(current)) => started >= current.started && self.fresh_rows(now).is_none(),
             };
             if replace {
-                self.result = Some((outcome, started));
+                self.result = Some(Completed {
+                    outcome,
+                    started,
+                    finished: now,
+                });
             }
         }
     }
 
     /// The newest known failure: a completed error, expired rows or a stalled stage.
     fn failure(&self, now: Instant) -> Option<CatalogError> {
-        let completed = match &self.result {
-            Some((Err(error), at)) => Some((*at, *error)),
-            Some((Ok(_), at)) => Some((*at, CatalogError::RefreshRequired)),
-            None => None,
-        };
+        let completed = self.result.as_ref().map(|result| match &result.outcome {
+            Err(error) => (result.started, *error),
+            Ok(_) => (result.started, CatalogError::RefreshRequired),
+        });
         let stalled = self
             .attempts
             .iter()
@@ -186,7 +200,11 @@ impl CatalogCache {
             });
         } else {
             budget.record(None, now);
-            entry.result = Some((Err(CatalogError::Unavailable), now));
+            entry.result = Some(Completed {
+                outcome: Err(CatalogError::Unavailable),
+                started: now,
+                finished: now,
+            });
         }
     }
 
