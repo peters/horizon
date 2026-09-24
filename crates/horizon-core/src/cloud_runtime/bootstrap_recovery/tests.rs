@@ -4,12 +4,20 @@ use horizon_cloud_protocol::SharingMode;
 use serde_json::json;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+const HOST_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f";
+
 fn target(owner: &Owner, root: &Path) -> Target {
     let key = root.join("ssh-key");
-    fs::write(&key, "synthetic SSH fixture").unwrap();
-    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&key)
+            .status()
+            .unwrap()
+            .success()
+    );
     let hosts = root.join("known-hosts");
-    fs::write(&hosts, "horizon-cloud-worker1 ssh-ed25519 AAAAfixture\n").unwrap();
+    fs::write(&hosts, format!("horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}\n")).unwrap();
     fs::set_permissions(&hosts, fs::Permissions::from_mode(0o600)).unwrap();
     Target {
         startup: Startup {
@@ -184,6 +192,66 @@ fn missing_unrelated_and_unsafe_pins_are_rejected_without_creating_intent() {
         assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("untrusted SSH target")).is_err());
         assert!(owner.load().unwrap().get(KEY).is_none());
     }
+}
+
+#[test]
+fn malformed_host_keys_never_anchor_and_corrected_pins_can_recover() {
+    for invalid in [
+        "ssh-ed25519 AAAAfixture".to_owned(),
+        "ssh-ed25519 !!!!".to_owned(),
+        format!("ssh-rsa {HOST_KEY}"),
+        format!("ssh-ed25519 {}", &HOST_KEY[..HOST_KEY.len() - 4]),
+    ] {
+        let (temp, root, vault) = fixture();
+        let mut owner = create(&root, &vault);
+        let target = target(&owner, temp.path());
+        fs::write(
+            &target.connection.known_hosts,
+            format!("horizon-cloud-worker1 {invalid}\n"),
+        )
+        .unwrap();
+        assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("malformed pin sent")).is_err());
+        assert!(owner.load().unwrap().get(KEY).is_none());
+        fs::write(
+            &target.connection.known_hosts,
+            format!("horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}\n"),
+        )
+        .unwrap();
+        recover_with(&mut owner, &target, &mut |_, request| Ok(reply(&target, request))).unwrap();
+        assert!(saved(&owner).completed);
+    }
+}
+
+#[test]
+fn invalid_private_keys_never_anchor_and_corrected_identity_can_recover() {
+    let (temp, root, vault) = fixture();
+    let mut owner = create(&root, &vault);
+    let target = target(&owner, temp.path());
+    let original = fs::read(&target.connection.identity).unwrap();
+    for bytes in [
+        b"invalid key".to_vec(),
+        original[..original.len() / 2].to_vec(),
+        format!("ssh-ed25519 {HOST_KEY}\n").into_bytes(),
+    ] {
+        fs::write(&target.connection.identity, bytes).unwrap();
+        assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("invalid identity sent")).is_err());
+        assert!(owner.load().unwrap().get(KEY).is_none());
+    }
+    fs::write(&target.connection.identity, &original).unwrap();
+    assert!(
+        std::process::Command::new("ssh-keygen")
+            .args(["-q", "-p", "-P", "", "-N", "fixture-passphrase", "-f"])
+            .arg(&target.connection.identity)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("encrypted identity sent")).is_err());
+    assert!(owner.load().unwrap().get(KEY).is_none());
+    fs::write(&target.connection.identity, original).unwrap();
+    recover_with(&mut owner, &target, &mut |_, request| Ok(reply(&target, request))).unwrap();
+    assert!(saved(&owner).completed);
 }
 
 #[test]

@@ -96,6 +96,10 @@ impl Runner<'_> {
             secrets: Vec::new(),
         }
         .spawn_bytes("Private worker request", command, timeout, LIMIT)
+        .map_err(|error| match error {
+            Error::Command(_) => Error::PrivateTransport,
+            other => other,
+        })
     }
     /// # Errors
     /// Runs a bounded object pack without collecting binary output into memory.

@@ -8,6 +8,8 @@ use std::{
     io::{Read, Write},
     net::IpAddr,
     path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
 };
 use zeroize::Zeroizing;
 
@@ -81,20 +83,50 @@ impl Material {
         }
         let (identity, key) = read(&connection.identity, true)?;
         let (known_hosts, hosts) = read(&connection.known_hosts, false)?;
-        let pinned = std::str::from_utf8(&hosts)
+        let pins = std::str::from_utf8(&hosts)
             .map_err(|_| Error::Invalid)?
             .lines()
-            .any(|line| {
+            .filter_map(|line| {
                 let mut fields = line.split_whitespace();
-                fields.next() == Some(connection.host_key_alias.as_str())
-                    && fields
-                        .next()
-                        .is_some_and(|kind| kind.starts_with("ssh-") || kind.starts_with("ecdsa-"))
-                    && fields.next().is_some_and(|key| !key.is_empty())
-            });
-        if !pinned {
+                if fields.next() != Some(connection.host_key_alias.as_str()) {
+                    return None;
+                }
+                let kind = fields.next()?;
+                let key = fields.next()?;
+                Some(format!("{kind} {key}\n"))
+            })
+            .collect::<String>();
+        if pins.is_empty() {
             return Err(Error::Invalid);
         }
+        // Use OpenSSH's parser to check algorithm names, base64 and complete key
+        // fields before an unusable pin can become part of an anchored request.
+        let cancel = super::Cancellation::default();
+        let runner = super::Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        runner
+            .private_exchange(
+                Command::new("ssh-keygen").args(["-l", "-f", "-"]),
+                pins.as_bytes(),
+                Duration::from_secs(5),
+            )
+            .map_err(|_| Error::Invalid)?;
+        // Recovery supports noninteractive, unencrypted private identities.
+        // Validate captured bytes, never a mutable source path or agent fallback.
+        let mut identity_snapshot = tempfile::NamedTempFile::new()?;
+        identity_snapshot.write_all(&key)?;
+        runner
+            .private_exchange(
+                Command::new("ssh-keygen")
+                    .args(["-y", "-P", "", "-f"])
+                    .arg(identity_snapshot.path()),
+                &[],
+                Duration::from_secs(5),
+            )
+            .map_err(|_| Error::Invalid)?;
         Ok(Self {
             binding: Binding {
                 startup: target.startup.clone(),

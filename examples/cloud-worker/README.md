@@ -332,7 +332,11 @@ The host library's `cloud_runtime::bootstrap_recovery::recover` holds an `Owner`
 through request anchoring, SSH transport and receipt anchoring. It requires the
 expected startup/worker identity, the existing SSH identity and a previously
 recorded plain `horizon-cloud-<worker-id>` host-key entry. It refuses absent or
-changed pins and never accepts a new host key during recovery. Transport uses
+changed pins and never accepts a new host key during recovery. OpenSSH's
+`ssh-keygen` validates the key encoding before the request is anchored; both
+`ssh` and `ssh-keygen` must be available on the host. Recovery requires an
+unencrypted private identity and validates its captured bytes before anchoring;
+encrypted keys and agent-only identities are unsupported by this API. Transport uses
 private snapshots of the verified key/pin bytes, so changing their source files
 cannot change an in-flight connection. Requests and replies
 are limited to 64 KiB; transport has a maximum 60-second deadline and supports

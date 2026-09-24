@@ -34,6 +34,8 @@ pub enum Error {
     Provider(#[from] horizon_cloud::CloudError),
     #[error("{0} failed; inspect deployment output")]
     Command(&'static str),
+    #[error("Private worker request failed; its output is intentionally not logged")]
+    PrivateTransport,
     #[error("Another controller owns this cloud operation")]
     Busy,
     #[error("{primary}; cleanup also failed: {cleanup}")]

@@ -2,6 +2,28 @@ use super::*;
 use std::cell::RefCell;
 
 #[test]
+fn failed_private_exchange_reports_no_unavailable_logs_or_remote_output() {
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| panic!("private output was emitted"),
+        secrets: Vec::new(),
+    };
+    let error = runner
+        .private_exchange(
+            Command::new("sh").args(["-c", "printf 'private stdout'; printf 'private stderr' >&2; exit 1"]),
+            b"private request",
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+    assert!(matches!(error, Error::PrivateTransport));
+    assert_eq!(
+        error.to_string(),
+        "Private worker request failed; its output is intentionally not logged"
+    );
+}
+
+#[test]
 fn private_exchange_keeps_exact_bytes_and_never_emits_either_stream() {
     let cancel = Cancellation::default();
     let events = RefCell::new(Vec::new());

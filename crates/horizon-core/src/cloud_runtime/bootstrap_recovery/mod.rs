@@ -53,6 +53,8 @@ struct Record {
 /// # Errors
 /// Missing or changed SSH pins, uncertain journals and absent worker state block
 /// recovery. A lost reply or completion-save failure retains the same operation.
+/// Requires OpenSSH `ssh`/`ssh-keygen` and a valid unencrypted private identity;
+/// encrypted or agent-only identities are rejected before anchoring the request.
 pub fn recover(
     owner: &mut Owner,
     target: &Target,
