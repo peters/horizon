@@ -60,8 +60,9 @@ central default when omitted) or `existing_worker` with an allocation ID.
 `new_worker` carries a `sharing` mode: `dedicated` is the central default, while
 `trusted_shared` is an explicit user choice for a new compatible CPU allocation.
 Copy the resolved sharing mode into the durable allocation record before provider
-I/O. For the shared runtime protocol, initialize its manifest with that same mode
-after worker identity/readiness verification and before first-project bootstrap. Only `trusted_shared` can
+I/O. For the shared runtime protocol, pass that mode into the fenced allocation
+bootstrap defined below, which creates the manifest after worker identity/readiness
+verification and before first-project source/session setup. Only `trusted_shared` can
 admit a second member; an existing-worker choice never upgrades a dedicated
 allocation. Legacy migration records `dedicated` explicitly. Image capability
 alone is not sharing consent, and no in-place sharing-mode conversion is supported
@@ -136,7 +137,7 @@ controller for a newly verified allocation. Persist a unique bootstrap token and
 sending the first initialization command. Under the worker allocation lock, the
 first command verifies the recorded creation and mounted-storage provenance and
 requires no existing membership manifest or project state before writing anything.
-An existing bootstrap record goes through same-token recovery; conflicting tokens
+An existing bootstrap record uses the recorded token for recovery; conflicting tokens
 or allocation identities are rejected. A newly verified worker mounting retained
 storage is not a fresh membership store, and an absent marker alone grants no
 initialization permission. Synchronize a separate bootstrap record containing that
@@ -407,12 +408,13 @@ existing worker`. The new-worker path offers an explicit `Allow trusted projects
 to share this worker` choice, off by default, mapped to the persisted sharing mode.
 Show names, observed CPU/memory, capabilities, members, known
 prices with observation time, and precise incompatibility reasons before compute
-or credential changes. Keep ordinary panels, immutable membership, per-cloud
+or credential changes. Keep ordinary panels, immutable panel membership, per-cloud
 layouts and fullscreen. A compact shared indicator and Cloud-menu member list
 are sufficient; do not add another canvas management surface.
 
-Expose allocation list/inspect, attachment, project stop/remove, reconnect and
-worker transition prepare/confirm/reconcile through one typed core service used
+Expose allocation list/inspect, attachment, project stop/remove, explicit
+project-data deletion with prepare/confirm/reconcile, reconnect and worker
+transition prepare/confirm/reconcile through one typed core service used
 by UI, public CLI and MCP. Protocol requests carry stable IDs, expected revisions
 and idempotency keys, not raw provider credentials or SSH commands. Status returns
 structured incompatibility, pending operation, lost-worker and resource failure
