@@ -136,8 +136,8 @@ struct Latest {
 
 impl Billing {
     /// Reduces the buckets of a window that starts at `from`. The total counts as
-    /// lifetime only when the window's first day has no charges, so billing began
-    /// inside the window; otherwise older charges may exist and it covers the
+    /// lifetime only when the window's first day has no positive charge, so billing
+    /// began inside the window; otherwise older charges may exist and it covers the
     /// window. A worker that was billed nothing at all for that first day, such as
     /// one stopped without its own disk, is taken to have started later. Buckets
     /// without an RFC 3339 start are ignored rather than risk counting them twice.
@@ -153,7 +153,7 @@ impl Billing {
         };
         let first_day_end = from.checked_add(BucketSize::Day.duration());
         let excludes_before = dated()
-            .any(|(start, _)| first_day_end.is_none_or(|end| start < end))
+            .any(|(start, bucket)| bucket.amount > 0.0 && first_day_end.is_none_or(|end| start < end))
             .then_some(from);
         let (mut earlier, mut amount) = (0.0, 0.0);
         for (bucket_start, bucket) in dated() {
@@ -548,6 +548,19 @@ mod tests {
             Some(at("2024-07-09T12:00:00Z")),
             "a charge within a day of the window start may continue before it"
         );
+        let mut free_first_day = history();
+        free_first_day.extend([
+            bucket("2024-07-09T00:00:00Z", BucketSize::Day, 0.0),
+            bucket("2024-07-09T18:00:00Z", BucketSize::Hour, 0.0),
+        ]);
+        let from = at("2024-07-09T00:00:00Z");
+        assert_eq!(
+            total(&free_first_day, from, &running, now).excludes_before,
+            None,
+            "zero-dollar buckets on the first day are no evidence of older charges"
+        );
+        free_first_day.push(bucket("2024-07-09T20:00:00Z", BucketSize::Hour, 0.01));
+        assert_eq!(total(&free_first_day, from, &running, now).excludes_before, Some(from));
         let windowed = total(&history(), at("2024-07-10T00:00:00Z"), &running, now);
         assert_total(windowed, 18.38, 0.345, Some("2024-07-12T19:00:00Z"));
         let stopped = worker(&json!({"desiredStatus": "EXITED"}));

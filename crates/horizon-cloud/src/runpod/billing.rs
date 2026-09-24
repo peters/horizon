@@ -45,7 +45,7 @@ pub struct BillingBucket {
 
 impl RunPod {
     /// Charges of worker `pod_id` in `size` buckets between `start` and `end`,
-    /// both truncated to whole seconds. Buckets of other workers are dropped.
+    /// both truncated to whole seconds. Valid buckets of other workers are dropped.
     /// # Errors
     /// Rejects invalid IDs and windows, provider failures, and buckets without an
     /// RFC 3339 start or with a negative or non-finite amount.
@@ -71,11 +71,16 @@ impl RunPod {
         );
         let buckets: Vec<Bucket> = serde_json::from_value(self.request("GET", &path, None, cancel)?)
             .map_err(|_| CloudError::InvalidResponse)?;
-        buckets
-            .into_iter()
-            .filter(|bucket| bucket.pod_id.as_deref().is_none_or(|id| id == pod_id))
-            .map(|bucket| bucket.validate(size))
-            .collect()
+        // Every bucket must be valid, including another worker's, before those are dropped.
+        let mut own = Vec::with_capacity(buckets.len());
+        for bucket in buckets {
+            let mine = bucket.pod_id.as_deref().is_none_or(|id| id == pod_id);
+            let bucket = bucket.validate(size)?;
+            if mine {
+                own.push(bucket);
+            }
+        }
+        Ok(own)
     }
 }
 

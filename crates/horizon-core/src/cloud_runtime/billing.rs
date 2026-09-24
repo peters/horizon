@@ -166,20 +166,19 @@ impl BillingMonitor {
             return;
         };
         self.update(pod, Instant::now(), || {
-            let (settings, pod, notify) = (root.join("settings.json"), pod.to_owned(), notify.clone());
-            move |cancel: &Cancellation| {
-                let result = fetch(&settings, &pod, SystemTime::now(), cancel);
-                notify();
-                result
-            }
+            let (settings, pod) = (root.join("settings.json"), pod.to_owned());
+            let job = move |cancel: &Cancellation| fetch(&settings, &pod, SystemTime::now(), cancel);
+            (job, notify.clone())
         });
     }
 
-    /// Consumes a finished refresh and starts the next once it is due. `job` is
-    /// only called to start a refresh.
-    fn update<F>(&mut self, pod_id: &str, now: Instant, job: impl FnOnce() -> F)
+    /// Consumes a finished refresh and starts the next once it is due. `start`
+    /// is only called to start a refresh; it returns the refresh work and the
+    /// notification that runs once its result can be polled.
+    fn update<F, N>(&mut self, pod_id: &str, now: Instant, start: impl FnOnce() -> (F, N))
     where
         F: FnOnce(&Cancellation) -> Result<History, BillingError> + Send + 'static,
+        N: FnOnce() + Send + 'static,
     {
         self.select(pod_id);
         self.poll(now);
@@ -191,12 +190,13 @@ impl BillingMonitor {
             return;
         }
         self.last_attempt = Some(now);
-        let job = job();
+        let (job, notify) = start();
         let cancel = Cancellation::default();
         let observed = cancel.clone();
         let (sender, receiver) = channel();
         match std::thread::Builder::new().name("cloud-billing".into()).spawn(move || {
             let _ = sender.send(job(&observed));
+            notify();
         }) {
             Ok(_) => {
                 self.pending = Some(Pending {
@@ -374,8 +374,14 @@ mod tests {
         panic!("the refresh did not finish");
     }
 
-    fn answer(result: Result) -> impl FnOnce() -> Box<dyn FnOnce(&Cancellation) -> Result + Send> {
-        move || Box::new(move |_: &Cancellation| result)
+    type Job = Box<dyn FnOnce(&Cancellation) -> Result + Send>;
+
+    fn answer(result: Result) -> impl FnOnce() -> (Job, fn()) {
+        move || (Box::new(move |_: &Cancellation| result), || {})
+    }
+
+    fn quiet<F: FnOnce(&Cancellation) -> Result + Send + 'static>(job: F) -> impl FnOnce() -> (F, fn()) {
+        move || (job, || {})
     }
 
     fn deployment(operation: &serde_json::Value) -> Deployment {
@@ -441,8 +447,10 @@ mod tests {
         let mut monitor = BillingMonitor::default();
         let (observed, cancelled) = mpsc::channel();
         let start = Instant::now();
-        monitor.update("worker1", start, || {
-            move |cancel: &Cancellation| {
+        monitor.update(
+            "worker1",
+            start,
+            quiet(move |cancel: &Cancellation| {
                 for _ in 0..1000 {
                     if cancel.is_cancelled() {
                         break;
@@ -451,8 +459,8 @@ mod tests {
                 }
                 let _ = observed.send(cancel.is_cancelled());
                 Err(BillingError::Unreachable)
-            }
-        });
+            }),
+        );
         monitor.poll(start + REFRESH_TIMEOUT / 2);
         assert!(monitor.refreshing());
         monitor.poll(start + REFRESH_TIMEOUT);
@@ -462,17 +470,40 @@ mod tests {
 
         let (observed, cancelled) = mpsc::channel();
         let mut dropped = BillingMonitor::default();
-        dropped.update("worker1", start, || {
-            move |cancel: &Cancellation| {
+        dropped.update(
+            "worker1",
+            start,
+            quiet(move |cancel: &Cancellation| {
                 while !cancel.is_cancelled() {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 let _ = observed.send(());
                 Ok(history(Vec::new()))
-            }
-        });
+            }),
+        );
         drop(dropped);
         assert_eq!(cancelled.recv_timeout(Duration::from_secs(10)), Ok(()));
+    }
+
+    #[test]
+    fn the_result_can_be_polled_as_soon_as_the_refresh_notifies() {
+        let fetch: Fetch = |_, _, _, _| Ok(history(vec![bucket("2024-07-12T19:00:00Z", BucketSize::Hour, 0.25)]));
+        let bound = deployment(&json!({"state":"bound","worker_id":"worker1"}));
+        for _ in 0..20 {
+            let (notified, notification) = mpsc::channel();
+            let notify = move || {
+                let _ = notified.send(());
+            };
+            let mut monitor = BillingMonitor::default();
+            monitor.follow(Some(&bound), Some(Path::new("/synthetic/cloud")), fetch, &notify);
+            assert_eq!(notification.recv_timeout(Duration::from_secs(10)), Ok(()));
+            monitor.poll(Instant::now());
+            assert!(
+                !monitor.refreshing(),
+                "a notified refresh has already published its result"
+            );
+            assert_eq!(monitor.sample().unwrap().history.buckets.len(), 1);
+        }
     }
 
     #[test]

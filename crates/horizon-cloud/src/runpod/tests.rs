@@ -702,6 +702,8 @@ fn billing_maps_provider_failures_and_rejects_invalid_buckets() {
         r#"[{"amount":0.5}]"#,
         r#"[{"time":"2024-07-11T00:00:00Z"}]"#,
         r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","timeBilledMs":-1}]"#,
+        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","podId":"worker1"},{"amount":-1,"time":"2024-07-11T00:00:00Z","podId":"other-worker"}]"#,
+        r#"[{"amount":0.5,"time":"2024-07-11T00:00:00Z","podId":"worker1"},{"amount":1,"time":"yesterday","podId":"other-worker"}]"#,
     ] {
         assert!(
             matches!(fetch(200, invalid), Err(CloudError::InvalidResponse)),
