@@ -3,6 +3,7 @@
 use egui::{Event, PointerButton, Ui};
 use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserInput, BrowserModifiers, BrowserPanelState};
 
+use super::ShortcutOwner;
 use super::keyboard::{key_modifiers, to_browser_modifiers};
 use crate::browser_widget::{BrowserPointerClick, BrowserUiState};
 
@@ -20,6 +21,7 @@ pub(super) struct PointerFrame {
     pub(super) frame_size: [f32; 2],
     pub(super) pointer_target: bool,
     pub(super) frame_has_pointer_button: bool,
+    pub(super) zoom_wheel_owner: ShortcutOwner,
 }
 
 pub(super) fn events(
@@ -458,10 +460,10 @@ fn egui_button(button: PointerButton) -> Option<BrowserButton> {
     }
 }
 
-/// Ctrl/Cmd+wheel is canvas zoom, exactly as in terminal panels. Forwarding it
-/// would zoom the page and the canvas at the same time.
-fn wheel_reaches_page(modifiers: egui::Modifiers) -> bool {
-    !modifiers.ctrl && !modifiers.command
+/// Reserve Ctrl/Cmd+wheel while the canvas handles zoom. Fullscreen views
+/// bypass canvas input, so their pages retain the modified wheel instead.
+fn wheel_reaches_page(modifiers: egui::Modifiers, owner: ShortcutOwner) -> bool {
+    matches!(owner, ShortcutOwner::Page) || (!modifiers.ctrl && !modifiers.command)
 }
 
 /// Forward one wheel event to the page.
@@ -474,8 +476,24 @@ fn send_wheel(
     modifiers: egui::Modifiers,
     event_modifiers: BrowserModifiers,
 ) {
-    if !wheel_reaches_page(modifiers) || overlay_blocks_pointer(browser, frame, pos) {
+    if overlay_blocks_pointer(browser, frame, pos) {
         return;
+    }
+    if let Some(input) = wheel_input(frame, pos, unit, delta, modifiers, event_modifiers) {
+        browser.send(BrowserCommand::Input(input));
+    }
+}
+
+fn wheel_input(
+    frame: PointerFrame,
+    pos: egui::Pos2,
+    unit: egui::MouseWheelUnit,
+    delta: egui::Vec2,
+    modifiers: egui::Modifiers,
+    event_modifiers: BrowserModifiers,
+) -> Option<BrowserInput> {
+    if !wheel_reaches_page(modifiers, frame.zoom_wheel_owner) {
+        return None;
     }
     let scale = match unit {
         egui::MouseWheelUnit::Point => 1.0,
@@ -484,13 +502,13 @@ fn send_wheel(
     };
     let (x, y) = to_page_coords(frame.rect, frame.frame_size, pos);
     let (delta_x, delta_y) = cdp_wheel_delta(delta, scale);
-    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
+    Some(BrowserInput::Wheel {
         x,
         y,
         delta_x,
         delta_y,
         modifiers: event_modifiers,
-    }));
+    })
 }
 
 fn overlay_blocks_pointer(browser: &BrowserPanelState, frame: PointerFrame, pos: egui::Pos2) -> bool {
@@ -556,10 +574,63 @@ mod tests {
 
     #[test]
     fn zoom_modified_wheels_stay_with_the_canvas() {
-        assert!(wheel_reaches_page(egui::Modifiers::NONE));
-        assert!(wheel_reaches_page(egui::Modifiers::SHIFT));
-        assert!(!wheel_reaches_page(egui::Modifiers::CTRL));
-        assert!(!wheel_reaches_page(egui::Modifiers::COMMAND));
+        assert!(wheel_reaches_page(egui::Modifiers::NONE, ShortcutOwner::App));
+        assert!(wheel_reaches_page(egui::Modifiers::SHIFT, ShortcutOwner::App));
+        assert!(!wheel_reaches_page(egui::Modifiers::CTRL, ShortcutOwner::App));
+        assert!(!wheel_reaches_page(egui::Modifiers::COMMAND, ShortcutOwner::App));
+    }
+
+    #[test]
+    fn fullscreen_wheels_preserve_page_modifiers_when_canvas_zoom_is_inactive() {
+        for modifiers in [
+            egui::Modifiers::NONE,
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::CTRL,
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::MAC_CMD,
+        ] {
+            let frame = PointerFrame {
+                rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0)),
+                frame_size: [400.0, 300.0],
+                pointer_target: true,
+                frame_has_pointer_button: false,
+                zoom_wheel_owner: ShortcutOwner::Page,
+            };
+            let expected = to_browser_modifiers(modifiers);
+            let input = wheel_input(
+                frame,
+                egui::pos2(100.0, 100.0),
+                egui::MouseWheelUnit::Line,
+                egui::vec2(0.0, -1.0),
+                modifiers,
+                expected,
+            );
+            let Some(BrowserInput::Wheel {
+                delta_y,
+                modifiers: actual,
+                ..
+            }) = input
+            else {
+                panic!("fullscreen page must receive {modifiers:?} wheel");
+            };
+            assert!((delta_y - 16.0).abs() < f64::EPSILON);
+            assert_eq!(actual, expected);
+            assert_eq!(
+                wheel_input(
+                    PointerFrame {
+                        zoom_wheel_owner: ShortcutOwner::App,
+                        ..frame
+                    },
+                    egui::pos2(100.0, 100.0),
+                    egui::MouseWheelUnit::Line,
+                    egui::vec2(0.0, -1.0),
+                    modifiers,
+                    expected
+                )
+                .is_some(),
+                !modifiers.ctrl && !modifiers.command
+            );
+        }
     }
 
     #[test]

@@ -24,6 +24,8 @@ mod review;
 mod select_popup;
 mod teach;
 
+pub(crate) use input::ShortcutOwner as ZoomWheelOwner;
+
 use egui::{Event, Pos2, TextureHandle, Ui};
 use horizon_core::browser::{BackendKind, BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
 use horizon_core::{AppShortcuts, Panel};
@@ -131,17 +133,19 @@ pub struct BrowserView<'a> {
     ui_state: &'a mut BrowserUiState,
     shortcuts: &'a AppShortcuts,
     fullscreen_active: bool,
+    zoom_wheel_owner: ZoomWheelOwner,
     shortcut_bindings: &'a [horizon_core::ShortcutBinding],
     frame_has_pointer_button: bool,
 }
 
 impl<'a> BrowserView<'a> {
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         panel: &'a mut Panel,
         ui_state: &'a mut BrowserUiState,
         shortcuts: &'a AppShortcuts,
         fullscreen_active: bool,
+        zoom_wheel_owner: ZoomWheelOwner,
         shortcut_bindings: &'a [horizon_core::ShortcutBinding],
         frame_has_pointer_button: bool,
     ) -> BrowserView<'a> {
@@ -150,6 +154,7 @@ impl<'a> BrowserView<'a> {
             ui_state,
             shortcuts,
             fullscreen_active,
+            zoom_wheel_owner,
             shortcut_bindings,
             frame_has_pointer_button,
         }
@@ -238,6 +243,7 @@ impl<'a> BrowserView<'a> {
                 input::InputFlags {
                     events,
                     interactive,
+                    zoom_wheel_owner: self.zoom_wheel_owner,
                     panel_focused: is_focused,
                     keyboard_target,
                     pointer_viewport: pointer_viewport_state(
