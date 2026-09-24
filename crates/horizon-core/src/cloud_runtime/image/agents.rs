@@ -6,6 +6,7 @@ use std::time::Duration;
 
 const REGISTRY: &str = "https://registry.npmjs.org";
 const TIMEOUT: Duration = Duration::from_secs(20);
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MAX_VERSION_BYTES: usize = 64;
 
@@ -135,10 +136,38 @@ fn latest_from(registry: &str, cancel: &Cancellation, timeout: Duration) -> Resu
     let mut releases = Releases::default();
     for agent in AGENTS {
         cancel.check()?;
-        releases.0.push(lookup(&http, registry, agent)?);
+        let (http, registry) = (http.clone(), registry.to_owned());
+        releases
+            .0
+            .push(interruptible(cancel, move || lookup(&http, &registry, agent))?);
     }
     cancel.check()?;
     Ok(releases)
+}
+
+/// Runs one bounded registry read on its own thread so cancellation takes effect
+/// at once and wins over whatever the read returns; an abandoned read ends at its
+/// own timeout.
+fn interruptible<T: Send + 'static>(
+    cancel: &Cancellation,
+    read: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(read());
+    });
+    loop {
+        match receiver.recv_timeout(CANCEL_POLL) {
+            Ok(result) => {
+                cancel.check()?;
+                return result;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => cancel.check()?,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(Error::Invalid("Agent release lookup stopped unexpectedly"));
+            }
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -396,6 +425,27 @@ mod tests {
         let error = latest_from(&address, &Cancellation::default(), Duration::from_millis(300)).unwrap_err();
         assert_eq!(error.to_string(), "Could not look up the latest Codex release");
         assert!(started.elapsed() < Duration::from_secs(5));
+        drop(listener);
+    }
+
+    #[test]
+    fn cancelling_a_stalled_lookup_returns_cancellation_before_the_timeout() {
+        // Accepts the connection but never answers, so only cancellation can end the read early.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let cancel = Cancellation::default();
+        let canceller = {
+            let cancel = cancel.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(200));
+                cancel.cancel();
+            })
+        };
+        let started = std::time::Instant::now();
+        let error = latest_from(&address, &cancel, Duration::from_secs(20)).unwrap_err();
+        assert!(matches!(error, Error::Provider(horizon_cloud::CloudError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        canceller.join().unwrap();
         drop(listener);
     }
 }
