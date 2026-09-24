@@ -80,7 +80,7 @@ impl Config {
             if self
                 .bindings
                 .iter()
-                .any(|binding| credentials::registry_host(&binding.repository) == "docker.io")
+                .any(|binding| credentials::registry_authority(&binding.repository) == "docker.io")
             {
                 return Err(Error::Invalid(
                     "Use an explicit docker.io repository when Docker Hub bindings are configured",
@@ -92,11 +92,11 @@ impl Config {
         if let Some(binding) = self.bindings.iter().find(|binding| binding.repository == repository) {
             return Ok(Some(binding));
         }
-        let host = credentials::registry_host(repository);
+        let host = credentials::registry_authority(repository);
         if self
             .bindings
             .iter()
-            .any(|binding| credentials::registry_host(&binding.repository) == host)
+            .any(|binding| credentials::registry_authority(&binding.repository) == host)
         {
             return Err(Error::Invalid(
                 "Image repository does not match the authorized registry scope",

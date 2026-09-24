@@ -181,6 +181,19 @@ pub(super) fn is_github_registry(repository: &str) -> bool {
     registry_host(repository) == "ghcr.io"
 }
 
+pub(super) fn registry_authority(repository: &str) -> String {
+    let authority = repository.split('/').next().unwrap_or_default();
+    let host = registry_host(repository);
+    match authority.split_once(':') {
+        Some((_, port)) => match port.parse::<u16>() {
+            Ok(443) => host,
+            Ok(port) => format!("{host}:{port}"),
+            Err(_) => format!("{host}:{port}"),
+        },
+        None => host,
+    }
+}
+
 pub(super) fn docker_auth_key(repository: &str) -> &str {
     match repository.split('/').next().unwrap_or_default() {
         "docker.io" | "index.docker.io" => "https://index.docker.io/v1/",

@@ -368,6 +368,33 @@ fn registry_setup_rotation_and_revocation_share_the_machine_policy() {
     assert!(!serialized.contains("synthetic-push"));
     app.open_cloud_accounts(&ctx, false);
     wait(&mut app, &ctx);
+    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "unsaved-compute".into();
+    app.manage_cloud_registry(
+        &ctx,
+        registry::Action::Revoke {
+            repository: original.repository.clone(),
+            generation: original.generation.clone(),
+        },
+    );
+    assert!(app.cloud_prototype.production.setup.receiver.is_none());
+    assert!(
+        app.cloud_prototype
+            .production
+            .setup
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("unsaved compute key")
+    );
+    assert_eq!(std::fs::read_to_string(root.join("settings.json")).unwrap(), serialized);
+    app.cloud_prototype
+        .production
+        .setup
+        .draft
+        .as_mut()
+        .unwrap()
+        .runpod_key
+        .clear();
     app.manage_cloud_registry(
         &ctx,
         registry::Action::Revoke {

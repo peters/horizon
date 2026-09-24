@@ -67,6 +67,23 @@ fn exact_scope_rejects_neighbors_and_preserves_unbound_public_registries() {
 }
 
 #[test]
+fn independent_registry_ports_retain_their_own_scope() {
+    let (_root, mut settings) = fixture();
+    binding(&mut settings).repository = "localhost:5000/team/worker".into();
+    let config = settings.registries.as_ref().unwrap();
+    assert!(config.select("localhost:5000/team/worker:tag").unwrap().is_some());
+    assert!(config.select("localhost:5000/team/other:tag").is_err());
+    assert!(config.select("localhost:05000/team/other:tag").is_err());
+    assert!(config.select("localhost:5001/team/other:tag").unwrap().is_none());
+    binding(&mut settings).repository = "registry.example:443/team/worker".into();
+    let config = settings.registries.as_ref().unwrap();
+    assert!(config.select("registry.example/team/other:tag").is_err());
+    assert!(config.select("registry.example:0443/team/other:tag").is_err());
+    assert!(config.select("REGISTRY.EXAMPLE.:443/team/other:tag").is_err());
+    assert!(config.select("registry.example:5000/team/other:tag").unwrap().is_none());
+}
+
+#[test]
 fn generations_must_be_persisted_and_metadata_contains_no_secret() {
     let (_root, settings) = fixture();
     let json = serde_json::to_string(&settings).unwrap();

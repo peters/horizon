@@ -6,9 +6,13 @@ use horizon_core::cloud_runtime::{
 
 pub(super) fn render(ui: &mut Ui, accounts: &mut setup::Draft) -> Option<Action> {
     let mut action = None;
+    let compute_saved = accounts.runpod_key.is_empty();
     ui.collapsing("Private container images", |ui| {
         ui.label("Bind each image repository to separate publishing and read-only worker credentials.");
         ui.small("Save stores credentials privately on this computer. Validate pull access sends only the saved pull credential to the compute provider. No image is published and no worker is allocated.");
+        if !compute_saved {
+            ui.small("Clear the unsaved compute key to manage existing provider access, or save it to switch accounts.");
+        }
         for (index, draft) in accounts.registries.iter_mut().enumerate() {
             ui.push_id(index, |ui| {
                 ui.separator();
@@ -31,7 +35,7 @@ pub(super) fn render(ui: &mut Ui, accounts: &mut setup::Draft) -> Option<Action>
                     ui.small("Enter a replacement pull credential and save to rotate. Previous bindings remain available for explicit revocation.");
                     ui.label("Immutable image to validate (repository@sha256:…)");
                     ui.text_edit_singleline(&mut draft.validation_image);
-                    ui.add_enabled_ui(draft.is_saved(), |ui| {
+                    ui.add_enabled_ui(compute_saved && draft.is_saved(), |ui| {
                         ui.horizontal_wrapped(|ui| {
                             if ui.add_enabled(!draft.validation_image.is_empty(), egui::Button::new("Validate pull access")).clicked() {
                                 action = Some(Action::Verify { image: draft.validation_image.clone() });

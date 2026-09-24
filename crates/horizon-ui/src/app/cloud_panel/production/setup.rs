@@ -304,6 +304,10 @@ impl HorizonApp {
     fn manage_cloud_registry(&mut self, ctx: &Context, action: horizon_core::cloud_runtime::registry::Action) {
         let state = &mut self.cloud_prototype.production.setup;
         let Some(draft) = &state.draft else { return };
+        if !draft.runpod_key.is_empty() {
+            state.error = Some("Clear or save the unsaved compute key before managing provider access.".into());
+            return;
+        }
         let settings = draft.settings.clone();
         let cancellation = horizon_core::cloud_runtime::Cancellation::default();
         state.registry_cancel = Some(cancellation.clone());
