@@ -98,7 +98,7 @@ impl Runtime {
         port: u16,
         host_key: &str,
     ) -> io::Result<Response> {
-        if port == 0 || alias.len() > 64 || !horizon_cloud::valid_id(alias) {
+        if port == 0 || !horizon_cloud::companions::valid_alias(alias) {
             return Err(io::Error::other("Invalid companion address or alias"));
         }
         let host_key = public_key(host_key)?;
@@ -149,7 +149,12 @@ impl Runtime {
             let entry = entry?;
             if entry.file_type()?.is_dir() && entry.path() != self.key_directory(grant) {
                 let path = entry.path().join("config");
-                if path.exists() && std::fs::read_to_string(path)?.lines().next() == Some(&format!("Host {alias}")) {
+                if path.exists()
+                    && std::fs::read_to_string(path)?
+                        .lines()
+                        .next()
+                        .is_some_and(|line| line.eq_ignore_ascii_case(&format!("Host {alias}")))
+                {
                     return Err(io::Error::other("Companion SSH alias already bound"));
                 }
             }
@@ -217,7 +222,7 @@ impl Runtime {
                 .lines()
                 .next()
                 .ok_or_else(|| io::Error::other("Invalid companion config"))?;
-            if !aliases.insert(alias.to_owned()) {
+            if !aliases.insert(alias.to_ascii_lowercase()) {
                 return Err(io::Error::other("Companion SSH alias already bound"));
             }
             combined.push_str(&config);

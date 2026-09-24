@@ -177,6 +177,54 @@ fn authorizing_again_preserves_dirty_worktree_and_reuses_the_grant() {
 }
 
 #[test]
+fn aliases_use_the_shared_canonical_rules_before_preparing_a_connection() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    for alias in ["App", "app.Name", "_app", "1app"] {
+        let error = runtime
+            .apply(&Request::Connect {
+                grant: "pair".into(),
+                alias: alias.into(),
+                host: "127.0.0.1".parse().unwrap(),
+                port: 22,
+                host_key: String::new(),
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid companion address or alias");
+        assert!(!runtime.key_directory("pair").exists());
+    }
+}
+
+#[test]
+fn existing_alias_collisions_follow_case_insensitive_ssh_matching() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    let first = runtime.key_directory("first");
+    files::directory(&first).unwrap();
+    files::write(&first.join("config"), b"Host companion-App\n  HostName 127.0.0.1\n").unwrap();
+    runtime.update_config().unwrap();
+    let Response::Identity { public_key } = runtime.apply(&Request::Identity { grant: "second".into() }).unwrap()
+    else {
+        panic!("expected public key")
+    };
+    assert!(
+        runtime
+            .apply(&Request::Connect {
+                grant: "second".into(),
+                alias: "app".into(),
+                host: "127.0.0.1".parse().unwrap(),
+                port: 22,
+                host_key: public_key,
+            })
+            .is_err()
+    );
+    let second = runtime.key_directory("second");
+    files::directory(&second).unwrap();
+    files::write(&second.join("config"), b"Host companion-app\n  HostName 127.0.0.2\n").unwrap();
+    assert!(runtime.update_config().is_err());
+}
+
+#[test]
 fn rejected_alias_collision_does_not_poison_other_connections() {
     let root = tempfile::tempdir().unwrap();
     let runtime = runtime(root.path());
