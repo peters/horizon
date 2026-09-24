@@ -217,8 +217,13 @@ impl ScrollGesture {
             }
         }
 
-        routing.owns_smooth_scroll = self.canvas_owned == Some(true);
-        if routing.owns_smooth_scroll {
+        let canvas_owned = self.canvas_owned == Some(true);
+        // egui scroll areas use smoothed motion rather than the raw events
+        // removed below. Keep a displaced owner's easing away from the new
+        // hover target, including idle frames with no wheel events to remove.
+        routing.owns_smooth_scroll =
+            canvas_owned || self.owner.is_some_and(|owner| target != ScrollTarget::Panel(owner));
+        if canvas_owned {
             routing.pan += self.ease_backlog(input.stable_dt);
         }
         routing.pans_canvas = has_canvas_motion || routing.pan != Vec2::ZERO;
