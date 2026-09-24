@@ -2,6 +2,7 @@ mod fullscreen;
 mod ownership;
 mod production;
 mod render;
+mod resize;
 mod runtime;
 
 use std::path::PathBuf;

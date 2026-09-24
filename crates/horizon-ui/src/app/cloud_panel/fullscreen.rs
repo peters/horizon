@@ -129,6 +129,7 @@ impl HorizonApp {
         self.render_cloud_frames(ui.ctx());
         self.handle_canvas_double_click(ui);
         self.render_panels(ui);
+        self.render_cloud_resize_handles(ui.ctx());
         self.render_cloud_ownership(ui.ctx());
         self.render_preset_picker(ui);
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_some() {

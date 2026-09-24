@@ -358,6 +358,8 @@ impl HorizonApp {
         }
         self.render_panels(ui);
         #[cfg(feature = "cloud-workspaces")]
+        self.render_cloud_resize_handles(ui.ctx());
+        #[cfg(feature = "cloud-workspaces")]
         self.render_cloud_ownership(ui.ctx());
         self.render_file_drop_highlight(ui);
         self.render_preset_picker(ui);
