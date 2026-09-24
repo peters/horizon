@@ -777,3 +777,95 @@ fn the_first_refresh_shows_that_billing_is_being_read() {
     running.billing.stop();
     assert_eq!(cost_texts(&running, std::time::Duration::from_secs(60)).len(), 1);
 }
+
+#[test]
+fn deleted_cloud_can_redeploy_without_removing_the_card() {
+    let launch = size_launch();
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
+    let mut runtime = super::super::Runtime {
+        stage: Some(Stage::Deleted),
+        state: Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"resize","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"example.invalid/team/worker","cpu":8,"memory_gb":32,"gpu":false},
+                "stage":"Deleted","operation":{"state":"terminated","worker_id":"worker1"},
+                "spec":null,"worker":null,"sessions":[]
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    let frame = |runtime: &mut super::super::Runtime, events: Vec<egui::Event>| {
+        let mut action = None;
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::Vec2::new(1200.0, 2000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(profile_details(ui, 1, &launch, runtime).is_none());
+                    action = runtime_actions(ui, 1, runtime);
+                },
+            )
+            .discard_textures();
+        let texts: Vec<(String, egui::Pos2)> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text().to_string(), text.pos + text.galley.size() * 0.5)),
+                _ => None,
+            })
+            .collect();
+        (texts, action)
+    };
+    let click = |runtime: &mut super::super::Runtime, label: &str| {
+        let point = frame(runtime, Vec::new())
+            .0
+            .into_iter()
+            .find_map(|(text, point)| (text == label).then_some(point))
+            .unwrap_or_else(|| panic!("{label} must be rendered"));
+        let mut action = None;
+        for pressed in [true, false] {
+            action = frame(
+                runtime,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .1
+            .or(action);
+        }
+        action
+    };
+    let (texts, action) = frame(&mut runtime, Vec::new());
+    assert!(
+        texts.iter().any(|(text, _)| text == "8 vCPU"),
+        "a deleted cloud can choose the replacement size"
+    );
+    assert!(texts.iter().any(|(text, _)| text == "Redeploy cloud…"));
+    assert!(texts.iter().any(|(text, _)| text == "Remove cloud"));
+    assert!(action.is_none());
+    assert!(click(&mut runtime, "Redeploy cloud…").is_none());
+    assert!(runtime.confirmation == Confirmation::Redeploy);
+    let (texts, _) = frame(&mut runtime, Vec::new());
+    assert!(texts.iter().any(|(text, _)| text == "Redeploy cloud"));
+    assert!(texts.iter().any(|(text, _)| text == "Keep removed"));
+    assert!(click(&mut runtime, "Keep removed").is_none());
+    assert!(runtime.confirmation == Confirmation::None);
+    assert!(click(&mut runtime, "Redeploy cloud…").is_none());
+    assert!(click(&mut runtime, "Redeploy cloud") == Some(Action::Deploy));
+    runtime.confirmation = Confirmation::None;
+    assert!(click(&mut runtime, "Remove cloud") == Some(Action::Remove));
+}

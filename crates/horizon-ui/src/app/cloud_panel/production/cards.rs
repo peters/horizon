@@ -112,7 +112,7 @@ impl HorizonApp {
             .and_then(|path| Store::lock(&path))
             .and_then(|store| store.load());
         let allowed = match loaded {
-            Ok(Some(state)) if !state.resizable() => {
+            Ok(Some(state)) if !state.accepts_next_size() => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.stage = Some(state.stage);
                 runtime.state = Some(state);
@@ -207,7 +207,7 @@ fn machine_size(
         || !runtime
             .state
             .as_ref()
-            .is_none_or(horizon_core::cloud_runtime::state::Deployment::resizable)
+            .is_none_or(horizon_core::cloud_runtime::state::Deployment::accepts_next_size)
     {
         // A requested worker's saved size is authoritative.
         let fixed = runtime.state.as_ref().filter(|state| !state.resizable());
@@ -253,12 +253,48 @@ fn machine_size(
     size
 }
 
+fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
+    egui::Button::new(label)
+        .min_size(Vec2::new(ui.available_width(), 34.0))
+        .fill(theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.20))
+}
+
+fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+    ui.label(DELETED_RESOURCES_MESSAGE);
+    if let Some(error) = runtime
+        .error
+        .as_ref()
+        .filter(|error| error.as_str() != DELETED_RESOURCES_MESSAGE)
+    {
+        ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
+    if runtime.receiver.is_some() {
+        ui.spinner();
+        ui.label("Redeploying cloud…");
+        return None;
+    }
+    if runtime.confirmation == Confirmation::Redeploy {
+        ui.label("Redeploy this cloud? A new worker and managed workspace storage will be allocated. Files from the deleted worker are gone.");
+        let action = ui
+            .add(accent_button(ui, "Redeploy cloud"))
+            .clicked()
+            .then_some(Action::Deploy);
+        if ui.button("Keep removed").clicked() {
+            runtime.confirmation = Confirmation::None;
+        }
+        return action;
+    }
+    if ui.add(accent_button(ui, "Redeploy cloud…")).clicked() {
+        runtime.confirmation = Confirmation::Redeploy;
+    }
+    ui.button("Remove cloud").clicked().then_some(Action::Remove)
+}
+
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
     let mut action = None;
     ui.separator();
     if runtime.stage == Some(Stage::Deleted) {
-        ui.label(DELETED_RESOURCES_MESSAGE);
-        return ui.button("Remove cloud").clicked().then_some(Action::Remove);
+        return deleted_runtime_actions(ui, runtime);
     }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(
@@ -314,15 +350,14 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             action = Some(Action::Resume);
         }
     } else if ui
-        .add(
-            egui::Button::new(if runtime.state.is_some() {
+        .add(accent_button(
+            ui,
+            if runtime.state.is_some() {
                 "Reconnect cloud"
             } else {
                 "Deploy cloud"
-            })
-            .min_size(Vec2::new(ui.available_width(), 34.0))
-            .fill(theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.20)),
-        )
+            },
+        ))
         .clicked()
     {
         action = Some(Action::Deploy);

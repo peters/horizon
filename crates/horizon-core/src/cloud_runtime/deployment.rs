@@ -1,5 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod readiness;
+mod redeploy;
 pub(super) mod storage;
 
 use super::{
@@ -48,9 +49,11 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
     if state.stage == Stage::Deleted {
-        return Err(Error::Invalid(
-            "This cloud was deleted; create a new cloud to allocate resources",
-        ));
+        let public_key = current_public_key(&request.settings.ssh_identity_file)?;
+        redeploy::reopen(&store, &mut state, &public_key)?;
+    }
+    if assign_requested_size(request, &mut state)? {
+        store.save(&state)?;
     }
     let started = attempt_started(&state, started);
     let mut registry = prepare_registry(request, &store, &mut state)?;
@@ -343,20 +346,15 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             || state.revision != request.revision
             || state.repository != request.repository
             || resized != request.profile
-            || (state.profile != resized && !state.resizable())
+            || (state.profile != resized && !state.accepts_next_size())
         {
             return Err(Error::Invalid(
                 "Cloud is permanently bound to its repository, revision and profile",
             ));
         }
-        if state.profile != resized {
-            // Reject an unoffered size before saving, and keep the spec's identity in step.
-            let cpu_flavors = cpu_flavors(&resized, &request.settings)?;
-            if let Some(spec) = &mut state.spec {
-                spec.profile.clone_from(&resized);
-                spec.cpu_flavors = cpu_flavors;
-            }
-            state.profile = resized;
+        // A deleted cloud keeps the recorded spec until redeploy releases its journal.
+        if state.resizable() {
+            assign_requested_size(request, &mut state)?;
         }
         state
     } else {
@@ -383,6 +381,40 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     store.save(&state)?;
     Ok(state)
 }
+
+fn current_public_key(identity: &std::path::Path) -> Result<String> {
+    let path = PathBuf::from(format!("{}.pub", identity.display()));
+    let key = std::fs::read_to_string(&path)?.trim().to_owned();
+    if !horizon_cloud::valid_public_key(&key) {
+        return Err(Error::Invalid(
+            "Replacement worker requires the current Ed25519 public key",
+        ));
+    }
+    Ok(key)
+}
+
+/// Applies CPU and memory once the deployment fence allows it.
+fn assign_requested_size(request: &Request, state: &mut Deployment) -> Result<bool> {
+    let mut resized = state.profile.clone();
+    resized.cpu = request.profile.cpu;
+    resized.memory_gb = request.profile.memory_gb;
+    if resized != request.profile || (state.profile != resized && !state.resizable()) {
+        return Err(Error::Invalid(
+            "Cloud is permanently bound to its repository, revision and profile",
+        ));
+    }
+    if state.profile == resized {
+        return Ok(false);
+    }
+    let cpu_flavors = cpu_flavors(&resized, &request.settings)?;
+    if let Some(spec) = &mut state.spec {
+        spec.profile.clone_from(&resized);
+        spec.cpu_flavors = cpu_flavors;
+    }
+    state.profile = resized;
+    Ok(true)
+}
+
 fn prepare_image(
     request: &Request,
     store: &Store,

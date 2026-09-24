@@ -68,6 +68,7 @@ pub(super) enum Confirmation {
     None,
     Stop,
     Delete,
+    Redeploy,
 }
 #[derive(Default)]
 pub(super) struct Runtime {
@@ -411,6 +412,9 @@ impl HorizonApp {
             .is_some_and(|runtime| runtime.recovery_receiver.is_some())
         {
             return;
+        }
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.confirmation = Confirmation::None;
         }
         let Some(group) = self.cloud_prototype.groups.0.iter().find(|g| g.issue == id) else {
             return;

@@ -66,11 +66,21 @@ impl Deployment {
     pub fn requires_browserstack_release(&self) -> bool {
         self.profile.capabilities.browserstack.is_some() && !self.browserstack_released
     }
-    /// No worker is requested or bound, so CPU and memory can still change.
+    /// CPU and memory can change until a worker is requested.
     /// `RunPod` cannot resize an existing pod.
     #[must_use]
     pub fn resizable(&self) -> bool {
         self.operation == CreateState::Prepared && self.worker.is_none()
+    }
+
+    /// A deleted cloud can choose the next worker's size, but that choice stays
+    /// on the launch profile until redeploy releases the old storage journal.
+    #[must_use]
+    pub fn accepts_next_size(&self) -> bool {
+        self.resizable()
+            || (self.stage == Stage::Deleted
+                && self.worker.is_none()
+                && matches!(self.operation, CreateState::Prepared | CreateState::Terminated { .. }))
     }
 }
 
