@@ -96,6 +96,7 @@ fn only_the_replacement_outcomes_become_notes() {
         "Image unchanged; nothing to restart",
         "Image replacement cancelled; the worker keeps its image",
         "Transport error; checking which image the provider records",
+        "Rebuild refused: The latest commit has no readable .horizon/cloud.yml",
     ] {
         runtime.observe_rebuild(&Event::Output(line.into()));
     }
@@ -118,6 +119,10 @@ fn only_the_replacement_outcomes_become_notes() {
             ),
             ("Image unchanged; nothing to restart", false),
             ("Image replacement cancelled; the worker keeps its image", false),
+            (
+                "Rebuild refused: The latest commit has no readable .horizon/cloud.yml",
+                true
+            ),
         ]
     );
     for _ in 0..NOTE_LIMIT {
@@ -253,6 +258,23 @@ fn rebuild_actions_start_their_own_core_operation() {
     );
     assert!(runtime.error.is_some(), "the reconnect needs the provider credential");
     assert!(!runtime.needs_repaint());
+
+    // A rebuild refused before anything is journaled reconnects and keeps the reason.
+    let runtime = run_action(&mut app, &ctx, Action::Rebuild);
+    assert!(saved_phase(&state_root).is_none());
+    let notes: Vec<_> = runtime
+        .rebuild
+        .as_ref()
+        .unwrap()
+        .notes
+        .iter()
+        .map(|note| (note.text.as_str(), note.warning))
+        .collect();
+    assert!(
+        matches!(notes.as_slice(), [(text, true)] if text.starts_with("Rebuild refused: ")),
+        "{notes:?}"
+    );
+    assert!(runtime.error.is_some(), "the reconnect needs the provider credential");
 
     // Any other worker operation replaces the finished rebuild's view.
     for stop in [false, true] {

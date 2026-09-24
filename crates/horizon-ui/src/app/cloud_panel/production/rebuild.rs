@@ -1,7 +1,8 @@
 //! Runs a cloud's image rebuild, or continues or cancels a pending one, off the UI
 //! thread. The build, switch and reconnect live in `deployment::replacement`.
 use super::{
-    Confirmation, Event, HorizonApp, Request, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action, presentation,
+    Confirmation, Event, HorizonApp, Request, Runtime, Settings, Stage, Store, cloud_runtime, lifecycle::Action,
+    presentation,
 };
 use horizon_core::cloud_runtime::deployment::replacement;
 use std::{
@@ -16,6 +17,8 @@ pub(super) mod tests;
 
 /// Notes kept per attempt; lost sessions are listed one per line.
 const NOTE_LIMIT: usize = 20;
+/// Starts the note for a rebuild refused before anything was journaled.
+const REFUSED: &str = "Rebuild refused:";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -68,7 +71,8 @@ impl Attempt {
     /// Keeps the outcomes `deployment::replacement` reports as output lines; the rest
     /// of the output stays in the verbose log only.
     fn observe(&mut self, line: &str) {
-        let warning = line.starts_with("Session ") && line.ends_with("was not relaunched");
+        let warning =
+            (line.starts_with("Session ") && line.ends_with("was not relaunched")) || line.starts_with(REFUSED);
         let notable = warning
             || line.starts_with("Image unchanged")
             || line.starts_with("Image replacement cancelled")
@@ -175,6 +179,23 @@ fn run(
         // Dropping an unsent replacement leaves the worker as it was without
         // reconnecting; reconnect to restore the presentation stopped for it.
         Ok(_) => super::run_deployment(request, cancel, tx, ctx),
+        // Refused before anything was journaled, so the worker runs as recorded: reconnect
+        // to restore the presentation stopped for the rebuild, and keep the reason. An
+        // explicit cancel ends here instead; the card then offers Reconnect.
+        Err(error) if !cancel.is_cancelled() && untouched(&request.state_root) => {
+            emit(Event::Output(format!("{REFUSED} {error}")));
+            super::run_deployment(request, cancel, tx, ctx);
+        }
         Err(error) => super::report_failure(&request.state_root, &error, &emit),
     }
+}
+
+/// The saved record is still Ready with nothing journaled or pending.
+fn untouched(state_root: &std::path::Path) -> bool {
+    Store::lock(state_root)
+        .ok()
+        .and_then(|store| store.load().ok().flatten())
+        .is_some_and(|state| {
+            state.stage == Stage::Ready && state.image_replacement.is_none() && state.session_restart.is_none()
+        })
 }
