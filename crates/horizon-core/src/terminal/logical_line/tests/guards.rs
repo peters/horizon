@@ -51,7 +51,12 @@ fn row_filling_url_does_not_absorb_the_next_sentence() {
 #[test]
 fn path_below_a_row_filling_url_stays_a_path() {
     let first = format!("https://example.com/{}", "a".repeat(COLS - 20));
-    for next in ["/tmp/file.rs", "~/work/notes-v2.md"] {
+    for next in [
+        "/tmp/file.rs",
+        "~/work/notes-v2.md",
+        "/tmp/build=release.log",
+        "/srv/a&b%20c.txt",
+    ] {
         let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
 
         assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");

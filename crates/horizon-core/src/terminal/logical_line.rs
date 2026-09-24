@@ -23,8 +23,9 @@ const MAX_WRAP_PADDING: usize = 1;
 const URL_BREAK_CHARS: [char; 3] = ['/', '-', '?'];
 /// Delimiters that mark continuation text as part of a URL rather than prose.
 const URL_DELIMITERS: [char; 6] = ['/', '?', '#', '&', '=', '%'];
-/// Query and fragment syntax, the only URL evidence a path-shaped row can give.
-const URL_QUERY_DELIMITERS: [char; 5] = ['?', '#', '&', '=', '%'];
+/// Characters that open a query or fragment, the only URL evidence a
+/// path-shaped row can give: file names may contain `&`, `=` or `%` too.
+const URL_QUERY_DELIMITERS: [char; 2] = ['?', '#'];
 /// Rows followed away from a joint for URL context: the query syntax below a
 /// path-shaped row, or the scheme and open delimiters above a segment. It
 /// matches the hard-wrap limit so that context reaches as far as a join does.
