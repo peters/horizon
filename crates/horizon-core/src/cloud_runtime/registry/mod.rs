@@ -204,14 +204,8 @@ impl Prepared {
                 "Publishing and worker pulling must use different credentials",
             ));
         }
-        std::fs::create_dir_all(&config.root)?;
-        if source
-            .as_ref()
-            .is_some_and(|source| config.root.canonicalize().is_ok_and(|root| root.starts_with(source)))
-        {
-            return Err(Error::Invalid(
-                "Registry state must stay outside the source and build context",
-            ));
+        if let Some(source) = &source {
+            store::ensure_outside_source(&config.root, source)?;
         }
         let login_identity =
             credentials::fingerprint(format!("{}\0{}", binding.pull.username, pull.fingerprint).as_bytes());
@@ -368,6 +362,15 @@ pub(super) fn repository(image: &str) -> Result<&str> {
         .rfind('/')
         .ok_or(Error::Invalid("Use an explicit registry hostname and repository"))?;
     let image = image[slash..].find(':').map_or(image, |colon| &image[..slash + colon]);
+    if image
+        .split('/')
+        .skip(1)
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(Error::Invalid(
+            "Registry repository path must contain nonempty components",
+        ));
+    }
     let host = image.split('/').next().unwrap_or_default();
     if !host.contains('.') && !host.contains(':') && host != "localhost" {
         return Err(Error::Invalid("Use an explicit registry hostname"));

@@ -84,6 +84,41 @@ fn independent_registry_ports_retain_their_own_scope() {
 }
 
 #[test]
+fn empty_repository_components_are_rejected_before_saving() {
+    let (_root, mut settings) = fixture();
+    for repository in [
+        "ghcr.io/",
+        "ghcr.io/team/",
+        "ghcr.io//worker",
+        "ghcr.io/./worker",
+        "ghcr.io/team/../worker",
+    ] {
+        binding(&mut settings).repository = repository.into();
+        assert!(settings.registries.as_ref().unwrap().validate().is_err());
+        assert!(draft::Draft::from_binding(binding(&mut settings)).validate().is_err());
+    }
+}
+
+#[test]
+fn rejected_registry_root_does_not_create_directories_in_source() {
+    let (root, mut settings) = fixture();
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let rejected = source.join("nested/registry");
+    settings.registries.as_mut().unwrap().root = rejected;
+    assert!(Prepared::for_image(&settings, &image(), Some(&source), false).is_err());
+    assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
+    #[cfg(unix)]
+    {
+        let alias = root.path().join("source-alias");
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        settings.registries.as_mut().unwrap().root = alias.join("nested/registry");
+        assert!(Prepared::for_image(&settings, &image(), Some(&source), false).is_err());
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn generations_must_be_persisted_and_metadata_contains_no_secret() {
     let (_root, settings) = fixture();
     let json = serde_json::to_string(&settings).unwrap();

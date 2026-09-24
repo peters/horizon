@@ -3,8 +3,29 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
 };
+
+pub(super) fn ensure_outside_source(root: &Path, source: &Path) -> Result<()> {
+    let mut resolved = PathBuf::new();
+    for component in root.components() {
+        if component == Component::ParentDir {
+            return Err(Error::Invalid("Registry state path must not contain parent traversal"));
+        }
+        resolved.push(component.as_os_str());
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(_) => resolved = resolved.canonicalize()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if resolved.starts_with(source) {
+            return Err(Error::Invalid(
+                "Registry state must stay outside the source and build context",
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Deserialize, Serialize)]
 struct Record {
