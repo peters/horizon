@@ -25,8 +25,14 @@ if command == 'has-session':
 if command == 'new-session':
     if len(rest) != 6 or rest[0:2] != ['-d', '-s'] or rest[3] != '-c' or (state / 'running' / rest[2]).exists():
         sys.exit(91)
+    try:
+        os.fstat(9)
+        inherits_lock = True
+    except OSError:
+        inherits_lock = False
     with open(state / 'launches', 'a') as log:
-        log.write(json.dumps({'session': rest[2], 'cwd': rest[4], 'command': rest[5]}) + '\\n')
+        log.write(json.dumps({'session': rest[2], 'cwd': rest[4], 'command': rest[5],
+                              'inherits_lock': inherits_lock}) + '\\n')
     (state / 'running').mkdir(exist_ok=True)
     (state / 'running' / rest[2]).touch()
     sys.exit(0)
@@ -97,7 +103,10 @@ class SessionRelaunchTests(unittest.TestCase):
 
     def launches(self):
         log = self.state / 'launches'
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        launches = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        # The tmux server never holds the session lock, so a crash cannot leave it locked.
+        self.assertFalse(any(launch.pop('inherits_lock') for launch in launches))
+        return launches
 
     def reset_container(self):
         shutil.rmtree(self.state / 'running', ignore_errors=True)

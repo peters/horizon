@@ -20,7 +20,9 @@ worktree="/workspace/agents/$id"
 bound() { [ "$(cat "$session/agent")" = "$agent" ] && [ "$(cat "$session/revision")" = "$revision" ]; }
 running() { tmux -L horizon-cloud has-session -t "=$id" 2>/dev/null; }
 # The persisted binding fully determines the launch, so a relaunch reproduces it exactly.
-launch() { tmux -L horizon-cloud new-session -d -s "$id" -c "$worktree" "horizon-worker-run $id $agent"; }
+# The tmux server must not inherit the session lock (fd 9), or a crash before the unlock
+# would hold it for the server's lifetime.
+launch() { tmux -L horizon-cloud new-session -d -s "$id" -c "$worktree" "horizon-worker-run $id $agent" 9>&-; }
 if [ -n "$operation" ]; then
     # Replace a lost process only. Never create, reset or check out the worktree.
     [ -d "$session" ] || { echo 'Unknown session. No process was started.' >&2; exit 3; }
