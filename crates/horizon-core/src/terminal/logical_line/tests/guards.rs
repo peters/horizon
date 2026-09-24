@@ -136,3 +136,18 @@ fn path_below_a_web_url_that_embeds_a_file_url_stays_a_path() {
     assert_eq!(url_at(&term, COLS, 0, 5), Some(first));
     assert_eq!(url_at(&term, COLS, 1, 3), None);
 }
+
+#[test]
+fn url_context_stops_at_the_start_of_a_new_url() {
+    let file_url = format!("file:///very/long/{}", "x".repeat(COLS - 18));
+    let web_url = format!("https://example.com/{}", "a".repeat(COLS - 20));
+    let term = term_with_rows(
+        COLS,
+        4,
+        &[file_url.clone(), web_url.clone(), "/tmp/file.rs".to_string()],
+    );
+
+    assert_eq!(url_at(&term, COLS, 0, 5), Some(file_url));
+    assert_eq!(url_at(&term, COLS, 1, 5), Some(web_url));
+    assert_eq!(url_at(&term, COLS, 2, 3), None);
+}

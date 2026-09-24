@@ -406,9 +406,10 @@ fn is_marker(mut chars: impl Iterator<Item = char>) -> bool {
 
 /// The URL segment starting at `segment_start` on row `line`, preceded by the
 /// full-width rows of URL text that wrap into it, up to
-/// [`MAX_URL_CONTEXT_ROWS`] rows in all. It starts with the URL's scheme when
-/// the URL begins within that reach, and carries any delimiters a
-/// continuation might close.
+/// [`MAX_URL_CONTEXT_ROWS`] rows in all. The walk stops at the segment that
+/// starts the URL, so the text starts with the URL's own scheme when the URL
+/// begins within that reach, and carries any delimiters a continuation might
+/// close.
 fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, mut segment_start: usize) -> String {
     let mut text = String::new();
     for _ in 0..MAX_URL_CONTEXT_ROWS {
@@ -416,8 +417,12 @@ fn segment_text_with_rows_above(grid: &Grid<Cell>, cols: usize, mut line: Line, 
         let Some(end) = last_content_column(row, cols) else {
             break;
         };
-        text.insert_str(0, &row_chars(row, segment_start..end + 1).collect::<String>());
-        if first_content_column(row, cols) != Some(segment_start) || line <= grid.topmost_line() {
+        let segment = row_chars(row, segment_start..end + 1);
+        let starts_url = starts_with_url_scheme(&segment);
+        text.insert_str(0, &segment.collect::<String>());
+        // A segment that starts its own URL is where that URL begins, just as
+        // a continuation that starts a new URL never joins the row above.
+        if starts_url || first_content_column(row, cols) != Some(segment_start) || line <= grid.topmost_line() {
             break;
         }
         let above = &grid[line - 1];
