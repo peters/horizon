@@ -74,6 +74,7 @@ pub(super) struct LockIdentity {
 impl LockIdentity {
     fn from_file(file: &File) -> Result<Self> {
         let metadata = file.metadata()?;
+        require_private(&metadata)?;
         if !metadata.is_file() || metadata.len() != 16 {
             return Err(Error::Ownership);
         }
@@ -109,14 +110,16 @@ impl LockIdentity {
 
 impl Lock {
     pub(super) fn acquire(path: &Path, create: bool) -> Result<Self> {
+        verify_lock_root(path.parent().ok_or(Error::Ownership)?)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create_new(create);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let mut file = options.open(path)?;
+        require_private(&file.metadata()?)?;
         if !file.metadata()?.is_file() {
             return Err(Error::Ownership);
         }
@@ -126,7 +129,9 @@ impl Lock {
             file.sync_all()?;
             File::open(path.parent().ok_or(Error::Ownership)?)?.sync_all()?;
         }
-        Ok(Self(file))
+        let lock = Self(file);
+        lock.verify(path, lock.identity()?)?;
+        Ok(lock)
     }
 
     pub(super) fn identity(&self) -> Result<LockIdentity> {
@@ -134,6 +139,7 @@ impl Lock {
     }
 
     pub(super) fn verify(&self, path: &Path, expected: LockIdentity) -> Result<()> {
+        verify_lock_root(path.parent().ok_or(Error::Ownership)?)?;
         if self.identity()? != expected || LockIdentity::at_path(path)? != expected {
             return Err(Error::Ownership);
         }
@@ -147,10 +153,39 @@ impl Drop for Lock {
 }
 
 pub(super) fn create_lock_root(root: &Path) -> Result<std::path::PathBuf> {
-    fs::create_dir_all(root)?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(root)?;
+    verify_lock_root(root)?;
     let root = root.canonicalize()?;
     for directory in root.ancestors() {
         File::open(directory)?.sync_all()?;
     }
     Ok(root)
+}
+
+fn verify_lock_root(root: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() {
+        return Err(Error::Ownership);
+    }
+    require_private(&metadata)
+}
+
+fn require_private(metadata: &fs::Metadata) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+            return Err(Error::Ownership);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+    Ok(())
 }

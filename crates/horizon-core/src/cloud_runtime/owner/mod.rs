@@ -291,13 +291,8 @@ impl Owner {
             next: next.clone(),
         });
         self.register(registration, previous.as_ref())?;
-        let pending = registration.clone();
         checkpoint(Boundary::Pending)?;
-        self.directory.write(JOURNAL, &bytes)?;
-        checkpoint(Boundary::Published)?;
-        registration.committed = Some(next);
-        registration.pending = None;
-        self.register(registration, Some(&pending))?;
+        self.recover(registration, checkpoint)?;
         checkpoint(Boundary::Committed)
     }
 

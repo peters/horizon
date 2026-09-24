@@ -578,6 +578,8 @@ fn native_commits_require_the_expected_candidate_and_published_journal() {
         for (boundary, file) in [
             (Boundary::Candidate, CANDIDATE),
             (Boundary::Candidate, JOURNAL),
+            (Boundary::Pending, CANDIDATE),
+            (Boundary::Pending, JOURNAL),
             (Boundary::Published, JOURNAL),
         ] {
             let (temp, root, vault) = fixture();
@@ -620,6 +622,43 @@ fn relative_lock_roots_are_canonicalized_before_syncing_ancestors() {
         journal::create_lock_root(&relative).unwrap(),
         relative.canonicalize().unwrap()
     );
+}
+
+#[test]
+fn private_locks_reject_insecure_roots_files_and_later_permission_changes() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    for directory in [false, true] {
+        let (_temp, root, vault) = fixture();
+        let mut owner = create(&root, &vault);
+        let path = if directory {
+            owner.lock_path.parent().unwrap().to_owned()
+        } else {
+            owner.lock_path.clone()
+        };
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().mode() & 0o777,
+            if directory { 0o700 } else { 0o600 }
+        );
+        let before = vault.0.borrow().clone();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(owner.binding().is_err());
+        assert!(owner.save(json!({"changed": true})).is_err());
+        assert_eq!(*vault.0.borrow(), before);
+        drop(owner);
+        assert!(open(&root, &vault).is_err());
+        if directory {
+            assert!(journal::create_lock_root(&path).is_err());
+            assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o777);
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(temp.path(), &link).unwrap();
+    assert!(journal::create_lock_root(&link).is_err());
+    let file = temp.path().join("file");
+    std::fs::write(&file, b"sentinel").unwrap();
+    assert!(journal::create_lock_root(&file).is_err());
+    assert_eq!(std::fs::read(file).unwrap(), b"sentinel");
 }
 
 #[test]

@@ -484,6 +484,8 @@ worker dispatch are separate consumers and are not connected yet.
 `cloud_runtime::owner` supplies an opt-in owning-host journal API: native machine
 identity, a cloud-specific OS-store registration, a signing key and a canonical
 lock outside transferable journal state, pinned by native file identity and a nonce.
+Lock roots/files are created with private modes and must retain effective-user
+ownership and no group/other access on acquisition and every ownership check.
 Artifact reads, publication and directory synchronization use a retained directory
 handle and reject replacement of its registered path. Root creation retains a
 private staging-directory handle through exclusive publication, refusing an
