@@ -106,16 +106,43 @@ impl Records {
 }
 
 fn decode_preserving<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T, Error> {
-    let original = unique_json::parse(bytes).map_err(|_| Error::Encoding)?;
+    let mut original = unique_json::parse(bytes).map_err(|_| Error::Encoding)?;
     let parsed: T = serde_json::from_value(original.clone()).map_err(|_| Error::Encoding)?;
     let normalized = serde_json::to_value(&parsed).map_err(|_| Error::Encoding)?;
+    normalize_supported_input(&mut original, &normalized);
     if !preserves_present_values(&original, &normalized) {
         return Err(Error::Encoding);
     }
     Ok(parsed)
 }
 
-// Legacy optional fields may be absent, but no present value may disappear or change.
+fn normalize_supported_input(original: &mut Value, normalized: &Value) {
+    // Profiles recursively deny unknown fields. Their defaults, optional omissions
+    // and capability sets are therefore safely canonicalized by the existing schema.
+    // The worker's custom address/rate parsers and project target set likewise own
+    // normalization; do not duplicate their parsing or default-selection rules here.
+    for pointer in [
+        "/profile",
+        "/spec/profile",
+        "/worker/publicIp",
+        "/worker/costPerHr",
+        "/browserstack_targets",
+    ] {
+        if let Some(input) = original.pointer_mut(pointer)
+            && let Some(output) = normalized.pointer(pointer)
+        {
+            *input = output.clone();
+        }
+    }
+    if let Some(worker) = original.get_mut("worker").and_then(Value::as_object_mut)
+        && let Some(image) = worker.remove("image")
+    {
+        // Typed decoding above rejects input containing both spellings.
+        worker.insert("imageName".into(), image);
+    }
+}
+
+// After supported normalization, no present value may disappear or change.
 fn preserves_present_values(original: &Value, normalized: &Value) -> bool {
     match (original, normalized) {
         (Value::Object(before), Value::Object(after)) => before.iter().all(|(key, value)| {

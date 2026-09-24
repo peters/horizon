@@ -243,3 +243,54 @@ fn duplicate_keys_in_nested_maps_are_rejected_before_either_decode_path() {
     // Escaped spellings of the same key must not evade the duplicate check.
     assert!(unique_json::parse(br#"{"key":1,"\u006bey":2}"#).is_err());
 }
+
+#[test]
+fn supported_legacy_spellings_and_normalized_values_preserve_the_existing_runtime_view() {
+    for address in ["", "0:0:0:0:0:0:0:1"] {
+        let mut original = legacy();
+        let image = original["worker"].as_object_mut().unwrap().remove("imageName").unwrap();
+        original["worker"]["image"] = image;
+        original["worker"]["publicIp"] = json!(address);
+        original["worker"]["costPerHr"] = json!("0.100");
+        original["profile"]["capabilities"]["browserstack"] = Value::Null;
+        original["profile"]["capabilities"]["agents"] = json!(["grok", "claude", "codex"]);
+        original["spec"]["profile"]["capabilities"]["browserstack"] = json!({"targets":[]});
+        original["browserstack_targets"] = json!(["target-b", "target-a"]);
+        let expected: Deployment = serde_json::from_value(original.clone()).unwrap();
+        let pair = convert(&original).unwrap();
+        assert_eq!(
+            serde_json::to_value(pair.deployment()).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let mut allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        allocation["worker"] = original["worker"].clone();
+        let restored = Records::decode(
+            &serde_json::to_vec(&allocation).unwrap(),
+            &pair.project_bytes().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(restored.deployment()).unwrap(),
+            serde_json::to_value(pair.deployment()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn alias_conflicts_and_unknown_fields_inside_strict_profiles_are_rejected() {
+    for image in ["saved-image", "different-image"] {
+        let mut original = legacy();
+        original["worker"]["image"] = json!(image);
+        assert!(convert(&original).is_err());
+    }
+    for pointer in ["/profile/capabilities", "/spec/profile/storage", "/profile/bootstrap"] {
+        let mut original = legacy();
+        original
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown_cleanup_fence".into(), Value::Null);
+        assert!(convert(&original).is_err());
+    }
+}
