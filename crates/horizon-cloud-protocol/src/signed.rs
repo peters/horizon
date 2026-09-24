@@ -61,17 +61,23 @@ pub enum Action {
 
 impl Action {
     fn project_scoped(self) -> bool {
-        matches!(
-            self,
+        match self {
+            Self::Bootstrap
+            | Self::InspectAllocation
+            | Self::PrepareWorkerTransition
+            | Self::ConfirmWorkerTransition
+            | Self::ReconcileWorkerTransition
+            | Self::CancelWorkerTransition
+            | Self::ResumeWorker => false,
             Self::AttachProject
-                | Self::InspectProject
-                | Self::ReconcileProject
-                | Self::StopProjectSessions
-                | Self::RemoveProject
-                | Self::PrepareProjectDataDeletion
-                | Self::ConfirmProjectDataDeletion
-                | Self::ReconcileProjectDataDeletion
-        )
+            | Self::InspectProject
+            | Self::ReconcileProject
+            | Self::StopProjectSessions
+            | Self::RemoveProject
+            | Self::PrepareProjectDataDeletion
+            | Self::ConfirmProjectDataDeletion
+            | Self::ReconcileProjectDataDeletion => true,
+        }
     }
 }
 
