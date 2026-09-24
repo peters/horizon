@@ -2371,10 +2371,13 @@ dependencies = [
  "horizon-cloud-protocol",
  "png",
  "ring",
+ "rmcp",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml_edit",
 ]
 

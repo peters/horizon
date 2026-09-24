@@ -476,6 +476,9 @@ the host coordinator, not the portable selection contract.
 durable runtime writes and `ssh` owns key validation, bounded probes, and alias
 publication. The existing worker run/source helpers prepare and enter separate
 companion worktrees. These transport operations have no provider lifecycle authority.
+`companion_tools` reads the same validated discovery catalog for CLI and MCP;
+its MCP leaf only adapts requests. Readiness expiration and grant probes stay
+in the shared worker service, and neither interface starts compute.
 
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are

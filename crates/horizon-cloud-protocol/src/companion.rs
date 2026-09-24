@@ -52,3 +52,92 @@ pub enum Response {
     Revoked,
     Disconnected,
 }
+
+/// A safe discovery snapshot supplied by the owning controller; never an access grant.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Catalog {
+    pub version: u32,
+    pub source_cloud_id: String,
+    pub observed_at: u64,
+    pub companions: Vec<Companion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Companion {
+    pub alias: String,
+    pub repository: String,
+    pub profile: String,
+    pub target_cloud_id: Option<String>,
+    pub selected: bool,
+    pub status: Status,
+    pub access: Option<Access>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Unselected,
+    Missing,
+    Ambiguous,
+    Stopped,
+    Unavailable,
+    Connecting,
+    Ready,
+    Unverified,
+    Unreachable,
+    Changed,
+    RevocationPending,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Access {
+    pub grant: String,
+    pub ssh_alias: String,
+    pub worktree: String,
+}
+
+impl Catalog {
+    /// # Errors
+    /// Rejects malformed discovery data before it is published or used in a command.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != VERSION || !horizon_cloud::valid_id(&self.source_cloud_id) || self.companions.len() > 64 {
+            return Err("Invalid companion catalog");
+        }
+        let mut aliases = std::collections::BTreeSet::new();
+        for entry in &self.companions {
+            if !horizon_cloud::valid_id(&entry.alias)
+                || entry.alias.len() > 64
+                || !aliases.insert(&entry.alias)
+                || !horizon_cloud::valid_id(&entry.profile)
+                || entry.repository.len() > 201
+                || entry.repository.is_empty()
+                || !entry
+                    .repository
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+                || entry
+                    .target_cloud_id
+                    .as_deref()
+                    .is_some_and(|id| !horizon_cloud::valid_id(id))
+            {
+                return Err("Invalid companion identity in catalog");
+            }
+            if entry.status == Status::Ready && entry.access.is_none() {
+                return Err("Ready companion requires connection details");
+            }
+            if let Some(access) = &entry.access
+                && (!entry.selected
+                    || entry.target_cloud_id.is_none()
+                    || !horizon_cloud::valid_id(&access.grant)
+                    || access.ssh_alias != format!("companion-{}", entry.alias)
+                    || access.worktree != format!("/workspace/companions/worktrees/{}", access.grant))
+            {
+                return Err("Invalid companion connection details");
+            }
+        }
+        Ok(())
+    }
+}

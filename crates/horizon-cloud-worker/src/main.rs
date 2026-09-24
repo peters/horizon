@@ -2,6 +2,7 @@
 mod bootstrap;
 mod browser;
 mod catalog;
+mod companion_tools;
 mod companions;
 mod configuration;
 mod controller;
@@ -29,8 +30,9 @@ fn main() -> std::process::ExitCode {
         Some("configure-agent-tools") => configuration::run(),
         Some("recover-allocation") => bootstrap::run(),
         Some("companion-control") => companions::run(),
+        Some("companions") => companion_tools::run(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|companion-control",
+            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|companion-control|companions",
         )),
     };
     match result {
