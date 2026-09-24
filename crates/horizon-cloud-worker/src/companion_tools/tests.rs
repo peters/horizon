@@ -96,6 +96,10 @@ fn malformed_and_unselected_connections_are_rejected_before_any_probe() {
     invalid.companions[0].alias = "x;touch /tmp/injected".into();
     assert!(invalid.validate().is_err());
     invalid = original.clone();
+    invalid.companions[0].alias = "App".into();
+    invalid.companions[0].access.as_mut().unwrap().ssh_alias = "companion-App".into();
+    assert!(invalid.validate().is_err());
+    invalid = original.clone();
     invalid.companions[0].selected = false;
     assert!(invalid.validate().is_err());
     invalid = original.clone();

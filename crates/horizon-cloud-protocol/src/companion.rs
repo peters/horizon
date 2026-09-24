@@ -109,8 +109,7 @@ impl Catalog {
         let mut aliases = std::collections::BTreeSet::new();
         let mut grants = std::collections::BTreeSet::new();
         for entry in &self.companions {
-            if !horizon_cloud::valid_id(&entry.alias)
-                || entry.alias.len() > 64
+            if !horizon_cloud::companions::valid_alias(&entry.alias)
                 || !aliases.insert(&entry.alias)
                 || !horizon_cloud::valid_id(&entry.profile)
                 || entry.repository.len() > 201
