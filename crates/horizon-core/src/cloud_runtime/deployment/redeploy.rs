@@ -28,7 +28,17 @@ pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) ->
     {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
-    storage::release_deleted_journal(store, &state.cloud_id)?;
+    match &state.spec {
+        Some(spec) => storage::release_deleted_journal(store, spec)?,
+        None if store.root().join("workspace-volume.json").try_exists()?
+            || store.root().join("workspace-volume.required").try_exists()? =>
+        {
+            return Err(Error::Invalid(
+                "Managed workspace storage is not confirmed deleted; finish cleanup before redeploying",
+            ));
+        }
+        None => {}
+    }
     if let Some(spec) = &mut state.spec {
         public_key.clone_into(&mut spec.public_key);
     }
@@ -56,12 +66,12 @@ mod tests {
         let operation = operation.clone();
         serde_json::from_value(serde_json::json!({
             "version":1,"cloud_id":"deleted-cloud","repository":"/synthetic","revision":"a",
-            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":true},
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
             "stage":"Deleted","operation":operation,
             "spec":{
                 "operation_id":"deleted-cloud",
                 "image_digest":format!("registry.example/worker@sha256:{}", "ab".repeat(32)),
-                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":true},
+                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
                 "public_key":"fixture","registry_auth_id":null,"gpu_types":[],"cpu_flavors":[],"data_centers":[]
             },
             "registry_generation":"generation1","worker":null,
@@ -73,17 +83,19 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn journal(operation_id: &str, state: &str) -> String {
-        format!(
-            r#"{{"version":1,"worker":{{"operation_id":"{operation_id}","image_digest":"registry.example/worker@sha256:{}","profile":{{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":true}},"public_key":"fixture","registry_auth_id":null,"gpu_types":[],"cpu_flavors":[],"data_centers":[]}},"spec":{{"operation_id":"{operation_id}","size":20,"data_center_id":"EU-TEST-1"}},"state":{{"state":"{state}"}}}}"#,
-            "ab".repeat(32)
-        )
-    }
-
-    #[cfg(unix)]
-    fn write_journal(root: &std::path::Path, body: &str) {
+    fn write_matching_journal(root: &std::path::Path, spec: &horizon_cloud::WorkerSpec, state: &str) {
+        let body = serde_json::json!({
+            "version": 1,
+            "worker": spec,
+            "spec": {
+                "operation_id": spec.operation_id,
+                "size": spec.profile.storage.volume_gb,
+                "data_center_id": "EU-TEST-1"
+            },
+            "state": {"state": state}
+        });
         std::fs::write(root.join("workspace-volume.required"), b"").unwrap();
-        std::fs::write(root.join("workspace-volume.json"), body).unwrap();
+        std::fs::write(root.join("workspace-volume.json"), serde_json::to_vec(&body).unwrap()).unwrap();
     }
 
     #[test]
@@ -91,8 +103,8 @@ mod tests {
     fn confirmed_deletion_reopens_without_dropping_sessions_or_the_image() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
-        write_journal(root.path(), &journal("deleted-cloud", "deleted"));
         let mut state = deleted(&serde_json::json!({"state":"terminated","worker_id":"worker1"}));
+        write_matching_journal(root.path(), state.spec.as_ref().unwrap(), "deleted");
         reopen(&store, &mut state, PUBLIC_KEY).unwrap();
         assert_eq!(state.stage, Stage::Validate);
         assert_eq!(state.operation, CreateState::Prepared);
@@ -122,9 +134,8 @@ mod tests {
     fn unfinished_cleanup_keeps_the_deleted_fence_and_journal() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
-        let body = journal("deleted-cloud", "deleted");
-        write_journal(root.path(), &body);
         let mut state = deleted(&serde_json::json!({"state":"terminated","worker_id":"worker1"}));
+        write_matching_journal(root.path(), state.spec.as_ref().unwrap(), "deleted");
         assert!(
             reopen(&store, &mut state, "not-a-key")
                 .unwrap_err()
@@ -132,18 +143,14 @@ mod tests {
                 .contains("Ed25519")
         );
         assert!(root.path().join("workspace-volume.json").exists());
-        let body = journal("deleted-cloud", "prepared");
-        write_journal(root.path(), &body);
+        write_matching_journal(root.path(), state.spec.as_ref().unwrap(), "prepared");
         let error = reopen(&store, &mut state, PUBLIC_KEY).unwrap_err();
         assert!(error.to_string().contains("not confirmed deleted"), "{error}");
         assert_eq!(state.stage, Stage::Deleted);
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("workspace-volume.json")).unwrap(),
-            body
-        );
+        assert!(root.path().join("workspace-volume.json").exists());
         assert!(root.path().join("workspace-volume.required").exists());
         state.operation = CreateState::Requested;
-        write_journal(root.path(), &journal("deleted-cloud", "deleted"));
+        write_matching_journal(root.path(), state.spec.as_ref().unwrap(), "deleted");
         assert!(
             reopen(&store, &mut state, PUBLIC_KEY)
                 .unwrap_err()
@@ -190,8 +197,7 @@ mod tests {
         let cloud = root.path().join("cloud");
         let repository = root.path().join("missing-repo");
         let revision = "a".repeat(40);
-        let profile =
-            serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":true});
+        let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false});
         let mut state = deleted(&serde_json::json!({"state":"terminated","worker_id":"worker1"}));
         state.repository.clone_from(&repository);
         state.revision.clone_from(&revision);
@@ -201,7 +207,7 @@ mod tests {
         {
             let store = Store::lock(&cloud).unwrap();
             store.save(&state).unwrap();
-            write_journal(&cloud, &journal("deleted-cloud", "deleted"));
+            write_matching_journal(&cloud, state.spec.as_ref().unwrap(), "deleted");
         }
         let key = root.path().join("runpod");
         let ssh = root.path().join("ssh");
@@ -245,7 +251,7 @@ mod tests {
         {
             let store = Store::lock(&cloud).unwrap();
             store.save(&state).unwrap();
-            write_journal(&cloud, &journal("deleted-cloud", "deleted"));
+            write_matching_journal(&cloud, state.spec.as_ref().unwrap(), "deleted");
         }
         let settings: Settings = serde_json::from_value(serde_json::json!({
             "runpod_key_file": root.path().join("missing-key"),

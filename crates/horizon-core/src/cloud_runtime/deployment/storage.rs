@@ -64,32 +64,20 @@ pub(in crate::cloud_runtime) fn retained(store: &Store, worker: &WorkerSpec) -> 
     Ok(load(store, worker)?.is_some_and(|record| record.state != State::Deleted))
 }
 
-/// Drops a journal only after this operation's storage is recorded as deleted.
+/// Drops a journal only after this worker's storage is confirmed deleted.
+/// Identity checks match cleanup, so a mismatched journal is left in place.
 /// The marker is removed first so a crash cannot look like a missing journal.
-pub(in crate::cloud_runtime) fn release_deleted_journal(store: &Store, operation_id: &str) -> Result<()> {
+pub(in crate::cloud_runtime) fn release_deleted_journal(store: &Store, worker: &WorkerSpec) -> Result<()> {
     let path = store.root().join("workspace-volume.json");
     let marker = store.root().join("workspace-volume.required");
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if marker.try_exists()? {
-                return Err(Error::Invalid(
-                    "Workspace storage journal is missing; restore it before redeploying",
-                ));
-            }
-            return Ok(());
+    match load(store, worker)? {
+        Some(record) if record.state == State::Deleted => {}
+        Some(_) => {
+            return Err(Error::Invalid(
+                "Managed workspace storage is not confirmed deleted; finish cleanup before redeploying",
+            ));
         }
-        Err(error) => return Err(error.into()),
-    };
-    let record: Record = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
-    if record.version != 1
-        || record.state != State::Deleted
-        || record.worker.operation_id != operation_id
-        || record.spec.operation_id != operation_id
-    {
-        return Err(Error::Invalid(
-            "Managed workspace storage is not confirmed deleted; finish cleanup before redeploying",
-        ));
+        None => return Ok(()),
     }
     if marker.try_exists()? {
         std::fs::remove_file(&marker)?;
@@ -279,7 +267,9 @@ mod tests {
         let mut record = record();
         record.state = State::Deleted;
         save(&store, &record).unwrap();
-        assert!(release_deleted_journal(&store, "another-operation").is_err());
+        let mut other = record.worker.clone();
+        other.operation_id = "another-operation".into();
+        assert!(release_deleted_journal(&store, &other).is_err());
         assert!(root.path().join("workspace-volume.json").exists());
         record.state = State::Deleting {
             volume: Volume {
@@ -290,15 +280,15 @@ mod tests {
             },
         };
         save(&store, &record).unwrap();
-        assert!(release_deleted_journal(&store, &record.worker.operation_id).is_err());
+        assert!(release_deleted_journal(&store, &record.worker).is_err());
         record.state = State::Deleted;
         save(&store, &record).unwrap();
-        release_deleted_journal(&store, &record.worker.operation_id).unwrap();
+        release_deleted_journal(&store, &record.worker).unwrap();
         assert!(!root.path().join("workspace-volume.json").exists());
         assert!(!root.path().join("workspace-volume.required").exists());
-        release_deleted_journal(&store, &record.worker.operation_id).unwrap();
+        release_deleted_journal(&store, &record.worker).unwrap();
         std::fs::write(root.path().join("workspace-volume.required"), b"").unwrap();
-        assert!(release_deleted_journal(&store, &record.worker.operation_id).is_err());
+        assert!(release_deleted_journal(&store, &record.worker).is_err());
     }
     #[test]
     fn absent_journal_keeps_legacy_worker_storage_validation() {
