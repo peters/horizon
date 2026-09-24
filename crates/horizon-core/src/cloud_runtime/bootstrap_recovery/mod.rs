@@ -1,5 +1,5 @@
 //! Anchored host recovery of an existing worker bootstrap, never initialization.
-mod connection;
+pub(super) mod connection;
 
 use super::{Cancellation, command::Runner, owner::Owner, ssh::Connection};
 use connection::{Binding, Snapshot};
@@ -9,7 +9,7 @@ use horizon_cloud_protocol::{
     signed::{Action, Intent, SignedIntent, Target as IntentTarget},
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const KEY: &str = "bootstrap_recovery";
 const LIMIT: usize = 64 * 1024;
@@ -61,8 +61,22 @@ pub fn recover(
     cancel: &Cancellation,
     timeout: Duration,
 ) -> Result<RecoveryReceipt> {
+    recover_until(
+        owner,
+        target,
+        cancel,
+        Instant::now() + timeout.min(Duration::from_secs(60)),
+    )
+}
+
+pub(super) fn recover_until(
+    owner: &mut Owner,
+    target: &Target,
+    cancel: &Cancellation,
+    deadline: Instant,
+) -> Result<RecoveryReceipt> {
     cancel.check().map_err(super::Error::from)?;
-    if timeout.is_zero() {
+    if Instant::now() >= deadline {
         return Err(Error::Invalid);
     }
     let runner = Runner {
@@ -71,6 +85,10 @@ pub fn recover(
         secrets: Vec::new(),
     };
     recover_with(owner, target, &mut |connection, request| {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        if timeout.is_zero() {
+            return Err(Error::Invalid);
+        }
         Ok(runner.private_exchange(
             &mut connection.pinned_command("horizon-cloud-worker recover-allocation"),
             request,
@@ -84,21 +102,10 @@ fn recover_with(
     target: &Target,
     exchange: &mut impl FnMut(&Connection, &[u8]) -> Result<Vec<u8>>,
 ) -> Result<RecoveryReceipt> {
+    let mut record = prepare(owner, target)?;
     let binding = Binding::capture(target)?;
-    if owner.binding()? != target.startup.controller {
-        return Err(Error::Invalid);
-    }
-    let mut payload = owner.load()?;
-    let object = payload.as_object_mut().ok_or(Error::Invalid)?;
-    let mut record = if let Some(saved) = object.get(KEY) {
-        serde_json::from_value::<Record>(saved.clone()).map_err(|_| Error::Invalid)?
-    } else {
-        let record = Record::new(owner, binding.clone())?;
-        object.insert(KEY.into(), serde_json::to_value(&record).map_err(|_| Error::Invalid)?);
-        owner.save(payload.clone())?;
-        record
-    };
     record.verify(&binding)?;
+    let mut payload = owner.load()?;
     // Recheck both local authorities immediately before sending the anchored bytes.
     let snapshot = Snapshot::capture(target)?;
     if owner.binding()? != target.startup.controller || snapshot.binding != binding {
@@ -124,6 +131,47 @@ fn recover_with(
         owner.save(payload)?;
     }
     Ok(receipt)
+}
+
+/// Persist the future Recover request before consuming first-initialize permission.
+pub(super) fn anchor(owner: &mut Owner, target: &Target) -> Result<Binding> {
+    prepare(owner, target).map(|record| record.binding)
+}
+
+pub(super) fn is_anchored(owner: &Owner) -> Result<bool> {
+    Ok(owner.load()?.get(KEY).is_some())
+}
+
+/// Validate retained recovery authority without creating a replacement operation.
+pub(super) fn require_existing(owner: &Owner, target: &Target) -> Result<Binding> {
+    let payload = owner.load()?;
+    let record: Record =
+        serde_json::from_value(payload.get(KEY).ok_or(Error::Invalid)?.clone()).map_err(|_| Error::Invalid)?;
+    let binding = Binding::capture(target)?;
+    if owner.binding()? != target.startup.controller {
+        return Err(Error::Invalid);
+    }
+    record.verify(&binding)?;
+    Ok(binding)
+}
+
+fn prepare(owner: &mut Owner, target: &Target) -> Result<Record> {
+    let binding = Binding::capture(target)?;
+    if owner.binding()? != target.startup.controller {
+        return Err(Error::Invalid);
+    }
+    let mut payload = owner.load()?;
+    let object = payload.as_object_mut().ok_or(Error::Invalid)?;
+    let record = if let Some(saved) = object.get(KEY) {
+        serde_json::from_value::<Record>(saved.clone()).map_err(|_| Error::Invalid)?
+    } else {
+        let record = Record::new(owner, binding.clone())?;
+        object.insert(KEY.into(), serde_json::to_value(&record).map_err(|_| Error::Invalid)?);
+        owner.save(payload.clone())?;
+        record
+    };
+    record.verify(&binding)?;
+    Ok(record)
 }
 
 impl Record {

@@ -31,8 +31,11 @@ fn main() -> std::process::ExitCode {
         Some("recover-allocation") => bootstrap::run(),
         Some("companion-control") => companions::run(),
         Some("companions") => companion_tools::run(),
+        Some("initialize-allocation") => bootstrap::initialize(false),
+        Some("abandon-bootstrap") => bootstrap::initialize(true),
+        Some("prepare-allocation-ssh") => bootstrap::prepare(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|companion-control|companions",
+            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
         )),
     };
     match result {

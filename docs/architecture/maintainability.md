@@ -599,14 +599,27 @@ share provider adaptation and capacity policy across desktop and worker hosts.
 The worker retains remote allocation recovery and teardown ownership; disconnecting
 its presentation client never releases a hosted device or ends the private tunnel.
 
-Worker bootstrap recovery is separate from browser/tool requests. The protocol
-crate defines only bounded recovery wire data; `horizon-cloud-worker/bootstrap`
-loads existing pinned state at the fixed worker path, authenticates the request
-under its allocation lock, and recovers the revision-zero manifest through synced
-receipt, manifest and initialized publications. The store never creates its root
-or lock. Missing state and admitted/nonempty manifests fail closed. There is no
-production first-initialization path or sharing activation; provider/mount
-qualification and anchored host bootstrap permission remain prerequisites.
+Worker allocation bootstrap is separate from browser/tool requests. The protocol
+crate defines bounded initialization, recovery and abandonment wire data.
+`horizon-cloud-worker/bootstrap/runtime` captures provider identity before SSH
+clears the login environment. `keys` binds the exact running private key to the
+v2 marker; `store` owns descriptor-anchored locking and durable publication.
+`initialize` exclusively creates a pristine root and key before publishing only
+the initializing marker. `recovery` publishes the revision-zero empty manifest
+through synced receipt, manifest and initialized boundaries. Missing, corrupt
+or admitted state stays fenced. Signed abandonment is terminal and preserves
+SSH-only access to retrieve the same fence receipt after a restart.
+
+`cloud_runtime::bootstrap_initialization` owns the complete first-create attempt
+under the canonical Owner lock. The provider's nonserializable direct-create and
+first-attachment witnesses cannot be restored from JSON. The coordinator anchors
+the future Recover before Requested; resumed operations cannot repeat Initialize.
+Its typed record binds original account/key material and provider specifications.
+Explicit cleanup after Requested requires a verified abandonment receipt and an
+anchored deletion intent before exact provider resources can be removed. Cleanup
+before Requested retains the proof that initialization was never sent. These APIs
+are pre-admission infrastructure; shared project activation and interface routing
+remain separate work under #805.
 
 `cloud_runtime::bootstrap_recovery` connects the owning-host anchor to that
 existing worker command. It stores one exact signed recovery request and SSH

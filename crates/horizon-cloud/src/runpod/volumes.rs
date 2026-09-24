@@ -382,10 +382,23 @@ impl RunPod {
     }
 
     fn volume_attached(&self, id: &str, cancel: &Cancellation, progress: &mut impl FnMut(Progress)) -> Result<bool> {
+        self.volume_attached_except(id, None, cancel, progress)
+    }
+
+    pub(super) fn volume_attached_except(
+        &self,
+        id: &str,
+        allowed: Option<&str>,
+        cancel: &Cancellation,
+        progress: &mut impl FnMut(Progress),
+    ) -> Result<bool> {
         progress(Progress::CheckingAttachments);
         let workers = self.list(cancel)?;
         let count = workers.len();
         for (index, worker) in workers.into_iter().enumerate() {
+            if allowed == Some(worker.id.as_str()) {
+                continue;
+            }
             if worker.network_volume.as_ref().is_some_and(|attached| {
                 attached
                     .id

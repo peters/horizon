@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Binding {
+pub(in crate::cloud_runtime) struct Binding {
     pub startup: Startup,
     pub worker_id: String,
     identity: PathBuf,
@@ -33,7 +33,7 @@ struct Material {
 
 /// Original credential paths can change while SSH starts. Retain private copies
 /// of the exact verified bytes until the transport has exited.
-pub(super) struct Snapshot {
+pub(in crate::cloud_runtime) struct Snapshot {
     pub binding: Binding,
     pub connection: Connection,
     _key: tempfile::NamedTempFile,
@@ -66,6 +66,9 @@ impl Snapshot {
 }
 
 impl Binding {
+    pub fn matches_identity(&self, path: &Path, hash: &[u8; 32]) -> bool {
+        self.identity == path && self.identity_hash == *hash
+    }
     pub fn capture(target: &Target) -> Result<Self> {
         Ok(Material::read(target)?.binding)
     }
@@ -110,17 +113,7 @@ impl Material {
         }
         // Recovery supports noninteractive, unencrypted private identities.
         // Validate captured bytes, never a mutable source path or agent fallback.
-        let mut identity_snapshot = tempfile::NamedTempFile::new()?;
-        identity_snapshot.write_all(&key)?;
-        runner
-            .private_exchange(
-                Command::new("ssh-keygen")
-                    .args(["-y", "-P", "", "-f"])
-                    .arg(identity_snapshot.path()),
-                &[],
-                Duration::from_secs(5),
-            )
-            .map_err(|_| Error::Invalid)?;
+        public_identity(&key, &runner)?;
         Ok(Self {
             binding: Binding {
                 startup: target.startup.clone(),
@@ -134,6 +127,52 @@ impl Material {
             hosts,
         })
     }
+}
+
+/// Parsing the embedded public field alone does not prove private-seed integrity.
+pub(in crate::cloud_runtime) fn public_identity(bytes: &[u8], runner: &super::Runner<'_>) -> Result<String> {
+    const PROBE: &[u8] = b"horizon bootstrap private identity validation v1\n";
+    const NAMESPACE: &str = "horizon-bootstrap-identity";
+    let mut key = tempfile::NamedTempFile::new()?;
+    key.write_all(bytes)?;
+    let public = runner
+        .private_exchange(
+            Command::new("ssh-keygen")
+                .env_remove("SSH_AUTH_SOCK")
+                .args(["-y", "-P", "", "-f"])
+                .arg(key.path()),
+            &[],
+            Duration::from_secs(5),
+        )
+        .map_err(|_| Error::Invalid)?;
+    let public = std::str::from_utf8(&public).map_err(|_| Error::Invalid)?.trim();
+    let signature = runner
+        .private_exchange(
+            Command::new("ssh-keygen")
+                .env_remove("SSH_AUTH_SOCK")
+                .args(["-Y", "sign", "-n", NAMESPACE, "-f"])
+                .arg(key.path()),
+            PROBE,
+            Duration::from_secs(5),
+        )
+        .map_err(|_| Error::Invalid)?;
+    let mut signed = tempfile::NamedTempFile::new()?;
+    signed.write_all(&signature)?;
+    let mut allowed = tempfile::NamedTempFile::new()?;
+    writeln!(allowed, "bootstrap {public}")?;
+    runner
+        .private_exchange(
+            Command::new("ssh-keygen")
+                .env_remove("SSH_AUTH_SOCK")
+                .args(["-Y", "verify", "-n", NAMESPACE, "-I", "bootstrap", "-f"])
+                .arg(allowed.path())
+                .arg("-s")
+                .arg(signed.path()),
+            PROBE,
+            Duration::from_secs(5),
+        )
+        .map_err(|_| Error::Invalid)?;
+    Ok(public.to_owned())
 }
 
 fn exact_pins(bytes: &[u8], alias: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -160,7 +199,15 @@ fn exact_pins(bytes: &[u8], alias: &str) -> Result<Zeroizing<Vec<u8>>> {
     Ok(Zeroizing::new(pins.into_bytes()))
 }
 
-fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+pub(in crate::cloud_runtime) fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+    read_inner(path, private, false)
+}
+
+pub(in crate::cloud_runtime) fn read_empty(path: &Path) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+    read_inner(path, false, true)
+}
+
+fn read_inner(path: &Path, private: bool, empty: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
     if !path.is_absolute() || std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(Error::Invalid);
     }
@@ -179,7 +226,7 @@ fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
     #[cfg(not(unix))]
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 {
+    if !metadata.is_file() || (!empty && metadata.len() == 0) || metadata.len() > 64 * 1024 {
         return Err(Error::Invalid);
     }
     #[cfg(unix)]
@@ -203,7 +250,7 @@ fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
         }
         length += read;
     }
-    if length > 64 * 1024 || length == 0 {
+    if length > 64 * 1024 || (!empty && length == 0) {
         return Err(Error::Invalid);
     }
     bytes.truncate(length);

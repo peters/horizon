@@ -10,6 +10,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod billing;
 pub mod flavors;
+pub mod fresh;
 pub mod recovery;
 pub mod registry;
 pub mod replacement;
@@ -26,6 +27,11 @@ pub struct RunPod {
     catalog_endpoint: String,
     api_endpoint: String,
     graphql_endpoint: String,
+}
+#[derive(Clone, Copy)]
+enum Provisioning<'a> {
+    ExistingOrNew(Option<&'a volumes::Volume>),
+    New(&'a volumes::Volume),
 }
 impl RunPod {
     #[must_use]
@@ -70,9 +76,35 @@ impl RunPod {
         state: &mut CreateState,
         volume: Option<&volumes::Volume>,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        progress: impl FnMut(Progress),
+    ) -> Result<Worker, CloudError> {
+        self.provision(
+            spec,
+            state,
+            Provisioning::ExistingOrNew(volume),
+            cancel,
+            persist,
+            progress,
+        )
+    }
+    fn provision(
+        &self,
+        spec: &WorkerSpec,
+        state: &mut CreateState,
+        mode: Provisioning<'_>,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
     ) -> Result<Worker, CloudError> {
+        let direct = matches!(mode, Provisioning::New(_));
+        let volume = match mode {
+            Provisioning::ExistingOrNew(volume) => volume,
+            Provisioning::New(volume) => Some(volume),
+        };
+        if direct && *state != CreateState::Prepared {
+            return Err(CloudError::CreationUnresolved);
+        }
         spec.validate()?;
         if let Some(volume) = volume {
             volume.verify_worker_spec(spec)?;
@@ -118,6 +150,9 @@ impl RunPod {
             return Err(CloudError::DuplicateWorkers);
         }
         if let Some(worker) = workers.into_iter().next() {
+            if direct {
+                return Err(CloudError::IdentityMismatch);
+            }
             worker.verify(spec)?;
             bind(state, &worker, &mut persist)?;
             progress(Progress::WorkerFound(worker.id.clone()));

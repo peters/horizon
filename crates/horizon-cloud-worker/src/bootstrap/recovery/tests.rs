@@ -24,6 +24,8 @@ impl Fixture {
         let key =
             Ed25519KeyPair::from_pkcs8(Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap().as_ref()).unwrap();
         let runtime = Runtime {
+            version: 1,
+            source: Source::LegacyEnvironment,
             startup: Startup {
                 version: 1,
                 controller: ControllerBinding::new(
@@ -52,6 +54,10 @@ impl Fixture {
                 worker_id: fixture.runtime.worker_id.clone(),
                 phase: Phase::Initializing,
                 recovery: None,
+                initialization: None,
+                host_key: None,
+                key_hash: None,
+                abandonment: None,
             })
             .unwrap(),
         );
@@ -90,6 +96,25 @@ impl Fixture {
     fn bootstrap(&self) -> Bootstrap {
         decode(&fs::read(self.root.path().join(BOOTSTRAP)).unwrap()).unwrap()
     }
+}
+
+#[test]
+fn v1_direct_recovery_remains_supported_without_granting_cold_start_authority() {
+    let f = Fixture::new();
+    let request = f.request();
+    let original = fs::read(f.root.path().join(BOOTSTRAP)).unwrap();
+    let mut startup = f.runtime.clone();
+    startup.source = Source::StartupCapture;
+    {
+        let store = Store::open(f.root.path()).unwrap();
+        assert!(f.bootstrap().validate(&store, &startup).is_err());
+        assert!(recover(&store, &startup, &request, &mut |_| Ok(())).is_err());
+    }
+    assert_eq!(fs::read(f.root.path().join(BOOTSTRAP)).unwrap(), original);
+    assert!(!f.root.path().join(MANIFEST).exists());
+    assert!(!f.root.path().join(keys::HOST_KEY).exists());
+    f.recover(&request).unwrap();
+    assert_eq!(f.bootstrap().phase, Phase::Initialized);
 }
 
 #[test]

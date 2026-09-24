@@ -1,6 +1,10 @@
-use super::store::{LIMIT, Store, invalid};
+use super::{
+    keys,
+    runtime::{Runtime, Source},
+    store::{LIMIT, Store, invalid},
+};
 use horizon_cloud_protocol::{
-    bootstrap::{RecoveryPayload, RecoveryReceipt, RecoveryRequest, Startup},
+    bootstrap::{BootstrapOutcome, BootstrapReceipt, RecoveryPayload, RecoveryReceipt, RecoveryRequest, Startup},
     signed::{Action, SignedIntent, Target},
 };
 use serde::{Deserialize, Serialize};
@@ -9,25 +13,34 @@ use std::{
     path::Path,
 };
 
-const ROOT: &str = "/workspace/.horizon-allocation";
-const BOOTSTRAP: &str = "bootstrap.json";
-const MANIFEST: &str = "membership.json";
+pub(super) const ROOT: &str = "/workspace/.horizon-allocation";
+pub(super) const BOOTSTRAP: &str = "bootstrap.json";
+pub(super) const MANIFEST: &str = "membership.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Phase {
+pub(super) enum Phase {
     Initializing,
     Initialized,
+    Abandoned,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Bootstrap {
-    version: u32,
-    startup: Startup,
-    worker_id: String,
-    phase: Phase,
-    recovery: Option<RecoveryReceipt>,
+pub(super) struct Bootstrap {
+    pub version: u32,
+    pub startup: Startup,
+    pub worker_id: String,
+    pub phase: Phase,
+    pub recovery: Option<RecoveryReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialization: Option<BootstrapReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_hash: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandonment: Option<BootstrapReceipt>,
 }
 
 /// This entry point only understands the pre-admission manifest. Later membership
@@ -42,17 +55,8 @@ struct Manifest {
     members: Vec<serde_json::Value>,
 }
 
-#[derive(Clone)]
-struct Runtime {
-    startup: Startup,
-    worker_id: String,
-    volume_id: String,
-    data_center_id: String,
-    worker_operation: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Boundary {
+pub(super) enum Boundary {
     Receipt,
     Manifest,
     Initialized,
@@ -62,33 +66,16 @@ pub(super) fn run() -> io::Result<()> {
     if std::env::args().len() != 2 {
         return Err(invalid());
     }
-    // Presence of a real workspace mount is necessary, never freshness proof.
-    let mounts = std::fs::read_to_string("/proc/self/mountinfo")?;
-    if !mounts
-        .lines()
-        .any(|line| line.split_whitespace().nth(4) == Some("/workspace"))
-    {
-        return Err(invalid());
-    }
-    let metadata = variable("HORIZON_WORKER_STARTUP")?;
-    if metadata.len() > 8192 {
-        return Err(invalid());
-    }
-    let runtime = Runtime {
-        startup: decode(metadata.as_bytes())?,
-        worker_id: variable("RUNPOD_POD_ID")?,
-        volume_id: variable("RUNPOD_VOLUME_ID")?,
-        data_center_id: variable("RUNPOD_DC_ID")?,
-        worker_operation: variable("HORIZON_CLOUD_OPERATION")?,
-    };
     let request = read_request(io::stdin().lock())?;
     let store = Store::open(Path::new(ROOT))?;
+    let bootstrap: Bootstrap = decode(&store.read(BOOTSTRAP)?.ok_or_else(invalid)?)?;
+    let runtime = Runtime::load(bootstrap.version)?;
     let receipt = recover(&store, &runtime, &request, &mut |_| Ok(()))?;
     serde_json::to_writer(io::stdout().lock(), &receipt)?;
     io::stdout().lock().write_all(b"\n")
 }
 
-fn read_request(reader: impl Read) -> io::Result<RecoveryRequest> {
+pub(super) fn read_request(reader: impl Read) -> io::Result<RecoveryRequest> {
     let mut input = Vec::new();
     reader.take(LIMIT + 1).read_to_end(&mut input)?;
     if input.len() as u64 > LIMIT {
@@ -97,15 +84,11 @@ fn read_request(reader: impl Read) -> io::Result<RecoveryRequest> {
     decode(&input)
 }
 
-fn variable(name: &str) -> io::Result<String> {
-    std::env::var(name).map_err(|_| invalid())
-}
-
-fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
+pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> io::Result<T> {
     serde_json::from_slice(bytes).map_err(|_| invalid())
 }
 
-fn recover(
+pub(super) fn recover(
     store: &Store,
     runtime: &Runtime,
     request: &RecoveryRequest,
@@ -113,15 +96,8 @@ fn recover(
 ) -> io::Result<RecoveryReceipt> {
     let mut encoded = store.read(BOOTSTRAP)?.ok_or_else(invalid)?;
     let mut bootstrap: Bootstrap = decode(&encoded)?;
-    bootstrap.startup.validate().map_err(|_| invalid())?;
-    if bootstrap.version != 1
-        || bootstrap.startup != runtime.startup
-        || !horizon_cloud::valid_id(&bootstrap.worker_id)
-        || bootstrap.worker_id != runtime.worker_id
-        || bootstrap.startup.volume_id != runtime.volume_id
-        || bootstrap.startup.data_center_id != runtime.data_center_id
-        || bootstrap.startup.worker_operation != runtime.worker_operation
-    {
+    bootstrap.validate(store, runtime)?;
+    if bootstrap.phase == Phase::Abandoned {
         return Err(invalid());
     }
     let message = SignedIntent::parse(request.message.as_bytes()).map_err(|_| invalid())?;
@@ -177,6 +153,7 @@ fn recover(
     if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
         return Err(invalid());
     }
+    bootstrap.validate(store, runtime)?;
     if bootstrap.phase == Phase::Initializing {
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
             return Err(invalid());
@@ -185,6 +162,7 @@ fn recover(
             store.write(MANIFEST, None, &serde_json::to_vec(&expected)?)?;
         }
         checkpoint(Boundary::Manifest)?;
+        bootstrap.validate(store, runtime)?;
         // Never commit initialized after a concurrent or injected artifact change.
         verify_manifest(store, &expected)?;
         store.sync(MANIFEST)?;
@@ -195,6 +173,7 @@ fn recover(
         encoded = next;
     }
     checkpoint(Boundary::Initialized)?;
+    bootstrap.validate(store, runtime)?;
     verify_manifest(store, &expected)?;
     store.sync(MANIFEST)?;
     store.sync(BOOTSTRAP)?;
@@ -211,6 +190,80 @@ fn verify_manifest(store: &Store, expected: &Manifest) -> io::Result<()> {
         return Err(invalid());
     }
     Ok(())
+}
+
+impl Bootstrap {
+    pub fn validate(&self, store: &Store, runtime: &Runtime) -> io::Result<()> {
+        self.startup.validate().map_err(|_| invalid())?;
+        if self.startup != runtime.startup
+            || self.worker_id != runtime.worker_id
+            || !horizon_cloud::valid_id(&self.worker_id)
+            || self.startup.volume_id != runtime.volume_id
+            || self.startup.data_center_id != runtime.data_center_id
+            || self.startup.worker_operation != runtime.worker_operation
+        {
+            return Err(invalid());
+        }
+        if let Some(receipt) = &self.recovery
+            && (receipt.version != 1 || receipt.startup != self.startup || receipt.worker_id != self.worker_id)
+        {
+            return Err(invalid());
+        }
+        match self.version {
+            1 if runtime.source == Source::LegacyEnvironment
+                && self.initialization.is_none()
+                && self.host_key.is_none()
+                && self.key_hash.is_none()
+                && self.abandonment.is_none()
+                && self.phase != Phase::Abandoned =>
+            {
+                Ok(())
+            }
+            2 if runtime.source == Source::StartupCapture => {
+                let receipt = self.initialization.as_ref().ok_or_else(invalid)?;
+                self.validate_receipt(receipt, BootstrapOutcome::Initializing)?;
+                let key = store.host_key()?;
+                if self.key_hash != Some(keys::hash(&key)) {
+                    return Err(invalid());
+                }
+                if self.host_key.as_deref() != Some(keys::public(&key)?.as_str()) {
+                    return Err(invalid());
+                }
+                match (&self.phase, &self.abandonment) {
+                    (Phase::Abandoned, Some(receipt)) => self.validate_receipt(receipt, BootstrapOutcome::Abandoned),
+                    (Phase::Abandoned, None) | (_, Some(_)) => Err(invalid()),
+                    _ => Ok(()),
+                }
+            }
+            _ => Err(invalid()),
+        }
+    }
+
+    fn validate_receipt(&self, receipt: &BootstrapReceipt, outcome: BootstrapOutcome) -> io::Result<()> {
+        if receipt.version != 1
+            || receipt.startup != self.startup
+            || receipt.worker_id != self.worker_id
+            || receipt.outcome != outcome
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    pub fn empty(&self, store: &Store) -> io::Result<()> {
+        let expected = Manifest {
+            version: 1,
+            startup: self.startup.clone(),
+            worker_id: self.worker_id.clone(),
+            revision: 0,
+            members: Vec::new(),
+        };
+        match store.read(MANIFEST)? {
+            Some(bytes) if self.recovery.is_some() && decode::<Manifest>(&bytes)? == expected => Ok(()),
+            None if self.phase == Phase::Initializing || self.phase == Phase::Abandoned => Ok(()),
+            _ => Err(invalid()),
+        }
+    }
 }
 
 #[cfg(test)]
