@@ -10,6 +10,9 @@ pub(super) enum Action {
     Remove,
     RevokeBrowserstack,
     Reconcile,
+    Rebuild,
+    ContinueRebuild,
+    CancelRebuild,
 }
 
 #[cfg(test)]
@@ -72,12 +75,41 @@ impl Runtime {
         }
     }
 
+    /// Another operation owns the cloud's worker or record.
+    pub(super) fn busy(&self) -> bool {
+        self.remote_release.is_some()
+            || self.recovery_receiver.is_some()
+            || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
+    }
+
+    fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
+        if !self.can_release_remote_devices() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.remote_release_error = None;
+        self.remote_release = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = cloud_runtime::lifecycle::revoke_browserstack(
+                &state_root,
+                &settings,
+                &cloud_runtime::Cancellation::default(),
+            );
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
     pub(super) fn can_release_remote_devices(&self) -> bool {
         self.remote_release.is_none()
             && (self.receiver.is_none() || self.stage == Some(Stage::Ready))
             && self.state.as_ref().is_some_and(|state| {
                 state.requires_browserstack_release()
                     && matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
+                    // The release acts on the worker as recorded, so it waits for a pending replacement.
+                    && state.image_replacement.is_none()
+                    && state.stage != Stage::Replace
             })
     }
 
@@ -137,6 +169,10 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 
 impl HorizonApp {
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
+        if let Some(kind) = super::rebuild::Kind::of(action) {
+            self.start_production_rebuild(id, kind, ctx);
+            return;
+        }
         let Some(launch) = self
             .cloud_prototype
             .groups
@@ -151,10 +187,7 @@ impl HorizonApp {
             return;
         };
         let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-        if runtime.remote_release.is_some()
-            || runtime.recovery_receiver.is_some()
-            || (runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready))
-        {
+        if runtime.busy() {
             return;
         }
         let settings = match Settings::load(&root.join("settings.json")) {
@@ -177,22 +210,7 @@ impl HorizonApp {
             return;
         }
         if action == Action::RevokeBrowserstack {
-            if !runtime.can_release_remote_devices() {
-                return;
-            }
-            let (tx, rx) = channel();
-            runtime.remote_release_error = None;
-            runtime.remote_release = Some(rx);
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                let result = cloud_runtime::lifecycle::revoke_browserstack(
-                    &state_root,
-                    &settings,
-                    &cloud_runtime::Cancellation::default(),
-                );
-                let _ = tx.send(result);
-                ctx.request_repaint();
-            });
+            runtime.start_device_release(state_root, settings, ctx);
             return;
         }
         if let Some(cancel) = runtime.cancel.take() {
@@ -200,6 +218,7 @@ impl HorizonApp {
         }
         runtime.desktop = None;
         runtime.confirmation = Confirmation::None;
+        runtime.rebuild = None;
         let (tx, rx) = channel();
         runtime.receiver = Some(rx);
         runtime.sender = Some(tx.clone());
@@ -220,7 +239,13 @@ impl HorizonApp {
                 Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
                     .map(|state| Event::Snapshot(Box::new(state))),
                 Action::Delete => deployment::terminate(&root, &settings, &cancel, &emit).map(|()| Event::deleted()),
-                Action::Deploy | Action::Desktop | Action::Remove | Action::Reconcile => return,
+                Action::Deploy
+                | Action::Desktop
+                | Action::Remove
+                | Action::Reconcile
+                | Action::Rebuild
+                | Action::ContinueRebuild
+                | Action::CancelRebuild => return,
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()

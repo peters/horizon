@@ -291,7 +291,8 @@ It does not substitute a browser viewer or depend on the laptop for device input
 The development example `cargo run -p horizon-core --example cloud_deploy -- ...`
 uses the same coordinator. Run it without arguments for its command synopsis.
 It supports image preparation without allocation, deployment, stop, resume,
-deletion and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
+deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
+`cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
 structured outcome without worker environment or credentials and an explanation;
 the UI and this harness use the same locked coordinator and provider policy.
 An unresolved outcome is a successful check, not permission to deploy again.
@@ -331,6 +332,17 @@ else stays blocked as a pending replacement. Continuing it sends the update agai
 only while the worker still reports its previous image. Cancelling it drops an
 unsent update or switches the worker back and relaunches its sessions. Deletion
 stays available throughout.
+
+On the runtime card of a Ready cloud whose profile has a build section,
+**Rebuild image & restart…** asks for confirmation and names these consequences
+first. While it runs, the card lists the rebuild's steps with their durations and
+offers **Cancel rebuild** only until the image switch is requested; a cancelled
+rebuild stays pending. A pending replacement shows a notice with **Continue
+rebuild** and **Cancel rebuild**, and Stop waits until it is resolved. Cancelling
+a switch that may have been sent asks for confirmation, because switching back
+restarts the worker again, and Horizon does not reconnect such a cloud on its own
+at startup. The card keeps the outcome, such as an unchanged image or a session
+that could not be relaunched, until the next deployment.
 
 ### Deployment progress
 

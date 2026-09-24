@@ -10,6 +10,7 @@ mod lifecycle;
 mod machine_size;
 mod presentation;
 mod progress;
+mod rebuild;
 mod repository_setup;
 mod sessions;
 mod setup;
@@ -69,6 +70,8 @@ pub(super) enum Confirmation {
     Stop,
     Delete,
     Redeploy,
+    Rebuild,
+    CancelRebuild,
 }
 #[derive(Default)]
 pub(super) struct Runtime {
@@ -103,6 +106,7 @@ pub(super) struct Runtime {
     desktop: Option<std::sync::Arc<cloud_runtime::tunnel::DesktopTunnel>>,
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
     billing: cloud_runtime::billing::BillingMonitor,
+    rebuild: Option<rebuild::Attempt>,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
@@ -140,12 +144,26 @@ impl Runtime {
 
     fn needs_provider_check(state: &Deployment) -> bool {
         state.operation == cloud_runtime::CreateState::Requested
+            // The worker may run either image until the provider reports which.
+            || state.stage == Stage::Replace
+            || state
+                .image_replacement
+                .as_ref()
+                .is_some_and(cloud_runtime::state::ImageReplacement::requested)
             || (matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
                 && !state.stop_requested
                 && state
                     .worker
                     .as_ref()
                     .is_some_and(|worker| worker.desired_status != "RUNNING"))
+    }
+
+    /// A restored cloud reconnects on its own only while its worker is known to run
+    /// its recorded image.
+    fn reconnects_on_restore(state: &Deployment) -> bool {
+        matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
+            && !state.stop_requested
+            && !Self::needs_provider_check(state)
     }
 
     fn start_deployment(&mut self, request: Request, ctx: &egui::Context) {
@@ -157,6 +175,7 @@ impl Runtime {
         }
         self.desktop = None;
         self.progress.reset();
+        self.rebuild = None;
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
         self.cancel = Some(cancel.clone());
@@ -219,6 +238,7 @@ impl HorizonApp {
                 .as_ref()
                 .map_or_else(Vec::new, |rx| rx.try_iter().collect());
             for event in events {
+                runtime.observe_rebuild(&event);
                 match event {
                     Event::Snapshot(state) => {
                         runtime.stage = Some(state.stage);
@@ -392,10 +412,7 @@ impl HorizonApp {
                             ..Runtime::default()
                         },
                     );
-                    (matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. })
-                        && !state.stop_requested
-                        && !Runtime::needs_provider_check(&state))
-                    .then_some(group.issue)
+                    Runtime::reconnects_on_restore(&state).then_some(group.issue)
                 })
                 .collect();
             for id in reconnect {
@@ -631,13 +648,16 @@ fn run_deployment(
     let root = request.state_root.clone();
     match deployment::deploy(request, cancel, &emit) {
         Ok(state) => presentation::watch(&state, &settings, &root, cancel, tx, ctx),
-        Err(error) => {
-            if let Ok(store) = Store::lock(&root)
-                && let Ok(Some(state)) = store.load()
-            {
-                emit(Event::Snapshot(Box::new(state)));
-            }
-            emit(Event::failed(error.to_string()));
-        }
+        Err(error) => report_failure(&root, &error, &emit),
     }
+}
+
+/// Reports the saved record with the failure, so the card shows what was kept.
+fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) {
+    if let Ok(store) = Store::lock(root)
+        && let Ok(Some(state)) = store.load()
+    {
+        emit(Event::Snapshot(Box::new(state)));
+    }
+    emit(Event::failed(error.to_string()));
 }

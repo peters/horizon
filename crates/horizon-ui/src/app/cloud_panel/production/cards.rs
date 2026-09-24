@@ -2,6 +2,7 @@ use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, Store, c
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
+mod rebuild;
 #[cfg(test)]
 mod tests;
 impl HorizonApp {
@@ -318,6 +319,13 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             deletion_action(ui, runtime)
         };
     }
+    if rebuild::in_progress(runtime) {
+        rebuild::progress(ui, id, runtime);
+        return None;
+    }
+    if let Some(next) = rebuild::pending_notice(ui, runtime) {
+        return Some(next);
+    }
     progress_output(ui, id, runtime);
     ui.add_space(8.0);
     if runtime.remote_release.is_some() {
@@ -372,20 +380,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     worker_cost(ui, runtime, std::time::SystemTime::now());
     ui.small("Sessions continue while disconnected.");
     if runtime.stage == Some(Stage::Ready) {
-        if desktop_button(ui, runtime) {
-            action = Some(Action::Desktop);
-        }
-        if runtime.confirmation == Confirmation::Stop {
-            ui.label("Stop this worker? Running processes will end. Storage remains billable.");
-            if ui.button("Stop worker").clicked() {
-                action = Some(Action::Stop);
-            }
-            if ui.button("Keep running").clicked() {
-                runtime.confirmation = Confirmation::None;
-            }
-        } else if ui.button("Stop worker…").clicked() {
-            runtime.confirmation = Confirmation::Stop;
-        }
+        action = ready_actions(ui, runtime).or(action);
     }
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
@@ -433,6 +428,26 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
     } else if runtime.billing.refreshing() {
         ui.small("Since creation · reading RunPod billing…");
     }
+}
+
+fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+    let mut action = None;
+    if desktop_button(ui, runtime) {
+        action = Some(Action::Desktop);
+    }
+    let stoppable = !rebuild::blocks_stop(runtime);
+    if stoppable && runtime.confirmation == Confirmation::Stop {
+        ui.label("Stop this worker? Running processes will end. Storage remains billable.");
+        if ui.button("Stop worker").clicked() {
+            action = Some(Action::Stop);
+        }
+        if ui.button("Keep running").clicked() {
+            runtime.confirmation = Confirmation::None;
+        }
+    } else if stoppable && ui.button("Stop worker…").clicked() {
+        runtime.confirmation = Confirmation::Stop;
+    }
+    rebuild::offer(ui, runtime).or(action)
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
@@ -597,7 +612,7 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     let stages: &[Stage] = if runtime.progress.is_deletion() {
         &Stage::DELETION
     } else {
-        &Stage::ALL
+        rebuild::stages(runtime)
     };
     stage_rows(ui, runtime, stages);
     if runtime.stage == Some(Stage::Ready)
@@ -612,6 +627,7 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
         );
     }
     runtime.progress.render(ui);
+    rebuild::notes(ui, runtime);
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }

@@ -4,7 +4,13 @@
 mod registry;
 #[path = "cloud_deploy/registry_mcp.rs"]
 mod registry_mcp;
-use horizon_core::cloud_runtime::{self, Cancellation, Event, deployment, repository, settings::Settings};
+use horizon_core::cloud_runtime::{
+    self, Cancellation, Event,
+    deployment::{self, replacement},
+    repository,
+    settings::Settings,
+    state::Store,
+};
 use std::{path::PathBuf, process::ExitCode};
 fn main() -> ExitCode {
     match run() {
@@ -25,7 +31,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack SETTINGS STATE_ROOT | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -57,6 +63,9 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args[0] == "resume" && args.len() == 3 {
         return cloud_runtime::lifecycle::resume(&PathBuf::from(&args[2]), &settings, &cancel);
+    }
+    if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
+        return rebuild(&args, settings, &cancel);
     }
     if !matches!(args[0].as_str(), "deploy" | "prepare-image") || !(6..=7).contains(&args.len()) {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
@@ -102,6 +111,29 @@ fn print_event(event: Event) {
         }
         _ => {}
     }
+}
+
+/// Rebuilds, continues or cancels an image replacement of the cloud saved under `STATE_ROOT`.
+fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    let root = PathBuf::from(&args[2]);
+    let state = Store::lock(&root)?
+        .load()?
+        .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
+    let request = deployment::Request {
+        cloud_id: state.cloud_id,
+        repository: state.repository,
+        revision: state.revision,
+        profile: state.profile,
+        state_root: root,
+        settings,
+    };
+    match (args[0].as_str(), args.get(3)) {
+        ("rebuild", Some(profile)) if args.len() == 4 => replacement::rebuild(&request, profile, cancel, &print_event),
+        ("continue-rebuild", None) => replacement::continue_replacement(&request, cancel, &print_event),
+        ("cancel-rebuild", None) => replacement::cancel_replacement(&request, cancel, &print_event),
+        _ => Err(cloud_runtime::Error::Invalid("Invalid rebuild arguments")),
+    }?;
+    Ok(())
 }
 
 fn prepare_image(
