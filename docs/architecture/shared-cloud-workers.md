@@ -117,7 +117,33 @@ worker membership and service/port reservations execute under one OS allocation
 lock. Write a temporary file, synchronize it, atomically replace the manifest and
 synchronize its parent before any corresponding side effect. A monotonically
 increasing revision enables compare-and-swap requests. Corrupt or unsupported
-state blocks mutations; neither missing files nor timeouts reset membership.
+state blocks ordinary mutations; neither missing files nor timeouts reset membership.
+
+Initial bootstrap is a separate fenced operation, available only to the owning
+controller for a newly verified allocation. Persist a unique bootstrap token and
+`prepared` intent locally, then consume that permission as `requested` before
+sending the first initialization command. Under the worker allocation lock, the
+first command verifies the recorded creation and mounted-storage provenance and
+requires no existing membership manifest or project state before writing anything.
+An existing bootstrap record goes through same-token recovery; conflicting tokens
+or allocation identities are rejected. A newly verified worker mounting retained
+storage is not a fresh membership store, and an absent marker alone grants no
+initialization permission. Synchronize a separate bootstrap record containing that
+token, allocation identity and `initializing`
+phase before writing the empty manifest. Admission is disabled in this phase.
+After synchronizing the manifest and its directory, atomically persist
+`initialized` in the bootstrap record; only that phase permits project admission.
+Persist the matching initialized receipt locally after verification.
+
+Recovery with a matching `initializing` record may finish the same empty manifest,
+because admission has never been enabled; a nonempty/conflicting manifest blocks
+recovery. An `initialized` record requires an intact matching manifest, even if the
+controller lost the success reply. Missing/corrupt membership after initialization
+never permits a new empty manifest. A missing bootstrap record after a requested
+operation is likewise uncertain, not fresh-worker proof: preserve the fence and
+require recovery of authoritative state. Repeated initialization returns the
+recorded outcome for the same token without resetting a manifest. No admission or
+source/credential transfer may bypass these checks.
 
 Each request has a persisted operation ID, immutable request fingerprint and
 expected manifest revision. Retrying the same operation returns its recorded
@@ -149,7 +175,9 @@ member or recycling its namespace; an explicit new project uses a new identity.
 Provider stop/restart/delete requires a fresh authoritative member snapshot and
 a separate worker action. First atomically persist a worker-wide transition fence
 on the worker containing the operation, full member set, manifest revision and
-storage consequences; this blocks attach/detach and new session/grant mutations.
+all action consequences: affected processes/sessions and unsaved in-memory work,
+service/route downtime, tool-allocation cleanup, ephemeral disk loss, retained or
+deleted persistent data and ongoing storage charges; this blocks attach/detach and new session/grant mutations.
 Refuse to prepare the fence while attachment/removal or session/grant side effects
 are in flight or uncertain. Each such operation must hold a durable reservation
 until reconciled, so a lock released during I/O cannot hide unfinished work.
@@ -313,6 +341,9 @@ Cloud Workspaces contract.
 3. Add worker-authoritative membership, fenced actions and project namespaces in
    focused slices; test conflicting controllers, lost replies, cancellation,
    port/desktop reservation and sibling preservation before host integration.
+   Crash before/after each bootstrap write, lose the initialization reply and
+   remove an initialized manifest: only proven pre-admission bootstrap can finish
+   an empty manifest; lost membership must never be replaced with an empty set.
    Include delayed provider-stop execution versus another controller's attempted
    resume, and in-flight attachment versus worker transition preparation.
 4. Integrate the core coordinator and credential/tool ownership. Add equivalent
