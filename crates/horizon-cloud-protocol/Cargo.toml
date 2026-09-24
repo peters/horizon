@@ -12,6 +12,7 @@ description = "Shared cloud allocation identity and coordination contracts"
 workspace = true
 
 [dependencies]
+ring.workspace = true
 horizon-cloud = { path = "../horizon-cloud" }
 serde.workspace = true
 serde_json.workspace = true

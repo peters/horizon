@@ -55,6 +55,10 @@ identity!(
     ControllerId,
     "Identity of the single provider controller; copying it is not ownership transfer."
 );
+identity!(
+    OperationId,
+    "Persisted management operation identity, reused only for the same request."
+);
 
 /// Immutable saved-session membership, separate from an allocation reference.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
