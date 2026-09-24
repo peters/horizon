@@ -159,3 +159,20 @@ fn catalog_rejects_invalid_declarations_and_self_targets() {
     assert!(list(file.path(), 100).is_err());
     assert!(inspect(file.path(), "app", 100, |_| panic!("self target was probed")).is_err());
 }
+
+#[test]
+fn selected_companion_requires_a_pinned_target_even_without_access() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    for status in [
+        Status::Stopped,
+        Status::Missing,
+        Status::Connecting,
+        Status::RevocationPending,
+    ] {
+        let mut snapshot = catalog(status);
+        snapshot.companions[0].target_cloud_id = None;
+        save(file.path(), &snapshot);
+        assert!(list(file.path(), 100).is_err());
+        assert!(inspect(file.path(), "app", 100, |_| panic!("unpinned selection was probed")).is_err());
+    }
+}
