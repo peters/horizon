@@ -66,5 +66,31 @@ fn private_secret(path: &Path) -> cloud_runtime::Result<zeroize::Zeroizing<Strin
             "Use an absolute path to a nonempty private registry secret file",
         ));
     }
-    Ok(zeroize::Zeroizing::new(std::fs::read_to_string(path)?.trim().into()))
+    let value = zeroize::Zeroizing::new(std::fs::read_to_string(path)?);
+    if value.trim().is_empty() {
+        return Err(Error::Invalid(
+            "Registry credential file must contain a nonempty credential",
+        ));
+    }
+    Ok(zeroize::Zeroizing::new(value.trim().into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_whitespace_secret_cannot_mean_keep_saved_credential() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credential");
+        std::fs::write(&path, " \t\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert!(private_secret(&path).is_err());
+        std::fs::write(&path, "synthetic-token\n").unwrap();
+        assert_eq!(private_secret(&path).unwrap().as_str(), "synthetic-token");
+    }
 }
