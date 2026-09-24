@@ -331,7 +331,8 @@ mod tests {
         assert!(!state.accepts_next_size());
         state.stage = Stage::Deleted;
         state.operation = CreateState::Prepared;
-        assert!(state.resizable());
+        assert!(!state.resizable());
+        assert!(state.accepts_next_size());
         state.operation = CreateState::Bound {
             worker_id: "worker1".into(),
         };

@@ -93,6 +93,10 @@ pub(in crate::cloud_runtime) fn release_deleted_journal(store: &Store, operation
     }
     if marker.try_exists()? {
         std::fs::remove_file(&marker)?;
+        // Durably drop the marker before the journal. A crash after only the
+        // journal unlink would otherwise look like a missing record.
+        #[cfg(unix)]
+        std::fs::File::open(store.root())?.sync_all()?;
     }
     std::fs::remove_file(&path)?;
     #[cfg(unix)]

@@ -70,7 +70,7 @@ impl Deployment {
     /// `RunPod` cannot resize an existing pod.
     #[must_use]
     pub fn resizable(&self) -> bool {
-        self.operation == CreateState::Prepared && self.worker.is_none()
+        self.stage != Stage::Deleted && self.operation == CreateState::Prepared && self.worker.is_none()
     }
 
     /// A deleted cloud can choose the next worker's size, but that choice stays
