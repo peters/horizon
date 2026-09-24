@@ -347,6 +347,19 @@ fn run_timing_survives_the_split_verbatim_and_saved_records_reencode_identically
 }
 
 #[test]
+fn explicit_null_run_timing_splits_as_absent() {
+    for key in ["adjustedCostPerHr", "lastStartedAt"] {
+        let mut original = legacy();
+        original["worker"][key] = Value::Null;
+        let pair = convert(&original).unwrap();
+        let saved: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        assert!(saved["worker"].get(key).is_none(), "{key} null is saved as absent");
+        original["worker"].as_object_mut().unwrap().remove(key);
+        assert_eq!(serde_json::to_value(pair.deployment()).unwrap(), original);
+    }
+}
+
+#[test]
 fn alias_conflicts_and_unknown_fields_inside_strict_profiles_are_rejected() {
     for image in ["saved-image", "different-image"] {
         let mut original = legacy();

@@ -133,12 +133,17 @@ fn normalize_supported_input(original: &mut Value, normalized: &Value) {
         "/worker/publicIp",
         "/worker/costPerHr",
         "/worker/adjustedCostPerHr",
+        "/worker/lastStartedAt",
         "/browserstack_targets",
     ] {
-        if let Some(input) = original.pointer_mut(pointer)
-            && let Some(output) = normalized.pointer(pointer)
-        {
-            *input = output.clone();
+        match normalized.pointer(pointer) {
+            Some(output) => {
+                if let Some(input) = original.pointer_mut(pointer) {
+                    *input = output.clone();
+                }
+            }
+            // Optional fields omitted when absent: an explicit null is that same absence.
+            None => remove_null(original, pointer),
         }
     }
     if let Some(worker) = original.get_mut("worker").and_then(Value::as_object_mut)
@@ -146,6 +151,15 @@ fn normalize_supported_input(original: &mut Value, normalized: &Value) {
     {
         // Typed decoding above rejects input containing both spellings.
         worker.insert("imageName".into(), image);
+    }
+}
+
+fn remove_null(value: &mut Value, pointer: &str) {
+    if let Some((parent, key)) = pointer.rsplit_once('/')
+        && let Some(object) = value.pointer_mut(parent).and_then(Value::as_object_mut)
+        && object.get(key).is_some_and(Value::is_null)
+    {
+        object.remove(key);
     }
 }
 
