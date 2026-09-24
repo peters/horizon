@@ -154,3 +154,34 @@ fn github_identity_accepts_dot_repositories_and_matches_case_insensitively() {
         assert!(declaration.validate().is_err());
     }
 }
+
+#[test]
+fn copied_inventory_ids_in_other_scopes_do_not_shadow_the_selected_target() {
+    let source = target("a");
+    let selected = target("b");
+    let selection = Selection::new(&source, "app", &selected).unwrap();
+    let mut other = selected.clone();
+    other.scope.session_id = "another-session".into();
+    let inventory = [other, selected.clone()];
+    assert_eq!(
+        selection.resolve(&source, "app", &selected.declaration, &inventory),
+        Ok(&selected)
+    );
+    for invalid in ["../session", "", "workspace/name"] {
+        let mut invalid_source = source.clone();
+        let mut invalid_target = selected.clone();
+        invalid_source.scope.session_id = invalid.into();
+        invalid_target.scope = invalid_source.scope.clone();
+        assert_eq!(
+            Selection::new(&invalid_source, "app", &invalid_target),
+            Err(SelectionError::Invalid)
+        );
+        invalid_source.scope.session_id = "valid-session".into();
+        invalid_source.scope.workspace_id = invalid.into();
+        invalid_target.scope = invalid_source.scope.clone();
+        assert_eq!(
+            Selection::new(&invalid_source, "app", &invalid_target),
+            Err(SelectionError::Invalid)
+        );
+    }
+}

@@ -119,8 +119,8 @@ impl Selection {
             || !valid_id(&target.cloud_id)
             || source.cloud_id == target.cloud_id
             || target.declaration.validate().is_err()
-            || source.scope.session_id.is_empty()
-            || source.scope.workspace_id.is_empty()
+            || !valid_id(&source.scope.session_id)
+            || !valid_id(&source.scope.workspace_id)
         {
             return Err(SelectionError::Invalid);
         }
@@ -154,7 +154,7 @@ impl Selection {
         }
         let mut matches = inventory
             .iter()
-            .filter(|target| target.cloud_id == self.target_cloud_id);
+            .filter(|target| target.cloud_id == self.target_cloud_id && target.scope == self.scope);
         let target = matches.next().ok_or(SelectionError::Missing)?;
         if matches.next().is_some() {
             return Err(SelectionError::Ambiguous);
