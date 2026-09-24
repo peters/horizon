@@ -302,6 +302,36 @@ Cloud provisioning/reconciliation has no public MCP operation yet; the worker's
 browser/device MCP tools do not allocate or reconcile compute. This example is
 an integration harness, not an installed user command.
 
+### Rebuilding a cloud's image
+
+A ready dedicated cloud can rebuild its worker image and restart on it, for
+example to pick up newer agent CLIs or a committed change to its `.horizon`
+recipe. Horizon resolves the repository's latest committed `HEAD` (uncommitted
+changes are not used) and reads `.horizon/cloud.yml` there. It refuses when the
+cloud's profile is missing there or differs from the one the cloud was created
+with, naming the change: a running worker's size, capabilities, image repository
+and build section are fixed. A CPU cloud's vCPU and memory are chosen when the
+cloud is created, so different committed values for them are not a change. A
+profile without a build section has no recipe to rebuild. Otherwise Horizon builds the recipe with the newest agent CLIs under a
+new tag, validates the worker contract, pushes the image and verifies the
+worker's pull binding. An unchanged image digest is reported, and nothing restarts.
+
+Horizon then releases any hosted devices and switches the existing worker to the
+new image through the provider's pod update. The worker ID and `/workspace`
+(worktrees, agent logins, SSH host keys) survive; the container disk is reset and
+running processes end. After readiness, Horizon relaunches each session's process
+in its existing worktree without resetting it. Images without the relaunch
+contract report those sessions lost, as Stop and Resume do.
+
+The replacement is journaled in the deployment record before each provider
+mutation, and older Horizon versions cannot read the record while the update may
+be in flight. After an interruption, reconnect and **Check provider** only read
+the provider: a worker already on the new image completes the switch, and anything
+else stays blocked as a pending replacement. Continuing it sends the update again
+only while the worker still reports its previous image. Cancelling it drops an
+unsent update or switches the worker back and relaunches its sessions. Deletion
+stays available throughout.
+
 ### Deployment progress
 
 The cloud runtime card shows the active stage and elapsed time for completed

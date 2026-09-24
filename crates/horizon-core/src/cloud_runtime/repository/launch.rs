@@ -26,6 +26,21 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     )?;
     let repository = Path::new(root.trim_end_matches(['\r', '\n'])).canonicalize()?;
     let revision = resolve_with_runner(&repository, if revision.is_empty() { "HEAD" } else { revision }, runner)?;
+    let config = committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
+        "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration or choose another revision in Advanced.",
+    ))?;
+    Ok(Prepared {
+        repository,
+        revision,
+        config,
+    })
+}
+
+/// The `.horizon/cloud.yml` committed at `revision`, or `None` when that commit has no
+/// readable file.
+/// # Errors
+/// Reports cancellation and an invalid configuration.
+pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) -> super::Result<Option<CloudConfig>> {
     // Configuration may contain invalid secret-bearing fields; never stream its blob to progress logs.
     let yaml = Runner {
         cancel: runner.cancel,
@@ -34,7 +49,7 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     }
     .run(
         "Read committed cloud configuration",
-        Command::new("git").arg("-C").arg(&repository).args([
+        Command::new("git").arg("-C").arg(repository).args([
             "cat-file",
             "blob",
             &format!("{revision}:.horizon/cloud.yml"),
@@ -42,16 +57,11 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
         Duration::from_secs(30),
     );
     runner.cancel.check()?;
-    let yaml = yaml.map_err(|_| {
-        Error::Invalid("The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration or choose another revision in Advanced.")
-    })?;
-    let config = CloudConfig::parse(&yaml).map_err(|_| {
+    let Ok(yaml) = yaml else {
+        return Ok(None);
+    };
+    CloudConfig::parse(&yaml).map(Some).map_err(|_| {
         Error::Invalid("Invalid .horizon/cloud.yml. Check its syntax, default profile and supported fields.")
-    })?;
-    Ok(Prepared {
-        repository,
-        revision,
-        config,
     })
 }
 

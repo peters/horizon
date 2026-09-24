@@ -37,12 +37,14 @@ pub fn reconcile(
 ) -> Result<ReconciledDeployment> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
-    state.refuse_unsettled_replacement()?;
-    let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
+    let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker was requested"))?;
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
     let provider = RunPod::new(settings.credential()?);
+    // Settling commits only a new image and pull credential for the same worker.
+    super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
+    let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let mut operation = state.operation.clone();
     let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
         if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
@@ -259,9 +261,19 @@ mod tests {
             assert!(refused(&stop(&root, &settings, &cancel)));
             assert!(refused(&resume(&root, &settings, &cancel)));
             assert!(refused(&revoke_browserstack(&root, &settings, &cancel)));
-            // The provider check reads the worker as recorded until an update may be in flight.
-            assert_eq!(refused(&reconcile(&root, &settings, None, &cancel)), requested);
+            // The provider check needs the provider, which these settings cannot reach.
+            assert!(reconcile(&root, &settings, None, &cancel).is_err());
             assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), saved);
         }
+        // Identity is checked before a pending update is settled through the provider.
+        let root = temp.path().join("cloud-foreign");
+        pending(&root, true);
+        let store = Store::lock(&root).unwrap();
+        let mut state = store.load().unwrap().unwrap();
+        state.cloud_id = "foreign".into();
+        store.save(&state).unwrap();
+        drop(store);
+        let error = reconcile(&root, &settings, None, &cancel).unwrap_err().to_string();
+        assert!(error.contains("identities differ"), "{error}");
     }
 }

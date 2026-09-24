@@ -48,7 +48,16 @@ pub(super) fn prepare(
 }
 
 pub(super) fn expected(store: &Store, worker: &WorkerSpec) -> Result<Option<Volume>> {
-    match load(store, worker)? {
+    bound(load(store, worker)?)
+}
+
+/// As `expected` for the deployment's worker on either image of a journaled replacement.
+pub(super) fn expected_owned(store: &Store, deployment: &Deployment) -> Result<Option<Volume>> {
+    bound(load_owned(store.root(), deployment)?)
+}
+
+fn bound(record: Option<Record>) -> Result<Option<Volume>> {
+    match record {
         None => Ok(None),
         Some(Record {
             state: State::Bound { volume, .. },

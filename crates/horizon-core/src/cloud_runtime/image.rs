@@ -31,14 +31,23 @@ impl Images<'_> {
     /// Builds and checks locally, then pushes and resolves the registry digest.
     /// Never performs a provider allocation. `BuildKit` handles cache/.dockerignore.
     pub fn prepare(&self, profile: &Profile, source: &Path, operation_id: &str) -> Result<String> {
+        self.prepare_tagged(profile, source, operation_id, &format!("horizon-{operation_id}"))
+    }
+    /// # Errors
+    /// As `prepare`, publishing a built image under `tag`. The contract check keeps
+    /// its container named by `operation_id`, which recovers an interrupted check.
+    pub fn prepare_tagged(&self, profile: &Profile, source: &Path, operation_id: &str, tag: &str) -> Result<String> {
         profile
             .validate(false)
             .map_err(|_| Error::Invalid("Invalid cloud profile"))?;
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
         }
+        if !valid_tag(tag) {
+            return Err(Error::Invalid("Invalid image tag"));
+        }
         let image = if profile.build.is_some() {
-            format!("{}:horizon-{operation_id}", repository_name(&profile.image))
+            format!("{}:{tag}", repository_name(&profile.image))
         } else {
             profile.image.clone()
         };
@@ -171,6 +180,16 @@ fn contained(root: &Path, value: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Docker's tag grammar: at most 128 word characters, dots and dashes, not led by either.
+fn valid_tag(tag: &str) -> bool {
+    tag.len() <= 128
+        && tag
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
 fn repository_name(image: &str) -> &str {
     let name = image.split('@').next().unwrap_or(image);
     let slash = name.rfind('/').map_or(0, |i| i + 1);
@@ -202,6 +221,15 @@ mod tests {
             } else {
                 assert!(override_auth.is_none());
             }
+        }
+    }
+
+    #[test]
+    fn replacement_tags_follow_the_docker_tag_grammar() {
+        let tag = format!("horizon-{}-{}", "c".repeat(36), "d".repeat(32));
+        assert!(valid_tag(&tag));
+        for invalid in ["", "-lead", ".lead", "has space", "has:colon", &"a".repeat(129)] {
+            assert!(!valid_tag(invalid), "{invalid:?}");
         }
     }
 
