@@ -49,10 +49,11 @@ impl Flavor {
     }
 }
 
-/// Whether any flavor offers `(cpu, memory_gb)` with this container disk.
+/// Whether any flavor offers `(cpu, memory_gb)` with this container disk. Flavors
+/// bound memory from above, so zero memory, which no profile may request, is refused here.
 #[must_use]
 pub fn offered((cpu, memory_gb): (u16, u16), container_gb: u16) -> bool {
-    FLAVORS.iter().any(|flavor| flavor.fits(cpu, memory_gb, container_gb))
+    memory_gb > 0 && FLAVORS.iter().any(|flavor| flavor.fits(cpu, memory_gb, container_gb))
 }
 /// vCPU counts that some flavor offers with this container disk.
 pub fn vcpu_options(container_gb: u16) -> impl Iterator<Item = u16> {
@@ -191,6 +192,8 @@ mod tests {
         assert_eq!(resized.image, base.image);
         assert!(sized(&base, (3, 8)).is_err(), "RunPod needs a power of two vCPU");
         assert!(sized(&base, (4, 64)).is_err(), "no flavor offers 16 GB per vCPU");
+        assert!(sized(&base, (2, 0)).is_err(), "a profile needs memory");
+        assert!(!offered((2, 0), 20));
         assert!(
             sized(&profile(2, 4, 31), (2, 4)).is_err(),
             "container disk limits small workers"
