@@ -43,37 +43,75 @@ fn released_cloud_workspace_is_removed_by_the_next_cleanup() {
 
     assert!(board.workspace(cloud).is_none());
     assert_eq!(board.active_workspace, Some(local));
-    assert!(board.panel(remaining).is_some());
+    assert_eq!(board.focused, Some(remaining));
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Departure {
+    /// The focused last panel of a plain workspace closes.
+    LastPanel,
+    /// A cloud whose focused member is the workspace's last panel is removed.
+    CloudWithMember,
+    /// An empty cloud in the active workspace, with nothing focused, is removed.
+    EmptyCloud,
 }
 
 #[test]
 fn removing_a_cloud_moves_focus_like_closing_the_last_panel() {
-    let outcome = |with_cloud: bool| {
+    let outcome = |departure: Departure| {
         let mut board = Board::new();
-        let local = board.create_workspace("local");
-        let remaining = board
-            .create_panel(editor_panel_options(), local)
+        let first = board.create_workspace("first");
+        board
+            .create_panel(editor_panel_options(), first)
+            .expect("panel should spawn");
+        let second = board.create_workspace("second");
+        let most_recent = board
+            .create_panel(editor_panel_options(), second)
             .expect("panel should spawn");
         let target = board.create_workspace("target");
-        let last = board
-            .create_panel(editor_panel_options(), target)
-            .expect("panel should spawn");
-        if with_cloud {
+        if !matches!(departure, Departure::LastPanel) {
             add_cloud(&mut board, 1, target);
         }
-        assert_eq!(board.focused, Some(last));
-        board.close_panel(last);
-        if with_cloud {
+        if matches!(departure, Departure::EmptyCloud) {
+            board.focus_workspace(target);
+            assert_eq!(board.focused, None);
+        } else {
+            let last = board
+                .create_panel(editor_panel_options(), target)
+                .expect("panel should spawn");
+            assert_eq!(board.focused, Some(last));
+            board.close_panel(last);
+        }
+        if !matches!(departure, Departure::LastPanel) {
             remove_cloud(&mut board, 1);
             board.release_empty_workspace_retention(target);
         }
         board.remove_empty_workspaces();
-        assert!(board.workspace(target).is_none());
-        assert_eq!(board.focused, Some(remaining));
+        assert!(board.workspace(target).is_none(), "{departure:?}");
+        assert_eq!(board.focused, Some(most_recent), "{departure:?}");
+        assert_eq!(board.active_workspace, Some(second), "{departure:?}");
         (board.focused, board.active_workspace, board.workspaces.len())
     };
 
-    assert_eq!(outcome(true), outcome(false));
+    let closed = outcome(Departure::LastPanel);
+    assert_eq!(outcome(Departure::CloudWithMember), closed);
+    assert_eq!(outcome(Departure::EmptyCloud), closed);
+}
+
+#[test]
+fn releasing_the_active_workspace_of_an_empty_board_selects_the_first_workspace() {
+    let mut board = Board::new();
+    let first = board.create_workspace("first");
+    let cloud = board.create_workspace("cloud");
+    add_cloud(&mut board, 1, cloud);
+    board.focus_workspace(cloud);
+    remove_cloud(&mut board, 1);
+    board.release_empty_workspace_retention(cloud);
+    board.remove_empty_workspaces();
+
+    assert!(board.workspace(cloud).is_none());
+    assert_eq!(board.focused, None);
+    assert_eq!(board.active_workspace, Some(first));
 }
 
 #[test]

@@ -22,13 +22,31 @@ impl Board {
     /// [`Self::remove_empty_workspaces`] or when its last panel closes. The
     /// caller keeps the hold for work the board does not track, such as a
     /// pending cloud creation.
+    ///
+    /// When the released workspace is empty, active and nothing is focused,
+    /// its removal takes the selection with it, so focus moves as when a
+    /// focused last panel closes.
     #[cfg(feature = "cloud-workspaces")]
     pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) {
-        if self
-            .workspace(id)
-            .is_some_and(|workspace| !cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
-        {
-            self.retained_empty_workspaces.remove(&id);
+        let Some(workspace) = self.workspace(id) else {
+            return;
+        };
+        if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
+            return;
+        }
+        let leaves_board = workspace.panels.is_empty() && workspace.remote_workspace.is_none();
+        self.retained_empty_workspaces.remove(&id);
+        if leaves_board && self.active_workspace == Some(id) && self.focused.is_none() {
+            self.focus_most_recent_panel();
+        }
+    }
+
+    /// Focus the most recently created remaining panel and activate its
+    /// workspace; used when the focused panel or selected workspace goes away.
+    fn focus_most_recent_panel(&mut self) {
+        self.focused = self.panels.last().map(|panel| panel.id);
+        if let Some(focused) = self.focused {
+            self.active_workspace = self.panel_workspace_id(focused);
         }
     }
 
@@ -290,10 +308,7 @@ impl Board {
         self.attention.retain(|item| item.panel_id != Some(id));
         self.panel_attention_signals.remove(&id);
         if self.focused == Some(id) {
-            self.focused = self.panels.last().map(|p| p.id);
-            if let Some(focused) = self.focused {
-                self.active_workspace = self.panel_workspace_id(focused);
-            }
+            self.focus_most_recent_panel();
         }
 
         // Remove workspace if it has no panels left.

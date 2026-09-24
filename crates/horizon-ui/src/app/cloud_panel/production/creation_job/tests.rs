@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::test_support::test_app;
 use horizon_core::cloud_panel::{CHILD_SIZE, CloudConfig};
-use horizon_core::{PanelKind, PanelOptions, WorkspaceLayout};
+use horizon_core::{PanelKind, PanelOptions, WorkspaceId, WorkspaceLayout};
 
 fn pending(app: &mut HorizonApp) -> std::sync::mpsc::Sender<cloud_runtime::Result<Resolved>> {
     let workspace = app.board.ensure_workspace();
@@ -245,33 +245,139 @@ fn cancelled_pending_job_signals_its_worker_and_permit_releases_only_on_exit() {
     assert!(!busy.load(Ordering::Acquire));
 }
 
+/// Remove the only cloud from the workspace an open creation targets.
+fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Path) -> WorkspaceId {
+    let workspace = app.board.ensure_workspace();
+    let local = app.board.workspace(workspace).unwrap().local_id.clone();
+    app.cloud_prototype.production.launch.workspace = Some(local.clone());
+    let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+    let mut group = CloudGroup::new(1, "Removed".into(), local, temp.into(), [0.0, 0.0]);
+    group.remote = Some(CloudLaunch {
+        deployment_started: false,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: config.profiles["dev"].clone(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype.root = Some(temp.into());
+    app.remove_deleted_cloud(1, &egui::Context::default());
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    workspace
+}
+
+/// The per-frame release check followed by the next frame's empty-workspace cleanup.
+fn next_frames(app: &mut HorizonApp) {
+    app.release_workspaces_after_creation();
+    app.normalize_workspace_state(&egui::Context::default());
+}
+
+fn press_escape_in_creation(app: &mut HorizonApp) {
+    use crate::test_egui::DiscardTextures;
+    let ctx = egui::Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+        ..Default::default()
+    };
+    for _ in 0..3 {
+        let _ = ctx
+            .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
+            .discard_textures();
+    }
+    let mut escape = input();
+    escape.events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: Some(egui::Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx
+        .run_ui(escape, |ui| app.render_cloud_creation(ui.ctx()))
+        .discard_textures();
+    assert!(!app.cloud_prototype.production.creating);
+}
+
 #[test]
-fn removing_a_cloud_keeps_the_workspace_a_cloud_creation_targets() {
+fn a_creation_keeps_a_removed_clouds_workspace_until_it_ends() {
     for submitted in [true, false] {
         let (temp, mut app) = test_app();
-        let ctx = egui::Context::default();
         let _sender = pending(&mut app);
-        let workspace = app.board.ensure_workspace();
-        let local = app.board.workspace(workspace).unwrap().local_id.clone();
         if !submitted {
             app.cloud_prototype.production.pending_creation = None;
-            app.cloud_prototype.production.launch.workspace = Some(local.clone());
         }
-        let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
-        let mut group = CloudGroup::new(1, "Removed".into(), local, temp.path().into(), [0.0, 0.0]);
-        group.remote = Some(CloudLaunch {
-            deployment_started: false,
-            id: "fixture".into(),
-            revision: "a".repeat(40),
-            profile_name: "dev".into(),
-            profile: config.profiles["dev"].clone(),
-        });
-        app.cloud_prototype.groups.0.push(group);
-        app.cloud_prototype.root = Some(temp.path().into());
-
-        app.remove_deleted_cloud(1, &ctx);
-        assert!(app.cloud_prototype.groups.0.is_empty());
-        app.normalize_workspace_state(&ctx);
+        let workspace = remove_cloud_from_creation_target(&mut app, temp.path());
+        for _ in 0..2 {
+            next_frames(&mut app);
+        }
         assert!(app.board.workspace(workspace).is_some(), "submitted: {submitted}");
+
+        press_escape_in_creation(&mut app);
+        next_frames(&mut app);
+        assert!(app.board.workspace(workspace).is_none(), "submitted: {submitted}");
     }
+}
+
+#[test]
+fn failed_or_stale_creation_releases_a_removed_clouds_workspace_when_it_ends() {
+    for stale_session in [false, true] {
+        let (temp, mut app) = test_app();
+        let sender = pending(&mut app);
+        let workspace = remove_cloud_from_creation_target(&mut app, temp.path());
+        if stale_session {
+            app.cloud_prototype
+                .production
+                .pending_creation
+                .as_mut()
+                .unwrap()
+                .session = Some("old session".into());
+        } else {
+            sender
+                .send(Err(cloud_runtime::Error::Invalid("Missing revision")))
+                .unwrap();
+        }
+        app.poll_cloud_creation(&egui::Context::default());
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        next_frames(&mut app);
+        if !stale_session {
+            assert!(
+                app.board.workspace(workspace).is_some(),
+                "the form stays open on its target after a failure"
+            );
+            press_escape_in_creation(&mut app);
+            next_frames(&mut app);
+        }
+        assert!(app.board.workspace(workspace).is_none(), "stale: {stale_session}");
+    }
+}
+
+#[test]
+fn cloud_settings_that_resume_a_creation_keep_its_target() {
+    let (temp, mut app) = test_app();
+    let _sender = pending(&mut app);
+    let workspace = remove_cloud_from_creation_target(&mut app, temp.path());
+    app.open_cloud_accounts(&egui::Context::default(), true);
+    assert!(!app.cloud_prototype.production.creating);
+    next_frames(&mut app);
+    assert!(app.board.workspace(workspace).is_some());
+
+    app.cloud_prototype.production.setup.open = false;
+    next_frames(&mut app);
+    assert!(app.board.workspace(workspace).is_none());
+}
+
+#[test]
+fn completed_creation_keeps_the_workspace_for_its_new_cloud() {
+    let (temp, mut app) = test_app();
+    let sender = pending(&mut app);
+    let workspace = remove_cloud_from_creation_target(&mut app, temp.path());
+    app.cloud_prototype.production.launch.workspace = None;
+    sender.send(Ok(resolved(temp.path()))).unwrap();
+    app.poll_cloud_creation(&egui::Context::default());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    for _ in 0..2 {
+        next_frames(&mut app);
+    }
+    assert!(app.board.workspace(workspace).is_some());
+    assert!(app.cloud_prototype.creation_holds.is_empty());
 }

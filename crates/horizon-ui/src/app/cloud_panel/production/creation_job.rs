@@ -34,12 +34,13 @@ struct Resolved {
 }
 
 impl super::Production {
-    /// Whether the open or pending cloud creation will place its cloud in `workspace`.
+    /// Whether the open or pending cloud creation will place its cloud in
+    /// `workspace`, including while cloud settings interrupt it.
     pub(in crate::app::cloud_panel) fn creation_targets(&self, workspace: &str) -> bool {
         self.pending_creation
             .as_ref()
             .is_some_and(|pending| pending.workspace == workspace)
-            || (self.creating && self.launch.workspace.as_deref() == Some(workspace))
+            || ((self.creating || self.setup.resumes_creation()) && self.launch.workspace.as_deref() == Some(workspace))
     }
 }
 

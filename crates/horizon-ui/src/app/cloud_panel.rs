@@ -32,6 +32,8 @@ pub(super) struct CloudPrototype {
     provider_logo: Option<egui::TextureHandle>,
     pub fullscreen: Option<fullscreen::CloudFullscreen>,
     deployments: std::collections::HashMap<u32, runtime::DemoDeployment>,
+    /// Workspaces of removed clouds kept only because a cloud creation targets them.
+    creation_holds: Vec<String>,
 }
 
 impl CloudPrototype {
@@ -44,6 +46,7 @@ impl HorizonApp {
     pub(super) fn prepare_cloud_prototype(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
             self.prepare_production_clouds(ctx);
+            self.release_workspaces_after_creation();
             return;
         }
         self.start_cloud_setup(ctx);
@@ -298,11 +301,17 @@ impl HorizonApp {
     }
 
     /// Let a removed cloud's workspace go like one whose last panel closed,
-    /// unless another cloud or a cloud creation still targets it.
+    /// unless another cloud or a cloud creation still targets it. A creation
+    /// keeps it until [`Self::release_workspaces_after_creation`] sees that
+    /// creation end.
     fn release_removed_cloud_workspace(&mut self, workspace: &str) {
-        if self.cloud_prototype.groups.contains_workspace(workspace)
-            || self.cloud_prototype.production.creation_targets(workspace)
-        {
+        if self.cloud_prototype.groups.contains_workspace(workspace) {
+            return;
+        }
+        if self.cloud_prototype.production.creation_targets(workspace) {
+            if !self.cloud_prototype.creation_holds.iter().any(|held| held == workspace) {
+                self.cloud_prototype.creation_holds.push(workspace.to_owned());
+            }
             return;
         }
         if self.cloud_state_is_live() {
@@ -310,6 +319,15 @@ impl HorizonApp {
         }
         if let Some(id) = self.board.workspace_id_by_local_id(workspace) {
             self.board.release_empty_workspace_retention(id);
+        }
+    }
+
+    /// Release the workspaces a cloud creation kept once it no longer targets
+    /// them, however it ended: cancelled, failed, stale or finished elsewhere.
+    /// Checked every frame so no exit path can leave one stuck.
+    fn release_workspaces_after_creation(&mut self) {
+        for workspace in std::mem::take(&mut self.cloud_prototype.creation_holds) {
+            self.release_removed_cloud_workspace(&workspace);
         }
     }
 

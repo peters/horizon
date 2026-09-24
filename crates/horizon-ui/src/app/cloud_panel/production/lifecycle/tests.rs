@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::test_support::{run_app_frame, test_app, test_app_with_startup};
+use crate::app::test_support::{raw_input, run_app_frame, run_app_frame_with_input, test_app, test_app_with_startup};
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
 use horizon_core::{PanelId, PanelOptions, RuntimeState, StartupDecision, WorkspaceId};
 
@@ -306,34 +306,44 @@ fn add_editor(app: &mut HorizonApp, workspace: WorkspaceId) -> PanelId {
 #[test]
 #[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
-    for with_member in [false, true] {
-        let (_temp, ctx, mut app) = live_cloud_app();
-        let local = app.board.create_workspace("Local");
-        let remaining = add_editor(&mut app, local);
-        let cloud = app.board.create_workspace("Cloud");
-        add_unallocated_cloud(&mut app, 1, cloud);
-        let member = with_member.then(|| {
-            let member = add_editor(&mut app, cloud);
-            app.cloud_prototype.groups.0[0].attach(&mut app.board, member);
-            member
-        });
-        run_app_frame(&ctx, &mut app);
-        app.board.focused = member;
-        app.board.active_workspace = Some(cloud);
-        run_app_frame(&ctx, &mut app);
-        assert!(
-            app.board.workspace(cloud).is_some(),
-            "an empty cloud keeps its workspace"
-        );
+    for survivors in [1, 2] {
+        for with_member in [false, true] {
+            let (_temp, ctx, mut app) = live_cloud_app();
+            let mut most_recent = None;
+            let mut survivor_workspace = None;
+            for index in 0..survivors {
+                let workspace = app.board.create_workspace(&format!("Local {index}"));
+                most_recent = Some(add_editor(&mut app, workspace));
+                survivor_workspace = Some(workspace);
+            }
+            let cloud = app.board.create_workspace("Cloud");
+            add_unallocated_cloud(&mut app, 1, cloud);
+            let member = with_member.then(|| {
+                let member = add_editor(&mut app, cloud);
+                app.cloud_prototype.groups.0[0].attach(&mut app.board, member);
+                member
+            });
+            run_app_frame(&ctx, &mut app);
+            match member {
+                Some(member) => app.board.focus(member),
+                None => app.board.focus_workspace(cloud),
+            }
+            run_app_frame(&ctx, &mut app);
+            assert!(
+                app.board.workspace(cloud).is_some(),
+                "an empty cloud keeps its workspace"
+            );
 
-        app.remove_deleted_cloud(1, &ctx);
-        assert!(app.cloud_prototype.groups.0.is_empty());
-        assert!(member.is_none_or(|member| app.board.panel(member).is_none()));
-        run_app_frame(&ctx, &mut app);
+            app.remove_deleted_cloud(1, &ctx);
+            assert!(app.cloud_prototype.groups.0.is_empty());
+            assert!(member.is_none_or(|member| app.board.panel(member).is_none()));
+            run_app_frame(&ctx, &mut app);
 
-        assert!(app.board.workspace(cloud).is_none(), "member: {with_member}");
-        assert_eq!(app.board.active_workspace, Some(local));
-        assert_eq!(app.board.focused, Some(remaining));
+            let case = format!("survivors: {survivors}, member: {with_member}");
+            assert!(app.board.workspace(cloud).is_none(), "{case}");
+            assert_eq!(app.board.focused, most_recent, "{case}");
+            assert_eq!(app.board.active_workspace, survivor_workspace, "{case}");
+        }
     }
 }
 
@@ -371,4 +381,48 @@ fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
             );
         }
     }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
+fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
+    let (temp, ctx, mut app) = live_cloud_app();
+    let frame = |app: &mut HorizonApp, escape: bool| {
+        let mut input = raw_input([1400.0, 900.0], None);
+        if escape {
+            input.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        run_app_frame_with_input(&ctx, app, input);
+    };
+    let local = app.board.create_workspace("Local");
+    let remaining = add_editor(&mut app, local);
+    let cloud = app.board.create_workspace("Cloud");
+    app.board.workspace_mut(cloud).unwrap().cwd = Some(temp.path().into());
+    add_unallocated_cloud(&mut app, 1, cloud);
+    frame(&mut app, false);
+    app.open_workspace_cloud(&ctx, cloud);
+    app.remove_deleted_cloud(1, &ctx);
+    for _ in 0..3 {
+        frame(&mut app, false);
+    }
+    assert!(app.cloud_prototype.production.creating);
+    assert!(
+        app.board.workspace(cloud).is_some(),
+        "the open creation keeps its target"
+    );
+
+    frame(&mut app, true);
+    assert!(!app.cloud_prototype.production.creating);
+    for _ in 0..2 {
+        frame(&mut app, false);
+    }
+    assert!(app.board.workspace(cloud).is_none());
+    assert_eq!(app.board.focused, Some(remaining));
+    assert_eq!(app.board.active_workspace, Some(local));
 }
