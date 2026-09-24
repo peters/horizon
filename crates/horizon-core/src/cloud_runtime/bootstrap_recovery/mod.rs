@@ -23,7 +23,7 @@ pub enum Error {
     Owner(#[from] super::owner::Error),
     #[error(transparent)]
     Transport(#[from] super::Error),
-    #[error("Bootstrap recovery identity file is unavailable")]
+    #[error("Bootstrap recovery SSH material could not be read or snapshotted")]
     Io(#[from] std::io::Error),
 }
 

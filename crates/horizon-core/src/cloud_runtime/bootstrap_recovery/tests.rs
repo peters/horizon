@@ -223,6 +223,39 @@ fn malformed_host_keys_never_anchor_and_corrected_pins_can_recover() {
 }
 
 #[test]
+fn additional_host_trust_rules_never_reach_the_transport_or_journal() {
+    for rule in [
+        format!("* ssh-ed25519 {HOST_KEY}"),
+        format!("horizon-cloud-* ssh-ed25519 {HOST_KEY}"),
+        format!("horizon-cloud-worker1,other ssh-ed25519 {HOST_KEY}"),
+        format!("@cert-authority * ssh-ed25519 {HOST_KEY}"),
+        format!("@revoked horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}"),
+        format!("other ssh-ed25519 {HOST_KEY}"),
+    ] {
+        let (temp, root, vault) = fixture();
+        let mut owner = create(&root, &vault);
+        let target = target(&owner, temp.path());
+        let original = fs::read(&target.connection.known_hosts).unwrap();
+        fs::write(
+            &target.connection.known_hosts,
+            format!("horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}\n{rule}\n"),
+        )
+        .unwrap();
+        assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("broader trust sent")).is_err());
+        assert!(owner.load().unwrap().get(KEY).is_none());
+        fs::write(&target.connection.known_hosts, original).unwrap();
+        recover_with(&mut owner, &target, &mut |connection, request| {
+            assert_eq!(
+                fs::read_to_string(&connection.known_hosts).unwrap(),
+                format!("horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}\n")
+            );
+            Ok(reply(&target, request))
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn invalid_private_keys_never_anchor_and_corrected_identity_can_recover() {
     let (temp, root, vault) = fixture();
     let mut owner = create(&root, &vault);

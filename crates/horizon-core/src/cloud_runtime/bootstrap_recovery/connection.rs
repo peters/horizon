@@ -3,6 +3,7 @@ use crate::cloud_runtime::ssh::Connection;
 use horizon_cloud_protocol::bootstrap::Startup;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::{
     fs::File,
     io::{Read, Write},
@@ -82,23 +83,8 @@ impl Material {
             return Err(Error::Invalid);
         }
         let (identity, key) = read(&connection.identity, true)?;
-        let (known_hosts, hosts) = read(&connection.known_hosts, false)?;
-        let pins = std::str::from_utf8(&hosts)
-            .map_err(|_| Error::Invalid)?
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                if fields.next() != Some(connection.host_key_alias.as_str()) {
-                    return None;
-                }
-                let kind = fields.next()?;
-                let key = fields.next()?;
-                Some(format!("{kind} {key}\n"))
-            })
-            .collect::<String>();
-        if pins.is_empty() {
-            return Err(Error::Invalid);
-        }
+        let (known_hosts, source_hosts) = read(&connection.known_hosts, false)?;
+        let hosts = exact_pins(&source_hosts, &connection.host_key_alias)?;
         // Use OpenSSH's parser to check algorithm names, base64 and complete key
         // fields before an unusable pin can become part of an anchored request.
         let cancel = super::Cancellation::default();
@@ -110,7 +96,7 @@ impl Material {
         runner
             .private_exchange(
                 Command::new("ssh-keygen").args(["-l", "-f", "-"]),
-                pins.as_bytes(),
+                &hosts,
                 Duration::from_secs(5),
             )
             .map_err(|_| Error::Invalid)?;
@@ -140,6 +126,30 @@ impl Material {
             hosts,
         })
     }
+}
+
+fn exact_pins(bytes: &[u8], alias: &str) -> Result<Zeroizing<Vec<u8>>> {
+    let source = std::str::from_utf8(bytes).map_err(|_| Error::Invalid)?;
+    let mut pins = String::new();
+    for line in source.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(host) = fields.next() else { continue };
+        if host.starts_with('#') {
+            continue;
+        }
+        // A dedicated pin file cannot expand trust through patterns, host lists,
+        // hashed aliases, authorities or revocations discarded by normalization.
+        if host != alias {
+            return Err(Error::Invalid);
+        }
+        let kind = fields.next().ok_or(Error::Invalid)?;
+        let key = fields.next().ok_or(Error::Invalid)?;
+        writeln!(&mut pins, "{alias} {kind} {key}").map_err(|_| Error::Invalid)?;
+    }
+    if pins.is_empty() {
+        return Err(Error::Invalid);
+    }
+    Ok(Zeroizing::new(pins.into_bytes()))
 }
 
 fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
