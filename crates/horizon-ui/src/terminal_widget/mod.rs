@@ -184,6 +184,12 @@ fn grid_metrics(ctx: &Context) -> GridMetrics {
     }
 }
 
+/// The cell size the terminal widget converts wheel deltas into lines with.
+pub(crate) fn wheel_cell_size(ctx: &Context) -> Vec2 {
+    let metrics = grid_metrics(ctx);
+    Vec2::new(metrics.char_width, metrics.line_height)
+}
+
 pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
     let metrics = grid_metrics(ctx);
     terminal_viewport_size(available, metrics.char_width, metrics.line_height)

@@ -229,6 +229,7 @@ struct PanelBodyContext<'a> {
     browser_shortcut_bindings: &'a [ShortcutBinding],
     browser_frame_has_pointer_button: bool,
     browser_fullscreen_active: bool,
+    browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner,
 }
 
 fn show_panel_body_contents(
@@ -262,6 +263,7 @@ fn show_panel_body_contents(
                 state,
                 shortcuts,
                 body_context.browser_fullscreen_active,
+                body_context.browser_zoom_wheel_owner,
                 body_context.browser_shortcut_bindings,
                 body_context.browser_frame_has_pointer_button,
             )
@@ -462,6 +464,7 @@ impl HorizonApp {
                                     browser_shortcut_bindings: &all_shortcut_bindings,
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
                                     browser_fullscreen_active: true,
+                                    browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner::Page,
                                 },
                             );
                         }
@@ -635,6 +638,10 @@ impl HorizonApp {
     ) -> PanelUiOutcome {
         let mut outcome = PanelUiOutcome::default();
         let interactive = !self.canvas_pan_input_claimed && !scope.host_dialog_open;
+        #[cfg(feature = "cloud-workspaces")]
+        let browser_canvas_zoom_active = scope.detached || self.cloud_prototype.fullscreen.is_none();
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let browser_canvas_zoom_active = true;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
         // Browser input suppresses app shortcuts that this viewport actually
@@ -866,6 +873,11 @@ impl HorizonApp {
                                     browser_shortcut_bindings,
                                     browser_frame_has_pointer_button: scope.frame_has_pointer_button,
                                     browser_fullscreen_active: false,
+                                    browser_zoom_wheel_owner: if browser_canvas_zoom_active {
+                                        crate::browser_widget::ZoomWheelOwner::App
+                                    } else {
+                                        crate::browser_widget::ZoomWheelOwner::Page
+                                    },
                                 },
                             ) {
                                 outcome.request_focus();

@@ -27,6 +27,9 @@ pub(crate) fn run_native_with_keyboard_observer(
     #[cfg(target_os = "linux")]
     {
         app.pinch = pinch::NativePinch::start(&event_loop);
+        // Keeps the platform display alive independently of the event loop,
+        // so the bridge above still outlives it when a callback unwinds.
+        app.display_handle = Some(event_loop.owned_display_handle());
     }
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -38,8 +41,14 @@ struct KeyboardAwareApp<'app> {
     device_requests: Arc<DeviceRequestBridge>,
     modifiers: egui::Modifiers,
     native_window_liveness: NativeWindowLiveness,
+    // `pinch` borrows the platform display through raw FFI, so it must be
+    // declared before `display_handle`: fields drop in declaration order, and
+    // that ordering is what keeps the display alive on the unwind path too,
+    // where `exiting` never runs.
     #[cfg(target_os = "linux")]
     pinch: Option<pinch::NativePinch>,
+    #[cfg(target_os = "linux")]
+    display_handle: Option<winit::event_loop::OwnedDisplayHandle>,
 }
 
 impl<'app> KeyboardAwareApp<'app> {
@@ -56,6 +65,8 @@ impl<'app> KeyboardAwareApp<'app> {
             native_window_liveness: NativeWindowLiveness::default(),
             #[cfg(target_os = "linux")]
             pinch: None,
+            #[cfg(target_os = "linux")]
+            display_handle: None,
         }
     }
 }
@@ -94,6 +105,21 @@ impl NativeWindowLiveness {
 
     fn is_root_destroyed(&self) -> bool {
         self.root_destroyed
+    }
+}
+
+impl KeyboardAwareApp<'_> {
+    /// Feed any pending native pinch into the normal window-event path. The
+    /// Wayland bridge owns no thread, so this must run every loop iteration
+    /// rather than only when a bridge thread wakes the loop.
+    #[cfg(target_os = "linux")]
+    fn drain_pinch(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pinch) = &mut self.pinch else {
+            return;
+        };
+        for (window_id, event) in pinch.take_events() {
+            self.inner.window_event(event_loop, window_id, event);
+        }
     }
 }
 
@@ -162,11 +188,7 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
             return;
         }
         #[cfg(target_os = "linux")]
-        if let Some(pinch) = &mut self.pinch {
-            for (window_id, event) in pinch.take_events() {
-                self.inner.window_event(event_loop, window_id, event);
-            }
-        }
+        self.drain_pinch(event_loop);
         // Not a repaint. Claiming here runs while Wayland is withholding
         // `RedrawRequested` for an unpresented surface.
         if crate::app::is_device_queue_wake(&event) {
@@ -192,6 +214,8 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         if self.native_window_liveness.is_root_destroyed() {
             return;
         }
+        #[cfg(target_os = "linux")]
+        self.drain_pinch(event_loop);
         self.inner.about_to_wait(event_loop);
     }
 
@@ -203,6 +227,12 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        // Release the pinch bridge while the display it adopted is still
+        // alive; winit tears that down once this call returns.
+        #[cfg(target_os = "linux")]
+        {
+            self.pinch = None;
+        }
         // `exiting` is the one callback that remains safe and necessary after
         // the native root handle is gone: eframe uses it to run `App::on_exit`
         // and destroy application state. Skipping it lets browser-driver

@@ -1,11 +1,14 @@
 use std::mem;
 
+use alacritty_terminal::term::TermMode;
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
-use horizon_core::WorkspaceId;
+use horizon_core::{Panel, PanelId, WorkspaceId};
 
-use super::super::super::input::{TerminalInputEvent, terminal_input_events};
+use super::super::super::input::{GridPoint, TerminalInputEvent, WheelAction, terminal_input_events, wheel_action};
 use super::super::canvas_drag::canvas_drag_delta;
-use super::super::canvas_scroll::route_canvas_scroll;
+use super::super::canvas_scroll::{
+    ScrollTarget, WheelStep, canvas_zoom_delta, reset_canvas_scroll, route_canvas_scroll,
+};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_key_may_emit_text, shortcut_pressed, take_captured_clipboard_event,
@@ -125,12 +128,6 @@ fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
     !modifiers.ctrl && !modifiers.command && !modifiers.alt
 }
 
-// egui feeds every wheel/trackpad event into both raw_scroll_delta and
-// smooth_scroll_delta; summing them would pan the canvas twice per event.
-fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
-    input.smooth_scroll_delta
-}
-
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
@@ -185,34 +182,24 @@ impl HorizonApp {
         canvas_rect: Rect,
         visible_workspace: Option<WorkspaceId>,
     ) {
-        if self.browser_file_chooser_open() {
+        if self.host_dialog_open() {
+            reset_canvas_scroll(ctx);
             self.terminal_keyboard_events.clear();
             self.frame_keyboard_events.remove(&ctx.viewport_id());
             return;
         }
-        let (
-            events,
-            pointer_position,
-            middle_down,
-            primary_down,
-            space_down,
-            modifiers,
-            scroll,
-            pointer_delta,
-            zoom_delta,
-        ) = ctx.input(|input| {
-            (
-                input.events.clone(),
-                input.pointer.interact_pos().or_else(|| input.pointer.hover_pos()),
-                input.pointer.middle_down(),
-                input.pointer.primary_down(),
-                input.key_down(egui::Key::Space),
-                input.modifiers,
-                wheel_pan_scroll_input(input),
-                input.pointer.delta(),
-                input.zoom_delta(),
-            )
-        });
+        let (events, pointer_position, middle_down, primary_down, space_down, modifiers, pointer_delta) =
+            ctx.input(|input| {
+                (
+                    input.events.clone(),
+                    input.pointer.interact_pos().or_else(|| input.pointer.hover_pos()),
+                    input.pointer.middle_down(),
+                    input.pointer.primary_down(),
+                    input.key_down(egui::Key::Space),
+                    input.modifiers,
+                    input.pointer.delta(),
+                )
+            });
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
@@ -221,6 +208,7 @@ impl HorizonApp {
                         .work_resume_overlay_rect(ctx)
                         .is_some_and(|rect| rect.contains(position)))
         });
+        let zoom_delta = canvas_zoom_delta(ctx, pointer_in_canvas);
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
         let ctrl_or_cmd = modifiers.ctrl || modifiers.command;
@@ -259,39 +247,89 @@ impl HorizonApp {
         );
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
+        // Zoom and pan come from different wheel events, so a frame can do
+        // both: plain wheels still route below.
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
             }
             self.canvas_pan_input_claimed = false;
-            self.is_panning = false;
-            return;
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
-        let pointer_over_panel = pointer_position.is_some_and(|position| {
-            panel_geometry
-                .iter()
-                .any(|(_, geometry)| geometry.screen_rect.contains(position))
+        // Focused panels are Foreground. Other overlapping panels follow
+        // egui's persisted Middle-layer order, with board order as a fallback
+        // before egui has registered their areas.
+        let panel_under_pointer = pointer_position.and_then(|position| {
+            let hits = |id: PanelId| {
+                panel_geometry
+                    .iter()
+                    .any(|(candidate, geometry)| *candidate == id && geometry.screen_rect.contains(position))
+            };
+            self.board.focused.filter(|id| hits(*id)).or_else(|| {
+                if let Some(layer) = ctx.layer_id_at(position)
+                    && let Some((id, _)) = panel_geometry.iter().find(|(id, geometry)| {
+                        layer.id == egui::Id::new(("panel", id.0)) && geometry.screen_rect.contains(position)
+                    })
+                {
+                    return Some(*id);
+                }
+                panel_geometry
+                    .iter()
+                    .rev()
+                    .find(|(_, geometry)| geometry.screen_rect.contains(position))
+                    .map(|(id, _)| *id)
+            })
         });
+        // Runtime cards share the Middle layer with unfocused panels. Focused
+        // panels are Foreground; otherwise use egui's persisted area ordering
+        // for overlaps rather than inferring it from rendering call order.
         #[cfg(feature = "cloud-workspaces")]
-        let pointer_over_panel = pointer_over_panel
-            || pointer_position.is_some_and(|position| self.pointer_over_cloud_runtime(ctx, position));
-        let scroll_routing = route_canvas_scroll(
-            ctx,
-            !pointer_over_panel,
-            pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
+        let cloud_runtime = pointer_position.and_then(|position| {
+            self.cloud_runtime_under_pointer(ctx, position).filter(|_| {
+                !panel_under_pointer.is_some_and(|panel| {
+                    self.board.focused == Some(panel)
+                        || ctx
+                            .layer_id_at(position)
+                            .is_some_and(|layer| layer.id == egui::Id::new(("panel", panel.0)))
+                })
+            })
+        });
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let cloud_runtime: Option<u32> = None;
+        let scroll_target = cloud_runtime.map_or_else(
+            || panel_under_pointer.map_or(ScrollTarget::Canvas, ScrollTarget::Panel),
+            ScrollTarget::Surface,
         );
+        let terminal_under_pointer = panel_under_pointer.filter(|panel| {
+            cloud_runtime.is_none() && {
+                panel_geometry.iter().any(|(id, geometry)| {
+                    id == panel
+                        && geometry
+                            .terminal_body_screen_rect
+                            .is_some_and(|body| pointer_position.is_some_and(|position| body.contains(position)))
+                })
+            }
+        });
+        let cell_size = crate::terminal_widget::wheel_cell_size(ctx);
+        let mut pending_scrollback = None;
+        let mut scroll_routing =
+            route_canvas_scroll(ctx, scroll_target, pointer_in_canvas && !drag_panning, |panel, step| {
+                // A latched owner outside the pointer's terminal body will
+                // not receive this event, so earlier events cannot move its
+                // predicted scrollback either.
+                if terminal_under_pointer != Some(panel) {
+                    pending_scrollback = None;
+                }
+                self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback)
+            });
+        scroll_routing.discard_displaced_wheels(scroll_target);
+        scroll_routing.defer_for_panel_delivery(ctx);
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
         } else if scroll_routing.pans_canvas {
-            if modifiers.shift && scroll.x == 0.0 {
-                Vec2::new(scroll.y, 0.0)
-            } else {
-                scroll
-            }
+            scroll_routing.pan
         } else {
             Vec2::ZERO
         };
@@ -307,6 +345,62 @@ impl HorizonApp {
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
         }
+    }
+
+    /// Whether `panel` has run out of scroll to absorb one wheel event. A
+    /// latched gesture chains to the canvas once its own panel cannot absorb
+    /// any more, the way a browser hands off at a scroll container's edge.
+    /// Only terminals expose a reliable extent; other panel kinds keep the
+    /// gesture.
+    ///
+    /// The terminal applies a frame's wheel events only after routing, so
+    /// `pending` carries the scrollback position the events already judged
+    /// will leave it at, advanced with the terminal's own step conversion.
+    pub(in crate::app) fn panel_scroll_exhausted(
+        &self,
+        panel: PanelId,
+        step: WheelStep,
+        cell_size: Vec2,
+        pending: &mut Option<(PanelId, usize)>,
+    ) -> bool {
+        let Some(terminal) = self
+            .board
+            .panels
+            .iter()
+            .find(|candidate| candidate.id == panel)
+            .and_then(Panel::terminal)
+        else {
+            return false;
+        };
+        let mode = terminal.mode();
+        if mode.intersects(TermMode::MOUSE_MODE) || mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+            return false;
+        }
+        let history = terminal.history_size();
+        let position = pending
+            .filter(|(owner, _)| *owner == panel)
+            .map_or_else(|| terminal.scrollback(), |(_, position)| position);
+        let exhausted = if step.delta.y > 0.0 {
+            position >= history
+        } else if step.delta.y < 0.0 {
+            position == 0
+        } else {
+            // Horizontal-only swipes have nothing to absorb in the scrollback.
+            true
+        };
+        if !exhausted {
+            let point = GridPoint { line: 0, column: 0 };
+            let lines = match wheel_action(step.delta, step.unit, cell_size, step.modifiers, mode, point) {
+                Some(WheelAction::Scrollback(lines)) => lines,
+                Some(WheelAction::Pty(_)) | None => 0,
+            };
+            let moved = i64::try_from(position)
+                .unwrap_or(i64::MAX)
+                .saturating_add(i64::from(lines));
+            let history = i64::try_from(history).unwrap_or(i64::MAX);
+            *pending = Some((panel, usize::try_from(moved.clamp(0, history)).unwrap_or(0)));
+        }
+        exhausted
     }
 
     fn clear_terminal_selections(&self) {
@@ -757,7 +851,7 @@ mod tests {
         HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys,
         next_middle_pan_active, pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
         swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
-        swallow_speech_hotkey_event, wheel_pan_scroll_input,
+        swallow_speech_hotkey_event,
     };
 
     #[test]
@@ -808,28 +902,6 @@ mod tests {
                 assert_eq!(pending_capture_event(pending, &release), PendingCaptureEvent::Release);
             }
         }
-    }
-
-    #[test]
-    fn wheel_pan_scroll_input_counts_each_wheel_event_once() {
-        let delta = Vec2::new(3.0, -5.0);
-        let raw_input = egui::RawInput {
-            events: vec![Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta,
-                phase: egui::TouchPhase::Move,
-                modifiers: Modifiers::NONE,
-            }],
-            ..egui::RawInput::default()
-        };
-
-        let input = egui::InputState::default().begin_pass(raw_input, false, 1.0, egui::InputOptions::default());
-
-        // A point-unit trackpad delta must land exactly once in the smoothed
-        // delta that wheel pan consumes; egui no longer exposes a raw scroll
-        // delta, so this single field is the whole pan input.
-        assert_eq!(input.smooth_scroll_delta, delta);
-        assert_eq!(wheel_pan_scroll_input(&input), delta);
     }
 
     #[test]

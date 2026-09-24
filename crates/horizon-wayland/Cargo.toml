@@ -1,0 +1,23 @@
+[package]
+name = "horizon-wayland"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Wayland protocol support for Horizon that winit does not provide, starting with trackpad pinch"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6.2"
+thiserror.workspace = true
+tracing.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+wayland-protocols = { workspace = true, features = ["server"] }
+wayland-server.workspace = true

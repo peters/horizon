@@ -3,6 +3,11 @@
 //! Cursor position returns global (screen-space) coordinates without requiring
 //! special permissions.  On macOS this deliberately avoids the Accessibility
 //! subsystem — only Core Graphics is used.
+//!
+//! The Windows cursor query has no safe equivalent, so this crate uses
+//! `deny(unsafe_code)` with one scoped allow rather than `forbid`.
+
+#![deny(unsafe_code)]
 
 mod accessibility;
 mod hotkey;
@@ -50,6 +55,7 @@ mod platform {
         let mut point = POINT { x: 0, y: 0 };
         // SAFETY: `GetCursorPos` writes into the provided POINT and returns
         // a BOOL.  The pointer is valid for the lifetime of the local.
+        #[allow(unsafe_code)]
         let ok = unsafe { GetCursorPos(&mut point) };
         (ok != 0).then_some((point.x, point.y))
     }

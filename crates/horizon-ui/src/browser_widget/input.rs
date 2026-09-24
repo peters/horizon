@@ -16,6 +16,7 @@ pub(super) use pointer::cancel_pointer_capture;
 pub(crate) struct InputFlags<'a> {
     pub(crate) events: &'a [Event],
     pub(crate) interactive: bool,
+    pub(crate) zoom_wheel_owner: ShortcutOwner,
     pub(crate) panel_focused: bool,
     pub(crate) keyboard_target: KeyboardTarget,
     pub(crate) pointer_viewport: PointerViewportState,
@@ -95,6 +96,7 @@ pub fn handle(
                 frame_size,
                 pointer_target,
                 frame_has_pointer_button: flags.frame_has_pointer_button,
+                zoom_wheel_owner: flags.zoom_wheel_owner,
             },
         );
     } else {
