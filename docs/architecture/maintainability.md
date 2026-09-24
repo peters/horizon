@@ -659,8 +659,11 @@ without adding a production host admission API.
 Companion controls under `cloud_panel/production/companions` keep only cached
 presentation, queued user actions, and cancellable jobs in UI. Repository
 identity, durable selection, authorization, and status remain in the shared
-controller and worker protocols. Inventory or owning-session changes discard
-stale UI jobs; render paths perform no repository or SSH work.
+controller and worker protocols. Inventory or owning-session changes cancel
+stale jobs and wait for completion before new work. Queued revocations retain
+their original owner and finish without reading the new session's inventory,
+even while its bootstrap is pending. Only saved sessions can authorize access;
+render paths perform no repository or SSH work.
 
 `cloud_runtime::project_reservations` coordinates owning-host reserve/cancel/retry
 operations; its `journal` leaf validates exact pending transitions and confirmed

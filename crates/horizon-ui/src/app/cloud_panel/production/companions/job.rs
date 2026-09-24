@@ -28,7 +28,10 @@ fn run(root: PathBuf, owner: Owner, groups: &CloudGroups, action: Action, cancel
         cancel.check()?;
         let journal = cloud_runtime::state::cloud_directory(&root, &owner.cloud_id)?.join("companions.json");
         // Existing images without companion declarations need no companion protocol support.
-        if context.as_ref().is_none_or(|context| context.declarations.is_empty()) && !journal.try_exists()? {
+        if !matches!(action, Action::Clear { .. })
+            && context.as_ref().is_none_or(|context| context.declarations.is_empty())
+            && !journal.try_exists()?
+        {
             return Ok(None);
         }
         let settings = Settings::load(&root.join("settings.json"))?;

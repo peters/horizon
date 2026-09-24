@@ -368,7 +368,7 @@ impl HorizonApp {
 
         let switching_session = self.poll_session_switch(ctx);
         #[cfg(feature = "cloud-workspaces")]
-        self.sync_cloud_companion_session();
+        self.sync_cloud_companion_session(ctx);
         if switching_session {
             self.refresh_active_session_lease();
             self.render_session_switch_overlay(ui);

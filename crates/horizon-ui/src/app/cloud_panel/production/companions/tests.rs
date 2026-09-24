@@ -42,8 +42,9 @@ fn switching_sessions_cancels_inflight_results_and_queued_consent() {
                 snapshot: None,
                 error: Some("old session".into())
             })
-            .is_err()
+            .is_ok()
     );
+    assert_eq!(state.retiring.len(), 1);
     let entry = &state.entries["source"];
     assert!(entry.pending.is_none());
     assert!(entry.clearing.is_empty());
@@ -68,7 +69,7 @@ fn session_bootstrap_cancels_old_jobs_without_using_the_old_inventory() {
             session_id: "second".into(),
             lease: None,
             last_lease_refresh: None,
-            persistent: false,
+            persistent: true,
         });
         app.pending_startup_runtime_state = (blocked == "runtime").then(horizon_core::RuntimeState::default);
         let (_bootstrap_sender, bootstrap_receiver) = channel();
@@ -89,8 +90,9 @@ fn session_bootstrap_cancels_old_jobs_without_using_the_old_inventory() {
                     snapshot: None,
                     error: None
                 })
-                .is_err()
+                .is_ok()
         );
+        assert_eq!(app.cloud_prototype.production.companions.retiring.len(), 1);
     }
 }
 
@@ -127,8 +129,9 @@ fn revision_change_cancels_stale_jobs_and_removed_cloud_cannot_receive_results()
                 snapshot: None,
                 error: None
             })
-            .is_err()
+            .is_ok()
     );
+    assert_eq!(state.retiring.len(), 1);
 }
 
 #[test]
@@ -165,10 +168,31 @@ fn unchecking_cancels_refresh_and_remains_queued_until_persisted() {
     let groups = groups();
     state.sync(Some("session"), &groups);
     let entry = state.entries.get_mut("source").unwrap();
-    let (cancel, _) = pending_job(entry);
+    let (cancel, sender) = pending_job(entry);
     entry.queue(Action::Clear { alias: "app".into() });
     assert!(cancel.check().is_err());
-    assert!(entry.job.is_none());
+    state.tick(Path::new("/absent"), &groups, &egui::Context::default());
+    let entry = state.entries.get_mut("source").unwrap();
+    assert!(entry.job.as_ref().unwrap().cancel.check().is_err());
+    sender
+        .send(job::Outcome {
+            snapshot: Some(Snapshot {
+                catalog: horizon_core::cloud_runtime::companions::Catalog {
+                    version: 1,
+                    source_cloud_id: "source".into(),
+                    observed_at: 1,
+                    companions: vec![],
+                },
+                rows: vec![],
+                publication_error: None,
+                notice: None,
+            }),
+            error: None,
+        })
+        .unwrap();
+    entry.poll();
+    assert!(entry.job.is_none() && entry.snapshot.is_none());
+    assert!(entry.clearing.contains("app"));
     let (_, sender) = pending_job(entry);
     sender
         .send(job::Outcome {
@@ -253,7 +277,7 @@ fn first_selection_remains_cancellable_while_connecting_and_after_an_uncertain_f
         assert!(matches!(&action, Some(Action::Clear { alias }) if alias == "app"));
         entry.queue(action.unwrap());
         assert!(cancel.check().is_err());
-        assert!(entry.job.is_none());
+        assert_eq!(entry.job.is_none(), fail);
         assert!(entry.selecting.is_empty());
         assert!(entry.clearing.contains("app"));
     }
@@ -300,6 +324,9 @@ fn rapid_unchecks_preserve_every_alias_until_individually_acknowledged() {
         entry.clearing.iter().map(String::as_str).collect::<Vec<_>>(),
         ["app", "utility"]
     );
+    entry.poll();
+    assert!(entry.job.is_none());
+    assert!(entry.error.is_none());
     let (_, sender) = pending_job(entry);
     let companions: Vec<_> = [("app", false), ("utility", true)]
         .into_iter()
@@ -339,4 +366,165 @@ fn rapid_unchecks_preserve_every_alias_until_individually_acknowledged() {
     entry.poll();
     assert!(!entry.clearing.contains("app"));
     assert!(entry.clearing.contains("utility"));
+}
+
+#[test]
+fn retired_jobs_fence_session_roundtrips_and_readded_clouds() {
+    for switch_session in [false, true] {
+        for reply in [false, true] {
+            let mut state = State::default();
+            let groups = groups();
+            state.sync(Some("first"), &groups);
+            let (cancel, sender) = pending_job(state.entries.get_mut("source").unwrap());
+            if switch_session {
+                state.sync(Some("second"), &groups);
+            } else {
+                state.sync(Some("first"), &CloudGroups::default());
+            }
+            state.sync(Some("first"), &groups);
+            state.tick(Path::new("/absent"), &groups, &egui::Context::default());
+            assert!(cancel.check().is_err());
+            assert_eq!(state.retiring.len(), 1);
+            assert!(state.entries["source"].job.is_none());
+            if reply {
+                sender
+                    .send(job::Outcome {
+                        snapshot: None,
+                        error: Some("stale".into()),
+                    })
+                    .unwrap();
+            }
+            drop(sender);
+            state.entries.get_mut("source").unwrap().due = Instant::now() + REFRESH;
+            state.tick(Path::new("/absent"), &groups, &egui::Context::default());
+            assert!(state.retiring.is_empty());
+            assert!(state.entries["source"].error.is_none());
+        }
+    }
+}
+
+#[test]
+fn ephemeral_sessions_never_own_persisted_companion_access() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    app.cloud_prototype.root = None;
+    app.cloud_prototype.groups = groups();
+    app.active_session = Some(crate::app::ActiveSession {
+        session_id: "ephemeral".into(),
+        lease: None,
+        last_lease_refresh: None,
+        persistent: true,
+    });
+    app.prepare_cloud_companions(&egui::Context::default());
+    assert!(!app.cloud_prototype.production.companions.entries.is_empty());
+    app.active_session.as_mut().unwrap().persistent = false;
+    for _ in 0..2 {
+        app.sync_cloud_companion_session(&egui::Context::default());
+        let state = &app.cloud_prototype.production.companions;
+        assert!(state.session.is_none() && state.entries.is_empty());
+        app.prepare_cloud_companions(&egui::Context::default());
+        let state = &app.cloud_prototype.production.companions;
+        assert!(state.session.is_none() && state.entries.is_empty() && state.inventory.is_empty());
+    }
+}
+
+#[cfg(unix)] // Companion journals require the Unix directory-durability contract.
+#[test]
+fn queued_revocation_survives_owner_roundtrips_and_absent_journals() {
+    use horizon_core::cloud_runtime::{companions, settings::Settings};
+    for transition in ["session", "remove", "workspace"] {
+        for persist_selection in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let settings: Settings = serde_json::from_value(serde_json::json!({
+                "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+            })).unwrap();
+            std::fs::write(
+                root.path().join("settings.json"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .unwrap();
+            let mut state = State::default();
+            let groups = groups();
+            state.sync(Some("first"), &groups);
+            let entry = state.entries.get_mut("source").unwrap();
+            let owner = entry.owner.clone();
+            let (_, sender) = pending_job(entry);
+            entry.queue(Action::Clear { alias: "app".into() });
+            match transition {
+                "session" => state.sync(Some("second"), &groups),
+                "remove" => state.sync(Some("first"), &CloudGroups::default()),
+                _ => {
+                    let mut moved = groups.clone();
+                    moved.0[0].workspace = "other".into();
+                    state.sync(Some("first"), &moved);
+                }
+            }
+            state.sync(Some("first"), &groups);
+            let source = companions::Target {
+                scope: owner.scope.clone(),
+                cloud_id: "source".into(),
+                declaration: companions::Declaration {
+                    repository: "example/library".into(),
+                    profile: "cpu".into(),
+                },
+            };
+            let target = companions::Target {
+                cloud_id: "target".into(),
+                declaration: companions::Declaration {
+                    repository: "example/consumer".into(),
+                    profile: "cpu".into(),
+                },
+                ..source.clone()
+            };
+            let snapshot = persist_selection.then(|| {
+                companions::refresh(
+                    &companions::Request {
+                        root: root.path().to_owned(),
+                        owner,
+                        context: Some(companions::Context {
+                            source: source.clone(),
+                            declarations: [("app".into(), target.declaration.clone())].into(),
+                            inventory: vec![source, target],
+                        }),
+                        action: Action::Select {
+                            alias: "app".into(),
+                            target_cloud_id: "target".into(),
+                        },
+                        settings,
+                    },
+                    &Cancellation::default(),
+                )
+                .unwrap()
+            });
+            sender.send(job::Outcome { snapshot, error: None }).unwrap();
+            let (_app_root, mut app) = crate::app::test_support::test_app();
+            app.cloud_prototype.root = Some(root.path().to_owned());
+            app.cloud_prototype.groups = groups;
+            app.cloud_prototype.production.companions = state;
+            app.active_session = Some(crate::app::ActiveSession {
+                session_id: "first".into(),
+                lease: None,
+                last_lease_refresh: None,
+                persistent: true,
+            });
+            app.startup_bootstrap_failure = Some(crate::app::StartupBootstrapFailure::WorkerDisconnected);
+            let ctx = egui::Context::default();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !app.cloud_prototype.production.companions.retiring.is_empty() {
+                crate::app::test_support::run_app_frame(&ctx, &mut app);
+                assert!(
+                    Instant::now() < deadline,
+                    "revocation did not finish for {transition}, journal={persist_selection}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let journal: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(root.path().join("source/companions.json")).unwrap()).unwrap();
+            assert!(journal["grants"].as_object().unwrap().is_empty());
+            assert!(
+                app.cloud_prototype.production.companions.entries["source"]
+                    .job
+                    .is_none()
+            );
+        }
+    }
 }
