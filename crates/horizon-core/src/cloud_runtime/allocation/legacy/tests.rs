@@ -106,6 +106,48 @@ fn preallocation_and_absent_legacy_optionals_do_not_invent_provider_facts() {
 }
 
 #[test]
+#[cfg(unix)]
+fn readiness_history_matches_the_existing_loader_for_historical_records() {
+    use crate::cloud_runtime::state::{ReadyHistory, Store};
+
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::lock(root.path()).unwrap();
+    for stage in [
+        "Provision",
+        "Readiness",
+        "Sessions",
+        "Ready",
+        "Stopping",
+        "Stopped",
+        "Deleted",
+    ] {
+        for history in [None, Some("Unobserved"), Some("Observed")] {
+            let mut original = legacy();
+            original["stage"] = json!(stage);
+            original.as_object_mut().unwrap().remove("ready_history");
+            if let Some(history) = history {
+                original["ready_history"] = json!(history);
+            }
+            std::fs::write(
+                root.path().join("deployment.json"),
+                serde_json::to_vec(&original).unwrap(),
+            )
+            .unwrap();
+            let expected = store.load().unwrap().unwrap();
+            let pair = convert(&original).unwrap();
+            let restored = Records::decode(&pair.allocation_bytes().unwrap(), &pair.project_bytes().unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(restored.deployment()).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            if stage == "Ready" {
+                assert_eq!(expected.ready_history, ReadyHistory::Observed);
+            }
+        }
+    }
+}
+
+#[test]
 fn unknown_source_fields_are_rejected_instead_of_dropping_cleanup_fences() {
     for pointer in [
         "",

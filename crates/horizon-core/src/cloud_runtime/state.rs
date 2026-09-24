@@ -51,6 +51,12 @@ pub struct Deployment {
     pub browserstack_targets: std::collections::BTreeSet<String>,
 }
 impl Deployment {
+    pub(super) fn normalize_readiness_history(&mut self) {
+        if self.stage == Stage::Ready {
+            self.ready_history = ReadyHistory::Observed;
+        }
+    }
+
     #[must_use]
     pub fn requires_browserstack_release(&self) -> bool {
         self.profile.capabilities.browserstack.is_some() && !self.browserstack_released
@@ -108,9 +114,7 @@ impl Store {
                 if state.version != 1 {
                     return Err(Error::Invalid("Unsupported cloud state"));
                 }
-                if state.stage == Stage::Ready {
-                    state.ready_history = ReadyHistory::Observed;
-                }
+                state.normalize_readiness_history();
                 Ok(Some(state))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),

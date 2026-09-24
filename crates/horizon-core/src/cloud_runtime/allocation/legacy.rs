@@ -39,13 +39,14 @@ impl Records {
         allocation: AllocationId,
         controller: ControllerId,
     ) -> Result<Self, Error> {
-        let legacy: Deployment = decode_preserving(bytes)?;
+        let mut legacy: Deployment = decode_preserving(bytes)?;
         if legacy.version != 1 {
             return Err(Error::Version);
         }
         if identity.cloud_id() != legacy.cloud_id {
             return Err(Error::Ownership);
         }
+        legacy.normalize_readiness_history();
         let pair = Self::split(legacy, identity, allocation, controller);
         pair.validate()?;
         Ok(pair)
