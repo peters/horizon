@@ -91,6 +91,14 @@ impl Store {
         }
         let mut ids = BTreeSet::new();
         for (alias, grant) in &state.grants {
+            let source = Target {
+                scope: state.owner.scope.clone(),
+                cloud_id: state.owner.cloud_id.clone(),
+                declaration: grant.target.declaration.clone(),
+            };
+            if Selection::new(&source, alias, &grant.target).as_ref() != Ok(&grant.selection) {
+                return Err(Error::Invalid("Persisted companion selection differs from its grant"));
+            }
             if grant.access.as_ref().is_some_and(|access| {
                 access.grant != grant.id
                     || access.ssh_alias != format!("companion-{alias}")

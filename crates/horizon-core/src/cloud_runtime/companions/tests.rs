@@ -291,6 +291,9 @@ fn invalid_scope_ambiguity_and_competing_controllers_fail_closed() {
         target_cloud_id: "target".into(),
     };
     assert!(apply_action(&mut state, Some(&fixture.context), &select).is_err());
+    fixture.context.inventory.last_mut().unwrap().declaration.repository = "example/other".into();
+    assert!(apply_action(&mut state, Some(&fixture.context), &select).is_err());
+    assert!(state.grants.is_empty());
     fixture.context.inventory.pop();
     fixture.context.inventory[1].scope.workspace_id = "other-workspace".into();
     assert!(apply_action(&mut state, Some(&fixture.context), &select).is_err());
@@ -302,7 +305,19 @@ fn invalid_scope_ambiguity_and_competing_controllers_fail_closed() {
 
 #[test]
 fn contradictory_access_and_duplicate_grants_fail_before_ssh_or_journal_mutation() {
-    for corruption in ["source", "target", "duplicate", "source_pin", "target_pin", "revision"] {
+    for corruption in [
+        "source",
+        "target",
+        "duplicate",
+        "source_pin",
+        "target_pin",
+        "revision",
+        "alias",
+        "source_cloud_id",
+        "target_cloud_id",
+        "scope",
+        "declaration",
+    ] {
         let mut fixture = Fixture::new();
         fixture.transport.fail_authorize = corruption.ends_with("_pin") || corruption == "revision";
         fixture.select();
@@ -316,6 +331,15 @@ fn contradictory_access_and_duplicate_grants_fail_before_ssh_or_journal_mutation
             "source_pin" => grant.source_worker = None,
             "target_pin" => grant.target_worker = None,
             "revision" => grant.revision = None,
+            field @ ("alias" | "source_cloud_id" | "target_cloud_id" | "scope" | "declaration") => {
+                let mut selection = serde_json::to_value(&grant.selection).unwrap();
+                selection[field] = match field {
+                    "scope" => serde_json::json!({"session_id":"other", "workspace_id":"workspace"}),
+                    "declaration" => serde_json::json!({"repository":"example/other", "profile":"cpu"}),
+                    _ => "other".into(),
+                };
+                grant.selection = serde_json::from_value(selection).unwrap();
+            }
             _ => {
                 let mut duplicate = grant.clone();
                 duplicate.selection =

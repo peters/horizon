@@ -152,6 +152,9 @@ fn apply_action(state: &mut journal::State, context: Option<&Context>, action: &
             }
             let selection = Selection::new(&context.source, alias, target)
                 .map_err(|_| Error::Invalid("Invalid companion selection"))?;
+            selection
+                .resolve(&context.source, alias, declaration, &context.inventory)
+                .map_err(|_| Error::Invalid("Companion target identity is ambiguous"))?;
             if let Some(existing) = state.grants.get(alias) {
                 if existing.selected && existing.selection == selection {
                     return Ok(());
