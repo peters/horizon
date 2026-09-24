@@ -327,7 +327,12 @@ impl HorizonApp {
                         horizon_core::cloud_runtime::registry::State::Revoked => "Revoked",
                     };
                     status.validation.map_or_else(
-                        || format!("{state}. Image access has not been validated."),
+                        || {
+                            format!(
+                                "{state}. Image access has not been validated. Configured pull expiry: {}.",
+                                status.configured_pull_expiry.as_deref().unwrap_or("Unknown")
+                            )
+                        },
                         |validation| {
                             format!(
                                 "{state}. Last verified image: {}. Scope: {}. Expiry: {}.",

@@ -16,6 +16,7 @@ pub struct Images<'a> {
 impl Images<'_> {
     fn docker(&self) -> Command {
         let mut cmd = Command::new("docker");
+        cmd.env_remove("DOCKER_AUTH_CONFIG");
         cmd.arg("--config").arg(self.docker_config);
         if let Some(host) = self.docker_host {
             cmd.arg("--host").arg(host);
@@ -166,6 +167,24 @@ fn repository_name(image: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn build_repository_retains_registry_namespace_and_port() {
+        for (reference, expected) in [
+            ("registry.example.com/team/worker", "registry.example.com/team/worker"),
+            (
+                "registry.example.com:5000/team/worker:latest",
+                "registry.example.com:5000/team/worker",
+            ),
+            (
+                "registry.example.com/team/worker@sha256:abc",
+                "registry.example.com/team/worker",
+            ),
+            ("docker.io/team/worker:latest", "docker.io/team/worker"),
+        ] {
+            assert_eq!(repository_name(reference), expected);
+        }
+    }
+
     #[test]
     fn uploaded_identity_supports_both_docker_stores_and_rejects_changed_tags() {
         let manifest = serde_json::json!({"config": {"digest": "sha256:config"}});

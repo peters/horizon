@@ -56,8 +56,14 @@ impl Config {
             return Err(Error::Invalid("Registry state must use an absolute private path"));
         }
         let mut repositories = std::collections::BTreeSet::new();
+        let mut generations = std::collections::BTreeSet::new();
         for binding in &self.bindings {
             binding.validate()?;
+            for generation in std::iter::once(&binding.generation).chain(&binding.retired) {
+                if !generations.insert(generation) {
+                    return Err(Error::Invalid("Registry generations must be globally unique"));
+                }
+            }
             if !repositories.insert(&binding.repository) {
                 return Err(Error::Invalid("Duplicate registry repository binding"));
             }
@@ -86,11 +92,11 @@ impl Config {
         if let Some(binding) = self.bindings.iter().find(|binding| binding.repository == repository) {
             return Ok(Some(binding));
         }
-        let host = repository.split('/').next();
+        let host = credentials::registry_host(repository);
         if self
             .bindings
             .iter()
-            .any(|binding| binding.repository.split('/').next() == host)
+            .any(|binding| credentials::registry_host(&binding.repository) == host)
         {
             return Err(Error::Invalid(
                 "Image repository does not match the authorized registry scope",
@@ -160,6 +166,7 @@ pub struct Prepared {
     pull: Material,
     journal: Journal,
     verified: bool,
+    docker_host: Option<String>,
 }
 
 impl Prepared {
@@ -220,6 +227,7 @@ impl Prepared {
             pull,
             journal,
             verified: false,
+            docker_host: settings.docker_host.clone(),
         }))
     }
 
@@ -242,6 +250,7 @@ impl Prepared {
 
     fn verify_image_with(&mut self, image: &str, cancel: &Cancellation, mut command: Command) -> Result<()> {
         self.verified = false;
+        command.env_remove("DOCKER_AUTH_CONFIG");
         self.binding.pull.check_expiry()?;
         if repository(image)? != self.binding.repository || !image.contains("@sha256:") {
             return Err(Error::Invalid(
@@ -254,6 +263,9 @@ impl Prepared {
             emit: &|_| {},
             secrets: self.pull.redactions(),
         };
+        if let Some(host) = &self.docker_host {
+            command.arg("--host").arg(host);
+        }
         let output = runner.run("Registry pull validation", command
             .arg("--config").arg(self.pull.config.path())
             .args(["buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"]), Duration::from_secs(60))
@@ -266,7 +278,7 @@ impl Prepared {
         self.journal.record_validation(Validation {
             image: image.into(),
             checked_at: time::OffsetDateTime::now_utc().unix_timestamp(),
-            scope: if self.binding.repository.starts_with("ghcr.io/") {
+            scope: if credentials::is_github_registry(&self.binding.repository) {
                 "issuer-verified read:packages"
             } else {
                 "owner-confirmed read-only; issuer scope introspection unavailable"

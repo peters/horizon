@@ -24,6 +24,7 @@ pub struct Status {
     pub generation: String,
     pub state: State,
     pub validation: Option<Validation>,
+    pub configured_pull_expiry: Option<String>,
 }
 
 /// Shared UI/CLI entry point. Never publishes images or allocates compute.
@@ -41,6 +42,7 @@ pub fn manage(settings: &Settings, action: &Action, cancel: &Cancellation) -> Re
             generation: prepared.binding.generation.clone(),
             state: prepared.journal.state().clone(),
             validation: prepared.journal.validation(),
+            configured_pull_expiry: prepared.binding.pull.expires_at.clone(),
         });
     }
     let (repository, generation) = match action {
@@ -62,5 +64,8 @@ pub fn manage(settings: &Settings, action: &Action, cancel: &Cancellation) -> Re
         generation: generation.clone(),
         state: journal.state().clone(),
         validation: journal.validation(),
+        configured_pull_expiry: (generation == &binding.generation)
+            .then(|| binding.pull.expires_at.clone())
+            .flatten(),
     })
 }

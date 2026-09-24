@@ -180,7 +180,8 @@ fn provider_transfer_requires_completed_image_validation() {
 #[test]
 fn immutable_pull_probe_uses_only_the_pull_config_and_handles_failure_and_cancellation() {
     use std::os::unix::fs::PermissionsExt;
-    let (root, settings) = fixture();
+    let (root, mut settings) = fixture();
+    settings.docker_host = Some("unix:///synthetic/docker.sock".into());
     let mut prepared = Prepared::for_image(&settings, &image(), None, true).unwrap().unwrap();
     assert_ne!(prepared.docker_config(true), prepared.docker_config(false));
     let config: serde_json::Value =
@@ -193,14 +194,18 @@ fn immutable_pull_probe_uses_only_the_pull_config_and_handles_failure_and_cancel
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s' '{{\"digest\":\"sha256:{}\"}}'\n",
+            "#!/bin/sh\n[ -z \"${{DOCKER_AUTH_CONFIG+x}}\" ] || exit 2\n[ \"$1\" = --host ] && [ \"$2\" = unix:///synthetic/docker.sock ] || exit 1\nprintf '%s' '{{\"digest\":\"sha256:{}\"}}'\n",
             "a".repeat(64)
         ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     prepared
-        .verify_image_with(&image(), &Cancellation::default(), Command::new(&script))
+        .verify_image_with(&image(), &Cancellation::default(), {
+            let mut command = Command::new(&script);
+            command.env("DOCKER_AUTH_CONFIG", "ambient-credential");
+            command
+        })
         .unwrap();
     assert!(prepared.verified);
     assert_eq!(prepared.journal.validation().unwrap().image, image());
@@ -212,7 +217,7 @@ fn immutable_pull_probe_uses_only_the_pull_config_and_handles_failure_and_cancel
             .is_err()
     );
     assert!(!prepared.verified);
-    std::fs::write(&script, "#!/bin/sh\nprintf synthetic-pull >&2\nexit 1\n").unwrap();
+    std::fs::write(&script, "#!/bin/sh\n[ \"$1\" = --host ] && [ \"$2\" = unix:///synthetic/docker.sock ] || exit 1\nprintf synthetic-pull >&2\nexit 1\n").unwrap();
     let error = prepared
         .verify_image_with(&image(), &Cancellation::default(), Command::new(&script))
         .unwrap_err();
@@ -233,4 +238,79 @@ fn pull_only_deployment_still_excludes_the_publishing_secret_from_source() {
             "Registry secrets must be outside the source and build context"
         ))
     ));
+}
+
+#[test]
+fn equivalent_issuer_hosts_cannot_bypass_scope_policy() {
+    for reference in [
+        "ghcr.io/team/worker",
+        "ghcr.io:443/team/worker",
+        "GHCR.IO/team/worker",
+        "ghcr.io./team/worker",
+    ] {
+        assert!(credentials::is_github_registry(reference));
+    }
+    assert!(!credentials::is_github_registry("ghcr.io.example/team/worker"));
+    let (_root, mut settings) = fixture();
+    binding(&mut settings).repository = "ghcr.io/team/worker".into();
+    assert!(
+        settings
+            .registries
+            .as_ref()
+            .unwrap()
+            .select("ghcr.io:443/team/other:latest")
+            .is_err()
+    );
+}
+
+#[test]
+fn docker_hub_material_uses_the_canonical_login_key() {
+    let (_root, settings) = fixture();
+    let auth = &settings.registries.as_ref().unwrap().bindings[0].pull;
+    let material = Material::load(auth, "docker.io/team/worker", None).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(material.config.path().join("config.json")).unwrap()).unwrap();
+    assert!(config["auths"]["https://index.docker.io/v1/"]["auth"].is_string());
+    assert_eq!(config["auths"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        credentials::docker_auth_key("registry.example:5000/team/worker"),
+        "registry.example:5000"
+    );
+}
+
+#[test]
+fn duplicate_current_and_retired_generations_are_rejected_globally() {
+    let (_root, mut settings) = fixture();
+    let mut second = binding(&mut settings).clone();
+    second.repository = "registry.example/team/other".into();
+    let config = settings.registries.as_mut().unwrap();
+    config.bindings.push(second);
+    assert!(config.validate().is_err());
+    config.bindings[1].generation = "generation2".into();
+    assert!(config.validate().is_ok());
+    config.bindings[1].retired.push("generation1".into());
+    assert!(config.validate().is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn status_exposes_configured_expiry_before_verification_without_mislabeling_retired_grants() {
+    let (_root, mut settings) = fixture();
+    binding(&mut settings).pull.expires_at = Some("2030-01-01T00:00:00Z".into());
+    binding(&mut settings).retired.push("previous".into());
+    let status = |generation: &str| {
+        manage(
+            &settings,
+            &Action::Status {
+                repository: "registry.example/team/worker".into(),
+                generation: generation.into(),
+            },
+            &Cancellation::default(),
+        )
+        .unwrap()
+    };
+    let current = status("generation1");
+    assert!(current.validation.is_none());
+    assert_eq!(current.configured_pull_expiry.as_deref(), Some("2030-01-01T00:00:00Z"));
+    assert!(status("previous").configured_pull_expiry.is_none());
 }

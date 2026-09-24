@@ -33,10 +33,7 @@ impl Material {
         );
         let config = tempfile::Builder::new().prefix("horizon-registry-").tempdir()?;
         let mut file = tempfile::NamedTempFile::new_in(config.path())?;
-        let host = repository
-            .split('/')
-            .next()
-            .ok_or(Error::Invalid("Registry hostname is missing"))?;
+        let host = docker_auth_key(repository);
         serde_json::to_writer(
             &mut file,
             &serde_json::json!({"auths": {host: {"auth": encoded.as_str()}}}),
@@ -60,7 +57,7 @@ impl Material {
     pub fn verify_scope(&self, repository: &str, cancel: &Cancellation) -> Result<Option<String>> {
         cancel.check()?;
         let mut observed_expiry = None;
-        if repository.starts_with("ghcr.io/") {
+        if is_github_registry(repository) {
             let config = ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(30)))
                 .max_redirects(0)
@@ -162,4 +159,26 @@ pub(super) fn verify_github_scopes(scopes: Option<&str>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+// Issuer policy follows the DNS hostname, including equivalent case, port and FQDN spellings.
+pub(super) fn registry_host(repository: &str) -> String {
+    let authority = repository.split('/').next().unwrap_or_default();
+    authority
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+pub(super) fn is_github_registry(repository: &str) -> bool {
+    registry_host(repository) == "ghcr.io"
+}
+
+pub(super) fn docker_auth_key(repository: &str) -> &str {
+    match repository.split('/').next().unwrap_or_default() {
+        "docker.io" | "index.docker.io" => "https://index.docker.io/v1/",
+        _ => repository.split('/').next().unwrap_or_default(),
+    }
 }

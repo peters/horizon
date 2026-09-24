@@ -92,7 +92,7 @@ form or CLI first. No UI needs to be open. Cancellation preserves pending mutati
 journals; use status/reconcile to inspect an interrupted operation.
 
 Status includes the generation, provider state, last validated image, scope proof,
-observed/configured expiry and verification timestamp. It is historical evidence,
+configured pull expiry even before verification, observed expiry and verification timestamp. It is historical evidence,
 not a guarantee that the issuer has not revoked the token since. Deployment validates
 again. Docker with buildx and network access to the registry are required for image
 validation. The helper uses the workspace's existing MCP/runtime dependencies only
