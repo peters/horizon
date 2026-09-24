@@ -117,6 +117,22 @@ fn malformed_and_unselected_connections_are_rejected_before_any_probe() {
 }
 
 #[test]
+fn aliases_cannot_share_a_connection_grant() {
+    let mut snapshot = catalog(Status::Ready);
+    let mut other = snapshot.companions[0].clone();
+    other.alias = "utility".into();
+    other.target_cloud_id = Some("cloud-utility".into());
+    other.access.as_mut().unwrap().ssh_alias = "companion-utility".into();
+    snapshot.companions.push(other);
+    assert!(snapshot.validate().is_err());
+
+    let access = snapshot.companions[1].access.as_mut().unwrap();
+    access.grant = "grant-utility".into();
+    access.worktree = "/workspace/companions/worktrees/grant-utility".into();
+    assert!(snapshot.validate().is_ok());
+}
+
+#[test]
 fn missing_catalog_is_an_explicit_discovery_error() {
     let root = tempfile::tempdir().unwrap();
     assert!(list(&root.path().join("missing"), 100).is_err());

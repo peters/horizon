@@ -107,6 +107,7 @@ impl Catalog {
             return Err("Invalid companion catalog");
         }
         let mut aliases = std::collections::BTreeSet::new();
+        let mut grants = std::collections::BTreeSet::new();
         for entry in &self.companions {
             if !horizon_cloud::valid_id(&entry.alias)
                 || entry.alias.len() > 64
@@ -132,6 +133,7 @@ impl Catalog {
                 && (!entry.selected
                     || entry.target_cloud_id.is_none()
                     || !horizon_cloud::valid_id(&access.grant)
+                    || !grants.insert(&access.grant)
                     || access.ssh_alias != format!("companion-{}", entry.alias)
                     || access.worktree != format!("/workspace/companions/worktrees/{}", access.grant))
             {
