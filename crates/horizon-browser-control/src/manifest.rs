@@ -272,12 +272,12 @@ pub fn read_at(path: &Path) -> Option<BrowserManifest> {
 /// Read a manifest, distinguishing an absent file (`Ok(None)`) from a read
 /// or parse failure, which callers that must retry later need to see.
 fn try_read_at(path: &Path) -> std::io::Result<Option<BrowserManifest>> {
-    let raw = match std::fs::read_to_string(path) {
+    let raw = match crate::atomic_file::read(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    serde_json::from_str(&raw)
+    serde_json::from_slice(&raw)
         .map(Some)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }

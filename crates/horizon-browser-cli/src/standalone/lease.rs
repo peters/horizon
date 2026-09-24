@@ -296,7 +296,7 @@ fn read_lease(root: &Path, panel_id: &str) -> Option<StandaloneHostRef> {
 }
 
 fn decode_lease(root: &Path, path: &Path) -> Option<StandaloneHostRef> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = atomic_file::read(path).ok()?;
     let host = serde_json::from_slice::<StandaloneHostRef>(&bytes).ok()?;
     (lease_path_for_root(root, &host.panel_id) == path).then_some(host)
 }

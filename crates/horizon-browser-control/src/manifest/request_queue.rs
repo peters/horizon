@@ -53,7 +53,7 @@ pub(super) fn write_private_json(path: &Path, value: &impl Serialize) -> std::io
 }
 
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {
-    let encoded = match std::fs::read(path) {
+    let encoded = match crate::atomic_file::read(path) {
         Ok(encoded) => encoded,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),

@@ -10,17 +10,28 @@
 //! `FILE_SHARE_DELETE` (the `std::fs::File` default). A handle that denies
 //! delete sharing, such as a scanner or an external reader, still blocks the
 //! rename, so publication retries for a bounded window before failing.
+//!
+//! On Windows the replacing rename is not atomic for readers either. While it
+//! is in flight, and a filter such as a scanner can hold it there for a few
+//! hundred milliseconds, the destination can be missing or still being
+//! deleted, so readers of replaced files open them through [`open`] or
+//! [`read`].
 
-use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const BLOCKED_RETRY_WINDOW: Duration = Duration::from_secs(2);
 const FIRST_RETRY_DELAY: Duration = Duration::from_millis(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_millis(50);
+const STAGED_PREFIX: &str = ".";
+const STAGED_SUFFIX: &str = ".tmp";
+/// Staging older than this was left by a writer that crashed mid-publication.
+const ABANDONED_STAGING_AGE: Duration = Duration::from_secs(10);
 
 /// Replace `path` with `bytes`, creating it when it does not exist.
 ///
@@ -40,6 +51,33 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         BLOCKED_RETRY_WINDOW,
     )?;
     staged.published()
+}
+
+/// Open a file that [`replace`] publishes, for reading.
+///
+/// On Windows a destination that is missing or still being deleted while a
+/// staged sibling shows a publication in flight is retried for the bounded
+/// window; with no publication in flight a missing file is reported at once.
+///
+/// # Errors
+/// Returns the open error, including `NotFound` for a file that does not
+/// exist.
+pub fn open(path: &Path) -> io::Result<File> {
+    retry_while_blocked(
+        || File::open(path),
+        |error| is_racing_a_publication(error, path),
+        BLOCKED_RETRY_WINDOW,
+    )
+}
+
+/// Read a file that [`replace`] publishes; see [`open`].
+///
+/// # Errors
+/// Returns the error from opening or reading the file.
+pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open(path)?.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Create `path` with `bytes`, refusing to replace an existing file.
@@ -78,13 +116,13 @@ impl StagedFile {
                 format!("{} has no file name", destination.display()),
             ));
         }
-        let directory = match destination.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
+        let directory = parent_directory(destination);
         // A fixed-length leaf keeps staging valid for every destination the
         // filesystem accepts, however long its own leaf is.
-        let path = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
+        let path = directory.join(format!(
+            "{STAGED_PREFIX}{}{STAGED_SUFFIX}",
+            uuid::Uuid::new_v4().simple()
+        ));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -108,6 +146,42 @@ impl Drop for StagedFile {
     fn drop(&mut self) {
         remove_staged(&self.path);
     }
+}
+
+fn parent_directory(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+fn is_staged_name(name: &OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(STAGED_PREFIX))
+        .and_then(|name| name.strip_suffix(STAGED_SUFFIX))
+        .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+/// A freshly staged sibling means some publication into this directory is in
+/// flight.
+fn publication_in_flight(path: &Path) -> bool {
+    std::fs::read_dir(parent_directory(path)).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            is_staged_name(&entry.file_name())
+                && entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| {
+                        SystemTime::now()
+                            .duration_since(modified)
+                            .map_or(true, |age| age < ABANDONED_STAGING_AGE)
+                    })
+        })
+    })
+}
+
+fn is_racing_a_publication(error: &io::Error, path: &Path) -> bool {
+    is_torn_by_a_rename(error) && publication_in_flight(path)
 }
 
 fn remove_staged(path: &Path) {
@@ -141,15 +215,15 @@ fn sync_directory(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn retry_while_blocked(
-    mut publish: impl FnMut() -> io::Result<()>,
+fn retry_while_blocked<T>(
+    mut attempt: impl FnMut() -> io::Result<T>,
     is_blocked: impl Fn(&io::Error) -> bool,
     window: Duration,
-) -> io::Result<()> {
+) -> io::Result<T> {
     let deadline = Instant::now() + window;
     let mut delay = FIRST_RETRY_DELAY;
     loop {
-        match publish() {
+        match attempt() {
             Err(error) if is_blocked(&error) && Instant::now() < deadline => {
                 std::thread::sleep(delay);
                 delay = (delay * 2).min(MAX_RETRY_DELAY);
@@ -178,6 +252,21 @@ fn is_blocked_by_open_handle(_error: &io::Error) -> bool {
     false
 }
 
+/// A reader that opens the destination mid-rename finds it missing, or still
+/// being deleted, which Windows reports as access denied.
+#[cfg(windows)]
+fn is_torn_by_a_rename(error: &io::Error) -> bool {
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    matches!(error.raw_os_error(), Some(ERROR_FILE_NOT_FOUND | ERROR_ACCESS_DENIED))
+}
+
+/// Unix renames replace the destination atomically for readers.
+#[cfg(not(windows))]
+fn is_torn_by_a_rename(_error: &io::Error) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -187,7 +276,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
-    use super::{create_new, replace, retry_while_blocked};
+    use super::{StagedFile, create_new, is_staged_name, publication_in_flight, read, replace, retry_while_blocked};
 
     fn entry_names(directory: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(directory)
@@ -272,7 +361,7 @@ mod tests {
                 std::thread::spawn(move || {
                     let mut reads = 0_u32;
                     loop {
-                        let contents = std::fs::read(&path).unwrap();
+                        let contents = read(&path).unwrap();
                         assert!(contents == first || contents == second, "observed a partial file");
                         reads += 1;
                         if reads == 1 {
@@ -297,6 +386,84 @@ mod tests {
             assert!(reader.join().unwrap() > 0);
         }
         assert_eq!(entry_names(root.path()), ["panel.json"]);
+    }
+
+    #[test]
+    fn only_staging_names_mark_a_publication_in_flight() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("panel.json");
+        replace(&path, b"{}").unwrap();
+        std::fs::write(root.path().join(".notes.tmp"), b"").unwrap();
+        std::fs::write(root.path().join(format!(".{}.tmp", "g".repeat(32))), b"").unwrap();
+        assert!(!publication_in_flight(&path));
+
+        let staged = StagedFile::write(&path, b"next").unwrap();
+        assert!(is_staged_name(staged.path.file_name().unwrap()));
+        assert!(publication_in_flight(&path));
+        drop(staged);
+        assert!(!publication_in_flight(&path));
+    }
+
+    #[test]
+    fn abandoned_staging_does_not_mark_a_publication_in_flight() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("panel.json");
+        let orphan = std::fs::File::create(root.path().join(format!(".{}.tmp", "b".repeat(32)))).unwrap();
+        orphan
+            .set_modified(std::time::SystemTime::now() - super::ABANDONED_STAGING_AGE * 2)
+            .unwrap();
+        drop(orphan);
+
+        assert!(!publication_in_flight(&path));
+    }
+
+    #[test]
+    fn read_reports_an_absent_file_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+
+        let error = read(&root.path().join("panel.json")).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "no publication was in flight"
+        );
+    }
+
+    /// Windows can leave the destination missing while a replacing rename is
+    /// in flight; the staged sibling is still there, so the read waits.
+    #[cfg(windows)]
+    #[test]
+    fn read_waits_out_a_publication_that_is_mid_rename() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("panel.json");
+        let staged = root.path().join(format!(".{}.tmp", "a".repeat(32)));
+        std::fs::write(&staged, b"new").unwrap();
+        let publish = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                std::fs::rename(staged, path).unwrap();
+            })
+        };
+
+        assert_eq!(read(&path).unwrap(), b"new");
+        publish.join().unwrap();
+    }
+
+    /// Unix renames are atomic for readers, so a missing file is genuine even
+    /// while a sibling is being published.
+    #[cfg(not(windows))]
+    #[test]
+    fn read_does_not_wait_for_publications_on_unix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("panel.json");
+        let _staged = StagedFile::write(&path, b"next").unwrap();
+        let started = std::time::Instant::now();
+
+        assert_eq!(read(&path).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
@@ -347,7 +514,7 @@ mod tests {
     #[test]
     fn blocked_publication_gives_up_after_the_window() {
         let attempts = Cell::new(0);
-        let error = retry_while_blocked(
+        let error = retry_while_blocked::<()>(
             || {
                 attempts.set(attempts.get() + 1);
                 Err(io::Error::from(io::ErrorKind::PermissionDenied))
@@ -364,7 +531,7 @@ mod tests {
     #[test]
     fn unrelated_publication_errors_are_not_retried() {
         let attempts = Cell::new(0);
-        let error = retry_while_blocked(
+        let error = retry_while_blocked::<()>(
             || {
                 attempts.set(attempts.get() + 1);
                 Err(io::Error::from(io::ErrorKind::NotFound))
