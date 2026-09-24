@@ -55,8 +55,16 @@ to create a dedicated worker.
 
 Introduce a version-1 machine-local placement envelope, separate from portable
 profiles and account secrets. Its tagged `placement` is either `new_worker` (the
-central default when omitted) or `existing_worker` with an allocation ID. The
-latter also binds the existing local account reference and SSH identity; changing
+central default when omitted) or `existing_worker` with an allocation ID.
+`new_worker` carries a `sharing` mode: `dedicated` is the central default, while
+`trusted_shared` is an explicit user choice for a new compatible CPU allocation.
+Copy the resolved sharing mode into the durable allocation record before provider
+I/O. After worker identity and readiness verification, initialize its manifest
+with that same mode before first-project bootstrap. Only `trusted_shared` can
+admit a second member; an existing-worker choice never upgrades a dedicated
+allocation. Legacy migration records `dedicated` explicitly. Image capability
+alone is not sharing consent, and no in-place sharing-mode conversion is supported
+in this first delivery. The existing-worker choice also binds the existing local account reference and SSH identity; changing
 machine defaults cannot redirect a saved allocation to another account. Persist
 the resolved choice with the project before side effects. Unknown versions,
 unknown placement variants and dangling references fail closed. A label change
@@ -85,6 +93,9 @@ explicitly enabled.
 
 Requested agent/browser sets must be subsets of verified installed capabilities;
 project-enabled tools are exactly the requested subset, not the worker union.
+A desktop request also requires verified installed desktop capability; exclusivity
+alone is insufficient. Check any requested remote-browser runtime contract and
+the project's explicit account grant independently of installed local browsers.
 Validate runtime/source contract versions, CPU-only operation, platform and
 storage compatibility. CPU/memory requirements must fit the observed allocation;
 report them as requirements, not reserved resources or enforced per-project
@@ -255,7 +266,9 @@ there is no in-place image upgrade or silent sharing of existing allocations.
 ### UI, CLI and MCP
 
 Extend the established New Cloud flow with `New worker` as the default and `Use
-existing worker`. Show names, observed CPU/memory, capabilities, members, known
+existing worker`. The new-worker path offers an explicit `Allow trusted projects
+to share this worker` choice, off by default, mapped to the persisted sharing mode.
+Show names, observed CPU/memory, capabilities, members, known
 prices with observation time, and precise incompatibility reasons before compute
 or credential changes. Keep ordinary panels, immutable membership, per-cloud
 layouts and fullscreen. A compact shared indicator and Cloud-menu member list
