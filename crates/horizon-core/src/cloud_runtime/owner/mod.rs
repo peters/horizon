@@ -160,9 +160,8 @@ impl Owner {
             Err(error) => return Err(error),
             Ok(_) => return Err(Error::Registration),
         }
-        journal::create_root(root)?;
-        let root = root.canonicalize()?;
-        let directory = Directory::open(&root)?;
+        let directory = Directory::create(root, || {})?;
+        let root = directory.path().to_owned();
         let lock_root = journal::create_lock_root(lock_root)?;
         if lock_root.starts_with(&root) {
             return Err(Error::Ownership);
@@ -308,6 +307,18 @@ impl Owner {
         let marker: Marker = serde_json::from_slice(&self.directory.read(MARKER)?).map_err(|_| Error::Journal)?;
         if marker != self.marker || next.lock_path != self.lock_path {
             return Err(Error::Ownership);
+        }
+        if let Some(pending) = &next.pending {
+            journal::decode(&self.directory.read(CANDIDATE)?, &self.marker, &pending.next)?;
+        }
+        match &next.committed {
+            Some(anchor) => {
+                journal::decode(&self.directory.read(JOURNAL)?, &self.marker, anchor)?;
+            }
+            None => match self.directory.read(JOURNAL) {
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err(Error::Journal),
+            },
         }
         // The canonical lock serializes cooperative writers; never recreate a
         // missing native predecessor from cached signing material.

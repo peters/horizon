@@ -540,7 +540,7 @@ fn native_commits_recheck_ownership_and_the_exact_predecessor() {
 
 #[test]
 fn recovery_never_recreates_or_overwrites_a_changed_native_predecessor() {
-    for deleted in [false, true] {
+    for mutation in ["delete", "replace", "journal"] {
         let (_temp, root, vault) = fixture();
         let mut owner = create(&root, &vault);
         assert!(
@@ -553,12 +553,14 @@ fn recovery_never_recreates_or_overwrites_a_changed_native_predecessor() {
         assert!(
             owner
                 .recover(&mut registration, &mut |_| {
-                    if deleted {
-                        vault.0.borrow_mut().clear();
-                    } else {
-                        let mut changed = Registration::read(&vault, &owner.marker).unwrap();
-                        changed.pending.as_mut().unwrap().next.hash = [0; 32];
-                        changed.write(&vault).unwrap();
+                    match mutation {
+                        "delete" => vault.0.borrow_mut().clear(),
+                        "replace" => {
+                            let mut changed = Registration::read(&vault, &owner.marker).unwrap();
+                            changed.pending.as_mut().unwrap().next.hash = [0; 32];
+                            changed.write(&vault).unwrap();
+                        }
+                        _ => std::fs::write(root.join(JOURNAL), b"corrupt").unwrap(),
                     }
                     expected = vault.0.borrow().clone();
                     Ok(())
@@ -567,6 +569,45 @@ fn recovery_never_recreates_or_overwrites_a_changed_native_predecessor() {
         );
         assert!(!owner.ready);
         assert_eq!(*vault.0.borrow(), expected);
+    }
+}
+
+#[test]
+fn native_commits_require_the_expected_candidate_and_published_journal() {
+    for initial in [false, true] {
+        for (boundary, file) in [
+            (Boundary::Candidate, CANDIDATE),
+            (Boundary::Candidate, JOURNAL),
+            (Boundary::Published, JOURNAL),
+        ] {
+            let (temp, root, vault) = fixture();
+            let mut expected = HashMap::new();
+            let mut mutate = |step| {
+                if step == boundary {
+                    std::fs::write(root.join(file), b"corrupt").unwrap();
+                    expected = vault.0.borrow().clone();
+                }
+                Ok(())
+            };
+            let result = if initial {
+                Owner::create_with(
+                    &root,
+                    &temp.path().join("locks"),
+                    json!({}),
+                    Box::new(vault.clone()),
+                    machine(1),
+                    &mut mutate,
+                )
+                .map(|_| ())
+            } else {
+                let mut owner = create(&root, &vault);
+                let result = owner.save_with(json!({"next":true}), &mut mutate);
+                assert!(!owner.ready);
+                result
+            };
+            assert!(result.is_err(), "{initial} {boundary:?} {file}");
+            assert_eq!(*vault.0.borrow(), expected);
+        }
     }
 }
 

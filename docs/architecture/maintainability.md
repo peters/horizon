@@ -485,11 +485,14 @@ worker dispatch are separate consumers and are not connected yet.
 identity, a cloud-specific OS-store registration, a signing key and a canonical
 lock outside transferable journal state, pinned by native file identity and a nonce.
 Artifact reads, publication and directory synchronization use a retained directory
-handle and reject replacement of its registered path. Its journal
+handle and reject replacement of its registered path. Root creation retains a
+private staging-directory handle through exclusive publication, refusing an
+existing or competing destination. Its journal
 generation/hash is anchored in the registration; candidate, pending, published and committed boundaries keep
 crash recovery exact and copied or rolled-back journals fenced. Every native write
 rechecks ownership and the exact preceding registration; deleted or changed native
-state cannot be recreated from cached credentials. This API is not
+state cannot be recreated from cached credentials. Pending and final commits also
+validate the journal artifacts they anchor before changing native state. This API is not
 called by runtime entry points yet. Backends are implemented for Linux Secret Service
 and macOS Keychain; other hosts remain blocked by the existing Unix directory
 durability requirement. Synthetic tests never access the user's credential store.

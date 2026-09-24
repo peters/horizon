@@ -146,16 +146,6 @@ impl Drop for Lock {
     }
 }
 
-pub(super) fn create_root(root: &Path) -> Result<()> {
-    crate::session_store::require_directory_durability()?;
-    if !root.is_absolute() {
-        return Err(Error::Ownership);
-    }
-    fs::create_dir(root)?;
-    File::open(root.parent().ok_or(Error::Journal)?)?.sync_all()?;
-    Ok(())
-}
-
 pub(super) fn create_lock_root(root: &Path) -> Result<std::path::PathBuf> {
     fs::create_dir_all(root)?;
     let root = root.canonicalize()?;
