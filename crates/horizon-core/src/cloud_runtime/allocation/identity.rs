@@ -97,6 +97,11 @@ impl ProjectIdentity {
         self.0.project
     }
 
+    #[must_use]
+    pub fn cloud_id(&self) -> &str {
+        &self.0.cloud
+    }
+
     /// A copied workspace or session must not adopt another project's ownership.
     #[must_use]
     pub fn belongs_to(&self, session_id: &str, workspace_id: &str, cloud_id: &str) -> bool {

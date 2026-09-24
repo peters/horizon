@@ -1,6 +1,7 @@
 //! Local identities and explicit placement for the shared-worker coordinator.
 //! These records do not authorize provider calls or enable worker sharing.
 mod identity;
+pub mod legacy;
 mod placement;
 
 pub use identity::{AllocationId, ControllerId, ProjectId, ProjectIdentity};
