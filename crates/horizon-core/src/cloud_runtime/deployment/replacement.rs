@@ -283,11 +283,11 @@ fn open(request: &Request) -> Result<(Store, Deployment)> {
 
 /// The recorded worker specification belongs to this deployment.
 fn same_worker(state: &Deployment) -> Result<()> {
-    if state
+    let spec = state
         .spec
         .as_ref()
-        .is_some_and(|spec| spec.operation_id != state.cloud_id || spec.profile != state.profile)
-    {
+        .ok_or(Error::Invalid("Missing worker specification"))?;
+    if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
     Ok(())
@@ -454,10 +454,10 @@ fn revert(steps: &impl Provider, store: &Store, state: &mut Deployment, emit: &d
         .as_ref()
         .ok_or(Error::Invalid(NOTHING_PENDING))?
         .operation;
-    if steps.observe(state, None)? != Observed::Previous {
-        send(steps, &worker_id, &next, &current, emit)?;
-        await_image(steps, state, Observed::Previous, emit)?;
-    }
+    // The forward update may still apply after a read of the previous image, so the
+    // reverse one is always sent and must be observed before the journal is dropped.
+    send(steps, &worker_id, &next, &current, emit)?;
+    await_image(steps, state, Observed::Previous, emit)?;
     steps.checkpoint(Boundary::Reverted)?;
     // An interrupted commit may have rebound the storage journal to the new image.
     super::storage::rebind(store, &next, &current)?;
@@ -497,7 +497,9 @@ fn await_image(steps: &impl Provider, state: &Deployment, target: Observed, emit
     loop {
         match steps.observe(state, Some(deadline)) {
             Ok(observed) if observed == target => return Ok(()),
-            Ok(_) | Err(Error::Provider(CloudError::Transport | CloudError::Http(..))) => {}
+            Ok(_) | Err(Error::Provider(CloudError::Transport)) => {}
+            // Server errors and rate limits are transient; other statuses are not.
+            Err(Error::Provider(CloudError::Http(status, _))) if status >= 500 || status == 429 => {}
             Err(error) => return Err(error),
         }
         if !steps.pause(deadline)? {

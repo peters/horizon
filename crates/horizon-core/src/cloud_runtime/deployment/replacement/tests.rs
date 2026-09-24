@@ -334,7 +334,8 @@ fn every_crash_boundary_recovers_consistently_without_switching_twice() {
                 usize::from(committed || sent),
                 "{context}"
             );
-            let reverted = usize::from(recovery == Recovery::Cancel && sent);
+            // Once the update may have been sent, cancelling always sends the reverse one.
+            let reverted = usize::from(recovery == Recovery::Cancel && !matches!(boundary, Begun | Built));
             assert_eq!(script.count("replace Previous"), reverted, "{context}");
             if state.image_replacement.is_none() {
                 // A committed or cancelled replacement has nothing left to continue or cancel.
@@ -350,7 +351,7 @@ fn every_crash_boundary_recovers_consistently_without_switching_twice() {
 }
 
 #[test]
-fn an_interrupted_cancel_finishes_without_switching_back_twice() {
+fn an_interrupted_cancel_switches_back_again_and_finishes() {
     let fixture = Fixture::new();
     let script = Script::new(&fixture);
     script.fail_at.set(Some(Boundary::Patched));
@@ -365,8 +366,9 @@ fn an_interrupted_cancel_finishes_without_switching_back_twice() {
     let state = fixture.state();
     assert!(state.image_replacement.is_none());
     assert_eq!(state.spec.unwrap().image_digest, digest('a'));
+    // The reverse update targets the recorded image, so sending it again is safe.
     let switches = (script.count("replace Next"), script.count("replace Previous"));
-    assert_eq!(switches, (1, 1));
+    assert_eq!(switches, (1, 2));
 }
 
 #[test]
@@ -408,7 +410,12 @@ fn a_definite_refusal_returns_to_built_and_an_uncertain_update_stays_requested()
 
 #[test]
 fn a_third_image_or_lost_worker_fails_closed_and_keeps_the_update_requested() {
-    let failures: [fn() -> CloudError; 2] = [|| CloudError::IdentityMismatch, || CloudError::WorkerLost];
+    // A permanent client error ends the wait at once instead of retrying it.
+    let failures: [fn() -> CloudError; 3] = [
+        || CloudError::IdentityMismatch,
+        || CloudError::WorkerLost,
+        || CloudError::Http(405, Reason::default()),
+    ];
     for failure in failures {
         let fixture = Fixture::new();
         let script = Script::new(&fixture);
@@ -551,6 +558,9 @@ fn a_foreign_worker_spec_is_refused_before_the_provider_is_read() {
     let calls = script.calls.borrow().len();
     let error = recover(&fixture, &script, Recovery::Settle).unwrap_err().to_string();
     assert!(error.contains("identities differ"), "{error}");
+    fixture.edit(|state| state.spec = None);
+    let error = recover(&fixture, &script, Recovery::Settle).unwrap_err().to_string();
+    assert!(error.contains("Missing worker specification"), "{error}");
     assert_eq!(script.calls.borrow().len(), calls, "no provider read");
 }
 
