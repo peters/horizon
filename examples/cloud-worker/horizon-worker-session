@@ -53,10 +53,12 @@ if [ -n "$operation" ]; then
     printf '%s\n' "$operation" > "$current.new"
     sync -f "$current.new"
     mv "$current.new" "$current"
+    # The rename must be durable too, so the fence and the record naming its operation survive together.
+    sync -f "$current"
     rm -f "$session/exit-status"
     launch
     rm -f "$session/preparing"
-    # A tmux server started here may inherit descriptor 9; release the lock itself.
+    # Release the lock explicitly before exiting; the tmux server never holds it.
     flock -u 9
     printf 'Session relaunched in its existing worktree: %s\n' "$id"
     exit 0
