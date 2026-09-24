@@ -30,6 +30,9 @@ impl Connection {
     }
     #[must_use]
     pub fn args(&self) -> Vec<String> {
+        self.arguments("accept-new")
+    }
+    fn arguments(&self, host_check: &str) -> Vec<String> {
         vec![
             "-F".into(),
             "none".into(),
@@ -52,7 +55,7 @@ impl Connection {
             "-o".into(),
             "IdentitiesOnly=yes".into(),
             "-o".into(),
-            "StrictHostKeyChecking=accept-new".into(),
+            format!("StrictHostKeyChecking={host_check}"),
             "-o".into(),
             format!("HostKeyAlias={}", self.host_key_alias),
             "-o".into(),
@@ -71,6 +74,13 @@ impl Connection {
         let mut cmd = Command::new("ssh");
         cmd.args(self.args()).arg(remote);
         cmd
+    }
+    /// Use only a previously pinned host key; never enroll a key during recovery.
+    #[must_use]
+    pub fn pinned_command(&self, remote: &str) -> Command {
+        let mut command = Command::new("ssh");
+        command.args(self.arguments("yes")).arg(remote);
+        command
     }
     /// # Errors
     /// Checks the worker runtime through the existing OpenSSH transport and reports

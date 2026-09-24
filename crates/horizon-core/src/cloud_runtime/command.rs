@@ -5,7 +5,7 @@ pub mod terminal_progress;
 use super::{Error, Event, Result};
 use horizon_cloud::Cancellation;
 use std::{
-    io::Read,
+    io::{Read, Seek, Write},
     process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
@@ -75,6 +75,32 @@ impl Runner<'_> {
         .spawn("Private runtime upload", command, Duration::from_secs(30))?;
         Ok(())
     }
+    /// Exchange a bounded structured request without logging either stream.
+    /// The caller must anchor any mutation intent before invoking this method.
+    ///
+    /// # Errors
+    /// Rejects oversized requests/replies, cancellation, timeout and unsuccessful exit.
+    pub fn private_exchange(&self, command: &mut Command, request: &[u8], timeout: Duration) -> Result<Vec<u8>> {
+        const LIMIT: usize = 64 * 1024;
+        if request.len() > LIMIT {
+            return Err(Error::Invalid("Private request exceeded its bound"));
+        }
+        self.cancel.check()?;
+        let mut input = tempfile::tempfile()?;
+        input.write_all(request)?;
+        input.rewind()?;
+        command.stdin(input).stdout(Stdio::piped()).stderr(Stdio::null());
+        Runner {
+            cancel: self.cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        }
+        .spawn_bytes("Private worker request", command, timeout, LIMIT)
+        .map_err(|error| match error {
+            Error::Command(_) => Error::PrivateTransport,
+            other => other,
+        })
+    }
     /// # Errors
     /// Runs a bounded object pack without collecting binary output into memory.
     pub fn to_file(
@@ -94,6 +120,16 @@ impl Runner<'_> {
         Ok(())
     }
     fn spawn(&self, name: &'static str, command: &mut Command, timeout: Duration) -> Result<String> {
+        let bytes = self.spawn_bytes(name, command, timeout, 4 * 1024 * 1024)?;
+        Ok(self.redact(String::from_utf8_lossy(&bytes).into_owned()))
+    }
+    fn spawn_bytes(
+        &self,
+        name: &'static str,
+        command: &mut Command,
+        timeout: Duration,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
         self.cancel.check()?;
         (self.emit)(Event::Progress(super::progress::Progress::activity(name)));
         #[cfg(unix)]
@@ -136,9 +172,9 @@ impl Runner<'_> {
                 match rx.try_recv() {
                     Ok((stdout, bytes)) => {
                         if stdout {
-                            if output.len() + bytes.len() > 4 * 1024 * 1024 {
+                            if output.len() + bytes.len() > limit {
                                 stop(&mut child);
-                                return Err(Error::Invalid("Command output exceeded 4 MiB"));
+                                return Err(Error::Invalid("Command output exceeded its bound"));
                             }
                             output.extend_from_slice(&bytes);
                         }
@@ -178,7 +214,7 @@ impl Runner<'_> {
                 self.log(&pending_stdout);
                 self.log(&pending_stderr);
                 return if status.success() {
-                    Ok(self.redact(String::from_utf8_lossy(&output).into_owned()))
+                    Ok(output)
                 } else {
                     Err(Error::Command(name))
                 };
@@ -331,3 +367,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+mod exchange_tests;

@@ -607,3 +607,14 @@ receipt, manifest and initialized publications. The store never creates its root
 or lock. Missing state and admitted/nonempty manifests fail closed. There is no
 production first-initialization path or sharing activation; provider/mount
 qualification and anchored host bootstrap permission remain prerequisites.
+
+`cloud_runtime::bootstrap_recovery` connects the owning-host anchor to that
+existing worker command. It stores one exact signed recovery request and SSH
+identity/pin fingerprints in the owner's payload before transport, preserves
+unrelated payload fields, and anchors the verified receipt before success.
+`connection` validates the existing worker alias and identity files, then retains
+private snapshots of those verified bytes through SSH completion. SSH uses strict
+existing-key verification. `command::Runner::private_exchange` transports
+bounded raw bytes through private stdin without emitting either stream. Retries,
+including completed ones, still contact the worker and validate its full receipt.
+This path provides no initialization permission and performs no provider mutation.

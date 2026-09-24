@@ -327,3 +327,33 @@ yet. First initialization still requires qualified provider/storage provenance
 and an anchored, consumed host permission. Shared membership, source/session/tool
 isolation and UI/CLI/MCP integration remain unfinished under issue #805. Native
 provider-volume locking and durability must be qualified before activation.
+
+The host library's `cloud_runtime::bootstrap_recovery::recover` holds an `Owner`
+through request anchoring, SSH transport and receipt anchoring. It requires the
+expected startup/worker identity, the existing SSH identity and a previously
+recorded plain `horizon-cloud-<worker-id>` host-key entry. It refuses absent or
+changed pins and never accepts a new host key during recovery. The dedicated pin
+file may contain only that exact alias, blank lines and comments; wildcard,
+hashed, multi-host, authority, revocation and unrelated entries are rejected.
+The private snapshot and anchored pin hash use normalized exact-alias entries. OpenSSH's
+`ssh-keygen` validates the key encoding before the request is anchored; both
+`ssh` and `ssh-keygen` must be available on the host. Recovery requires an
+unencrypted private identity and validates its captured bytes before anchoring;
+encrypted keys and agent-only identities are unsupported by this API. Transport uses
+private snapshots of the verified key/pin bytes, so changing their source files
+cannot change an in-flight connection. Requests and replies
+are limited to 64 KiB; transport has a maximum 60-second deadline and supports
+cancellation. The exact signed request survives lost replies and host restarts.
+A completed local receipt still requires a matching remote response on every retry.
+Calling interfaces must validate allocation ownership before entering this API.
+
+For a repeatable Linux host/worker integration smoke, build the candidate worker
+and run `scripts/cloud-recovery-smoke.py --worker /absolute/horizon-cloud-worker
+--evidence /absolute/new/private-directory` from the same checkout. Use its
+isolated Cargo target and an isolated Python environment with Paramiko installed;
+the fixture also requires OpenSSH and bubblewrap. It starts a task-owned loopback
+SSH server, seeds synthetic test-only pinned state, and exercises the actual
+worker executable in a mount namespace. It checks a lost reply, reopening the
+anchored owner, identical signed retries and a missing initialized manifest, then
+closes its server and removes its task SSH private key. It does not create provider
+resources or qualify provider power-loss durability.
