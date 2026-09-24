@@ -103,7 +103,8 @@ impl Catalog {
     /// # Errors
     /// Rejects malformed discovery data before it is published or used in a command.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.version != VERSION || !horizon_cloud::valid_id(&self.source_cloud_id) || self.companions.len() > 64 {
+        // Up to 64 declarations plus 64 retained grants awaiting cleanup after configuration changes.
+        if self.version != VERSION || !horizon_cloud::valid_id(&self.source_cloud_id) || self.companions.len() > 128 {
             return Err("Invalid companion catalog");
         }
         let mut aliases = std::collections::BTreeSet::new();

@@ -6,6 +6,7 @@ pub mod bootstrap_initialization;
 pub mod bootstrap_recovery;
 pub mod browser_auth;
 pub mod command;
+pub mod companions;
 pub mod cost;
 pub mod deployment;
 pub mod git_auth;
