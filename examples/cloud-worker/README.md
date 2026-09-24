@@ -123,7 +123,7 @@ session directory, so each operation starts at most one process per session:
 |------|---------|
 | 0 | Relaunched, or this operation's relaunched process is still running |
 | 3 | Unknown session, binding mismatch or missing worktree; nothing started |
-| 4 | This operation's relaunched process was lost; it is not replayed |
+| 4 | This operation's relaunch was lost, or its launch failed or was interrupted after the fence was persisted; either way it is not replayed |
 | 5 | Nothing to relaunch: a process is running or was never launched; attach normally |
 
 Any other failure, such as services that are not ready, starts nothing. A launch

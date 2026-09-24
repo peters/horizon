@@ -36,7 +36,7 @@ if [ -n "$operation" ]; then
     current="$session/relaunch-operation"
     if [ -f "$fence" ]; then
         if running && [ "$(cat "$current" 2>/dev/null)" = "$operation" ]; then exit 0; fi
-        echo 'The process relaunched by this operation was lost. No replacement process was started.' >&2; exit 4
+        echo 'The process relaunched by this operation was lost or its launch is uncertain. No replacement process was started.' >&2; exit 4
     fi
     if running; then
         echo 'Session process is running. No replacement process was started.' >&2; exit 5
