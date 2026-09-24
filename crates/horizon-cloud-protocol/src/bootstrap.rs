@@ -56,3 +56,39 @@ pub struct RecoveryReceipt {
     pub operation: OperationId,
     pub fingerprint: [u8; 32],
 }
+
+/// Only the verified direct-create host flow may sign Initialize. Parsing this
+/// payload or a retained provider receipt does not create that permission.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BootstrapPayload {
+    Initialize {
+        startup: Startup,
+        worker_id: String,
+        host_key: String,
+    },
+    Abandon {
+        startup: Startup,
+        worker_id: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapOutcome {
+    Initializing,
+    Abandoned,
+}
+
+/// First publication and terminal pre-admission fence receipts. Initialization
+/// alone never reports admission readiness; the anchored Recover must complete.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapReceipt {
+    pub version: u32,
+    pub startup: Startup,
+    pub worker_id: String,
+    pub operation: OperationId,
+    pub fingerprint: [u8; 32],
+    pub outcome: BootstrapOutcome,
+}

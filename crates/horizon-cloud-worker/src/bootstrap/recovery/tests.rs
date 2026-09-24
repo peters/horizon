@@ -24,6 +24,8 @@ impl Fixture {
         let key =
             Ed25519KeyPair::from_pkcs8(Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap().as_ref()).unwrap();
         let runtime = Runtime {
+            version: 1,
+            source: Source::LegacyEnvironment,
             startup: Startup {
                 version: 1,
                 controller: ControllerBinding::new(
@@ -52,6 +54,10 @@ impl Fixture {
                 worker_id: fixture.runtime.worker_id.clone(),
                 phase: Phase::Initializing,
                 recovery: None,
+                initialization: None,
+                host_key: None,
+                key_hash: None,
+                abandonment: None,
             })
             .unwrap(),
         );

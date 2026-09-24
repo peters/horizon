@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Binding {
+pub(in crate::cloud_runtime) struct Binding {
     pub startup: Startup,
     pub worker_id: String,
     identity: PathBuf,
@@ -33,7 +33,7 @@ struct Material {
 
 /// Original credential paths can change while SSH starts. Retain private copies
 /// of the exact verified bytes until the transport has exited.
-pub(super) struct Snapshot {
+pub(in crate::cloud_runtime) struct Snapshot {
     pub binding: Binding,
     pub connection: Connection,
     _key: tempfile::NamedTempFile,
@@ -66,6 +66,9 @@ impl Snapshot {
 }
 
 impl Binding {
+    pub fn matches_identity(&self, path: &Path, hash: &[u8; 32]) -> bool {
+        self.identity == path && self.identity_hash == *hash
+    }
     pub fn capture(target: &Target) -> Result<Self> {
         Ok(Material::read(target)?.binding)
     }
@@ -160,7 +163,15 @@ fn exact_pins(bytes: &[u8], alias: &str) -> Result<Zeroizing<Vec<u8>>> {
     Ok(Zeroizing::new(pins.into_bytes()))
 }
 
-fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+pub(in crate::cloud_runtime) fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+    read_inner(path, private, false)
+}
+
+pub(in crate::cloud_runtime) fn read_empty(path: &Path) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
+    read_inner(path, false, true)
+}
+
+fn read_inner(path: &Path, private: bool, empty: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
     if !path.is_absolute() || std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(Error::Invalid);
     }
@@ -179,7 +190,7 @@ fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
     #[cfg(not(unix))]
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 {
+    if !metadata.is_file() || (!empty && metadata.len() == 0) || metadata.len() > 64 * 1024 {
         return Err(Error::Invalid);
     }
     #[cfg(unix)]
@@ -203,7 +214,7 @@ fn read(path: &Path, private: bool) -> Result<(PathBuf, Zeroizing<Vec<u8>>)> {
         }
         length += read;
     }
-    if length > 64 * 1024 || length == 0 {
+    if length > 64 * 1024 || (!empty && length == 0) {
         return Err(Error::Invalid);
     }
     bytes.truncate(length);

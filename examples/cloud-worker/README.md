@@ -321,12 +321,40 @@ missing, corrupt, conflicting or admitted membership instead of resetting it.
 There is no path override, initialize action, controller enrollment or fresh-store
 flag. Error output does not include request data.
 
-This command is not invoked by the existing entrypoint and does not advertise
-shared-worker support. There is no production creator of these bootstrap records
-yet. First initialization still requires qualified provider/storage provenance
-and an anchored, consumed host permission. Shared membership, source/session/tool
-isolation and UI/CLI/MCP integration remain unfinished under issue #805. Native
-provider-volume locking and durability must be qualified before activation.
+Allocation startup metadata selects an experimental SSH-only entrypoint before
+legacy workspace writes. `prepare-allocation-ssh` captures the independent runtime
+identities at a fixed private `/run/sshd/horizon-allocation/runtime.json` path and
+prepares the exact Ed25519 key. The v2 commands never fall back to SSH login
+environment variables if that capture is absent. Explicitly retained v1 recovery
+records retain their legacy environment-based behavior.
+
+The host library's `bootstrap_initialization::create` is the first-initialization
+producer. It requires a CPU profile, immutable image, explicit sharing mode,
+private account/SSH files and a new dedicated pin path. It performs verified direct
+provider creation and first attachment while holding the Owner lock. Persisted
+creation receipts, later inspection and arbitrary JSON cannot recreate its live
+initialization permission. SSH enrollment retries within the live attempt while
+retaining its first accepted key. Before sending signed `initialize-allocation`,
+the host anchors the exact future Recover and consumes permission as Requested.
+The worker saves the exact running key before its initializing marker; only the
+subsequent Recover publishes the empty membership manifest. Missing initialized
+keys, markers or membership are never regenerated.
+
+`resume` uses only the existing Recover record. `cleanup` is explicit: after
+Requested it anchors a signed `abandon-bootstrap` operation, verifies the terminal
+worker receipt and anchors deletion intent before deleting exact owned resources.
+Abandoned state rejects Initialize and Recover permanently, but SSH-only startup
+allows the same cleanup receipt to be retrieved after a restart. Missing or
+unreachable worker state cannot grant new deletion permission. Before Requested,
+cleanup uses anchored proof that initialization was never sent. No error triggers
+automatic cleanup, replacement or allocation.
+
+These library APIs do not activate shared projects or advertise full shared-worker
+support. Shared membership, source/session/tool isolation and UI/CLI/MCP routing
+remain unfinished under #805. Provider storage qualification and spending approval
+are prerequisites for live allocation; local synthetic tests do not qualify a
+provider image or power-loss durability. The existing entrypoint without allocation
+startup metadata preserves its dedicated-worker behavior.
 
 The host library's `cloud_runtime::bootstrap_recovery::recover` holds an `Owner`
 through request anchoring, SSH transport and receipt anchoring. It requires the
@@ -357,3 +385,13 @@ worker executable in a mount namespace. It checks a lost reply, reopening the
 anchored owner, identical signed retries and a missing initialized manifest, then
 closes its server and removes its task SSH private key. It does not create provider
 resources or qualify provider power-loss durability.
+
+For first-initialization integration, use `scripts/cloud-initialization-smoke.py`
+with the same arguments and prerequisites. The fixture starts with an empty
+synthetic mounted workspace, uses the actual worker's startup capture and key
+preparation, and checks delayed SSH readiness, initialization, completion-save
+failure/reopen, cold restarts with the same key, lost abandonment replies and
+terminal rejection of delayed commands. Synthetic provider ownership is seeded
+only in the host test; provider witness transitions have separate adapter tests.
+No provider resources are created. Evidence directories are private and each run
+removes its task SSH private keys and closes all fixture connections.

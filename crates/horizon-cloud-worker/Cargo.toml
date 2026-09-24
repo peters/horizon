@@ -21,6 +21,8 @@ png.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 tokio = { workspace = true, features = ["io-std", "rt-multi-thread"] }
+zeroize.workspace = true
+sha2.workspace = true
 [dev-dependencies]
 ring.workspace = true
 horizon-browser = { workspace = true, features = ["test-support"] }

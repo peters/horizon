@@ -2,6 +2,28 @@
 set -euo pipefail
 umask 077
 : "${PUBLIC_KEY:?SSH public key is required}"
+# New allocations start SSH only; initialization owns the first workspace write.
+if [[ ${HORIZON_WORKER_STARTUP+x} ]]; then
+    mkdir -p /run/sshd
+    horizon-cloud-worker prepare-allocation-ssh
+    root=/run/sshd/horizon-allocation
+    printf '%s\n' "$PUBLIC_KEY" > "$root/authorized_keys"
+    chmod 600 "$root/authorized_keys"
+    unset PUBLIC_KEY
+    cat > "$root/sshd_config" <<'CONFIG'
+Port 22
+HostKey /run/sshd/horizon-allocation/ssh-host-key
+AuthorizedKeysFile /run/sshd/horizon-allocation/authorized_keys
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+AllowUsers root
+PidFile /run/sshd/horizon-allocation/sshd.pid
+StrictModes yes
+CONFIG
+    exec /usr/sbin/sshd -D -e -f "$root/sshd_config"
+fi
 mkdir -p /workspace/home/.ssh /workspace/agents /workspace/sessions /run/sshd/horizon-host-keys
 chmod 700 /run/sshd/horizon-host-keys
 printf '%s\n' "$PUBLIC_KEY" > /run/sshd/horizon-authorized-keys

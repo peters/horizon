@@ -1,5 +1,5 @@
-//! Existing storage only. Neither a directory nor its allocation lock is created here.
-use rustix::fs::{AtFlags, Mode, OFlags, openat, renameat, unlinkat};
+//! Descriptor-anchored allocation storage with exclusive first publication.
+use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, mkdirat, openat, renameat, renameat_with, unlinkat};
 use std::{
     fs::File,
     io::{self, Read, Write},
@@ -38,6 +38,87 @@ impl Drop for Store {
 }
 
 impl Store {
+    pub(super) fn require_pristine(workspace: &Path) -> io::Result<()> {
+        pristine(&anchor_directory(workspace)?, None)
+    }
+
+    /// Called only after independent runtime and signed first-create checks.
+    /// Existing or partial roots are never adopted by this constructor.
+    pub(super) fn create(root: &Path) -> io::Result<Self> {
+        let workspace = root.parent().ok_or_else(invalid)?;
+        let name = root.file_name().ok_or_else(invalid)?;
+        let parent = anchor_directory(workspace)?;
+        pristine(&parent, None)?;
+        let staged = format!(".horizon-bootstrap-{}", horizon_cloud_protocol::OperationId::generate());
+        mkdirat(&parent, staged.as_str(), Mode::RUSR | Mode::WUSR | Mode::XUSR)?;
+        let directory = File::from(openat(
+            &parent,
+            staged.as_str(),
+            FLAGS | OFlags::DIRECTORY,
+            Mode::empty(),
+        )?);
+        private(&directory.metadata()?)?;
+        let lock = File::from(openat(
+            &directory,
+            LOCK,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )?);
+        lock.try_lock().map_err(|_| invalid())?;
+        lock.sync_all()?;
+        directory.sync_all()?;
+        pristine(&parent, Some(staged.as_bytes()))?;
+        renameat_with(&parent, staged.as_str(), &parent, name, RenameFlags::NOREPLACE)?;
+        parent.sync_all()?;
+        let store = Self {
+            root: root.to_owned(),
+            directory,
+            lock,
+            #[cfg(test)]
+            fail_sync_after: std::cell::Cell::new(None),
+        };
+        store.verify()?;
+        pristine(&parent, Some(name.as_encoded_bytes()))?;
+        Ok(store)
+    }
+
+    pub(super) fn pristine_workspace(&self) -> io::Result<()> {
+        self.verify()?;
+        let parent = self.root.parent().ok_or_else(invalid)?;
+        let directory = anchor_directory(parent)?;
+        pristine(
+            &directory,
+            Some(self.root.file_name().ok_or_else(invalid)?.as_encoded_bytes()),
+        )?;
+        self.verify()
+    }
+
+    pub(super) fn create_host_key(&self, bytes: &[u8]) -> io::Result<()> {
+        self.verify()?;
+        if bytes.is_empty() || bytes.len() > 8192 {
+            return Err(invalid());
+        }
+        let mut file = File::from(openat(
+            &self.directory,
+            "ssh-host-key",
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )?);
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        self.directory.sync_all()?;
+        same(&file, &regular(&self.directory, "ssh-host-key")?)?;
+        self.verify()
+    }
+
+    pub(super) fn host_key(&self) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
+        self.verify()?;
+        let mut file = regular(&self.directory, "ssh-host-key")?;
+        let bytes = secret(&mut file)?;
+        same(&file, &regular(&self.directory, "ssh-host-key")?)?;
+        self.verify()?;
+        Ok(bytes)
+    }
     pub(super) fn open(root: &Path) -> io::Result<Self> {
         let directory = open_directory(root)?;
         let lock = regular(&directory, LOCK)?;
@@ -141,6 +222,34 @@ impl Store {
     }
 }
 
+pub(super) fn secret(file: &mut File) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let mut bytes = zeroize::Zeroizing::new(vec![0; 8193]);
+    let mut length = 0;
+    while length < bytes.len() {
+        let read = file.read(&mut bytes[length..])?;
+        if read == 0 {
+            break;
+        }
+        length += read;
+    }
+    if length == 0 || length > 8192 {
+        return Err(invalid());
+    }
+    bytes.truncate(length);
+    Ok(bytes)
+}
+
+fn pristine(directory: &File, allowed: Option<&[u8]>) -> io::Result<()> {
+    for entry in rustix::fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." && Some(name) != allowed {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 fn same(left: &File, right: &File) -> io::Result<()> {
     let left = left.metadata()?;
     let right = right.metadata()?;
@@ -158,7 +267,7 @@ fn private(metadata: &std::fs::Metadata) -> io::Result<()> {
     Ok(())
 }
 
-fn regular(directory: &File, name: &str) -> io::Result<File> {
+pub(super) fn regular(directory: &File, name: &str) -> io::Result<File> {
     let file = File::from(openat(directory, name, FLAGS | OFlags::NONBLOCK, Mode::empty())?);
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.nlink() != 1 {
@@ -168,7 +277,13 @@ fn regular(directory: &File, name: &str) -> io::Result<File> {
     Ok(file)
 }
 
-fn open_directory(path: &Path) -> io::Result<File> {
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
+    let file = anchor_directory(path)?;
+    private(&file.metadata()?)?;
+    Ok(file)
+}
+
+pub(super) fn anchor_directory(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(invalid());
     }
@@ -181,7 +296,6 @@ fn open_directory(path: &Path) -> io::Result<File> {
         };
         file = File::from(openat(&file, name, FLAGS | OFlags::DIRECTORY, Mode::empty())?);
     }
-    private(&file.metadata()?)?;
     Ok(file)
 }
 
