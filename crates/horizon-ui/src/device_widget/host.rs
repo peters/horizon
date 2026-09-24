@@ -26,6 +26,11 @@ impl HostState {
     /// Counts an accepted request and returns its number.
     pub(crate) fn requested(&mut self) -> u64 {
         self.requests = self.requests.saturating_add(1);
+        // An answer given before the next recorded pass must not pair the new
+        // request count with an older applied one.
+        if let Some(observation) = &mut self.observation {
+            observation.reveal_requests = self.requests;
+        }
         self.requests
     }
 

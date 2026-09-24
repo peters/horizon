@@ -334,5 +334,6 @@ fn a_reveal_answer_never_reports_an_earlier_draw_as_its_success() {
     assert!(!panel.image.image_displayed, "the draw predates the reveal");
     let diagnostics = panel.diagnostics.unwrap();
     assert_eq!(diagnostics.presentation, Presentation::Displayed);
-    assert_eq!(diagnostics.host.unwrap().applied_reveal_request, 0);
+    let host = diagnostics.host.unwrap();
+    assert_eq!((host.reveal_requests, host.applied_reveal_request), (1, 0));
 }
