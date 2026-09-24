@@ -246,3 +246,11 @@ for older records without measurements.
 Cached image layers are excluded from transfer speed. Expand verbose output for
 command details. Per-stage timing resets on retry. The recorded worker-readiness
 duration survives reconnect.
+
+## Planned shared workers
+
+Explicit sharing of a compatible CPU worker across trusted projects is tracked in
+[#805](https://github.com/peters/horizon/issues/805). The
+[shared-worker contract](architecture/shared-cloud-workers.md) defines the proposed
+identity, migration and lifecycle design. This is not yet a supported placement
+choice; existing clouds continue to use dedicated workers.
