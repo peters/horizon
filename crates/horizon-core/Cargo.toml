@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 default = ["cloud-workspaces"]
-cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol"]
+cloud-workspaces = ["dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek"]
 cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["profiling/profile-with-tracing"]
 
@@ -20,6 +20,8 @@ workspace = true
 [dependencies]
 horizon-cloud = { path = "../horizon-cloud", optional = true }
 horizon-cloud-protocol = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }
 tempfile.workspace = true
 base64.workspace = true
 horizon-browser = { workspace = true, features = ["video-capture"] }

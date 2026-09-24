@@ -488,6 +488,31 @@ management envelopes against a previously pinned controller key, binding project
 membership, operation, action, revision and exact payload bytes. It does not load
 signing credentials or replace worker membership checks. Host registration and
 worker dispatch are separate consumers and are not connected yet.
+`cloud_runtime::owner` supplies an opt-in owning-host journal API: native machine
+identity, a cloud-specific OS-store registration, a signing key and a canonical
+lock outside transferable journal state, pinned by native file identity and a nonce.
+Lock roots/files are created with private modes and must retain effective-user
+ownership and no group/other access on acquisition and every ownership check.
+Artifact reads, publication and directory synchronization use a retained directory
+handle and reject replacement of its registered path. Root creation retains a
+private staging-directory handle through exclusive publication, refusing an
+existing or competing destination. Its journal
+generation/hash is anchored in the registration; candidate, pending, published and committed boundaries keep
+crash recovery exact and copied or rolled-back journals fenced. Every native write
+rechecks ownership and the exact preceding registration; deleted or changed native
+state cannot be recreated from cached credentials. Pending and final commits also
+validate the journal artifacts they anchor before changing native state. This API is not
+called by runtime entry points yet. Backends are implemented for Linux Secret Service
+and macOS Keychain; other hosts remain blocked by the existing Unix directory
+durability requirement. Synthetic tests never access the user's credential store.
+On Linux, `scripts/cloud-smoke/controller-keyring.sh` qualifies registration and
+signing against a disposable Secret Service backend across crash/restart, using a
+private D-Bus session, private data directories and the exact foreground daemon PID.
+The macOS backend remains unqualified: native create/save/reopen/sign and
+locked/unavailable-Keychain checks on an isolated target must pass before macOS
+runtime activation or a support claim. Synthetic macOS filesystem tests do not
+qualify native Keychain behavior. Secret serialization writes directly into a
+fixed zeroizing buffer, including partial output on an encoding failure.
 The host `allocation::legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership

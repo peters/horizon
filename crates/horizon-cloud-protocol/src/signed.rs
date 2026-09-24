@@ -219,6 +219,28 @@ impl SignedIntent {
         Ok(Self { intent, signature })
     }
 
+    /// Sign with a credential-owning backend without copying its private key into
+    /// this protocol crate. The resulting signature must match the pinned key.
+    ///
+    /// # Errors
+    /// Rejects unsupported intents, controller mismatches and invalid signatures.
+    pub fn sign_with(
+        intent: Intent,
+        binding: &ControllerBinding,
+        signer: impl FnOnce(&[u8]) -> Vec<u8>,
+    ) -> Result<Self, Error> {
+        intent.validate()?;
+        if intent.allocation != binding.allocation || intent.controller != binding.controller {
+            return Err(Error::Controller);
+        }
+        let bytes = intent.signing_bytes()?;
+        let signature = signer(&bytes);
+        signature::UnparsedPublicKey::new(&signature::ED25519, binding.public_key)
+            .verify(&bytes, &signature)
+            .map_err(|_| Error::Signature)?;
+        Ok(Self { intent, signature })
+    }
+
     /// # Errors
     /// Enforces the wire bound before deserialization; values are never included in errors.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
