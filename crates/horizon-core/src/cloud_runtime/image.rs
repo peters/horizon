@@ -1,7 +1,8 @@
 //! Local Docker/BuildKit image preparation, kept outside horizon-cloud.
+pub mod agents;
 mod contract;
-use super::{Error, Event, Result, Stage, command::Runner};
-use horizon_cloud::{Profile, valid_image};
+use super::{Error, Event, Result, Stage, command::Runner, progress::Progress};
+use horizon_cloud::{Capabilities, Profile, valid_image};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -46,6 +47,11 @@ impl Images<'_> {
             (self.runner.emit)(Event::stage(Stage::Build));
             let context = contained(source, &build.context)?;
             let dockerfile = contained(source, &build.dockerfile)?;
+            (self.runner.emit)(Event::Progress(Progress::activity(
+                "Looking up the latest agent CLI releases",
+            )));
+            let releases = agents::latest(self.runner.cancel)?;
+            (self.runner.emit)(Event::Output(format!("Agent CLI releases: {}", releases.summary())));
             self.runner.run(
                 "image build",
                 self.docker()
@@ -57,18 +63,9 @@ impl Images<'_> {
                         "--progress=plain",
                         "--platform",
                         &build.platform,
-                        "--build-arg",
-                        &format!("HORIZON_AGENTS={}", profile.capabilities.agents_argument()),
-                        "--build-arg",
-                        &format!("HORIZON_BROWSERS={}", profile.capabilities.browsers_argument()),
-                        "--build-arg",
-                        &format!("HORIZON_DESKTOP={}", profile.capabilities.desktop),
-                        "--build-arg",
-                        &format!("HORIZON_BROWSERSTACK={}", profile.capabilities.browserstack.is_some()),
-                        "--tag",
-                        &image,
-                        "--file",
                     ])
+                    .args(build_arguments(&profile.capabilities, &releases))
+                    .args(["--tag", &image, "--file"])
                     .arg(dockerfile)
                     .arg(context),
                 TIMEOUT,
@@ -147,6 +144,19 @@ impl Images<'_> {
         Ok(reference)
     }
 }
+/// Capability selections plus the exact agent releases that key each install layer.
+fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases) -> Vec<String> {
+    [
+        format!("HORIZON_AGENTS={}", capabilities.agents_argument()),
+        format!("HORIZON_BROWSERS={}", capabilities.browsers_argument()),
+        format!("HORIZON_DESKTOP={}", capabilities.desktop),
+        format!("HORIZON_BROWSERSTACK={}", capabilities.browserstack.is_some()),
+    ]
+    .into_iter()
+    .chain(releases.build_arguments())
+    .flat_map(|value| ["--build-arg".to_owned(), value])
+    .collect()
+}
 fn uploaded_image_matches(local_id: &str, reference: &str, manifest: &serde_json::Value) -> bool {
     // Classic Docker identifies the config; containerd-backed Docker identifies the manifest.
     manifest["config"]["digest"].as_str() == Some(local_id)
@@ -211,6 +221,36 @@ mod tests {
         ] {
             assert_eq!(repository_name(reference), expected);
         }
+    }
+
+    #[test]
+    fn build_arguments_carry_capabilities_and_each_agent_release() {
+        let capabilities: Capabilities =
+            serde_json::from_str(r#"{"agents":["claude"],"browsers":["firefox"],"desktop":true}"#).unwrap();
+        let releases = [
+            agents::Release::new(horizon_cloud::Agent::Codex, "0.156.1").unwrap(),
+            agents::Release::new(horizon_cloud::Agent::Claude, "2.1.281").unwrap(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            build_arguments(&capabilities, &releases),
+            [
+                "--build-arg",
+                "HORIZON_AGENTS=claude",
+                "--build-arg",
+                "HORIZON_BROWSERS=firefox",
+                "--build-arg",
+                "HORIZON_DESKTOP=true",
+                "--build-arg",
+                "HORIZON_BROWSERSTACK=false",
+                "--build-arg",
+                "HORIZON_CODEX_VERSION=0.156.1",
+                "--build-arg",
+                "HORIZON_CLAUDE_VERSION=2.1.281",
+            ]
+        );
+        assert!(agents::Release::new(horizon_cloud::Agent::Grok, "1.0.0 --tag other").is_err());
     }
 
     #[test]

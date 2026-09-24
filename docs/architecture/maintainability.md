@@ -473,7 +473,8 @@ Git, settings storage or a provider CLI.
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
 Its `image`, `repository`, `state`, `lifecycle` and `ssh` modules keep those duties
-separate. `allocation` re-exports the typed allocation/project/controller identities
+separate. `image::agents` resolves the newest npm release of every agent CLI for
+image builds, using only bounded, cancellable registry reads. `allocation` re-exports the typed allocation/project/controller identities
 and machine-local placement bindings from `horizon-cloud-protocol`. That small
 contract crate can be used by the host and worker without importing core/UI; it
 contains no runtime or ownership authority. Its `signed` module authenticates bounded

@@ -17,11 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server tmux git git-lfs gh ca-certificates curl python3 tini util-linux \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=agent-runtime /output/ /
-ARG HORIZON_AGENTS=
-# Separate installation layers make each selected agent's compressed cost measurable.
-RUN case ",$HORIZON_AGENTS," in *,codex,*) npm install -g @openai/codex && npm cache clean --force;; esac
-RUN case ",$HORIZON_AGENTS," in *,claude,*) npm install -g @anthropic-ai/claude-code && npm cache clean --force;; esac
-RUN case ",$HORIZON_AGENTS," in *,grok,*) npm install -g @xai-official/grok && npm cache clean --force;; esac
 ARG HORIZON_DESKTOP=false
 RUN if [ "$HORIZON_DESKTOP" = true ]; then apt-get update \
     && apt-get install -y --no-install-recommends xvfb openbox x11vnc xauth x11-utils libxtst6 fonts-dejavu-core \
@@ -48,6 +43,19 @@ RUN if [ "$HORIZON_BROWSERSTACK" = true ]; then \
     && echo '0b2349bde6a33fc417597a7960903fb7a80188ea738aa3e675e2eaae07ad7442  /tmp/browserstack.zip' | sha256sum -c - \
     && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/browserstack.zip").extract("BrowserStackLocal", "/usr/local/bin")' \
     && chmod 755 /usr/local/bin/BrowserStackLocal && rm /tmp/browserstack.zip; fi
+ARG HORIZON_AGENTS=
+# Separate installation layers make each selected agent's compressed cost measurable.
+# They follow the heavier layers, and each is keyed on the release Horizon passes,
+# so a newer release rebuilds only that agent and the layers after it. An empty
+# version installs the current latest release, which the layer cache then keeps.
+ARG HORIZON_GROK_VERSION=
+RUN case ",$HORIZON_AGENTS," in *,grok,*) npm install -g "@xai-official/grok@${HORIZON_GROK_VERSION:-latest}" && npm cache clean --force;; esac
+ARG HORIZON_CODEX_VERSION=
+RUN case ",$HORIZON_AGENTS," in *,codex,*) npm install -g "@openai/codex@${HORIZON_CODEX_VERSION:-latest}" && npm cache clean --force;; esac
+ARG HORIZON_CLAUDE_VERSION=
+RUN case ",$HORIZON_AGENTS," in *,claude,*) npm install -g "@anthropic-ai/claude-code@${HORIZON_CLAUDE_VERSION:-latest}" && npm cache clean --force;; esac
+# horizon-worker-check requires each selected agent to report its recorded version.
+RUN mkdir -p /etc/horizon-worker && python3 -c 'import json, pathlib; root = pathlib.Path("/usr/local/lib/node_modules"); packages = {"codex": "@openai/codex", "claude": "@anthropic-ai/claude-code", "grok": "@xai-official/grok"}; versions = {agent: json.loads((root / name / "package.json").read_text())["version"] for agent, name in packages.items() if (root / name / "package.json").is_file()}; pathlib.Path("/etc/horizon-worker/agent-versions.json").write_text(json.dumps(versions, sort_keys=True) + "\n")'
 COPY --from=selected /output/ /
 COPY horizon-worker-start \
     horizon-worker-check \

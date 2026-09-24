@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -44,6 +45,27 @@ def capabilities(value):
             raise ValueError('Invalid local ports')
         result['browserstack'] = {'provider': provider, 'targets': sorted(set(targets)), 'local_ports': sorted(set(ports))}
     return result
+
+def recorded_versions():
+    path = Path('/etc/horizon-worker/agent-versions.json')
+    if not path.exists():
+        return None
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or any(
+            agent not in {'codex', 'claude', 'grok'} or not isinstance(version, str)
+            or len(version) > 64 or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?', version)
+            for agent, version in value.items()):
+        raise ValueError('Invalid recorded agent versions')
+    return value
+
+def require_version(agent, version):
+    output = subprocess.run([agent, '--version'], check=True, timeout=20,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+    reported = output.decode('utf-8', 'replace')
+    # The version must stand alone: 1.0.4 does not match 1.0.41 or 1.0.4-beta.
+    if not re.search(r'(?:^|[^0-9A-Za-z.])v?' + re.escape(version) + r'(?![0-9A-Za-z+-]|\.[0-9A-Za-z])', reported):
+        print(f'Worker agent {agent} does not report its recorded version {version}', file=sys.stderr)
+        raise ValueError('Agent version differs from the image record')
 
 def require(binary):
     if shutil.which(binary) is None:
@@ -85,9 +107,15 @@ try:
     for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
         require(binary)
     probe(['git', 'lfs', 'version'])
+    versions = recorded_versions()
     for agent in selected['agents']:
         require(agent)
-        probe([agent, '--version'])
+        if versions is None:
+            probe([agent, '--version'])
+        elif agent in versions:
+            require_version(agent, versions[agent])
+        else:
+            raise ValueError('Selected agent has no recorded version')
     if selected['browsers'] or 'browserstack' in selected:
         require('horizon-browser')
     if 'browserstack' in selected:
