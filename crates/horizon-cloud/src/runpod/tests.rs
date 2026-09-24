@@ -4,6 +4,7 @@ mod placement;
 mod recovery;
 mod registry;
 mod storage;
+mod volume_limits;
 use std::{
     io::{Read, Write},
     net::TcpListener,

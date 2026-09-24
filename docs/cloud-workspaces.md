@@ -157,7 +157,10 @@ that has the cloud's exact CPU size in stock, honoring configured location
 preferences, and attach it at worker creation. The provider catalog rates only CPU
 flavor families, so Horizon confirms stock for the requested vCPU and memory size
 before allocating storage; when no configured data center has it, no volume is
-created. GPU clouds and existing deployments retain their Pod-local
+created. New CPU profiles require `storage.volume_gb` between 10 and 4000 GB;
+unsupported sizes are rejected before placement lookups or allocation. Saved
+allocation journals remain reconcilable and deletable under their original sizes.
+GPU clouds and existing deployments retain their Pod-local
 storage contract. Unexpected volume identities, locations or capacities block
 readiness. CPU mount verification uses the current provider API because the legacy
 worker response omits CPU network attachments. Deletion checks current mounts on

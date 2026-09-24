@@ -96,6 +96,9 @@ impl WorkerSpec {
     /// are checked, so saved workers stay reconcilable when flavor limits change.
     pub fn validate_request(&self) -> Result<(), CloudError> {
         self.validate()?;
+        if !self.profile.gpu {
+            crate::runpod::volumes::validate_request_size(u32::from(self.profile.storage.volume_gb))?;
+        }
         if !self.profile.gpu
             && self.cpu_flavors.iter().any(|flavor| {
                 !crate::runpod::flavors::Flavor::get(flavor).is_some_and(|flavor| {
