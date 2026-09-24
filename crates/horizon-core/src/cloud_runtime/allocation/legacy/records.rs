@@ -18,6 +18,8 @@ pub(super) struct Allocation {
     pub protocol: Protocol,
     pub operation: CreateState,
     pub spec: Option<WorkerSpec>,
+    #[serde(default)]
+    pub registry_generation: Option<String>,
     pub worker: Option<Worker>,
     pub stop_requested: bool,
 }
@@ -70,6 +72,7 @@ impl Records {
             stage,
             operation,
             spec,
+            registry_generation,
             worker,
             sessions,
             source_ready,
@@ -89,6 +92,7 @@ impl Records {
                 protocol: Protocol::LegacyDedicated,
                 operation,
                 spec,
+                registry_generation,
                 worker,
                 stop_requested,
             },
@@ -122,6 +126,7 @@ impl Records {
             stage: self.project.stage,
             operation: self.allocation.operation.clone(),
             spec: self.allocation.spec.clone(),
+            registry_generation: self.allocation.registry_generation.clone(),
             worker: self.allocation.worker.clone(),
             sessions: self.project.sessions.clone(),
             source_ready: self.project.source_ready,
