@@ -132,6 +132,7 @@ fn normalize_supported_input(original: &mut Value, normalized: &Value) {
         "/spec/profile",
         "/worker/publicIp",
         "/worker/costPerHr",
+        "/worker/adjustedCostPerHr",
         "/browserstack_targets",
     ] {
         if let Some(input) = original.pointer_mut(pointer)

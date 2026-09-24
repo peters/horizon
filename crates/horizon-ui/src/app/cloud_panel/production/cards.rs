@@ -339,11 +339,7 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     {
         action = Some(Action::Deploy);
     }
-    if let Some(worker) = runtime.state.as_ref().and_then(|s| s.worker.as_ref())
-        && let Some(rate) = worker.cost_per_hr
-    {
-        ui.label(format!("Worker rate: ${rate:.3}/hour"));
-    }
+    worker_cost(ui, runtime, std::time::SystemTime::now());
     ui.small("Sessions continue while disconnected.");
     if runtime.stage == Some(Stage::Ready) {
         if desktop_button(ui, runtime) {
@@ -364,6 +360,21 @@ fn runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
         .or(action)
+}
+
+/// The current run's live cost while Ready, otherwise the worker's hourly rate.
+fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::SystemTime) {
+    if let Some(run) = runtime.current_run_cost(now) {
+        ui.label(run.summary())
+            .on_hover_text("Estimated from the worker's hourly rate and the time since it last started.");
+    } else if let Some(rate) = runtime
+        .state
+        .as_ref()
+        .and_then(|state| state.worker.as_ref())
+        .and_then(cloud_runtime::cost::hourly_rate)
+    {
+        ui.label(format!("Worker rate: {}", cloud_runtime::cost::format_rate(rate)));
+    }
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {

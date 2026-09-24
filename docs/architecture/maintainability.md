@@ -495,6 +495,9 @@ credential binding, runtime activation and sharing remain integration work. `dep
 per-cloud lock; explicit cleanup and local removal account for both resources.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
+`cost` estimates a worker's current run from the provider's effective hourly rate
+and latest start time without I/O, so any surface can reuse it; the UI only formats
+it and schedules the refresh.
 `repository::launch` discovers the selected checkout, parses its default profile
 and resolves the committed revision; the UI launch coordinator captures workspace
 identity and performs preparation while the user enters a title. Credential

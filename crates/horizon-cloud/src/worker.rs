@@ -181,6 +181,13 @@ pub struct Worker {
     #[serde(default)]
     #[serde(deserialize_with = "optional_number")]
     pub cost_per_hr: Option<f64>,
+    /// Effective hourly rate after the account's savings plans.
+    #[serde(default)]
+    #[serde(deserialize_with = "optional_number")]
+    pub adjusted_cost_per_hr: Option<f64>,
+    /// RFC 3339 time of the latest start or resume, kept verbatim for lossless records.
+    #[serde(default)]
+    pub last_started_at: Option<String>,
     #[serde(default)]
     pub memory_in_gb: Option<u32>,
     #[serde(default)]

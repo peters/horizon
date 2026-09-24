@@ -3,6 +3,7 @@ pub use horizon_cloud::{Cancellation, CreateState, runpod::flavors};
 pub mod allocation;
 pub mod browser_auth;
 pub mod command;
+pub mod cost;
 pub mod deployment;
 pub mod git_auth;
 pub mod image;

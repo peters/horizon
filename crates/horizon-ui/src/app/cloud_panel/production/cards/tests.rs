@@ -469,3 +469,124 @@ fn missing_worker_recovery_keeps_the_warning_despite_cached_running_status() {
         assert!(runtime.receiver.is_none());
     }
 }
+
+/// 2024-07-12T19:14:40.144Z, the synthetic worker's latest start.
+const RUN_STARTED_MS: u64 = 1_720_811_680_144;
+
+fn cost_runtime(stage: Stage, worker: &serde_json::Value) -> super::super::Runtime {
+    super::super::Runtime {
+        stage: Some(stage),
+        state: Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"cost-fixture","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+                "stage":stage,"operation":{"state":"bound","worker_id":"worker1"},
+                "spec":null,"worker":worker,"sessions":[]
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    }
+}
+
+fn cost_worker(status: &str, fields: &serde_json::Value) -> serde_json::Value {
+    let mut worker = serde_json::json!({
+        "id":"worker1","name":"horizon-cloud-cost-fixture","imageName":"registry.example/worker",
+        "desiredStatus":status,"publicIp":"192.0.2.1","portMappings":{"22":22001},
+        "costPerHr":0.74,"adjustedCostPerHr":0.69,"lastStartedAt":"2024-07-12T19:14:40.144Z"
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        worker[key] = value.clone();
+    }
+    worker
+}
+
+fn cost_texts(runtime: &super::super::Runtime, elapsed: std::time::Duration) -> Vec<String> {
+    let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(RUN_STARTED_MS) + elapsed;
+    egui::Context::default()
+        .run_ui(egui::RawInput::default(), |ui| worker_cost(ui, runtime, now))
+        .discard_textures()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn ready_card_shows_the_live_cost_of_the_current_run() {
+    let running = cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({})));
+    let hour = std::time::Duration::from_hours(1);
+    assert_eq!(
+        cost_texts(&running, hour + std::time::Duration::from_mins(12)),
+        ["This run · 1h 12m · $0.83 · $0.690/h"]
+    );
+    assert_eq!(
+        cost_texts(&running, std::time::Duration::from_secs(307)),
+        ["This run · 5m 07s · $0.06 · $0.690/h"]
+    );
+    let listed = cost_runtime(
+        Stage::Ready,
+        &cost_worker("RUNNING", &serde_json::json!({"adjustedCostPerHr": null})),
+    );
+    assert_eq!(cost_texts(&listed, hour), ["This run · 1h 00m · $0.74 · $0.740/h"]);
+}
+
+#[test]
+fn card_falls_back_to_the_hourly_rate_without_a_live_run() {
+    for runtime in [
+        cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
+        cost_runtime(Stage::Readiness, &cost_worker("RUNNING", &serde_json::json!({}))),
+        cost_runtime(
+            Stage::Ready,
+            &cost_worker("RUNNING", &serde_json::json!({"lastStartedAt": null})),
+        ),
+    ] {
+        assert_eq!(
+            cost_texts(&runtime, std::time::Duration::from_secs(60)),
+            ["Worker rate: $0.690/h"]
+        );
+    }
+    let unpriced = cost_runtime(
+        Stage::Ready,
+        &cost_worker(
+            "RUNNING",
+            &serde_json::json!({"costPerHr": null, "adjustedCostPerHr": null}),
+        ),
+    );
+    assert!(cost_texts(&unpriced, std::time::Duration::from_secs(60)).is_empty());
+    assert!(cost_texts(&super::super::Runtime::default(), std::time::Duration::ZERO).is_empty());
+}
+
+#[test]
+fn only_a_ready_running_worker_schedules_the_one_second_refresh() {
+    let delay = |runtime: &mut super::super::Runtime| {
+        let ctx = egui::Context::default();
+        // A new context repaints its first passes immediately.
+        for _ in 0..2 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+        }
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            runtime.poll_release_and_repaint(ui.ctx());
+        })
+        .discard_textures()
+        .viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+    };
+    let mut running = cost_runtime(Stage::Ready, &cost_worker("RUNNING", &serde_json::json!({})));
+    // egui subtracts the expected frame time from the requested delay.
+    let refresh = delay(&mut running);
+    assert!(refresh <= super::super::RUN_COST_REFRESH && refresh > super::super::RUN_COST_REFRESH / 2);
+    for mut idle in [
+        cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
+        cost_runtime(
+            Stage::Ready,
+            &cost_worker("RUNNING", &serde_json::json!({"lastStartedAt": null})),
+        ),
+        super::super::Runtime::default(),
+    ] {
+        assert!(delay(&mut idle) > std::time::Duration::from_secs(60));
+    }
+}
