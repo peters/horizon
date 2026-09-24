@@ -1,4 +1,4 @@
-//! Presentation timing for the current deployment attempt.
+//! Presentation timing for the current deployment or deletion attempt.
 use horizon_core::cloud_runtime::{
     Stage,
     progress::{self, Progress, Rate, Unit},
@@ -10,13 +10,24 @@ pub(super) struct Timeline {
     started: Option<Instant>,
     active: Option<(Stage, Instant)>,
     finished: Vec<(Stage, Duration)>,
+    outcome: Option<Stage>,
     detail: Option<Progress>,
     rate: Rate,
+    /// Set when a deletion starts, so a deletion that fails before its first step
+    /// still presents as one.
+    deletion: bool,
 }
 
 impl Timeline {
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub fn begin_deletion(&mut self) {
+        *self = Self {
+            deletion: true,
+            ..Self::default()
+        };
     }
 
     pub fn stage(&mut self, stage: Stage, observed_at: Instant) {
@@ -27,7 +38,10 @@ impl Timeline {
         self.started.get_or_insert(observed_at);
         self.detail = None;
         self.rate = Rate::default();
-        if !matches!(stage, Stage::Ready | Stage::Deleted | Stage::Stopped) {
+        if matches!(stage, Stage::Ready | Stage::Deleted | Stage::Stopped) {
+            self.outcome = Some(stage);
+        } else {
+            self.outcome = None;
             self.active = Some((stage, observed_at));
         }
     }
@@ -61,6 +75,42 @@ impl Timeline {
         } else {
             stage.label().into()
         }
+    }
+
+    /// Stages are contiguous, so a finished attempt took the sum of its stage durations.
+    pub fn elapsed(&self) -> Option<Duration> {
+        let started = self.started?;
+        Some(if self.active.is_some() {
+            started.elapsed()
+        } else {
+            self.finished.iter().map(|(_, duration)| *duration).sum()
+        })
+    }
+
+    /// Total time of an attempt observed to end in `stage`, such as a completed deletion.
+    pub fn ended_in(&self, stage: Stage) -> Option<Duration> {
+        if self.outcome == Some(stage) {
+            self.elapsed()
+        } else {
+            None
+        }
+    }
+
+    pub fn activity(&self) -> Option<&str> {
+        self.active
+            .and(self.detail.as_ref())
+            .map(|detail| detail.detail.as_str())
+    }
+
+    /// Whether this attempt is a deletion: begun as one, or it reported a deletion step.
+    pub fn is_deletion(&self) -> bool {
+        self.deletion
+            || self
+                .active
+                .iter()
+                .map(|(stage, _)| stage)
+                .chain(self.finished.iter().map(|(stage, _)| stage))
+                .any(|stage| Stage::DELETION.contains(stage))
     }
 
     pub fn render(&self, ui: &mut egui::Ui) {
@@ -152,5 +202,51 @@ mod tests {
             timeline.rate.remaining(timeline.detail.as_ref().unwrap()),
             Some(Duration::from_secs(8))
         );
+    }
+    #[test]
+    fn deletion_freezes_step_durations_and_the_total_time() {
+        let start = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
+        let mut timeline = Timeline::default();
+        assert_eq!(timeline.elapsed(), None);
+        timeline.stage(Stage::ReleaseDevices, start);
+        timeline.update(Progress::activity("Confirming worker identity"));
+        assert_eq!(timeline.activity(), Some("Confirming worker identity"));
+        assert!(
+            timeline.elapsed().unwrap() >= Duration::from_secs(60),
+            "running totals are live"
+        );
+        timeline.stage(Stage::DeleteWorker, start + Duration::from_secs(3));
+        assert_eq!(timeline.activity(), None, "a new step starts without the old detail");
+        timeline.stage(Stage::DeleteStorage, start + Duration::from_secs(5));
+        assert_eq!(timeline.ended_in(Stage::Deleted), None, "still running");
+        timeline.stage(Stage::Deleted, start + Duration::from_secs(12));
+        assert_eq!(timeline.elapsed(), Some(Duration::from_secs(12)));
+        assert_eq!(timeline.ended_in(Stage::Deleted), Some(Duration::from_secs(12)));
+        assert_eq!(timeline.activity(), None);
+        assert_eq!(
+            Stage::DELETION.map(|stage| timeline.stage_label(stage)),
+            [
+                "Release hosted devices · 0m 03s",
+                "Delete worker · 0m 02s",
+                "Delete workspace storage · 0m 07s"
+            ]
+        );
+        assert!(timeline.is_deletion());
+        let mut failed = Timeline::default();
+        failed.stage(Stage::DeleteWorker, start);
+        failed.finish(start + Duration::from_secs(4));
+        assert!(failed.is_deletion(), "a failed deletion keeps its steps");
+        assert_eq!(failed.elapsed(), Some(Duration::from_secs(4)));
+        assert_eq!(
+            failed.ended_in(Stage::Deleted),
+            None,
+            "a failed deletion reports no total"
+        );
+        let mut early = Timeline::default();
+        early.begin_deletion();
+        assert!(early.is_deletion(), "a deletion that fails before its first step");
+        assert_eq!(early.elapsed(), None);
+        early.reset();
+        assert!(!early.is_deletion(), "the next deployment starts a fresh timeline");
     }
 }
