@@ -356,3 +356,33 @@ fn cancelled_pull_probe_preserves_cancellation_instead_of_reporting_authenticati
     assert!(!prepared.verified);
     assert!(prepared.journal.validation().is_none());
 }
+
+#[test]
+fn partial_credential_replacement_cannot_save_the_unchanged_opposite_secret() {
+    let (_root, mut settings) = fixture();
+    let original = binding(&mut settings).clone();
+    for replace_pull in [false, true] {
+        let mut draft = draft::Draft::from_binding(&original);
+        if replace_pull {
+            draft.pull_secret = zeroize::Zeroizing::new("synthetic-push".into());
+        } else {
+            draft.publish_secret = zeroize::Zeroizing::new("synthetic-pull".into());
+        }
+        let mut writes = 0;
+        assert!(
+            draft
+                .save(|_, _| {
+                    writes += 1;
+                    Err(Error::Invalid("must validate before writing"))
+                })
+                .is_err()
+        );
+        assert_eq!(writes, 0);
+        if replace_pull {
+            draft.pull_secret = zeroize::Zeroizing::new("replacement-pull".into());
+        } else {
+            draft.publish_secret = zeroize::Zeroizing::new("replacement-push".into());
+        }
+        assert!(draft.validate().is_ok());
+    }
+}

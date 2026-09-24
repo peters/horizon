@@ -92,7 +92,13 @@ impl Draft {
         } else if !self.publish_secret.is_empty() {
             return Err(Error::Invalid("Publishing credential needs a username"));
         }
-        if !self.pull_secret.is_empty() && self.pull_secret == self.publish_secret {
+        if !self.publish_username.is_empty()
+            && secret_fingerprint(&self.pull_secret, self.original.as_ref().map(|binding| &binding.pull))?
+                == secret_fingerprint(
+                    &self.publish_secret,
+                    self.original.as_ref().and_then(|binding| binding.publish.as_ref()),
+                )?
+        {
             return Err(Error::Invalid("Use different push and pull credentials"));
         }
         Ok(())
@@ -197,4 +203,15 @@ fn save_auth(
         secret_file,
         expires_at: (!expiry.is_empty()).then(|| expiry.into()),
     })
+}
+
+fn secret_fingerprint(value: &str, saved: Option<&Auth>) -> Result<String> {
+    let value = if value.is_empty() {
+        let saved = saved.ok_or(Error::Invalid("No saved registry credential"))?;
+        super::super::settings::validate_private_key_file(&saved.secret_file)?;
+        Zeroizing::new(std::fs::read_to_string(&saved.secret_file)?)
+    } else {
+        Zeroizing::new(value.into())
+    };
+    Ok(super::credentials::fingerprint(value.trim().as_bytes()))
 }
