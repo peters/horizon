@@ -408,6 +408,27 @@ mod volumes {
     }
 
     #[test]
+    fn reconciling_a_requested_volume_is_named_before_its_request() {
+        let (provider, requests, task) = server(vec![(200, "[]".into())]);
+        let mut state = State::Requested;
+        let mut reported = Vec::new();
+        assert!(
+            provider
+                .terminate_volume(
+                    &volume_spec(),
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| Ok(()),
+                    |progress| reported.push((progress, requests.lock().unwrap().len())),
+                )
+                .is_err()
+        );
+        task.join().unwrap();
+        assert_eq!(reported, [(Progress::ConfirmingVolume, 0)]);
+        assert_eq!(state, State::Requested);
+    }
+
+    #[test]
     fn empty_or_conflicting_evidence_never_resets_the_volume_fence() {
         for response in [json!([]), json!([volume(), volume()])] {
             let (provider, requests, task) = server(vec![(200, response.to_string())]);

@@ -275,6 +275,8 @@ impl RunPod {
         state.verify(spec)?;
         cancel.check()?;
         if *state == State::Requested {
+            // Reconciling a requested volume already reads the provider.
+            progress(Progress::ConfirmingVolume);
             self.ensure_volume(spec, state, cancel, &mut persist)?;
         }
         let (volume, creation) = match state {
