@@ -214,6 +214,18 @@ impl RunPod {
         spec: &WorkerSpec,
         state: &mut CreateState,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
+        self.terminate_with_progress(spec, state, cancel, persist, |_| {})
+    }
+    /// As `terminate`, naming each provider request in `progress` before it is sent.
+    /// # Errors
+    /// As `terminate`.
+    pub fn terminate_with_progress(
+        &self,
+        spec: &WorkerSpec,
+        state: &mut CreateState,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
     ) -> Result<(), CloudError> {

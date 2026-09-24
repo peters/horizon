@@ -86,7 +86,7 @@ fn serverless_attachment_prevents_owned_volume_deletion() {
     let original = state.clone();
     let mut persisted = Vec::new();
     let mut reported = Vec::new();
-    let result = provider.terminate_volume(
+    let result = provider.terminate_volume_with_progress(
         &volume_spec,
         &mut state,
         &Cancellation::default(),

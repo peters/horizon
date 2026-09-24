@@ -455,7 +455,7 @@ fn termination_checks_identity_then_proves_absence() {
     let mut state = bound.clone();
     let mut reported = Vec::new();
     provider
-        .terminate(
+        .terminate_with_progress(
             &spec,
             &mut state,
             &Cancellation::default(),
@@ -484,7 +484,7 @@ fn termination_checks_identity_then_proves_absence() {
     let mut state = bound;
     let mut reported = Vec::new();
     provider
-        .terminate(
+        .terminate_with_progress(
             &spec,
             &mut state,
             &Cancellation::default(),

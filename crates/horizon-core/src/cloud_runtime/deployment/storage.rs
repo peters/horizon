@@ -103,7 +103,7 @@ pub(super) fn terminate(
         return Ok(());
     };
     let mut operation = record.state.clone();
-    provider.terminate_volume(
+    provider.terminate_volume_with_progress(
         &record.spec.clone(),
         &mut operation,
         cancel,

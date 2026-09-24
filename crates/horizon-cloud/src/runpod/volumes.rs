@@ -269,6 +269,19 @@ impl RunPod {
         spec: &Spec,
         state: &mut State,
         cancel: &Cancellation,
+        persist: impl FnMut(&State) -> Result<()>,
+    ) -> Result<()> {
+        self.terminate_volume_with_progress(spec, state, cancel, persist, |_| {})
+    }
+
+    /// As `terminate_volume`, naming each provider request in `progress` before it is sent.
+    /// # Errors
+    /// As `terminate_volume`.
+    pub fn terminate_volume_with_progress(
+        &self,
+        spec: &Spec,
+        state: &mut State,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&State) -> Result<()>,
         mut progress: impl FnMut(Progress),
     ) -> Result<()> {

@@ -121,7 +121,7 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
         expected
     );
     provider
-        .terminate_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .terminate_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
         .unwrap();
     assert_eq!(state, State::Deleted);
     task.join().unwrap();

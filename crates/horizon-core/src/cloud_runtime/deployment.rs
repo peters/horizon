@@ -564,7 +564,7 @@ fn terminate_worker(
         Stage::DeleteWorker,
         "Deleting the worker and confirming its removal",
     );
-    provider.terminate(
+    provider.terminate_with_progress(
         spec,
         &mut operation,
         &committed,

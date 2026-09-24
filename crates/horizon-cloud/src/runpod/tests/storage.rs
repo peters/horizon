@@ -129,7 +129,7 @@ fn rejected_storage_keeps_allocation_bound_and_explicit_deletion_available() {
     assert!(retried.verify_resources(&spec).is_err());
     assert_eq!(state, bound);
     provider
-        .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
         .unwrap();
     assert!(matches!(state, CreateState::Terminated { .. }));
     task.join().unwrap();
@@ -220,7 +220,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .is_err()
         );
         task.join().unwrap();
@@ -243,7 +243,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .is_err()
         );
         task.join().unwrap();
@@ -268,7 +268,7 @@ mod volumes {
                 creation: None,
             };
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .unwrap();
             task.join().unwrap();
             assert_eq!(state, State::Deleted);
@@ -305,10 +305,13 @@ mod volumes {
             (204, String::new()),
             (404, String::new()),
         ]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         let mut reported = Vec::new();
         provider
-            .terminate_volume(
+            .terminate_volume_with_progress(
                 &volume_spec(),
                 &mut state,
                 &Cancellation::default(),
@@ -414,7 +417,7 @@ mod volumes {
         let mut reported = Vec::new();
         assert!(
             provider
-                .terminate_volume(
+                .terminate_volume_with_progress(
                     &volume_spec(),
                     &mut state,
                     &Cancellation::default(),
@@ -500,12 +503,12 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .is_err()
         );
         assert!(matches!(state, State::Deleting { .. }));
         provider
-            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
             .unwrap();
         task.join().unwrap();
         assert_eq!(state, State::Deleted);
@@ -537,7 +540,7 @@ mod volumes {
             };
             assert!(
                 provider
-                    .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                    .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                     .is_err()
             );
             task.join().unwrap();
@@ -563,7 +566,7 @@ mod volumes {
         };
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .is_err()
         );
         task.join().unwrap();
@@ -573,7 +576,7 @@ mod volumes {
         let (provider, requests, task) = server(vec![(200, serde_json::to_string(&wrong).unwrap())]);
         assert!(
             provider
-                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .is_err()
         );
         task.join().unwrap();
