@@ -340,6 +340,25 @@ viewport/canvas changes without identifying who caused them.
 moving away and back resets it. It is null when the required observations are
 missing. Counters are transient and reset with the viewer state.
 
+`reveal` answers after the host has drawn the connected image in a frame
+completed after the reveal reached the canvas, so its `image_displayed` is
+presentation evidence for that reveal. When that does not happen within three
+seconds, it answers with the latest observation instead: `presentation` and
+`host.exclusion` name what kept the viewer off screen (for example another
+panel fullscreen or the viewer outside the canvas), and `applied_reveal_request`
+shows whether the reveal reached the canvas at all. In a reveal answer,
+`image_displayed` is true only for a draw after the reveal applied: a timed-out
+or superseded answer reports false even when an earlier pass drew the viewer,
+while `presentation` still describes the latest pass. Stopped and disconnected
+viewers answer with the request, because waiting cannot draw them. A viewer closed
+while its reveal is held answers `panel_unavailable` in the same host frame, and a
+reveal superseded by another viewer's before it reached the canvas answers on the
+next host frame. A pass egui discarded is not
+presentation evidence. A session switch or host exit answers held reveals with
+`panel_unavailable`. A host that runs no UI frames cannot draw
+the viewer; it still answers when the bound expires, and omits `host` when no
+pass has run since the viewer was created.
+
 Host context describes an egui UI pass, not operating-system presentation.
 `ui_pass` is viewport-local; `discarded` samples `will_discard` at callback
 completion, before end-pass plugins. Neither host context, an applied Reveal nor

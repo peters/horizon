@@ -419,6 +419,8 @@ separately. Native input remains in the standalone device crate.
 context; `device_widget/host.rs` owns transient view and Reveal observations.
 Their optional shared manifest data keeps render-time and later navigation
 geometry distinct without changing view, focus, ownership or transport.
+`app/device_reveal_wait.rs` holds a Reveal result until a frame completed after
+the reveal draws the viewer, or a bounded wait returns the blocking observation.
 
 ### Shared remote-provider capacity
 

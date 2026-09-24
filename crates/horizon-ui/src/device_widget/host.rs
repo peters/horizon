@@ -1,5 +1,6 @@
 //! Completed-pass context for diagnosing host exclusion without changing the view.
 use horizon_core::browser::manifest::device::{HostCanvas, HostExclusion, HostPresentation, HostViewport};
+use std::time::Instant;
 
 #[derive(Default)]
 pub(crate) struct HostState {
@@ -10,6 +11,7 @@ pub(crate) struct HostState {
     revision: u64,
     requests: u64,
     applied_request: u64,
+    applied_at: Option<Instant>,
 }
 
 impl HostState {
@@ -21,13 +23,38 @@ impl HostState {
         self.observed_this_frame
     }
 
-    pub(crate) fn requested(&mut self) {
+    /// Counts an accepted request and returns its number.
+    pub(crate) fn requested(&mut self) -> u64 {
         self.requests = self.requests.saturating_add(1);
+        // An answer given before the next recorded pass must not pair the new
+        // request count with an older applied one.
+        if let Some(observation) = &mut self.observation {
+            observation.reveal_requests = self.requests;
+        }
+        self.requests
     }
 
     pub(crate) fn applied(&mut self, viewport: HostViewport, canvas: HostCanvas) {
         self.applied_request = self.requests;
+        self.applied_at = Some(Instant::now());
         self.revealed_view = Some((viewport, canvas));
+    }
+
+    /// egui discarded the last completed pass, so nothing it drew was presented.
+    pub(crate) fn last_pass_discarded(&self) -> bool {
+        self.observation
+            .as_ref()
+            .is_some_and(|observation| observation.discarded)
+    }
+
+    pub(crate) fn reveal_requests(&self) -> u64 {
+        self.requests
+    }
+
+    /// When `request`, or a later one that superseded it, reached the canvas.
+    pub(crate) fn applied_at(&self, request: u64) -> Option<Instant> {
+        self.applied_at
+            .filter(|_| request > 0 && self.applied_request >= request)
     }
 
     pub(crate) fn record(

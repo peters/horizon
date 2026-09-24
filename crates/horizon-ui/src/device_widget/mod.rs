@@ -61,10 +61,21 @@ impl DeviceUiState {
         self.rendered
     }
 
+    /// The last completed, non-discarded pass of this viewer's own viewport
+    /// painted it after reveal `request` (or a later one) reached the canvas.
+    pub(crate) fn displayed_since_reveal(&self, request: u64) -> bool {
+        self.image.previous_displayed
+            && !self.host.last_pass_discarded()
+            && self
+                .host
+                .applied_at(request)
+                .zip(self.image.last_displayed)
+                .is_some_and(|(applied, displayed)| displayed >= applied)
+    }
+
     pub(crate) fn begin_frame(&mut self) {
         self.host.begin_frame();
-        self.image.previous_displayed = self.image.displayed;
-        self.previous_rendered = self.rendered;
+        self.commit_pass();
         self.image.displayed = false;
         self.rendered = false;
     }
@@ -79,6 +90,16 @@ impl DeviceUiState {
         if let Some(session) = &self.session {
             session.set_visible(self.rendered);
         }
+        // Observations between passes (request pump, held reveals) describe
+        // this completed pass rather than the one before it.
+        self.commit_pass();
+    }
+
+    /// A pass its viewport discarded was never presented, so it cannot be
+    /// display evidence for inspection or a held reveal.
+    fn commit_pass(&mut self) {
+        self.image.previous_displayed = self.image.displayed && !self.host.last_pass_discarded();
+        self.previous_rendered = self.rendered;
     }
 
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {
@@ -262,6 +283,23 @@ impl DeviceUiState {
         } else {
             self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
             true
+        }
+    }
+
+    /// A connected viewer holding one undelivered frame, without a VNC server.
+    #[cfg(test)]
+    pub(crate) fn connected_fixture(owner: &str) -> Self {
+        let image = ColorImage::filled([4, 4], egui::Color32::GREEN);
+        Self {
+            owner: Some(owner.into()),
+            initialized: true,
+            status: Status::Connected,
+            session: Some(Session::pending_frame(
+                image.clone(),
+                image,
+                DeviceViewOptions::default(),
+            )),
+            ..Default::default()
         }
     }
 

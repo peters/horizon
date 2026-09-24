@@ -20,6 +20,7 @@ mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;
 mod device_requests;
+mod device_reveal_wait;
 #[cfg(test)]
 mod device_tests;
 mod file_drop;
@@ -201,6 +202,7 @@ struct SpeechNotice {
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
     pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
+    awaiting_device_reveals: Vec<device_reveal_wait::AwaitingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
@@ -427,6 +429,7 @@ impl eframe::App for HorizonApp {
         for state in self.panel_render_caches.device_ui_state.values_mut() {
             state.finish_frame();
         }
+        self.complete_settled_device_reveals(ui.ctx());
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -445,6 +448,7 @@ impl eframe::App for HorizonApp {
     }
 
     fn on_exit(&mut self) {
+        self.abandon_device_reveals("Horizon is exiting");
         self.run_exit_cleanup();
         // macOS can leave Horizon running as a windowless app after eframe
         // has already torn down the viewport, so terminate explicitly.
