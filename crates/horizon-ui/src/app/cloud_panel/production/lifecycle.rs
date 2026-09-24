@@ -269,7 +269,7 @@ impl HorizonApp {
         }
         self.cloud_prototype.production.runtimes.remove(&id);
         self.save_cloud_prototype();
-        self.release_removed_cloud_workspace(&group.workspace);
+        self.release_removed_cloud_workspace(&group.workspace, ctx);
     }
     fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {

@@ -46,7 +46,7 @@ impl HorizonApp {
     pub(super) fn prepare_cloud_prototype(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
             self.prepare_production_clouds(ctx);
-            self.release_workspaces_after_creation();
+            self.release_workspaces_after_creation(ctx);
             return;
         }
         self.start_cloud_setup(ctx);
@@ -303,8 +303,9 @@ impl HorizonApp {
     /// Let a removed cloud's workspace go like one whose last panel closed,
     /// unless another cloud or a cloud creation still targets it. A creation
     /// keeps it until [`Self::release_workspaces_after_creation`] sees that
-    /// creation end.
-    fn release_removed_cloud_workspace(&mut self, workspace: &str) {
+    /// creation end. This frame's workspace cleanup has already run, so a
+    /// released hold asks for another frame to remove the workspace.
+    fn release_removed_cloud_workspace(&mut self, workspace: &str, ctx: &egui::Context) {
         if self.cloud_prototype.groups.contains_workspace(workspace) {
             return;
         }
@@ -317,17 +318,19 @@ impl HorizonApp {
         if self.cloud_state_is_live() {
             self.sync_board_cloud_groups();
         }
-        if let Some(id) = self.board.workspace_id_by_local_id(workspace) {
-            self.board.release_empty_workspace_retention(id);
+        if let Some(id) = self.board.workspace_id_by_local_id(workspace)
+            && self.board.release_empty_workspace_retention(id)
+        {
+            ctx.request_repaint();
         }
     }
 
     /// Release the workspaces a cloud creation kept once it no longer targets
     /// them, however it ended: cancelled, failed, stale or finished elsewhere.
     /// Checked every frame so no exit path can leave one stuck.
-    fn release_workspaces_after_creation(&mut self) {
+    fn release_workspaces_after_creation(&mut self, ctx: &egui::Context) {
         for workspace in std::mem::take(&mut self.cloud_prototype.creation_holds) {
-            self.release_removed_cloud_workspace(&workspace);
+            self.release_removed_cloud_workspace(&workspace, ctx);
         }
     }
 

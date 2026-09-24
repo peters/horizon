@@ -150,7 +150,7 @@ impl HorizonApp {
         }
         self.apply_cloud_title_edit(title_action);
         if let Some(action) = action {
-            self.cloud_action(action);
+            self.cloud_action(action, ctx);
         }
     }
 
@@ -172,7 +172,7 @@ impl HorizonApp {
         }
     }
 
-    fn cloud_action(&mut self, action: Action) {
+    fn cloud_action(&mut self, action: Action, ctx: &egui::Context) {
         let issue = match action {
             Action::Rename(i) | Action::Collapse(i) | Action::Remove(i) => i,
         };
@@ -201,7 +201,7 @@ impl HorizonApp {
         }
         self.save_cloud_prototype();
         if let Some(workspace) = removed_from {
-            self.release_removed_cloud_workspace(&workspace);
+            self.release_removed_cloud_workspace(&workspace, ctx);
         }
     }
 
@@ -497,9 +497,25 @@ mod tests {
             ));
         }
 
-        app.cloud_action(Action::Remove(101));
-        app.cloud_action(Action::Remove(103));
-        app.normalize_workspace_state(&egui::Context::default());
+        let ctx = egui::Context::default();
+        // A new context asks for its first frames; settle it so only the release can ask.
+        for _ in 0..4 {
+            if !ctx.has_requested_repaint() {
+                break;
+            }
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+        }
+        app.cloud_action(Action::Remove(101), &ctx);
+        assert!(
+            !ctx.has_requested_repaint(),
+            "cloud 102 still holds the shared workspace"
+        );
+        app.cloud_action(Action::Remove(103), &ctx);
+        assert!(
+            ctx.has_requested_repaint(),
+            "the release schedules the frame that removes the workspace"
+        );
+        app.normalize_workspace_state(&ctx);
 
         assert!(app.board.workspace(shared).is_some(), "cloud 102 keeps its workspace");
         assert!(app.board.workspace(single).is_none());

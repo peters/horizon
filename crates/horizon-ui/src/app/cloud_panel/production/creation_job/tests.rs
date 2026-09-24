@@ -268,8 +268,9 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
 
 /// The per-frame release check followed by the next frame's empty-workspace cleanup.
 fn next_frames(app: &mut HorizonApp) {
-    app.release_workspaces_after_creation();
-    app.normalize_workspace_state(&egui::Context::default());
+    let ctx = egui::Context::default();
+    app.release_workspaces_after_creation(&ctx);
+    app.normalize_workspace_state(&ctx);
 }
 
 fn press_escape_in_creation(app: &mut HorizonApp) {

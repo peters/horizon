@@ -37,7 +37,7 @@ fn released_cloud_workspace_is_removed_by_the_next_cleanup() {
     assert!(board.workspace(cloud).is_some(), "an empty cloud keeps its workspace");
 
     remove_cloud(&mut board, 1);
-    board.release_empty_workspace_retention(cloud);
+    assert!(board.release_empty_workspace_retention(cloud), "the hold is released");
     assert!(board.workspace(cloud).is_some(), "removal waits for the cleanup pass");
     board.remove_empty_workspaces();
 
@@ -121,7 +121,10 @@ fn workspace_stays_while_another_cloud_or_a_panel_uses_it() {
     add_cloud(&mut board, 1, shared);
     add_cloud(&mut board, 2, shared);
     remove_cloud(&mut board, 1);
-    board.release_empty_workspace_retention(shared);
+    assert!(
+        !board.release_empty_workspace_retention(shared),
+        "cloud 2 still holds it"
+    );
     board.remove_empty_workspaces();
     assert!(board.workspace(shared).is_some(), "the other cloud keeps its workspace");
 

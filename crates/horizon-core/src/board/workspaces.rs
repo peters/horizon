@@ -25,20 +25,22 @@ impl Board {
     ///
     /// When the released workspace is empty, active and nothing is focused,
     /// its removal takes the selection with it, so focus moves as when a
-    /// focused last panel closes.
+    /// focused last panel closes. Returns whether a hold was released, so the
+    /// caller can schedule the cleanup frame.
     #[cfg(feature = "cloud-workspaces")]
-    pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) {
+    pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) -> bool {
         let Some(workspace) = self.workspace(id) else {
-            return;
+            return false;
         };
         if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
-            return;
+            return false;
         }
         let leaves_board = workspace.panels.is_empty() && workspace.remote_workspace.is_none();
-        self.retained_empty_workspaces.remove(&id);
+        let released = self.retained_empty_workspaces.remove(&id);
         if leaves_board && self.active_workspace == Some(id) && self.focused.is_none() {
             self.focus_most_recent_panel();
         }
+        released
     }
 
     /// Focus the most recently created remaining panel and activate its
