@@ -108,6 +108,26 @@ Extended LFS pointer formats are rejected explicitly. Source repositories must u
 SHA-1 object IDs and UTF-8 paths; unsupported formats fail validation before
 compute allocation.
 
+Before each image build, Horizon looks up the release npm currently tags `latest`
+for every supported agent CLI. It passes them as the `HORIZON_CODEX_VERSION`,
+`HORIZON_CLAUDE_VERSION` and `HORIZON_GROK_VERSION` build arguments, next to
+`HORIZON_AGENTS`, `HORIZON_BROWSERS`, `HORIZON_DESKTOP` and `HORIZON_BROWSERSTACK`,
+and names the versions in verbose output. All three are passed because an image
+can install an agent its profile does not enable. A failed lookup stops the
+deployment before the build. In a custom Dockerfile, declare each version argument
+directly before that agent's install step and install the exact release, for
+example `ARG HORIZON_CLAUDE_VERSION=` followed by
+`RUN npm install -g "@anthropic-ai/claude-code@${HORIZON_CLAUDE_VERSION:-latest}"`.
+A newer release then rebuilds only that step and the steps after it, so place agent
+installs after heavier toolchain steps. An install step without a version stays
+cached at the first release it installed. Record the installed versions in
+`/etc/horizon-worker/agent-versions.json`, for example `{"claude": "2.1.281"}`.
+When that file exists, `horizon-worker-check` requires each enabled agent to have
+an entry and to report that version from `--version`; Horizon runs the check
+before pushing the image. The [example worker Dockerfile](../examples/cloud-worker/Dockerfile)
+follows this pattern. Existing clouds keep the image they were built with; new
+clouds receive the latest agents.
+
 Choose **New cloud**, enter its title, repository and base revision, load profiles,
 then create and deploy. Horizon validates and uploads the image before allocating
 compute. It resolves an immutable digest and checks the worker contract. Keep the

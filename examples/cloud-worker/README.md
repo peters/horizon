@@ -37,9 +37,12 @@ browser MCP registration. Agent configuration contains only enabled tool servers
 Disabled agent requests are rejected before writing session or worktree state.
 
 Horizon supplies `HORIZON_AGENTS`, `HORIZON_BROWSERS` and `HORIZON_DESKTOP` Docker
-build arguments from the profile. The standalone Dockerfile defaults to a minimal
-image; pass these arguments explicitly when building outside Horizon. The image
-records available features in `/etc/horizon-worker/capabilities.json`. Before any
+build arguments from the profile, and the latest release of each agent CLI as
+`HORIZON_CODEX_VERSION`, `HORIZON_CLAUDE_VERSION` and `HORIZON_GROK_VERSION`. The
+standalone Dockerfile defaults to a minimal image; pass these arguments explicitly
+when building outside Horizon. An empty version installs the current latest release.
+The image records available features in `/etc/horizon-worker/capabilities.json`
+and installed agent versions in `/etc/horizon-worker/agent-versions.json`. Before any
 allocation, the image checker verifies the requested subset and actual executable
 runtimes, with networking disabled. Requested features are supplied through the
 nonsecret `HORIZON_WORKER_CAPABILITIES` environment binding, preserving legacy
