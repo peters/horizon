@@ -333,12 +333,24 @@ fn equivalent_issuer_hosts_cannot_bypass_scope_policy() {
     for reference in [
         "ghcr.io/team/worker",
         "ghcr.io:443/team/worker",
+        "GHCR.IO.:0443/team/worker",
         "GHCR.IO/team/worker",
         "ghcr.io./team/worker",
     ] {
         assert!(credentials::is_github_registry(reference));
     }
-    assert!(!credentials::is_github_registry("ghcr.io.example/team/worker"));
+    for reference in ["ghcr.io.example/team/worker", "ghcr.io:5000/team/worker"] {
+        assert!(!credentials::is_github_registry(reference));
+    }
+    let (_root, settings) = fixture();
+    let auth = &settings.registries.as_ref().unwrap().bindings[0].pull;
+    let material = Material::load(auth, "ghcr.io:5000/team/worker", None).unwrap();
+    assert_eq!(
+        material
+            .verify_scope("ghcr.io:5000/team/worker", &Cancellation::default())
+            .unwrap(),
+        None
+    );
     let (_root, mut settings) = fixture();
     binding(&mut settings).repository = "ghcr.io/team/worker".into();
     assert!(

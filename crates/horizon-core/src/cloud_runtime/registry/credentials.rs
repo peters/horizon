@@ -165,7 +165,7 @@ pub(super) fn verify_github_scopes(scopes: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-// Issuer policy follows the DNS hostname, including equivalent case, port and FQDN spellings.
+// Normalize DNS aliases separately from the port that identifies a registry authority.
 pub(super) fn registry_host(repository: &str) -> String {
     let authority = repository.split('/').next().unwrap_or_default();
     let host = authority
@@ -182,7 +182,7 @@ pub(super) fn registry_host(repository: &str) -> String {
 }
 
 pub(super) fn is_github_registry(repository: &str) -> bool {
-    registry_host(repository) == "ghcr.io"
+    registry_authority(repository) == "ghcr.io"
 }
 
 pub(super) fn registry_authority(repository: &str) -> String {
