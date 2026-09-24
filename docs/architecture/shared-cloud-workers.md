@@ -28,7 +28,7 @@ merging. The existing MVP qualification in #813 remains a separate gate.
 
 | Record | Identity and contents | Authority |
 | --- | --- | --- |
-| Allocation | Stable allocation ID, display name, original provider operation ID, local account binding, immutable image digest, verified runtime capabilities, observed resources, storage ownership, SSH trust, lifecycle intent | Local durable allocation journal for provider operations; worker manifest for membership |
+| Allocation | Stable allocation ID, display name, original provider operation ID, local account binding, image digest (immutable except through a dedicated image replacement, below), verified runtime capabilities, observed resources, storage ownership, SSH trust, lifecycle intent | Local durable allocation journal for provider operations; worker manifest for membership |
 | Project deployment | Stable project ID, immutable cloud/workspace/session membership, allocation reference, committed repository revision, selected profile, namespace, agent sessions and tool grants | Local project journal and corresponding worker member record |
 | Presentation | Cloud, panel IDs, layout and transport attachment | Existing workspace/session persistence; never compute ownership |
 
@@ -43,7 +43,7 @@ ID is not the lifetime owner of a shared allocation.
 Keep `WorkerSpec`, `CreateState`, provider inspection, storage and power operations
 in `horizon-cloud`. Keep membership, controller coordination, presentation and
 project session policy in `horizon-core` and the existing `horizon-cloud-worker`
-binary. Provider verification uses the original allocation specification, never
+binary. Provider verification uses the allocation's own specification, never
 a joining project's profile. Do not revive the removed remote-development model.
 
 ### Versioned configuration and placement binding
@@ -399,7 +399,26 @@ never replace their pins merely to make a candidate connection succeed. A legacy
 preallocation request still needs explicit local bindings before its first I/O.
 
 A share-capable worker must be created explicitly with the new image/contract;
-there is no in-place image upgrade or silent sharing of existing allocations.
+no image change upgrades a worker to sharing, and existing allocations are never
+silently shared.
+
+The only in-place image change is an explicit, confirmed image replacement of a
+`legacy_dedicated` allocation with `dedicated` sharing (#903). `shared_v1`
+allocations are not eligible. A replacement switches only the image digest and the
+registry credential that pulls it. It keeps the worker ID, `/workspace` volume,
+protocol, sharing mode and SSH trust files. The digest stays immutable within each
+replacement generation:
+
+- The allocation journal records the previous and next digests before each
+  provider mutation.
+- While the provider update may be in flight, the record carries a barrier stage
+  that older versions cannot parse, so they fail closed.
+- The worker specification and storage journal take the new digest only after the
+  provider reports it.
+
+While a replacement is pending, verification accepts exactly the previous or next
+digest, and only to settle the replacement or delete the worker. Stop, resume and
+device release wait until the replacement is continued or cancelled.
 
 ### UI, CLI and MCP
 

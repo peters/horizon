@@ -197,6 +197,8 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         stop_requested: false,
         browserstack_released: false,
         browserstack_targets: std::collections::BTreeSet::new(),
+        image_replacement: None,
+        session_restart: None,
     };
     store.save(&state).unwrap();
     app.remove_deleted_cloud(1, &ctx);

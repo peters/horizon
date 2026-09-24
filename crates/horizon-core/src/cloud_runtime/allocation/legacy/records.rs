@@ -1,9 +1,10 @@
 use super::{AllocationId, ControllerId, Deployment, ProjectIdentity, Records, SharingMode};
 use crate::cloud_runtime::{
     Stage,
-    state::{ReadyHistory, Session},
+    state::{ImageReplacement, ReadyHistory, Session},
 };
 use horizon_cloud::{CreateState, Profile, Worker, WorkerSpec};
+use horizon_cloud_protocol::OperationId;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -22,6 +23,8 @@ pub(super) struct Allocation {
     pub registry_generation: Option<String>,
     pub worker: Option<Worker>,
     pub stop_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_replacement: Option<ImageReplacement>,
 }
 
 impl Allocation {
@@ -50,6 +53,8 @@ pub(super) struct Project {
     pub ready_history: ReadyHistory,
     pub browserstack_released: bool,
     pub browserstack_targets: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_restart: Option<OperationId>,
 }
 
 impl Project {
@@ -81,6 +86,8 @@ impl Records {
             stop_requested,
             browserstack_released,
             browserstack_targets,
+            image_replacement,
+            session_restart,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -95,6 +102,7 @@ impl Records {
                 registry_generation,
                 worker,
                 stop_requested,
+                image_replacement,
             },
             project: Project {
                 version: Project::VERSION,
@@ -110,6 +118,7 @@ impl Records {
                 ready_history,
                 browserstack_released,
                 browserstack_targets,
+                session_restart,
             },
         }
     }
@@ -135,6 +144,8 @@ impl Records {
             stop_requested: self.allocation.stop_requested,
             browserstack_released: self.project.browserstack_released,
             browserstack_targets: self.project.browserstack_targets.clone(),
+            image_replacement: self.allocation.image_replacement.clone(),
+            session_restart: self.project.session_restart,
         }
     }
 }

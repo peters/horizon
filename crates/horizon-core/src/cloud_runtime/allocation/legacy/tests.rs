@@ -377,3 +377,84 @@ fn alias_conflicts_and_unknown_fields_inside_strict_profiles_are_rejected() {
         assert!(convert(&original).is_err());
     }
 }
+
+fn replacing(phase: &str) -> Value {
+    let mut original = legacy();
+    original["stage"] = json!(if phase == "requested" { "Replace" } else { "Ready" });
+    let mut journal = json!({
+        "version":1,"operation":crate::cloud_runtime::state::OperationId::generate(),"worker_id":"worker1",
+        "previous_digest":original["spec"]["image_digest"],"previous_registry_auth_id":"saved-pull-reference",
+        "previous_registry_generation":"saved-registry-generation","recipe_revision":"c".repeat(40),
+        "tag":"horizon-legacy-cloud-replacement","phase":{"state":phase}
+    });
+    if phase != "prepared" {
+        journal["phase"]["digest"] = json!(format!("registry.example/worker@sha256:{}", "b".repeat(64)));
+        journal["phase"]["registry_auth_id"] = json!("replacement-pull-reference");
+        journal["phase"]["registry_generation"] = json!("replacement-registry-generation");
+    }
+    original["image_replacement"] = journal;
+    serde_json::to_value(serde_json::from_value::<Deployment>(original).unwrap()).unwrap()
+}
+
+#[test]
+fn replacement_journal_and_session_restart_survive_the_record_split() {
+    let mut committed = legacy();
+    committed["stage"] = json!("Readiness");
+    committed["session_restart"] = json!(crate::cloud_runtime::state::OperationId::generate());
+    for original in [
+        replacing("prepared"),
+        replacing("built"),
+        replacing("requested"),
+        committed,
+    ] {
+        let pair = convert(&original).unwrap();
+        let allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        let project: Value = serde_json::from_slice(&pair.project_bytes().unwrap()).unwrap();
+        assert_eq!(allocation.get("image_replacement"), original.get("image_replacement"));
+        assert_eq!(project.get("session_restart"), original.get("session_restart"));
+        let restored = Records::decode(&pair.allocation_bytes().unwrap(), &pair.project_bytes().unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(restored.deployment()).unwrap(), original);
+    }
+}
+
+#[test]
+fn records_without_a_replacement_keep_their_split_encodings() {
+    let pair = convert(&legacy()).unwrap();
+    let allocation = String::from_utf8(pair.allocation_bytes().unwrap()).unwrap();
+    let project = String::from_utf8(pair.project_bytes().unwrap()).unwrap();
+    assert!(!allocation.contains("image_replacement") && !project.contains("session_restart"));
+    assert!(
+        !serde_json::to_string(&pair.deployment())
+            .unwrap()
+            .contains("image_replacement")
+    );
+}
+
+#[test]
+fn unknown_fields_in_a_replacement_journal_are_rejected() {
+    for pointer in ["/image_replacement", "/image_replacement/phase"] {
+        let mut original = replacing("built");
+        original
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown_cleanup_fence".into(), json!(true));
+        assert!(convert(&original).is_err(), "accepted unknown field at {pointer}");
+        let pair = convert(&replacing("built")).unwrap();
+        let mut allocation: Value = serde_json::from_slice(&pair.allocation_bytes().unwrap()).unwrap();
+        allocation
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown_cleanup_fence".into(), json!(true));
+        assert!(
+            Records::decode(
+                &serde_json::to_vec(&allocation).unwrap(),
+                &pair.project_bytes().unwrap()
+            )
+            .is_err()
+        );
+    }
+}

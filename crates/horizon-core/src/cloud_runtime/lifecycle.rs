@@ -20,7 +20,7 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
         return Ok(false);
     }
     match &state.spec {
-        Some(spec) => Ok(!super::deployment::storage::retained(store, spec)?),
+        Some(_) => Ok(!super::deployment::storage::retained(store, state)?),
         None => Ok(!store.root().join("workspace-volume.json").try_exists()?
             && !store.root().join("workspace-volume.required").try_exists()?),
     }
@@ -37,6 +37,7 @@ pub fn reconcile(
 ) -> Result<ReconciledDeployment> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    state.refuse_unsettled_replacement()?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
@@ -57,11 +58,12 @@ pub fn reconcile(
         state.worker = Some(worker.clone());
     }
     if matches!(operation, CreateState::Terminated { .. }) {
-        if super::deployment::storage::retained(&store, &spec)? {
+        if super::deployment::storage::retained(&store, &state)? {
             return Err(Error::Invalid(
                 "Worker termination is confirmed, but workspace storage remains; explicitly delete the cloud to finish cleanup",
             ));
         }
+        super::deployment::drop_replacement(&store, &mut state)?;
         state.worker = None;
         state.stage = Stage::Deleted;
     }
@@ -76,6 +78,7 @@ pub fn reconcile(
 pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Deployment> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    state.refuse_pending_replacement()?;
     let CreateState::Bound { worker_id } = &state.operation else {
         return Err(Error::Invalid("Reconcile a bound worker before stopping it"));
     };
@@ -148,6 +151,7 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
 pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    state.refuse_pending_replacement()?;
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
@@ -176,6 +180,7 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
 pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Deployment> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    state.refuse_pending_replacement()?;
     let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker specification"))?;
     let CreateState::Bound { worker_id } = &state.operation else {
         return Err(Error::Invalid("No bound worker"));
@@ -197,4 +202,66 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
     state.browserstack_released = true;
     store.save(&state)?;
     Ok(state)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
+
+    fn pending(root: &Path, requested: bool) -> Vec<u8> {
+        let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"pending","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":{
+                "operation_id":"pending","image_digest":format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+                "profile":profile,"public_key":"unused","registry_auth_id":null,"gpu_types":[],
+                "cpu_flavors":["cpu3c"],"data_centers":[]
+            },
+            "worker":null,"sessions":[]
+        }))
+        .unwrap();
+        state
+            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-pending".into())
+            .unwrap();
+        state
+            .replacement_built(ReplacementImage {
+                digest: format!("registry.example/worker@sha256:{}", "b".repeat(64)),
+                registry_auth_id: None,
+                registry_generation: None,
+            })
+            .unwrap();
+        if requested {
+            state.request_replacement().unwrap();
+        }
+        Store::lock(root).unwrap().save(&state).unwrap();
+        std::fs::read(root.join("deployment.json")).unwrap()
+    }
+
+    fn refused<T>(result: &Result<T>) -> bool {
+        matches!(result, Err(Error::Invalid(message)) if *message == REPLACEMENT_PENDING)
+    }
+
+    #[test]
+    fn worker_actions_refuse_a_pending_image_replacement_before_provider_io() {
+        let temp = tempfile::tempdir().unwrap();
+        // Missing credentials: an action that got past its guard would fail differently.
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":temp.path().join("missing"),"ssh_identity_file":temp.path().join("missing"),
+            "docker_config":temp.path().join("docker"),"registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        let cancel = Cancellation::default();
+        for requested in [false, true] {
+            let root = temp.path().join(format!("cloud-{requested}"));
+            let saved = pending(&root, requested);
+            assert!(refused(&stop(&root, &settings, &cancel)));
+            assert!(refused(&resume(&root, &settings, &cancel)));
+            assert!(refused(&revoke_browserstack(&root, &settings, &cancel)));
+            // The provider check reads the worker as recorded until an update may be in flight.
+            assert_eq!(refused(&reconcile(&root, &settings, None, &cancel)), requested);
+            assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), saved);
+        }
+    }
 }

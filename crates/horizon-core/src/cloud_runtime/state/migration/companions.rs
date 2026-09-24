@@ -10,11 +10,7 @@ pub(super) fn capture(root: &Path, deployment: &Deployment) -> Result<BTreeMap<S
         }
     }
     if !files.is_empty() {
-        let worker = deployment
-            .spec
-            .as_ref()
-            .ok_or(Error::Invalid("Storage journal has no worker specification"))?;
-        storage::validate_migration(root, worker)?;
+        storage::validate_migration(root, deployment)?;
     }
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;

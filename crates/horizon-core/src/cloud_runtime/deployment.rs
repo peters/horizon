@@ -10,9 +10,9 @@ use super::{
     repository,
     settings::Settings,
     ssh::Connection,
-    state::{Deployment, ReadyHistory, Store},
+    state::{Deployment, OperationId, ReadyHistory, Store},
 };
-use horizon_cloud::{Cancellation, CreateState, WorkerSpec, runpod::RunPod};
+use horizon_cloud::{Cancellation, CreateState, ImageSide, Worker, WorkerSpec, runpod::RunPod};
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -55,6 +55,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     if assign_requested_size(request, &mut state)? {
         store.save(&state)?;
     }
+    state.refuse_unsettled_replacement()?;
     let started = attempt_started(&state, started);
     let mut registry = prepare_registry(request, &store, &mut state)?;
     let runner = Runner {
@@ -376,6 +377,8 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             stop_requested: false,
             browserstack_released: true,
             browserstack_targets: std::collections::BTreeSet::new(),
+            image_replacement: None,
+            session_restart: None,
         }
     };
     store.save(&state)?;
@@ -493,6 +496,7 @@ pub fn terminate(
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
+    let replacement = state.replacement_worker()?;
     let provider = RunPod::new(settings.credential()?);
     if state.operation != CreateState::Prepared {
         let runner = Runner {
@@ -500,39 +504,40 @@ pub fn terminate(
             emit,
             secrets: Vec::new(),
         };
-        terminate_worker(&provider, &store, &mut state, &spec, settings, &runner)?;
+        terminate_worker(&provider, &store, &mut state, (spec, replacement), settings, &runner)?;
     }
     deletion_step(
         emit,
         Stage::DeleteStorage,
         "Deleting managed workspace storage and confirming its removal",
     );
-    storage::terminate(&provider, &store, &spec, &committed(), emit)?;
-    state.stage = Stage::Deleted;
-    state.worker = None;
-    store.save(&state)
+    storage::terminate(&provider, &store, &state, &committed(), emit)?;
+    finish_deletion(state, &store)
 }
 
+/// `specs` holds the recorded worker and, while a replacement is journaled, the
+/// worker on its replacement image.
 fn terminate_worker(
     provider: &RunPod,
     store: &Store,
     state: &mut Deployment,
-    spec: &WorkerSpec,
+    specs: (WorkerSpec, Option<WorkerSpec>),
     settings: &Settings,
     runner: &Runner<'_>,
 ) -> Result<()> {
     let cancel = runner.cancel;
     let release = state.requires_browserstack_release();
+    let first = if release {
+        Stage::ReleaseDevices
+    } else {
+        Stage::DeleteWorker
+    };
+    let (spec, replacement) = specs;
     let mut operation = state.operation.clone();
     if operation == CreateState::Requested {
-        let step = if release {
-            Stage::ReleaseDevices
-        } else {
-            Stage::DeleteWorker
-        };
-        deletion_step(runner.emit, step, "Reconciling the requested worker");
+        deletion_step(runner.emit, first, "Reconciling the requested worker");
         provider.ensure(
-            spec,
+            &spec,
             &mut operation,
             cancel,
             |next| {
@@ -542,12 +547,19 @@ fn terminate_worker(
             |_| {},
         )?;
     }
+    let spec = match (replacement, &operation) {
+        (Some(next), CreateState::Bound { worker_id } | CreateState::Terminated { worker_id }) => {
+            deletion_step(runner.emit, first, "Identifying which image the worker runs");
+            reported_spec(provider.inspect(worker_id, cancel)?.as_ref(), spec, next)?
+        }
+        _ => spec,
+    };
     if release && let CreateState::Bound { worker_id } = &operation {
         deletion_step(runner.emit, Stage::ReleaseDevices, "Confirming worker identity");
         let worker = provider.inspect(worker_id, cancel)?.ok_or(Error::Invalid(
             "Worker is lost; remote-device release must be verified before cleanup can be confirmed",
         ))?;
-        worker.verify(spec)?;
+        worker.verify(&spec)?;
         if worker.status() == horizon_cloud::WorkerStatus::Stopped {
             return Err(Error::Invalid(
                 "Resume the worker to release its hosted devices before deletion",
@@ -565,7 +577,7 @@ fn terminate_worker(
         "Deleting the worker and confirming its removal",
     );
     provider.terminate_with_progress(
-        spec,
+        &spec,
         &mut operation,
         &committed,
         |next| {
@@ -603,6 +615,55 @@ fn request_detail(emit: &dyn Fn(Event)) -> impl FnMut(horizon_cloud::Progress) {
             request.to_string(),
         )));
     }
+}
+
+/// Commits a requested image replacement once the provider reports the new image on
+/// every API. The storage journal is rebound first, then one deployment write switches
+/// the worker specification; after a crash in between, the replacement is still
+/// requested and committing again completes it. No provider I/O.
+/// # Errors
+/// Refuses unless the replacement was requested, and reports persistence failures.
+pub fn commit_replacement(store: &Store, state: &mut Deployment) -> Result<OperationId> {
+    let previous = state
+        .spec
+        .clone()
+        .ok_or(Error::Invalid("Missing worker specification"))?;
+    let mut committed = state.clone();
+    let operation = committed.commit_replacement()?;
+    let next = committed
+        .spec
+        .as_ref()
+        .ok_or(Error::Invalid("Missing worker specification"))?;
+    storage::rebind(store, &previous, next)?;
+    store.save(&committed)?;
+    *state = committed;
+    Ok(operation)
+}
+
+/// While a journaled replacement has a built image, the worker may run either image of
+/// the pair. Delete it as the one it reports; the provider verifies that again strictly.
+fn reported_spec(worker: Option<&Worker>, current: WorkerSpec, next: WorkerSpec) -> Result<WorkerSpec> {
+    let side = worker.map(|worker| worker.verify_either(&current, &next)).transpose()?;
+    Ok(if side == Some(ImageSide::Next) { next } else { current })
+}
+
+fn finish_deletion(mut state: Deployment, store: &Store) -> Result<()> {
+    drop_replacement(store, &mut state)?;
+    state.stage = Stage::Deleted;
+    state.worker = None;
+    store.save(&state)
+}
+
+/// A deleted worker has no image to replace and no sessions to relaunch. An interrupted
+/// commit may have rebound the storage journal to the replacement's worker, so it is
+/// bound back to the recorded one, which later storage checks compare against.
+pub(in crate::cloud_runtime) fn drop_replacement(store: &Store, state: &mut Deployment) -> Result<()> {
+    if let (Some(next), Some(current)) = (state.replacement_worker()?, state.spec.as_ref()) {
+        storage::rebind(store, &next, current)?;
+    }
+    state.image_replacement = None;
+    state.session_restart = None;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -946,6 +1007,97 @@ mod tests {
         request.profile.cpu = 4;
         assert!(initial_state(&request, &store).is_ok());
     }
+    #[test]
+    fn deletion_identifies_a_replacing_worker_by_either_image() {
+        let current: WorkerSpec = serde_json::from_value(serde_json::json!({
+            "operation_id":"replacing","image_digest":format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "public_key":"unused","registry_auth_id":null,"gpu_types":[],"cpu_flavors":["cpu3c"],"data_centers":[]
+        }))
+        .unwrap();
+        let mut next = current.clone();
+        next.image_digest = format!("registry.example/worker@sha256:{}", "b".repeat(64));
+        let worker = |image: &str, name: &str| -> Worker {
+            serde_json::from_value(serde_json::json!({
+                "id":"worker1","name":name,"imageName":image,"desiredStatus":"RUNNING",
+                "env":{"HORIZON_CLOUD_OPERATION":"replacing"}
+            }))
+            .unwrap()
+        };
+        let name = current.name();
+        for (reported, expected) in [
+            (Some(worker(&current.image_digest, &name)), &current),
+            (Some(worker(&next.image_digest, &name)), &next),
+            (None, &current),
+        ] {
+            assert_eq!(
+                reported_spec(reported.as_ref(), current.clone(), next.clone()).unwrap(),
+                *expected
+            );
+        }
+        let third = format!("registry.example/worker@sha256:{}", "c".repeat(64));
+        for reported in [worker(&third, &name), worker(&next.image_digest, "horizon-cloud-other")] {
+            assert!(reported_spec(Some(&reported), current.clone(), next.clone()).is_err());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reconnect_refuses_an_image_update_that_may_be_in_flight() {
+        let root = tempfile::tempdir().unwrap();
+        let mut key = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        std::io::Write::write_all(&mut key, b"synthetic-test-key").unwrap();
+        let mut identity = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        std::io::Write::write_all(&mut identity, b"synthetic-identity").unwrap();
+        let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        let request = Request {
+            cloud_id: "reconnect".into(),
+            // Unmounted, so an attempt that passes the guard stops before provider I/O.
+            repository: root.path().join("repository-is-not-mounted"),
+            revision: "a".repeat(40),
+            profile: serde_json::from_value(profile.clone()).unwrap(),
+            state_root: root.path().join("state"),
+            settings: serde_json::from_value(serde_json::json!({
+                "runpod_key_file":key.path(),"ssh_identity_file":identity.path(),
+                "docker_config":root.path().join("docker"),"registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+            }))
+            .unwrap(),
+        };
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":request.cloud_id,"repository":request.repository,"revision":request.revision,
+            "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":{
+                "operation_id":request.cloud_id,"image_digest":format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+                "profile":profile,"public_key":"unused","registry_auth_id":null,"gpu_types":[],
+                "cpu_flavors":["cpu3c"],"data_centers":[]
+            },
+            "worker":null,"sessions":[]
+        }))
+        .unwrap();
+        state
+            .begin_replacement(OperationId::generate(), "c".repeat(40), "horizon-reconnect".into())
+            .unwrap();
+        state
+            .replacement_built(super::super::state::ReplacementImage {
+                digest: format!("registry.example/worker@sha256:{}", "b".repeat(64)),
+                registry_auth_id: None,
+                registry_generation: None,
+            })
+            .unwrap();
+        let pending = |error: &Error| matches!(error, Error::Invalid(message) if *message == super::super::state::REPLACEMENT_PENDING);
+        for requested in [false, true] {
+            if requested {
+                state.request_replacement().unwrap();
+            }
+            Store::lock(&request.state_root).unwrap().save(&state).unwrap();
+            let error = deploy(&request, &Cancellation::default(), &|_| {}).unwrap_err();
+            assert_eq!(pending(&error), requested, "{error}");
+            let saved = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
+            assert_eq!(saved.image_replacement, state.image_replacement);
+            assert_eq!(saved.stage, state.stage);
+        }
+    }
+
     #[test]
     fn gpu_profiles_keep_configured_cpu_flavors() {
         let settings: Settings = serde_json::from_value(serde_json::json!({

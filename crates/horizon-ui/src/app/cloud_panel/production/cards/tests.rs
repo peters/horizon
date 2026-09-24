@@ -55,6 +55,8 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                                 stop_requested: false,
                                 browserstack_released: false,
                                 browserstack_targets: std::collections::BTreeSet::new(),
+                                image_replacement: None,
+                                session_restart: None,
                             }),
                             ..Default::default()
                         };
@@ -142,6 +144,8 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         stop_requested: false,
         browserstack_released: true,
         browserstack_targets: std::collections::BTreeSet::new(),
+        image_replacement: None,
+        session_restart: None,
     };
     store.save(&state).unwrap();
     app.resize_production_cloud(1, (16, 64));

@@ -83,6 +83,9 @@ pub enum Stage {
     Validate,
     Build,
     Push,
+    /// Persisted only while a journaled image replacement's provider update may
+    /// be in flight. Older Horizon versions cannot parse it and do nothing.
+    Replace,
     Provision,
     Readiness,
     Worktrees,
@@ -118,6 +121,7 @@ impl Stage {
             Self::Validate => "Validate",
             Self::Build => "Build locally",
             Self::Push => "Push image",
+            Self::Replace => "Replace image",
             Self::Provision => "Provision worker",
             Self::Readiness => "Check readiness",
             Self::Worktrees => "Prepare worktrees",
