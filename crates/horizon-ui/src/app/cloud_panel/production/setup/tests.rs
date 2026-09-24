@@ -338,7 +338,7 @@ fn cancelling_workspace_credential_repair_returns_to_the_entered_title() {
 }
 
 #[test]
-fn registry_setup_rotation_and_revocation_share_the_machine_policy() {
+fn registry_setup_rotation_and_status_share_the_machine_policy() {
     use horizon_core::cloud_runtime::{registry, settings::Settings};
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
@@ -397,7 +397,7 @@ fn registry_setup_rotation_and_revocation_share_the_machine_policy() {
         .clear();
     app.manage_cloud_registry(
         &ctx,
-        registry::Action::Revoke {
+        registry::Action::Status {
             repository: original.repository.clone(),
             generation: original.generation.clone(),
         },
@@ -410,7 +410,7 @@ fn registry_setup_rotation_and_revocation_share_the_machine_policy() {
             .registry_status
             .as_ref()
             .unwrap()
-            .starts_with("Revoked")
+            .starts_with("Not prepared")
     );
     let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
     assert!(draft.registries[0].pull_secret.is_empty());

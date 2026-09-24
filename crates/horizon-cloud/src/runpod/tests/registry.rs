@@ -32,6 +32,37 @@ fn prepared_generation_cannot_adopt_an_existing_provider_binding() {
 }
 
 #[test]
+fn prepared_revocation_requires_absence_and_never_deletes_an_unowned_binding() {
+    for response in [
+        (200, "[]".into()),
+        (200, serde_json::to_string(&vec![binding()]).unwrap()),
+        (503, "{}".into()),
+    ] {
+        let absent = response.1 == "[]";
+        let (provider, requests, task) = server(vec![response]);
+        let mut state = State::Prepared;
+        let mut transitions = Vec::new();
+        let result = provider.revoke_registry_binding("generation1", &mut state, &Cancellation::default(), |next| {
+            transitions.push(next.clone());
+            Ok(())
+        });
+        if absent {
+            assert!(result.is_ok());
+            assert_eq!(state, State::Revoked);
+            assert_eq!(transitions, [State::Revoked]);
+        } else {
+            assert!(result.is_err());
+            assert_eq!(state, State::Prepared);
+            assert!(transitions.is_empty());
+        }
+        task.join().unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /containerregistryauth "));
+    }
+}
+
+#[test]
 fn missing_delete_response_remains_fenced_until_absence_is_observed() {
     let result = binding();
     let listed = serde_json::to_string(&vec![&result]).unwrap();

@@ -160,10 +160,10 @@ impl RunPod {
         if *state == State::Revoked {
             return Ok(());
         }
-        if *state == State::Prepared {
-            return transition(state, State::Revoked, &mut persist);
-        }
         let observed = self.match_registry_binding(&name, state, cancel)?;
+        if *state == State::Prepared && observed.is_some() {
+            return Err(CloudError::IdentityMismatch);
+        }
         let Some(binding) = observed else {
             if matches!(state, State::Requested { .. }) {
                 return Err(CloudError::Invalid(
