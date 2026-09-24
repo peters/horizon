@@ -93,13 +93,21 @@ impl Material {
             emit: &|_| {},
             secrets: Vec::new(),
         };
-        runner
+        let fingerprints = runner
             .private_exchange(
                 Command::new("ssh-keygen").args(["-l", "-f", "-"]),
                 &hosts,
                 Duration::from_secs(5),
             )
             .map_err(|_| Error::Invalid)?;
+        let validated = std::str::from_utf8(&fingerprints)
+            .map_err(|_| Error::Invalid)?
+            .lines()
+            .count();
+        let expected = std::str::from_utf8(&hosts).map_err(|_| Error::Invalid)?.lines().count();
+        if validated != expected {
+            return Err(Error::Invalid);
+        }
         // Recovery supports noninteractive, unencrypted private identities.
         // Validate captured bytes, never a mutable source path or agent fallback.
         let mut identity_snapshot = tempfile::NamedTempFile::new()?;

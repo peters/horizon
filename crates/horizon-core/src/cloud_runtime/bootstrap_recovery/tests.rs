@@ -256,6 +256,32 @@ fn additional_host_trust_rules_never_reach_the_transport_or_journal() {
 }
 
 #[test]
+fn every_entry_must_validate_before_a_multi_key_pin_can_be_anchored() {
+    for malformed_first in [false, true] {
+        let (temp, root, vault) = fixture();
+        let mut owner = create(&root, &vault);
+        let target = target(&owner, temp.path());
+        let second = fs::read_to_string(target.connection.identity.with_extension("pub")).unwrap();
+        let valid = format!("horizon-cloud-worker1 ssh-ed25519 {HOST_KEY}\nhorizon-cloud-worker1 {second}");
+        let invalid = "horizon-cloud-worker1 ssh-ed25519 !!!!\n";
+        let mixed = if malformed_first {
+            format!("{invalid}{valid}")
+        } else {
+            format!("{valid}{invalid}")
+        };
+        fs::write(&target.connection.known_hosts, mixed).unwrap();
+        assert!(recover_with(&mut owner, &target, &mut |_, _| panic!("partially validated pin sent")).is_err());
+        assert!(owner.load().unwrap().get(KEY).is_none());
+        fs::write(&target.connection.known_hosts, valid).unwrap();
+        recover_with(&mut owner, &target, &mut |connection, request| {
+            assert_eq!(fs::read_to_string(&connection.known_hosts).unwrap().lines().count(), 2);
+            Ok(reply(&target, request))
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn invalid_private_keys_never_anchor_and_corrected_identity_can_recover() {
     let (temp, root, vault) = fixture();
     let mut owner = create(&root, &vault);
