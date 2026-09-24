@@ -419,9 +419,11 @@ fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
 
     frame(&mut app, true);
     assert!(!app.cloud_prototype.production.creating);
-    for _ in 0..2 {
-        frame(&mut app, false);
-    }
+    assert!(
+        app.cloud_prototype.creation_holds.is_empty(),
+        "the frame that ends the creation releases its hold"
+    );
+    frame(&mut app, false);
     assert!(app.board.workspace(cloud).is_none());
     assert_eq!(app.board.focused, Some(remaining));
     assert_eq!(app.board.active_workspace, Some(local));

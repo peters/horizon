@@ -220,6 +220,7 @@ impl HorizonApp {
     pub(in crate::app) fn render_cloud_dialogs(&mut self, ctx: &egui::Context) {
         self.render_cloud_creation(ctx);
         self.render_cloud_accounts(ctx);
+        self.release_workspaces_after_creation(ctx);
     }
 }
 

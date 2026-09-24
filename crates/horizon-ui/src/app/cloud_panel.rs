@@ -46,7 +46,6 @@ impl HorizonApp {
     pub(super) fn prepare_cloud_prototype(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
             self.prepare_production_clouds(ctx);
-            self.release_workspaces_after_creation(ctx);
             return;
         }
         self.start_cloud_setup(ctx);
@@ -327,8 +326,9 @@ impl HorizonApp {
 
     /// Release the workspaces a cloud creation kept once it no longer targets
     /// them, however it ended: cancelled, failed, stale or finished elsewhere.
-    /// Checked every frame so no exit path can leave one stuck.
-    fn release_workspaces_after_creation(&mut self, ctx: &egui::Context) {
+    /// Checked every frame after the dialogs, so an exit in this frame is seen
+    /// at once and no exit path can leave one stuck.
+    pub(super) fn release_workspaces_after_creation(&mut self, ctx: &egui::Context) {
         for workspace in std::mem::take(&mut self.cloud_prototype.creation_holds) {
             self.release_removed_cloud_workspace(&workspace, ctx);
         }
