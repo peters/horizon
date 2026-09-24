@@ -83,7 +83,7 @@ fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
         } else if ui
             .button("Cancel rebuild")
             .on_hover_text(
-                "Stops before the worker's image is switched. The rebuild can then be continued or discarded.",
+                "Stops before the worker's image is switched. Cancelled while the committed recipe is read, the rebuild leaves nothing pending and the card offers Reconnect; later, it stays pending to be continued or discarded.",
             )
             .clicked()
         {

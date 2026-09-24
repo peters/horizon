@@ -336,8 +336,9 @@ stays available throughout.
 On the runtime card of a Ready cloud whose profile has a build section,
 **Rebuild image & restart…** asks for confirmation and names these consequences
 first. While it runs, the card lists the rebuild's steps with their durations and
-offers **Cancel rebuild** only until the image switch is requested; a cancelled
-rebuild stays pending. A pending replacement shows a notice with **Continue
+offers **Cancel rebuild** only until the image switch is requested. A rebuild
+cancelled while its committed recipe is read leaves nothing pending, and the card
+offers **Reconnect cloud**; cancelled later, it stays pending. A pending replacement shows a notice with **Continue
 rebuild** and **Cancel rebuild**, and Stop waits until it is resolved. Cancelling
 a switch that may have been sent asks for confirmation, because switching back
 restarts the worker again, and Horizon does not reconnect such a cloud on its own
