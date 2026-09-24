@@ -42,6 +42,8 @@ pub struct CloudGroup {
     workspace_position: [f32; 2],
     pub size: [f32; 2],
     pub collapsed: bool,
+    /// `None` is manual placement. New clouds start with the default preset;
+    /// a saved cloud without a stored layout stays manual.
     #[serde(default)]
     pub layout: Option<WorkspaceLayout>,
     pub panels: Vec<String>,
@@ -99,7 +101,7 @@ impl CloudGroup {
             environment: Environment::prototype(format!("issue-{issue}")),
             size: [CHILD_SIZE[0] + PAD * 2.0, CHILD_SIZE[1] + HEADER + PAD],
             collapsed: false,
-            layout: None,
+            layout: Some(WorkspaceLayout::default()),
             panels: Vec::new(),
             hidden: Vec::new(),
         }
@@ -822,6 +824,103 @@ mod tests {
         assert_eq!(restored.0[1].layout, Some(WorkspaceLayout::Grid));
         assert_eq!(restored.0[0].panels.len(), 3);
         assert_eq!(restored.0[1].panels.len(), 3);
+    }
+
+    fn attach_usage_panels(board: &mut Board, group: &mut CloudGroup, positions: &[[f32; 2]]) -> Vec<PanelId> {
+        let workspace = board.workspace_id_by_local_id(&group.workspace).unwrap();
+        positions
+            .iter()
+            .map(|position| {
+                let id = board
+                    .create_panel(
+                        PanelOptions {
+                            kind: PanelKind::Usage,
+                            position: Some(*position),
+                            size: Some(CHILD_SIZE),
+                            ..PanelOptions::default()
+                        },
+                        workspace,
+                    )
+                    .unwrap();
+                group.attach(board, id);
+                id
+            })
+            .collect()
+    }
+
+    #[test]
+    fn new_cloud_starts_with_grid_and_arranges_members_added_later() {
+        let mut board = Board::new();
+        let ws = board.create_workspace_at("desk", [0.0, 0.0]);
+        board.workspace_mut(ws).unwrap().layout = None;
+        let local = board.workspace(ws).unwrap().local_id.clone();
+        let mut groups = CloudGroups(vec![CloudGroup::new(
+            1,
+            "Cloud".into(),
+            local,
+            PathBuf::new(),
+            [0.0, 0.0],
+        )]);
+        assert_eq!(groups.0[0].layout, Some(WorkspaceLayout::Grid));
+        groups.reconcile(&mut board);
+        let ids = attach_usage_panels(
+            &mut board,
+            &mut groups.0[0],
+            &[[900.0, 700.0], [60.0, 1500.0], [400.0, 90.0]],
+        );
+        let placed: Vec<_> = ids.iter().map(|id| board.panel(*id).unwrap().layout.position).collect();
+        // Three members fill two columns; the third starts a row below the first.
+        assert_eq!(placed[1][1].to_bits(), placed[0][1].to_bits());
+        assert!(placed[1][0] >= placed[0][0] + CHILD_SIZE[0]);
+        assert_eq!(placed[2][0].to_bits(), placed[0][0].to_bits());
+        assert!(placed[2][1] >= placed[0][1] + CHILD_SIZE[1]);
+        let (min, max) = groups.0[0].bounds();
+        for position in placed {
+            assert!(position[0] >= min[0] + PAD && position[0] + CHILD_SIZE[0] <= max[0]);
+            assert!(position[1] >= min[1] + HEADER && position[1] + CHILD_SIZE[1] <= max[1]);
+        }
+    }
+
+    #[test]
+    fn saved_cloud_without_a_stored_layout_keeps_manual_placement() {
+        let mut board = Board::new();
+        let ws = board.create_workspace_at("desk", [0.0, 0.0]);
+        board.workspace_mut(ws).unwrap().layout = None;
+        let local = board.workspace(ws).unwrap().local_id.clone();
+        let mut groups = CloudGroups(vec![CloudGroup::new(
+            1,
+            "Cloud".into(),
+            local,
+            PathBuf::new(),
+            [0.0, 0.0],
+        )]);
+        groups.0[0].layout = None;
+        groups.reconcile(&mut board);
+        let ids = attach_usage_panels(
+            &mut board,
+            &mut groups.0[0],
+            &[[PAD, HEADER], [PAD + 600.0, HEADER + 40.0]],
+        );
+        let positions = |board: &Board| -> Vec<[u32; 2]> {
+            ids.iter()
+                .map(|id| board.panel(*id).unwrap().layout.position.map(f32::to_bits))
+                .collect()
+        };
+        let manual = positions(&board);
+        assert_ne!(manual[0][1], manual[1][1], "a grid would align both members in one row");
+        let saved = serde_json::to_value(&groups).unwrap();
+        for stored in [None, Some(serde_json::Value::Null)] {
+            let mut value = saved.clone();
+            let group = value[0].as_object_mut().unwrap();
+            group.remove("layout");
+            if let Some(stored) = stored {
+                group.insert("layout".into(), stored);
+            }
+            let mut restored: CloudGroups = serde_json::from_value(value).unwrap();
+            assert_eq!(restored.0[0].layout, None);
+            restored.reconcile(&mut board);
+            assert_eq!(positions(&board), manual);
+        }
     }
 
     #[test]

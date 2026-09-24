@@ -1,6 +1,7 @@
 use super::*;
 use crate::app::test_support::test_app;
-use horizon_core::cloud_panel::CloudConfig;
+use horizon_core::cloud_panel::{CHILD_SIZE, CloudConfig};
+use horizon_core::{PanelKind, PanelOptions, WorkspaceLayout};
 
 fn pending(app: &mut HorizonApp) -> std::sync::mpsc::Sender<cloud_runtime::Result<Resolved>> {
     let workspace = app.board.ensure_workspace();
@@ -73,6 +74,38 @@ fn completion_uses_captured_workspace_title_profile_and_revision() {
     assert_eq!(launch.revision, "a".repeat(40));
     assert!(!launch.deployment_started);
     assert!(app.cloud_prototype.production.runtimes.is_empty());
+}
+
+#[test]
+fn completed_cloud_starts_with_grid_and_arranges_panels_added_later() {
+    let (temp, mut app) = test_app();
+    let sender = pending(&mut app);
+    sender.send(Ok(resolved(temp.path()))).unwrap();
+    app.poll_cloud_creation(&egui::Context::default());
+    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
+    let group = &app.cloud_prototype.groups.0[0];
+    assert_eq!(group.layout, Some(WorkspaceLayout::Grid));
+    let workspace = app.board.workspace_id_by_local_id(&group.workspace).unwrap();
+    let ids: Vec<_> = (0..3)
+        .map(|_| {
+            let options = PanelOptions {
+                kind: PanelKind::Usage,
+                position: Some(app.cloud_prototype.groups.0[0].next_position(&app.board)),
+                size: Some(CHILD_SIZE),
+                ..PanelOptions::default()
+            };
+            app.create_cloud_member(0, options, workspace).unwrap()
+        })
+        .collect();
+    let placed: Vec<_> = ids
+        .iter()
+        .map(|id| app.board.panel(*id).unwrap().layout.position)
+        .collect();
+    // Manual placement would line all three up in one row.
+    assert_eq!(placed[1][1].to_bits(), placed[0][1].to_bits());
+    assert!(placed[1][0] > placed[0][0]);
+    assert_eq!(placed[2][0].to_bits(), placed[0][0].to_bits());
+    assert!(placed[2][1] > placed[0][1]);
 }
 
 #[test]
