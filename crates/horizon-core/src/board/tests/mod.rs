@@ -3,6 +3,8 @@ use crate::panel::{PanelKind, PanelOptions};
 mod alignment;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_collisions;
+#[cfg(feature = "cloud-workspaces")]
+mod cloud_retention;
 mod core;
 mod layout;
 mod reordering;

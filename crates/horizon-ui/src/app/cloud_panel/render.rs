@@ -150,7 +150,7 @@ impl HorizonApp {
         }
         self.apply_cloud_title_edit(title_action);
         if let Some(action) = action {
-            self.cloud_action(action);
+            self.cloud_action(action, ctx);
         }
     }
 
@@ -172,13 +172,14 @@ impl HorizonApp {
         }
     }
 
-    fn cloud_action(&mut self, action: Action) {
+    fn cloud_action(&mut self, action: Action, ctx: &egui::Context) {
         let issue = match action {
             Action::Rename(i) | Action::Collapse(i) | Action::Remove(i) => i,
         };
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue) else {
             return;
         };
+        let mut removed_from = None;
         match action {
             Action::Rename(_) => {
                 self.cloud_prototype.renaming = Some(issue);
@@ -194,11 +195,14 @@ impl HorizonApp {
                 if self.cloud_prototype.groups.0[index].panels.is_empty()
                     && self.cloud_prototype.groups.0[index].remote.is_none()
                 {
-                    self.cloud_prototype.groups.0.remove(index);
+                    removed_from = Some(self.cloud_prototype.groups.0.remove(index).workspace);
                 }
             }
         }
         self.save_cloud_prototype();
+        if let Some(workspace) = removed_from {
+            self.release_removed_cloud_workspace(&workspace, ctx);
+        }
     }
 
     pub(in crate::app) fn render_cloud_controls(&mut self, ctx: &egui::Context) {
@@ -216,6 +220,7 @@ impl HorizonApp {
     pub(in crate::app) fn render_cloud_dialogs(&mut self, ctx: &egui::Context) {
         self.render_cloud_creation(ctx);
         self.render_cloud_accounts(ctx);
+        self.release_workspaces_after_creation(ctx);
     }
 }
 
@@ -418,6 +423,7 @@ fn frame_background(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::test_support::test_app;
     use crate::test_egui::DiscardTextures;
 
     /// Painted texts with their bounds and clip rectangles, and the width reserved for the cost badge.
@@ -474,5 +480,45 @@ mod tests {
         );
         assert!((title_clip(&plain).right() - title_clip(&costed).right() - reserved).abs() < 0.5);
         assert!(reserved > cost.width());
+    }
+
+    #[test]
+    fn removing_the_last_demo_cloud_releases_only_its_own_workspace() {
+        let (temp, mut app) = test_app();
+        let shared = app.board.create_workspace("Shared");
+        let single = app.board.create_workspace("Single");
+        for (issue, workspace) in [(101, shared), (102, shared), (103, single)] {
+            let local = app.board.workspace(workspace).unwrap().local_id.clone();
+            app.cloud_prototype.groups.0.push(CloudGroup::new(
+                issue,
+                "Demo".into(),
+                local,
+                temp.path().into(),
+                [0.0, 0.0],
+            ));
+        }
+
+        let ctx = egui::Context::default();
+        // A new context asks for its first frames; settle it so only the release can ask.
+        for _ in 0..4 {
+            if !ctx.has_requested_repaint() {
+                break;
+            }
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+        }
+        app.cloud_action(Action::Remove(101), &ctx);
+        assert!(
+            !ctx.has_requested_repaint(),
+            "cloud 102 still holds the shared workspace"
+        );
+        app.cloud_action(Action::Remove(103), &ctx);
+        assert!(
+            ctx.has_requested_repaint(),
+            "the release schedules the frame that removes the workspace"
+        );
+        app.normalize_workspace_state(&ctx);
+
+        assert!(app.board.workspace(shared).is_some(), "cloud 102 keeps its workspace");
+        assert!(app.board.workspace(single).is_none());
     }
 }

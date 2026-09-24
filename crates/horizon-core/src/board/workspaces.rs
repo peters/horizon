@@ -16,6 +16,42 @@ impl Board {
         }
     }
 
+    /// Stop keeping `id` when empty once no cloud on this board uses it. It
+    /// then behaves like any workspace: it stays while it holds a panel,
+    /// hidden ones included, and is removed by the next
+    /// [`Self::remove_empty_workspaces`] or when its last panel closes. The
+    /// caller keeps the hold for work the board does not track, such as a
+    /// pending cloud creation.
+    ///
+    /// When the released workspace is empty, active and nothing is focused,
+    /// its removal takes the selection with it, so focus moves as when a
+    /// focused last panel closes. Returns whether a hold was released, so the
+    /// caller can schedule the cleanup frame.
+    #[cfg(feature = "cloud-workspaces")]
+    pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) -> bool {
+        let Some(workspace) = self.workspace(id) else {
+            return false;
+        };
+        if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
+            return false;
+        }
+        let leaves_board = workspace.panels.is_empty() && workspace.remote_workspace.is_none();
+        let released = self.retained_empty_workspaces.remove(&id);
+        if leaves_board && self.active_workspace == Some(id) && self.focused.is_none() {
+            self.focus_most_recent_panel();
+        }
+        released
+    }
+
+    /// Focus the most recently created remaining panel and activate its
+    /// workspace; used when the focused panel or selected workspace goes away.
+    fn focus_most_recent_panel(&mut self) {
+        self.focused = self.panels.last().map(|panel| panel.id);
+        if let Some(focused) = self.focused {
+            self.active_workspace = self.panel_workspace_id(focused);
+        }
+    }
+
     #[must_use]
     pub fn create_workspace(&mut self, name: &str) -> WorkspaceId {
         let id = WorkspaceId(self.next_workspace_id);
@@ -274,10 +310,7 @@ impl Board {
         self.attention.retain(|item| item.panel_id != Some(id));
         self.panel_attention_signals.remove(&id);
         if self.focused == Some(id) {
-            self.focused = self.panels.last().map(|p| p.id);
-            if let Some(focused) = self.focused {
-                self.active_workspace = self.panel_workspace_id(focused);
-            }
+            self.focus_most_recent_panel();
         }
 
         // Remove workspace if it has no panels left.

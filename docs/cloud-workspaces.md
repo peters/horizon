@@ -145,8 +145,11 @@ memory, so create a new cloud for a different size.
 
 Add normal panels inside the cloud using the existing panel picker. Choose
 Default, Rows, Cols or Grid independently for each cloud. Cloud and workspace
-membership is permanent. Full screen opens one cloud; F11 opens its focused panel,
-and Escape returns through the previous views. The shared canvas supports zooming
+membership is permanent. Removing the last cloud from a workspace also removes the
+workspace when no panel remains in it; a new cloud being created there keeps it
+until that creation ends. **Close All Panels** keeps its workspace. Full screen
+opens one cloud; F11 opens its focused panel, and Escape returns through the
+previous views. The shared canvas supports zooming
 out to 5%; Fit reserves space for the overview controls and minimap on smaller
 windows, and saved views use the same zoom limits as manual zoom.
 

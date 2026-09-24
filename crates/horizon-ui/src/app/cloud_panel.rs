@@ -32,6 +32,8 @@ pub(super) struct CloudPrototype {
     provider_logo: Option<egui::TextureHandle>,
     pub fullscreen: Option<fullscreen::CloudFullscreen>,
     deployments: std::collections::HashMap<u32, runtime::DemoDeployment>,
+    /// Workspaces of removed clouds kept only because a cloud creation targets them.
+    creation_holds: Vec<String>,
 }
 
 impl CloudPrototype {
@@ -295,6 +297,41 @@ impl HorizonApp {
             self.board.reapply_workspace_layout_after(workspace, before);
         }
         self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
+    }
+
+    /// Let a removed cloud's workspace go like one whose last panel closed,
+    /// unless another cloud or a cloud creation still targets it. A creation
+    /// keeps it until [`Self::release_workspaces_after_creation`] sees that
+    /// creation end. This frame's workspace cleanup has already run, so a
+    /// released hold asks for another frame to remove the workspace.
+    fn release_removed_cloud_workspace(&mut self, workspace: &str, ctx: &egui::Context) {
+        if self.cloud_prototype.groups.contains_workspace(workspace) {
+            return;
+        }
+        if self.cloud_prototype.production.creation_targets(workspace) {
+            if !self.cloud_prototype.creation_holds.iter().any(|held| held == workspace) {
+                self.cloud_prototype.creation_holds.push(workspace.to_owned());
+            }
+            return;
+        }
+        if self.cloud_state_is_live() {
+            self.sync_board_cloud_groups();
+        }
+        if let Some(id) = self.board.workspace_id_by_local_id(workspace)
+            && self.board.release_empty_workspace_retention(id)
+        {
+            ctx.request_repaint();
+        }
+    }
+
+    /// Release the workspaces a cloud creation kept once it no longer targets
+    /// them, however it ended: cancelled, failed, stale or finished elsewhere.
+    /// Checked every frame after the dialogs, so an exit in this frame is seen
+    /// at once and no exit path can leave one stuck.
+    pub(super) fn release_workspaces_after_creation(&mut self, ctx: &egui::Context) {
+        for workspace in std::mem::take(&mut self.cloud_prototype.creation_holds) {
+            self.release_removed_cloud_workspace(&workspace, ctx);
+        }
     }
 
     pub(super) fn save_cloud_prototype(&mut self) {

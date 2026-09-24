@@ -31,6 +31,11 @@ pub(in crate::app::cloud_panel) struct State {
 }
 
 impl State {
+    /// Whether these settings resume a cloud creation once they are saved.
+    pub(in crate::app::cloud_panel) fn resumes_creation(&self) -> bool {
+        self.open && self.continue_creation
+    }
+
     fn render_fields(&mut self, ui: &mut egui::Ui) -> Option<horizon_core::cloud_runtime::registry::Action> {
         let state = self;
         let mut registry_action = None;
