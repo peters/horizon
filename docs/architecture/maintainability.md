@@ -474,6 +474,11 @@ new image digest through the pod update and observes which image of the pair the
 provider reports; it keeps no journal, so callers record intent first.
 `runpod::billing` reads one worker's validated billing buckets. The crate must
 not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
+`startup::StartupMetadata` is bounded opaque, non-secret creation data saved in
+`WorkerSpec`. The RunPod request passes it through one environment value, and the
+shared worker-identity check requires its exact echo before adoption or lifecycle
+operations. The provider crate does not interpret application bootstrap or
+membership policy. Existing runtime callers leave this optional field absent.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
