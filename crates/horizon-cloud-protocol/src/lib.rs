@@ -2,6 +2,7 @@
 //! These records do not authorize provider calls or enable worker sharing.
 #![forbid(unsafe_code)]
 pub mod bootstrap;
+pub mod companion;
 mod identity;
 mod placement;
 pub mod signed;

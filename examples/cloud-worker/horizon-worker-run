@@ -1,6 +1,15 @@
 #!/bin/bash
 set -u
 id="$1"; agent="$2"
+if [ "$agent" = companion ]; then
+    [[ "$id" =~ ^[a-zA-Z0-9_-]{1,100}$ ]] || exit 2
+    export HOME=/workspace/home
+    cd "/workspace/companions/worktrees/$id" || exit 3
+    if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+        exec /bin/bash -c "$SSH_ORIGINAL_COMMAND"
+    fi
+    exec /bin/bash
+fi
 export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
 export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"
 export HORIZON_DEVICE_ACTOR="horizon:cloud-$id"
