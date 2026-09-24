@@ -227,3 +227,22 @@ fn file_url_continues_onto_path_shaped_rows() {
         assert_eq!(url_at(&term, COLS, row, 3).as_deref(), Some(url.as_str()), "row {row}");
     }
 }
+
+#[test]
+fn ragged_middle_row_ending_in_a_question_mark_joins() {
+    let cols = 60;
+    let term = term_with_rows(
+        cols,
+        4,
+        &texts(&[
+            "     https://docs.example.com/guides/",
+            "     terminal-rendering/long-links?",
+            "     topic=terminal&ref=test-0001",
+        ]),
+    );
+    let url = "https://docs.example.com/guides/terminal-rendering/long-links?topic=terminal&ref=test-0001";
+
+    for row in 0..3 {
+        assert_eq!(url_at(&term, cols, row, 8).as_deref(), Some(url), "row {row}");
+    }
+}

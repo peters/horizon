@@ -189,15 +189,17 @@ fn url_continues_on_next_row(grid: &Grid<Cell>, cols: usize, line: Line) -> bool
     let segment_is_row_content = only_marker_before(upper, upper_start, segment_start);
     let continuation_is_path = starts_path(row_chars(lower, continuation.clone()));
     let continuation_is_row_content = continuation.end == lower_end + 1;
-    let continuation_ends_sentence = ends_before_wrap_edge(&continuation, cols)
-        && SENTENCE_PUNCTUATION.contains(&lower[Column(continuation.end - 1)].c);
+    let continuation_ends_sentence = word_ends_sentence(lower, &continuation, cols);
+    // A sentence's closing punctuation, such as the `?` of `Continue?`, is no
+    // evidence of URL syntax.
+    let continuation_body = continuation.start..continuation.end - usize::from(continuation_ends_sentence);
     let continuation_has_delimiters = if continuation_is_path {
         path_row_reaches_query(grid, cols, line + 1)
             || (continuation_is_row_content
                 && !continuation_ends_sentence
                 && segment_in_file_url(grid, cols, line, segment_start))
     } else {
-        row_chars(lower, continuation.clone()).any(|character| URL_DELIMITERS.contains(&character))
+        row_chars(lower, continuation_body).any(|character| URL_DELIMITERS.contains(&character))
     };
     let continuation_is_url_word = !continuation_is_path && continuation_is_row_content && !continuation_ends_sentence;
     if cols - 1 - upper_end <= MAX_WRAP_PADDING {
@@ -263,6 +265,21 @@ fn starts_list_item_or_prompt(row: &Row<Cell>, word: Range<usize>, cols: usize) 
     followed_by_blank
         && (is_marker(row_chars(row, word.clone()))
             || (ends_before_wrap_edge(&word, cols) && PROMPT_TERMINATORS.contains(&row[Column(word.end - 1)].c)))
+}
+
+/// Whether `word` ends a sentence rather than a wrapped URL chunk: it stops
+/// short of the wrap edge and ends in sentence punctuation, or in a question
+/// mark with no other URL syntax before it. Line breakers also split URLs
+/// after `?`, but such chunks carry other delimiters or joiners.
+fn word_ends_sentence(row: &Row<Cell>, word: &Range<usize>, cols: usize) -> bool {
+    if !ends_before_wrap_edge(word, cols) {
+        return false;
+    }
+    match row[Column(word.end - 1)].c {
+        '?' => !row_chars(row, word.start..word.end - 1)
+            .any(|character| URL_DELIMITERS.contains(&character) || URL_WORD_JOINERS.contains(&character)),
+        last => SENTENCE_PUNCTUATION.contains(&last),
+    }
 }
 
 /// Whether `word` stops short of the wrap edge. A word that runs into the

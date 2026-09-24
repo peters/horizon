@@ -32,7 +32,13 @@ fn url_after_prose_that_exactly_fills_the_row_keeps_its_end() {
 #[test]
 fn row_filling_url_does_not_absorb_the_next_sentence() {
     let first = format!("https://example.com/{}", "a".repeat(COLS - 20));
-    for next in ["Thanks for reading.", "Thanks.", "see the docs for more"] {
+    for next in [
+        "Thanks for reading.",
+        "Thanks.",
+        "see the docs for more",
+        "Continue?",
+        "Overwrite? [y/N]",
+    ] {
         let term = term_with_rows(COLS, 4, &[first.clone(), next.to_string()]);
 
         assert_eq!(url_at(&term, COLS, 0, 5), Some(first.clone()), "next row {next:?}");
