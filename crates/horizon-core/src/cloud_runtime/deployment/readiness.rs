@@ -125,6 +125,7 @@ mod tests {
             gpu_types: Vec::new(),
             cpu_flavors: vec!["cpu3g".into()],
             data_centers: Vec::new(),
+            startup_metadata: None,
         };
         state.spec = Some(spec.clone());
         let mut inspected = serde_json::json!({

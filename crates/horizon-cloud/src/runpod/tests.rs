@@ -4,6 +4,7 @@ mod placement;
 mod recovery;
 mod registry;
 mod replacement;
+mod startup;
 mod storage;
 mod volume_limits;
 use std::{
@@ -22,6 +23,7 @@ fn spec() -> WorkerSpec {
         gpu_types: vec!["NVIDIA RTX A4000".into()],
         cpu_flavors: vec!["cpu3g".into()],
         data_centers: vec![],
+        startup_metadata: None,
     }
 }
 fn worker(spec: &WorkerSpec) -> Value {

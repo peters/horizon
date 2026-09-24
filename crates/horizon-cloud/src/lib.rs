@@ -5,8 +5,10 @@
 mod capabilities;
 mod profile;
 mod reason;
+mod startup;
 pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};
 pub use reason::Reason;
+pub use startup::StartupMetadata;
 pub mod runpod;
 mod worker;
 pub use profile::{

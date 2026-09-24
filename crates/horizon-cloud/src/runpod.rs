@@ -357,6 +357,9 @@ fn create_body(spec: &WorkerSpec) -> Value {
         "env":{"PUBLIC_KEY":spec.public_key,"HORIZON_CLOUD_OPERATION":spec.operation_id,"HORIZON_WORKER_CAPABILITIES":json!(profile.capabilities).to_string()},
         "interruptible":false,
     });
+    if let Some(metadata) = &spec.startup_metadata {
+        body["env"][crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
+    }
     if profile.gpu {
         body["gpuCount"] = json!(1);
         body["gpuTypeIds"] = json!(spec.gpu_types);

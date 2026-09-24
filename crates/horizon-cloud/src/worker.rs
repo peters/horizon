@@ -63,6 +63,8 @@ pub struct WorkerSpec {
     pub gpu_types: Vec<String>,
     pub cpu_flavors: Vec<String>,
     pub data_centers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_metadata: Option<crate::StartupMetadata>,
 }
 impl WorkerSpec {
     #[must_use]
@@ -130,6 +132,7 @@ impl WorkerSpec {
             gpu_types,
             cpu_flavors,
             data_centers,
+            startup_metadata,
         } = next;
         if *operation_id != self.operation_id
             || *profile != self.profile
@@ -137,6 +140,7 @@ impl WorkerSpec {
             || *gpu_types != self.gpu_types
             || *cpu_flavors != self.cpu_flavors
             || *data_centers != self.data_centers
+            || *startup_metadata != self.startup_metadata
         {
             return Err(CloudError::IdentityChange);
         }
@@ -280,6 +284,12 @@ impl Worker {
             .env
             .get("HORIZON_CLOUD_OPERATION")
             .is_some_and(|id| id != &spec.operation_id)
+        {
+            return Err(CloudError::IdentityMismatch);
+        }
+        if self.env.get(crate::startup::ENVIRONMENT_KEY).map(String::as_str)
+            != spec.startup_metadata.as_ref().map(crate::StartupMetadata::as_str)
+            || (spec.startup_metadata.is_some() && self.env.get("HORIZON_CLOUD_OPERATION") != Some(&spec.operation_id))
         {
             return Err(CloudError::IdentityMismatch);
         }

@@ -420,6 +420,7 @@ fn prepare_image(
         gpu_types: request.settings.gpu_types.clone(),
         cpu_flavors: cpu_flavors(&state.profile, &request.settings)?,
         data_centers: request.settings.data_centers.clone(),
+        startup_metadata: None,
     });
     store.save(state)
 }
@@ -565,6 +566,7 @@ mod tests {
                 gpu_types: Vec::new(),
                 cpu_flavors: Vec::new(),
                 data_centers: Vec::new(),
+                startup_metadata: None,
             });
             store.save(&state).unwrap();
             state = store.load().unwrap().unwrap();
@@ -800,6 +802,7 @@ mod tests {
             gpu_types: Vec::new(),
             cpu_flavors: vec!["cpu3c".into()],
             data_centers: Vec::new(),
+            startup_metadata: None,
         });
         store.save(&state).unwrap();
         request.profile.cpu = 1;
