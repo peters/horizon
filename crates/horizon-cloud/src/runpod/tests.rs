@@ -506,14 +506,58 @@ fn malformed_public_keys_are_rejected_before_provider_access() {
     assert!(spec.validate().is_err());
 }
 
+/// Accept one client, or `None` when `deadline` passes with an empty backlog.
+///
+/// The inspection budget can expire before TCP connect on a loaded machine.
+/// A blocking `accept` would then never return, and `join` would hang the test.
+fn accept_before(listener: &TcpListener, deadline: std::time::Instant) -> Option<std::net::TcpStream> {
+    listener.set_nonblocking(true).unwrap();
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // `accept` does not copy the listener's nonblocking flag on every
+                // platform. Force blocking mode so the timeouts below apply.
+                stream.set_nonblocking(false).unwrap();
+                return Some(stream);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("fixture accept failed: {error}"),
+        }
+    }
+}
+
+#[test]
+fn inspection_accept_returns_when_no_client_connects() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let started = std::time::Instant::now();
+    let task = thread::spawn(move || {
+        assert!(accept_before(&listener, std::time::Instant::now() + Duration::from_millis(200)).is_none());
+    });
+    task.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
 #[test]
 fn caller_inspection_budget_bounds_headers_and_body() {
     for headers_first in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let task = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let Some(mut stream) = accept_before(&listener, std::time::Instant::now() + Duration::from_secs(2)) else {
+                return;
+            };
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut input = [0; 4096];
             assert!(stream.read(&mut input).unwrap() > 0);
             if headers_first {
