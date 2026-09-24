@@ -159,7 +159,43 @@ Each request has a persisted operation ID, immutable request fingerprint and
 expected manifest revision. Retrying the same operation returns its recorded
 outcome or reconciles its side effects. Reusing an ID with different inputs is
 rejected. Each allocation has exactly one persisted provider-controller identity and local
-journal. Only that controller may invoke provider lifecycle operations; other
+journal. For `shared_v1`, a journal ID alone is not ownership proof. Register the controller in the
+host's OS credential store, outside transferable project/allocation state, with
+an independently read native machine identity, a controller signing credential
+and the canonical provider-journal location. The journal carries only the
+registration reference and public-key fingerprint. Every provider mutation must
+resolve the registration, match the current native machine identity and canonical
+journal location, and acquire the registration's one canonical allocation lock.
+A copied journal on another host lacks the matching machine-bound registration;
+a copy at another location on the same host cannot choose its own lock or journal.
+Do not expose registration import/re-enrollment as ownership transfer. If the OS
+store or independent machine identity is unavailable, provider mutation is blocked;
+there is no journal-only fallback.
+
+Pin the controller public key during verified worker bootstrap. Worker lifecycle
+fence commands require proof from that registered credential and bind it to the
+allocation, request fingerprint and expected manifest revision; merely asserting
+a controller ID is rejected. Losing a receipt never permits registration of a new
+owner. Treat manual OS/key-store cloning or credential extraction as outside this
+cooperative trusted-user model, rather than claiming resistance to malicious
+machine clones. Test copied journals on different simulated machine identities,
+missing registrations and alternate local journal locations before provider I/O.
+Anchor the canonical journal's committed generation and content hash in that
+non-transferable registration too. Restoring an old journal at the original path
+must fail before provider I/O. Under the canonical lock, first synchronize a
+candidate next-generation journal, then durably record a pending registration
+transition containing the old/new generation and hashes. Atomically publish and
+synchronize the journal, then commit the registration head. Provider I/O is
+forbidden until both committed heads match. Recovery may finish only that exact
+pending transition from matching old/new files and the verified candidate; missing,
+conflicting or rolled-back files remain fenced. An unreferenced staged file grants
+no mutation authority. Store unavailability or uncertain registration durability
+blocks advancement. A cached worker fence is usable only with the current anchored
+journal generation, including while the worker is unreachable. Test restoring an
+old same-path journal after a completed stop/resume cycle, plus every registration
+advancement crash boundary.
+
+Only that controller may invoke provider lifecycle operations; other
 machines can request worker-side project operations but cannot stop, resume or
 delete compute. The owner holds its OS allocation lock across provider intent,
 I/O and verified completion. Uncertainty leaves a durable pending operation that
@@ -276,8 +312,15 @@ intent requires a fresh read instead of retaining an earlier lock target.
 
 Preserve the original provider operation ID, `CreateState` (including uncertainty), `WorkerSpec`, worker ID, volume journal
 and required-storage fence, SSH trust files, profile, source readiness, timing and
-all session/branch/worktree identities. Never reconstruct provider facts from UI
-state. A preallocation record remains preallocation; migration never requests a
+all session/branch/worktree identities. Conversion must carry the complete v1
+payload, not only this list: cloud/repository/revision/profile bindings, lifecycle
+stage, source readiness, timing/history, sessions and external-browser release and
+target-ownership fields belong to the project record; provider operation/spec,
+worker and stop intent belong to the allocation record. Preserve every cleanup
+fence, including an unconfirmed external-tool release. Reject unrecognized source
+fields rather than silently discarding them. Test reconstruction of the complete
+v1 payload from the new records, including optional/legacy fields and every
+uncertain lifecycle state. Never reconstruct provider facts from UI state. A preallocation record remains preallocation; migration never requests a
 worker. Missing/corrupt companion journals block migration rather than erase fences.
 
 Before publishing any allocation, atomically replace the old deployment with a
@@ -306,8 +349,12 @@ migration. Their allocation has exactly one member and stays ineligible for
 sharing. Existing dedicated behavior remains usable through the migrated model.
 Legacy dedicated stop/resume/delete uses its durable provider and
 storage journals under the owning controller's allocation lock. This compatibility
-path has exactly one fixed member and no attachment API, so it requires no remote
-membership manifest or bootstrap marker. Its worker-action confirmation still
+path has exactly one fixed member and no additional-project attachment API, so it
+requires no remote membership manifest or bootstrap marker. It retains the
+existing single-host local-journal concurrency scope and credential mechanisms;
+the new OS-store registration prerequisite applies to `shared_v1`, not legacy
+dedicated operation. Cross-machine mutation or journal adoption is not added to
+this compatibility path. Its worker-action confirmation still
 names that sole member and the full process/storage consequences. Preserve all
 uncertain-create, pending-stop and storage-cleanup fences. Project-only actions
 cannot call the provider lifecycle implicitly. Never select this path because a
