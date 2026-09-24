@@ -53,6 +53,7 @@ pub(super) struct ScrollRouting {
     owns_smooth_scroll: bool,
     claimed_wheels: Vec<usize>,
     absorbed_wheels: Vec<(usize, PanelId, WheelStep)>,
+    plain_scroll_enabled: bool,
 }
 
 impl ScrollGesture {
@@ -87,18 +88,7 @@ impl ScrollGesture {
     /// turned by the scroll-axis modifiers, and eased in over a few frames
     /// unless it is a precise trackpad step.
     fn claim_motion(&mut self, input: &InputState, options: &InputOptions, step: WheelStep, pan: &mut Vec2) {
-        let mut delta = match step.unit {
-            MouseWheelUnit::Point => step.delta,
-            MouseWheelUnit::Line => options.line_scroll_speed * step.delta,
-            MouseWheelUnit::Page => input.viewport_rect().height() * step.delta,
-        };
-        let horizontal = step.modifiers.matches_any(options.horizontal_scroll_modifier);
-        let vertical = step.modifiers.matches_any(options.vertical_scroll_modifier);
-        if horizontal && !vertical {
-            delta = Vec2::new(delta.x + delta.y, 0.0);
-        } else if vertical && !horizontal {
-            delta = Vec2::new(0.0, delta.x + delta.y);
-        }
+        let delta = wheel_points(input, options, step);
         if self.has_touch_phase || (step.unit == MouseWheelUnit::Point && delta.length() < 8.0) {
             *pan += delta;
         } else {
@@ -108,17 +98,7 @@ impl ScrollGesture {
 
     /// egui's own easing: 90% of a queued step lands within 0.1 s.
     fn ease_backlog(&mut self, dt: f32) -> Vec2 {
-        let t = egui::emath::exponential_smooth_factor(0.90, 0.1, dt.min(0.1));
-        let mut applied = Vec2::ZERO;
-        for axis in 0..2 {
-            applied[axis] = if self.pan_backlog[axis].abs() < 1.0 {
-                self.pan_backlog[axis]
-            } else {
-                t * self.pan_backlog[axis]
-            };
-            self.pan_backlog[axis] -= applied[axis];
-        }
-        applied
+        ease_scroll_backlog(&mut self.pan_backlog, dt)
     }
 
     fn route(
@@ -136,6 +116,7 @@ impl ScrollGesture {
 
         let mut routing = ScrollRouting {
             pan: std::mem::take(&mut self.deferred_pan),
+            plain_scroll_enabled: true,
             ..ScrollRouting::default()
         };
         let mut has_canvas_motion = false;
@@ -242,6 +223,36 @@ impl ScrollGesture {
     }
 }
 
+fn wheel_points(input: &InputState, options: &InputOptions, step: WheelStep) -> Vec2 {
+    let mut delta = match step.unit {
+        MouseWheelUnit::Point => step.delta,
+        MouseWheelUnit::Line => options.line_scroll_speed * step.delta,
+        MouseWheelUnit::Page => input.viewport_rect().height() * step.delta,
+    };
+    let horizontal = step.modifiers.matches_any(options.horizontal_scroll_modifier);
+    let vertical = step.modifiers.matches_any(options.vertical_scroll_modifier);
+    if horizontal && !vertical {
+        delta = Vec2::new(delta.x + delta.y, 0.0);
+    } else if vertical && !horizontal {
+        delta = Vec2::new(0.0, delta.x + delta.y);
+    }
+    delta
+}
+
+fn ease_scroll_backlog(backlog: &mut Vec2, dt: f32) -> Vec2 {
+    let t = egui::emath::exponential_smooth_factor(0.90, 0.1, dt.min(0.1));
+    let mut applied = Vec2::ZERO;
+    for axis in 0..2 {
+        applied[axis] = if backlog[axis].abs() < 1.0 {
+            backlog[axis]
+        } else {
+            t * backlog[axis]
+        };
+        backlog[axis] -= applied[axis];
+    }
+    applied
+}
+
 fn wheel_steps(events: &[Event]) -> impl Iterator<Item = (WheelStep, TouchPhase)> + '_ {
     events.iter().filter_map(|event| match event {
         Event::MouseWheel {
@@ -266,6 +277,42 @@ fn last_wheel_boundary(events: &[Event]) -> Option<TouchPhase> {
         Event::MouseWheel { phase, .. } if *phase != TouchPhase::Move => Some(*phase),
         _ => None,
     })
+}
+
+/// egui's wheel phases and easing, applied only to the plain motion retained
+/// for panels. A separate backlog prevents zoom-modified wheels from being
+/// classified together with plain wheels by egui's frame-wide accumulator.
+#[derive(Clone, Default)]
+struct PanelWheelScroll {
+    backlog: Vec2,
+    in_touch: bool,
+}
+
+impl PanelWheelScroll {
+    fn advance(&mut self, input: &InputState, options: &InputOptions, claimed: &[usize]) -> Vec2 {
+        let mut motion = Vec2::ZERO;
+        for (index, (step, phase)) in wheel_steps(&input.events).enumerate() {
+            match phase {
+                TouchPhase::Start => self.in_touch = true,
+                TouchPhase::End | TouchPhase::Cancel => {
+                    *self = Self::default();
+                    motion = Vec2::ZERO;
+                }
+                TouchPhase::Move => {
+                    if step.modifiers.ctrl || step.modifiers.command || claimed.binary_search(&index).is_ok() {
+                        continue;
+                    }
+                    let delta = wheel_points(input, options, step);
+                    if self.in_touch || (step.unit == MouseWheelUnit::Point && delta.length() < 8.0) {
+                        motion += delta;
+                    } else {
+                        self.backlog += delta;
+                    }
+                }
+            }
+        }
+        motion + ease_scroll_backlog(&mut self.backlog, input.stable_dt)
+    }
 }
 
 /// Route this frame's scroll. `target` is the surface under the pointer, used
@@ -296,6 +343,7 @@ pub(super) fn reset_canvas_scroll(ctx: &Context) {
     let viewport = ctx.viewport_id();
     let boundary = ctx.input(|input| last_wheel_boundary(&input.raw.events));
     ctx.data_mut(|data| {
+        data.remove::<PanelWheelScroll>(Id::new(("panel_wheel_scroll", viewport)));
         data.get_temp_mut_or_default::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)))
             .reject_contact(boundary);
         let zoom = data.get_temp_mut_or_default::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
@@ -418,6 +466,22 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 }
 
 impl ScrollRouting {
+    fn panel_scroll_delta(&self, ctx: &Context) -> Option<Vec2> {
+        let id = Id::new(("panel_wheel_scroll", ctx.viewport_id()));
+        if !self.plain_scroll_enabled || self.owns_smooth_scroll {
+            ctx.data_mut(|data| data.remove::<PanelWheelScroll>(id));
+            return self.plain_scroll_enabled.then_some(Vec2::ZERO);
+        }
+        let mut state = ctx.data_mut(|data| data.get_temp::<PanelWheelScroll>(id).unwrap_or_default());
+        let options = ctx.options(|options| options.input_options);
+        let delta = ctx.input(|input| state.advance(input, &options, &self.claimed_wheels));
+        if state.backlog != Vec2::ZERO {
+            ctx.request_repaint();
+        }
+        ctx.data_mut(|data| data.insert_temp(id, state));
+        Some(delta)
+    }
+
     /// A latched panel's wheel must never leak to a different hover target.
     pub(super) fn discard_displaced_wheels(&mut self, target: ScrollTarget) {
         for &(index, owner, _) in &self.absorbed_wheels {
@@ -450,10 +514,11 @@ impl ScrollRouting {
     }
 
     pub(super) fn consume(&self, ctx: &Context, terminal_events: &mut Vec<TerminalInputEvent>) {
+        let smooth_scroll = self.panel_scroll_delta(ctx);
         ctx.input_mut(|input| {
             discard_claimed_wheels(&mut input.events, &self.claimed_wheels, |event| event);
-            if self.owns_smooth_scroll {
-                input.smooth_scroll_delta = Vec2::ZERO;
+            if let Some(delta) = smooth_scroll {
+                input.smooth_scroll_delta = delta;
             }
         });
         discard_claimed_wheels(terminal_events, &self.claimed_wheels, |input| &input.event);
