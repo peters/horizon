@@ -481,6 +481,17 @@ management envelopes against a previously pinned controller key, binding project
 membership, operation, action, revision and exact payload bytes. It does not load
 signing credentials or replace worker membership checks. Host registration and
 worker dispatch are separate consumers and are not connected yet.
+`cloud_runtime::owner` supplies an opt-in owning-host journal API: native machine
+identity, a cloud-specific OS-store registration, a signing key and a canonical
+lock outside transferable journal state, pinned by native file identity. Its journal
+generation/hash is anchored in the registration; candidate, pending, published and committed boundaries keep
+crash recovery exact and copied or rolled-back journals fenced. This API is not
+called by runtime entry points yet. It currently supports Linux Secret Service
+and macOS Keychain; other hosts remain blocked by the existing Unix directory
+durability requirement. Synthetic tests never access the user's credential store.
+On Linux, `scripts/cloud-smoke/controller-keyring.sh` qualifies registration and
+signing against a disposable Secret Service backend across crash/restart, using a
+private D-Bus session, private data directories and the exact foreground daemon PID.
 The host `allocation::legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership

@@ -1,0 +1,319 @@
+//! Owning-host registration and anchored provider journal for the shared protocol.
+//! This API performs no provider I/O and is not connected to runtime entry points.
+mod journal;
+mod machine;
+mod registration;
+mod vault;
+
+use horizon_cloud_protocol::{
+    AllocationId, ControllerId,
+    signed::{ControllerBinding, Intent, SignedIntent},
+};
+use journal::{Anchor, CANDIDATE, JOURNAL, Journal, Lock, MARKER, Marker};
+use machine::MachineId;
+use registration::{Registration, Transition};
+use ring::{
+    rand::SystemRandom,
+    signature::{Ed25519KeyPair, KeyPair},
+};
+use std::path::{Path, PathBuf};
+use vault::{NativeVault, Vault};
+
+type Result<T> = std::result::Result<T, Error>;
+type MachineReader = Box<dyn Fn() -> Result<MachineId>>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Native machine identity is unavailable")]
+    Machine,
+    #[error("Cloud controller OS credential store is unavailable")]
+    Store,
+    #[error("Cloud controller registration is missing")]
+    MissingRegistration,
+    #[error("Cloud controller registration is invalid or uncertain")]
+    Registration,
+    #[error("Cloud journal is not owned by this host and location")]
+    Ownership,
+    #[error("Cloud journal is missing, changed or rolled back")]
+    Journal,
+    #[error("Another process owns this allocation lock")]
+    Busy,
+    #[error("Cloud journal I/O failed")]
+    Io(#[from] std::io::Error),
+    #[error("Cloud management request cannot be signed")]
+    Signature,
+}
+
+/// Holds the canonical allocation lock. Keep it through provider intent, I/O and
+/// verified completion. UI/CLI/MCP must validate caller/project ownership first.
+/// There is no key import, ownership transfer or file-store fallback.
+pub struct Owner {
+    root: PathBuf,
+    lock_path: PathBuf,
+    marker: Marker,
+    machine: MachineReader,
+    vault: Box<dyn Vault>,
+    ready: bool,
+    lock: Lock,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Boundary {
+    Candidate,
+    Pending,
+    Published,
+    Committed,
+}
+
+impl Owner {
+    /// Create a new allocation identity and register a new, absent journal directory.
+    /// Existing directories are never adopted, even when empty or missing state.
+    ///
+    /// # Errors
+    /// Blocks unsupported hosts, unavailable stores and uncertain durable writes.
+    pub fn create(root: &Path, payload: serde_json::Value) -> Result<Self> {
+        Self::create_with(
+            root,
+            &crate::horizon_home::HorizonHome::resolve()
+                .root()
+                .join("cloud-controller-locks"),
+            payload,
+            Box::new(NativeVault::open()?),
+            Box::new(MachineId::read),
+            &mut |_| Ok(()),
+        )
+    }
+
+    /// Verify the native host, registration, canonical path and anchored journal.
+    /// Recovery can complete only a pending transition already in the OS store.
+    ///
+    /// # Errors
+    /// Refuses copies, rollbacks, missing registrations and conflicting recovery state.
+    pub fn open(root: &Path) -> Result<Self> {
+        Self::open_with(root, Box::new(NativeVault::open()?), Box::new(MachineId::read))
+    }
+
+    /// # Errors
+    /// Rechecks the native registration and anchored journal before returning public identity.
+    pub fn binding(&self) -> Result<ControllerBinding> {
+        let (registration, _) = self.current()?;
+        let key = registration.verify(&self.root, &self.marker, &(self.machine)()?)?;
+        let public = key.public_key().as_ref().try_into().map_err(|_| Error::Registration)?;
+        Ok(ControllerBinding::new(
+            self.marker.allocation,
+            self.marker.controller,
+            public,
+        ))
+    }
+
+    /// # Errors
+    /// Refuses an unanchored, missing or rolled-back journal, including after a failed save.
+    pub fn load(&self) -> Result<serde_json::Value> {
+        self.current().map(|(_, journal)| journal.payload)
+    }
+
+    /// # Errors
+    /// Any uncertain boundary poisons this handle; reopen to reconcile before further actions.
+    pub fn save(&mut self, payload: serde_json::Value) -> Result<()> {
+        self.save_with(payload, &mut |_| Ok(()))
+    }
+
+    /// Sign only after local caller ownership and typed action validation. This
+    /// method does not grant project membership or permission for provider I/O.
+    ///
+    /// # Errors
+    /// Rechecks native registration and journal freshness and rejects mismatched intents.
+    pub fn sign(&self, intent: Intent) -> Result<SignedIntent> {
+        let (registration, _) = self.current()?;
+        let key = registration.verify(&self.root, &self.marker, &(self.machine)()?)?;
+        SignedIntent::sign(intent, &self.binding()?, &key).map_err(|_| Error::Signature)
+    }
+
+    fn create_with(
+        root: &Path,
+        lock_root: &Path,
+        payload: serde_json::Value,
+        vault: Box<dyn Vault>,
+        machine: MachineReader,
+        checkpoint: &mut impl FnMut(Boundary) -> Result<()>,
+    ) -> Result<Self> {
+        let machine_id = machine()?;
+        crate::session_store::require_directory_durability()?;
+        let key = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).map_err(|_| Error::Registration)?;
+        let decoded = Ed25519KeyPair::from_pkcs8(key.as_ref()).map_err(|_| Error::Registration)?;
+        let marker = Marker {
+            version: 1,
+            allocation: AllocationId::generate(),
+            controller: ControllerId::generate(),
+            registration: uuid::Uuid::new_v4(),
+            public_key_hash: journal::hash(decoded.public_key().as_ref()),
+        };
+        match vault.read(&marker.registration.to_string()) {
+            Err(Error::MissingRegistration) => {}
+            _ => return Err(Error::Registration),
+        }
+        journal::create_root(root)?;
+        let root = root.canonicalize()?;
+        std::fs::create_dir_all(lock_root)?;
+        let lock_root = lock_root.canonicalize()?;
+        if lock_root.starts_with(&root) {
+            return Err(Error::Ownership);
+        }
+        let lock_path = lock_root.join(format!("{}.lock", marker.registration));
+        let lock = Lock::acquire(&lock_path, true)?;
+        journal::write(&root, MARKER, &serde_json::to_vec(&marker).map_err(|_| Error::Journal)?)?;
+        let mut registration = Registration {
+            version: 1,
+            machine: machine_id,
+            root: root.clone(),
+            lock_path: lock_path.clone(),
+            lock_identity: lock.identity()?,
+            marker: marker.clone(),
+            key: zeroize::Zeroizing::new(key.as_ref().to_vec()),
+            committed: None,
+            pending: None,
+        };
+        let mut owner = Self {
+            root,
+            lock_path,
+            marker,
+            machine,
+            vault,
+            ready: false,
+            lock,
+        };
+        owner.advance(&mut registration, payload, checkpoint)?;
+        owner.ready = true;
+        Ok(owner)
+    }
+
+    fn open_with(root: &Path, vault: Box<dyn Vault>, machine: MachineReader) -> Result<Self> {
+        crate::session_store::require_directory_durability()?;
+        let root = root.canonicalize()?;
+        let marker: Marker = serde_json::from_slice(&journal::read(&root, MARKER)?).map_err(|_| Error::Journal)?;
+        if marker.version != 1 || marker.registration.is_nil() {
+            return Err(Error::Journal);
+        }
+        let registration = Registration::read(vault.as_ref(), &marker)?;
+        registration.verify(&root, &marker, &machine()?)?;
+        let lock = Lock::acquire(&registration.lock_path, false)?;
+        lock.verify(&registration.lock_path, registration.lock_identity)?;
+        let mut owner = Self {
+            root,
+            lock_path: registration.lock_path.clone(),
+            marker,
+            machine,
+            vault,
+            ready: false,
+            lock,
+        };
+        let mut registration = Registration::read(owner.vault.as_ref(), &owner.marker)?;
+        registration.verify(&owner.root, &owner.marker, &(owner.machine)()?)?;
+        if registration.lock_path != owner.lock_path {
+            return Err(Error::Ownership);
+        }
+        owner.lock.verify(&owner.lock_path, registration.lock_identity)?;
+        owner.recover(&mut registration)?;
+        owner.ready = true;
+        owner.current()?;
+        Ok(owner)
+    }
+
+    fn current(&self) -> Result<(Registration, Journal)> {
+        if !self.ready {
+            return Err(Error::Registration);
+        }
+        let marker: Marker = serde_json::from_slice(&journal::read(&self.root, MARKER)?).map_err(|_| Error::Journal)?;
+        if marker != self.marker {
+            return Err(Error::Ownership);
+        }
+        let registration = Registration::read(self.vault.as_ref(), &self.marker)?;
+        registration.verify(&self.root, &self.marker, &(self.machine)()?)?;
+        if registration.lock_path != self.lock_path {
+            return Err(Error::Ownership);
+        }
+        self.lock.verify(&self.lock_path, registration.lock_identity)?;
+        if registration.pending.is_some() {
+            return Err(Error::Registration);
+        }
+        let anchor = registration.committed.as_ref().ok_or(Error::Registration)?;
+        let journal = journal::decode(&journal::read(&self.root, JOURNAL)?, &self.marker, anchor)?;
+        Ok((registration, journal))
+    }
+
+    fn save_with(
+        &mut self,
+        payload: serde_json::Value,
+        checkpoint: &mut impl FnMut(Boundary) -> Result<()>,
+    ) -> Result<()> {
+        let (mut registration, _) = self.current()?;
+        self.ready = false;
+        self.advance(&mut registration, payload, checkpoint)?;
+        self.ready = true;
+        Ok(())
+    }
+
+    fn advance(
+        &self,
+        registration: &mut Registration,
+        payload: serde_json::Value,
+        checkpoint: &mut impl FnMut(Boundary) -> Result<()>,
+    ) -> Result<()> {
+        let generation = match &registration.committed {
+            Some(anchor) => anchor.generation.checked_add(1).ok_or(Error::Registration)?,
+            None => 0,
+        };
+        let journal = Journal {
+            owner: self.marker.clone(),
+            generation,
+            payload,
+        };
+        let bytes = serde_json::to_vec(&journal).map_err(|_| Error::Journal)?;
+        let next = Anchor {
+            generation,
+            hash: journal::hash(&bytes),
+        };
+        journal::write(&self.root, CANDIDATE, &bytes)?;
+        checkpoint(Boundary::Candidate)?;
+        registration.pending = Some(Transition {
+            previous: registration.committed.clone(),
+            next: next.clone(),
+        });
+        registration.write(self.vault.as_ref())?;
+        checkpoint(Boundary::Pending)?;
+        journal::write(&self.root, JOURNAL, &bytes)?;
+        checkpoint(Boundary::Published)?;
+        registration.committed = Some(next);
+        registration.pending = None;
+        registration.write(self.vault.as_ref())?;
+        checkpoint(Boundary::Committed)
+    }
+
+    fn recover(&self, registration: &mut Registration) -> Result<()> {
+        let Some(pending) = &registration.pending else {
+            return Ok(());
+        };
+        let candidate = journal::read(&self.root, CANDIDATE)?;
+        journal::decode(&candidate, &self.marker, &pending.next)?;
+        match journal::read(&self.root, JOURNAL) {
+            Ok(bytes) if journal::hash(&bytes) == pending.next.hash => {
+                journal::decode(&bytes, &self.marker, &pending.next)?;
+            }
+            Ok(bytes) => {
+                let previous = pending.previous.as_ref().ok_or(Error::Journal)?;
+                journal::decode(&bytes, &self.marker, previous)?;
+                journal::write(&self.root, JOURNAL, &candidate)?;
+            }
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && pending.previous.is_none() => {
+                journal::write(&self.root, JOURNAL, &candidate)?;
+            }
+            _ => return Err(Error::Journal),
+        }
+        registration.committed = Some(pending.next.clone());
+        registration.pending = None;
+        registration.write(self.vault.as_ref())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests;

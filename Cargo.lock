@@ -2340,6 +2340,7 @@ dependencies = [
  "libc",
  "profiling",
  "regex",
+ "ring",
  "rmcp",
  "rusqlite",
  "rustix 1.1.5",

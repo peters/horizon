@@ -7,6 +7,7 @@ pub mod deployment;
 pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
+pub mod owner;
 pub mod progress;
 pub mod registry;
 pub mod repository;
