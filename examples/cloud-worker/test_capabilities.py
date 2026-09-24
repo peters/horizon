@@ -140,7 +140,7 @@ class CapabilitiesTests(unittest.TestCase):
         for claude in [b'v2.1.281\n', b'Claude Code\n2.1.281\n']:
             status, output, _ = self.run_check(reported=dict(reported, claude=claude))
             self.assertEqual(status, 0, output)
-        for claude in [b'2.1.280 (Claude Code)\n', b'2.1.2811\n', b'2.1.281-beta.1\n', b'2.1.281.4\n', b'12.1.281\n', b'']:
+        for claude in [b'2.1.280 (Claude Code)\n', b'2.1.2811\n', b'2.1.281-beta.1\n', b'2.1.281.4\n', b'12.1.281\n', b'1.0.0+2.1.281\n', b'1.0.0-2.1.281\n', b'']:
             status, output, _ = self.run_check(reported=dict(reported, claude=claude))
             self.assertEqual(status, 1, claude)
             self.assertIn('claude does not report its recorded version 2.1.281', output)

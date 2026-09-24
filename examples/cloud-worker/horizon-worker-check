@@ -69,8 +69,9 @@ def require_version(agent, version):
     output = subprocess.run([agent, '--version'], check=True, timeout=20,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
     reported = output.decode('utf-8', 'replace')
-    # The version must stand alone: 1.0.4 does not match 1.0.41 or 1.0.4-beta.
-    if not re.search(r'(?:^|[^0-9A-Za-z.])v?' + re.escape(version) + r'(?![0-9A-Za-z+-]|\.[0-9A-Za-z])', reported):
+    # The version must stand alone: 1.0.4 does not match 1.0.41, 1.0.4-beta or the
+    # tail of another version such as 1.0.0+1.0.4.
+    if not re.search(r'(?:^|[^0-9A-Za-z.+-])v?' + re.escape(version) + r'(?![0-9A-Za-z+-]|\.[0-9A-Za-z])', reported):
         print(f'Worker agent {agent} does not report its recorded version {version}', file=sys.stderr)
         raise ValueError('Agent version differs from the image record')
 
