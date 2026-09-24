@@ -250,6 +250,25 @@ impl RunPod {
         cancel: &Cancellation,
         timeout: Duration,
     ) -> Result<()> {
+        if self.mounted_image(worker, volume, cancel, timeout)? != worker.image_name {
+            return Err(CloudError::IdentityMismatch);
+        }
+        worker.network_volume = Some(NetworkVolume {
+            id: Some(volume.id.clone()),
+            size: Some(volume.size),
+            data_center_id: Some(volume.data_center_id.clone()),
+        });
+        Ok(())
+    }
+
+    /// The image the current API reports for `worker` with exactly `volume` at `/workspace`.
+    pub(super) fn mounted_image(
+        &self,
+        worker: &Worker,
+        volume: &Volume,
+        cancel: &Cancellation,
+        timeout: Duration,
+    ) -> Result<String> {
         if !valid_id(&worker.id) {
             return Err(CloudError::IdentityMismatch);
         }
@@ -259,7 +278,6 @@ impl RunPod {
                 .map_err(|_| CloudError::InvalidResponse)?;
         if current.id != worker.id
             || current.name != worker.name
-            || current.image != worker.image_name
             || current.data_center_id != volume.data_center_id
             || current.mounts.network.len() != 1
             || current.mounts.persistent.is_some()
@@ -268,12 +286,7 @@ impl RunPod {
         {
             return Err(CloudError::IdentityMismatch);
         }
-        worker.network_volume = Some(NetworkVolume {
-            id: Some(volume.id.clone()),
-            size: Some(volume.size),
-            data_center_id: Some(volume.data_center_id.clone()),
-        });
-        Ok(())
+        Ok(current.image)
     }
 
     fn volume_attached(&self, id: &str, cancel: &Cancellation) -> Result<bool> {

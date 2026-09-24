@@ -3,6 +3,7 @@ mod inspection;
 mod placement;
 mod recovery;
 mod registry;
+mod replacement;
 mod storage;
 mod volume_limits;
 use std::{
@@ -50,6 +51,43 @@ fn power_actions_verify_identity_and_accept_empty_success_bodies() {
     ));
     task.join().unwrap();
     assert_eq!(requests.lock().unwrap().len(), 1);
+}
+#[test]
+fn patch_sends_json_and_keeps_definite_refusals_apart_from_uncertain_failures() {
+    let (provider, requests, task) = server(vec![
+        (200, "not a pod".into()),
+        (204, String::new()),
+        (400, "refused".into()),
+        (422, json!({"error": "image cannot be pulled"}).to_string()),
+        (401, String::new()),
+        (403, String::new()),
+        (500, String::new()),
+        (503, json!({"error": "echoed secret-test-key"}).to_string()),
+    ]);
+    let cancel = Cancellation::default();
+    let patch = || provider.request("PATCH", "/pods/worker1", Some(json!({"imageName": "next"})), &cancel);
+    assert_eq!(patch().unwrap(), Value::Null);
+    assert_eq!(patch().unwrap(), Value::Null);
+    assert!(matches!(patch(), Err(CloudError::Rejected(_))));
+    assert_eq!(
+        patch().unwrap_err().to_string(),
+        "Provider rejected the request or capacity is unavailable: image cannot be pulled"
+    );
+    assert!(matches!(patch(), Err(CloudError::Unauthorized)));
+    assert!(matches!(patch(), Err(CloudError::Unauthorized)));
+    assert!(matches!(patch(), Err(CloudError::Http(500, _))));
+    assert_eq!(patch().unwrap_err().to_string(), "Provider returned HTTP 503");
+    cancel.cancel();
+    assert!(matches!(patch(), Err(CloudError::Cancelled)));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 8);
+    for request in requests.iter() {
+        assert!(request.starts_with("PATCH /pods/worker1 "));
+        assert!(request.contains("Bearer secret-test-key"));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body, json!({"imageName": "next"}));
+    }
 }
 #[test]
 fn stopped_worker_without_an_address_does_not_break_account_reconciliation() {

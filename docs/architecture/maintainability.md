@@ -469,8 +469,10 @@ and credential logic must not be copied into either transport or UI rendering.
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
 fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
-stock for placement. The crate must not depend on core/UI, terminal, browser, device,
-Git, settings storage or a provider CLI.
+stock for placement. `runpod::replacement` switches a verified, running worker to a
+new image digest through the pod update and observes which image of the pair the
+provider reports; it keeps no journal, so callers record intent first. The crate must
+not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 
 `horizon-core::cloud_runtime` coordinates local image preparation, committed source
 transfer, durable deployment/session references and existing OpenSSH transport.
