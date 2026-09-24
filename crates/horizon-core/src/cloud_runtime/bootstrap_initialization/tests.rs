@@ -622,3 +622,99 @@ fn replaced_pin_parent_cannot_satisfy_directory_durability() {
     fs::create_dir(&path).unwrap();
     assert!(verify_pin_parent(&path, &retained).is_err());
 }
+
+#[test]
+fn corrupted_private_seed_never_anchors_and_corrected_key_can_retry() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    fn skip(bytes: &[u8], offset: &mut usize) -> usize {
+        let length = usize::try_from(u32::from_be_bytes(bytes[*offset..*offset + 4].try_into().unwrap())).unwrap();
+        let start = *offset + 4;
+        *offset = start + length;
+        start
+    }
+    if std::env::var_os("HORIZON_IDENTITY_AGENT_FIXTURE").is_none() {
+        struct Agent(std::process::Child);
+        impl Drop for Agent {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("agent.sock");
+        let _agent = Agent(
+            Command::new("ssh-agent")
+                .arg("-D")
+                .arg("-a")
+                .arg(&socket)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !socket.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(socket.exists());
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "cloud_runtime::bootstrap_initialization::tests::corrupted_private_seed_never_anchors_and_corrected_key_can_retry", "--nocapture"])
+            .env("SSH_AUTH_SOCK", &socket).env("HORIZON_IDENTITY_AGENT_FIXTURE", "1")
+            .status().unwrap().success());
+        return;
+    }
+    let mut f = CoordinatorFixture::new();
+    let target = resolve(&f.record).unwrap();
+    assert!(
+        Command::new("ssh-add")
+            .arg(&target.connection.identity)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut payload = f.owner.load().unwrap();
+    payload.as_object_mut().unwrap().remove("bootstrap_recovery");
+    f.owner.save(payload).unwrap();
+    let original = fs::read(&target.connection.identity).unwrap();
+    let body = std::str::from_utf8(&original)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("---"))
+        .collect::<String>();
+    let mut bytes = STANDARD.decode(body).unwrap();
+    let mut offset = b"openssh-key-v1\0".len();
+    for _ in 0..3 {
+        skip(&bytes, &mut offset);
+    }
+    offset += 4;
+    skip(&bytes, &mut offset);
+    let private = skip(&bytes, &mut offset);
+    let mut offset = private + 8;
+    skip(&bytes, &mut offset);
+    skip(&bytes, &mut offset);
+    let seed = skip(&bytes, &mut offset);
+    bytes[seed] ^= 1;
+    fs::write(
+        &target.connection.identity,
+        format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n{}\n-----END OPENSSH PRIVATE KEY-----\n",
+            STANDARD.encode(bytes)
+        ),
+    )
+    .unwrap();
+    let parsed = Command::new("ssh-keygen")
+        .args(["-y", "-P", "", "-f"])
+        .arg(&target.connection.identity)
+        .output()
+        .unwrap();
+    assert!(
+        parsed.status.success(),
+        "public extraction alone misses this corruption"
+    );
+    assert!(bootstrap_recovery::anchor(&mut f.owner, &target).is_err());
+    assert!(f.owner.load().unwrap().get("bootstrap_recovery").is_none());
+    fs::write(&target.connection.identity, original).unwrap();
+    bootstrap_recovery::anchor(&mut f.owner, &target).unwrap();
+}

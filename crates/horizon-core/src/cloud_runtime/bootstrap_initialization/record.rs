@@ -12,12 +12,7 @@ use horizon_cloud_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
 
 const KEY: &str = "bootstrap_initialization";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,16 +46,7 @@ impl FileBinding {
     }
     pub fn identity(path: &Path, runner: &Runner<'_>) -> Result<(Self, String)> {
         let (binding, bytes) = Self::capture(path)?;
-        let mut snapshot = tempfile::NamedTempFile::new()?;
-        snapshot.write_all(&bytes)?;
-        let output = runner.private_exchange(
-            Command::new("ssh-keygen")
-                .args(["-y", "-P", "", "-f"])
-                .arg(snapshot.path()),
-            &[],
-            Duration::from_secs(5),
-        )?;
-        let text = std::str::from_utf8(&output).map_err(|_| Error::Invalid)?;
+        let text = bootstrap_recovery::connection::public_identity(&bytes, runner)?;
         let fields: Vec<_> = text.split_whitespace().collect();
         if fields.len() < 2 || fields[0] != "ssh-ed25519" {
             return Err(Error::Invalid);

@@ -364,8 +364,9 @@ changed pins and never accepts a new host key during recovery. The dedicated pin
 file may contain only that exact alias, blank lines and comments; wildcard,
 hashed, multi-host, authority, revocation and unrelated entries are rejected.
 The private snapshot and anchored pin hash use normalized exact-alias entries. OpenSSH's
-`ssh-keygen` validates the key encoding before the request is anchored; both
-`ssh` and `ssh-keygen` must be available on the host. Recovery requires an
+`ssh-keygen` validates the key encoding and signs and verifies a fixed private
+probe before the request is anchored; both `ssh` and `ssh-keygen` with
+`-Y sign`/`-Y verify` support must be available on the host. Recovery requires an
 unencrypted private identity and validates its captured bytes before anchoring;
 encrypted keys and agent-only identities are unsupported by this API. Transport uses
 private snapshots of the verified key/pin bytes, so changing their source files
