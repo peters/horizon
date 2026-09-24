@@ -8,7 +8,7 @@ Tracking: [#805](https://github.com/peters/horizon/issues/805).
 ## Context
 
 Cloud Workspaces currently gives each cloud one provider allocation. The version-1
-`Deployment` in `horizon-core/src/cloud_runtime/state.rs` contains both provider
+`Deployment` in `crates/horizon-core/src/cloud_runtime/state.rs` contains both provider
 and project state. Provider operation IDs equal cloud IDs. The worker scripts use
 one `/workspace/repository.git`, `/workspace/home`, capability manifest, browser
 host and desktop. Changing only allocation lookup would overwrite sibling source,
@@ -227,10 +227,15 @@ separate worker-wide action with exact provider/storage ownership checks.
 ### Version-1 deployment migration
 
 Introduce version-2 local deployment records and version-1 allocation journals.
-Migration acquires the old cloud lock and allocation lock, and persists a migration
-intent before publishing either new record. Generate the allocation/project IDs
-once in that intent; recovery reuses them. Preserve the original provider operation
-ID, `CreateState` (including uncertainty), `WorkerSpec`, worker ID, volume journal
+To discover or create migration intent, first hold only the old cloud lock. Persist
+the intent, including its allocation/project IDs generated once, then release the
+old lock. Acquire the allocation lock followed by the old cloud/project lock,
+matching the global order, and revalidate the intent and source journals before
+publishing anything. Never request an allocation lock while holding a project
+lock. Competing recovery uses the same persisted IDs; changed or conflicting
+intent requires a fresh read instead of retaining an earlier lock target.
+
+Preserve the original provider operation ID, `CreateState` (including uncertainty), `WorkerSpec`, worker ID, volume journal
 and required-storage fence, SSH trust files, profile, source readiness, timing and
 all session/branch/worktree identities. Never reconstruct provider facts from UI
 state. A preallocation record remains preallocation; migration never requests a
