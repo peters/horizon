@@ -244,3 +244,34 @@ fn cancelled_pending_job_signals_its_worker_and_permit_releases_only_on_exit() {
     drop(permit);
     assert!(!busy.load(Ordering::Acquire));
 }
+
+#[test]
+fn removing_a_cloud_keeps_the_workspace_a_cloud_creation_targets() {
+    for submitted in [true, false] {
+        let (temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        let _sender = pending(&mut app);
+        let workspace = app.board.ensure_workspace();
+        let local = app.board.workspace(workspace).unwrap().local_id.clone();
+        if !submitted {
+            app.cloud_prototype.production.pending_creation = None;
+            app.cloud_prototype.production.launch.workspace = Some(local.clone());
+        }
+        let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+        let mut group = CloudGroup::new(1, "Removed".into(), local, temp.path().into(), [0.0, 0.0]);
+        group.remote = Some(CloudLaunch {
+            deployment_started: false,
+            id: "fixture".into(),
+            revision: "a".repeat(40),
+            profile_name: "dev".into(),
+            profile: config.profiles["dev"].clone(),
+        });
+        app.cloud_prototype.groups.0.push(group);
+        app.cloud_prototype.root = Some(temp.path().into());
+
+        app.remove_deleted_cloud(1, &ctx);
+        assert!(app.cloud_prototype.groups.0.is_empty());
+        app.normalize_workspace_state(&ctx);
+        assert!(app.board.workspace(workspace).is_some(), "submitted: {submitted}");
+    }
+}

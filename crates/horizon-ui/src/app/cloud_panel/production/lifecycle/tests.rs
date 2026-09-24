@@ -1,6 +1,7 @@
 use super::*;
-use crate::app::test_support::test_app;
+use crate::app::test_support::{run_app_frame, test_app, test_app_with_startup};
 use horizon_core::cloud_panel::{CloudConfig, CloudGroup, CloudLaunch};
+use horizon_core::{PanelId, PanelOptions, RuntimeState, StartupDecision, WorkspaceId};
 
 fn failed_setup_runtime() -> Runtime {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n    capabilities:\n      browserstack:\n        provider: account\n").unwrap();
@@ -254,4 +255,120 @@ fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
     app.remove_deleted_cloud(1, &ctx);
     assert!(!outside.exists());
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+}
+
+/// An app whose production cloud list is live for its session, after startup frames.
+fn live_cloud_app() -> (tempfile::TempDir, egui::Context, HorizonApp) {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    for _ in 0..2 {
+        run_app_frame(&ctx, &mut app);
+    }
+    assert!(app.cloud_state_is_live());
+    app.cloud_prototype.root = Some(temp.path().into());
+    (temp, ctx, app)
+}
+
+/// A cloud whose worker was never allocated, so it can be removed.
+fn add_unallocated_cloud(app: &mut HorizonApp, issue: u32, workspace: WorkspaceId) {
+    let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+    let mut group = CloudGroup::new(
+        issue,
+        format!("Cloud {issue}"),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        std::path::PathBuf::new(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(CloudLaunch {
+        deployment_started: false,
+        id: format!("fixture{issue}"),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: config.profiles["dev"].clone(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+}
+
+fn add_editor(app: &mut HorizonApp, workspace: WorkspaceId) -> PanelId {
+    app.board
+        .create_panel(
+            PanelOptions {
+                kind: horizon_core::PanelKind::Editor,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap()
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
+fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
+    for with_member in [false, true] {
+        let (_temp, ctx, mut app) = live_cloud_app();
+        let local = app.board.create_workspace("Local");
+        let remaining = add_editor(&mut app, local);
+        let cloud = app.board.create_workspace("Cloud");
+        add_unallocated_cloud(&mut app, 1, cloud);
+        let member = with_member.then(|| {
+            let member = add_editor(&mut app, cloud);
+            app.cloud_prototype.groups.0[0].attach(&mut app.board, member);
+            member
+        });
+        run_app_frame(&ctx, &mut app);
+        app.board.focused = member;
+        app.board.active_workspace = Some(cloud);
+        run_app_frame(&ctx, &mut app);
+        assert!(
+            app.board.workspace(cloud).is_some(),
+            "an empty cloud keeps its workspace"
+        );
+
+        app.remove_deleted_cloud(1, &ctx);
+        assert!(app.cloud_prototype.groups.0.is_empty());
+        assert!(member.is_none_or(|member| app.board.panel(member).is_none()));
+        run_app_frame(&ctx, &mut app);
+
+        assert!(app.board.workspace(cloud).is_none(), "member: {with_member}");
+        assert_eq!(app.board.active_workspace, Some(local));
+        assert_eq!(app.board.focused, Some(remaining));
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
+fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
+    for keeper in ["another cloud", "an ordinary panel", "a hidden panel"] {
+        let (_temp, ctx, mut app) = live_cloud_app();
+        let cloud = app.board.create_workspace("Cloud");
+        add_unallocated_cloud(&mut app, 1, cloud);
+        let ordinary = if keeper == "another cloud" {
+            add_unallocated_cloud(&mut app, 2, cloud);
+            None
+        } else {
+            let panel = add_editor(&mut app, cloud);
+            if keeper == "a hidden panel" {
+                assert!(app.board.set_panel_visible(panel, false));
+            }
+            Some(panel)
+        };
+        run_app_frame(&ctx, &mut app);
+
+        app.remove_deleted_cloud(1, &ctx);
+        assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 1));
+        for _ in 0..2 {
+            run_app_frame(&ctx, &mut app);
+        }
+        assert!(app.board.workspace(cloud).is_some(), "{keeper} keeps the workspace");
+        if let Some(panel) = ordinary {
+            assert!(app.board.panel(panel).is_some());
+            app.close_panel(panel);
+            assert!(
+                app.board.workspace(cloud).is_none(),
+                "without a cloud it closes with its last panel"
+            );
+        }
+    }
 }

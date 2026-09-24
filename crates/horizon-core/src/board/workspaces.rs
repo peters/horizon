@@ -16,6 +16,22 @@ impl Board {
         }
     }
 
+    /// Stop keeping `id` when empty once no cloud on this board uses it. It
+    /// then behaves like any workspace: it stays while it holds a panel,
+    /// hidden ones included, and is removed by the next
+    /// [`Self::remove_empty_workspaces`] or when its last panel closes. The
+    /// caller keeps the hold for work the board does not track, such as a
+    /// pending cloud creation.
+    #[cfg(feature = "cloud-workspaces")]
+    pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) {
+        if self
+            .workspace(id)
+            .is_some_and(|workspace| !cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
+        {
+            self.retained_empty_workspaces.remove(&id);
+        }
+    }
+
     #[must_use]
     pub fn create_workspace(&mut self, name: &str) -> WorkspaceId {
         let id = WorkspaceId(self.next_workspace_id);

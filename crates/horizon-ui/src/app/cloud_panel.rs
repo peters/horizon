@@ -297,6 +297,22 @@ impl HorizonApp {
         self.cloud_prototype.groups.clone_from(&self.board.cloud_groups);
     }
 
+    /// Let a removed cloud's workspace go like one whose last panel closed,
+    /// unless another cloud or a cloud creation still targets it.
+    fn release_removed_cloud_workspace(&mut self, workspace: &str) {
+        if self.cloud_prototype.groups.contains_workspace(workspace)
+            || self.cloud_prototype.production.creation_targets(workspace)
+        {
+            return;
+        }
+        if self.cloud_state_is_live() {
+            self.sync_board_cloud_groups();
+        }
+        if let Some(id) = self.board.workspace_id_by_local_id(workspace) {
+            self.board.release_empty_workspace_retention(id);
+        }
+    }
+
     pub(super) fn save_cloud_prototype(&mut self) {
         if !self.cloud_state_is_live() {
             return;

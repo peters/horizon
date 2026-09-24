@@ -33,6 +33,16 @@ struct Resolved {
     revision: String,
 }
 
+impl super::Production {
+    /// Whether the open or pending cloud creation will place its cloud in `workspace`.
+    pub(in crate::app::cloud_panel) fn creation_targets(&self, workspace: &str) -> bool {
+        self.pending_creation
+            .as_ref()
+            .is_some_and(|pending| pending.workspace == workspace)
+            || (self.creating && self.launch.workspace.as_deref() == Some(workspace))
+    }
+}
+
 impl HorizonApp {
     pub(super) fn create_production_cloud(&mut self, ctx: &egui::Context) -> cloud_runtime::Result<()> {
         if self.cloud_prototype.production.pending_creation.is_some() {
