@@ -56,7 +56,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                         let id = u32::try_from(id).unwrap();
                         let response = runtime_frame(ui, id, |ui| {
                             assert!(profile_details(ui, id, &launch, &runtime).is_none());
-                            runtime_actions(ui, &mut runtime);
+                            runtime_actions(ui, id, &mut runtime);
                         });
                         assert!((response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1);
                         assert!((response.response.rect.height() - RUNTIME_HEIGHT).abs() < 0.1);
@@ -416,7 +416,7 @@ fn restored_bound_records_can_check_provider_after_failed_reconnect() {
         runtime.recovery_receiver = Some(rx);
         let _ = ctx
             .run_ui(egui::RawInput::default(), |ui| {
-                assert!(runtime_actions(ui, &mut runtime).is_none());
+                assert!(runtime_actions(ui, 1, &mut runtime).is_none());
             })
             .discard_textures();
     }

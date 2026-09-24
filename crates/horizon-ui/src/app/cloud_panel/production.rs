@@ -74,6 +74,11 @@ pub(super) struct Runtime {
     stage: Option<Stage>,
     progress: progress::Timeline,
     logs: std::collections::VecDeque<String>,
+    /// Lines that arrived after the reader scrolled up. They join `logs` when
+    /// follow mode resumes, so the visible history does not shift.
+    pending_logs: std::collections::VecDeque<String>,
+    /// The reader scrolled away from the latest line.
+    verbose_unpinned: bool,
     state: Option<Deployment>,
     error: Option<String>,
     confirmation: Confirmation,
@@ -90,6 +95,39 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
 }
 impl Runtime {
+    const FOLLOW_LOG_LINES: usize = 150;
+    const PENDING_LOG_LINES: usize = 4_000;
+
+    /// Follow mode keeps a short tail. While the reader is scrolled up, new
+    /// lines wait aside so the lines on screen are neither dropped nor shifted.
+    fn push_log(&mut self, line: String) {
+        if self.verbose_unpinned {
+            self.pending_logs.push_back(line);
+            while self.pending_logs.len() > Self::PENDING_LOG_LINES {
+                self.pending_logs.pop_front();
+            }
+            return;
+        }
+        self.accept_followed_logs();
+        self.logs.push_back(line);
+        self.trim_followed_logs();
+    }
+
+    fn accept_followed_logs(&mut self) {
+        if self.pending_logs.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_logs);
+        self.logs.extend(pending);
+        self.trim_followed_logs();
+    }
+
+    fn trim_followed_logs(&mut self) {
+        while self.logs.len() > Self::FOLLOW_LOG_LINES {
+            self.logs.pop_front();
+        }
+    }
+
     fn needs_provider_check(state: &Deployment) -> bool {
         state.operation == cloud_runtime::CreateState::Requested
             || (matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
@@ -215,12 +253,7 @@ impl HorizonApp {
                         runtime.stage = Some(stage);
                     }
                     Event::Progress(progress) => runtime.progress.update(progress),
-                    Event::Output(line) => {
-                        runtime.logs.push_back(line);
-                        while runtime.logs.len() > 150 {
-                            runtime.logs.pop_front();
-                        }
-                    }
+                    Event::Output(line) => runtime.push_log(line),
                     Event::Ready(state, at) => {
                         runtime.progress.stage(Stage::Ready, at);
                         runtime.browsers = None;
