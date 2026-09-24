@@ -75,6 +75,9 @@ impl RunPod {
         }
         let existing = self.match_registry_binding(&name, state, cancel)?;
         if let Some(binding) = existing {
+            if *state == State::Prepared {
+                return Err(CloudError::IdentityMismatch);
+            }
             if let State::Bound(expected) = state
                 && *expected != binding
             {

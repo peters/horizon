@@ -9,6 +9,52 @@ fn binding() -> Binding {
 }
 
 #[test]
+fn prepared_generation_cannot_adopt_an_existing_provider_binding() {
+    let (provider, requests, task) = server(vec![(200, serde_json::to_string(&vec![binding()]).unwrap())]);
+    let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
+    let input = PullBinding {
+        operation_id: "generation1",
+        username: "pull-user",
+        credential: &credential,
+    };
+    let mut state = State::Prepared;
+    assert!(matches!(
+        provider.ensure_registry_binding(&input, &mut state, &Cancellation::default(), |_| {
+            panic!("An unrelated provider binding must not change the journal")
+        }),
+        Err(CloudError::IdentityMismatch)
+    ));
+    assert_eq!(state, State::Prepared);
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /containerregistryauth "));
+}
+
+#[test]
+fn missing_delete_response_remains_fenced_until_absence_is_observed() {
+    let result = binding();
+    let listed = serde_json::to_string(&vec![&result]).unwrap();
+    let (provider, requests, task) = server(vec![
+        (200, listed),
+        (404, r#"{"error":"synthetic-pull-secret"}"#.into()),
+        (200, "[]".into()),
+    ]);
+    let mut state = State::Bound(result.clone());
+    let error = provider
+        .revoke_registry_binding("generation1", &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap_err();
+    assert!(!format!("{error:?} {error}").contains("synthetic-pull-secret"));
+    assert_eq!(state, State::Revoking(result));
+    provider
+        .reconcile_registry_binding("generation1", &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(state, State::Revoked);
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 3);
+}
+
+#[test]
 fn creation_persists_intent_before_sending_only_the_explicit_pull_credential() {
     let result = binding();
     let (provider, requests, task) = server(vec![(200, "[]".into()), (200, serde_json::to_string(&result).unwrap())]);
