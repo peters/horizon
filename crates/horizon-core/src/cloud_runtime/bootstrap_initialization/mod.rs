@@ -1,5 +1,6 @@
 //! Owning-host first initialization. Retained journals can recover or clean up,
 //! but only this invocation's direct provider witnesses may send Initialize.
+mod inspection;
 mod record;
 use super::{
     Cancellation,
@@ -19,6 +20,7 @@ use horizon_cloud_protocol::{
     OperationId, SharingMode,
     bootstrap::{BootstrapOutcome, BootstrapPayload, RecoveryReceipt, Startup},
 };
+pub use inspection::inspect;
 use record::{FileBinding, Phase, Record, Signed};
 use serde::{Deserialize, Serialize};
 use std::{

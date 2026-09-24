@@ -2,6 +2,8 @@
 #[cfg(target_os = "linux")]
 mod initialize;
 #[cfg(target_os = "linux")]
+mod inspection;
+#[cfg(target_os = "linux")]
 mod keys;
 #[cfg(target_os = "linux")]
 mod recovery;
@@ -10,6 +12,17 @@ mod runtime;
 #[cfg(target_os = "linux")]
 mod store;
 use std::io;
+
+pub(super) fn inspect() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        inspection::run()
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err(io::Error::other(
+        "Allocation inspection requires a qualified Linux worker",
+    ))
+}
 
 pub(super) fn run() -> io::Result<()> {
     #[cfg(target_os = "linux")]

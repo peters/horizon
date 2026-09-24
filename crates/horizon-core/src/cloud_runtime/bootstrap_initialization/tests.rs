@@ -165,6 +165,46 @@ fn startup_deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }
 
+fn native_inspection(
+    owner: &Owner,
+    target: &bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    directory: &std::path::Path,
+) {
+    let capabilities: Capabilities = serde_json::from_str("{}").unwrap();
+    let observed = inspection::inspect_with(
+        owner,
+        target,
+        &capabilities,
+        startup_deadline(),
+        &mut |connection, bytes, timeout| {
+            Ok(runner.private_exchange(
+                &mut connection.pinned_command("horizon-cloud-worker inspect-allocation"),
+                bytes,
+                timeout,
+            )?)
+        },
+    )
+    .unwrap();
+    assert_eq!(observed.capabilities, capabilities);
+    assert!(!directory.join("workspace/capabilities.json").exists());
+    let unavailable: Capabilities = serde_json::from_str(r#"{"desktop":true}"#).unwrap();
+    assert!(
+        inspection::inspect_with(
+            owner,
+            target,
+            &unavailable,
+            startup_deadline(),
+            &mut |connection, bytes, timeout| Ok(runner.private_exchange(
+                &mut connection.pinned_command("horizon-cloud-worker inspect-allocation"),
+                bytes,
+                timeout,
+            )?),
+        )
+        .is_err()
+    );
+}
+
 #[test]
 #[ignore = "requires scripts/cloud-initialization-smoke.py and an isolated mount namespace"]
 fn native_ssh_worker_initialization() {
@@ -202,6 +242,7 @@ fn native_ssh_worker_initialization() {
         receipt
     );
     assert_eq!(fs::read(&target.connection.known_hosts).unwrap(), pin);
+    native_inspection(&owner, &target, &runner, &directory);
     let payload = BootstrapPayload::Abandon {
         startup: target.startup.clone(),
         worker_id: target.worker_id.clone(),
@@ -772,4 +813,110 @@ fn corrupted_private_seed_never_anchors_and_corrected_key_can_retry() {
     assert!(f.owner.load().unwrap().get("bootstrap_recovery").is_none());
     fs::write(&target.connection.identity, original).unwrap();
     bootstrap_recovery::anchor(&mut f.owner, &target).unwrap();
+}
+
+#[test]
+fn inspection_rejects_wrong_receipts_and_expired_or_changed_bindings() {
+    use horizon_cloud_protocol::{
+        bootstrap::RecoveryRequest,
+        inspection::Receipt,
+        signed::{Action, SignedIntent},
+    };
+    let f = CoordinatorFixture::new();
+    let target = resolve(&f.record).unwrap();
+    let capabilities: Capabilities = serde_json::from_str("{}").unwrap();
+    let original = serde_json::to_vec(&Record::load(&f.owner).unwrap()).unwrap();
+    let marker = fs::read(f.root.join("owner.json")).unwrap();
+    for variant in 0..9 {
+        let result = inspection::inspect_with(
+            &f.owner,
+            &target,
+            &capabilities,
+            startup_deadline(),
+            &mut |_, bytes, _| {
+                let request: RecoveryRequest = serde_json::from_slice(bytes).unwrap();
+                let signed = SignedIntent::parse(request.message.as_bytes()).unwrap();
+                let intent = signed
+                    .verify(&target.startup.controller, request.payload.as_bytes())
+                    .unwrap();
+                assert_eq!(intent.action(), Action::InspectAllocation);
+                let mut receipt = Receipt {
+                    version: 1,
+                    startup: target.startup.clone(),
+                    worker_id: target.worker_id.clone(),
+                    operation: intent.operation(),
+                    fingerprint: intent.fingerprint().unwrap(),
+                    revision: 0,
+                    capabilities: capabilities.clone(),
+                };
+                match variant {
+                    0 => {}
+                    1 => receipt.version = 2,
+                    2 => receipt.startup.token = OperationId::generate(),
+                    3 => receipt.worker_id = "foreign-worker".into(),
+                    4 => receipt.operation = OperationId::generate(),
+                    5 => receipt.fingerprint = [0; 32],
+                    6 => receipt.revision = 1,
+                    7 => receipt.capabilities.desktop = true,
+                    _ => fs::write(f.root.join("owner.json"), b"changed during exchange").unwrap(),
+                }
+                Ok(serde_json::to_vec(&receipt).unwrap())
+            },
+        );
+        assert_eq!(result.is_ok(), variant == 0);
+        fs::write(f.root.join("owner.json"), &marker).unwrap();
+    }
+    assert_eq!(serde_json::to_vec(&Record::load(&f.owner).unwrap()).unwrap(), original);
+    assert!(
+        inspection::inspect_with(&f.owner, &target, &capabilities, Instant::now(), &mut |_, _, _| panic!(
+            "expired send"
+        ))
+        .is_err()
+    );
+    fs::write(&target.connection.known_hosts, b"changed pin").unwrap();
+    assert!(
+        inspection::inspect_with(
+            &f.owner,
+            &target,
+            &capabilities,
+            startup_deadline(),
+            &mut |_, _, _| panic!("changed pins")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn inspection_checks_completed_state_and_qualified_image_before_provider_reads() {
+    let mut f = CoordinatorFixture::new();
+    let cancel = Cancellation::default();
+    let capabilities: Capabilities = serde_json::from_str("{}").unwrap();
+    for completed in [false, true] {
+        if completed {
+            f.record.phase = Phase::Completed;
+            f.record.save(&mut f.owner).unwrap();
+        }
+        assert!(matches!(
+            inspect(
+                &f.owner,
+                &f.record.request,
+                "different-image",
+                &capabilities,
+                &cancel,
+                Duration::from_secs(5)
+            ),
+            Err(Error::Invalid)
+        ));
+    }
+    assert!(matches!(
+        inspect(
+            &f.owner,
+            &f.record.request,
+            &f.record.spec.image_digest,
+            &capabilities,
+            &cancel,
+            Duration::ZERO
+        ),
+        Err(Error::Unresolved)
+    ));
 }
