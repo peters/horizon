@@ -1,4 +1,6 @@
 //! Durable allocation fence and per-cloud ownership lock.
+pub mod migration;
+mod transaction;
 use super::{Error, Result, Stage};
 use horizon_cloud::{CreateState, Worker, WorkerSpec};
 use serde::{Deserialize, Serialize};

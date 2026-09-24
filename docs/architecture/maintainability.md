@@ -455,8 +455,12 @@ versioned machine-local placement bindings for the shared-worker coordinator.
 Its `legacy` module converts the complete v1 deployment payload into a validated
 allocation/project pair and reconstructs the old runtime view without dropping
 cleanup fences. The module performs no I/O and grants no provider or membership
-authority; publishing these records transactionally, companion storage journals,
-and runtime sharing remain separate integration work. `deployment::storage` persists a separate volume journal under the same
+authority. `state::migration` provides opt-in local publication with an old-reader
+barrier and preserved storage/trust companions; `state::transaction` commits and
+recovers the paired projections. Migration and updates hold a parent registry lock
+before allocation and project locks, with exclusive mutable handle access. These
+local APIs perform no provider I/O and are not called by runtime entry points yet;
+credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
