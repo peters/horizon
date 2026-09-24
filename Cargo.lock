@@ -2311,6 +2311,7 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-protocol",
  "horizon-cloud",
+ "horizon-cloud-protocol",
  "png",
  "serde",
  "serde_json",
