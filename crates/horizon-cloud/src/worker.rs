@@ -116,6 +116,52 @@ impl WorkerSpec {
         }
         Ok(())
     }
+    /// The size, capabilities, placement, key and operation are bound to the
+    /// worker; only the image and the credential that pulls it may change.
+    /// # Errors
+    /// Refuses any other difference and a replacement with the same image.
+    pub fn verify_replacement(&self, next: &Self) -> Result<(), CloudError> {
+        let Self {
+            operation_id,
+            image_digest,
+            profile,
+            public_key,
+            registry_auth_id: _,
+            gpu_types,
+            cpu_flavors,
+            data_centers,
+        } = next;
+        if *operation_id != self.operation_id
+            || *profile != self.profile
+            || *public_key != self.public_key
+            || *gpu_types != self.gpu_types
+            || *cpu_flavors != self.cpu_flavors
+            || *data_centers != self.data_centers
+        {
+            return Err(CloudError::IdentityChange);
+        }
+        if *image_digest == self.image_digest {
+            return Err(CloudError::Invalid("Replacement image is the worker's current image"));
+        }
+        Ok(())
+    }
+}
+/// Which image of a replacement a worker reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageSide {
+    Previous,
+    Next,
+}
+impl ImageSide {
+    pub(crate) fn of(image: &str, current: &WorkerSpec, next: &WorkerSpec) -> Option<Self> {
+        if image == current.image_digest {
+            Some(Self::Previous)
+        } else if image == next.image_digest {
+            Some(Self::Next)
+        } else {
+            None
+        }
+    }
 }
 /// Whether a public identity satisfies the worker SSH key contract.
 #[must_use]
@@ -239,6 +285,20 @@ impl Worker {
         }
         Ok(())
     }
+    /// As `verify`, while the worker's image is being replaced: it may report
+    /// either image. Only replacement code accepts a worker this way.
+    /// # Errors
+    /// Refuses mismatching identities, any third image and replacements that
+    /// change more than the image and its registry credential.
+    pub fn verify_either(&self, current: &WorkerSpec, next: &WorkerSpec) -> Result<ImageSide, CloudError> {
+        current.verify_replacement(next)?;
+        let side = ImageSide::of(&self.image_name, current, next).ok_or(CloudError::IdentityMismatch)?;
+        self.verify(match side {
+            ImageSide::Previous => current,
+            ImageSide::Next => next,
+        })?;
+        Ok(side)
+    }
     /// # Errors
     /// Inspect actual assigned resources separately after persisting the worker identity.
     pub fn verify_resources(&self, spec: &WorkerSpec) -> Result<(), CloudError> {
@@ -333,6 +393,8 @@ pub enum CloudError {
     DuplicateWorkers,
     #[error("Worker identity does not match the persisted operation")]
     IdentityMismatch,
+    #[error("An image replacement may change only the worker image and its registry credential")]
+    IdentityChange,
     #[error("Worker no longer exists; its running processes cannot be recovered")]
     WorkerLost,
     #[error("Cannot persist worker operation before provider I/O")]

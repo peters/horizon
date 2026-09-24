@@ -5,10 +5,13 @@ use std::{io::Read, time::Duration};
 
 /// Larger error bodies are not provider explanations worth parsing.
 const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
+/// Default per-request budget and the ceiling for caller-supplied budgets.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod flavors;
 pub mod recovery;
 pub mod registry;
+pub mod replacement;
 mod stock;
 pub mod volumes;
 
@@ -27,7 +30,7 @@ impl RunPod {
     #[must_use]
     pub fn new(credential: Credential) -> Self {
         let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
+            .timeout_global(Some(REQUEST_TIMEOUT))
             .http_status_as_error(false)
             .max_redirects(0)
             .build();
@@ -173,7 +176,7 @@ impl RunPod {
         if timeout.is_zero() {
             return Err(CloudError::Transport);
         }
-        self.inspect_bounded(id, cancel, Some(timeout.min(Duration::from_secs(30))))
+        self.inspect_bounded(id, cancel, Some(timeout.min(REQUEST_TIMEOUT)))
     }
     fn inspect_bounded(
         &self,
@@ -282,6 +285,11 @@ impl RunPod {
                 .post(url)
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or(Value::Null)),
+            "PATCH" => self
+                .agent
+                .patch(url)
+                .header("Authorization", auth.as_str())
+                .send_json(body.unwrap_or(Value::Null)),
             "DELETE" => self.agent.delete(url).header("Authorization", auth.as_str()).call(),
             _ => {
                 let request = self.agent.get(url).header("Authorization", auth.as_str());
@@ -301,7 +309,8 @@ impl RunPod {
             400 | 422 => return Err(CloudError::Rejected(self.failure_reason(&mut response))),
             _ => return Err(CloudError::Http(status, self.failure_reason(&mut response))),
         }
-        if method == "DELETE" || url.ends_with("/stop") || url.ends_with("/start") {
+        // An update is confirmed by observing the worker, not by its response body.
+        if matches!(method, "DELETE" | "PATCH") || url.ends_with("/stop") || url.ends_with("/start") {
             return Ok(Value::Null);
         }
         response
