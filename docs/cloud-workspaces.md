@@ -381,6 +381,10 @@ remain visible; checking a stopped cloud leaves it stopped. Refresh retries
 access through the existing SSH endpoints without contacting provider lifecycle
 APIs. No overlay network is needed when those endpoints are reachable.
 
+The source worker must be able to reach the target's published SSH endpoint.
+Some providers refuse this connection when workers share a public address;
+Horizon reports Unreachable and does not add a relay or start another worker.
+
 Workers with enabled agents automatically advertise `horizon-cloud-companions`.
 The read-only `cloud_companions_list` and `cloud_companion_inspect` tools expose
 the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`.
