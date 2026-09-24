@@ -62,6 +62,8 @@ pub struct Request {
 /// The Owner's canonical lock remains held through creation and signed completion.
 /// A failed invocation must use resume or cleanup; calling create again never
 /// repeats provider creation or manufactures a new first-initialization witness.
+/// The timeout bounds post-create SSH startup; provider calls and synchronous
+/// durability checks retain their own bounds. Expiry prevents further SSH sends.
 /// # Errors
 /// Refuses existing journals, changed keys/accounts, uncertain saves or responses,
 /// unqualified runtime identities and non-pristine worker state. No automatic cleanup.
@@ -137,14 +139,9 @@ pub fn create(
     let attachment = allocation.confirm(cancel)?;
     let address = attachment.worker().ssh_address().ok_or(Error::Invalid)?;
     let target = target(&record, address)?;
-    enroll(
-        &record,
-        &target,
-        &runner,
-        deadline.saturating_duration_since(Instant::now()),
-    )?;
-    initialize(owner, &mut record, &target, &runner, timeout)?;
-    complete(owner, &mut record, &target, cancel, timeout)
+    enroll(&record, &target, &runner, deadline)?;
+    initialize(owner, &mut record, &target, &runner, deadline)?;
+    complete(owner, &mut record, &target, cancel, deadline)
 }
 
 /// Read retained authority and send only the exact pre-anchored Recover request.
@@ -156,6 +153,7 @@ pub fn resume(
     cancel: &Cancellation,
     timeout: Duration,
 ) -> Result<RecoveryReceipt> {
+    let deadline = Instant::now() + timeout.min(Duration::from_secs(3600));
     let runner = runner(cancel);
     let (account, credential, identity) = bindings(request, &runner)?;
     let mut record = Record::load(owner)?.ok_or(Error::Invalid)?;
@@ -165,7 +163,7 @@ pub fn resume(
     }
     bootstrap_recovery::require_existing(owner, &target(&record, ([127, 0, 0, 1], 22).into())?)?;
     let target = inspect_target(&RunPod::new(credential), &record, cancel)?;
-    complete(owner, &mut record, &target, cancel, timeout)
+    complete(owner, &mut record, &target, cancel, deadline)
 }
 
 /// Explicitly abandon this pre-admission allocation and delete only its anchored
@@ -280,23 +278,31 @@ fn initialize(
     record: &mut Record,
     target: &bootstrap_recovery::Target,
     runner: &Runner<'_>,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<()> {
-    initialize_with(owner, record, target, &mut |connection, request| {
-        Ok(runner.private_exchange(
-            &mut connection.pinned_command("horizon-cloud-worker initialize-allocation"),
-            request,
-            timeout.min(Duration::from_secs(60)),
-        )?)
-    })
+    initialize_with(
+        owner,
+        record,
+        target,
+        &mut || remaining(deadline),
+        &mut |connection, request, timeout| {
+            Ok(runner.private_exchange(
+                &mut connection.pinned_command("horizon-cloud-worker initialize-allocation"),
+                request,
+                timeout.min(Duration::from_secs(60)),
+            )?)
+        },
+    )
 }
 
 fn initialize_with(
     owner: &mut Owner,
     record: &mut Record,
     target: &bootstrap_recovery::Target,
-    exchange: &mut impl FnMut(&Connection, &[u8]) -> Result<Vec<u8>>,
+    budget: &mut impl FnMut() -> Result<Duration>,
+    exchange: &mut impl FnMut(&Connection, &[u8], Duration) -> Result<Vec<u8>>,
 ) -> Result<()> {
+    budget()?;
     let snapshot = Snapshot::capture(target)?;
     if !record.identity.matches(&snapshot.binding) {
         return Err(Error::Invalid);
@@ -323,6 +329,7 @@ fn initialize_with(
     )?);
     record.phase = Phase::Prepared;
     record.save(owner)?;
+    budget()?;
     record.requested = true;
     record.phase = Phase::Requested;
     record.save(owner)?;
@@ -330,6 +337,7 @@ fn initialize_with(
     let bytes = exchange(
         &snapshot.connection,
         signed.request(target, &payload, BootstrapOutcome::Initializing)?,
+        budget()?,
     )?;
     signed.confirm(&bytes)?;
     // The verified initialization response is anchored before recovery begins.
@@ -341,10 +349,11 @@ fn complete(
     record: &mut Record,
     target: &bootstrap_recovery::Target,
     cancel: &Cancellation,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<RecoveryReceipt> {
+    remaining(deadline)?;
     bootstrap_recovery::require_existing(owner, target)?;
-    let receipt = bootstrap_recovery::recover(owner, target, cancel, timeout)?;
+    let receipt = bootstrap_recovery::recover_until(owner, target, cancel, deadline)?;
     record.phase = Phase::Completed;
     record.save(owner)?;
     Ok(receipt)
@@ -419,9 +428,19 @@ fn verify_new_pin_path(path: &std::path::Path) -> Result<()> {
     }
     Ok(())
 }
-fn enroll(record: &Record, target: &bootstrap_recovery::Target, runner: &Runner<'_>, timeout: Duration) -> Result<()> {
+fn remaining(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err(Error::Unresolved)
+    } else {
+        Ok(remaining)
+    }
+}
+
+fn enroll(record: &Record, target: &bootstrap_recovery::Target, runner: &Runner<'_>, deadline: Instant) -> Result<()> {
+    remaining(deadline)?;
     let (identity, bytes) = FileBinding::capture(&record.request.identity_file)?;
-    if identity != record.identity || timeout.is_zero() {
+    if identity != record.identity {
         return Err(Error::Invalid);
     }
     let mut key = tempfile::NamedTempFile::new()?;
@@ -444,18 +463,14 @@ fn enroll(record: &Record, target: &bootstrap_recovery::Target, runner: &Runner<
             "UpdateHostKeys=no".into(),
         ],
     );
-    let deadline = Instant::now() + timeout;
     let mut pinned = None;
     let output = loop {
         runner.cancel.check()?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(Error::Unresolved);
-        }
         let current = pin_bytes(&record.request.known_hosts, &pin)?;
         if pinned.as_ref().is_some_and(|saved| *saved != current) {
             return Err(Error::Invalid);
         }
+        let remaining = remaining(deadline)?;
         let result = runner.private_exchange(
             Command::new("ssh")
                 .args(&arguments)

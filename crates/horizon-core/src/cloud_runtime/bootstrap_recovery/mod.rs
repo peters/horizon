@@ -9,7 +9,7 @@ use horizon_cloud_protocol::{
     signed::{Action, Intent, SignedIntent, Target as IntentTarget},
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const KEY: &str = "bootstrap_recovery";
 const LIMIT: usize = 64 * 1024;
@@ -61,8 +61,22 @@ pub fn recover(
     cancel: &Cancellation,
     timeout: Duration,
 ) -> Result<RecoveryReceipt> {
+    recover_until(
+        owner,
+        target,
+        cancel,
+        Instant::now() + timeout.min(Duration::from_secs(60)),
+    )
+}
+
+pub(super) fn recover_until(
+    owner: &mut Owner,
+    target: &Target,
+    cancel: &Cancellation,
+    deadline: Instant,
+) -> Result<RecoveryReceipt> {
     cancel.check().map_err(super::Error::from)?;
-    if timeout.is_zero() {
+    if Instant::now() >= deadline {
         return Err(Error::Invalid);
     }
     let runner = Runner {
@@ -71,6 +85,10 @@ pub fn recover(
         secrets: Vec::new(),
     };
     recover_with(owner, target, &mut |connection, request| {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        if timeout.is_zero() {
+            return Err(Error::Invalid);
+        }
         Ok(runner.private_exchange(
             &mut connection.pinned_command("horizon-cloud-worker recover-allocation"),
             request,

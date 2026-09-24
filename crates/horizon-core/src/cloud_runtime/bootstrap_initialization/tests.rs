@@ -161,6 +161,10 @@ fn native_fixture(directory: &std::path::Path) -> CoordinatorFixture {
     }
 }
 
+fn startup_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(30)
+}
+
 #[test]
 #[ignore = "requires scripts/cloud-initialization-smoke.py and an isolated mount namespace"]
 fn native_ssh_worker_initialization() {
@@ -176,24 +180,25 @@ fn native_ssh_worker_initialization() {
     let cancel = Cancellation::default();
     let runner = runner(&cancel);
     let target = target(&record, ([127, 0, 0, 1], port).into()).unwrap();
-    enroll(&record, &target, &runner, Duration::from_secs(30)).unwrap();
-    initialize(&mut owner, &mut record, &target, &runner, Duration::from_secs(30)).unwrap();
+    let deadline = startup_deadline();
+    enroll(&record, &target, &runner, deadline).unwrap();
+    initialize(&mut owner, &mut record, &target, &runner, deadline).unwrap();
     assert!(!directory.join("workspace/.horizon-allocation/membership.json").exists());
     // Lose the host handle after Requested: a fresh handle sends only Recover.
     drop(owner);
     let mut owner = open(&root, &vault).unwrap();
     let mut record = Record::load(&owner).unwrap().unwrap();
     vault.fail_after(Some(2));
-    assert!(complete(&mut owner, &mut record, &target, &cancel, Duration::from_secs(30)).is_err());
+    assert!(complete(&mut owner, &mut record, &target, &cancel, startup_deadline()).is_err());
     drop(owner);
     vault.fail_after(None);
     let mut owner = open(&root, &vault).unwrap();
     let mut record = Record::load(&owner).unwrap().unwrap();
-    let receipt = complete(&mut owner, &mut record, &target, &cancel, Duration::from_secs(30)).unwrap();
+    let receipt = complete(&mut owner, &mut record, &target, &cancel, startup_deadline()).unwrap();
     let pin = fs::read(&target.connection.known_hosts).unwrap();
     fs::write(directory.join("restart"), b"restart only fixture runtime").unwrap();
     assert_eq!(
-        complete(&mut owner, &mut record, &target, &cancel, Duration::from_secs(30)).unwrap(),
+        complete(&mut owner, &mut record, &target, &cancel, startup_deadline()).unwrap(),
         receipt
     );
     assert_eq!(fs::read(&target.connection.known_hosts).unwrap(), pin);
@@ -570,13 +575,63 @@ fn failed_prepared_and_requested_anchors_prevent_initialize_transport() {
         f.vault.fail_after(Some(writes));
         let target = resolve(&f.record).unwrap();
         assert!(
-            initialize_with(&mut f.owner, &mut f.record, &target, &mut |_, _| panic!(
-                "unanchored Initialize"
-            ))
+            initialize_with(
+                &mut f.owner,
+                &mut f.record,
+                &target,
+                &mut || Ok(Duration::from_secs(30)),
+                &mut |_, _, _| panic!("unanchored Initialize")
+            )
             .is_err()
         );
         f = f.reopen();
         assert!(!f.record.requested);
+    }
+}
+
+#[test]
+fn expired_startup_budget_never_sends_initialize_or_discards_consumed_permission() {
+    assert!(remaining(Instant::now()).is_err());
+    for allowed in 0..3 {
+        let mut f = CoordinatorFixture::new();
+        f.record.phase = Phase::Creating;
+        f.record.requested = false;
+        f.record.initialize = None;
+        f.record.save(&mut f.owner).unwrap();
+        let target = resolve(&f.record).unwrap();
+        let mut checks = 0;
+        assert!(
+            initialize_with(
+                &mut f.owner,
+                &mut f.record,
+                &target,
+                &mut || {
+                    checks += 1;
+                    if checks > allowed {
+                        Err(Error::Unresolved)
+                    } else {
+                        Ok(Duration::from_secs(1))
+                    }
+                },
+                &mut |_, _, _| panic!("expired Initialize")
+            )
+            .is_err()
+        );
+        f = f.reopen();
+        assert_eq!(f.record.requested, allowed == 2);
+        if allowed == 2 {
+            assert!(
+                complete(
+                    &mut f.owner,
+                    &mut f.record,
+                    &target,
+                    &Cancellation::default(),
+                    Instant::now()
+                )
+                .is_err()
+            );
+            assert!(f.record.requested);
+        }
     }
 }
 
