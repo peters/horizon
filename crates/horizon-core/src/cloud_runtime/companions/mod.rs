@@ -140,16 +140,11 @@ fn apply_action(state: &mut journal::State, context: Option<&Context>, action: &
                 .declarations
                 .get(alias)
                 .ok_or(Error::Invalid("Unknown companion alias"))?;
-            let matching = candidates(&context.source, declaration, &context.inventory);
-            let mut matching = matching
-                .into_iter()
-                .filter(|target| &target.cloud_id == target_cloud_id);
-            let target = matching
-                .next()
+            let target = context
+                .inventory
+                .iter()
+                .find(|target| &target.cloud_id == target_cloud_id && target.scope == context.source.scope)
                 .ok_or(Error::Invalid("Companion target is unavailable in this workspace"))?;
-            if matching.next().is_some() {
-                return Err(Error::Invalid("Companion target identity is ambiguous"));
-            }
             let selection = Selection::new(&context.source, alias, target)
                 .map_err(|_| Error::Invalid("Invalid companion selection"))?;
             selection

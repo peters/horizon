@@ -24,6 +24,7 @@ pub(super) struct Worker {
 }
 
 pub(super) trait Transport {
+    fn release(&mut self, _cloud: &str) {}
     fn worker(&mut self, cloud: &str) -> Result<Option<Worker>>;
     fn call(&mut self, cloud: &str, request: &Request) -> Result<Response>;
     fn publish(&mut self, cloud: &str, catalog: &Catalog) -> Result<()>;
@@ -115,6 +116,10 @@ impl<'a> Live<'a> {
 }
 
 impl Transport for Live<'_> {
+    fn release(&mut self, cloud: &str) {
+        self.states.remove(cloud);
+    }
+
     fn worker(&mut self, cloud: &str) -> Result<Option<Worker>> {
         let Some(state) = self.load(cloud)? else {
             return Ok(None);
@@ -164,5 +169,25 @@ impl Transport for Live<'_> {
             Duration::from_secs(45),
         )?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn releasing_target_allows_lifecycle_while_source_stays_locked() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+        })).unwrap();
+        let cancel = Cancellation::default();
+        let mut live = Live::new(root.path(), &settings, &cancel);
+        live.worker("source").unwrap();
+        live.worker("target").unwrap();
+        assert!(Store::lock(&root.path().join("target")).is_err());
+        live.release("target");
+        assert!(Store::lock(&root.path().join("target")).is_ok());
+        assert!(Store::lock(&root.path().join("source")).is_err());
     }
 }

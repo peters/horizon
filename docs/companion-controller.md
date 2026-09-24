@@ -14,7 +14,9 @@ Selection is stored in the source cloud's private `companions.json` journal.
 Stopped targets remain stopped. Reconciliation uses already-running workers and
 has no create, start, resume, stop, or delete provider operation. Both deployments
 remain locked during SSH setup, and the journal is saved before any grant can
-be installed. The controller requires the existing owner SSH host-key pin.
+be installed. Each target lock is released after its setup or cleanup, before
+processing the next target; the source stays locked through reconciliation.
+The controller requires the existing owner SSH host-key pin.
 Worker public keys cross the controller; private keys stay on their source.
 
 The journal pins the selected cloud and its worker identity and initial target

@@ -1,5 +1,6 @@
 use super::*;
 use horizon_cloud_protocol::companion::{Request as WorkerRequest, Response};
+use std::collections::BTreeSet;
 use transport::{Transport, Worker};
 
 struct Fixture {
@@ -11,6 +12,7 @@ struct Fixture {
 
 struct Fake {
     workers: BTreeMap<String, Worker>,
+    held: BTreeSet<String>,
     calls: Vec<(String, String)>,
     fail_authorize: bool,
     cancel_on_call: Option<Cancellation>,
@@ -18,10 +20,18 @@ struct Fake {
 }
 
 impl Transport for Fake {
+    fn release(&mut self, cloud: &str) {
+        self.held.remove(cloud);
+    }
     fn worker(&mut self, cloud: &str) -> Result<Option<Worker>> {
+        if cloud != "source" {
+            assert!(self.held.iter().all(|id| id == "source" || id == cloud));
+        }
+        self.held.insert(cloud.into());
         Ok(self.workers.get(cloud).cloned())
     }
     fn publish(&mut self, _: &str, catalog: &Catalog) -> Result<()> {
+        assert!(self.held.iter().all(|id| id == "source"));
         catalog.validate().map_err(Error::Invalid)
     }
     fn call(&mut self, cloud: &str, request: &WorkerRequest) -> Result<Response> {
@@ -115,6 +125,7 @@ impl Fixture {
             .collect();
         let transport = Fake {
             workers,
+            held: BTreeSet::new(),
             calls: Vec::new(),
             fail_authorize: false,
             cancel_on_call: None,
@@ -182,6 +193,21 @@ fn durable_grant_retries_reuse_the_identity_after_controller_restart() {
     assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.access, grant);
     fixture.context.inventory[1].declaration.repository = "EXAMPLE/App".into();
     assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Ready);
+    let mut other = fixture.context.inventory[1].clone();
+    other.cloud_id = "utility".into();
+    fixture
+        .context
+        .declarations
+        .insert("utility".into(), other.declaration.clone());
+    fixture.context.inventory.push(other);
+    let mut worker = fixture.transport.workers["target"].clone();
+    worker.id = "worker-utility".into();
+    fixture.transport.workers.insert("utility".into(), worker);
+    let snapshot = fixture.run(&Action::Select {
+        alias: "utility".into(),
+        target_cloud_id: "utility".into(),
+    });
+    assert!(snapshot.rows.iter().all(|row| row.companion.status == Status::Ready));
 }
 
 #[test]

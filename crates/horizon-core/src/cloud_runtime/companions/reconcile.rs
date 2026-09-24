@@ -59,6 +59,7 @@ pub(super) fn run(
                     rows.remove(&alias);
                 }
             }
+            transport.release(&grant.target.cloud_id);
             continue;
         }
         match connect(store, state, &alias, &mut grant, transport) {
@@ -80,6 +81,7 @@ pub(super) fn run(
                 row.error = Some(error.to_string());
             }
         }
+        transport.release(&grant.target.cloud_id);
     }
     let rows: Vec<_> = rows.into_values().collect();
     let catalog = catalog(&state.owner.cloud_id, &rows);
