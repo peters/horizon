@@ -5,7 +5,7 @@ use rustix::fs::{AtFlags, Mode, OFlags, openat, renameat, unlinkat};
 #[cfg(unix)]
 use std::io::{Read, Write};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::File,
     path::{Path, PathBuf},
 };
 
@@ -17,33 +17,59 @@ pub(super) struct Directory {
 impl Directory {
     pub(super) fn open(path: &Path) -> Result<Self> {
         crate::session_store::require_directory_durability()?;
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-        }
         let directory = Self {
             path: path.to_owned(),
-            file: options.open(path)?,
+            file: Self::open_path(path)?,
         };
         directory.verify()?;
         Ok(directory)
     }
     fn verify(&self) -> Result<()> {
-        let path = fs::symlink_metadata(&self.path)?;
+        self.verify_with(|| {})
+    }
+    pub(super) fn verify_with(&self, checkpoint: impl FnOnce()) -> Result<()> {
         let opened = self.file.metadata()?;
-        if !path.is_dir() || !opened.is_dir() || self.path.canonicalize()? != self.path {
+        checkpoint();
+        let current = Self::open_path(&self.path)?.metadata()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if (current.dev(), current.ino()) != (opened.dev(), opened.ino()) {
+                return Err(Error::Ownership);
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (opened, current);
+            Err(Error::Ownership)
+        }
+    }
+    fn open_path(path: &Path) -> Result<File> {
+        if !path.is_absolute() {
             return Err(Error::Ownership);
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::MetadataExt;
-            if (path.dev(), path.ino()) != (opened.dev(), opened.ino()) {
-                return Err(Error::Ownership);
+            use std::path::Component;
+            let mut directory = File::open("/")?;
+            for component in path.components() {
+                let name = match component {
+                    Component::RootDir => continue,
+                    Component::Normal(name) => name,
+                    _ => return Err(Error::Ownership),
+                };
+                directory = File::from(
+                    openat(
+                        &directory,
+                        name,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                        Mode::empty(),
+                    )
+                    .map_err(std::io::Error::from)?,
+                );
             }
-            Ok(())
+            Ok(directory)
         }
         #[cfg(not(unix))]
         Err(Error::Ownership)

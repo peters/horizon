@@ -36,6 +36,20 @@ fn machine(value: u128) -> MachineReader {
     Box::new(move || serde_json::from_value(json!(uuid::Uuid::from_u128(value))).map_err(|_| Error::Machine))
 }
 
+fn open(root: &Path, vault: &MemoryVault) -> Result<Owner> {
+    Owner::open_with(root, Box::new(vault.clone()), machine(1))
+}
+
+fn interrupt_at(step: Boundary, expected: Boundary) -> Result<()> {
+    if step == expected { Err(Error::Journal) } else { Ok(()) }
+}
+
+fn fixture() -> (tempfile::TempDir, PathBuf, MemoryVault) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("allocation");
+    (temp, root, MemoryVault::default())
+}
+
 fn create(root: &Path, vault: &MemoryVault) -> Owner {
     Owner::create_with(
         root,
@@ -50,20 +64,15 @@ fn create(root: &Path, vault: &MemoryVault) -> Owner {
 
 #[test]
 fn exclusive_owner_reopens_the_exact_anchored_journal_and_signs() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("allocation");
-    let vault = MemoryVault::default();
+    let (_temp, root, vault) = fixture();
     let mut owner = create(&root, &vault);
-    assert!(matches!(
-        Owner::open_with(&root, Box::new(vault.clone()), machine(1)),
-        Err(Error::Busy)
-    ));
+    assert!(matches!(open(&root, &vault), Err(Error::Busy)));
     let binding = owner.binding().unwrap();
     let intent = inspect_intent(&binding);
     assert!(owner.sign(intent).unwrap().verify(&binding, b"{}").is_ok());
     owner.save(json!({"state":"stopped"})).unwrap();
     drop(owner);
-    let owner = Owner::open_with(&root, Box::new(vault), machine(1)).unwrap();
+    let owner = open(&root, &vault).unwrap();
     assert_eq!(owner.load().unwrap(), json!({"state":"stopped"}));
 }
 
@@ -86,19 +95,13 @@ fn copies_missing_registrations_and_rolled_back_same_path_journals_fail_closed()
     for file in [MARKER, JOURNAL, CANDIDATE] {
         std::fs::copy(root.join(file), copied.join(file)).unwrap();
     }
-    assert!(matches!(
-        Owner::open_with(&copied, Box::new(vault.clone()), machine(1)),
-        Err(Error::Ownership)
-    ));
+    assert!(matches!(open(&copied, &vault), Err(Error::Ownership)));
     assert!(matches!(
         Owner::open_with(&root, Box::<MemoryVault>::default(), machine(1)),
         Err(Error::MissingRegistration)
     ));
     journal::write(&root, JOURNAL, &old).unwrap();
-    assert!(matches!(
-        Owner::open_with(&root, Box::new(vault), machine(1)),
-        Err(Error::Journal)
-    ));
+    assert!(matches!(open(&root, &vault), Err(Error::Journal)));
 }
 
 #[test]
@@ -109,15 +112,11 @@ fn interrupted_updates_recover_only_the_registered_transition() {
         Boundary::Published,
         Boundary::Committed,
     ] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("allocation");
-        let vault = MemoryVault::default();
+        let (_temp, root, vault) = fixture();
         let mut owner = create(&root, &vault);
         assert!(
             owner
-                .save_with(json!({"state":"stopped"}), &mut |step| {
-                    if step == boundary { Err(Error::Journal) } else { Ok(()) }
-                })
+                .save_with(json!({"state":"stopped"}), &mut |step| interrupt_at(step, boundary))
                 .is_err()
         );
         assert!(matches!(owner.load(), Err(Error::Registration)));
@@ -127,12 +126,12 @@ fn interrupted_updates_recover_only_the_registered_transition() {
         if boundary == Boundary::Published {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).unwrap();
-            let blocked = Owner::open_with(&root, Box::new(vault.clone()), machine(1));
+            let blocked = open(&root, &vault);
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert!(blocked.is_err());
             assert!(Registration::read(&vault, &marker).unwrap().pending.is_some());
         }
-        let owner = Owner::open_with(&root, Box::new(vault), machine(1)).unwrap();
+        let owner = open(&root, &vault).unwrap();
         let expected = if boundary == Boundary::Candidate {
             "prepared"
         } else {
@@ -150,9 +149,7 @@ fn interrupted_initial_registration_never_adopts_an_existing_directory() {
         Boundary::Published,
         Boundary::Committed,
     ] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("allocation");
-        let vault = MemoryVault::default();
+        let (temp, root, vault) = fixture();
         assert!(
             Owner::create_with(
                 &root,
@@ -160,7 +157,7 @@ fn interrupted_initial_registration_never_adopts_an_existing_directory() {
                 json!({}),
                 Box::new(vault.clone()),
                 machine(1),
-                &mut |step| { if step == boundary { Err(Error::Journal) } else { Ok(()) } }
+                &mut |step| interrupt_at(step, boundary)
             )
             .is_err()
         );
@@ -175,7 +172,7 @@ fn interrupted_initial_registration_never_adopts_an_existing_directory() {
             )
             .is_err()
         );
-        let restored = Owner::open_with(&root, Box::new(vault), machine(1));
+        let restored = open(&root, &vault);
         if boundary == Boundary::Candidate {
             assert!(matches!(restored, Err(Error::MissingRegistration)));
         } else {
@@ -188,19 +185,11 @@ fn interrupted_initial_registration_never_adopts_an_existing_directory() {
 fn missing_or_conflicting_recovery_files_remain_fenced() {
     for file in [CANDIDATE, JOURNAL] {
         for corrupt in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
-            let root = temp.path().join("allocation");
-            let vault = MemoryVault::default();
+            let (_temp, root, vault) = fixture();
             let mut owner = create(&root, &vault);
             assert!(
                 owner
-                    .save_with(json!({"next":true}), &mut |step| {
-                        if step == Boundary::Pending {
-                            Err(Error::Journal)
-                        } else {
-                            Ok(())
-                        }
-                    })
+                    .save_with(json!({"next":true}), &mut |step| interrupt_at(step, Boundary::Pending))
                     .is_err()
             );
             drop(owner);
@@ -209,16 +198,14 @@ fn missing_or_conflicting_recovery_files_remain_fenced() {
             } else {
                 std::fs::remove_file(root.join(file)).unwrap();
             }
-            assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_err());
+            assert!(open(&root, &vault).is_err());
         }
     }
 }
 
 #[test]
 fn live_handle_rechecks_registration_machine_and_journal_before_signing() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("allocation");
-    let vault = MemoryVault::default();
+    let (_temp, root, vault) = fixture();
     let mut owner = create(&root, &vault);
     let binding = owner.binding().unwrap();
     let intent = inspect_intent(&binding);
@@ -245,12 +232,9 @@ fn restoring_a_current_copy_at_the_same_path_cannot_replace_the_live_lock() {
     for file in [MARKER, JOURNAL, CANDIDATE] {
         std::fs::copy(moved.join(file), root.join(file)).unwrap();
     }
-    assert!(matches!(
-        Owner::open_with(&root, Box::new(vault.clone()), machine(1)),
-        Err(Error::Busy)
-    ));
+    assert!(matches!(open(&root, &vault), Err(Error::Busy)));
     drop(owner);
-    assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_ok());
+    assert!(open(&root, &vault).is_ok());
 }
 
 struct FailingVault {
@@ -294,7 +278,7 @@ fn failed_and_lost_store_write_replies_fence_the_handle_and_reconcile_exactly() 
             assert!(matches!(owner.save(json!({"state":"stopped"})), Err(Error::Store)));
             assert!(matches!(owner.binding(), Err(Error::Registration)));
             drop(owner);
-            let restored = Owner::open_with(&root, Box::new(memory), machine(1)).unwrap();
+            let restored = open(&root, &memory).unwrap();
             let state = if fail_at == 1 && !after_write {
                 "prepared"
             } else {
@@ -308,9 +292,7 @@ fn failed_and_lost_store_write_replies_fence_the_handle_and_reconcile_exactly() 
 #[test]
 fn missing_lock_changed_public_identity_and_store_secrets_are_never_adopted() {
     for mutation in ["lock", "key", "marker", "version"] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("allocation");
-        let vault = MemoryVault::default();
+        let (_temp, root, vault) = fixture();
         let owner = create(&root, &vault);
         let mut registration = Registration::read(&vault, &owner.marker).unwrap();
         match mutation {
@@ -332,16 +314,14 @@ fn missing_lock_changed_public_identity_and_store_secrets_are_never_adopted() {
             _ => unreachable!(),
         }
         drop(owner);
-        assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_err());
+        assert!(open(&root, &vault).is_err());
     }
 }
 
 #[test]
 fn replacement_lock_cannot_authorize_a_second_owner_or_keep_the_old_handle_usable() {
     for symlink in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("allocation");
-        let vault = MemoryVault::default();
+        let (_temp, root, vault) = fixture();
         let mut owner = create(&root, &vault);
         let registration = Registration::read(&vault, &owner.marker).unwrap();
         let moved = registration.lock_path.with_extension("old");
@@ -351,39 +331,25 @@ fn replacement_lock_cannot_authorize_a_second_owner_or_keep_the_old_handle_usabl
         } else {
             std::fs::write(&registration.lock_path, b"").unwrap();
         }
-        assert!(matches!(
-            Owner::open_with(&root, Box::new(vault.clone()), machine(1)),
-            Err(Error::Ownership)
-        ));
+        assert!(matches!(open(&root, &vault), Err(Error::Ownership)));
         assert!(matches!(owner.binding(), Err(Error::Ownership)));
         assert!(matches!(
             owner.save(json!({"unauthorized":true})),
             Err(Error::Ownership)
         ));
         drop(owner);
-        assert!(matches!(
-            Owner::open_with(&root, Box::new(vault), machine(1)),
-            Err(Error::Ownership)
-        ));
+        assert!(matches!(open(&root, &vault), Err(Error::Ownership)));
     }
 }
 
 #[test]
 fn journal_artifacts_reject_links_and_special_files_before_reading_or_recovery() {
     for file in [MARKER, JOURNAL, CANDIDATE] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("allocation");
-        let vault = MemoryVault::default();
+        let (temp, root, vault) = fixture();
         let mut owner = create(&root, &vault);
         assert!(
             owner
-                .save_with(json!({"next":true}), &mut |step| {
-                    if step == Boundary::Pending {
-                        Err(Error::Journal)
-                    } else {
-                        Ok(())
-                    }
-                })
+                .save_with(json!({"next":true}), &mut |step| interrupt_at(step, Boundary::Pending))
                 .is_err()
         );
         drop(owner);
@@ -391,11 +357,11 @@ fn journal_artifacts_reject_links_and_special_files_before_reading_or_recovery()
         std::fs::rename(root.join(file), &external).unwrap();
         std::os::unix::fs::symlink(&external, root.join(file)).unwrap();
         assert!(journal::read(&root, file).is_err());
-        assert!(Owner::open_with(&root, Box::new(vault.clone()), machine(1)).is_err());
+        assert!(open(&root, &vault).is_err());
         std::fs::remove_file(root.join(file)).unwrap();
         let _socket = std::os::unix::net::UnixListener::bind(root.join(file)).unwrap();
         assert!(journal::read(&root, file).is_err());
-        assert!(Owner::open_with(&root, Box::new(vault), machine(1)).is_err());
+        assert!(open(&root, &vault).is_err());
     }
 }
 
@@ -415,8 +381,8 @@ fn signing_backend_wipes_keys_and_rejects_a_foreign_signature() {
 }
 
 #[test]
-fn live_owner_refuses_replaced_root_and_ancestor_directories() {
-    for ancestor in [false, true] {
+fn live_owner_refuses_directory_replacement_during_verification() {
+    for (ancestor, symlink) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = tempfile::tempdir().unwrap();
         let parent = temp.path().join("parent");
         std::fs::create_dir(&parent).unwrap();
@@ -436,18 +402,29 @@ fn live_owner_refuses_replaced_root_and_ancestor_directories() {
         let moved = temp.path().join("moved");
         let copied = temp.path().join("copied");
         let replaced = if ancestor { &parent } else { &root };
-        std::fs::rename(replaced, &moved).unwrap();
-        let source = if ancestor { moved.join("allocation") } else { moved };
-        let destination = if ancestor {
-            copied.join("allocation")
-        } else {
-            copied.clone()
-        };
-        std::fs::create_dir_all(&destination).unwrap();
-        for file in [MARKER, JOURNAL, CANDIDATE] {
-            std::fs::copy(source.join(file), destination.join(file)).unwrap();
-        }
-        std::os::unix::fs::symlink(&copied, replaced).unwrap();
+        assert!(
+            owner
+                .directory
+                .verify_with(|| {
+                    std::fs::rename(replaced, &moved).unwrap();
+                    let source = if ancestor { moved.join("allocation") } else { moved };
+                    let destination = if ancestor {
+                        copied.join("allocation")
+                    } else {
+                        copied.clone()
+                    };
+                    std::fs::create_dir_all(&destination).unwrap();
+                    for file in [MARKER, JOURNAL, CANDIDATE] {
+                        std::fs::copy(source.join(file), destination.join(file)).unwrap();
+                    }
+                    if symlink {
+                        std::os::unix::fs::symlink(&copied, replaced).unwrap();
+                    } else {
+                        std::fs::rename(&copied, replaced).unwrap();
+                    }
+                })
+                .is_err()
+        );
         assert!(owner.load().is_err());
         assert!(owner.binding().is_err());
         assert!(owner.sign(intent).is_err());
@@ -458,18 +435,13 @@ fn live_owner_refuses_replaced_root_and_ancestor_directories() {
 
 #[test]
 fn lock_nonce_changes_fence_even_an_unchanged_inode() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("allocation");
-    let vault = MemoryVault::default();
+    let (_temp, root, vault) = fixture();
     let owner = create(&root, &vault);
     let registration = Registration::read(&vault, &owner.marker).unwrap();
     std::fs::write(&registration.lock_path, [0; 16]).unwrap();
     assert!(matches!(owner.binding(), Err(Error::Ownership)));
     drop(owner);
-    assert!(matches!(
-        Owner::open_with(&root, Box::new(vault), machine(1)),
-        Err(Error::Ownership)
-    ));
+    assert!(matches!(open(&root, &vault), Err(Error::Ownership)));
 }
 
 #[test]
