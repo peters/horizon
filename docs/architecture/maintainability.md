@@ -474,7 +474,11 @@ the host coordinator, not the portable selection contract.
 `horizon-cloud` owns portable repository configuration, typed worker identities,
 RunPod REST lifecycle and the durable allocation-state protocol. Credentials are
 caller supplied. `runpod::volumes` owns CPU workspace-volume placement, allocation
-fencing, attachment verification and deletion; `runpod::stock` answers per-size CPU
+fencing, attachment verification and deletion. Its optional creation receipt records
+only a verified direct POST response in the same durable binding transition;
+legacy journals and lost-response reconciliation never acquire that evidence.
+The receipt alone does not prove current storage freshness or authorize bootstrap.
+`runpod::stock` answers per-size CPU
 stock for placement. `runpod::replacement` switches a verified, running worker to a
 new image digest through the pod update and observes which image of the pair the
 provider reports; it keeps no journal, so callers record intent first.

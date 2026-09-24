@@ -51,7 +51,7 @@ pub(super) fn expected(store: &Store, worker: &WorkerSpec) -> Result<Option<Volu
     match load(store, worker)? {
         None => Ok(None),
         Some(Record {
-            state: State::Bound { volume },
+            state: State::Bound { volume, .. },
             ..
         }) => Ok(Some(volume)),
         Some(_) => Err(Error::Invalid(
@@ -107,9 +107,7 @@ fn load_at(root: &std::path::Path, worker: &WorkerSpec) -> Result<Option<Record>
     {
         return Err(Error::Invalid("Workspace storage journal does not match this cloud"));
     }
-    if let State::Bound { volume } | State::Deleting { volume } = &record.state {
-        volume.verify(&record.spec)?;
-    }
+    record.state.verify(&record.spec)?;
     Ok(Some(record))
 }
 fn save(store: &Store, record: &Record) -> Result<()> {
@@ -180,18 +178,54 @@ mod tests {
             size: record.spec.size,
             data_center_id: record.spec.data_center_id.clone(),
         };
-        record.state = State::Bound { volume: volume.clone() };
+        record.state = State::Bound {
+            volume: volume.clone(),
+            creation: None,
+        };
         save(&store, &record).unwrap();
         assert_eq!(expected(&store, &record.worker).unwrap(), Some(volume.clone()));
         let mut wrong = volume;
         wrong.data_center_id = "different".into();
-        record.state = State::Bound { volume: wrong };
+        record.state = State::Bound {
+            volume: wrong,
+            creation: None,
+        };
         save(&store, &record).unwrap();
         assert!(expected(&store, &record.worker).is_err());
         record.state = State::Deleted;
         save(&store, &record).unwrap();
         assert!(!retained(&store, &record.worker).unwrap());
         assert!(expected(&store, &record.worker).is_err());
+    }
+    #[test]
+    fn reopened_journal_preserves_and_checks_creation_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut record = record();
+        let volume = Volume {
+            id: "synthetic-volume".into(),
+            name: record.spec.name(),
+            size: record.spec.size,
+            data_center_id: record.spec.data_center_id.clone(),
+        };
+        record.state = serde_json::from_value(serde_json::json!({
+            "state":"bound", "volume":volume,
+            "creation":{"version":1,"spec":record.spec,"volume":volume}
+        }))
+        .unwrap();
+        save(&store, &record).unwrap();
+        let reopened = load(&store, &record.worker).unwrap().unwrap();
+        assert_eq!(reopened.state, record.state);
+        assert!(reopened.state.creation_receipt(&record.spec).unwrap().is_some());
+        let mut changed = serde_json::to_value(&record).unwrap();
+        changed["state"]["creation"]["volume"]["id"] = serde_json::json!("another-volume");
+        std::fs::write(
+            store.root().join("workspace-volume.json"),
+            serde_json::to_vec(&changed).unwrap(),
+        )
+        .unwrap();
+        assert!(expected(&store, &record.worker).is_err());
+        assert!(validate_migration(store.root(), &record.worker).is_err());
     }
     #[test]
     fn removal_requires_storage_cleanup_even_without_a_live_worker() {
@@ -211,12 +245,18 @@ mod tests {
         }))
         .unwrap();
         for (operation, storage) in [
-            (CreateState::Prepared, State::Bound { volume: volume.clone() }),
+            (
+                CreateState::Prepared,
+                State::Bound {
+                    volume: volume.clone(),
+                    creation: None,
+                },
+            ),
             (
                 CreateState::Terminated {
                     worker_id: "worker1".into(),
                 },
-                State::Deleting { volume },
+                State::Deleting { volume, creation: None },
             ),
         ] {
             deployment.operation = operation;

@@ -81,11 +81,56 @@ pub enum State {
     Requested,
     Bound {
         volume: Volume,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        creation: Option<CreationReceipt>,
     },
     Deleting {
         volume: Volume,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        creation: Option<CreationReceipt>,
     },
     Deleted,
+}
+
+/// Evidence of a verified direct creation response, persisted with the binding.
+/// This is not proof of current storage freshness or permission to initialize it.
+/// Consumers must retain their own anchored intent, mount checks and one-shot
+/// bootstrap fence. Inspection and lost-response reconciliation never mint this.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CreationReceipt {
+    version: u32,
+    spec: Spec,
+    volume: Volume,
+}
+
+impl State {
+    /// # Errors
+    /// Rejects a binding or creation receipt that differs from the original specification.
+    pub fn verify(&self, spec: &Spec) -> Result<()> {
+        spec.validate()?;
+        if let Self::Bound { volume, creation } | Self::Deleting { volume, creation } = self {
+            volume.verify(spec)?;
+            if let Some(receipt) = creation
+                && (receipt.version != 1 || receipt.spec != *spec || receipt.volume != *volume)
+            {
+                return Err(CloudError::IdentityMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns recorded direct-create evidence only for an intact bound volume.
+    /// Absence on legacy or reconciled records must never be inferred away.
+    /// # Errors
+    /// Rejects changed specifications, identities and unsupported receipt versions.
+    pub fn creation_receipt(&self, spec: &Spec) -> Result<Option<&CreationReceipt>> {
+        self.verify(spec)?;
+        Ok(match self {
+            Self::Bound { creation, .. } => creation.as_ref(),
+            _ => None,
+        })
+    }
 }
 impl RunPod {
     /// Selects a data center with the worker's exact CPU size in stock and standard
@@ -137,10 +182,10 @@ impl RunPod {
         cancel: &Cancellation,
         mut persist: impl FnMut(&State) -> Result<()>,
     ) -> Result<Volume> {
-        spec.validate()?;
+        state.verify(spec)?;
         cancel.check()?;
         match state {
-            State::Bound { volume } => {
+            State::Bound { volume, .. } => {
                 volume.verify(spec)?;
                 let current = self.inspect_volume(&volume.id, cancel)?.ok_or(CloudError::Invalid(
                     "Workspace volume is missing; replacement is not automatic",
@@ -169,7 +214,14 @@ impl RunPod {
         }
         if let Some(volume) = matches.into_iter().next() {
             volume.verify(spec)?;
-            transition(state, State::Bound { volume: volume.clone() }, &mut persist)?;
+            transition(
+                state,
+                State::Bound {
+                    volume: volume.clone(),
+                    creation: None,
+                },
+                &mut persist,
+            )?;
             return Ok(volume);
         }
         if *state == State::Requested {
@@ -193,7 +245,19 @@ impl RunPod {
         };
         let volume: Volume = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
         volume.verify(spec)?;
-        transition(state, State::Bound { volume: volume.clone() }, &mut persist)?;
+        let creation = CreationReceipt {
+            version: 1,
+            spec: spec.clone(),
+            volume: volume.clone(),
+        };
+        transition(
+            state,
+            State::Bound {
+                volume: volume.clone(),
+                creation: Some(creation),
+            },
+            &mut persist,
+        )?;
         Ok(volume)
     }
 
@@ -207,15 +271,17 @@ impl RunPod {
         cancel: &Cancellation,
         mut persist: impl FnMut(&State) -> Result<()>,
     ) -> Result<()> {
-        spec.validate()?;
+        state.verify(spec)?;
         cancel.check()?;
         if *state == State::Requested {
             self.ensure_volume(spec, state, cancel, &mut persist)?;
         }
-        let volume = match state {
+        let (volume, creation) = match state {
             State::Prepared => return transition(state, State::Deleted, &mut persist),
             State::Deleted => return Ok(()),
-            State::Bound { volume } | State::Deleting { volume } => volume.clone(),
+            State::Bound { volume, creation } | State::Deleting { volume, creation } => {
+                (volume.clone(), creation.clone())
+            }
             State::Requested => return Err(CloudError::CreationUnresolved),
         };
         volume.verify(spec)?;
@@ -226,7 +292,14 @@ impl RunPod {
                     "Workspace volume is still attached to a worker; storage was not deleted",
                 ));
             }
-            transition(state, State::Deleting { volume: volume.clone() }, &mut persist)?;
+            transition(
+                state,
+                State::Deleting {
+                    volume: volume.clone(),
+                    creation,
+                },
+                &mut persist,
+            )?;
             match self.request("DELETE", &format!("/networkvolumes/{}", volume.id), None, cancel) {
                 Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(error) => return Err(error),

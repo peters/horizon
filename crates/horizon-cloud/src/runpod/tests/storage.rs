@@ -214,7 +214,10 @@ mod volumes {
             (200, json!([pod]).to_string()),
             (200, mounted_worker().to_string()),
         ]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         assert!(
             provider
                 .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
@@ -234,7 +237,10 @@ mod volumes {
             (404, String::new()),
             (200, pod.to_string()),
         ]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         assert!(
             provider
                 .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
@@ -257,7 +263,10 @@ mod volumes {
                 (204, String::new()),
                 (404, String::new()),
             ]);
-            let mut state = State::Bound { volume: volume() };
+            let mut state = State::Bound {
+                volume: volume(),
+                creation: None,
+            };
             provider
                 .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
                 .unwrap();
@@ -310,7 +319,9 @@ mod volumes {
             })
             .unwrap();
         task.join().unwrap();
-        assert_eq!(saved, vec![State::Requested, State::Bound { volume: volume() }]);
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[0], State::Requested);
+        assert!(saved[1].creation_receipt(&volume_spec()).unwrap().is_some());
         assert_eq!(state, saved[1]);
         assert!(requests.lock().unwrap()[1].starts_with("POST /networkvolumes "));
     }
@@ -391,7 +402,10 @@ mod volumes {
     #[test]
     fn missing_bound_storage_is_never_replaced() {
         let (provider, requests, task) = server(vec![(404, String::new())]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         assert!(
             provider
                 .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
@@ -410,7 +424,10 @@ mod volumes {
             (503, String::new()),
             (404, String::new()),
         ]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         assert!(
             provider
                 .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
@@ -444,7 +461,10 @@ mod volumes {
             let mut pod = worker(&spec());
             pod["networkVolume"] = attachment;
             let (provider, requests, task) = server(vec![(200, value()), (200, json!([pod]).to_string())]);
-            let mut state = State::Bound { volume: volume() };
+            let mut state = State::Bound {
+                volume: volume(),
+                creation: None,
+            };
             assert!(
                 provider
                     .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
@@ -467,7 +487,10 @@ mod volumes {
         let mut pod = worker(&spec());
         pod["networkVolume"] = json!({"id":volume().id});
         let (provider, requests, task) = server(vec![(200, value()), (200, json!([pod]).to_string())]);
-        let mut state = State::Bound { volume: volume() };
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
         assert!(
             provider
                 .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))

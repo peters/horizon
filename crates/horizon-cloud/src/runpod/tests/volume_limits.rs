@@ -88,7 +88,8 @@ fn boundary_sizes_can_allocate_and_bind() {
                 .unwrap(),
             expected
         );
-        assert_eq!(state, State::Bound { volume: expected });
+        assert!(matches!(&state, State::Bound { volume, creation: Some(_) } if volume == &expected));
+        state.verify(&spec).unwrap();
         task.join().unwrap();
         assert_eq!(requests.lock().unwrap().len(), 2);
         assert!(requests.lock().unwrap()[1].starts_with("POST /networkvolumes "));

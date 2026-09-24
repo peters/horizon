@@ -82,7 +82,7 @@ fn serverless_attachment_prevents_owned_volume_deletion() {
             (404, json!({}))
         }
     });
-    let mut state = State::Bound { volume };
+    let mut state = State::Bound { volume, creation: None };
     let original = state.clone();
     let mut persisted = Vec::new();
     let result = provider.terminate_volume(&volume_spec, &mut state, &Cancellation::default(), |next| {

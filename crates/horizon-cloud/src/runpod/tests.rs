@@ -1,6 +1,7 @@
 use super::*;
 mod inspection;
 mod placement;
+mod provenance;
 mod recovery;
 mod registry;
 mod replacement;
