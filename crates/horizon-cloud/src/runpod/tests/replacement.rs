@@ -138,6 +138,44 @@ fn definite_refusals_stay_distinguishable_from_uncertain_updates() {
 }
 
 #[test]
+fn a_failed_read_before_the_update_is_definite() {
+    let current = spec();
+    let next = next(&current);
+    let unsent = |error: &CloudError| {
+        matches!(
+            error,
+            CloudError::Invalid("Could not confirm the worker before switching its image; no update was sent")
+        ) && !may_have_applied(error)
+    };
+    // The server failed the read.
+    let (provider, requests, task) = server(vec![(503, "{}".into())]);
+    let error = provider
+        .replace_image(&current, &next, "worker1", &Cancellation::default())
+        .unwrap_err();
+    task.join().unwrap();
+    assert!(unsent(&error), "{error}");
+    assert_eq!(methods(&requests), [INSPECT]);
+    // The read timed out in transit.
+    let (mut provider, requests, task) = delayed_server(
+        vec![(200, pod(&current, &current).to_string())],
+        Some((0, Duration::from_millis(1500))),
+    );
+    provider.agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_millis(500)))
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .build(),
+    );
+    let error = provider
+        .replace_image(&current, &next, "worker1", &Cancellation::default())
+        .unwrap_err();
+    task.join().unwrap();
+    assert!(unsent(&error), "{error}");
+    assert_eq!(methods(&requests), [INSPECT]);
+}
+
+#[test]
 fn refuses_to_update_a_stopped_lost_or_unverified_worker() {
     let current = spec();
     let next = next(&current);

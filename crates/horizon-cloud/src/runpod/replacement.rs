@@ -55,7 +55,10 @@ impl RunPod {
         let body = update_body(current, next)?;
         current.validate()?;
         next.validate()?;
-        let worker = self.inspect(worker_id, cancel)?.ok_or(CloudError::WorkerLost)?;
+        let worker = self
+            .inspect(worker_id, cancel)
+            .map_err(before_update)?
+            .ok_or(CloudError::WorkerLost)?;
         identify(&worker, current, next)?;
         if worker.desired_status != "RUNNING" {
             return Err(CloudError::Invalid("Worker must be running to replace its image"));
@@ -103,6 +106,16 @@ impl RunPod {
         } else {
             Observed::Unsettled
         })
+    }
+}
+
+/// A read that fails before the update was sent leaves nothing uncertain, even when
+/// the read itself failed in transit or on the server.
+fn before_update(error: CloudError) -> CloudError {
+    if may_have_applied(&error) {
+        CloudError::Invalid("Could not confirm the worker before switching its image; no update was sent")
+    } else {
+        error
     }
 }
 
