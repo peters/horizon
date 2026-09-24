@@ -61,6 +61,8 @@ zbus-secret-service-keyring-store.workspace = true
 secret-service.workspace = true
 
 [dev-dependencies]
+rmcp.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt-multi-thread"] }
 horizon-browser = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 

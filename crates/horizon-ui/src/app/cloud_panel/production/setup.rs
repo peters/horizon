@@ -1,5 +1,6 @@
 //! Machine account form; filesystem work and key generation run outside rendering.
 mod fields;
+mod registry;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -14,6 +15,7 @@ enum Completion {
     Saved(Vec<horizon_core::cloud_runtime::setup::Agent>),
     Failed(String),
     Invalid(Box<Draft>, String),
+    Registry(std::result::Result<String, String>),
 }
 
 #[derive(Default)]
@@ -24,6 +26,43 @@ pub(in crate::app::cloud_panel) struct State {
     receiver: Option<Receiver<Completion>>,
     draft: Option<Box<Draft>>,
     error: Option<String>,
+    registry_status: Option<String>,
+    registry_cancel: Option<horizon_core::cloud_runtime::Cancellation>,
+}
+
+impl State {
+    fn render_fields(&mut self, ui: &mut egui::Ui) -> Option<horizon_core::cloud_runtime::registry::Action> {
+        let state = self;
+        let mut registry_action = None;
+        if let Some(draft) = &mut state.draft {
+            ui.add_enabled_ui(state.receiver.is_none(), |ui| {
+                if state.required_agents.is_some() {
+                    fields::render_profile(ui, draft, true);
+                } else {
+                    fields::render(ui, draft);
+                }
+                registry_action = registry::render(ui, draft);
+            });
+        }
+        if let Some(status) = &state.registry_status {
+            ui.label(status);
+        }
+        if let Some(error) = &state.error {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
+        if state.receiver.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Preparing cloud settings…");
+            });
+            if let Some(cancel) = &state.registry_cancel
+                && ui.button("Cancel registry operation").clicked()
+            {
+                cancel.cancel();
+            }
+        }
+        registry_action
+    }
 }
 
 impl HorizonApp {
@@ -124,12 +163,20 @@ impl HorizonApp {
             _ => return,
         };
         state.receiver = None;
+        state.registry_cancel = None;
         let agents = match &completion {
             Completion::Loaded(draft, _) => Some(draft.settings.default_agents.clone()),
             Completion::Saved(agents) => Some(agents.clone()),
             _ => None,
         };
         let proceed = match completion {
+            Completion::Registry(result) => {
+                match result {
+                    Ok(status) => state.registry_status = Some(status),
+                    Err(error) => state.error = Some(error),
+                }
+                false
+            }
             Completion::Loaded(draft, configured) => {
                 state.draft = Some(draft);
                 configured && state.continue_creation
@@ -172,6 +219,7 @@ impl HorizonApp {
         }
         let mut save = false;
         let mut cancel = false;
+        let mut registry_action = None;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let id = Id::new("cloud-accounts");
         let response = egui::Modal::new(id)
@@ -199,22 +247,7 @@ impl HorizonApp {
                 egui::ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 240.0).max(100.0))
                     .show(ui, |ui| {
-                        if let Some(draft) = &mut state.draft {
-                            if state.required_agents.is_some() {
-                                fields::render_profile(ui, draft, true);
-                            } else {
-                                fields::render(ui, draft);
-                            }
-                        }
-                        if let Some(error) = &state.error {
-                            ui.colored_label(theme::PALETTE_RED(), error);
-                        }
-                        if state.receiver.is_some() {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label("Preparing cloud settings…");
-                            });
-                        }
+                        registry_action = state.render_fields(ui);
                     });
                 ui.add_space(16.0);
                 ui.separator();
@@ -263,7 +296,61 @@ impl HorizonApp {
             }
         } else if save {
             self.save_cloud_accounts(ctx);
+        } else if let Some(action) = registry_action {
+            self.manage_cloud_registry(ctx, action);
         }
+    }
+
+    fn manage_cloud_registry(&mut self, ctx: &Context, action: horizon_core::cloud_runtime::registry::Action) {
+        let state = &mut self.cloud_prototype.production.setup;
+        let Some(draft) = &state.draft else { return };
+        if !draft.runpod_key.is_empty() {
+            state.error = Some("Clear or save the unsaved compute key before managing provider access.".into());
+            return;
+        }
+        let settings = draft.settings.clone();
+        let cancellation = horizon_core::cloud_runtime::Cancellation::default();
+        state.registry_cancel = Some(cancellation.clone());
+        state.error = None;
+        state.registry_status = None;
+        let (sender, receiver) = channel();
+        state.receiver = Some(receiver);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = horizon_core::cloud_runtime::registry::manage(&settings, &action, &cancellation)
+                .map(|status| {
+                    let state = match status.state {
+                        horizon_core::cloud_runtime::registry::State::Prepared => "Not prepared",
+                        horizon_core::cloud_runtime::registry::State::Requested { .. } => {
+                            "Creation uncertain; reconcile before retrying"
+                        }
+                        horizon_core::cloud_runtime::registry::State::Bound(_) => "Active",
+                        horizon_core::cloud_runtime::registry::State::Revoking(_) => {
+                            "Revocation pending; reconcile again"
+                        }
+                        horizon_core::cloud_runtime::registry::State::Revoked => "Revoked",
+                    };
+                    status.validation.map_or_else(
+                        || {
+                            format!(
+                                "{state}. Image access has not been validated. Configured pull expiry: {}.",
+                                status.configured_pull_expiry.as_deref().unwrap_or("Unknown")
+                            )
+                        },
+                        |validation| {
+                            format!(
+                                "{state}. Last verified image: {}. Scope: {}. Expiry: {}.",
+                                validation.image,
+                                validation.scope,
+                                validation.expires_at.as_deref().unwrap_or("Unknown")
+                            )
+                        },
+                    )
+                })
+                .map_err(|error| error.to_string());
+            let _ = sender.send(Completion::Registry(result));
+            ctx.request_repaint();
+        });
     }
 
     fn cancel_cloud_accounts(&mut self) {

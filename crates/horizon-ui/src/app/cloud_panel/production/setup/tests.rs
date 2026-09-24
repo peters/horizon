@@ -336,3 +336,89 @@ fn cancelling_workspace_credential_repair_returns_to_the_entered_title() {
     assert!(!app.cloud_prototype.production.launch.submitted);
     assert!(!app.cloud_prototype.production.launch.accounts_checked);
 }
+
+#[test]
+fn registry_setup_rotation_and_status_share_the_machine_policy() {
+    use horizon_core::cloud_runtime::{registry, settings::Settings};
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let root = temp.path().join("cloud");
+    app.cloud_prototype.root = Some(root.clone());
+    app.open_cloud_accounts(&ctx, false);
+    wait(&mut app, &ctx);
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    *draft.runpod_key = "synthetic-compute".into();
+    draft.registries.push(registry::draft::Draft {
+        repository: "registry.example/team/worker".into(),
+        pull_username: "reader".into(),
+        pull_secret: zeroize::Zeroizing::new("synthetic-pull".into()),
+        publish_username: "writer".into(),
+        publish_secret: zeroize::Zeroizing::new("synthetic-push".into()),
+        read_only_confirmed: true,
+        ..Default::default()
+    });
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    assert!(app.cloud_prototype.production.setup.error.is_none());
+    let saved = Settings::load(&root.join("settings.json")).unwrap();
+    let original = saved.registries.as_ref().unwrap().bindings[0].clone();
+    let serialized = std::fs::read_to_string(root.join("settings.json")).unwrap();
+    assert!(!serialized.contains("synthetic-pull"));
+    assert!(!serialized.contains("synthetic-push"));
+    app.open_cloud_accounts(&ctx, false);
+    wait(&mut app, &ctx);
+    *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "unsaved-compute".into();
+    app.manage_cloud_registry(
+        &ctx,
+        registry::Action::Revoke {
+            repository: original.repository.clone(),
+            generation: original.generation.clone(),
+        },
+    );
+    assert!(app.cloud_prototype.production.setup.receiver.is_none());
+    assert!(
+        app.cloud_prototype
+            .production
+            .setup
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("unsaved compute key")
+    );
+    assert_eq!(std::fs::read_to_string(root.join("settings.json")).unwrap(), serialized);
+    app.cloud_prototype
+        .production
+        .setup
+        .draft
+        .as_mut()
+        .unwrap()
+        .runpod_key
+        .clear();
+    app.manage_cloud_registry(
+        &ctx,
+        registry::Action::Status {
+            repository: original.repository.clone(),
+            generation: original.generation.clone(),
+        },
+    );
+    wait(&mut app, &ctx);
+    assert!(
+        app.cloud_prototype
+            .production
+            .setup
+            .registry_status
+            .as_ref()
+            .unwrap()
+            .starts_with("Not prepared")
+    );
+    let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
+    assert!(draft.registries[0].pull_secret.is_empty());
+    *draft.registries[0].pull_secret = "replacement-pull".into();
+    app.save_cloud_accounts(&ctx);
+    wait(&mut app, &ctx);
+    let rotated = Settings::load(&root.join("settings.json")).unwrap();
+    let rotated = &rotated.registries.as_ref().unwrap().bindings[0];
+    assert_ne!(original.generation, rotated.generation);
+    assert_eq!(rotated.retired, [original.generation]);
+}

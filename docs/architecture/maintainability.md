@@ -468,6 +468,13 @@ between local image checks and SSH readiness, including legacy full-image suppor
 and resolves the committed revision; the UI launch coordinator captures workspace
 identity and performs preparation while the user enters a title. Credential
 preflight runs off-thread and checks only profile-enabled agents.
+`registry` owns repository-scoped machine bindings, credential separation, private
+Docker authentication, issuer scope checks and pre-allocation image validation.
+Its `draft` shares setup with the UI/CLI; `store` persists generation/account fences;
+`management` shares validation, status, reconciliation and revocation with the
+standalone registry MCP adapter. `horizon-cloud::runpod::registry` owns only provider
+binding transitions and never decides credential policy. Publishing credentials
+stay in local temporary Docker configs; only verified pull material is transferred.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. UI modules render controls, consume progress and attach the

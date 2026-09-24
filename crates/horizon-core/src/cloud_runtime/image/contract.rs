@@ -138,6 +138,7 @@ mod tests {
             secrets: Vec::new(),
         };
         let images = Images {
+            isolated_registry: false,
             docker_host: Some(&host),
             docker_config: config.path(),
             runner: &runner,

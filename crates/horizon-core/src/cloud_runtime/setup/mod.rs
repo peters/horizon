@@ -29,6 +29,7 @@ pub struct Draft {
     pub anthropic_key: Zeroizing<String>,
     pub openai_auth: Authentication,
     pub anthropic_auth: Authentication,
+    pub registries: Vec<super::registry::draft::Draft>,
 }
 
 impl Draft {
@@ -57,6 +58,13 @@ impl Draft {
             profile_agents: None,
             openai_auth: authentication(settings.openai_api_key_file.as_ref()),
             anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
+            registries: settings.registries.as_ref().map_or_else(Vec::new, |config| {
+                config
+                    .bindings
+                    .iter()
+                    .map(super::registry::draft::Draft::from_binding)
+                    .collect()
+            }),
             settings,
             runpod_key: Zeroizing::new(String::new()),
             openai_key: Zeroizing::new(String::new()),
@@ -78,6 +86,9 @@ impl Draft {
     /// Requires compute access and credentials only for selected API-authenticated agents.
     pub fn validate(&self) -> Result<()> {
         self.settings.validate()?;
+        for registry in &self.registries {
+            registry.validate()?;
+        }
         if self.runpod_key.is_empty() && !self.settings.runpod_key_file.is_file() {
             return Err(Error::Invalid("Enter your RunPod API key"));
         }
@@ -146,6 +157,20 @@ impl Draft {
             self.settings.ssh_identity_file = write.ssh_identity()?;
         }
         settings::validate_ssh_identity(&self.settings.ssh_identity_file)?;
+        if !self.registries.is_empty() {
+            self.settings.registries = Some(super::registry::Config {
+                root: self
+                    .settings
+                    .registries
+                    .as_ref()
+                    .map_or_else(|| self.root.join("registry"), |config| config.root.clone()),
+                bindings: self
+                    .registries
+                    .iter()
+                    .map(|draft| draft.save(|name, value| write.secret(name, value)))
+                    .collect::<Result<Vec<_>>>()?,
+            });
+        }
         write.commit(&self.settings, self.original.as_deref())?;
         Ok(self.settings)
     }
@@ -184,6 +209,7 @@ fn defaults(root: &Path) -> Settings {
         docker_config: root.join("docker"),
         docker_host: None,
         registry_pull_auth_id: None,
+        registries: None,
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: vec!["NVIDIA RTX A6000".into()],
         data_centers: Vec::new(),

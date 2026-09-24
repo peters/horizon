@@ -16,6 +16,7 @@ fn legacy() -> Value {
     let value = json!({
         "version":1,"cloud_id":"legacy-cloud",
         "repository":std::env::temp_dir().join("synthetic-repository"),"revision":"committed-revision",
+        "registry_generation":"saved-registry-generation",
         "profile":profile,"stage":"Stopping","operation":{"state":"bound","worker_id":"worker1"},
         "spec":{
             "operation_id":"legacy-cloud","image_digest":format!("registry.example/worker@sha256:{}", "a".repeat(64)),
@@ -86,6 +87,7 @@ fn preallocation_and_absent_legacy_optionals_do_not_invent_provider_facts() {
     original["worker"] = Value::Null;
     original["sessions"] = json!([]);
     for field in [
+        "registry_generation",
         "source_ready",
         "ready_after_seconds",
         "ready_history",

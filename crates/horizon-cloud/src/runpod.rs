@@ -8,6 +8,7 @@ const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 
 pub mod flavors;
 pub mod recovery;
+pub mod registry;
 mod stock;
 pub mod volumes;
 

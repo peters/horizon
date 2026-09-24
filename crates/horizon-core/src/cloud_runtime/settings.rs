@@ -16,6 +16,8 @@ pub struct Settings {
     #[serde(default)]
     pub docker_host: Option<String>,
     pub registry_pull_auth_id: Option<String>,
+    #[serde(default)]
+    pub registries: Option<super::registry::Config>,
     pub cpu_flavors: Vec<String>,
     pub gpu_types: Vec<String>,
     #[serde(default)]
@@ -48,6 +50,9 @@ impl Settings {
     /// # Errors
     /// Validates bindings supplied through either the file or Rust interface.
     pub fn validate(&self) -> Result<()> {
+        if let Some(registries) = &self.registries {
+            registries.validate()?;
+        }
         if [&self.runpod_key_file, &self.ssh_identity_file, &self.docker_config]
             .iter()
             .any(|p| !p.is_absolute())

@@ -10,12 +10,16 @@ use std::{
 const TIMEOUT: Duration = Duration::from_mins(30);
 pub struct Images<'a> {
     pub docker_host: Option<&'a str>,
+    pub isolated_registry: bool,
     pub docker_config: &'a Path,
     pub runner: &'a Runner<'a>,
 }
 impl Images<'_> {
     fn docker(&self) -> Command {
         let mut cmd = Command::new("docker");
+        if self.isolated_registry {
+            cmd.env_remove("DOCKER_AUTH_CONFIG");
+        }
         cmd.arg("--config").arg(self.docker_config);
         if let Some(host) = self.docker_host {
             cmd.arg("--host").arg(host);
@@ -166,6 +170,49 @@ fn repository_name(image: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_registry_commands_isolate_auth_and_legacy_commands_preserve_it() {
+        let cancel = super::super::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        for isolated_registry in [false, true] {
+            let images = Images {
+                docker_host: None,
+                docker_config: Path::new("/synthetic/config"),
+                isolated_registry,
+                runner: &runner,
+            };
+            let command = images.docker();
+            let override_auth = command.get_envs().find(|(key, _)| *key == "DOCKER_AUTH_CONFIG");
+            if isolated_registry {
+                assert_eq!(override_auth, Some((std::ffi::OsStr::new("DOCKER_AUTH_CONFIG"), None)));
+            } else {
+                assert!(override_auth.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn build_repository_retains_registry_namespace_and_port() {
+        for (reference, expected) in [
+            ("registry.example.com/team/worker", "registry.example.com/team/worker"),
+            (
+                "registry.example.com:5000/team/worker:latest",
+                "registry.example.com:5000/team/worker",
+            ),
+            (
+                "registry.example.com/team/worker@sha256:abc",
+                "registry.example.com/team/worker",
+            ),
+            ("docker.io/team/worker:latest", "docker.io/team/worker"),
+        ] {
+            assert_eq!(repository_name(reference), expected);
+        }
+    }
+
     #[test]
     fn uploaded_identity_supports_both_docker_stores_and_rejects_changed_tags() {
         let manifest = serde_json::json!({"config": {"digest": "sha256:config"}});
