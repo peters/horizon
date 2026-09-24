@@ -13,9 +13,10 @@ import json, pathlib, re, subprocess, sys
 agent, package, version = sys.argv[1:]
 installed = json.loads(pathlib.Path('/usr/local/lib/node_modules', package, 'package.json').read_text())['version']
 reported = subprocess.run([agent, '--version'], check=True, stdout=subprocess.PIPE, text=True, timeout=60).stdout
-# The release must stand alone: 1.0.4 does not match 1.0.41 or 1.0.4-beta.
+# The release must stand alone: 1.0.4 does not match 1.0.41, 1.0.4-beta or the
+# tail of another version such as 1.0.0+1.0.4.
 if installed != version or not re.search(
-        r'(?:^|[^0-9A-Za-z.])v?' + re.escape(version) + r'(?![0-9A-Za-z+-]|\.[0-9A-Za-z])', reported):
+        r'(?:^|[^0-9A-Za-z.+-])v?' + re.escape(version) + r'(?![0-9A-Za-z+-]|\.[0-9A-Za-z])', reported):
     sys.exit(f'{package} {installed} reports {reported.strip()!r}; expected {version}')
 record = pathlib.Path('/etc/horizon-worker/agent-versions.json')
 versions = json.loads(record.read_text()) if record.exists() else {}
