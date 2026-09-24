@@ -1,5 +1,5 @@
 //! Storage journal shares the deployment lock but retains its own allocation fence.
-use super::{Deployment, Error, Result, Store};
+use super::{Deployment, Error, Event, Result, Store};
 use horizon_cloud::{
     Cancellation, CreateState, WorkerSpec,
     runpod::{
@@ -92,15 +92,27 @@ pub(in crate::cloud_runtime) fn release_deleted_journal(store: &Store, worker: &
     Ok(())
 }
 
-pub(super) fn terminate(provider: &RunPod, store: &Store, worker: &WorkerSpec, cancel: &Cancellation) -> Result<()> {
+pub(super) fn terminate(
+    provider: &RunPod,
+    store: &Store,
+    worker: &WorkerSpec,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
     let Some(mut record) = load(store, worker)? else {
         return Ok(());
     };
     let mut operation = record.state.clone();
-    provider.terminate_volume(&record.spec.clone(), &mut operation, cancel, |next| {
-        record.state = next.clone();
-        save(store, &record).map_err(|_| horizon_cloud::CloudError::Persistence)
-    })?;
+    provider.terminate_volume_with_progress(
+        &record.spec.clone(),
+        &mut operation,
+        cancel,
+        |next| {
+            record.state = next.clone();
+            save(store, &record).map_err(|_| horizon_cloud::CloudError::Persistence)
+        },
+        super::request_detail(emit),
+    )?;
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 //! Dedicated workspace storage with a durable fence around every allocation.
 use super::{RunPod, flavors::Flavor, json};
-use crate::{Cancellation, CloudError, NetworkVolume, Worker, WorkerSpec, valid_id};
+use crate::{Cancellation, CloudError, NetworkVolume, Progress, Worker, WorkerSpec, valid_id};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -269,11 +269,27 @@ impl RunPod {
         spec: &Spec,
         state: &mut State,
         cancel: &Cancellation,
+        persist: impl FnMut(&State) -> Result<()>,
+    ) -> Result<()> {
+        self.terminate_volume_with_progress(spec, state, cancel, persist, |_| {})
+    }
+
+    /// As `terminate_volume`, naming each provider request in `progress` before it is sent.
+    /// # Errors
+    /// As `terminate_volume`.
+    pub fn terminate_volume_with_progress(
+        &self,
+        spec: &Spec,
+        state: &mut State,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&State) -> Result<()>,
+        mut progress: impl FnMut(Progress),
     ) -> Result<()> {
         state.verify(spec)?;
         cancel.check()?;
         if *state == State::Requested {
+            // Reconciling a requested volume already reads the provider.
+            progress(Progress::ConfirmingVolume);
             self.ensure_volume(spec, state, cancel, &mut persist)?;
         }
         let (volume, creation) = match state {
@@ -285,9 +301,10 @@ impl RunPod {
             State::Requested => return Err(CloudError::CreationUnresolved),
         };
         volume.verify(spec)?;
+        progress(Progress::ConfirmingVolume);
         if let Some(current) = self.inspect_volume(&volume.id, cancel)? {
             current.verify(spec)?;
-            if self.volume_attached(&volume.id, cancel)? {
+            if self.volume_attached(&volume.id, cancel, &mut progress)? {
                 return Err(CloudError::Invalid(
                     "Workspace volume is still attached to a worker; storage was not deleted",
                 ));
@@ -300,10 +317,12 @@ impl RunPod {
                 },
                 &mut persist,
             )?;
+            progress(Progress::DeletingVolume);
             match self.request("DELETE", &format!("/networkvolumes/{}", volume.id), None, cancel) {
                 Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(error) => return Err(error),
             }
+            progress(Progress::ConfirmingVolumeDeletion);
             if self.inspect_volume(&volume.id, cancel)?.is_some() {
                 return Err(CloudError::Invalid(
                     "Workspace volume deletion is pending; reconcile cleanup again",
@@ -362,8 +381,11 @@ impl RunPod {
         Ok(current.image)
     }
 
-    fn volume_attached(&self, id: &str, cancel: &Cancellation) -> Result<bool> {
-        for worker in self.list(cancel)? {
+    fn volume_attached(&self, id: &str, cancel: &Cancellation, progress: &mut impl FnMut(Progress)) -> Result<bool> {
+        progress(Progress::CheckingAttachments);
+        let workers = self.list(cancel)?;
+        let count = workers.len();
+        for (index, worker) in workers.into_iter().enumerate() {
             if worker.network_volume.as_ref().is_some_and(|attached| {
                 attached
                     .id
@@ -375,6 +397,10 @@ impl RunPod {
             if !valid_id(&worker.id) {
                 return Err(CloudError::InvalidResponse);
             }
+            progress(Progress::InspectingMounts {
+                worker: index + 1,
+                workers: count,
+            });
             let url = format!("{}/pods/{}", self.api_endpoint, worker.id);
             let value = match self.request_url("GET", &url, None, cancel, None) {
                 Err(CloudError::Http(404, _)) => {

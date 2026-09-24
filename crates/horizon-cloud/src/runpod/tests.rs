@@ -449,15 +449,57 @@ fn termination_checks_identity_then_proves_absence() {
         (204, String::new()),
         (404, "{}".into()),
     ]);
-    let mut state = CreateState::Bound {
+    let bound = CreateState::Bound {
         worker_id: "worker1".into(),
     };
+    let mut state = bound.clone();
+    let mut reported = Vec::new();
     provider
-        .terminate(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+        .terminate_with_progress(
+            &spec,
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |progress| {
+                reported.push((progress, requests.lock().unwrap().len()));
+            },
+        )
         .unwrap();
     assert!(matches!(state, CreateState::Terminated { .. }));
     task.join().unwrap();
-    assert_eq!(requests.lock().unwrap().len(), 3);
+    // Each step is named before its request reaches the provider.
+    assert_eq!(
+        reported,
+        [
+            (Progress::ConfirmingWorker, 0),
+            (Progress::Terminating, 1),
+            (Progress::ConfirmingTermination, 2),
+        ]
+    );
+    let requests = requests.lock().unwrap();
+    assert!(requests[0].starts_with("GET /pods/worker1?"));
+    assert!(requests[1].starts_with("DELETE /pods/worker1 "));
+    assert!(requests[2].starts_with("GET /pods/worker1?"));
+    let (provider, _, task) = server(vec![(404, "{}".into())]);
+    let mut state = bound;
+    let mut reported = Vec::new();
+    provider
+        .terminate_with_progress(
+            &spec,
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |progress| {
+                reported.push(progress);
+            },
+        )
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(
+        reported,
+        [Progress::ConfirmingWorker],
+        "an absent worker is never reported as being deleted"
+    );
 }
 #[test]
 fn unsuitable_cpu_memory_fails_before_provider_io() {

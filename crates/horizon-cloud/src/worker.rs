@@ -372,13 +372,49 @@ impl Worker {
         Ok(())
     }
 }
+/// Deletion steps are reported before their request is sent, so a stalled
+/// request is named while it waits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
     Reconciling,
     Requesting,
     WorkerFound(String),
+    ConfirmingWorker,
+    /// The delete request cannot be recalled once sent.
     Terminating,
-    Terminated,
+    ConfirmingTermination,
+    ConfirmingVolume,
+    /// Listing the workers that could still mount the workspace volume.
+    CheckingAttachments,
+    /// Inspecting the mounts of listed worker `worker` of `workers`, counted from 1.
+    InspectingMounts {
+        worker: usize,
+        workers: usize,
+    },
+    DeletingVolume,
+    ConfirmingVolumeDeletion,
+}
+impl std::fmt::Display for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reconciling => f.write_str("Reconciling the worker request"),
+            Self::Requesting => f.write_str("Requesting a worker"),
+            Self::WorkerFound(id) => write!(f, "Found worker {id}"),
+            Self::ConfirmingWorker => f.write_str("Confirming worker identity"),
+            Self::Terminating => f.write_str("Requesting worker deletion"),
+            Self::ConfirmingTermination => f.write_str("Confirming worker removal"),
+            Self::ConfirmingVolume => f.write_str("Confirming workspace storage identity"),
+            Self::CheckingAttachments => f.write_str("Checking workspace storage attachments"),
+            Self::InspectingMounts { worker, workers } => {
+                write!(
+                    f,
+                    "Checking workspace storage attachments · worker {worker} of {workers}"
+                )
+            }
+            Self::DeletingVolume => f.write_str("Requesting workspace storage deletion"),
+            Self::ConfirmingVolumeDeletion => f.write_str("Confirming workspace storage removal"),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

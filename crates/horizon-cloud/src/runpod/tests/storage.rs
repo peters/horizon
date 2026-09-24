@@ -284,6 +284,58 @@ mod volumes {
         }
     }
 
+    #[test]
+    fn volume_deletion_names_each_request_before_sending_it() {
+        let listed = |id: &str| {
+            let mut pod = worker(&spec());
+            pod["id"] = json!(id);
+            pod
+        };
+        let unmounted = |id: &str| {
+            let mut current = mounted_worker();
+            current["id"] = json!(id);
+            current["mounts"] = json!({});
+            current
+        };
+        let (provider, requests, task) = server(vec![
+            (200, value()),
+            (200, json!([listed("worker1"), listed("worker2")]).to_string()),
+            (200, unmounted("worker1").to_string()),
+            (200, unmounted("worker2").to_string()),
+            (204, String::new()),
+            (404, String::new()),
+        ]);
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
+        let mut reported = Vec::new();
+        provider
+            .terminate_volume_with_progress(
+                &volume_spec(),
+                &mut state,
+                &Cancellation::default(),
+                |_| Ok(()),
+                |progress| reported.push((progress, requests.lock().unwrap().len())),
+            )
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(state, State::Deleted);
+        // Each step is named before its request reaches the provider.
+        assert_eq!(
+            reported,
+            [
+                (Progress::ConfirmingVolume, 0),
+                (Progress::CheckingAttachments, 1),
+                (Progress::InspectingMounts { worker: 1, workers: 2 }, 2),
+                (Progress::InspectingMounts { worker: 2, workers: 2 }, 3),
+                (Progress::DeletingVolume, 4),
+                (Progress::ConfirmingVolumeDeletion, 5),
+            ]
+        );
+        assert!(requests.lock().unwrap()[4].starts_with("DELETE /networkvolumes/volume1 "));
+    }
+
     fn volume_spec() -> Spec {
         Spec {
             operation_id: spec().operation_id,
@@ -356,6 +408,27 @@ mod volumes {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn reconciling_a_requested_volume_is_named_before_its_request() {
+        let (provider, requests, task) = server(vec![(200, "[]".into())]);
+        let mut state = State::Requested;
+        let mut reported = Vec::new();
+        assert!(
+            provider
+                .terminate_volume_with_progress(
+                    &volume_spec(),
+                    &mut state,
+                    &Cancellation::default(),
+                    |_| Ok(()),
+                    |progress| reported.push((progress, requests.lock().unwrap().len())),
+                )
+                .is_err()
+        );
+        task.join().unwrap();
+        assert_eq!(reported, [(Progress::ConfirmingVolume, 0)]);
+        assert_eq!(state, State::Requested);
     }
 
     #[test]

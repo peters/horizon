@@ -85,10 +85,17 @@ fn serverless_attachment_prevents_owned_volume_deletion() {
     let mut state = State::Bound { volume, creation: None };
     let original = state.clone();
     let mut persisted = Vec::new();
-    let result = provider.terminate_volume(&volume_spec, &mut state, &Cancellation::default(), |next| {
-        persisted.push(next.clone());
-        Ok(())
-    });
+    let mut reported = Vec::new();
+    let result = provider.terminate_volume_with_progress(
+        &volume_spec,
+        &mut state,
+        &Cancellation::default(),
+        |next| {
+            persisted.push(next.clone());
+            Ok(())
+        },
+        |progress| reported.push(progress),
+    );
     stop.send(()).unwrap();
     let requests = task.join().unwrap();
     assert!(matches!(
@@ -99,6 +106,11 @@ fn serverless_attachment_prevents_owned_volume_deletion() {
     ));
     assert_eq!(state, original);
     assert!(persisted.is_empty());
+    assert_eq!(
+        reported,
+        [Progress::ConfirmingVolume, Progress::CheckingAttachments],
+        "refused storage never reports a deletion request"
+    );
     assert!(requests.iter().all(|request| !request.starts_with("DELETE ")));
 }
 
