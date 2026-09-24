@@ -241,10 +241,15 @@ class RetentionTests(unittest.TestCase):
                 self.assertNotIn(b'x', retained)
 
     def test_requested_release_must_be_a_plain_version(self):
-        for version in ['latest', '1.2', '0.156.1 --tag x', '../0.156.1']:
+        for version in ['latest', '1.2', '0.156.1 --tag x', '../0.156.1', '01.2.3', '1.2.3-01', '1.2.3-a..b', '1.2.3+']:
             with self.subTest(version), self.assertRaises(SystemExit):
                 self.retain_sources(version)
             self.assertEqual(self.git, [])
+
+    def test_release_versions_match_horizons_semantic_version_rules(self):
+        for version in ['0.156.1', '1.0.0-rc.1', '1.0.0-0a', '0.156.1+build.7', '1.0.0-x.7+001']:
+            with self.subTest(version):
+                self.assertTrue(retain.VERSION.fullmatch(version))
 
 
 if __name__ == '__main__':

@@ -55,7 +55,12 @@ RIPGREP_MANIFEST = 'scripts/codex_package/rg'
 ZSH_WORKFLOW = '.github/workflows/rust-release-zsh.yml'
 LAYOUT = (VOICE_SOURCES, LIBCAP_SCRIPT, RIPGREP_MANIFEST, ZSH_WORKFLOW, *TREE_NOTICES)
 
-VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?')
+# Semantic Versioning 2.0.0, as Horizon's release lookup accepts it: no leading zeros
+# in numeric core or pre-release identifiers, no empty identifiers.
+VERSION = re.compile(
+    r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    r'(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+    r'(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?')
 COMMIT = re.compile(r'[0-9a-f]{40}')
 SHA256 = re.compile(r'[0-9a-f]{64}')
 
