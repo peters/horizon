@@ -1,6 +1,7 @@
 //! Shared identity and placement types for host and worker coordination.
 //! These records do not authorize provider calls or enable worker sharing.
 #![forbid(unsafe_code)]
+pub mod bootstrap;
 mod identity;
 mod placement;
 pub mod signed;

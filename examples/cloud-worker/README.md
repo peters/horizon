@@ -301,3 +301,29 @@ The source-import contract requires Python's `hashlib.file_digest` and safe
 distribution images must supply compatible APIs before use. The worker check
 rejects missing APIs during local image validation, before allocating compute.
 A pinned GPU base does not by itself satisfy this runtime contract.
+
+### Experimental allocation bootstrap recovery
+
+`horizon-cloud-worker recover-allocation` is a Linux recovery-only command for
+an existing pre-admission bootstrap at `/workspace/.horizon-allocation`. It accepts
+one bounded JSON object on stdin, with `message` and `payload` strings preserving
+the exact signed request bytes, and returns a versioned recovery receipt on stdout.
+The signed bootstrap payload must be `{"action":"recover","token":"<saved-token>"}`.
+Use the same persisted operation and exact payload for every uncertain retry.
+
+The command requires an existing private directory and allocation lock, a pinned
+bootstrap record, matching immutable `HORIZON_WORKER_STARTUP`, the original
+`HORIZON_CLOUD_OPERATION`, matching provider runtime pod/volume/data-center IDs,
+and an actual `/workspace` mount. None of these alone proves storage freshness.
+It can complete only a matching initializing record and revision-zero empty
+manifest; initialized state requires that manifest to remain intact. It rejects
+missing, corrupt, conflicting or admitted membership instead of resetting it.
+There is no path override, initialize action, controller enrollment or fresh-store
+flag. Error output does not include request data.
+
+This command is not invoked by the existing entrypoint and does not advertise
+shared-worker support. There is no production creator of these bootstrap records
+yet. First initialization still requires qualified provider/storage provenance
+and an anchored, consumed host permission. Shared membership, source/session/tool
+isolation and UI/CLI/MCP integration remain unfinished under issue #805. Native
+provider-volume locking and durability must be qualified before activation.
