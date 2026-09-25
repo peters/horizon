@@ -73,6 +73,8 @@ impl ServerHandler for Server {
     ) -> impl Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> {
         std::future::ready(Ok(rmcp::model::ListToolsResult {
             tools: Self::tool_router().list_all(),
+            ttl_ms: Some(0),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
             ..Default::default()
         }))
     }
@@ -116,5 +118,55 @@ mod tests {
         let tools = Server::tool_router().list_all();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].input_schema.get("type"), Some(&serde_json::json!("object")));
+    }
+    #[tokio::test]
+    async fn discovery_catalog_has_required_cache_metadata() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (client, transport) = tokio::io::duplex(64 * 1024);
+        let task = tokio::spawn(async move {
+            Server {
+                settings: std::path::PathBuf::from("unused-settings.json"),
+            }
+            .serve(transport)
+            .await
+            .expect("start server")
+            .waiting()
+            .await
+            .expect("server exit");
+        });
+        let (input, mut output) = tokio::io::split(client);
+        let mut input = BufReader::new(input);
+        for (id, method) in [(1, "server/discover"), (2, "tools/list")] {
+            let request = serde_json::json!({
+                "jsonrpc": "2.0", "id": id, "method": method,
+                "params": {"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }}
+            });
+            output
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .expect("write request");
+            let mut line = String::new();
+            tokio::time::timeout(std::time::Duration::from_secs(5), input.read_line(&mut line))
+                .await
+                .expect("response deadline")
+                .expect("read response");
+            let response: serde_json::Value = serde_json::from_str(&line).expect("response JSON");
+            assert!(response.get("error").is_none(), "{response}");
+            if method == "tools/list" {
+                assert_eq!(response["result"]["resultType"], "complete");
+                assert_eq!(response["result"]["ttlMs"], 0);
+                assert_eq!(response["result"]["cacheScope"], "private");
+                assert_eq!(response["result"]["tools"].as_array().map(Vec::len), Some(1));
+            }
+        }
+        drop(output);
+        drop(input);
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("shutdown deadline")
+            .expect("server task");
     }
 }

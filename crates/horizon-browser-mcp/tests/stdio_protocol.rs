@@ -80,6 +80,36 @@ fn stdio_negotiates_handshake_protocols_without_leaking_private_endpoints() {
     }
 }
 
+#[test]
+fn discovery_tool_catalog_is_valid_for_per_request_protocol_clients() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start(home.path());
+    let meta = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
+    });
+    let discovery = process.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+        "params": {"_meta": meta}
+    }));
+    assert!(discovery.get("error").is_none(), "{discovery}");
+    let tools = process.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list",
+        "params": {"_meta": meta}
+    }));
+    assert_eq!(tools["result"]["resultType"], "complete");
+    assert_eq!(tools["result"]["ttlMs"], 0);
+    assert_eq!(tools["result"]["cacheScope"], "private");
+    assert_listed_tools_keep_the_browser_contract(&tools);
+    let list = process.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"_meta": meta, "name": "browser_list", "arguments": {}}
+    }));
+    assert_eq!(list["result"]["isError"], false);
+    assert_eq!(list["result"]["structuredContent"]["panels"], json!([]));
+    process.close();
+}
+
 fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
     let home = tempfile::tempdir().expect("isolated home");
     let mut process = McpProcess::start(home.path());
