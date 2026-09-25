@@ -8,6 +8,8 @@ mod keys;
 #[cfg(target_os = "linux")]
 mod membership;
 #[cfg(target_os = "linux")]
+mod namespaces;
+#[cfg(target_os = "linux")]
 mod recovery;
 #[cfg(target_os = "linux")]
 mod runtime;
@@ -51,14 +53,14 @@ pub(super) fn initialize(abandon: bool) -> io::Result<()> {
     }
 }
 
-pub(super) fn membership(cancel: bool) -> io::Result<()> {
+pub(super) fn membership(action: horizon_cloud_protocol::signed::Action) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
-        membership::run(cancel)
+        membership::run(action)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = cancel;
+        let _ = action;
         Err(io::Error::other(
             "Project reservations require a qualified Linux worker",
         ))

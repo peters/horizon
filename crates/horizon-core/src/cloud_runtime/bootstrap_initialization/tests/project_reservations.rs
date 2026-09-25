@@ -1,3 +1,4 @@
+mod namespaces;
 use super::*;
 use crate::cloud_runtime::project_reservations::{
     self as reservations, Change, Error as ReservationError, Reservation,

@@ -1,3 +1,4 @@
+mod namespaces;
 use super::*;
 use crate::bootstrap::{
     membership::{mutate, startup},

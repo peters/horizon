@@ -1,7 +1,7 @@
 //! Reservation mutations retain the allocation lock across authentication, probe
-//! and durable publication. They never create or remove project resources.
+//! and durable publication. Namespace preparation creates only private directories.
 use super::{
-    inspection,
+    inspection, namespaces,
     recovery::{BOOTSTRAP, Bootstrap, MANIFEST, Phase, ROOT, decode, read_request},
     runtime::Runtime,
     store::{Publication, Store, invalid},
@@ -17,18 +17,13 @@ use std::{
     path::Path,
 };
 
-pub(super) fn run(cancel: bool) -> io::Result<()> {
+pub(super) fn run(action: Action) -> io::Result<()> {
     if std::env::args().len() != 2 {
         return Err(invalid());
     }
     let request = read_request(io::stdin().lock())?;
     let store = Store::open(Path::new(ROOT))?;
     let runtime = Runtime::captured()?;
-    let action = if cancel {
-        Action::RemoveProject
-    } else {
-        Action::AttachProject
-    };
     let receipt = mutate(&store, &runtime, &request, action, inspection::probe, &mut |_| Ok(()))?;
     serde_json::to_writer(io::stdout().lock(), &receipt)?;
     io::stdout().lock().write_all(b"\n")
@@ -38,7 +33,8 @@ pub(super) fn startup(store: &Store, bootstrap: &Bootstrap) -> io::Result<()> {
     if bootstrap.phase != Phase::Initialized {
         return bootstrap.empty(store);
     }
-    load(store, bootstrap).map(|_| ())
+    let (_, manifest) = load(store, bootstrap)?;
+    namespaces::validate(store, &manifest)
 }
 
 fn load(store: &Store, bootstrap: &Bootstrap) -> io::Result<(Vec<u8>, Manifest)> {
@@ -85,6 +81,18 @@ pub(super) fn mutate(
     probe: impl FnOnce(&Capabilities) -> io::Result<()>,
     checkpoint: &mut impl FnMut(Publication) -> io::Result<()>,
 ) -> io::Result<Receipt> {
+    mutate_with(store, runtime, request, action, probe, checkpoint, &mut |_| Ok(()))
+}
+
+pub(super) fn mutate_with(
+    store: &Store,
+    runtime: &Runtime,
+    request: &RecoveryRequest,
+    action: Action,
+    probe: impl FnOnce(&Capabilities) -> io::Result<()>,
+    checkpoint: &mut impl FnMut(Publication) -> io::Result<()>,
+    namespace_checkpoint: &mut impl FnMut(namespaces::Boundary) -> io::Result<()>,
+) -> io::Result<Receipt> {
     let encoded = store.read(BOOTSTRAP)?.ok_or_else(invalid)?;
     let bootstrap: Bootstrap = decode(&encoded)?;
     bootstrap.validate(store, runtime)?;
@@ -100,12 +108,16 @@ pub(super) fn mutate(
         return Err(invalid());
     }
     let verify = || -> io::Result<()> {
+        if matches!(payload, Request::Cancel {}) {
+            namespaces::require_settled(store, &manifest, &receipt.identity)?;
+        }
         bootstrap.validate(store, runtime)?;
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
             return Err(invalid());
         }
         Ok(())
     };
+    verify()?;
     let next_bytes = if next.revision == manifest.revision {
         original.clone()
     } else {
@@ -125,6 +137,20 @@ pub(super) fn mutate(
     verify()?;
     store.sync(BOOTSTRAP)?;
     store.sync(MANIFEST)?;
+    verify()?;
+    if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {
+        return Err(invalid());
+    }
+    if matches!(payload, Request::PrepareNamespace {}) {
+        namespaces::ensure(store, &next, &receipt, &mut |boundary| {
+            namespace_checkpoint(boundary)?;
+            verify()?;
+            if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {
+                return Err(invalid());
+            }
+            Ok(())
+        })?;
+    }
     verify()?;
     if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {
         return Err(invalid());

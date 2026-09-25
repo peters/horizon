@@ -30,15 +30,20 @@ fn main() -> std::process::ExitCode {
         Some("configure-agent-tools") => configuration::run(),
         Some("recover-allocation") => bootstrap::run(),
         Some("inspect-allocation") => bootstrap::inspect(),
-        Some("reserve-project") => bootstrap::membership(false),
-        Some("cancel-project-reservation") => bootstrap::membership(true),
+        Some("prepare-project-namespace") => {
+            bootstrap::membership(horizon_cloud_protocol::signed::Action::ReconcileProject)
+        }
+        Some("reserve-project") => bootstrap::membership(horizon_cloud_protocol::signed::Action::AttachProject),
+        Some("cancel-project-reservation") => {
+            bootstrap::membership(horizon_cloud_protocol::signed::Action::RemoveProject)
+        }
         Some("companion-control") => companions::run(),
         Some("companions") => companion_tools::run(),
         Some("initialize-allocation") => bootstrap::initialize(false),
         Some("abandon-bootstrap") => bootstrap::initialize(true),
         Some("prepare-allocation-ssh") => bootstrap::prepare(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
+            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|prepare-project-namespace|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
         )),
     };
     match result {
