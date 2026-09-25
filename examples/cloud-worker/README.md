@@ -422,3 +422,48 @@ The actual checker runs against a synthetic shell-only image inventory and real
 locally available base tools; this is not qualification of a deployable image.
 No provider resources are created. Evidence directories are private and each run
 removes its task SSH private keys and closes all fixture connections.
+
+### Durable project reservations (low-level Linux commands)
+
+After version-2 initialization and anchored recovery, `reserve-project` accepts a
+signed project-scoped `AttachProject` with a typed `reserve` payload containing
+selected capabilities and explicit application `ports`. The installed capability
+checker must pass before first publication. `cancel-project-reservation` accepts
+a signed `RemoveProject` with `{"action":"cancel"}`. Both commands read the same
+bounded stdin envelope as bootstrap and require the pinned controller, immutable
+project identity and current expected manifest revision.
+
+These commands reserve logical names and resources only: `attaching` is never
+active or provisioning permission. The canonical namespace is `project-<UUID>`.
+They create no source trees, project homes, credentials, tools, processes, routes
+or provider resources. Cancellation records a permanent `removed` tombstone and
+releases only logical application-port and desktop reservations. Provisioning,
+full removal, host admission coordination and UI/CLI/MCP activation remain future
+work. The allocation lock covers authentication, capability probing and atomic
+manifest publication; all retained transitions carry verifiable signed history.
+
+Only `trusted_shared` may reserve multiple identities. A `dedicated` allocation
+retains its first project identity even after cancellation. Project and cloud IDs
+cannot be reused. Each request permits at most 16 application ports; privileged
+ports, 5900–6099 (VNC/X11) and 47280 (worker control) are unavailable. Live projects
+cannot share reserved ports or the exclusive desktop. Remote-browser local ports
+must be a subset of the project's application ports. These are logical conflict
+checks, not OS resource quotas or demonstrated application readiness.
+
+State retains at most 32 project identities and 64 mutations without eviction.
+The 64-KiB manifest limit can be reached earlier. Every live reservation reserves
+4 KiB for its eventual cancellation mutation; cancellation's complete encoded
+mutation must fit that bound (canonical `cancel` requests do). The worker stores
+canonical signed-message encoding while preserving authenticated payload bytes.
+An exact successful retry returns historical evidence without rechecking installed
+capabilities. A changed operation, stale revision, or attach retry after terminal
+cancellation fails. On uncertain publication, retry the same signed request;
+acknowledgement waits for file and directory synchronization.
+
+Cold SSH startup validates populated manifests and reinstalls the retained host
+key. Initialize, Recover, Abandon and pre-admission inspection remain fenced to
+empty revision-zero state. Even an allocation with only tombstones cannot use
+pre-admission cleanup; worker-wide deletion needs a future transition contract.
+The local `scripts/cloud-initialization-smoke.py --scenario reservations` lane
+uses the real worker/checker over SSH with synthetic provider identities. It does
+not qualify a deployed image, actual provider execution or physical power loss.

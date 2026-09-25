@@ -1,3 +1,4 @@
+mod membership;
 use super::super::recovery::{MANIFEST, recover};
 use super::*;
 use horizon_cloud_protocol::{

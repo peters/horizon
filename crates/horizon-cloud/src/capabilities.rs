@@ -96,6 +96,32 @@ impl Default for Capabilities {
 }
 
 impl Capabilities {
+    /// # Errors
+    /// Rejects invalid remote-browser target names and local ports.
+    pub fn validate(&self) -> Result<(), crate::ProfileError> {
+        if let Some(browserstack) = &self.browserstack
+            && (browserstack.provider.is_empty()
+                || browserstack.provider.len() > 64
+                || !browserstack
+                    .provider
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                || browserstack.targets.len() > 16
+                || browserstack.targets.iter().any(|name| {
+                    name.is_empty()
+                        || name.len() > 64
+                        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                })
+                || browserstack.local_ports.contains(&0)
+                || browserstack.local_ports.len() > 16)
+        {
+            return Err(crate::ProfileError::Invalid(
+                "BrowserStack requires named targets and valid worker-local ports",
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn browser_tools(&self) -> bool {
         !self.browsers.is_empty() || self.browserstack.is_some()
