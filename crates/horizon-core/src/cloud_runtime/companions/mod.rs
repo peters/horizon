@@ -64,6 +64,26 @@ pub struct Snapshot {
     pub notice: Option<String>,
 }
 
+/// Persist explicit unchecks without settings lookup or remote reconciliation.
+/// The caller must first wait for its earlier selection jobs to finish.
+///
+/// # Errors
+/// Refuses conflicting controllers, corrupt journals and failed durable writes.
+pub fn persist_deselections(root: &std::path::Path, owner: &Owner, aliases: &[String]) -> Result<()> {
+    let journal = journal::Store::open(root, owner)?;
+    let mut state = journal.load()?;
+    // Ownership only changes after all previous grants have been removed.
+    if state.owner != *owner {
+        return Ok(());
+    }
+    for alias in aliases {
+        if let Some(grant) = state.grants.get_mut(alias) {
+            grant.selected = false;
+        }
+    }
+    journal.save(&state)
+}
+
 /// # Errors
 /// Refuses malformed ownership, conflicting controllers and corrupt journals before SSH changes.
 pub fn refresh(request: &Request, cancel: &Cancellation) -> Result<Snapshot> {

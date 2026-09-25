@@ -1,11 +1,29 @@
 //! Background jobs keep repository, settings, and SSH work off the render path.
 use super::{Action, CloudGroups, Job, Owner, Snapshot};
 use horizon_core::cloud_runtime::{self, Cancellation, companions, settings::Settings};
-use std::{path::PathBuf, sync::mpsc::channel};
+use std::{
+    path::PathBuf,
+    sync::mpsc::{Receiver, channel},
+};
 
 pub(super) struct Outcome {
     pub snapshot: Option<Snapshot>,
     pub error: Option<String>,
+}
+
+pub(super) fn save_deselections(
+    root: PathBuf,
+    owner: Owner,
+    aliases: Vec<String>,
+    ctx: egui::Context,
+) -> Receiver<Result<(), String>> {
+    let (sender, receiver) = channel();
+    std::thread::spawn(move || {
+        let result = companions::persist_deselections(&root, &owner, &aliases).map_err(|error| error.to_string());
+        let _ = sender.send(result);
+        ctx.request_repaint();
+    });
+    receiver
 }
 
 pub(super) fn start(root: PathBuf, owner: Owner, groups: CloudGroups, action: Action, ctx: egui::Context) -> Job {

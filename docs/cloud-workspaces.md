@@ -399,3 +399,10 @@ retiring their source cloud. Changing the workspace, declaration, target worker,
 or initial revision requires cleanup and explicit selection again. These clouds
 share trusted shell access; this is not credential isolation. Both workers need
 an image containing the updated companion helper and rsync.
+
+When closing, Horizon waits for earlier companion jobs and durably saves queued
+unchecks locally. This save does not require provider settings or reachable
+workers; remote cleanup resumes when the session is opened again. If the local
+journal cannot be saved, shutdown displays the error and retries instead of
+discarding the uncheck. The fallback exit path also waits for that save, so a
+persistent disk or journal-lock failure can keep the process alive until repaired.

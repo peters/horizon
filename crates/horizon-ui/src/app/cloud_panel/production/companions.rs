@@ -44,6 +44,7 @@ struct Entry {
     snapshot: Option<Snapshot>,
     error: Option<String>,
     job: Option<Job>,
+    saving: Option<Receiver<Result<(), String>>>,
     pending: Option<Action>,
     selecting: BTreeSet<String>,
     clearing: BTreeSet<String>,
@@ -70,6 +71,7 @@ impl Entry {
             snapshot: None,
             error: None,
             job: None,
+            saving: None,
             pending: None,
             selecting: BTreeSet::new(),
             clearing: BTreeSet::new(),
@@ -141,6 +143,25 @@ impl Entry {
         }
     }
 
+    fn poll_save(&mut self) {
+        let Some(receiver) = &self.saving else { return };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("Companion save ended without a result".into()),
+        };
+        self.saving = None;
+        match result {
+            // Shutdown accepts no further checkbox actions.
+            Ok(()) => self.clearing.clear(),
+            Err(error) => {
+                tracing::error!(%error, "cannot finish shutdown until companion removals are saved");
+                self.error = Some(error);
+                self.due = Instant::now() + Duration::from_secs(1);
+            }
+        }
+    }
+
     fn retire(&mut self) -> Option<Self> {
         let mut retired = std::mem::replace(self, Self::new(self.owner.clone()));
         retired.cancel_job();
@@ -151,6 +172,42 @@ impl Entry {
 }
 
 impl State {
+    fn finish_shutdown(&mut self, root: Option<&Path>, ctx: &egui::Context) -> bool {
+        self.set_session(None);
+        for entry in &mut self.retiring {
+            entry.cancel_job();
+            entry.poll();
+            entry.poll_save();
+        }
+        self.retiring
+            .retain(|entry| entry.job.is_some() || !entry.clearing.is_empty());
+        if self.retiring.is_empty() {
+            return true;
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
+        // A late selection must finish before any local uncheck is acknowledged.
+        if self.retiring.iter().any(|entry| entry.job.is_some()) {
+            return false;
+        }
+        let Some(root) = root else { return false };
+        let mut active = self.retiring.iter().filter(|entry| entry.saving.is_some()).count();
+        for entry in &mut self.retiring {
+            if active >= CONCURRENT_JOBS {
+                break;
+            }
+            if entry.saving.is_none() && Instant::now() >= entry.due {
+                entry.saving = Some(job::save_deselections(
+                    root.to_owned(),
+                    entry.owner.clone(),
+                    entry.clearing.iter().cloned().collect(),
+                    ctx.clone(),
+                ));
+                active += 1;
+            }
+        }
+        false
+    }
+
     pub(super) fn set_session(&mut self, session: Option<&str>) -> bool {
         let changed = self.session.as_deref() != session;
         if changed {
@@ -338,6 +395,38 @@ impl State {
 }
 
 impl HorizonApp {
+    pub(in crate::app) fn finish_cloud_companion_shutdown(&mut self, ctx: &egui::Context) -> bool {
+        self.cloud_prototype
+            .production
+            .companions
+            .finish_shutdown(self.cloud_prototype.root.as_deref(), ctx)
+    }
+
+    pub(in crate::app) fn render_cloud_companion_shutdown(&self, ctx: &egui::Context) {
+        egui::Window::new("Saving companion access changes")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Waiting for access removals to be saved before closing.");
+                if self.cloud_prototype.root.is_none() {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        "The local cloud state directory is unavailable.",
+                    );
+                }
+                for error in self
+                    .cloud_prototype
+                    .production
+                    .companions
+                    .retiring
+                    .iter()
+                    .filter_map(|entry| entry.error.as_deref())
+                {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+            });
+    }
+
     pub(in crate::app) fn sync_cloud_companion_session(&mut self, ctx: &egui::Context) {
         let state = &mut self.cloud_prototype.production.companions;
         state.set_session(persistent_session(self.active_session.as_ref()));

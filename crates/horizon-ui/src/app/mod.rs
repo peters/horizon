@@ -362,6 +362,11 @@ impl HorizonApp {
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
+            #[cfg(feature = "cloud-workspaces")]
+            if !self.finish_cloud_companion_shutdown(ctx) {
+                self.render_cloud_companion_shutdown(ctx);
+                return;
+            }
             self.poll_shutdown_progress();
             return;
         }
@@ -452,6 +457,16 @@ impl eframe::App for HorizonApp {
 
     fn on_exit(&mut self) {
         self.abandon_device_reveals("Horizon is exiting");
+        #[cfg(feature = "cloud-workspaces")]
+        {
+            let ctx = egui::Context::default();
+            if !self.finish_cloud_companion_shutdown(&ctx) {
+                tracing::info!("waiting for companion access removals to be saved before exit");
+            }
+            while !self.finish_cloud_companion_shutdown(&ctx) {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
         self.run_exit_cleanup();
         // macOS can leave Horizon running as a windowless app after eframe
         // has already torn down the viewport, so terminate explicitly.

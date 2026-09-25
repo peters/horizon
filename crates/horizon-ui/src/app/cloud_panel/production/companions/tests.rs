@@ -528,3 +528,170 @@ fn queued_revocation_survives_owner_roundtrips_and_absent_journals() {
         }
     }
 }
+
+#[cfg(unix)]
+fn selected_request(root: &Path, owner: Owner) -> horizon_core::cloud_runtime::companions::Request {
+    use horizon_core::cloud_runtime::{companions, settings::Settings};
+    let source = companions::Target {
+        scope: owner.scope.clone(),
+        cloud_id: owner.cloud_id.clone(),
+        declaration: companions::Declaration {
+            repository: "example/library".into(),
+            profile: "cpu".into(),
+        },
+    };
+    let target = companions::Target {
+        cloud_id: "target".into(),
+        declaration: companions::Declaration {
+            repository: "example/consumer".into(),
+            profile: "cpu".into(),
+        },
+        ..source.clone()
+    };
+    companions::Request {
+        root: root.to_owned(), owner,
+        context: Some(companions::Context {
+            source: source.clone(), declarations: [("app".into(), target.declaration.clone())].into(), inventory: vec![source, target],
+        }),
+        action: Action::Select { alias: "app".into(), target_cloud_id: "target".into() },
+        settings: serde_json::from_value::<Settings>(serde_json::json!({
+            "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+        })).unwrap(),
+    }
+}
+
+#[cfg(unix)] // Subprocesses exercise paths that terminate the application process.
+#[test]
+fn shutdown_persists_queued_unchecks_before_both_exit_paths() {
+    use horizon_core::cloud_runtime::companions;
+    if let Some(root) = std::env::var_os("HORIZON_M0_SHUTDOWN_ROOT") {
+        let root = std::path::PathBuf::from(root);
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.cloud_prototype.root = Some(root.clone());
+        let state = &mut app.cloud_prototype.production.companions;
+        state.sync(Some("first"), &groups());
+        let entry = state.entries.get_mut("source").unwrap();
+        let request = selected_request(&root, entry.owner.clone());
+        companions::refresh(&request, &Cancellation::default()).unwrap();
+        let (_, sender) = pending_job(entry);
+        entry.queue(Action::Clear { alias: "app".into() });
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let snapshot = companions::refresh(&request, &Cancellation::default()).unwrap();
+            sender
+                .send(job::Outcome {
+                    snapshot: Some(snapshot),
+                    error: None,
+                })
+                .unwrap();
+        });
+        if std::env::var_os("HORIZON_M0_SHUTDOWN_FALLBACK").is_some() {
+            eframe::App::on_exit(&mut app);
+        } else {
+            app.begin_shutdown();
+            let ctx = egui::Context::default();
+            loop {
+                crate::app::test_support::run_app_frame(&ctx, &mut app);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        panic!("shutdown returned without exiting");
+    }
+    for fallback in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        // Saving the uncheck must not depend on provider settings being readable.
+        std::fs::write(root.path().join("settings.json"), "invalid settings").unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "app::cloud_panel::production::companions::tests::shutdown_persists_queued_unchecks_before_both_exit_paths"])
+            .env("HORIZON_M0_SHUTDOWN_ROOT", root.path());
+        if fallback {
+            command.env("HORIZON_M0_SHUTDOWN_FALLBACK", "1");
+        }
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() > deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("shutdown did not finish, fallback={fallback}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success());
+        let journal: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("source/companions.json")).unwrap()).unwrap();
+        assert_eq!(journal["grants"]["app"]["selected"], false);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_retries_local_lock_failure_without_remote_cleanup() {
+    use horizon_core::cloud_runtime::companions;
+    let root = tempfile::tempdir().unwrap();
+    let mut state = State::default();
+    state.sync(Some("first"), &groups());
+    let entry = state.entries.get_mut("source").unwrap();
+    let request = selected_request(root.path(), entry.owner.clone());
+    companions::refresh(&request, &Cancellation::default()).unwrap();
+    let path = root.path().join("source/companions.json");
+    let mut journal: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let grant = &mut journal["grants"]["app"];
+    grant["source_worker"] = "original-source".into();
+    grant["target_worker"] = "original-target".into();
+    grant["revision"] = "a".repeat(40).into();
+    grant["source_disconnected"] = false.into();
+    grant["target_revoked"] = false.into();
+    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    let other_owner = Owner {
+        scope: Scope {
+            session_id: "other".into(),
+            ..request.owner.scope.clone()
+        },
+        ..request.owner.clone()
+    };
+    companions::persist_deselections(root.path(), &other_owner, &["app".into()]).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+        journal
+    );
+    entry.queue(Action::Clear { alias: "app".into() });
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join("source/companions.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state.retiring.first().is_none_or(|entry| entry.error.is_none()) {
+        assert!(!state.finish_shutdown(Some(root.path()), &ctx));
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(state.retiring[0].clearing.contains("app"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+        journal
+    );
+    lock.unlock().unwrap();
+    state.retiring[0].due = Instant::now();
+    while !state.finish_shutdown(Some(root.path()), &ctx) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    journal["grants"]["app"]["selected"] = false.into();
+    let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        actual, journal,
+        "offline revocation pins must survive for later cleanup"
+    );
+    companions::persist_deselections(root.path(), &request.owner, &["app".into()]).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap(),
+        actual
+    );
+}
