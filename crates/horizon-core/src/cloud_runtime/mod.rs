@@ -14,6 +14,7 @@ pub mod image;
 pub mod lifecycle;
 pub mod owner;
 pub mod progress;
+pub mod project_reservations;
 pub mod registry;
 pub mod repository;
 pub mod settings;

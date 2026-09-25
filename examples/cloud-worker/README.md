@@ -467,3 +467,39 @@ pre-admission cleanup; worker-wide deletion needs a future transition contract.
 The local `scripts/cloud-initialization-smoke.py --scenario reservations` lane
 uses the real worker/checker over SSH with synthetic provider identities. It does
 not qualify a deployed image, actual provider execution or physical power loss.
+
+### Owning-host reservation recovery
+
+The low-level core `cloud_runtime::project_reservations` API exposes `reserve`,
+`cancel` and `resume` for a registered allocation owner. It reuses initialization's
+read-only provider qualification and pinned SSH snapshots. The immutable image,
+account, controller, worker and SSH bindings must still match. No provider mutation
+or project provisioning is performed; calling interfaces must first resolve the
+immutable owning-workspace/project identity. UI/CLI/MCP attachment remains pending.
+
+Before sending a mutation, the controller commits its exact signed request,
+proposed manifest and expected receipt in the existing native-anchored owner
+journal. Only one operation may be pending. Changed inputs and successor actions
+are rejected until that operation is reconciled. After a lost response or uncertain
+completion save, reopen the owner and retry the original `reserve` or `cancel`
+call; no replacement operation is signed. `resume` is also available while a
+pending entry remains. Reopening can finish an interrupted completion save, in
+which case `resume` reports no pending operation and the original call recovers
+its recorded receipt. Complete receipt verification and a current ownership check
+precede local completion. A failure or worker rejection without a matching receipt
+leaves the operation pending; this API cannot discard uncertain intent. Confirmed
+retries contact the worker again using the original request;
+they remain historical reservation evidence, not fresh readiness observations.
+
+Any retained reservation entry, including pending, corrupt or tombstone-only state,
+blocks the older bootstrap cleanup, resume and empty-allocation inspection paths.
+This protects an uncertain reservation even when no reply was received. Cleanup of
+a previously used allocation requires the future worker-wide transition protocol.
+The API timeout bounds further SSH sends; provider reads and synchronous native
+journal/credential-store durability have their own bounds.
+
+`scripts/cloud-initialization-smoke.py --scenario host-reservations` exercises the
+production host coordinator and real worker over isolated SSH with synthetic
+provider ownership. It covers three projects, a lost reserve response, a failed
+local cancellation completion, cold restarts, exact retries and retained sibling
+state. It does not qualify a deployed image or physical power-loss recovery.

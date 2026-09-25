@@ -655,3 +655,10 @@ resources. Capability shape validation is shared with profile validation in
 `horizon-cloud::Capabilities`. Reservation smoke has its own child test module
 under `bootstrap_initialization/tests`, reusing the existing synthetic SSH fixture
 without adding a production host admission API.
+
+`cloud_runtime::project_reservations` coordinates owning-host reserve/cancel/retry
+operations; its `journal` leaf validates exact pending transitions and confirmed
+signed membership history inside the existing native-anchored Owner payload.
+Bootstrap initialization shares its provider qualification helper and fences the
+older pre-admission lifecycle whenever reservation intent exists. No second owner
+store, source/session bootstrap, or public attachment interface is introduced.
