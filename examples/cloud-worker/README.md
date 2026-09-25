@@ -437,9 +437,9 @@ These commands reserve logical names and resources only: `attaching` is never
 active or provisioning permission. The canonical namespace is `project-<UUID>`.
 They create no source trees, project homes, credentials, tools, processes, routes
 or provider resources. Cancellation records a permanent `removed` tombstone and
-releases only logical application-port and desktop reservations. Provisioning,
-full removal, host admission coordination and UI/CLI/MCP activation remain future
-work. The allocation lock covers authentication, capability probing and atomic
+releases only logical application-port and desktop reservations. Source/session provisioning, full removal, host admission coordination and
+UI/CLI/MCP activation remain future work. Namespace preparation below is a
+separate signed step after reservation. The allocation lock covers authentication, capability probing and atomic
 manifest publication; all retained transitions carry verifiable signed history.
 
 Only `trusted_shared` may reserve multiple identities. A `dedicated` allocation
@@ -451,6 +451,8 @@ must be a subset of the project's application ports. These are logical conflict
 checks, not OS resource quotas or demonstrated application readiness.
 
 State retains at most 32 project identities and 64 mutations without eviction.
+Every live project retains one mutation slot for cancellation; preparation also
+consumes a slot.
 The 64-KiB manifest limit can be reached earlier. Every live reservation reserves
 4 KiB for its eventual cancellation mutation; cancellation's complete encoded
 mutation must fit that bound (canonical `cancel` requests do). The worker stores
@@ -503,3 +505,46 @@ production host coordinator and real worker over isolated SSH with synthetic
 provider ownership. It covers three projects, a lost reserve response, a failed
 local cancellation completion, cold restarts, exact retries and retained sibling
 state. It does not qualify a deployed image or physical power-loss recovery.
+
+### Recoverable project runtime directories
+
+After a logical reservation, `prepare-project-namespace` accepts a signed
+project-scoped `ReconcileProject` with `{"action":"prepare_namespace"}`. The owning
+host exposes `project_reservations::prepare_namespace` and persists that exact
+request before SSH using the same recovery rules as reserve/cancel. No caller
+paths are accepted. The worker records a `preparing` transition before filesystem
+creation; this state alone does not prove that a directory exists or that source,
+credentials, tools or sessions are ready. An exact successful receipt records
+historical namespace publication, not fresh application readiness.
+
+Layout version 1 is `/workspace/projects/<project-UUID>/`, with private
+`repository`, `worktrees`, `homes`, `runtime`, `logs` and `tools` directories.
+The `.namespace-owner.json` header binds the allocation, full project identity,
+preparation operation and directory inode. The allocation journal separately
+anchors the inode and whether publication finished. Retained internal records
+and private staging directories are not project source or credential grants.
+No process, tmux session, route, credential or source tree is installed here.
+
+The allocation lock covers intent, staged creation, ownership verification and
+publication. Exact recovery can complete anchored staging or a published rename
+whose acknowledgement was lost; it never replaces a published tree or recreates
+missing published children. A crash between initial directory creation and its
+durable inode anchor leaves uncertain, unowned staging and remains fenced. This
+case is not automatically adopted or deleted. Missing or conflicting ownership,
+symlinks and directory replacement also remain fenced. The same limits apply to
+initial creation of the shared `projects` container.
+
+Cancellation requires namespace preparation to be settled before publishing a
+terminal tombstone. It releases logical port/desktop reservations but **retains
+all project directories and data**. This is safe only because this stage creates
+no processes or tool grants; future provisioning requires additional removal
+semantics. A delayed preparation after cancellation fails. Worker startup
+validates published ownership and permits valid anchored partial staging only
+for explicit recovery. Uncertain membership still blocks bootstrap cleanup.
+
+`scripts/cloud-initialization-smoke.py --scenario namespaces` covers three
+project trees, host/worker restarts after a lost preparation reply and a failed
+host completion save, exact retries and retained sibling files over real local
+SSH. Provider identity is synthetic; this does not qualify a deployed image,
+live provider execution or physical power loss. Public UI/CLI/MCP attachment,
+source/session provisioning and worker-wide lifecycle remain pending.

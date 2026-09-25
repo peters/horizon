@@ -140,6 +140,12 @@ impl Store {
         same(&self.lock, &regular(&current, LOCK)?)
     }
 
+    pub(super) fn namespace_anchors(&self) -> io::Result<(File, File)> {
+        self.verify()?;
+        let workspace = anchor_directory(self.root.parent().ok_or_else(invalid)?)?;
+        Ok((workspace, self.directory.try_clone()?))
+    }
+
     pub(super) fn read(&self, name: &str) -> io::Result<Option<Vec<u8>>> {
         self.verify()?;
         let file = match regular(&self.directory, name) {
@@ -250,7 +256,7 @@ fn pristine(directory: &File, allowed: Option<&[u8]>) -> io::Result<()> {
     Ok(())
 }
 
-fn same(left: &File, right: &File) -> io::Result<()> {
+pub(super) fn same(left: &File, right: &File) -> io::Result<()> {
     let left = left.metadata()?;
     let right = right.metadata()?;
     if (left.dev(), left.ino()) != (right.dev(), right.ino()) {
@@ -260,7 +266,7 @@ fn same(left: &File, right: &File) -> io::Result<()> {
     private(&right)
 }
 
-fn private(metadata: &std::fs::Metadata) -> io::Result<()> {
+pub(super) fn private(metadata: &std::fs::Metadata) -> io::Result<()> {
     if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
         return Err(invalid());
     }

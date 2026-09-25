@@ -22,7 +22,7 @@ import paramiko
 
 LIMIT = 64 * 1024
 COMMANDS = {b"horizon-cloud-worker " + name: name.decode() for name in
-            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"cancel-project-reservation"]}
+            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"cancel-project-reservation", b"prepare-project-namespace"]}
 COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 
 
@@ -170,7 +170,8 @@ def run(options):
         environment = dict(os.environ, HORIZON_INITIALIZATION_FIXTURE=str(root))
         test_name = {"initialization": "native_ssh_worker_initialization",
                      "reservations": "native_ssh_project_reservations",
-                     "host-reservations": "native_ssh_host_reservation_recovery"}[options.scenario]
+                     "host-reservations": "native_ssh_host_reservation_recovery",
+                     "namespaces": "native_ssh_project_namespaces"}[options.scenario]
         with open(root / "test.log", "w") as output:
             test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300).returncode
     except (subprocess.TimeoutExpired, OSError) as error:
@@ -189,11 +190,11 @@ def run(options):
     assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
     expected = {"initialization": [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
                 "reservations": [0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1],
-                "host-reservations": [0] * 11}[options.scenario]
+                "host-reservations": [0] * 11, "namespaces": [0] * 13}[options.scenario]
     assert [session["exit_code"] for session in sessions] == expected
     assert report["same_host_key"]
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1
-    if options.scenario == "host-reservations":
+    if options.scenario in ["host-reservations", "namespaces"]:
         assert not any(session["command"] == "abandon-bootstrap" for session in sessions)
         assert len({session["request_sha256"] for session in sessions if session["command"] == "cancel-project-reservation"}) == 1
     else:
@@ -204,7 +205,7 @@ def run(options):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations"], default="initialization")
+    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces"], default="initialization")
     parser.add_argument("--worker", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--sshd", help="Actual OpenSSH server binary; may be extracted into a task-local directory")

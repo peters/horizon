@@ -1,4 +1,4 @@
-//! Durable logical reservations, not permission to provision or run a project.
+//! Durable reservation and namespace intent, never permission to run a project.
 use crate::{
     OperationId, ProjectIdentity, SharingMode,
     bootstrap::Startup,
@@ -22,6 +22,7 @@ pub struct Error;
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Attaching,
+    Preparing,
     Removed,
 }
 
@@ -32,6 +33,7 @@ pub enum Request {
         capabilities: Capabilities,
         ports: BTreeSet<u16>,
     },
+    PrepareNamespace {},
     Cancel {},
 }
 
@@ -40,6 +42,7 @@ impl Request {
     pub const fn action(&self) -> Action {
         match self {
             Self::Reserve { .. } => Action::AttachProject,
+            Self::PrepareNamespace {} => Action::ReconcileProject,
             Self::Cancel {} => Action::RemoveProject,
         }
     }
@@ -142,7 +145,7 @@ impl Manifest {
             .find(|entry| entry.receipt.operation == intent.operation())
         {
             if saved.receipt.fingerprint != intent.fingerprint().map_err(|_| Error)?
-                || (saved.receipt.state == State::Attaching
+                || (saved.receipt.state != State::Removed
                     && self
                         .members
                         .iter()
@@ -184,13 +187,25 @@ impl Manifest {
                 self.reserve(identity, capabilities, ports)?;
                 State::Attaching
             }
-            Request::Cancel {} => {
+            Request::PrepareNamespace {} => {
                 let member = self
                     .members
                     .iter_mut()
                     .find(|member| &member.identity == identity)
                     .ok_or(Error)?;
                 if member.state != State::Attaching {
+                    return Err(Error);
+                }
+                member.state = State::Preparing;
+                State::Preparing
+            }
+            Request::Cancel {} => {
+                let member = self
+                    .members
+                    .iter_mut()
+                    .find(|member| &member.identity == identity)
+                    .ok_or(Error)?;
+                if member.state == State::Removed {
                     return Err(Error);
                 }
                 member.state = State::Removed;
@@ -211,10 +226,12 @@ impl Manifest {
         let live = self
             .members
             .iter()
-            .filter(|member| member.state == State::Attaching)
+            .filter(|member| member.state != State::Removed)
             .count();
         // Keep room for every live reservation's cancellation even at capacity.
-        if serde_json::to_vec(self).map_err(|_| Error)?.len() + live * CANCELLATION_BYTES > MAX_MANIFEST_BYTES {
+        if self.operations.len() + live > MAX_OPERATIONS
+            || serde_json::to_vec(self).map_err(|_| Error)?.len() + live * CANCELLATION_BYTES > MAX_MANIFEST_BYTES
+        {
             return Err(Error);
         }
         Ok(receipt)
@@ -246,7 +263,7 @@ impl Manifest {
             // SSH, X11, VNC and the worker control endpoint cannot be app grants.
             || ports.iter().any(|port| *port < 1024 || (5900..=6099).contains(port) || *port == 47280)
             || capabilities.browserstack.as_ref().is_some_and(|remote| !remote.local_ports.is_subset(&ports))
-            || self.members.iter().filter(|member| member.state == State::Attaching).any(|member|
+            || self.members.iter().filter(|member| member.state != State::Removed).any(|member|
                 !member.ports.is_disjoint(&ports) || (member.capabilities.desktop && capabilities.desktop))
         {
             return Err(Error);

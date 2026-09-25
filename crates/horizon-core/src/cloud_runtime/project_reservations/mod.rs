@@ -45,6 +45,7 @@ pub struct Reservation {
 
 pub(super) enum Change {
     Reserve(Reservation),
+    PrepareNamespace(ProjectIdentity),
     Cancel(ProjectIdentity),
     Resume,
 }
@@ -64,6 +65,26 @@ pub fn reserve(
     timeout: Duration,
 ) -> Result<Receipt> {
     execute(owner, allocation, &Change::Reserve(request.clone()), cancel, timeout)
+}
+
+/// Prepare the reserved project's private directory layout without importing source
+/// or starting processes. A receipt is historical evidence, not current readiness.
+/// # Errors
+/// Refuses conflicting pending operations, cancelled projects and changed bindings.
+pub fn prepare_namespace(
+    owner: &mut Owner,
+    allocation: &bootstrap_initialization::Request,
+    project: &ProjectIdentity,
+    cancellation: &Cancellation,
+    timeout: Duration,
+) -> Result<Receipt> {
+    execute(
+        owner,
+        allocation,
+        &Change::PrepareNamespace(project.clone()),
+        cancellation,
+        timeout,
+    )
 }
 
 /// Cancel only a known logical reservation. No project or provider data is deleted.
@@ -157,7 +178,7 @@ pub(super) fn coordinate(
     {
         return Err(Error::Invalid);
     }
-    let reply = exchange(&snapshot.connection, pending.command(), pending.request.as_bytes())?;
+    let reply = exchange(&snapshot.connection, pending.command()?, pending.request.as_bytes())?;
     if reply.len() > horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES
         || serde_json::from_slice::<Receipt>(&reply).map_err(|_| Error::Invalid)? != pending.receipt
     {

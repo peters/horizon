@@ -3,7 +3,7 @@ use crate::cloud_runtime::bootstrap_recovery::connection::Binding;
 use horizon_cloud_protocol::{
     OperationId,
     bootstrap::RecoveryRequest,
-    membership::{Manifest, Receipt, Request, State},
+    membership::{Manifest, Receipt, Request},
     signed::{Intent, Target},
 };
 use serde::{Deserialize, Serialize};
@@ -107,25 +107,24 @@ impl Journal {
         if self.pending.is_some() {
             return Ok(());
         }
-        let (identity, payload, state) = match change {
+        let (identity, payload) = match change {
             Change::Reserve(request) => (
                 &request.project,
                 Request::Reserve {
                     capabilities: request.capabilities.clone(),
                     ports: request.ports.clone(),
                 },
-                State::Attaching,
             ),
-            Change::Cancel(identity) => (identity, Request::Cancel {}, State::Removed),
+            Change::PrepareNamespace(identity) => (identity, Request::PrepareNamespace {}),
+            Change::Cancel(identity) => (identity, Request::Cancel {}),
             Change::Resume => return Err(Error::Missing),
         };
+        let action = payload.action();
         let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
-        let message = if let Some(saved) = self
-            .manifest
-            .operations
-            .iter()
-            .find(|entry| entry.receipt.identity == *identity && entry.receipt.state == state)
-        {
+        let message = if let Some(saved) = self.manifest.operations.iter().find(|entry| {
+            entry.receipt.identity == *identity
+                && serde_json::from_str::<Request>(&entry.payload).is_ok_and(|request| request.action() == action)
+        }) {
             if saved.payload != payload {
                 return Err(Error::Invalid);
             }
@@ -138,11 +137,7 @@ impl Journal {
                 Target::Project {
                     identity: identity.clone(),
                 },
-                if state == State::Attaching {
-                    horizon_cloud_protocol::signed::Action::AttachProject
-                } else {
-                    horizon_cloud_protocol::signed::Action::RemoveProject
-                },
+                action,
                 payload.as_bytes(),
             )
             .map_err(|_| Error::Invalid)?;
@@ -168,14 +163,21 @@ impl Pending {
                             ports: request.ports.clone(),
                         })
             }
+            Change::PrepareNamespace(identity) => {
+                self.receipt.identity == *identity && payload == (Request::PrepareNamespace {})
+            }
             Change::Cancel(identity) => self.receipt.identity == *identity && payload == (Request::Cancel {}),
             Change::Resume => true,
         })
     }
-    pub fn command(&self) -> &'static str {
-        match self.receipt.state {
-            State::Attaching => "horizon-cloud-worker reserve-project",
-            State::Removed => "horizon-cloud-worker cancel-project-reservation",
-        }
+    pub fn command(&self) -> Result<&'static str> {
+        let request: RecoveryRequest = serde_json::from_str(&self.request).map_err(|_| Error::Invalid)?;
+        Ok(
+            match serde_json::from_str::<Request>(&request.payload).map_err(|_| Error::Invalid)? {
+                Request::Reserve { .. } => "horizon-cloud-worker reserve-project",
+                Request::PrepareNamespace {} => "horizon-cloud-worker prepare-project-namespace",
+                Request::Cancel {} => "horizon-cloud-worker cancel-project-reservation",
+            },
+        )
     }
 }

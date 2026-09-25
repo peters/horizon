@@ -674,3 +674,10 @@ signed membership history inside the existing native-anchored Owner payload.
 Bootstrap initialization shares its provider qualification helper and fences the
 older pre-admission lifecycle whenever reservation intent exists. No second owner
 store, source/session bootstrap, or public attachment interface is introduced.
+
+Project namespace preparation uses the existing signed membership history and
+owning-host journal. `horizon-cloud-worker/bootstrap/namespaces` coordinates
+project identity and startup/cancellation validation; its `storage` leaf owns
+staged directory creation, inode anchors and exclusive publication. Published
+trees are validated without repair, and cancellation retains their data. The
+`preparing` membership state does not imply source or session readiness.
