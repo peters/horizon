@@ -354,6 +354,22 @@ unreachable worker state cannot grant new deletion permission. Before Requested,
 cleanup uses anchored proof that initialization was never sent. No error triggers
 automatic cleanup, replacement or allocation.
 
+`bootstrap_initialization::inspect` verifies a completed allocation against the
+prospective project's immutable image digest, retained account, SSH identity and
+host key. It makes read-only provider observations and sends a signed
+`inspect-allocation` request. The Linux worker requires its version-2 initialized,
+empty manifest and retains the allocation lock while running the image's existing
+`horizon-worker-check --capabilities-json` for exactly the requested capabilities.
+The checker uses a private temporary HOME and cleared environment; it neither
+starts services nor writes `/workspace/capabilities.json`. Its process group is
+bounded to 60 seconds and captured output to 64 KiB. Host transport is cancellable
+and uses one deadline capped at 180 seconds. Missing tools, unavailable selected
+capabilities, changed state, stale revisions or foreign signatures fail closed.
+The response binds the startup identity, operation, fingerprint and revision-zero
+capability observation. It is not admission authority: future admission must
+recheck compatibility under its own lock. This pre-admission command rejects
+nonempty manifests and does not yet implement resource-capacity or grant checks.
+
 These library APIs do not activate shared projects or advertise full shared-worker
 support. Shared membership, source/session/tool isolation and UI/CLI/MCP routing
 remain unfinished under #805. Provider storage qualification and spending approval
@@ -393,11 +409,16 @@ closes its server and removes its task SSH private key. It does not create provi
 resources or qualify provider power-loss durability.
 
 For first-initialization integration, use `scripts/cloud-initialization-smoke.py`
-with the same arguments and prerequisites. The fixture starts with an empty
+with the same arguments and prerequisites, plus tmux, git-lfs and an actual
+OpenSSH server executable (`--sshd /absolute/sshd` accepts a task-local extracted
+binary without installing or starting a system service). The fixture starts with an empty
 synthetic mounted workspace, uses the actual worker's startup capture and key
 preparation, and checks delayed SSH readiness, initialization, completion-save
-failure/reopen, cold restarts with the same key, lost abandonment replies and
+failure/reopen, cold restarts with the same key, successful shell-only inspection,
+rejection of unavailable desktop capability, lost abandonment replies and
 terminal rejection of delayed commands. Synthetic provider ownership is seeded
 only in the host test; provider witness transitions have separate adapter tests.
+The actual checker runs against a synthetic shell-only image inventory and real
+locally available base tools; this is not qualification of a deployable image.
 No provider resources are created. Evidence directories are private and each run
 removes its task SSH private keys and closes all fixture connections.

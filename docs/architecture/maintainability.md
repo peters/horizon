@@ -629,6 +629,13 @@ before Requested retains the proof that initialization was never sent. These API
 are pre-admission infrastructure; shared project activation and interface routing
 remain separate work under #805.
 
+The initializer's `inspection` leaf performs read-only provider/SSH qualification
+against the retained image and identity. The worker's `bootstrap/inspection` leaf
+authenticates revision-zero inspection under the allocation lock and runs the
+existing capability checker with private temporary process state. The protocol's
+`inspection` types bind observations to requests; they grant no membership or
+provider authority. Admission must independently recheck compatibility.
+
 `cloud_runtime::bootstrap_recovery` connects the owning-host anchor to that
 existing worker command. It stores one exact signed recovery request and SSH
 identity/pin fingerprints in the owner's payload before transport, preserves
