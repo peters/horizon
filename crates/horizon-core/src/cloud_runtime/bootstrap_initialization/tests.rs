@@ -1,4 +1,5 @@
 mod membership;
+mod project_reservations;
 use super::*;
 use crate::cloud_runtime::owner::tests::{create as create_owner, fixture, open};
 use horizon_cloud::{Bootstrap, Capabilities, Profile, Storage};

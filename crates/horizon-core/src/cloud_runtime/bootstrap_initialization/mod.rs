@@ -21,6 +21,7 @@ use horizon_cloud_protocol::{
     bootstrap::{BootstrapOutcome, BootstrapPayload, RecoveryReceipt, Startup},
 };
 pub use inspection::inspect;
+pub(in crate::cloud_runtime) use inspection::project_target;
 use record::{FileBinding, Phase, Record, Signed};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,6 +34,8 @@ use std::{
 type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Project reservation history blocks pre-admission bootstrap operations")]
+    Membership,
     #[error("Allocation initialization is missing, conflicting or uncertain")]
     Invalid,
     #[error("First initialization cannot be repeated; recover or explicitly clean up the anchored allocation")]
@@ -155,6 +158,7 @@ pub fn resume(
     cancel: &Cancellation,
     timeout: Duration,
 ) -> Result<RecoveryReceipt> {
+    require_pre_admission(owner)?;
     let deadline = Instant::now() + timeout.min(Duration::from_secs(3600));
     let runner = runner(cancel);
     let (account, credential, identity) = bindings(request, &runner)?;
@@ -201,6 +205,7 @@ fn cleanup_with(
     exchange: &mut impl FnMut(&Connection, &[u8]) -> Result<Vec<u8>>,
     delete: &mut impl FnMut(&mut Owner, &mut Record) -> Result<()>,
 ) -> Result<()> {
+    require_pre_admission(owner)?;
     if record.phase == Phase::Deleted {
         return Ok(());
     }
@@ -377,6 +382,13 @@ fn bindings(request: &Request, runner: &Runner<'_>) -> Result<(FileBinding, hori
     }
     Ok((account, credential, identity))
 }
+fn require_pre_admission(owner: &Owner) -> Result<()> {
+    if super::project_reservations::started(owner)? {
+        return Err(Error::Membership);
+    }
+    Ok(())
+}
+
 fn runner(cancel: &Cancellation) -> Runner<'_> {
     Runner {
         cancel,

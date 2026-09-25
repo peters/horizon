@@ -168,8 +168,11 @@ def run(options):
     test_exit = None
     try:
         environment = dict(os.environ, HORIZON_INITIALIZATION_FIXTURE=str(root))
+        test_name = {"initialization": "native_ssh_worker_initialization",
+                     "reservations": "native_ssh_project_reservations",
+                     "host-reservations": "native_ssh_host_reservation_recovery"}[options.scenario]
         with open(root / "test.log", "w") as output:
-            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", ("native_ssh_project_reservations" if options.scenario == "reservations" else "native_ssh_worker_initialization"), "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300).returncode
+            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300).returncode
     except (subprocess.TimeoutExpired, OSError) as error:
         errors.append(type(error).__name__ + ": " + str(error))
     finally:
@@ -184,19 +187,24 @@ def run(options):
     report = {"worker_sha256": worker_hash, "test_exit": test_exit, "same_host_key": len(set(host_keys)) == 1, "sessions": sessions, "errors": errors, "threads_stopped": not thread.is_alive() and all(not child.is_alive() for child in children)}
     (root / "ssh-report.json").write_text(json.dumps(report, indent=2))
     assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
-    expected = ([0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1] if options.scenario == "reservations"
-                else [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1])
+    expected = {"initialization": [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
+                "reservations": [0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1],
+                "host-reservations": [0] * 11}[options.scenario]
     assert [session["exit_code"] for session in sessions] == expected
     assert report["same_host_key"]
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1
-    assert len({session["request_sha256"] for session in sessions if session["command"] == "abandon-bootstrap"}) == 1
+    if options.scenario == "host-reservations":
+        assert not any(session["command"] == "abandon-bootstrap" for session in sessions)
+        assert len({session["request_sha256"] for session in sessions if session["command"] == "cancel-project-reservation"}) == 1
+    else:
+        assert len({session["request_sha256"] for session in sessions if session["command"] == "abandon-bootstrap"}) == 1
     print(json.dumps({"passed": True, "ssh_sessions": len(sessions), "same_host_key": True, "worker_sha256": worker_hash}))
 
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["initialization", "reservations"], default="initialization")
+    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations"], default="initialization")
     parser.add_argument("--worker", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--sshd", help="Actual OpenSSH server binary; may be extracted into a task-local directory")

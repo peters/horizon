@@ -27,14 +27,9 @@ pub fn inspect(
 ) -> Result<Receipt> {
     let deadline = Instant::now() + timeout.min(Duration::from_secs(180));
     remaining(deadline)?;
+    super::require_pre_admission(owner)?;
     let runner = runner(cancel);
-    let (account, credential, identity) = bindings(request, &runner)?;
-    let record = Record::load(owner)?.ok_or(Error::Invalid)?;
-    record.verify(owner, request, &account, &identity)?;
-    if record.phase != Phase::Completed || record.spec.image_digest != image_digest {
-        return Err(Error::Invalid);
-    }
-    let target = inspect_target(&RunPod::new(credential), &record, cancel)?;
+    let target = project_target(owner, request, image_digest, cancel)?;
     inspect_with(
         owner,
         &target,
@@ -48,6 +43,22 @@ pub fn inspect(
             )?)
         },
     )
+}
+
+pub(in crate::cloud_runtime) fn project_target(
+    owner: &Owner,
+    request: &Request,
+    image_digest: &str,
+    cancel: &Cancellation,
+) -> Result<bootstrap_recovery::Target> {
+    let runner = runner(cancel);
+    let (account, credential, identity) = bindings(request, &runner)?;
+    let record = Record::load(owner)?.ok_or(Error::Invalid)?;
+    record.verify(owner, request, &account, &identity)?;
+    if record.phase != Phase::Completed || record.spec.image_digest != image_digest {
+        return Err(Error::Invalid);
+    }
+    inspect_target(&RunPod::new(credential), &record, cancel)
 }
 
 pub(super) fn inspect_with(
