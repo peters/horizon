@@ -6,6 +6,8 @@ mod inspection;
 #[cfg(target_os = "linux")]
 mod keys;
 #[cfg(target_os = "linux")]
+mod membership;
+#[cfg(target_os = "linux")]
 mod recovery;
 #[cfg(target_os = "linux")]
 mod runtime;
@@ -49,6 +51,20 @@ pub(super) fn initialize(abandon: bool) -> io::Result<()> {
     }
 }
 
+pub(super) fn membership(cancel: bool) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        membership::run(cancel)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cancel;
+        Err(io::Error::other(
+            "Project reservations require a qualified Linux worker",
+        ))
+    }
+}
+
 pub(super) fn prepare() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -85,7 +101,7 @@ pub(super) fn prepare() -> io::Result<()> {
                 if record.version != 2 {
                     return Err(invalid());
                 }
-                record.empty(&store)?;
+                membership::startup(&store, &record)?;
                 keys::install(Path::new(RUN_ROOT), &store.host_key()?)?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {

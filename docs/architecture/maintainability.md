@@ -646,3 +646,12 @@ existing-key verification. `command::Runner::private_exchange` transports
 bounded raw bytes through private stdin without emitting either stream. Retries,
 including completed ones, still contact the worker and validate its full receipt.
 This path provides no initialization permission and performs no provider mutation.
+
+Project reservation records and signed-history reconstruction live in
+`horizon-cloud-protocol::membership`; the worker's `bootstrap/membership` leaf
+owns locked capability checks, publication and populated-manifest startup.
+Logical cancellation retains tombstones and does not provision or remove project
+resources. Capability shape validation is shared with profile validation in
+`horizon-cloud::Capabilities`. Reservation smoke has its own child test module
+under `bootstrap_initialization/tests`, reusing the existing synthetic SSH fixture
+without adding a production host admission API.

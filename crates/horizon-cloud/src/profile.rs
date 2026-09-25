@@ -127,26 +127,7 @@ impl Profile {
     /// # Errors
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
-        if let Some(browserstack) = &self.capabilities.browserstack
-            && (browserstack.provider.is_empty()
-                || browserstack.provider.len() > 64
-                || !browserstack
-                    .provider
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-                || browserstack.targets.len() > 16
-                || browserstack.targets.iter().any(|name| {
-                    name.is_empty()
-                        || name.len() > 64
-                        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-                })
-                || browserstack.local_ports.contains(&0)
-                || browserstack.local_ports.len() > 16)
-        {
-            return Err(ProfileError::Invalid(
-                "BrowserStack requires named targets and valid worker-local ports",
-            ));
-        }
+        self.capabilities.validate()?;
         if self.provider != "runpod" && !(design_fixture && matches!(self.provider.as_str(), "daytona" | "fly")) {
             return Err(ProfileError::Invalid(
                 "Only RunPod can deploy workers; Daytona and Fly.io are design fixtures",

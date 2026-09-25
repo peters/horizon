@@ -5,6 +5,7 @@ use super::{
 };
 use horizon_cloud_protocol::{
     bootstrap::{BootstrapOutcome, BootstrapReceipt, RecoveryPayload, RecoveryReceipt, RecoveryRequest, Startup},
+    membership::Manifest,
     signed::{Action, SignedIntent, Target},
 };
 use serde::{Deserialize, Serialize};
@@ -41,18 +42,6 @@ pub(super) struct Bootstrap {
     pub key_hash: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abandonment: Option<BootstrapReceipt>,
-}
-
-/// This entry point only understands the pre-admission manifest. Later membership
-/// must add full validation before this recovery path can accept admitted projects.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Manifest {
-    version: u32,
-    startup: Startup,
-    worker_id: String,
-    revision: u64,
-    members: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,13 +113,7 @@ pub(super) fn recover(
     if bootstrap.recovery.as_ref().is_some_and(|saved| saved != &receipt) {
         return Err(invalid());
     }
-    let expected = Manifest {
-        version: 1,
-        startup: bootstrap.startup.clone(),
-        worker_id: bootstrap.worker_id.clone(),
-        revision: 0,
-        members: Vec::new(),
-    };
+    let expected = Manifest::empty(bootstrap.startup.clone(), bootstrap.worker_id.clone());
     let manifest = store.read(MANIFEST)?;
     if bootstrap.recovery.is_none() && (bootstrap.phase != Phase::Initializing || manifest.is_some()) {
         return Err(invalid());
@@ -251,13 +234,7 @@ impl Bootstrap {
     }
 
     pub fn empty(&self, store: &Store) -> io::Result<()> {
-        let expected = Manifest {
-            version: 1,
-            startup: self.startup.clone(),
-            worker_id: self.worker_id.clone(),
-            revision: 0,
-            members: Vec::new(),
-        };
+        let expected = Manifest::empty(self.startup.clone(), self.worker_id.clone());
         match store.read(MANIFEST)? {
             Some(bytes) if self.recovery.is_some() && decode::<Manifest>(&bytes)? == expected => Ok(()),
             None if self.phase == Phase::Initializing || self.phase == Phase::Abandoned => Ok(()),

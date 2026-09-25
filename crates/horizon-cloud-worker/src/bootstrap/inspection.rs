@@ -72,7 +72,7 @@ fn inspect(
     })
 }
 
-fn probe(capabilities: &Capabilities) -> io::Result<()> {
+pub(super) fn probe(capabilities: &Capabilities) -> io::Result<()> {
     // Version probes may create configuration. Keep it away from retained
     // project homes, credentials, global runtime files and the worker workspace.
     let home = tempfile::tempdir()?;
