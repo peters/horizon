@@ -304,7 +304,52 @@ fn unrelated_inventory_changes_preserve_clear_but_discard_stale_select() {
         state.sync(Some("session"), &groups);
         assert_eq!(state.entries["source"].clearing.contains("app"), clear);
         assert!(state.entries["source"].pending.is_none());
+        let entry = state.entries.get_mut("source").unwrap();
+        let (_, sender) = pending_job(entry);
+        sender
+            .send(job::Outcome {
+                snapshot: None,
+                error: Some("Unavailable".into()),
+            })
+            .unwrap();
+        entry.poll();
+        assert!(entry.selecting.is_empty());
     }
+}
+
+#[test]
+fn idle_companions_schedule_only_the_earliest_unblocked_refresh() {
+    let groups = groups();
+    let delay = |state: &mut State| {
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+        }
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            state.tick(Path::new("/absent"), &groups, ui.ctx());
+        })
+        .discard_textures()
+        .viewport_output[&egui::ViewportId::ROOT]
+            .repaint_delay
+    };
+    let mut state = State::default();
+    state.sync(Some("session"), &groups);
+    let entry = state.entries.get_mut("source").unwrap();
+    entry.due = Instant::now() + REFRESH;
+    let mut other = Entry::new(entry.owner.clone());
+    other.blocked = true;
+    state.entries.insert("blocked".into(), other);
+    assert!(delay(&mut state) > REFRESH / 2);
+    let other = state.entries.get_mut("blocked").unwrap();
+    other.blocked = false;
+    other.due = Instant::now() + Duration::from_secs(5);
+    let refresh = delay(&mut state);
+    assert!(refresh > Duration::from_secs(2) && refresh <= Duration::from_secs(5));
+    let (_, _sender) = pending_job(state.entries.get_mut("source").unwrap());
+    let polling = delay(&mut state);
+    assert!(!polling.is_zero() && polling <= Duration::from_millis(100));
+    state.entries.clear();
+    assert!(delay(&mut state) > Duration::from_secs(60));
 }
 
 #[test]

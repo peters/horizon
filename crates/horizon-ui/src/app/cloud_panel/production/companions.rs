@@ -82,11 +82,11 @@ impl Entry {
     }
 
     fn queue(&mut self, action: Action) {
+        self.discard_pending();
         if let Action::Clear { alias } = action {
             self.selecting.remove(&alias);
             self.clearing.insert(alias);
             self.cancel_job();
-            self.pending = None;
         } else {
             if let Action::Select { alias, .. } = &action {
                 self.selecting.insert(alias.clone());
@@ -94,6 +94,12 @@ impl Entry {
             self.pending = Some(action);
         }
         self.due = Instant::now();
+    }
+
+    fn discard_pending(&mut self) {
+        if let Some(Action::Select { alias, .. }) = self.pending.take() {
+            self.selecting.remove(&alias);
+        }
     }
 
     fn poll(&mut self) {
@@ -255,7 +261,7 @@ impl State {
                 .collect();
             for entry in self.entries.values_mut() {
                 entry.cancel_job();
-                entry.pending = None;
+                entry.discard_pending();
                 entry.error = Some("Cloud inventory changed; refreshing companion access".into());
                 entry.due = Instant::now();
             }
@@ -333,12 +339,17 @@ impl State {
                 ctx.clone(),
             ));
         }
-        if !self.entries.is_empty() {
-            ctx.request_repaint_after(if self.entries.values().any(|entry| entry.job.is_some()) {
-                Duration::from_millis(100)
-            } else {
-                Duration::from_secs(1)
-            });
+        let delay = if self.entries.values().any(|entry| entry.job.is_some()) {
+            Some(Duration::from_millis(100))
+        } else {
+            self.entries
+                .values()
+                .filter(|entry| !entry.blocked)
+                .map(|entry| entry.due.saturating_duration_since(Instant::now()))
+                .min()
+        };
+        if let Some(delay) = delay {
+            ctx.request_repaint_after(delay);
         }
     }
 
