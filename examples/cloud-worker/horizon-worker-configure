@@ -8,6 +8,8 @@ subprocess.run(['git', 'lfs', 'install', '--skip-repo'], check=True)
 subprocess.run(['git', 'config', '--global', 'lfs.storage', '/workspace/source/lfs'], check=True)
 capabilities = json.loads(Path('/workspace/capabilities.json').read_text())
 servers = {}
+if capabilities.get('agents', []):
+    servers['horizon-cloud-companions'] = {'command': '/usr/local/bin/horizon-cloud-worker', 'args': ['companions', 'mcp']}
 if capabilities.get('browsers', []) or capabilities.get('browserstack') is not None:
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):

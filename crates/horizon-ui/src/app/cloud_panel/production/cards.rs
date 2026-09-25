@@ -38,6 +38,7 @@ impl HorizonApp {
                         if let Some(size) = profile_details(ui, group.issue, launch, runtime) {
                             resize = Some((group.issue, size));
                         }
+                        self.cloud_prototype.production.companions.render(ui, &launch.id);
                         ui.add_space(10.0);
                         ui.label("Panel layout");
                         let mut selected = group.layout;

@@ -75,7 +75,7 @@ def main():
                             'import shutil,sys; print(bool(shutil.which(sys.argv[1])))', executable)
                 assert check.stdout.strip() == 'False', 'Unexpected installed executable: ' + executable
             config = json.loads(run('docker', 'exec', name, 'cat', '/workspace/agent-mcp.json').stdout)
-            expected = set()
+            expected = {'horizon-cloud-companions'} if caps.get('agents') else set()
             if caps.get('browsers') or caps.get('browserstack') is not None:
                 expected.add('horizon-browser')
             if caps.get('desktop'):

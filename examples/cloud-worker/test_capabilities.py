@@ -205,11 +205,14 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/workspace/capabilities.json', self.available)
         self.configure()
         actual = tomllib.loads(config.read_text())['mcp_servers']
-        self.assertEqual(set(actual), {'horizon-device', 'project'})
+        self.assertEqual(set(actual), {'horizon-device', 'horizon-cloud-companions', 'project'})
         self.assertEqual(actual['project']['command'], 'project-tool')
         servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
-        self.assertEqual(set(servers), {'horizon-device'})
+        self.assertEqual(set(servers), {'horizon-device', 'horizon-cloud-companions'})
+        self.assertEqual(servers['horizon-cloud-companions'], {
+            'command': '/usr/local/bin/horizon-cloud-worker', 'args': ['companions', 'mcp']})
         self.assertNotIn('horizon-browser', self.path('/workspace/home/.grok/config.toml').read_text())
+        self.assertNotIn('horizon-cloud-companions', self.path('/workspace/home/.grok/config.toml').read_text())
         self.write('/workspace/capabilities.json', {})
         self.configure()
         self.assertEqual(set(tomllib.loads(config.read_text())['mcp_servers']), {'project'})

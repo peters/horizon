@@ -656,6 +656,18 @@ resources. Capability shape validation is shared with profile validation in
 under `bootstrap_initialization/tests`, reusing the existing synthetic SSH fixture
 without adding a production host admission API.
 
+Companion controls under `cloud_panel/production/companions` keep only cached
+presentation, queued user actions, and cancellable jobs in UI. Repository
+identity, durable selection, authorization, and status remain in the shared
+controller and worker protocols. Inventory or owning-session changes cancel
+stale jobs and wait for completion before new work. Queued revocations retain
+their original owner and finish without reading the new session's inventory,
+even while its bootstrap is pending. Only saved sessions can authorize access;
+render paths perform no repository or SSH work. Shutdown fences earlier jobs,
+then calls the core journal-only deselection operation in background save jobs.
+Both exit paths wait for durable acknowledgement, leaving remote revocation to
+the next reconciliation and retaining failed local saves for retry.
+
 `cloud_runtime::project_reservations` coordinates owning-host reserve/cancel/retry
 operations; its `journal` leaf validates exact pending transitions and confirmed
 signed membership history inside the existing native-anchored Owner payload.
