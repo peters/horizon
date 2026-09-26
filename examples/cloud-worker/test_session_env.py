@@ -61,6 +61,10 @@ class SessionEnvironmentTests(unittest.TestCase):
         self.layer('40-c.env', 'PATH_PREPEND=/opt/x\nPATH_PREPEND=/bin\n')
         self.assertEqual(self.applied('/usr/bin:/bin:/usr/bin')['PATH'], '/opt/tool/bin:/usr/bin:/bin:/opt/x')
 
+    def test_empty_path_components_are_kept(self):
+        self.layer('20-a.env', 'PATH_APPEND=/opt/x\n')
+        self.assertEqual(self.applied('/usr/bin::/bin:')['PATH'], '/usr/bin::/bin:/opt/x')
+
     def test_later_files_override_in_lexical_order(self):
         self.layer('20-library.env', 'TOOLKIT=library\nONLY_LIBRARY=1\n')
         self.layer('30-consumer.env', 'TOOLKIT=consumer\nEMPTY=\nSPACED=a b=c  \n')
@@ -77,8 +81,9 @@ class SessionEnvironmentTests(unittest.TestCase):
             ('20-x.env', 'PATH=/opt/bin\n', '20-x.env:1: PATH cannot be set by an image layer'),
             ('20-x.env', 'HOME=/root\n', 'HOME cannot be set'),
             ('20-x.env', 'HORIZON_SESSION_DIR=/tmp\n', 'HORIZON_SESSION_DIR cannot be set'),
-            ('20-x.env', 'UID=0\n', 'UID cannot be set'),
-            ('20-x.env', 'BASHOPTS=x\n', 'BASHOPTS cannot be set'),
+            ('20-x.env', 'HORIZON=elsewhere\n', 'HORIZON cannot be set'),
+            ('20-x.env', 'DISPLAY=:1\n', 'DISPLAY cannot be set'),
+            ('20-x.env', 'ANTHROPIC_API_KEY=x\n', 'ANTHROPIC_API_KEY cannot be set'),
             ('20-x.env', 'K' * 129 + '=1\n', 'at most 128'),
             ('20-x.env', 'PATH_PREPEND=opt/bin\n', 'PATH_PREPEND needs one absolute directory'),
             ('20-x.env', 'PATH_APPEND=/a:/b\n', 'PATH_APPEND needs one absolute directory'),

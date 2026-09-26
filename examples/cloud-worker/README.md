@@ -312,20 +312,22 @@ data, never shell, with one entry per line:
 | `PATH_APPEND=DIR` | Adds `DIR` to the end of `PATH`, in file order |
 | empty, or starting with `#` | Ignored |
 
-`PATH` starts from the one SSH gives the session. A directory already on it, from that
-base or an earlier line, stays where it is. `KEY` is a letter or `_` followed by letters,
-digits or `_`, at most 128 characters. `PATH`, `HOME` and every `HORIZON_` variable belong
-to the worker, and Bash cannot set `BASHOPTS`, `BASH_VERSINFO`, `EUID`, `PPID`,
-`SHELLOPTS` or `UID`; all of them are refused. The directory holds at most 64 regular files
+`PATH` starts from the one SSH gives the session, empty components included. A directory
+already on it, from that base or an earlier line, stays where it is. `KEY` is a letter or
+`_` followed by letters, digits or `_`, at most 128 characters. The variables the worker
+sets or clears for every session are refused: `PATH`, `HOME`, `DISPLAY`, `HORIZON`, every
+`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
+and `ANTHROPIC_CUSTOM_HEADERS`. The directory holds at most 64 regular files
 of at most 16 KiB each, and a value is at most 4096 characters. Any other line, a control
 character (including tab, on any line), invalid UTF-8, another kind of entry or a larger
 file is refused with its file and line.
 
 `horizon-worker-check` validates the files, so a malformed file fails the image check,
 worker readiness and every session attach or relaunch before anything is started.
-`horizon-worker-run` applies them to agent sessions, with or without siblings, before
-setting the worker's own variables; if they are refused at that point, it starts no
-process, records exit status 3 and appends the reason to `/workspace/session-env.log`.
+`horizon-worker-run` passes them to the agent process of every session, with or without
+siblings, through `env` at launch, so each accepted value arrives exactly as written and
+the launcher's own shell never interprets it. If they are refused at that point, it starts
+no process, records exit status 3 and appends the reason to `/workspace/session-env.log`.
 Without the directory nothing changes. Companion shells from other clouds do not apply
 the files. The checker reports `horizon-session-env-contract=1` when the image has
 `horizon-worker-session-env`.

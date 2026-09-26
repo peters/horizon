@@ -30,7 +30,8 @@ keys = ['DISABLE_AUTOUPDATER', 'HOME', 'HORIZON', 'HORIZON_BROWSER_ACTOR',
         'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR']
 Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
     'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys},
-    'path': os.environ['PATH'], 'toolkit': os.environ.get('TOOLKIT')}))
+    'path': os.environ['PATH'], 'toolkit': os.environ.get('TOOLKIT'),
+    'layer': {key: os.environ[key] for key in ['_', 'IFS', 'BASH_ALIASES', 'UID'] if key in os.environ}}))
 sys.exit(23)
 '''
         for name, body in [('claude', child), ('grok', child), ('sleep', 'import sys\nsys.exit(0)\n')]:
@@ -106,17 +107,30 @@ sys.exit(23)
         self.assertIn('session test-panel: Session environment refused:', log)
         self.assertIn('20-library.env:1', log)
 
-    def test_a_variable_bash_cannot_set_starts_no_process(self):
-        # The helper refuses such names; this is the launcher's own backstop.
-        helper = self.tools / 'horizon-worker-session-env'
-        helper.write_text('#!/bin/sh\nprintf "TOOLKIT=1\\0UID=0\\0"\n')
-        result = subprocess.run(['bash', str(self.script), 'test-panel', 'claude'], env=self.env,
-                                capture_output=True, text=True, timeout=10, check=True)
-        self.assertFalse((self.root / 'child.json').exists())
-        self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '3\n')
-        self.assertIn('cannot set UID', result.stderr)
-        self.assertIn('cannot set UID', (self.workspace / 'session-env.log').read_text())
+    def test_every_accepted_variable_reaches_the_agent_exactly(self):
+        # Names a shell treats specially are passed through, never interpreted by the launcher.
+        self.fragments.mkdir()
+        (self.fragments / '20-layer.env').write_text('_=layer\nIFS=,\nBASH_ALIASES=alias\nUID=0\nTOOLKIT=a b\n')
+        child = self.launch('grok')
+        self.assertEqual(child['layer'], {'_': 'layer', 'IFS': ',', 'BASH_ALIASES': 'alias', 'UID': '0'})
+        self.assertEqual(child['toolkit'], 'a b')
+        self.assertEqual(child['args'], ['--no-leader'])
 
+    def test_every_variable_the_launcher_sets_is_refused_in_a_layer(self):
+        import re
+        source = Path(__file__).with_name('horizon-worker-run').read_text()
+        owned = set(re.findall(r'\bexport ((?:[A-Z_][A-Z0-9_]*(?:=\S*)? ?)+)', source))
+        names = {word.split('=', 1)[0] for group in owned for word in group.split()}
+        names |= set(re.findall(r'\bunset ([A-Z_][A-Z0-9_]*)', source))
+        names |= {'PATH'}
+        self.assertTrue({'HOME', 'DISPLAY', 'HORIZON', 'HORIZON_SESSION_DIR', 'ANTHROPIC_API_KEY'} <= names, names)
+        self.fragments.mkdir()
+        helper = self.tools / 'horizon-worker-session-env'
+        for name in sorted(names):
+            (self.fragments / '20-layer.env').write_text(name + '=layer\n')
+            refused = subprocess.run([str(helper), 'check'], capture_output=True, text=True, timeout=10)
+            self.assertEqual(refused.returncode, 1, name)
+            self.assertIn(f'{name} cannot be set by an image layer', refused.stderr)
 
 if __name__ == '__main__':
     unittest.main()

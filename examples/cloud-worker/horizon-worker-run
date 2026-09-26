@@ -10,7 +10,8 @@ if [ "$agent" = companion ]; then
     fi
     exec /bin/bash
 fi
-# Image layers add the session environment first, so the worker's own variables below win.
+# Image layers' session environment reaches the agent process exactly as written, through
+# env at launch, so this shell never interprets it. Names this script sets are refused.
 refuse_session_env() {
     printf '%s\n' "$1" >&2
     printf '%s session %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" "$1" >> /workspace/session-env.log
@@ -23,9 +24,7 @@ if ! refusal="$(horizon-worker-session-env apply 2>&1 >"$session_env")"; then
     rm -f "$session_env"
     refuse_session_env "$refusal"
 fi
-while IFS= read -r -d '' assignment; do
-    export "$assignment" 2>/dev/null || { rm -f "$session_env"; refuse_session_env "Session environment refused: cannot set ${assignment%%=*}"; }
-done < "$session_env"
+mapfile -d '' -t session_env_assignments < "$session_env"
 rm -f "$session_env"
 export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
 export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"
@@ -47,11 +46,11 @@ if [ "$agent" = claude ]; then
         export ANTHROPIC_WORKSPACE_ID
         export ANTHROPIC_CUSTOM_HEADERS="anthropic-workspace-id: $ANTHROPIC_WORKSPACE_ID"
     fi
-    claude --mcp-config /workspace/agent-mcp.json
+    env -- "${session_env_assignments[@]}" claude --mcp-config /workspace/agent-mcp.json
 elif [ "$agent" = grok ]; then
-    grok --no-leader
+    env -- "${session_env_assignments[@]}" grok --no-leader
 else
-    "$agent"
+    env -- "${session_env_assignments[@]}" "$agent"
 fi
 status=$?
 printf '%s\n' "$status" > "/workspace/sessions/$id/exit-status"

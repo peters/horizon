@@ -24,8 +24,9 @@ KEY = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}')
 MAX_KEY = 128
 # C0 controls including tab, DEL and C1 controls.
 CONTROL = re.compile('[\x00-\x1f\x7f-\x9f]')
-# Bash cannot assign these, so a session could never receive them.
-BASH_READONLY = frozenset({'BASHOPTS', 'BASH_VERSINFO', 'EUID', 'PPID', 'SHELLOPTS', 'UID'})
+# horizon-worker-run sets or clears these for every session; a layer cannot replace them.
+WORKER_OWNED = frozenset({'PATH', 'HOME', 'DISPLAY', 'HORIZON', 'DISABLE_AUTOUPDATER',
+                          'ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS'})
 PATH_DIRECTIVES = ('PATH_PREPEND', 'PATH_APPEND')
 MAX_FILES = 64
 MAX_FILE_BYTES = 16 * 1024
@@ -37,9 +38,9 @@ class Refused(ValueError):
 
 
 def reserved(key):
-    # The worker owns these: PATH changes only through the directives, and HOME and every
-    # HORIZON_ variable identify the session and its services.
-    return key in ('PATH', 'HOME') or key.startswith('HORIZON_') or key in BASH_READONLY
+    # PATH changes only through the directives; every HORIZON_ variable identifies the
+    # session and its services.
+    return key in WORKER_OWNED or key.startswith('HORIZON_')
 
 
 def parse(path, variables, directives):
@@ -96,7 +97,8 @@ def session_path(base, directives):
     # Each PATH_PREPEND goes first, so a later layer's directory is searched before an
     # earlier one's; PATH_APPEND adds to the end. A directory already on PATH, from the base
     # or an earlier line, stays where it is.
-    parts = list(dict.fromkeys(part for part in base.split(':') if part))
+    # An empty component means the current directory, so it is kept like any other.
+    parts = list(dict.fromkeys(base.split(':')))
     for key, directory in directives:
         if directory in parts:
             continue
