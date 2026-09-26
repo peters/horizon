@@ -2,7 +2,7 @@
 //! only an exact `allowedCudaVersions` list, so a profile's `min_cuda_version` floor is
 //! expanded from the v2 GPU catalog (2.0.0), which reports the CUDA versions that hosts
 //! of each GPU type run. The v2 pod create takes the floor itself as `gpu.minCudaVersion`.
-use super::RunPod;
+use super::{RunPod, volumes::Capacity};
 use crate::{Cancellation, CloudError, WorkerSpec, profile::cuda_version};
 use serde::Deserialize;
 
@@ -15,7 +15,8 @@ const POD_CREATE_VERSIONS: [&str; 12] = [
 
 impl RunPod {
     /// The CUDA versions at or above the profile's floor that hosts of the requested GPU
-    /// types run with free capacity now, newest first. Empty when the profile sets no floor.
+    /// types run with free capacity now, in the worker's data centers when it names any,
+    /// newest first. Empty when the profile sets no floor.
     /// # Errors
     /// Reports a floor no requested GPU type meets, provider errors and malformed catalogs.
     pub(super) fn allowed_cuda_versions(
@@ -27,9 +28,9 @@ impl RunPod {
             return Ok(Vec::new());
         };
         let minimum = cuda_version(floor).ok_or(CloudError::Invalid("Invalid worker profile"))?;
-        let catalog = self.cuda_catalog(floor, cancel)?;
+        let catalog = self.cuda_catalog(&format!("minCudaVersion={floor}"), cancel)?;
         let mut versions = Vec::new();
-        for gpu in catalog.gpus.iter().filter(|gpu| spec.gpu_types.contains(&gpu.id)) {
+        for gpu in catalog.requested(spec) {
             for offered in &gpu.cuda_versions {
                 let number = cuda_version(&offered.version).ok_or(CloudError::InvalidResponse)?;
                 // A version whose hosts are full would only fail the create on capacity.
@@ -40,16 +41,43 @@ impl RunPod {
         }
         versions.sort_unstable_by(|a, b| b.cmp(a));
         versions.dedup();
-        if versions.is_empty() {
+        let mut allowed = Vec::new();
+        for (_, version) in versions {
+            if spec.data_centers.is_empty() || self.free_in_data_centers(spec, &version, cancel)? {
+                allowed.push(version);
+            }
+        }
+        if allowed.is_empty() {
             return Err(CloudError::CudaUnavailable(floor.to_owned()));
         }
-        Ok(versions.into_iter().map(|(_, version)| version).collect())
+        Ok(allowed)
     }
 
-    /// GPU types with the CUDA versions their Secure Cloud pod hosts run, at `floor` or newer.
-    fn cuda_catalog(&self, floor: &str, cancel: &Cancellation) -> Result<Catalog, CloudError> {
+    /// Whether a requested GPU type has free capacity on `version` in one of the worker's
+    /// data centers. The floor query's version flags span every data center, while an
+    /// exact `cudaVersions` filter scopes each type's per-data-center availability to it.
+    fn free_in_data_centers(
+        &self,
+        spec: &WorkerSpec,
+        version: &str,
+        cancel: &Cancellation,
+    ) -> Result<bool, CloudError> {
+        let catalog = self.cuda_catalog(&format!("cudaVersions={version}"), cancel)?;
+        Ok(catalog.requested(spec).any(|gpu| {
+            gpu.cuda_versions
+                .iter()
+                .any(|offered| offered.available && offered.version == version)
+                && gpu.data_centers.iter().any(|center| {
+                    spec.data_centers.contains(&center.id)
+                        && matches!(center.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
+                })
+        }))
+    }
+
+    /// GPU types with the CUDA versions their Secure Cloud pod hosts run, scoped by `filter`.
+    fn cuda_catalog(&self, filter: &str, cancel: &Cancellation) -> Result<Catalog, CloudError> {
         let url = format!(
-            "{}/gpus?include=AVAILABILITY&product=POD&cloud=SECURE&minCudaVersion={floor}",
+            "{}/gpus?include=AVAILABILITY&product=POD&cloud=SECURE&{filter}",
             self.catalog_endpoint
         );
         serde_json::from_value(self.request_url("GET", &url, None, cancel, None)?)
@@ -61,14 +89,21 @@ impl RunPod {
 struct Catalog {
     gpus: Vec<Gpu>,
 }
+impl Catalog {
+    fn requested<'a>(&'a self, spec: &'a WorkerSpec) -> impl Iterator<Item = &'a Gpu> {
+        self.gpus.iter().filter(|gpu| spec.gpu_types.contains(&gpu.id))
+    }
+}
 /// A missing `cudaVersions` means none: the catalog omits it for a GPU type whose hosts
-/// report no CUDA version.
+/// report no CUDA version. A missing `dataCenters` means the type is unavailable everywhere.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Gpu {
     id: String,
     #[serde(default)]
     cuda_versions: Vec<CudaVersion>,
+    #[serde(default)]
+    data_centers: Vec<Capacity>,
 }
 #[derive(Deserialize)]
 struct CudaVersion {

@@ -162,8 +162,8 @@ newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a
 worker can land on a host too old for the image. Versions compare as numbers, so
 12.11 is above 12.2, and CPU profiles reject the field. Before requesting a worker,
 Horizon asks RunPod's GPU catalog which CUDA versions hosts of the requested GPU
-types run with free capacity, and asks for those at or above the floor that the
-pod API accepts. When none remains, the attempt fails before any worker is
+types run with free capacity, in the allowed data centers when the worker is
+limited to some, and asks for those at or above the floor that the pod API accepts. When none remains, the attempt fails before any worker is
 requested; choose other GPU types, try again later or lower the floor. The GPU stock New cloud shows does not yet take the floor into account.
 
 Before each image build, Horizon looks up the release npm currently tags `latest`

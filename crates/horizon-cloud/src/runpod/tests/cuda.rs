@@ -22,6 +22,14 @@ fn gpu_with(id: &str, versions: &[(&str, bool)]) -> Value {
         .collect();
     json!({"id": id, "name": id, "memory": 24, "secure": true, "price": {"secure": 0.5}, "cudaVersions": versions})
 }
+fn gpu_in(id: &str, version: &str, centers: &[(&str, &str)]) -> Value {
+    let mut gpu = gpu(id, &[version]);
+    gpu["dataCenters"] = centers
+        .iter()
+        .map(|(center, availability)| json!({"id": center, "name": center, "availability": availability}))
+        .collect();
+    gpu
+}
 fn ensure(provider: &RunPod, spec: &WorkerSpec, state: &mut CreateState) -> Result<Worker, CloudError> {
     provider.ensure(spec, state, &Cancellation::default(), |_| Ok(()), |_| {})
 }
@@ -136,6 +144,65 @@ fn a_malformed_or_failed_catalog_never_creates() {
         let mut state = CreateState::Prepared;
         assert!(ensure(&provider, &spec, &mut state).is_err());
         task.join().unwrap();
+        assert_eq!(state, CreateState::Prepared);
+        assert!(!requests.lock().unwrap().iter().any(|r| r.starts_with("POST ")));
+    }
+}
+
+#[test]
+fn a_version_free_only_outside_the_workers_data_centers_is_not_requested() {
+    let mut spec = gpu_spec(Some("12.8"));
+    spec.data_centers = vec!["EU-RO-1".into(), "EU-SE-1".into()];
+    let floor = json!({"gpus": [gpu("NVIDIA L4", &["13.0", "12.9", "12.8"])]});
+    // 13.0 is free in another data center but full here; 12.9 is free here only on a
+    // GPU type the worker did not request; 12.8 is free here.
+    let exact_13_0 = json!({"gpus": [gpu_in("NVIDIA L4", "13.0", &[("US-TX-3", "HIGH"), ("EU-RO-1", "NONE")])]});
+    let exact_12_9 = json!({"gpus": [
+        gpu_in("NVIDIA L4", "12.9", &[("US-TX-3", "LOW")]),
+        gpu_in("NVIDIA H100 80GB HBM3", "12.9", &[("EU-SE-1", "HIGH")])
+    ]});
+    let exact_12_8 = json!({"gpus": [gpu_in("NVIDIA L4", "12.8", &[("EU-SE-1", "LOW")])]});
+    let (provider, requests, task) = catalog_server(vec![
+        (200, "[]".into()),
+        (200, floor.to_string()),
+        (200, exact_13_0.to_string()),
+        (200, exact_12_9.to_string()),
+        (200, exact_12_8.to_string()),
+        (201, worker(&spec).to_string()),
+    ]);
+    let mut state = CreateState::Prepared;
+    ensure(&provider, &spec, &mut state).unwrap();
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    for (request, version) in requests[2..5].iter().zip(["13.0", "12.9", "12.8"]) {
+        let expected = format!("GET /gpus?include=AVAILABILITY&product=POD&cloud=SECURE&cudaVersions={version} ");
+        assert!(request.starts_with(&expected), "{request}");
+    }
+    let body = body(&requests[5]);
+    assert_eq!(body["allowedCudaVersions"], json!(["12.8"]));
+    assert_eq!(body["dataCenterIds"], json!(spec.data_centers));
+}
+
+#[test]
+fn a_floor_met_only_outside_the_workers_data_centers_fails_before_any_allocation() {
+    let mut spec = gpu_spec(Some("13.0"));
+    spec.data_centers = vec!["EU-RO-1".into()];
+    let floor = json!({"gpus": [gpu("NVIDIA L4", &["13.0"])]});
+    for exact in [
+        json!({"gpus": [gpu_in("NVIDIA L4", "13.0", &[("US-TX-3", "HIGH"), ("EU-RO-1", "NONE")])]}),
+        // No data center has the type free on this version, so the list is omitted.
+        json!({"gpus": [gpu("NVIDIA L4", &["13.0"])]}),
+    ] {
+        let (provider, requests, task) = catalog_server(vec![
+            (200, "[]".into()),
+            (200, floor.to_string()),
+            (200, exact.to_string()),
+        ]);
+        let mut state = CreateState::Prepared;
+        let error = ensure(&provider, &spec, &mut state).unwrap_err();
+        task.join().unwrap();
+        assert!(matches!(&error, CloudError::CudaUnavailable(floor) if floor == "13.0"));
+        assert!(error.to_string().contains("data centers"), "{error}");
         assert_eq!(state, CreateState::Prepared);
         assert!(!requests.lock().unwrap().iter().any(|r| r.starts_with("POST ")));
     }
