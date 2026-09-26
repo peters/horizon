@@ -57,6 +57,24 @@ fn new_pull_inputs_follow_provider_limit_without_restricting_publish_or_legacy_s
         assert!(binding.validate().is_ok());
         assert_eq!(draft::Draft::from_binding(binding).validate().is_ok(), length == 191);
     }
+    binding.pull.username = "é".repeat(191);
+    assert!(binding.validate().is_ok());
+    let draft = draft::Draft::from_binding(binding);
+    assert!(draft.validate().is_ok());
+    let saved = draft.save(|_, _| panic!("saved secrets are reused")).unwrap();
+    assert!(saved.validate().is_ok());
+    assert!(credentials::Material::load(&saved.pull, &saved.repository, None).is_ok());
+    binding.pull.username = "é".repeat(192);
+    assert!(binding.validate().is_err());
+    assert!(draft::Draft::from_binding(binding).validate().is_err());
+    binding.pull.username = "r".repeat(256);
+    assert!(binding.validate().is_ok());
+    binding.pull.username = "reader".into();
+    for username in ["p".repeat(257), "é".repeat(129)] {
+        binding.publish.as_mut().unwrap().username = username;
+        assert!(binding.validate().is_err());
+        assert!(draft::Draft::from_binding(binding).validate().is_err());
+    }
 }
 fn image() -> String {
     format!("registry.example/team/worker@sha256:{}", "a".repeat(64))
