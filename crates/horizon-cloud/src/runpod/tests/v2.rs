@@ -209,6 +209,7 @@ fn incomplete_or_cyclic_pages_never_clear_the_creation_fence() {
     for pages in [
         vec![json!([])],
         vec![json!({"pods":[]})],
+        vec![json!({"pods":[],"pagination":{"hasNextPage":false}})],
         vec![json!({"pods":[],"pagination":{"hasNextPage":true,"nextCursor":null}})],
         vec![json!({"pods":[],"pagination":{"hasNextPage":false,"nextCursor":"unexpected"}})],
         vec![json!({"pods":[],"pagination":{"hasNextPage":true,"nextCursor":"same"}}); 2],

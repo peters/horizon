@@ -24,9 +24,11 @@ impl RunPod {
                 .and_then(Value::as_array_mut)
                 .ok_or(CloudError::InvalidResponse)?;
             values.append(rows);
+            let pagination = page.get("pagination").ok_or(CloudError::InvalidResponse)?;
+            // A final cursor must be explicitly null; Option alone also accepts omission.
+            pagination.get("nextCursor").ok_or(CloudError::InvalidResponse)?;
             let pagination: Pagination =
-                serde_json::from_value(page.get("pagination").cloned().ok_or(CloudError::InvalidResponse)?)
-                    .map_err(|_| CloudError::InvalidResponse)?;
+                serde_json::from_value(pagination.clone()).map_err(|_| CloudError::InvalidResponse)?;
             if !pagination.has_next_page {
                 if pagination.next_cursor.is_some() {
                     return Err(CloudError::InvalidResponse);

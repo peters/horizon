@@ -160,6 +160,45 @@ fn uncertain_serverless_visibility_never_allows_storage_mutation() {
 }
 
 #[test]
+fn missing_cursor_cannot_authorize_storage_admission_or_deletion() {
+    for prepared in [true, false] {
+        let malformed = json!({"endpoints":[],"pagination":{"hasNextPage":false}}).to_string();
+        let responses = if prepared {
+            vec![(200, malformed)]
+        } else {
+            vec![(200, volume_body()), (200, malformed)]
+        };
+        let (provider, requests, task) = server(responses);
+        let mut state = if prepared {
+            State::Prepared
+        } else {
+            State::Bound {
+                volume: volume(),
+                creation: None,
+            }
+        };
+        let original = state.clone();
+        let result = if prepared {
+            provider
+                .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                    panic!("incomplete endpoint visibility must not authorize mutation")
+                })
+                .map(|_| ())
+        } else {
+            provider.terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                panic!("incomplete endpoint visibility must not authorize mutation")
+            })
+        };
+        assert!(matches!(result, Err(CloudError::InvalidResponse)));
+        assert_eq!(state, original);
+        task.join().unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), if prepared { 1 } else { 2 });
+        assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    }
+}
+
+#[test]
 fn cluster_pod_attachment_prevents_storage_deletion() {
     let mut attached = worker(&spec());
     attached["cluster"] = json!({"id":"cluster1"});
