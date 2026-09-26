@@ -10,6 +10,8 @@ import tempfile
 import unittest
 
 SCRIPTS = Path(__file__).parent
+# Without an init.defaultBranch setting, as on a fresh worker.
+UNCONFIGURED_GIT = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
 
 class SourceFormatTests(unittest.TestCase):
     def git(self, *args, **kwargs):
@@ -54,8 +56,10 @@ class SourceFormatTests(unittest.TestCase):
                 revision, pack, workspace = self.fixture(Path(directory), object_format)
                 for _ in range(2):
                     (workspace / 'horizon-transfer.pack').write_bytes(pack)
-                    result = self.execute('horizon-worker-import', workspace, revision)
+                    result = self.execute('horizon-worker-import', workspace, revision, env=UNCONFIGURED_GIT)
                     self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    # No Git advice (such as the initial branch hint) reaches deployment logs.
+                    self.assertEqual(result.stderr, b'')
                 self.assertEqual(self.git('--git-dir', workspace / 'repository.git', 'rev-parse', '--show-object-format').decode().strip(), object_format)
                 self.assertEqual(self.git('--git-dir', workspace / 'repository.git', 'show', revision+':file.txt'), b'selected committed content\n')
 
@@ -65,8 +69,9 @@ class SourceFormatTests(unittest.TestCase):
                 root = Path(directory)
                 revision, pack, workspace = self.fixture(root, object_format)
                 self.archive(root, workspace, [{'path': 'nested/module', 'revision': revision}], [pack])
-                imported = self.execute('horizon-worker-source', workspace, 'import')
+                imported = self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT)
                 self.assertEqual(imported.returncode, 0, imported.stderr.decode())
+                self.assertEqual(imported.stderr, b'')
                 agent = workspace / 'agents' / 'isolated'
                 agent.mkdir(parents=True)
                 checked = self.execute('horizon-worker-source', workspace, 'checkout', str(agent))

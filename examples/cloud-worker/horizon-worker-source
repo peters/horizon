@@ -72,7 +72,7 @@ def import_source(root, upload):
                 raise ValueError('Invalid submodule revision')
             object_format = 'sha256' if len(revision) == 64 else 'sha1'
             if not repo.exists():
-                git('init', '--bare', '--object-format=' + object_format, repo, stdout=subprocess.DEVNULL)
+                git('init', '--bare', '-q', '--object-format=' + object_format, repo, stdout=subprocess.DEVNULL)
             actual_format = subprocess.check_output(['git', '--git-dir', str(repo), 'rev-parse', '--show-object-format'], text=True).strip()
             if actual_format != object_format:
                 raise ValueError('Submodule object format mismatch')

@@ -21,7 +21,7 @@ exec 9>/workspace/import.lock
 flock 9
 format=sha1
 if [ "${#revision}" = 64 ]; then format=sha256; fi
-if [ ! -d "$repository" ]; then mkdir -p "${repository%/*}"; git init --bare --object-format="$format" "$repository" >/dev/null; fi
+if [ ! -d "$repository" ]; then mkdir -p "${repository%/*}"; git init --bare -q --object-format="$format" "$repository" >/dev/null; fi
 [ "$(git --git-dir="$repository" rev-parse --show-object-format)" = "$format" ] || { echo 'Cloud object format mismatch' >&2; exit 3; }
 # The global lfs.storage names the primary's store; a sibling hydrates only from its own.
 if [ -n "$sibling" ]; then git --git-dir="$repository" config lfs.storage "$sibling/source/lfs"; fi

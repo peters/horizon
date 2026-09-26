@@ -1,0 +1,129 @@
+#!/usr/bin/python3
+"""Session environment contributed by image layers.
+
+Each recipe layer, the primary's and every sibling's, may add files to
+/etc/horizon-worker/session-env.d/. They are read in lexical order of their names and hold
+data, never shell: `KEY=VALUE` sets a variable (a later value replaces an earlier one), and
+`PATH_PREPEND=DIR` or `PATH_APPEND=DIR` adds an absolute directory to PATH. Blank lines and
+lines starting with `#` are ignored; anything else, and any control character, is refused.
+
+  horizon-worker-session-env check   validate every file
+  horizon-worker-session-env apply   print the variables a session sets, each KEY=VALUE\\0,
+                                     with PATH built from the caller's PATH
+"""
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+DIRECTORY = Path('/etc/horizon-worker/session-env.d')
+NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}\.env')
+MAX_NAME = 100
+KEY = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}')
+MAX_KEY = 128
+# C0 controls including tab, DEL and C1 controls.
+CONTROL = re.compile('[\x00-\x1f\x7f-\x9f]')
+# horizon-worker-run sets or clears these for every session; a layer cannot replace them.
+WORKER_OWNED = frozenset({'PATH', 'HOME', 'DISPLAY', 'HORIZON', 'DISABLE_AUTOUPDATER',
+                          'ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS'})
+PATH_DIRECTIVES = ('PATH_PREPEND', 'PATH_APPEND')
+MAX_FILES = 64
+MAX_FILE_BYTES = 16 * 1024
+MAX_VALUE = 4096
+
+
+class Refused(ValueError):
+    pass
+
+
+def reserved(key):
+    # PATH changes only through the directives; every HORIZON_ variable identifies the
+    # session and its services.
+    return key in WORKER_OWNED or key.startswith('HORIZON_')
+
+
+def parse(path, variables, directives):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise Refused(f'{path}: not a regular file')
+    if info.st_size > MAX_FILE_BYTES:
+        raise Refused(f'{path}: larger than {MAX_FILE_BYTES} bytes')
+    try:
+        text = path.read_bytes().decode('utf-8')
+    except UnicodeDecodeError:
+        raise Refused(f'{path}: not UTF-8') from None
+    for number, line in enumerate(text.split('\n'), 1):
+        where = f'{path}:{number}'
+        if CONTROL.search(line):
+            raise Refused(f'{where}: control character in line')
+        if not line or line.startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        if not separator:
+            raise Refused(f'{where}: expected KEY=VALUE, PATH_PREPEND=DIR or PATH_APPEND=DIR')
+        if len(value) > MAX_VALUE:
+            raise Refused(f'{where}: value longer than {MAX_VALUE} characters')
+        if key in PATH_DIRECTIVES:
+            if not value.startswith('/') or ':' in value:
+                raise Refused(f'{where}: {key} needs one absolute directory without ":"')
+            directives.append((key, value))
+        elif not KEY.fullmatch(key):
+            raise Refused(f'{where}: invalid variable name (a letter or _, then letters, digits or _, at most {MAX_KEY})')
+        elif reserved(key):
+            raise Refused(f'{where}: {key} cannot be set by an image layer; use PATH_PREPEND or PATH_APPEND for PATH')
+        else:
+            variables[key] = value
+
+
+def load():
+    """Variables and PATH directives in application order; empty when there are no files."""
+    variables, directives = {}, []
+    if not os.path.lexists(DIRECTORY):
+        return variables, directives
+    if DIRECTORY.is_symlink() or not DIRECTORY.is_dir():
+        raise Refused(f'{DIRECTORY}: not a directory')
+    entries = sorted(DIRECTORY.iterdir(), key=lambda entry: entry.name)
+    if len(entries) > MAX_FILES:
+        raise Refused(f'{DIRECTORY}: more than {MAX_FILES} files')
+    for entry in entries:
+        if not NAME.fullmatch(entry.name):
+            raise Refused(f'{entry}: name must be at most {MAX_NAME} letters, digits, ".", "_" or "-" ending in .env')
+        parse(entry, variables, directives)
+    return variables, directives
+
+
+def session_path(base, directives):
+    # Each PATH_PREPEND goes first, so a later layer's directory is searched before an
+    # earlier one's; PATH_APPEND adds to the end. A directory already on PATH, from the base
+    # or an earlier line, stays where it is.
+    # An empty component means the current directory, so it is kept like any other.
+    parts = list(dict.fromkeys(base.split(':')))
+    for key, directory in directives:
+        if directory in parts:
+            continue
+        if key == 'PATH_PREPEND':
+            parts.insert(0, directory)
+        else:
+            parts.append(directory)
+    return ':'.join(parts)
+
+
+def main(arguments):
+    if arguments not in (['check'], ['apply']):
+        print('Usage: horizon-worker-session-env check|apply', file=sys.stderr)
+        return 2
+    try:
+        variables, directives = load()
+    except (Refused, OSError) as error:
+        print(f'Session environment refused: {error}', file=sys.stderr)
+        return 1
+    if arguments == ['apply']:
+        if directives:
+            variables['PATH'] = session_path(os.environ.get('PATH', os.defpath), directives)
+        sys.stdout.write(''.join(f'{key}={value}\0' for key, value in variables.items()))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

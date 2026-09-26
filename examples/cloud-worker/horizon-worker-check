@@ -152,6 +152,10 @@ try:
         raise ValueError('Worker image does not contain the requested capabilities')
     if 'browserstack' in selected and 'browserstack' not in available:
         raise ValueError('Worker image lacks remote browser support')
+    # Image layers' session environment: a malformed file fails the image check, readiness
+    # and every session start. The helper prints which file and line it refused.
+    if shutil.which('horizon-worker-session-env'):
+        subprocess.run(['horizon-worker-session-env', 'check'], check=True, timeout=20, stdout=subprocess.DEVNULL)
     if args.agent:
         if args.agent != 'shell' and args.agent not in selected['agents']:
             raise ValueError('Agent is disabled by this cloud profile')
@@ -218,6 +222,8 @@ try:
     # Sibling repositories need the manifest helper beside the session script.
     if shutil.which('horizon-worker-siblings'):
         print('horizon-siblings-contract=1')
+    if shutil.which('horizon-worker-session-env'):
+        print('horizon-session-env-contract=1')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1')
