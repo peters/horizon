@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 /// Hours in an average month, for prorating storage over the expected duration.
 const MONTH_HOURS: f64 = 730.0;
+/// `RunPod` bills in US dollars.
+const USD: &str = "USD";
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
 const DEFAULT_STORAGE_GB: u16 = 20;
@@ -33,6 +35,8 @@ pub struct Requirements {
     /// A provider GPU type ID or name, such as `NVIDIA RTX A5000` or `RTX A5000`.
     #[serde(default)]
     pub gpu_type: Option<String>,
+    /// The highest hourly price, in each offer's own currency: US dollars for `RunPod`
+    /// and euros for Hetzner.
     #[serde(default)]
     pub max_hourly: Option<f64>,
     /// Expected running time for the estimated total, at most a year. One hour when
@@ -96,6 +100,9 @@ impl Requirements {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Offer {
     pub provider: &'static str,
+    /// The currency of every amount in this offer, as the provider bills it: `USD` for
+    /// `RunPod` and `EUR` (net of VAT) for Hetzner. Amounts are never converted.
+    pub currency: &'static str,
     /// `cpu` or `gpu`.
     pub kind: &'static str,
     /// The CPU size as `cpu-<vCPU>-<GB>`, or the GPU type ID to request.
@@ -115,8 +122,18 @@ pub struct Offer {
     pub flavors: Vec<String>,
     /// Compute for the expected hours plus the workspace storage for that time.
     pub estimated_total: f64,
-    /// `high`, `medium`, `low`, `none`, or `checked_at_creation` for CPU sizes, whose exact
-    /// stock is confirmed when a cloud is created.
+    /// The most the worker's compute is billed in a month, where the provider caps it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monthly: Option<f64>,
+    /// What a stopped cloud of this kind costs per month: its kept workspace storage.
+    pub stopped_monthly: f64,
+    /// The location the worker is created in, where the offer is for one location.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// `high`, `medium`, `low` or `none` for GPU types, and `checked_at_creation` for
+    /// `RunPod` CPU sizes, whose exact stock is confirmed when a cloud is created. Hetzner
+    /// offers report `listed` or `unlisted`: Hetzner's own flag, which is advisory, so an
+    /// unlisted type can still be created and creation confirms either way.
     pub availability: &'static str,
     /// Regions with this GPU type in stock.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -218,6 +235,7 @@ fn cpu_offers(
             names.dedup();
             offers.push(Offer {
                 provider: list.provider,
+                currency: USD,
                 kind: "cpu",
                 id: format!("cpu-{vcpu}-{memory_gb}"),
                 name: format!("{} · {vcpu} vCPU · {memory_gb} GB", names.join(" or ")),
@@ -227,6 +245,9 @@ fn cpu_offers(
                 hourly,
                 flavors: requested,
                 estimated_total: hourly * hours + storage,
+                monthly: None,
+                stopped_monthly: list.storage.network_month(storage_gb),
+                location: None,
                 availability: "checked_at_creation",
                 regions_in_stock: Vec::new(),
                 host: "provider_operated",
@@ -246,7 +267,7 @@ fn gpu_offers(
     storage_gb: u32,
 ) -> Vec<Offer> {
     // A GPU worker keeps its files on its pod volume, billed at the running rate here.
-    let (running, _) = list.storage.pod_volume_month(storage_gb);
+    let (running, stopped) = list.storage.pod_volume_month(storage_gb);
     let storage = running * hours / MONTH_HOURS;
     let wanted = requirements.gpu_type.as_deref().map(str::trim);
     list.gpus
@@ -262,6 +283,7 @@ fn gpu_offers(
             }
             Some(Offer {
                 provider: list.provider,
+                currency: USD,
                 kind: "gpu",
                 id: gpu.id.clone(),
                 name: gpu.name.clone(),
@@ -271,6 +293,9 @@ fn gpu_offers(
                 hourly: gpu.hourly,
                 flavors: Vec::new(),
                 estimated_total: gpu.hourly * hours + storage,
+                monthly: None,
+                stopped_monthly: stopped,
+                location: None,
                 availability: level(availability),
                 regions_in_stock: regions_in_stock(list, &gpu.id, within),
                 host: "provider_operated",
@@ -324,6 +349,9 @@ fn level(availability: Availability) -> &'static str {
         Availability::None => "none",
     }
 }
+
+mod hetzner;
+pub use hetzner::hetzner;
 
 #[cfg(test)]
 mod tests;

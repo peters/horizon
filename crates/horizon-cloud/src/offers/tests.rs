@@ -66,6 +66,12 @@ fn cpu_offers_meet_the_size_and_rank_by_estimated_total() {
     let storage = 20.0 * 0.07 * 10.0 / MONTH_HOURS;
     assert!((first.estimated_total - (0.16 * 10.0 + storage)).abs() < 1e-9);
     assert_eq!(first.availability, "checked_at_creation");
+    assert_eq!(
+        (first.currency, first.monthly, first.location.as_deref()),
+        ("USD", None, None)
+    );
+    // A stopped CPU cloud keeps its 20 GB network volume.
+    assert!((first.stopped_monthly - 20.0 * 0.07).abs() < 1e-9);
     assert!(
         offers
             .iter()
@@ -145,6 +151,17 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
     };
     // Sold-out types are left out unless asked for.
     assert_eq!(gpu(Requirements::default()), ["NVIDIA RTX A5000", "NVIDIA L4"]);
+    let priced = offers(
+        &list(),
+        &Preferences::default(),
+        &Requirements {
+            gpu: true,
+            ..Requirements::default()
+        },
+    );
+    // A stopped GPU cloud keeps its 20 GB pod volume at the stopped rate.
+    assert_eq!((priced[0].currency, priced[0].monthly), ("USD", None));
+    assert!((priced[0].stopped_monthly - 20.0 * 0.20).abs() < 1e-9);
     assert_eq!(
         gpu(Requirements {
             include_unavailable: true,
