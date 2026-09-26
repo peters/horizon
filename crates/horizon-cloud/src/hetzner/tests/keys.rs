@@ -58,7 +58,7 @@ fn conflicts_reconcile_or_refuse_and_other_material_is_rejected() {
             .ensure_ssh_key(OPERATION, PUBLIC_KEY, &cancel)
             .unwrap_err()
             .to_string(),
-        "This public key is already registered in the Hetzner project under another name"
+        "The Hetzner project already has an SSH key with this cloud's name or this public key that this cloud does not own"
     );
     assert!(matches!(
         hetzner.ensure_ssh_key(OPERATION, PUBLIC_KEY, &cancel),

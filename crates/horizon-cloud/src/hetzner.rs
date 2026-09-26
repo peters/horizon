@@ -235,7 +235,23 @@ impl Hetzner {
         body: Option<Value>,
         cancel: &Cancellation,
     ) -> Result<Value, Failure> {
+        self.send_within(method, path, body, cancel, None)
+    }
+
+    /// As `send`, with a caller budget for a read that covers the response headers
+    /// and body. A budget is capped at `REQUEST_TIMEOUT`.
+    pub(crate) fn send_within(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        cancel: &Cancellation,
+        budget: Option<Duration>,
+    ) -> Result<Value, Failure> {
         cancel.check().map_err(Failure::Local)?;
+        if budget.is_some_and(|budget| budget.is_zero()) {
+            return Err(Failure::Local(CloudError::Transport));
+        }
         let url = format!("{}{path}", self.endpoint);
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
         let response = match method {
@@ -245,7 +261,17 @@ impl Hetzner {
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or_else(|| Value::Object(serde_json::Map::new()))),
             Method::Delete => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
-            Method::Get => self.agent.get(&url).header("Authorization", auth.as_str()).call(),
+            Method::Get => {
+                let request = self.agent.get(&url).header("Authorization", auth.as_str());
+                match budget {
+                    Some(budget) => request
+                        .config()
+                        .timeout_global(Some(budget.min(REQUEST_TIMEOUT)))
+                        .build()
+                        .call(),
+                    None => request.call(),
+                }
+            }
         };
         let mut response = response.map_err(|_| Failure::Local(CloudError::Transport))?;
         let status = response.status().as_u16();

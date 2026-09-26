@@ -208,7 +208,19 @@ impl Hetzner {
     /// # Errors
     /// Returns transport, authentication or response errors. HTTP 404 is a missing server.
     pub fn inspect_server(&self, id: u64, cancel: &Cancellation) -> Result<Option<Server>, CloudError> {
-        match self.send(Method::Get, &format!("/servers/{id}"), None, cancel) {
+        self.inspect_server_within(id, cancel, None)
+    }
+
+    /// As `inspect_server`, bounded by `budget` for the whole response.
+    /// # Errors
+    /// As `inspect_server`; an exhausted budget is a transport failure.
+    pub fn inspect_server_within(
+        &self,
+        id: u64,
+        cancel: &Cancellation,
+        budget: Option<std::time::Duration>,
+    ) -> Result<Option<Server>, CloudError> {
+        match self.send_within(Method::Get, &format!("/servers/{id}"), None, cancel, budget) {
             Err(failure) if failure.not_found() => Ok(None),
             result => {
                 let single: Single = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
