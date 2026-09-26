@@ -48,10 +48,11 @@ def request_stop(reason, path=STOP_SOCKET):
 
 
 def last_stop(log=STOP_LOG):
-    """The newest recorded stop as {'at', 'reason', 'agent', 'session'}, or None."""
+    """The newest recorded stop as {'at', 'reason', 'agent', 'session'}, or None without
+    any. A log that exists but cannot be read raises, so no stop is claimed absent."""
     try:
         lines = log.read_text().splitlines()
-    except OSError:
+    except FileNotFoundError:
         return None
     for line in reversed(lines):
         try:
@@ -114,7 +115,11 @@ def main(argv=None):
         serve()
         return 0
     if args.last:
-        print(json.dumps(last_stop()))
+        try:
+            print(json.dumps(last_stop()))
+        except OSError as error:
+            print('Stop record unreadable: ' + type(error).__name__, file=sys.stderr)
+            return 1
         return 0
     accepted, text = request_stop(args.reason)
     print(text, file=sys.stdout if accepted else sys.stderr)

@@ -185,6 +185,11 @@ class ClientTests(unittest.TestCase):
             self.assertIsNone(STOP['last_stop'](log))
             log.write_text('{"at": 1, "reason": "first"}\n{"at": 2, "reason": "   "}\nbroken\n')
             self.assertEqual(STOP['last_stop'](log), {'at': 1, 'reason': 'first', 'agent': '', 'session': ''})
+            # A log that exists but cannot be read is not "no stop recorded".
+            unreadable = Path(root, 'directory.jsonl')
+            unreadable.mkdir()
+            with self.assertRaises(OSError):
+                STOP['last_stop'](unreadable)
 
 
 if __name__ == '__main__':
