@@ -12,15 +12,19 @@ sessions and preserved cloud metadata remain available. The standalone provider
 crate remains portable. Windows cloud durability is tracked in #823; native Device
 platform qualification remains separately tracked in #741.
 
-## Companion declarations (preparatory support)
+## Companion declarations
 
 Version 1 configuration accepts optional companion repository metadata:
 
 ```yaml
 companions:
-  app:
-    repository: example/application
+  service:
+    repository: example/service
     profile: cpu
+  consumer:
+    repository: example/consumer
+    profile: gpu
+    placement: same_worker
 ```
 
 Repository identities currently use GitHub `owner/repository` notation. Aliases
@@ -28,12 +32,26 @@ start with a lowercase letter and contain lowercase letters, digits, `_` or `-`.
 Profiles refer to the companion's configuration, not the declaring repository's
 profiles. Local checkout paths and target cloud IDs belong in machine-local state.
 
-This parser and selection contract is a prerequisite for #910. It does not yet
-add the companion UI, CLI/MCP discovery, SSH grants, or remote execution. A
-declaration never starts a cloud or authorizes access. The selection contract pins
-the source session/workspace, source cloud, alias, declaration, and target cloud.
-A changed declaration or missing target requires a new explicit selection rather
-than rebinding to another matching repository. Multiple matches stay distinct.
+`placement` defaults to `cloud`: the companion runs on its own cloud and is
+selected in the cloud panel as described under
+[companion access](#companion-access-in-cloud-panels). A declaration never starts
+a cloud or authorizes access. The selection pins the source session/workspace,
+source cloud, alias, declaration, and target cloud. A changed declaration,
+including a changed placement, or a missing target requires a new explicit
+selection rather than rebinding to another matching repository. Multiple matches
+stay distinct.
+
+`placement: same_worker` declares a sibling for repositories coupled at build
+time, such as a native library and the application that consumes its binaries.
+The sibling is checked out beside the declaring repository on the same worker, in
+a directory named after its repository name without the owner, so relative paths
+such as `../consumer` in repository scripts keep working. Same-worker siblings in
+one configuration need distinct repository names, compared case-insensitively.
+A same-worker sibling never provisions, starts or stops a cloud, and it is not
+listed among the separate-cloud companions, their grants or the worker's
+companion catalog. Selecting siblings when creating a cloud, building the layered
+image and preparing their checkouts are planned (#910) and not yet available;
+today the declaration is validated and otherwise inactive.
 
 ## One-time machine setup
 

@@ -7,10 +7,7 @@ fn target(id: &str) -> Target {
             workspace_id: "workspace".into(),
         },
         cloud_id: id.into(),
-        declaration: Declaration {
-            repository: "example/app".into(),
-            profile: "cpu".into(),
-        },
+        declaration: Declaration::new("example/app", "cpu"),
     }
 }
 
@@ -188,10 +185,7 @@ fn copied_inventory_ids_in_other_scopes_do_not_shadow_the_selected_target() {
 
 #[test]
 fn owner_names_follow_login_constraints_including_managed_user_suffixes() {
-    let declaration = |owner: &str| Declaration {
-        repository: format!("{owner}/.github"),
-        profile: "cpu".into(),
-    };
+    let declaration = |owner: &str| Declaration::new(format!("{owner}/.github"), "cpu");
     for owner in [
         "a",
         "Example-Owner",
@@ -219,4 +213,104 @@ fn owner_names_follow_login_constraints_including_managed_user_suffixes() {
     }
     assert!(declaration(&format!("{}_abc", "a".repeat(35))).validate().is_ok());
     assert!(declaration(&format!("{}_abc", "a".repeat(36))).validate().is_err());
+}
+
+fn with_companions(companions: &str) -> String {
+    format!("{}\ncompanions:\n{companions}", crate::EXAMPLE)
+}
+
+#[test]
+fn cloud_placement_is_the_default_and_serializes_as_before() {
+    let implicit = crate::CloudConfig::parse(&with_companions(
+        "  app:\n    repository: example/app\n    profile: cpu\n",
+    ))
+    .unwrap();
+    let explicit = crate::CloudConfig::parse(&with_companions(
+        "  app:\n    repository: example/app\n    profile: cpu\n    placement: cloud\n",
+    ))
+    .unwrap();
+    assert_eq!(implicit.companions, explicit.companions);
+    assert_eq!(implicit.companions["app"].placement, Placement::Cloud);
+    let selection = Selection::new(&target("a"), "app", &target("b")).unwrap();
+    let json = serde_json::to_value(&selection).unwrap();
+    assert_eq!(
+        json["declaration"],
+        serde_json::json!({"repository": "example/app", "profile": "cpu"})
+    );
+    assert!(!serde_yaml::to_string(&explicit).unwrap().contains("placement"));
+    assert_eq!(implicit.cloud_companions().count(), 1);
+    assert_eq!(implicit.same_worker_siblings().count(), 0);
+}
+
+#[test]
+fn same_worker_siblings_round_trip_and_name_their_directory() {
+    let config = crate::CloudConfig::parse(&with_companions(
+        "  consumer:\n    repository: Example/Consumer-App\n    profile: gpu\n    placement: same_worker\n  \
+         service:\n    repository: example/service\n    profile: cpu\n",
+    ))
+    .unwrap();
+    let siblings: Vec<_> = config.same_worker_siblings().collect();
+    assert_eq!(siblings.len(), 1);
+    let (alias, sibling) = siblings[0];
+    assert_eq!(alias, "consumer");
+    assert_eq!(sibling.placement, Placement::SameWorker);
+    assert_eq!(sibling.directory_name(), "Consumer-App");
+    assert_eq!(
+        config.cloud_companions().map(|(alias, _)| alias).collect::<Vec<_>>(),
+        ["service"]
+    );
+    let serialized = serde_yaml::to_string(&config).unwrap();
+    assert!(serialized.contains("placement: same_worker"));
+    let (head, tail) = crate::EXAMPLE.split_once("# companions:").unwrap();
+    let example = crate::CloudConfig::parse(&format!("{head}companions:{}", tail.replace("\n# ", "\n"))).unwrap();
+    assert_eq!(example.same_worker_siblings().count(), 1);
+    assert_eq!(example.cloud_companions().count(), 1);
+    assert_eq!(
+        crate::CloudConfig::parse(&serialized).unwrap().companions,
+        config.companions
+    );
+}
+
+#[test]
+fn placement_rejects_unknown_values_and_colliding_sibling_directories() {
+    for placement in ["same-worker", "SameWorker", "worker", "\"\""] {
+        let yaml = with_companions(&format!(
+            "  app:\n    repository: example/app\n    profile: cpu\n    placement: {placement}\n"
+        ));
+        assert!(crate::CloudConfig::parse(&yaml).is_err(), "accepted {placement}");
+    }
+    let sibling = |repository: &str| Declaration {
+        placement: Placement::SameWorker,
+        ..Declaration::new(repository, "cpu")
+    };
+    let colliding = BTreeMap::from([
+        ("one".into(), sibling("first/app")),
+        ("two".into(), sibling("second/APP")),
+    ]);
+    assert!(validate_declarations(&colliding).is_err());
+    // Only same-worker checkouts share a directory namespace.
+    let mixed = BTreeMap::from([
+        ("one".into(), sibling("first/app")),
+        ("two".into(), Declaration::new("second/app", "cpu")),
+    ]);
+    assert!(validate_declarations(&mixed).is_ok());
+    for repository in ["example/.", "example/.."] {
+        assert!(sibling(repository).validate().is_err());
+    }
+}
+
+#[test]
+fn same_worker_declarations_are_never_selected_or_discovered() {
+    let source = target("a");
+    let mut sibling = target("b");
+    sibling.declaration.placement = Placement::SameWorker;
+    let inventory = [target("b")];
+    assert!(candidates(&source, &sibling.declaration, &inventory).is_empty());
+    assert_eq!(Selection::new(&source, "app", &sibling), Err(SelectionError::Invalid));
+    let selection = Selection::new(&source, "app", &inventory[0]).unwrap();
+    assert_eq!(
+        selection.resolve(&source, "app", &sibling.declaration, &inventory),
+        Err(SelectionError::DeclarationChanged)
+    );
+    assert!(!sibling.declaration.matches(&inventory[0].declaration));
 }

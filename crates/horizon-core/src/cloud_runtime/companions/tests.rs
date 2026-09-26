@@ -91,18 +91,12 @@ impl Fixture {
         let source = Target {
             scope: scope.clone(),
             cloud_id: "source".into(),
-            declaration: Declaration {
-                repository: "example/lib".into(),
-                profile: "cpu".into(),
-            },
+            declaration: Declaration::new("example/lib", "cpu"),
         };
         let target = Target {
             scope: scope.clone(),
             cloud_id: "target".into(),
-            declaration: Declaration {
-                repository: "example/app".into(),
-                profile: "cpu".into(),
-            },
+            declaration: Declaration::new("example/app", "cpu"),
         };
         let owner = Owner {
             scope,
@@ -502,10 +496,7 @@ fn cleanup_restores_current_declarations_instead_of_old_grant_rows() {
     for status in [Status::Missing, Status::Ambiguous, Status::Changed] {
         let mut fixture = Fixture::new();
         fixture.select();
-        let declaration = Declaration {
-            repository: "example/new".into(),
-            profile: "cpu".into(),
-        };
+        let declaration = Declaration::new("example/new", "cpu");
         if status == Status::Changed {
             fixture.context.declarations.clear();
         } else {
@@ -531,4 +522,68 @@ fn cleanup_restores_current_declarations_instead_of_old_grant_rows() {
             assert!(!row.selected && row.target_cloud_id.is_none() && row.access.is_none());
         }
     }
+}
+
+#[test]
+fn cloud_grants_persist_unchanged_and_same_worker_siblings_stay_out_of_selection() {
+    let mut fixture = Fixture::new();
+    let sibling = Declaration {
+        placement: horizon_cloud::companions::Placement::SameWorker,
+        ..fixture.context.inventory[1].declaration.clone()
+    };
+    fixture.context.declarations.insert("sibling".into(), sibling.clone());
+    let snapshot = fixture.select();
+    let aliases = |snapshot: &Snapshot| {
+        snapshot
+            .catalog
+            .companions
+            .iter()
+            .map(|companion| companion.alias.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(aliases(&snapshot), ["app"]);
+    assert_eq!(snapshot.rows.len(), 1);
+    let journal = std::fs::read_to_string(&fixture.transport.journal).unwrap();
+    assert_eq!(
+        journal
+            .matches(r#""declaration":{"repository":"example/app","profile":"cpu"}"#)
+            .count(),
+        2
+    );
+    assert!(!journal.contains("placement"));
+    assert!(!serde_json::to_string(&snapshot.catalog).unwrap().contains("placement"));
+
+    let mut state = fixture.saved();
+    let select = Action::Select {
+        alias: "sibling".into(),
+        target_cloud_id: "target".into(),
+    };
+    assert!(apply_action(&mut state, Some(&fixture.context), &select).is_err());
+    assert_eq!(state.grants.keys().collect::<Vec<_>>(), ["app"]);
+
+    // Re-placing a selected companion on the same worker is a declaration change.
+    fixture.transport.calls.clear();
+    fixture.context.declarations.remove("sibling");
+    fixture.context.declarations.insert("app".into(), sibling);
+    let changed = fixture.run(&Action::Refresh);
+    assert_eq!(aliases(&changed), ["app"]);
+    assert_eq!(changed.rows[0].companion.status, Status::Changed);
+    assert!(changed.rows[0].companion.access.is_none());
+    assert_eq!(fixture.transport.calls.len(), 2);
+    let cleared = fixture.run(&Action::Clear { alias: "app".into() });
+    assert!(cleared.catalog.companions.is_empty());
+    assert!(fixture.saved().grants.is_empty());
+}
+
+#[test]
+fn persisted_same_worker_grants_are_rejected() {
+    let mut fixture = Fixture::new();
+    fixture.select();
+    let path = fixture.transport.journal.clone();
+    let journal = std::fs::read_to_string(&path).unwrap();
+    let tampered = journal.replace(r#""profile":"cpu"}"#, r#""profile":"cpu","placement":"same_worker"}"#);
+    assert_ne!(tampered, journal);
+    std::fs::write(&path, tampered).unwrap();
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    assert!(store.load().is_err());
 }

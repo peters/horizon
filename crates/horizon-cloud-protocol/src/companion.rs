@@ -113,12 +113,9 @@ impl Catalog {
             if !horizon_cloud::companions::valid_alias(&entry.alias)
                 || !aliases.insert(&entry.alias)
                 || (entry.selected && entry.target_cloud_id.is_none())
-                || (horizon_cloud::companions::Declaration {
-                    repository: entry.repository.clone(),
-                    profile: entry.profile.clone(),
-                })
-                .validate()
-                .is_err()
+                || horizon_cloud::companions::Declaration::new(entry.repository.as_str(), entry.profile.as_str())
+                    .validate()
+                    .is_err()
                 || entry
                     .target_cloud_id
                     .as_deref()
