@@ -24,7 +24,8 @@ SERVER_TYPE = ["name", "cores", "memory", "disk", "cpu_type", "architecture", "p
                "prices.[].price_hourly.net", "prices.[].price_monthly.net", "locations.[].name",
                "locations.[].deprecation", "locations.[].available", "locations.[].recommended"]
 PRICING = ["pricing.currency", "pricing.volume.price_per_gb_month.net", "pricing.primary_ips.[].type",
-           "pricing.primary_ips.[].prices.[].location", "pricing.primary_ips.[].prices.[].price_monthly.net"]
+           "pricing.primary_ips.[].prices.[].location", "pricing.primary_ips.[].prices.[].price_monthly.net",
+           "pricing.primary_ips.[].prices.[].price_hourly.net"]
 
 
 def prefixed(prefix, fields):
@@ -59,6 +60,8 @@ USED = [
      prefixed("ssh_keys.[]", SSH_KEY) + ["meta.pagination.next_page"]),
     ("post", "/ssh_keys", [], ["name", "public_key", "labels"], "201", prefixed("ssh_key", SSH_KEY)),
     ("delete", "/ssh_keys/{id}", [], [], "204", []),
+    ("get", "/locations", ["page", "per_page"], [], "200",
+     ["locations.[].name", "locations.[].network_zone", "meta.pagination.next_page"]),
 ]
 
 
