@@ -88,6 +88,7 @@ impl HorizonApp {
             None if profile.gpu => profile.clone(),
             None => cloud_runtime::flavors::sized(profile, (profile.cpu, profile.memory_gb))?,
         };
+        let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);
         let revision = if let Some(revision) = &form.launch.revision {
             revision.clone()
@@ -120,7 +121,7 @@ impl HorizonApp {
                 revision: String::new(),
                 profile_name: form.selected_profile.clone(),
                 profile,
-                placement: form.placement.clone(),
+                placement,
             },
         });
         self.cloud_prototype.error = None;

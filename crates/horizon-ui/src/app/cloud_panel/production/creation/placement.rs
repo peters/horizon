@@ -2,19 +2,19 @@
 //! Advanced. A cloud's workspace stays where it first starts, so the choice outlives it.
 use super::{
     super::prices::{State, region_name},
-    pricing::option,
+    pricing::{option, requested_gpus},
 };
 use crate::theme;
 use egui::{Color32, CornerRadius, FontId, RichText, Sense, Ui, Vec2};
 use horizon_core::{
     cloud_panel::Placement,
-    cloud_runtime::prices::{Availability, DataCenter, Preferences, PriceList, Profile},
+    cloud_runtime::prices::{Availability, DataCenter, PriceList, Profile},
 };
 use std::collections::BTreeMap;
 
-/// Whether a data center has the chosen size, or one of the preferred GPUs, in stock.
+/// Whether a data center has the chosen size, or one of the requested GPUs, in stock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stock {
+pub(super) enum Stock {
     Yes,
     No,
     /// A stock check is running.
@@ -31,12 +31,8 @@ struct Candidate<'a> {
 }
 
 /// The data centers `profile` can use: CPU clouds need workspace storage there.
-fn candidates<'a>(
-    prices: &State,
-    list: &'a PriceList,
-    preferences: &Preferences,
-    profile: &Profile,
-) -> Vec<Candidate<'a>> {
+/// GPU profiles count data centers with any of `gpu_types` in stock.
+fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], profile: &Profile) -> Vec<Candidate<'a>> {
     let size = if profile.gpu {
         None
     } else {
@@ -49,8 +45,7 @@ fn candidates<'a>(
             let here = std::slice::from_ref(&center.id);
             let stocked = if profile.gpu {
                 Some(
-                    preferences
-                        .gpu_types
+                    gpu_types
                         .iter()
                         .any(|gpu| list.gpu_availability(gpu, here) != Availability::None),
                 )
@@ -148,7 +143,7 @@ fn stock_label(in_stock: Count) -> (String, Color32) {
 /// Returns a newly chosen placement.
 pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Placement) -> Option<Placement> {
     let (list, preferences) = &prices.list.as_ref()?.value;
-    let candidates = candidates(prices, list, preferences, profile);
+    let candidates = candidates(prices, list, requested_gpus(preferences, current), profile);
     let regions = regions(&candidates);
     if regions.len() < 2 && current.is_any() {
         return None;
@@ -162,7 +157,10 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
             .fold(Count::Known(0), |total, region| total.with(region.in_stock));
         let (detail, tint) = stock_label(total);
         if option(ui, "Any region", current.is_any(), Some(&detail), Some(tint)) {
-            chosen = Some(Placement::default());
+            chosen = Some(Placement {
+                gpu_types: current.gpu_types.clone(),
+                ..Placement::default()
+            });
         }
         for region in &regions {
             let selected = current.data_centers == region.data_centers;
@@ -179,6 +177,7 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
                 chosen = Some(Placement {
                     region: Some(region.name.clone()),
                     data_centers: region.data_centers.clone(),
+                    gpu_types: current.gpu_types.clone(),
                 });
             }
         }
@@ -206,7 +205,7 @@ pub(super) fn data_center_field(
     current: &Placement,
 ) -> Option<Placement> {
     let (list, preferences) = &prices.list.as_ref()?.value;
-    let candidates = candidates(prices, list, preferences, profile);
+    let candidates = candidates(prices, list, requested_gpus(preferences, current), profile);
     if candidates.is_empty() {
         return None;
     }
@@ -220,10 +219,17 @@ pub(super) fn data_center_field(
     ui.horizontal_wrapped(|ui| {
         for candidate in &shown {
             let selected = current.data_centers == [candidate.center.id.clone()];
-            if chip(ui, &candidate.center.id, &candidate.region, candidate.stock, selected) {
+            if chip(
+                ui,
+                &candidate.center.id,
+                &candidate.region,
+                Some(candidate.stock),
+                selected,
+            ) {
                 chosen = Some(Placement {
                     region: Some(candidate.region.clone()),
                     data_centers: vec![candidate.center.id.clone()],
+                    gpu_types: current.gpu_types.clone(),
                 });
             }
         }
@@ -245,13 +251,15 @@ fn hidden_note(hidden: usize, none_shown: bool) -> Option<String> {
     }
 }
 
-/// A compact data center choice with a stock dot, painted at its own size.
-fn chip(ui: &mut Ui, id: &str, region: &str, stock: Stock, selected: bool) -> bool {
+/// A compact choice with a title, a line under it and an optional stock dot, painted at
+/// its own size.
+pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, selected: bool) -> bool {
     const DOT: f32 = 6.0;
     let color = match stock {
-        Stock::Yes => theme::PALETTE_GREEN(),
-        Stock::No => theme::PALETTE_RED(),
-        Stock::Checking | Stock::Unknown => theme::FG_DIM(),
+        Some(Stock::Yes) => theme::PALETTE_GREEN(),
+        Some(Stock::No) => theme::PALETTE_RED(),
+        Some(Stock::Checking | Stock::Unknown) => theme::FG_DIM(),
+        None => Color32::TRANSPARENT,
     };
     let name = ui
         .painter()
@@ -292,17 +300,18 @@ fn chip(ui: &mut Ui, id: &str, region: &str, stock: Stock, selected: bool) -> bo
         theme::FG_DIM(),
     );
     let stock = match stock {
-        Stock::Yes => "in stock",
-        Stock::No => "out of stock",
-        Stock::Checking => "checking stock",
-        Stock::Unknown => "stock unknown",
+        Some(Stock::Yes) => ", in stock",
+        Some(Stock::No) => ", out of stock",
+        Some(Stock::Checking) => ", checking stock",
+        Some(Stock::Unknown) => ", stock unknown",
+        None => "",
     };
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Button,
             true,
             selected,
-            format!("{id}, {region}, {stock}"),
+            format!("{id}, {region}{stock}"),
         )
     });
     response.clicked()
@@ -383,6 +392,7 @@ mod tests {
         let europe = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(
             where_it_lives(&europe),
@@ -391,6 +401,7 @@ mod tests {
         let one = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(
             where_it_lives(&one),

@@ -100,12 +100,21 @@ fn hourly(list: &PriceList, preferences: &Preferences, profile: &Profile, size: 
     list.cpu_hourly(&prices::requested_flavors(&sized, preferences), size.0)
 }
 
+/// What the person asked for on the price card.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CardAction {
+    /// Fetch prices and stock again.
+    Refresh,
+    /// Request this GPU type for the new cloud instead of the preferences.
+    UseGpu(String),
+}
+
 /// The price card for `profile` at its chosen size in `placement`, once a price check
-/// has started. Returns whether prices should be fetched again.
-pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &Placement) -> bool {
-    let mut refresh = false;
+/// has started.
+pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &Placement) -> Option<CardAction> {
+    let mut action = None;
     if prices.list.is_none() && prices.list_error.is_none() && !prices.loading() {
-        return refresh;
+        return action;
     }
     Frame::new()
         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.06))
@@ -118,12 +127,14 @@ pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &P
                 (Some(fetched), _) => {
                     let (list, preferences) = &fetched.value;
                     if profile.gpu {
-                        gpu_summary(ui, list, preferences, profile, placement);
+                        action = gpu_summary(ui, list, preferences, profile, placement).map(CardAction::UseGpu);
                     } else {
                         cpu_summary(ui, prices, list, preferences, profile, placement);
                     }
                     ui.add_space(10.0);
-                    refresh = footer(ui, list.provider, fetched.at.elapsed(), prices.loading());
+                    if footer(ui, list.provider, fetched.at.elapsed(), prices.loading()) {
+                        action = Some(CardAction::Refresh);
+                    }
                 }
                 (None, Some(error)) => {
                     ui.label(
@@ -132,7 +143,9 @@ pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &P
                             .color(theme::FG_SOFT()),
                     );
                     ui.label(RichText::new(error).size(11.5).color(theme::FG_DIM()));
-                    refresh = ui.add(Button::new("Try again").corner_radius(8)).clicked();
+                    if ui.add(Button::new("Try again").corner_radius(8)).clicked() {
+                        action = Some(CardAction::Refresh);
+                    }
                 }
                 (None, None) => {
                     ui.horizontal(|ui| {
@@ -142,7 +155,7 @@ pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &P
                 }
             }
         });
-    refresh
+    action
 }
 
 fn cpu_summary(
@@ -207,13 +220,8 @@ struct Ranked<'a> {
 }
 
 /// Every preferred GPU type in request order, and the first one in stock.
-fn ranked<'a>(
-    list: &'a PriceList,
-    preferences: &'a Preferences,
-    within: &[String],
-) -> (Vec<Ranked<'a>>, Option<usize>) {
-    let preferred: Vec<Ranked<'a>> = preferences
-        .gpu_types
+fn ranked<'a>(list: &'a PriceList, gpu_types: &'a [String], within: &[String]) -> (Vec<Ranked<'a>>, Option<usize>) {
+    let preferred: Vec<Ranked<'a>> = gpu_types
         .iter()
         .map(|id| Ranked {
             id,
@@ -236,36 +244,54 @@ fn gpu_centers(list: &PriceList, id: &str, within: &[String]) -> usize {
         .count()
 }
 
-fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile: &Profile, placement: &Placement) {
+/// The GPU types a new cloud would request: those chosen for it, or else the machine's
+/// preferences.
+pub(super) fn requested_gpus<'a>(preferences: &'a Preferences, placement: &'a Placement) -> &'a [String] {
+    if placement.gpu_types.is_empty() {
+        &preferences.gpu_types
+    } else {
+        &placement.gpu_types
+    }
+}
+
+/// Returns a GPU type to request instead, when the person picks one.
+fn gpu_summary(
+    ui: &mut Ui,
+    list: &PriceList,
+    preferences: &Preferences,
+    profile: &Profile,
+    placement: &Placement,
+) -> Option<String> {
     let within = &placement.data_centers;
-    let (preferred, chosen) = ranked(list, preferences, within);
+    let chosen_here = !placement.gpu_types.is_empty();
+    let (preferred, chosen) = ranked(list, requested_gpus(preferences, placement), within);
     let chosen_gpu = chosen.and_then(|index| Some((preferred[index].gpu?, preferred[index].availability)));
-    match chosen_gpu {
-        Some((gpu, availability)) => {
-            let stock = Stock::Known(
-                availability,
-                Some(in_scope(gpu_centers(list, &gpu.id, within), placement)),
-            );
-            headline(ui, &money(gpu.hourly), &stock);
-            ui.label(
-                RichText::new(format!(
-                    "{} · {} GB · first preferred GPU in stock · Secure Cloud",
-                    gpu.name, gpu.memory_gb
-                ))
+    if let Some((gpu, availability)) = chosen_gpu {
+        let stock = Stock::Known(
+            availability,
+            Some(in_scope(gpu_centers(list, &gpu.id, within), placement)),
+        );
+        headline(ui, &money(gpu.hourly), &stock);
+        let why = match (chosen_here, placement.gpu_types.len()) {
+            (false, _) => "first preferred GPU in stock",
+            (true, 1) => "chosen for this cloud",
+            (true, _) => "first chosen GPU in stock",
+        };
+        ui.label(
+            RichText::new(format!("{} · {} GB · {why} · Secure Cloud", gpu.name, gpu.memory_gb))
                 .size(12.0)
                 .color(theme::FG_SOFT()),
-            );
-            stock_detail(ui, &stock);
-        }
-        None => {
-            ui.label(
-                RichText::new("None of your preferred GPUs is in stock")
-                    .size(16.0)
-                    .strong()
-                    .color(theme::PALETTE_RED()),
-            );
-        }
+        );
+        stock_detail(ui, &stock);
+    } else {
+        let heading = match (chosen_here, placement.gpu_types.len()) {
+            (false, _) => "None of your preferred GPUs is in stock",
+            (true, 1) => "The GPU chosen for this cloud is out of stock",
+            (true, _) => "None of the GPUs chosen for this cloud is in stock",
+        };
+        ui.label(RichText::new(heading).size(16.0).strong().color(theme::PALETTE_RED()));
     }
+    let mut use_gpu = None;
     if preferred.is_empty() {
         ui.label(
             RichText::new(format!(
@@ -276,24 +302,44 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile
         );
     } else {
         gpu_rows(ui, &preferred, chosen);
-        if chosen_gpu.is_none()
-            && let Some(cheapest) = list.cheapest_available_gpu(within)
+    }
+    // Offered with or without preferences, so a sold-out or empty list never blocks a cloud.
+    if chosen_gpu.is_none()
+        && let Some(cheapest) = list.cheapest_available_gpu(within)
+    {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "Cheapest in stock now: {} · {} GB · {}/h",
+                cheapest.name,
+                cheapest.memory_gb,
+                money(cheapest.hourly)
+            ))
+            .size(12.0)
+            .color(theme::FG_SOFT()),
+        );
+        let label = RichText::new(format!("Use {} instead", cheapest.name)).color(theme::FG());
+        if ui
+            .add(
+                Button::new(label)
+                    .corner_radius(8)
+                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.25)),
+            )
+            .clicked()
         {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "Cheapest in stock now: {} · {} GB · {}/h. GPU preferences are {GPU_SETTING}.",
-                    cheapest.name,
-                    cheapest.memory_gb,
-                    money(cheapest.hourly)
-                ))
-                .size(12.0)
-                .color(theme::FG_SOFT()),
-            );
+            use_gpu = Some(cheapest.id.clone());
         }
+        ui.label(
+            RichText::new(format!(
+                "Only this cloud changes. Other GPU types are under Advanced; the defaults are {GPU_SETTING}."
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM()),
+        );
     }
     // Storage is billed whichever GPU the cloud gets, so it shows even when none is in stock.
     costs::show(ui, list, profile, chosen_gpu.map(|(gpu, _)| (gpu.hourly, gpu.hourly)));
+    use_gpu
 }
 
 fn gpu_rows(ui: &mut Ui, preferred: &[Ranked<'_>], chosen: Option<usize>) {
@@ -477,6 +523,7 @@ mod tests {
         let europe = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(in_scope(0, &europe), "Out of stock in Europe");
         assert_eq!(in_scope(1, &europe), "In stock in 1 data center in Europe");
@@ -484,6 +531,7 @@ mod tests {
         let one = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(in_scope(1, &one), "In stock in EU-RO-1");
         assert_eq!(in_scope(0, &one), "Out of stock in EU-RO-1");
@@ -518,19 +566,19 @@ mod tests {
             cpu_flavors: Vec::new(),
             gpu_types: vec!["retired".into(), "ada".into(), "l4".into()],
         };
-        let (preferred, chosen) = ranked(&list, &preferences, &["EU-RO-1".into()]);
+        let (preferred, chosen) = ranked(&list, &preferences.gpu_types, &["EU-RO-1".into()]);
         let ids: Vec<(&str, bool)> = preferred.iter().map(|row| (row.id, row.gpu.is_some())).collect();
         assert_eq!(ids, [("retired", false), ("ada", true), ("l4", true)]);
         assert_eq!(chosen, Some(2));
         // In another data center the second preference is in stock and comes first.
-        assert_eq!(ranked(&list, &preferences, &["EU-SE-1".into()]).1, Some(1));
+        assert_eq!(ranked(&list, &preferences.gpu_types, &["EU-SE-1".into()]).1, Some(1));
         assert_eq!(gpu_centers(&list, "ada", &[]), 1);
 
         let retired = Preferences {
             cpu_flavors: Vec::new(),
             gpu_types: vec!["retired".into()],
         };
-        let (preferred, chosen) = ranked(&list, &retired, &[]);
+        let (preferred, chosen) = ranked(&list, &retired.gpu_types, &[]);
         assert_eq!(preferred.len(), 1);
         assert!(chosen.is_none());
     }

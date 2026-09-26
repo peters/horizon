@@ -177,8 +177,14 @@ with the date they were checked. Storage is shown for GPU profiles even when non
 of their GPUs is in stock. For GPU profiles the card also lists your
 preferred GPU types (`gpu_types` in the settings file) in the order Horizon
 requests them, marks the first one in stock, shows types the catalog does not
-list as not offered, and suggests the cheapest GPU in stock when none of them
-is. The 8 and 24 hour estimates are ranges when the size may land on flavors
+list as not offered, and offers the cheapest GPU in stock when none of them is,
+or when no preferences are set: its **Use** button (for example **Use RTX A5000
+instead**) requests that GPU type for this cloud only. **Advanced**
+also lists every GPU type in stock where the cloud may go, cheapest first with
+its memory and hourly price, next to **Your preferences**. A GPU type chosen
+this way is saved with the cloud like its region, replaces the `gpu_types`
+setting for every attempt, retry and redeploy of that cloud, and is named on its
+card. The 8 and 24 hour estimates are ranges when the size may land on flavors
 with different prices. Prices come
 from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
 is open; Refresh fetches them at once. Only providers Horizon can deploy to show
@@ -188,7 +194,8 @@ rather than in tooltips, which would draw below the dialog.
 When the allowed data centers span more than one region, New cloud also shows a
 **Region** row: **Any region** (the default, where Horizon picks a data center
 with stock) and each region with how many of its data centers have the chosen
-size, or one of the profile's preferred GPUs, in stock. A region known to be sold
+size, or one of the GPU types the cloud requests (a type chosen for it, or else
+the preferred ones), in stock. A region known to be sold
 out stays visible but cannot be chosen. CPU clouds only count data centers with
 standard network volumes, since their workspace lives on one. **Advanced** lists
 the individual data centers with stock for choosing exactly one. The machine's

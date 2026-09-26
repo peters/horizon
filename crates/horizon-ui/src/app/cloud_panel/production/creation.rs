@@ -7,6 +7,7 @@ use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel:
 use std::path::Path;
 
 mod costs;
+mod gpu_choice;
 mod placement;
 mod pricing;
 
@@ -278,6 +279,10 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if let Some(config) = &form.profiles {
         ui.small(&form.repository);
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
+            // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
+            if !profile.gpu {
+                form.placement.gpu_types.clear();
+            }
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
             if let Some(size) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {
@@ -292,8 +297,10 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 form.placement = placement;
             }
             ui.add_space(4.0);
-            if pricing::card(ui, &form.prices, &sized, &form.placement) {
-                form.prices.refresh();
+            match pricing::card(ui, &form.prices, &sized, &form.placement) {
+                Some(pricing::CardAction::Refresh) => form.prices.refresh(),
+                Some(pricing::CardAction::UseGpu(gpu)) => form.placement.gpu_types = vec![gpu],
+                None => {}
             }
         }
     }
@@ -375,6 +382,9 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 ..profile.clone()
             };
             if let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement) {
+                form.placement = placement;
+            }
+            if let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement) {
                 form.placement = placement;
             }
         }

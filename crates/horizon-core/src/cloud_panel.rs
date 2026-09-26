@@ -83,13 +83,13 @@ pub struct CloudLaunch {
     pub revision: String,
     pub profile_name: String,
     pub profile: horizon_cloud::Profile,
-    /// Omitted when any allowed data center will do, so earlier records keep their encoding.
-    #[serde(default, skip_serializing_if = "Placement::is_any")]
+    /// Omitted when nothing was chosen, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Placement::is_default")]
     pub placement: Placement,
 }
 
-/// Where a cloud may be placed, chosen when it is created. A cloud's workspace stays
-/// where it is first placed, so this matters beyond the first start.
+/// Where, and on which GPU types, a cloud may be placed, chosen when it is created. A
+/// cloud's workspace stays where it is first placed, so this matters beyond the first start.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Placement {
     /// A label shown to people, such as `Europe`, for a chosen region or the region of
@@ -99,18 +99,42 @@ pub struct Placement {
     /// The data centers to choose from; empty for the machine's `data_centers` setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_centers: Vec<String>,
+    /// GPU types to request, in this order; empty for the machine's `gpu_types` setting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpu_types: Vec<String>,
 }
 
 impl Placement {
+    /// Whether any allowed data center will do.
     #[must_use]
     pub fn is_any(&self) -> bool {
         self.data_centers.is_empty()
     }
 
-    /// Narrows `data_centers` from the machine settings to this placement.
-    pub fn apply(&self, data_centers: &mut Vec<String>) {
-        if !self.is_any() {
+    /// Whether nothing was chosen, so the machine settings apply unchanged.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.data_centers.is_empty() && self.gpu_types.is_empty()
+    }
+
+    /// This placement for a profile with or without a GPU: a GPU type chosen while the
+    /// profile had one never reaches a CPU cloud.
+    #[must_use]
+    pub fn for_profile(&self, gpu: bool) -> Self {
+        Self {
+            gpu_types: if gpu { self.gpu_types.clone() } else { Vec::new() },
+            ..self.clone()
+        }
+    }
+
+    /// Replaces the machine's `data_centers` and `gpu_types` with this placement's
+    /// choices, where it made one.
+    pub fn apply(&self, data_centers: &mut Vec<String>, gpu_types: &mut Vec<String>) {
+        if !self.data_centers.is_empty() {
             data_centers.clone_from(&self.data_centers);
+        }
+        if !self.gpu_types.is_empty() {
+            gpu_types.clone_from(&self.gpu_types);
         }
     }
 }
@@ -695,7 +719,8 @@ mod tests {
     #[test]
     fn a_cloud_keeps_its_placement_and_records_without_one_keep_their_encoding() {
         let mut settings = vec!["EU-RO-1".to_owned(), "US-MO-2".to_owned()];
-        Placement::default().apply(&mut settings);
+        let mut gpus = vec!["NVIDIA RTX A6000".to_owned()];
+        Placement::default().apply(&mut settings, &mut gpus);
         assert_eq!(
             settings,
             ["EU-RO-1", "US-MO-2"],
@@ -704,9 +729,30 @@ mod tests {
         let europe = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+            gpu_types: Vec::new(),
         };
-        europe.apply(&mut settings);
+        europe.apply(&mut settings, &mut gpus);
         assert_eq!(settings, ["EU-RO-1", "EUR-IS-1"]);
+        assert_eq!(
+            gpus,
+            ["NVIDIA RTX A6000"],
+            "no GPU choice keeps the machine preferences"
+        );
+        let a5000 = Placement {
+            gpu_types: vec!["NVIDIA RTX A5000".into()],
+            ..Placement::default()
+        };
+        a5000.apply(&mut settings, &mut gpus);
+        assert_eq!(gpus, ["NVIDIA RTX A5000"]);
+        assert_eq!(
+            settings,
+            ["EU-RO-1", "EUR-IS-1"],
+            "a GPU choice alone keeps the data centers"
+        );
+        assert!(a5000.is_any() && !a5000.is_default());
+        assert_eq!(a5000.for_profile(true), a5000);
+        assert!(a5000.for_profile(false).is_default(), "a CPU cloud keeps no GPU choice");
+        assert_eq!(europe.for_profile(false), europe);
 
         let legacy = serde_json::json!({
             "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",
@@ -718,7 +764,12 @@ mod tests {
         launch.placement = europe.clone();
         let saved = serde_json::to_value(&launch).unwrap();
         assert_eq!(saved["placement"]["region"], "Europe");
+        assert!(saved["placement"].get("gpu_types").is_none());
         assert_eq!(serde_json::from_value::<CloudLaunch>(saved).unwrap().placement, europe);
+        launch.placement = a5000.clone();
+        let saved = serde_json::to_value(&launch).unwrap();
+        assert_eq!(saved["placement"]["gpu_types"][0], "NVIDIA RTX A5000");
+        assert_eq!(serde_json::from_value::<CloudLaunch>(saved).unwrap().placement, a5000);
     }
 
     #[test]
