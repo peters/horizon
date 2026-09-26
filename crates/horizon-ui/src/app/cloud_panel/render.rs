@@ -306,6 +306,7 @@ fn paint_header(
         "runpod" => "RunPod",
         "daytona" => "Daytona",
         "fly" => "Fly.io",
+        "hetzner" => "Hetzner",
         "local" => "Local",
         other => other,
     };

@@ -29,11 +29,27 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     let config = committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
         "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration or choose another revision in Advanced.",
     ))?;
+    let config = creatable(config)?;
     Ok(Prepared {
         repository,
         revision,
         config,
     })
+}
+
+/// The profiles the New cloud dialog can create. Its prices, credential checks and
+/// sizing are `RunPod`'s, so Hetzner profiles stay out of it until the dialog knows
+/// Hetzner; they deploy through the deployment coordinator directly.
+fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
+    config
+        .profiles
+        .retain(|_, profile| profile.provider != horizon_cloud::hetzner::PROVIDER);
+    if !config.profiles.contains_key(&config.default) {
+        config.default = config.profiles.keys().next().cloned().ok_or(Error::Invalid(
+            "This repository's cloud profiles are all for Hetzner, which the New cloud dialog cannot create yet.",
+        ))?;
+    }
+    Ok(config)
 }
 
 /// The `.horizon/cloud.yml` committed at `revision`, or `None` when that commit has no
@@ -195,6 +211,19 @@ mod tests {
             },
         )
     }
+    #[test]
+    fn the_new_cloud_dialog_offers_only_profiles_it_can_create() {
+        let yaml = "version: 1\ndefault: cheap\nprofiles:\n  cheap:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+        let config = creatable(CloudConfig::parse(yaml).unwrap()).unwrap();
+        assert_eq!(config.profiles.keys().collect::<Vec<_>>(), ["dev"]);
+        assert_eq!(
+            config.default, "dev",
+            "a Hetzner default gives way to a profile the dialog can create"
+        );
+        let only = yaml.replace("provider: runpod", "provider: hetzner");
+        assert!(creatable(CloudConfig::parse(&only).unwrap()).is_err());
+    }
+
     #[test]
     fn ssh_readiness_requires_a_matching_public_companion() {
         let temp = tempfile::tempdir().unwrap();
