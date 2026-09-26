@@ -413,8 +413,6 @@ fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<Val
         "image": request.image,
         "user_data": request.user_data,
         "labels": {OPERATION_LABEL: request.operation_id},
-        "start_after_create": true,
-        "public_net": {"enable_ipv4": true, "enable_ipv6": true},
     });
     if let Some(volume) = request.volume {
         body["volumes"] = json!([volume.id]);

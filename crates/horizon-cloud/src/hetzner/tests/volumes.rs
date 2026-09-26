@@ -117,6 +117,8 @@ fn deletion_refuses_attached_volumes_and_proves_absence() {
         // The server is gone although the volume still names it.
         (200, json!({"volume": volume(9, Some(42))})),
         (404, error("not_found", "server not found")),
+        (200, json!({"volume": volume(9, Some(42))})),
+        (200, json!({"volume": volume(9, None)})),
         (204, Value::Null),
         (404, error("not_found", "volume not found")),
     ]);
@@ -141,7 +143,7 @@ fn deletion_refuses_attached_volumes_and_proves_absence() {
         ]
     );
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[4].starts_with("DELETE /volumes/9 "));
+    assert!(requests.lock().unwrap()[6].starts_with("DELETE /volumes/9 "));
 }
 
 #[test]

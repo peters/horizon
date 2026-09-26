@@ -1,10 +1,10 @@
 //! Workspace volumes. A volume belongs to one location and attaches to one
 //! server at a time; it outlives its servers until deleted explicitly.
-use super::{Action, Hetzner, Method, OPERATION_LABEL, resource_name, servers::Location, valid_name};
+use super::{ACTION_TIMEOUT, Action, Hetzner, Method, OPERATION_LABEL, resource_name, servers::Location, valid_name};
 use crate::{Cancellation, CloudError, CreateState, Progress};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// Hetzner's volume size limits in GB.
 pub const SIZE_GB: std::ops::RangeInclusive<u32> = 10..=10_240;
@@ -241,11 +241,27 @@ impl Hetzner {
     }
 
     /// The server that really holds the volume. Hetzner keeps naming a deleted
-    /// server, which already answers 404, until it finishes the deletion; that
-    /// attachment no longer holds the volume.
+    /// server, which already answers 404, for a while and refuses to delete or
+    /// attach the volume until it lets go, so this waits for that release.
     pub(crate) fn holder(&self, volume: &Volume, cancel: &Cancellation) -> Result<Option<u64>, CloudError> {
         let Some(server) = volume.server else { return Ok(None) };
-        Ok(self.inspect_server(server, cancel)?.map(|_| server))
+        if self.inspect_server(server, cancel)?.is_some() {
+            return Ok(Some(server));
+        }
+        let deadline = Instant::now() + ACTION_TIMEOUT;
+        loop {
+            match self.inspect_volume(volume.id, cancel)? {
+                Some(current) if current.server.is_some() => {}
+                _ => return Ok(None),
+            }
+            if Instant::now() >= deadline {
+                return Err(CloudError::Invalid(
+                    "Hetzner is still releasing the workspace volume; check again later",
+                ));
+            }
+            std::thread::sleep(self.poll);
+            cancel.check()?;
+        }
     }
 
     fn volume_action(

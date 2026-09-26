@@ -36,7 +36,6 @@ USED = [
     ("get", "/servers", ["label_selector", "page", "per_page"], [], "200",
      prefixed("servers.[]", SERVER) + ["meta.pagination.next_page"]),
     ("post", "/servers", [], ["name", "server_type", "location", "image", "user_data", "labels",
-                              "start_after_create", "public_net.enable_ipv4", "public_net.enable_ipv6",
                               "volumes", "automount", "ssh_keys"], "201",
      prefixed("server", SERVER) + prefixed("action", ACTION) + prefixed("next_actions.[]", ACTION)),
     ("get", "/servers/{id}", [], [], "200", prefixed("server", SERVER)),
