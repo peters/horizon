@@ -561,8 +561,11 @@ and revision selector reuse those bytes even if the selector now resolves to a
 new commit; `resume` needs no original repository. There is no refresh operation.
 Unreferenced artifacts after a failed initial save remain local and are not adopted.
 Generation enforces one 4 GiB byte budget while writing the retained pack and tar
-and the disposable LFS/submodule staging files. Material-heavy repositories can
-reach this production budget below the wire limit. Scratch is private, outside
+and the disposable LFS/submodule staging files. It reserves a second copy of each
+retained byte plus the maximum request header for the temporary SSH input frame.
+Framing rechecks that budget and rejects artifact growth before copying excess
+bytes. This conservative reservation keeps retained transfer data below 2 GiB;
+material staging reduces the available capacity further. Scratch is private, outside
 the owner directory, and removed on ordinary completion or error; only pack and
 tar are retained after a successful export.
 

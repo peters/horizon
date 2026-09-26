@@ -71,6 +71,7 @@ pub struct Artifact {
 }
 impl Source {
     pub const MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    pub const MAX_REQUEST_BYTES: usize = 65536;
     pub const WORKER_TIMEOUT: Duration = Duration::from_secs(600);
     pub const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(Self::WORKER_TIMEOUT.as_secs() * 2 + 60);
     /// # Errors

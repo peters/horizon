@@ -166,7 +166,12 @@ fn open(path: &Path, directory: bool) -> Result<File> {
         Err(Error::Invalid)
     }
 }
-fn fingerprint(file: &mut File, cancellation: &Cancellation, mut output: Option<&mut File>) -> Result<Artifact> {
+fn fingerprint(
+    file: &mut File,
+    cancellation: &Cancellation,
+    mut output: Option<&mut File>,
+    limit: u64,
+) -> Result<Artifact> {
     file.rewind()?;
     let mut hash = Sha256::new();
     let mut length = 0_u64;
@@ -178,7 +183,7 @@ fn fingerprint(file: &mut File, cancellation: &Cancellation, mut output: Option<
             break;
         }
         length += read as u64;
-        if length > Source::MAX_BYTES {
+        if length > limit {
             return Err(Error::Invalid);
         }
         hash.update(&buffer[..read]);
@@ -272,8 +277,8 @@ impl Artifacts {
         let descriptor = Source {
             version: 1,
             revision: selected,
-            pack: fingerprint(&mut pack, cancellation, None)?,
-            material: fingerprint(&mut material, cancellation, None)?,
+            pack: fingerprint(&mut pack, cancellation, None, Source::MAX_BYTES)?,
+            material: fingerprint(&mut material, cancellation, None, Source::MAX_BYTES)?,
         };
         descriptor.validate().map_err(|_| Error::Invalid)?;
         pack.sync_all()?;
@@ -332,8 +337,8 @@ impl Artifacts {
     }
     pub(super) fn verify(&self, root: &Path, cancellation: &Cancellation) -> Result<()> {
         let (mut pack, mut material) = self.files(root)?;
-        if fingerprint(&mut pack, cancellation, None)? != self.descriptor.pack
-            || fingerprint(&mut material, cancellation, None)? != self.descriptor.material
+        if fingerprint(&mut pack, cancellation, None, Source::MAX_BYTES)? != self.descriptor.pack
+            || fingerprint(&mut material, cancellation, None, Source::MAX_BYTES)? != self.descriptor.material
         {
             return Err(Error::Invalid);
         }
@@ -341,15 +346,31 @@ impl Artifacts {
         Ok(())
     }
     pub fn frame(&self, root: &Path, request: &[u8], cancellation: &Cancellation) -> Result<File> {
-        if request.len() > 65536 {
+        self.frame_with_limit(root, request, cancellation, Source::MAX_BYTES)
+    }
+    pub(in crate::cloud_runtime) fn frame_with_limit(
+        &self,
+        root: &Path,
+        request: &[u8],
+        cancellation: &Cancellation,
+        limit: u64,
+    ) -> Result<File> {
+        self.descriptor.validate().map_err(|_| Error::Invalid)?;
+        let retained = self.descriptor.pack.length + self.descriptor.material.length;
+        if request.len() > Source::MAX_REQUEST_BYTES || retained * 2 + request.len() as u64 + 4 > limit {
             return Err(Error::Invalid);
         }
         let mut output = tempfile::tempfile()?;
         output.write_all(&u32::try_from(request.len()).map_err(|_| Error::Invalid)?.to_be_bytes())?;
         output.write_all(request)?;
         let (mut pack, mut material) = self.files(root)?;
-        if fingerprint(&mut pack, cancellation, Some(&mut output))? != self.descriptor.pack
-            || fingerprint(&mut material, cancellation, Some(&mut output))? != self.descriptor.material
+        if fingerprint(&mut pack, cancellation, Some(&mut output), self.descriptor.pack.length)? != self.descriptor.pack
+            || fingerprint(
+                &mut material,
+                cancellation,
+                Some(&mut output),
+                self.descriptor.material.length,
+            )? != self.descriptor.material
         {
             return Err(Error::Invalid);
         }

@@ -130,7 +130,7 @@ pub fn auxiliary(repository: &Path, revision: &str, root: &Path, runner: &Runner
     material::archive(repository, revision, root, runner)
 }
 
-/// Counts both retained output and disposable material against one production budget.
+/// Reserves the transfer frame while counting retained output and disposable material.
 #[cfg(target_os = "linux")]
 pub(super) fn bounded_source(
     repository: &Path,
@@ -145,7 +145,8 @@ pub(super) fn bounded_source(
         return Err(Error::Invalid("Source material exceeds its entry limit"));
     }
     let mut budget = ExportBudget { remaining: limit };
-    bounded_pack(repository, revision, &retained.join("pack"), runner, &mut budget)?;
+    budget.charge(horizon_cloud_protocol::membership::Source::MAX_REQUEST_BYTES as u64 + 4)?;
+    bounded_pack(repository, revision, &retained.join("pack"), runner, &mut budget, 2)?;
     let directory = scratch.join("material");
     std::fs::create_dir(&directory)?;
     let objects = directory.join("lfs");
@@ -163,6 +164,7 @@ pub(super) fn bounded_source(
             &directory.join(format!("module-{index}.pack")),
             runner,
             &mut budget,
+            1,
         )?;
     }
     let manifest = serde_json::to_vec(&selected).map_err(|_| Error::Json)?;
@@ -180,6 +182,7 @@ pub(super) fn bounded_source(
         &retained.join("source-material.tar"),
         runner,
         &mut budget,
+        2,
     )
 }
 
@@ -205,6 +208,7 @@ fn bounded_pack(
     output: &Path,
     runner: &Runner<'_>,
     budget: &mut ExportBudget,
+    copies: u64,
 ) -> Result<()> {
     let sha = resolve_with_runner(repository, revision, runner)?;
     let mut input = tempfile::tempfile()?;
@@ -219,14 +223,21 @@ fn bounded_pack(
         output,
         runner,
         budget,
+        copies,
     )
 }
 
 #[cfg(target_os = "linux")]
-fn bounded_output(command: &mut Command, output: &Path, runner: &Runner<'_>, budget: &mut ExportBudget) -> Result<()> {
+fn bounded_output(
+    command: &mut Command,
+    output: &Path,
+    runner: &Runner<'_>,
+    budget: &mut ExportBudget,
+    copies: u64,
+) -> Result<()> {
     let mut file = std::fs::File::create_new(output)?;
-    let length = runner.bounded_file(command, &mut file, budget.remaining, Duration::from_secs(300))?;
-    budget.charge(length)
+    let length = runner.bounded_file(command, &mut file, budget.remaining / copies, Duration::from_secs(300))?;
+    budget.charge(length * copies)
 }
 
 #[cfg(target_os = "linux")]

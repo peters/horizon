@@ -186,13 +186,53 @@ fn source_generation_never_writes_beyond_the_shared_pack_material_and_archive_bu
     };
     export(retained.path(), scratch.path(), 1024 * 1024).unwrap();
     let pack = fs::metadata(retained.path().join("pack")).unwrap().len();
-    let total = size(retained.path()) + size(scratch.path());
-    for limit in [pack - 1, pack + 1, total - 1, total] {
+    let header = horizon_cloud_protocol::membership::Source::MAX_REQUEST_BYTES as u64 + 4;
+    let total = header + 2 * size(retained.path()) + size(scratch.path());
+    for limit in [header + 2 * pack - 1, header + 2 * pack + 1, total - 1, total] {
         let retained = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         assert_eq!(export(retained.path(), scratch.path(), limit).is_ok(), limit == total);
-        assert!(size(retained.path()) + size(scratch.path()) <= limit);
+        assert!(header + 2 * size(retained.path()) + size(scratch.path()) <= limit);
     }
+}
+
+#[test]
+fn source_frame_budget_includes_retained_files_and_rejects_growth() {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repository");
+    repository(&repo, "frame");
+    let mut f = ready();
+    let reservation = reservation(&f, "one", 8000);
+    let mut worker = remote(&f);
+    prepare_host(&mut f, &reservation, &mut worker);
+    let cancellation = Cancellation::default();
+    let descriptor = source::prepare(&mut f.owner, &reservation.project, &repo, "HEAD", &cancellation).unwrap();
+    let saved = Journal::load(&f.owner).unwrap().unwrap();
+    let artifacts = &saved.sources[0];
+    let root = f.owner.artifact_root().unwrap();
+    let request = b"bounded frame fixture";
+    let retained = descriptor.pack.length + descriptor.material.length;
+    let limit = 2 * retained + request.len() as u64 + 4;
+    assert!(
+        artifacts
+            .frame_with_limit(root, request, &cancellation, limit - 1)
+            .is_err()
+    );
+    let frame = artifacts.frame_with_limit(root, request, &cancellation, limit).unwrap();
+    assert_eq!(retained + frame.metadata().unwrap().len(), limit);
+    drop(frame);
+    let payload = journal(&f.owner);
+    let directory = payload["sources"][0]["directory"].as_str().unwrap();
+    let pack = root.join(directory).join("pack");
+    fs::set_permissions(&pack, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(pack)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    assert!(artifacts.frame_with_limit(root, request, &cancellation, limit).is_err());
 }
 
 #[test]

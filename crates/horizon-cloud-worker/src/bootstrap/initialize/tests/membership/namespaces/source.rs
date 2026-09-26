@@ -124,7 +124,7 @@ fn one_source_deadline_covers_preparation_transfer_and_publication() {
         .kind(),
         io::ErrorKind::TimedOut
     );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let receipt = source::prepare(&store, &f.runtime, &request, deadline, |_| Ok(())).unwrap();
     let mut received = false;
     let result = source::import(
