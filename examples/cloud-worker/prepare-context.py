@@ -13,7 +13,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-start', 'horizon-worker-check', 'horizon-worker-configure', 'horizon-worker-supervise',
     'horizon-worker-idle', 'horizon-worker-stop',
     'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-source',
-    'horizon-worker-import', 'horizon-worker-git-auth', 'horizon-worker-browserstack',
+    'horizon-worker-import', 'horizon-worker-siblings', 'horizon-worker-git-auth', 'horizon-worker-browserstack',
 )
 CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)
 HELPERS = ('horizon-cloud-worker', 'horizon-browser', 'horizon-device')

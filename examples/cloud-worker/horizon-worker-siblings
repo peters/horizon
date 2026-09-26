@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+"""Record the imported sibling repositories that new agent sessions check out beside the primary.
+
+  horizon-worker-siblings stage ALIAS   creates and prints the sibling's private upload directory
+  horizon-worker-siblings set           reads the manifest as JSON on stdin
+  horizon-worker-siblings show          prints the manifest, or an empty one
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+MANIFEST = Path('/workspace/siblings.json')
+EMPTY = {'version': 1, 'primary': None, 'siblings': []}
+LIMIT = 64 * 1024
+MAX_SIBLINGS = 16
+ALIAS = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+# No leading '.' or '-': excludes '.', '..', '.git' and option-like names.
+DIRECTORY = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,254}')
+REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+
+
+def unique_keys(pairs):
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError('Duplicate sibling manifest key')
+    return value
+
+
+def directory(value):
+    if not isinstance(value, str) or not DIRECTORY.fullmatch(value):
+        raise ValueError('Invalid sibling directory')
+    return value
+
+
+def parse(text):
+    value = json.loads(text, object_pairs_hook=unique_keys)
+    if not isinstance(value, dict) or set(value) != set(EMPTY):
+        raise ValueError('Invalid sibling manifest')
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Unsupported sibling manifest version')
+    siblings = value['siblings']
+    if not isinstance(siblings, list) or len(siblings) > MAX_SIBLINGS:
+        raise ValueError('Invalid sibling list')
+    # The empty manifest that show prints clears the siblings when sent back.
+    if value['primary'] is None and not siblings:
+        return value
+    taken = {directory(value['primary']).lower()}
+    aliases = set()
+    for sibling in siblings:
+        if not isinstance(sibling, dict) or set(sibling) != {'alias', 'directory', 'revision'}:
+            raise ValueError('Invalid sibling entry')
+        alias, revision = sibling['alias'], sibling['revision']
+        if not isinstance(alias, str) or not ALIAS.fullmatch(alias):
+            raise ValueError('Invalid sibling alias')
+        if not isinstance(revision, str) or not REVISION.fullmatch(revision):
+            raise ValueError('Invalid sibling revision')
+        # Directories stay distinct on case-insensitive filesystems too.
+        name = directory(sibling['directory']).lower()
+        if alias in aliases or name in taken:
+            raise ValueError('Duplicate sibling alias or directory')
+        aliases.add(alias)
+        taken.add(name)
+    return value
+
+
+def require_imported(sibling):
+    root = Path('/workspace/siblings') / sibling['alias']
+    base = subprocess.run(['git', '--git-dir', str(root / 'repository.git'), 'rev-parse', '--verify', '--quiet', 'refs/heads/base'],
+                          capture_output=True, text=True, check=False)
+    if base.returncode != 0 or not (root / 'source' / 'manifest.json').is_file():
+        raise ValueError('Sibling repository has not been imported: ' + sibling['alias'])
+    if base.stdout.strip() != sibling['revision']:
+        raise ValueError('Sibling revision differs from its imported base: ' + sibling['alias'])
+
+
+def write(value):
+    pending = MANIFEST.with_suffix('.new')
+    with pending.open('w') as destination:
+        destination.write(json.dumps(value, separators=(',', ':')) + '\n')
+        destination.flush()
+        os.fsync(destination.fileno())
+    os.replace(pending, MANIFEST)
+    descriptor = os.open(MANIFEST.parent, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def stage(alias):
+    if not ALIAS.fullmatch(alias):
+        raise ValueError('Invalid sibling alias')
+    root = Path('/workspace/siblings') / alias
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('Sibling directory is not a directory: ' + alias)
+    root.chmod(0o700)
+    print(root)
+
+
+def main(arguments):
+    if len(arguments) == 2 and arguments[0] == 'stage':
+        stage(arguments[1])
+        return
+    if arguments == ['show']:
+        print(json.dumps(parse(MANIFEST.read_bytes()) if MANIFEST.exists() else EMPTY, separators=(',', ':')))
+        return
+    if arguments != ['set']:
+        raise ValueError('Usage: horizon-worker-siblings stage ALIAS|set|show')
+    data = sys.stdin.buffer.read(LIMIT + 1)
+    if len(data) > LIMIT:
+        raise ValueError('Sibling manifest is too large')
+    value = parse(data)
+    # Imports hold this lock, so a base reference cannot appear while it is verified.
+    with open('/workspace/import.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for sibling in value['siblings']:
+            require_imported(sibling)
+        write(value)
+    aliases = ', '.join(sibling['alias'] for sibling in value['siblings'])
+    print('Sibling manifest recorded: ' + (aliases or 'no siblings'))
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    try:
+        main(sys.argv[1:])
+    except (ValueError, OSError) as error:
+        print(error, file=sys.stderr)
+        sys.exit(3 if isinstance(error, ValueError) else 1)

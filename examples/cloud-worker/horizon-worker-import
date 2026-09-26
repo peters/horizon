@@ -1,20 +1,36 @@
 #!/bin/bash
+# Primary: horizon-worker-import REVISION
+# Sibling: horizon-worker-import REVISION --sibling ALIAS
 set -euo pipefail
 umask 077
 revision="${1:?revision required}"
 [[ "$revision" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || exit 2
+repository=/workspace/repository.git
+pack=/workspace/horizon-transfer.pack
+sibling=
+if [ "$#" = 3 ] && [ "$2" = --sibling ]; then
+    [[ "$3" =~ ^[a-z][a-z0-9_-]{0,63}$ ]] || exit 2
+    # Each sibling has its own upload path, so no upload can replace another repository's.
+    sibling="/workspace/siblings/$3"
+    repository="$sibling/repository.git"
+    pack="$sibling/horizon-transfer.pack"
+elif [ "$#" != 1 ]; then
+    exit 2
+fi
 exec 9>/workspace/import.lock
 flock 9
 format=sha1
 if [ "${#revision}" = 64 ]; then format=sha256; fi
-if [ ! -d /workspace/repository.git ]; then git init --bare --object-format="$format" /workspace/repository.git >/dev/null; fi
-[ "$(git --git-dir=/workspace/repository.git rev-parse --show-object-format)" = "$format" ] || { echo 'Cloud object format mismatch' >&2; exit 3; }
-git --git-dir=/workspace/repository.git index-pack --stdin < /workspace/horizon-transfer.pack >/dev/null
-git --git-dir=/workspace/repository.git cat-file -e "$revision^{commit}"
-if git --git-dir=/workspace/repository.git rev-parse --verify refs/heads/base >/dev/null 2>&1; then
-    [ "$(git --git-dir=/workspace/repository.git rev-parse refs/heads/base)" = "$revision" ] || { echo 'Cloud base revision mismatch' >&2; exit 3; }
+if [ ! -d "$repository" ]; then mkdir -p "${repository%/*}"; git init --bare --object-format="$format" "$repository" >/dev/null; fi
+[ "$(git --git-dir="$repository" rev-parse --show-object-format)" = "$format" ] || { echo 'Cloud object format mismatch' >&2; exit 3; }
+# The global lfs.storage names the primary's store; a sibling hydrates only from its own.
+if [ -n "$sibling" ]; then git --git-dir="$repository" config lfs.storage "$sibling/source/lfs"; fi
+git --git-dir="$repository" index-pack --stdin < "$pack" >/dev/null
+git --git-dir="$repository" cat-file -e "$revision^{commit}"
+if git --git-dir="$repository" rev-parse --verify refs/heads/base >/dev/null 2>&1; then
+    [ "$(git --git-dir="$repository" rev-parse refs/heads/base)" = "$revision" ] || { echo 'Cloud base revision mismatch' >&2; exit 3; }
 else
-    git --git-dir=/workspace/repository.git update-ref refs/heads/base "$revision"
+    git --git-dir="$repository" update-ref refs/heads/base "$revision"
 fi
-rm /workspace/horizon-transfer.pack
+rm "$pack"
 printf 'Committed revision imported: %s\n' "$revision"

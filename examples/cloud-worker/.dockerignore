@@ -11,6 +11,7 @@
 !horizon-worker-session
 !horizon-worker-source
 !horizon-worker-import
+!horizon-worker-siblings
 !horizon-worker-git-auth
 !horizon-worker-browserstack
 !bin/

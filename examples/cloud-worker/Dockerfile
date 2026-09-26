@@ -67,6 +67,7 @@ COPY horizon-worker-start \
     horizon-worker-session \
     horizon-worker-source \
     horizon-worker-import \
+    horizon-worker-siblings \
     horizon-worker-git-auth \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \
