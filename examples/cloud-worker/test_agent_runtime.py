@@ -27,7 +27,7 @@ class AgentRuntimeTests(unittest.TestCase):
 from pathlib import Path
 keys = ['DISABLE_AUTOUPDATER', 'HOME', 'HORIZON', 'HORIZON_BROWSER_ACTOR',
         'HORIZON_BROWSER_HOST_INSTANCE', 'ANTHROPIC_API_KEY',
-        'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR']
+        'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR', 'HORIZON_GPU_LOCK']
 Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
     'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys},
     'path': os.environ['PATH'], 'toolkit': os.environ.get('TOOLKIT'),
@@ -67,7 +67,9 @@ sys.exit(23)
             'HORIZON_BROWSER_HOST_INSTANCE': 'test-host', 'ANTHROPIC_API_KEY': 'synthetic-key',
             'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
             'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
-            'HORIZON_SESSION_DIR': str(self.workspace / 'session-data/test-panel')})
+            'HORIZON_SESSION_DIR': str(self.workspace / 'session-data/test-panel'),
+            'HORIZON_GPU_LOCK': str(self.workspace / 'locks/gpu.lock')})
+        self.assertTrue((self.workspace / 'locks').is_dir())
         self.assertEqual(child['path'], self.env['PATH'])
         self.assertIsNone(child['toolkit'])
 

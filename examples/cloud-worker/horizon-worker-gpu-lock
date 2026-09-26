@@ -1,0 +1,30 @@
+#!/bin/bash
+# Usage: horizon-worker-gpu-lock [--wait SECONDS] -- COMMAND [ARGUMENT...]
+# Runs COMMAND while holding this worker's GPU lock, so GPU builds and tests from different
+# sessions never overlap. Without --wait it waits as long as the lock is held; --wait 0 tries
+# once. Exit status: COMMAND's own, 2 for invalid usage, 75 when the lock was not acquired in
+# time, 126 when COMMAND is not executable, 127 when it is not found, and flock's own status
+# when the lock file cannot be used. Sessions get the same file as HORIZON_GPU_LOCK, so a
+# script can also use flock on it directly.
+set -euo pipefail
+lock=/workspace/locks/gpu.lock
+usage() { echo 'Usage: horizon-worker-gpu-lock [--wait SECONDS] -- COMMAND [ARGUMENT...]' >&2; exit 2; }
+timeout=()
+if [ "${1:-}" = --wait ]; then
+    [[ "${2:-}" =~ ^[0-9]{1,7}$ ]] || usage
+    timeout=(-w "$2")
+    shift 2
+fi
+[ "${1:-}" = -- ] && [ "$#" -ge 2 ] || usage
+shift
+# flock runs executables only, never shell builtins or functions.
+if ! type -P -- "$1" >/dev/null; then
+    if [[ "$1" == */* && -e "$1" ]]; then
+        printf 'horizon-worker-gpu-lock: %s: not executable\n' "$1" >&2; exit 126
+    fi
+    printf 'horizon-worker-gpu-lock: %s: command not found\n' "$1" >&2; exit 127
+fi
+mkdir -p "${lock%/*}"
+# -o: only flock holds the lock, so a background process COMMAND leaves behind cannot keep it.
+# The lock is released when flock ends, so killing this process alone leaves COMMAND unlocked.
+exec flock -o -E 75 "${timeout[@]}" "$lock" "$@"
