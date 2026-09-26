@@ -442,17 +442,9 @@ pub(super) fn runtime_smoke(
     projects: &[(Reservation, PathBuf)],
 ) -> CoordinatorFixture {
     use horizon_cloud_protocol::session_runtime::Status;
-    let manifest = Journal::load(&f.owner).unwrap().unwrap().manifest;
-    let mut sessions = Vec::new();
-    for member in &manifest.members {
-        for session in &member.sessions {
-            let root = directory
-                .join("workspace/projects")
-                .join(member.identity.project_id().to_string())
-                .join("worktrees")
-                .join(session.id.to_string());
-            sessions.push((member.identity.clone(), session.id, root));
-        }
+    let sessions = runtime_sessions(&f, directory);
+    if std::env::var("HORIZON_RUNTIME_FAULT").as_deref() == Ok("early-exit") {
+        return runtime_early_exit(f, target, runner, &sessions[0]);
     }
     if std::env::var("HORIZON_RUNTIME_FAULT").as_deref() == Ok("stop-race") {
         let (project, id, root) = &sessions[0];
@@ -544,6 +536,44 @@ pub(super) fn runtime_smoke(
     f
 }
 
+fn runtime_sessions(f: &CoordinatorFixture, directory: &Path) -> Vec<(ProjectIdentity, uuid::Uuid, PathBuf)> {
+    let manifest = Journal::load(&f.owner).unwrap().unwrap().manifest;
+    let mut sessions = Vec::new();
+    for member in &manifest.members {
+        for session in &member.sessions {
+            let root = directory
+                .join("workspace/projects")
+                .join(member.identity.project_id().to_string())
+                .join("worktrees")
+                .join(session.id.to_string());
+            sessions.push((member.identity.clone(), session.id, root));
+        }
+    }
+    sessions
+}
+
+fn runtime_early_exit(
+    mut f: CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    session: &(ProjectIdentity, uuid::Uuid, PathBuf),
+) -> CoordinatorFixture {
+    use horizon_cloud_protocol::session_runtime::Status;
+    let (project, id, root) = session;
+    fs::write(root.join("home/exit-agent"), "exit immediately after startup").unwrap();
+    runtime_change(&mut f, target, runner, &Change::StartSession(project.clone(), *id)).unwrap();
+    runtime_wait(&f, target, runner, project, *id, &Status::Exited { code: Some(17) });
+    runtime_change(&mut f, target, runner, &Change::StopSession(project.clone(), *id)).unwrap();
+    runtime_wait(&f, target, runner, project, *id, &Status::Stopped);
+    let descendant = root.join("home/descendant-progress");
+    let before = fs::metadata(&descendant).unwrap().len();
+    runtime_change(&mut f, target, runner, &Change::StartSession(project.clone(), *id)).unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(fs::metadata(descendant).unwrap().len(), before);
+    assert_eq!(fs::read_to_string(root.join("home/launch-count")).unwrap(), "launch\n");
+    f
+}
+
 fn runtime_start(
     mut f: CoordinatorFixture,
     target: &crate::cloud_runtime::bootstrap_recovery::Target,
@@ -606,7 +636,10 @@ pub(super) fn runtime_cancel_uncertain(
     runner: &Runner<'_>,
     request: &Reservation,
 ) {
-    if std::env::var("HORIZON_RUNTIME_FAULT").as_deref() == Ok("stop-race") {
+    if matches!(
+        std::env::var("HORIZON_RUNTIME_FAULT").as_deref(),
+        Ok("stop-race" | "early-exit")
+    ) {
         return;
     }
     assert!(runtime_change(f, target, runner, &Change::Cancel(request.project.clone())).is_err());

@@ -247,6 +247,9 @@ impl Terminal {
         if parent_pid.lines().find_map(|l| l.strip_prefix("PPid:")).map(str::trim) != Some(expected.as_str()) {
             return Err(invalid());
         }
+        let identity = capture_agent(server, agent, &status, process::Identity::capture, || {
+            parse(&Self::query(&socket, &session)?)
+        })?;
         Ok(Self {
             directory,
             parent,
@@ -257,11 +260,7 @@ impl Terminal {
             server: process::Identity::capture(server)?,
             socket_inode: metadata.ino(),
             socket_device: metadata.dev(),
-            agent: if status == Status::Running {
-                Some(process::Identity::capture(agent)?)
-            } else {
-                None
-            },
+            agent: identity,
             pane: agent,
         })
     }
@@ -303,17 +302,60 @@ impl Terminal {
     }
     fn observe(&self) -> io::Result<(Option<process::Identity>, Status)> {
         self.verify()?;
-        let (server, agent, status) = parse(&Self::query(&self.socket, &self.session)?)?;
+        let pane = parse(&Self::query(&self.socket, &self.session)?)?;
         self.verify()?;
-        if server != self.server.pid
-            || agent != self.pane
-            || (status == Status::Running && !self.agent.as_ref().is_some_and(process::Identity::alive))
-        {
-            return Err(invalid());
-        }
+        let status = observe_pane(
+            self.server.pid,
+            self.pane,
+            pane,
+            || self.agent.as_ref().is_some_and(process::Identity::alive),
+            || parse(&Self::query(&self.socket, &self.session)?),
+        )?;
+        self.verify()?;
         Ok((self.agent.clone(), status))
     }
 }
+fn capture_agent(
+    server: i32,
+    pane: i32,
+    status: &Status,
+    capture: impl FnOnce(i32) -> io::Result<process::Identity>,
+    query: impl FnOnce() -> io::Result<(i32, i32, Status)>,
+) -> io::Result<Option<process::Identity>> {
+    if *status != Status::Running {
+        return Ok(None);
+    }
+    if let Ok(identity) = capture(pane) {
+        Ok(Some(identity))
+    } else {
+        exited_after_race(server, pane, query()?)?;
+        Ok(None)
+    }
+}
+fn observe_pane(
+    server: i32,
+    pane: i32,
+    observation: (i32, i32, Status),
+    alive: impl FnOnce() -> bool,
+    query: impl FnOnce() -> io::Result<(i32, i32, Status)>,
+) -> io::Result<Status> {
+    let (observed_server, observed_pane, status) = observation;
+    if observed_server != server || observed_pane != pane {
+        return Err(invalid());
+    }
+    if status == Status::Running && !alive() {
+        return exited_after_race(server, pane, query()?);
+    }
+    Ok(status)
+}
+fn exited_after_race(server: i32, pane: i32, observation: (i32, i32, Status)) -> io::Result<Status> {
+    let (observed_server, observed_pane, status) = observation;
+    if observed_server != server || observed_pane != pane || !matches!(status, Status::Exited { .. }) {
+        return Err(invalid());
+    }
+    Ok(status)
+}
+
 fn parse(bytes: &[u8]) -> io::Result<(i32, i32, Status)> {
     let text = std::str::from_utf8(bytes).map_err(|_| invalid())?;
     let parts: Vec<_> = text.split_whitespace().collect();
@@ -329,4 +371,53 @@ fn parse(bytes: &[u8]) -> io::Result<(i32, i32, Status)> {
         _ => return Err(invalid()),
     };
     Ok((pid(0)?, pid(1)?, status))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_between_initial_query_and_identity_capture_retains_dead_pane() {
+        assert!(
+            capture_agent(
+                10,
+                11,
+                &Status::Running,
+                |_| Err(invalid()),
+                || Ok((10, 11, Status::Exited { code: Some(17) }))
+            )
+            .unwrap()
+            .is_none()
+        );
+        for pane in [
+            (12, 11, Status::Exited { code: Some(17) }),
+            (10, 12, Status::Exited { code: Some(17) }),
+            (10, 11, Status::Running),
+        ] {
+            assert!(capture_agent(10, 11, &Status::Running, |_| Err(invalid()), || Ok(pane)).is_err());
+        }
+    }
+
+    #[test]
+    fn exit_between_live_query_and_liveness_check_retains_exit_status() {
+        assert_eq!(
+            observe_pane(
+                10,
+                11,
+                (10, 11, Status::Running),
+                || false,
+                || Ok((10, 11, Status::Exited { code: Some(23) }))
+            )
+            .unwrap(),
+            Status::Exited { code: Some(23) }
+        );
+        for pane in [
+            (12, 11, Status::Exited { code: Some(23) }),
+            (10, 12, Status::Exited { code: Some(23) }),
+            (10, 11, Status::Running),
+        ] {
+            assert!(observe_pane(10, 11, (10, 11, Status::Running), || false, || Ok(pane)).is_err());
+        }
+    }
 }

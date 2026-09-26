@@ -57,7 +57,7 @@ while True:
 '''
 
 SYNTHETIC_AGENT = r'''#!/usr/bin/python3
-import ctypes,os,pathlib,signal,sys,time
+import ctypes,os,pathlib,select,signal,sys,time
 if sys.argv[1:]==['--version']:
  print('2.1.283 (Claude Code)');sys.exit(0)
 assert sys.argv[1:]==['--safe-mode','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--setting-sources','','--disable-slash-commands','--no-chrome']
@@ -66,18 +66,26 @@ home=pathlib.Path(os.environ['HOME']);work=pathlib.Path.cwd()
 with (home/'launch-count').open('a') as f:f.write('launch\n')
 (home/'runtime-environment.json').write_text(__import__('json').dumps(dict(os.environ)))
 # An intermediate subreaper and fast exits exercise repeated adoption at stop.
+ready_read,ready_write=os.pipe()
 if os.fork()==0:
+ os.close(ready_read)
  assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
  for _ in range(5):
   if os.fork()==0:os._exit(0)
  if os.fork()!=0:
+  os.close(ready_write)
   while True:time.sleep(.05)
  os.setsid()
  if os.fork():os._exit(0)
  signal.signal(signal.SIGTERM,signal.SIG_IGN);signal.signal(signal.SIGHUP,signal.SIG_IGN)
+ with (home/'descendant-progress').open('a') as f:f.write('x')
+ os.write(ready_write,b'1');os.close(ready_write)
  while True:
   with (home/'descendant-progress').open('a') as f:f.write('x')
   time.sleep(.05)
+os.close(ready_write)
+assert select.select([ready_read],[],[],5)[0] and os.read(ready_read,1)==b'1'
+os.close(ready_read)
 while True:
  with (work/'runtime-progress').open('a') as f:f.write('x')
  if (home/'exit-agent').exists():sys.exit(17)
@@ -332,7 +340,7 @@ def run(options):
     assert test_exit == 0 and not errors and report["threads_stopped"] and report["namespace_stopped"], "Inspect private test.log and ssh-report.json"
     if options.scenario == "runtime":
         assert report["same_host_key"]
-        expected_starts = 1 if options.runtime_fault == "stop-race" else 6
+        expected_starts = 1 if options.runtime_fault in ["stop-race", "early-exit"] else 6
         assert len({s["request_sha256"] for s in sessions if s["command"] == "start-project-session"}) == expected_starts
         assert len([s for s in sessions if s["command"] == "inspect-project-session"]) >= expected_starts
         print(json.dumps({"passed":True,"ssh_sessions":len(sessions),"worker_sha256":worker_hash,"namespace_stopped":True}))
@@ -362,7 +370,7 @@ def run(options):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources", "runtime"], default="initialization")
-    parser.add_argument("--runtime-fault", choices=["supervisor", "server", "socket", "stop-race"], default="supervisor")
+    parser.add_argument("--runtime-fault", choices=["supervisor", "server", "socket", "stop-race", "early-exit"], default="supervisor")
     parser.add_argument("--worker", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--sshd", help="Actual OpenSSH server binary; may be extracted into a task-local directory")

@@ -779,9 +779,10 @@ The local `runtime` SSH smoke uses synthetic agents in one persistent isolated
 PID namespace. It checks six sessions, lost replies, host and SSH restarts,
 retained edits, agent exit, descendant termination, sibling preservation and
 supervisor-loss fencing. Repeat it with `--runtime-fault server`, `socket` and
-`stop-race`; the last mode requires `strace` and pauses the supervisor until signed
+`stop-race`; this mode requires `strace` and pauses the supervisor until signed
 stop has committed, then resumes it before any executable launch. Socket replacement preserves the replacement
-bytes. Separate installed-agent policy probes use no credentials
+bytes. The `early-exit` mode retains an immediate agent exit and then stops
+its remaining descendants. Separate installed-agent policy probes use no credentials
 or inference and disable networking; offline interactive startup may exit before
 authentication. Neither those probes nor synthetic process tests qualify
 live-provider execution, authenticated inference or physical power-loss behavior.
