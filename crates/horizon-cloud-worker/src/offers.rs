@@ -117,10 +117,20 @@ fn ranked(
     if now >= request.deadline_at_millis.saturating_sub(1_000) {
         return Err("cloud_offers_timed_out".to_owned());
     }
-    let invalid = |error: String| format!("cloud_offers_invalid_request: {error}");
-    let requirements: Requirements =
-        serde_json::from_value(request.cloud_offers.clone().unwrap_or_default()).map_err(|e| invalid(e.to_string()))?;
-    requirements.validate().map_err(|error| invalid(error.to_owned()))?;
+    let requirements: Requirements = serde_json::from_value(request.cloud_offers.clone().unwrap_or_default())
+        .map_err(|error| format!("cloud_offers_invalid_request: {error}"))?;
+    rank(&requirements, path, now)
+}
+
+/// Offers for `requirements` from the prices on this worker, for agents' MCP tools.
+pub(crate) fn rank_here(requirements: &Requirements) -> Result<serde_json::Value, String> {
+    rank(requirements, Path::new(SNAPSHOT), manifest::now_millis())
+}
+
+fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json::Value, String> {
+    requirements
+        .validate()
+        .map_err(|error| format!("cloud_offers_invalid_request: {error}"))?;
     let file = std::fs::File::open(path).map_err(|_| {
         "cloud_offers_unavailable: no prices from the Horizon that owns this cloud yet; they arrive while it runs"
             .to_owned()
@@ -143,6 +153,6 @@ fn ranked(
         "provider": snapshot.list.provider,
         "observed_at_millis": snapshot.observed_at_millis,
         "observed_seconds_ago": age / 1_000,
-        "offers": offers(&snapshot.list, &snapshot.preferences, &requirements),
+        "offers": offers(&snapshot.list, &snapshot.preferences, requirements),
     }))
 }

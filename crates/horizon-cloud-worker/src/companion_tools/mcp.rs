@@ -52,6 +52,20 @@ impl Server {
             Err(_) => CallToolResult::error(vec![ContentBlock::text("Companion inspection failed")]),
         }
     }
+
+    #[tool(
+        name = "cloud_offers",
+        description = "Rank cloud compute offers the Horizon that owns this cloud can rent for given requirements, cheapest estimated total first, without renting anything. Pass minimum vCPU and memory for CPU workers, or gpu=true with an optional minimum GPU memory or GPU type, plus an optional maximum hourly price, expected hours, workspace storage in GB and region. Each offer has its hourly price (for a CPU size, the highest among the flavors Horizon requests for it, since the provider picks one), an estimated total for the hours including workspace storage, availability (CPU sizes are confirmed when a cloud is created), regions with GPU stock, and host trust. Prices are the ones that Horizon last sent this worker, every 15 minutes while it runs; the result says when they were observed. Without prices from the last 20 minutes the tool returns an error rather than old prices. Offers are informational, never a reservation."
+    )]
+    async fn cloud_offers(
+        &self,
+        Parameters(requirements): Parameters<horizon_cloud::offers::Requirements>,
+    ) -> CallToolResult {
+        match crate::offers::rank_here(&requirements) {
+            Ok(offers) => CallToolResult::structured(offers),
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
+        }
+    }
 }
 
 impl ServerHandler for Server {
@@ -145,7 +159,16 @@ mod tests {
                 assert_eq!(response["result"]["resultType"], "complete");
                 assert_eq!(response["result"]["ttlMs"], 0);
                 assert_eq!(response["result"]["cacheScope"], "private");
-                assert_eq!(response["result"]["tools"].as_array().map(Vec::len), Some(2));
+                let tools = response["result"]["tools"].as_array().expect("tools");
+                assert_eq!(tools.len(), 3);
+                // Agents without browser tools still rank cloud offers here.
+                let offers = tools
+                    .iter()
+                    .find(|tool| tool["name"] == "cloud_offers")
+                    .expect("cloud_offers tool");
+                for field in ["min_vcpu", "gpu", "gpu_type", "max_hourly", "hours", "region", "limit"] {
+                    assert!(offers["inputSchema"]["properties"].get(field).is_some(), "{field}");
+                }
             }
         }
         drop(output);

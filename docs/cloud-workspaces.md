@@ -519,6 +519,9 @@ the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. M0 has no agent tool for starting or provisioning a cloud.
+The same server also offers `cloud_offers`, so agents on workers without browser
+tools can rank cloud offers from the prices the owning Horizon last sent the
+worker.
 
 Uncheck to remove access. If either worker is offline, removal stays pending
 until that original worker can confirm cleanup. Dirty worktrees are preserved;

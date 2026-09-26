@@ -19,6 +19,7 @@ const MAX_HOURS: f64 = 24.0 * 366.0;
 /// What the work needs. Every field is optional; an empty request lists the cheapest CPU
 /// workers.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Requirements {
     #[serde(default)]
