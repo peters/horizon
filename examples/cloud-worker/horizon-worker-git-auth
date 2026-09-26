@@ -225,21 +225,30 @@ def credential_reply(entries, request):
 
 
 def repository_arguments(argv):
-    """Explicit --repo/-R selections (including after `--` and in short-flag clusters) and the
-    repositories other arguments imply: github.com URLs, `gh repo <command> OWNER/REPO` and
-    `gh api repos/OWNER/REPO/...`. An argument that selects another host implies None."""
+    """Explicit --repo/-R selections (including short-flag clusters) and the repositories other
+    arguments imply: github.com URLs, `gh repo <command> OWNER/REPO` and
+    `gh api repos/OWNER/REPO/...`. An argument that selects another host implies None.
+
+    A selector right after a flag without an inline value, or after `--`, may be that flag's
+    value or a positional argument rather than a real selector. It only implies a repository,
+    so it can never redirect gh; it must agree with the repository chosen otherwise."""
     explicit, implied = [], []
+    terminated = False
     for index, argument in enumerate(argv):
         following = argv[index + 1] if index + 1 < len(argv) else ''
+        previous = argv[index - 1] if index else ''
+        ambiguous = terminated or (previous.startswith('-') and '=' not in previous)
+        terminated = terminated or argument == '--'
+        selectors = implied if ambiguous else explicit
         short = None if argument.startswith('--') else SHORT_REPOSITORY.fullmatch(argument)
         url = GITHUB_ARGUMENT.match(argument)
         endpoint = API_REPOSITORY.match(argument) if argv[:1] == ['api'] else None
         if argument == '--repo':
-            explicit.append(following)
+            selectors.append(following)
         elif argument.startswith('--repo='):
-            explicit.append(argument[len('--repo='):])
+            selectors.append(argument[len('--repo='):])
         elif short:
-            explicit.append(short.group(1).removeprefix('=') or following)
+            selectors.append(short.group(1).removeprefix('=') or following)
         elif url:
             implied.append(url.group(1))
         elif endpoint:

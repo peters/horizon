@@ -192,10 +192,13 @@ Git's helper answers only for the repository path it is asked about, with that
 repository's token. The `gh` wrapper chooses the repository from `--repo`/`-R`
 (including short-flag clusters), then `GH_REPO`, then the working directory's
 `origin`, and injects only that repository's token. Repositories that other
-arguments imply (github.com URLs, `gh repo <command> OWNER/REPO` and
-`gh api repos/OWNER/REPO/...`, also as an api.github.com URL) must agree with that choice; they select the
-repository only when nothing else does. If the repository cannot be determined,
-the arguments disagree, an argument or `GH_HOST` selects another host, or it has
+arguments imply (github.com URLs, `gh repo <command> OWNER/REPO`, and
+`gh api repos/OWNER/REPO/...`, also as an api.github.com URL) must agree with that
+choice; they select the repository only when nothing else does. A `--repo`/`-R`
+right after a flag without an inline value, or after `--`, might be that flag's
+value, so it is treated the same way: put `--repo` before value-less flags to
+select another repository. If the repository cannot be determined, the arguments
+disagree, an argument or `GH_HOST` selects another host, or it has
 no grant, `gh` runs without Horizon credentials (a Horizon token inherited from an
 outer `gh` is removed too) and prints one line on stderr. Package restores that
 call `gh auth token` inside a repository therefore read that repository's own
