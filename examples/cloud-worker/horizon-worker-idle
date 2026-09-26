@@ -135,6 +135,10 @@ def parent(pid, proc=Path('/proc')):
         return 0
 
 
+# Agents horizon-worker-session binds; its other kind, shell, is a person's terminal.
+AGENTS = ('claude', 'codex', 'grok')
+
+
 def caller(pid, query=tmux, parent_of=parent, sessions=Path('/workspace/sessions')):
     """The agent session whose process tree `pid` belongs to, as (window, session, agent).
     The kernel names the connecting process, so a caller cannot speak for another window."""
@@ -147,11 +151,15 @@ def caller(pid, query=tmux, parent_of=parent, sessions=Path('/workspace/sessions
     while pid > 1 and pid not in seen:
         if pid in panes:
             window, session = panes[pid]
+            # A pane is an agent session only with the binding horizon-worker-session
+            # wrote for it; a plain shell or an ad-hoc tmux session is not one.
             try:
                 agent = (sessions / session / 'agent').read_text().strip()
             except OSError:
                 agent = ''
-            return window, session, agent if agent.isalnum() and len(agent) <= 20 else ''
+            if agent not in AGENTS:
+                break
+            return window, session, agent
         seen.add(pid)
         pid = parent_of(pid)
     raise Refused('Only an agent session on this worker can stop it.')

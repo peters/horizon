@@ -46,7 +46,8 @@ done. The watcher is the only process that uses the provider credential, but age
 sessions run as root today, so this is not an isolation boundary (per-agent credential
 isolation is tracked separately). It identifies the requesting session from the
 connecting process through the kernel's peer credentials and its tmux pane, never from
-the request, and refuses callers outside an agent session. It refuses while another
+the request, and refuses callers outside a Claude, Codex or Grok session (a shell
+session or an ad-hoc tmux session is not one). It refuses while another
 agent window printed output in the last two minutes, checked after its CPU sample and
 right before the stop, while the container averages half a core, or when tmux or the
 container's CPU accounting cannot be read. Accepted stops are recorded with the requesting session and agent in

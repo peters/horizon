@@ -289,7 +289,8 @@ shared across workspaces and profiles with hosted devices do not support it.
 The same opt-in lets an agent stop its worker when its task is done, such as when
 its pull request is merged, without this computer. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
-one-line reason. The worker identifies the requesting agent session itself and
+one-line reason. The worker identifies the requesting agent session itself,
+refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
 refuses while another agent session printed output in the last two minutes, while
 the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
 output does not count. The reason and the requesting agent are kept on the

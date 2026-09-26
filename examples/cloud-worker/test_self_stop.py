@@ -90,8 +90,14 @@ class WatcherTests(unittest.TestCase):
         # A process outside every agent session cannot stop the worker.
         with self.assertRaisesRegex(Refused, 'Only an agent session'):
             caller(700, query=query, parent_of=lambda pid: parents.get(pid, 0), sessions=sessions)
-        # A session without a readable agent binding still identifies its window.
-        self.assertEqual(caller(200, query=query, parent_of=parents.get, sessions=sessions), ('@2', 'agent-b', ''))
+        # A pane without a readable agent binding, or bound to a plain shell, is not an
+        # agent session.
+        with self.assertRaisesRegex(Refused, 'Only an agent session'):
+            caller(200, query=query, parent_of=lambda pid: parents.get(pid, 0), sessions=sessions)
+        (sessions / 'agent-b').mkdir()
+        (sessions / 'agent-b' / 'agent').write_text('shell\n')
+        with self.assertRaisesRegex(Refused, 'Only an agent session'):
+            caller(200, query=query, parent_of=lambda pid: parents.get(pid, 0), sessions=sessions)
 
     def test_windows_other_than_the_callers_count_and_tmux_failures_refuse(self):
         listing = lambda *args: '@1 9990\n@2 9000\n'
