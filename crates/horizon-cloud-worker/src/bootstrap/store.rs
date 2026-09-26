@@ -1,10 +1,11 @@
 //! Descriptor-anchored allocation storage with exclusive first publication.
 use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, mkdirat, openat, renameat, renameat_with, unlinkat};
 use std::{
-    fs::File,
+    fs::{File, TryLockError},
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
+    time::{Duration, Instant},
 };
 pub(super) const LIMIT: u64 = 64 * 1024;
 const FLAGS: OFlags = OFlags::RDONLY.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
@@ -135,7 +136,7 @@ impl Store {
     pub(super) fn open(root: &Path) -> io::Result<Self> {
         let directory = open_directory(root)?;
         let lock = regular(&directory, LOCK)?;
-        lock.try_lock().map_err(|_| io::Error::other("Allocation is locked"))?;
+        acquire(&lock)?;
         let store = Self {
             root: root.to_owned(),
             directory,
@@ -242,6 +243,24 @@ impl Store {
     }
 }
 
+fn acquire(lock: &File) -> io::Result<()> {
+    // Concurrent forks briefly inherit even CLOEXEC descriptors. Allow those
+    // copies to close without releasing a lease held by a surviving helper.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "Allocation is locked"));
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
 pub(super) fn secret(file: &mut File) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
     let mut bytes = zeroize::Zeroizing::new(vec![0; 8193]);
     let mut length = 0;
@@ -323,6 +342,29 @@ pub(super) fn anchor_directory(path: &Path) -> io::Result<File> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn acquisition_waits_for_a_short_lease_but_fences_a_surviving_holder() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().join("allocation");
+        let store = Store::create(&root).unwrap();
+        let lease = store.lease().unwrap();
+        drop(store);
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            drop(lease);
+        });
+        let reopened = Store::open(&root).unwrap();
+        release.join().unwrap();
+        let retained = reopened.lease().unwrap();
+        drop(reopened);
+        let started = Instant::now();
+        let error = Store::open(&root).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        drop(retained);
+        drop(Store::open(&root).unwrap());
+    }
 
     #[test]
     fn dropping_store_releases_lock_even_when_another_descriptor_remains_open() {
