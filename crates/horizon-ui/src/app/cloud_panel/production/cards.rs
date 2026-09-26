@@ -17,6 +17,8 @@ impl HorizonApp {
         let mut fullscreen = None;
         let mut layout = None;
         let mut resize = None;
+        let regions = self.landed_regions(ctx);
+        let region_of = |center: &str| regions.get(center).cloned();
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
             if self
@@ -37,7 +39,7 @@ impl HorizonApp {
                     ui.set_clip_rect(clip);
                     runtime_frame(ui, group.issue, |ui| {
                         super::super::runtime::runtime_heading(ui, group, self.cloud_prototype.provider_logo.as_ref());
-                        if let Some(size) = profile_details(ui, group.issue, launch, runtime) {
+                        if let Some(size) = profile_details(ui, group.issue, launch, runtime, &region_of) {
                             resize = Some((group.issue, size));
                         }
                         self.cloud_prototype.production.companions.render(ui, &launch.id);
@@ -165,11 +167,12 @@ fn profile_details(
     id: u32,
     launch: &horizon_core::cloud_panel::CloudLaunch,
     runtime: &super::Runtime,
+    region_of: &dyn Fn(&str) -> Option<String>,
 ) -> Option<(u16, u16)> {
     ui.label(RichText::new(&launch.profile_name).size(15.0).color(theme::FG_DIM()));
     let resize = machine_size(ui, id, launch, runtime);
     ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
-    placement::where_it_lives(ui, launch, runtime.state.as_ref());
+    placement::where_it_lives(ui, launch, runtime.state.as_ref(), region_of);
     ui.small(format!(
         "Agents: {}",
         if launch.profile.capabilities.agents.is_empty() {

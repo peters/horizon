@@ -42,11 +42,8 @@ impl State {
         if cfg!(test) {
             return;
         }
-        if self.list_job.is_none() && self.list.as_ref().is_none_or(|list| stale(list.at)) && self.list_error.is_none()
-        {
-            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
-                prices::price_list(settings, cancel)
-            }));
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
         }
         let key = key(profile);
         let current = self
@@ -67,6 +64,34 @@ impl State {
         // Fetches repaint when they finish; an idle dialog still has to wake when its prices go stale.
         if let Some(wait) = self.until_stale(profile) {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// Fetches the price list once when there is none, for naming the region of the data
+    /// center a cloud landed in on its card. The New cloud dialog keeps it fresh.
+    pub fn request_regions(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.is_none() {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// The region of `data_center` as people say it, once the price list is known.
+    pub fn region_of(&self, data_center: &str) -> Option<String> {
+        let (list, _) = &self.list.as_ref()?.value;
+        list.data_centers
+            .iter()
+            .find(|center| center.id == data_center && !center.region.is_empty())
+            .map(|center| region_name(&center.region))
+    }
+
+    fn fetch_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if self.list_job.is_none() && self.list_error.is_none() {
+            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
+                prices::price_list(settings, cancel)
+            }));
         }
     }
 
@@ -149,6 +174,25 @@ impl State {
             Err(error) => Some(Err(error.as_str())),
         }
     }
+}
+
+/// The provider's region as people say it, such as `NORTH_AMERICA` as North America.
+pub(super) fn region_name(region: &str) -> String {
+    if region.is_empty() {
+        return "Other".to_owned();
+    }
+    region
+        .split('_')
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            let mut letters = lower.chars();
+            letters
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + letters.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn stale(at: Instant) -> bool {
@@ -250,6 +294,25 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    fn regions_read_as_people_say_them_and_are_found_by_data_center() {
+        assert_eq!(region_name("NORTH_AMERICA"), "North America");
+        assert_eq!(region_name("EUROPE"), "Europe");
+        assert_eq!(region_name(""), "Other");
+        let mut state = State::default();
+        assert_eq!(state.region_of("EU-RO-1"), None);
+        let mut listed = list();
+        listed.data_centers = vec![horizon_core::cloud_runtime::prices::DataCenter {
+            id: "EU-RO-1".into(),
+            region: "EUROPE".into(),
+            workspace_storage: true,
+            gpus: Vec::new(),
+        }];
+        state.list = Some(now((listed, Preferences::default())));
+        assert_eq!(state.region_of("EU-RO-1").as_deref(), Some("Europe"));
+        assert_eq!(state.region_of("US-MO-2"), None);
     }
 
     #[test]
