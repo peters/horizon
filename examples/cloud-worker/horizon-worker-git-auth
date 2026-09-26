@@ -21,7 +21,8 @@ GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_
 GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
                              re.IGNORECASE)
 SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
-API_REPOSITORY = re.compile(r'/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)')
+API_REPOSITORY = re.compile(r'(?:https?://api\.github\.com)?/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)',
+                            re.IGNORECASE)
 # `gh repo` commands whose first positional argument is a repository, with the flags that take a
 # separate value, so a flag value is never read as that repository.
 POSITIONAL_REPOSITORY_COMMANDS = {

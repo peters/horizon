@@ -312,6 +312,7 @@ class GitGrantTests(unittest.TestCase):
         git('config', 'remote.origin.url', 'https://github.com/example/consumer.git', cwd=primary, env=self.env)
         for argv in (['pr', 'view', 'https://github.com/example/consumer/pull/1'],
                      ['repo', 'view', 'example/consumer'], ['api', 'repos/example/consumer/pulls'],
+                     ['api', 'https://api.github.com/repos/example/consumer/issues'],
                      ['api', '/repos/{owner}/{repo}/pulls'], ['repo', 'clone', 'example/consumer', 'a/b/c'],
                      ['repo', 'view', '--json', 'name'], ['repo', 'view', '-b', 'feature/x', '--jq', '.name'],
                      ['repo', 'sync', '--branch', 'main', 'example/consumer'],
@@ -320,6 +321,8 @@ class GitGrantTests(unittest.TestCase):
             self.assertEqual(env['GH_TOKEN'], self.primary['token'], argv)
         for argv in (['repo', 'view', 'example/library'], ['repo', 'clone', 'example/library'],
                      ['api', 'repos/example/library/contents/x'],
+                     ['api', 'https://api.github.com/repos/example/library/issues'],
+                     ['api', 'HTTPS://API.GITHUB.COM/repos/example/library'],
                      ['pr', 'view', 'https://github.com/example/library/pull/1'],
                      ['pr', 'create', '--body', 'https://github.com/example/library/pull/3'],
                      ['repo', 'view', 'library'], ['repo', 'view', '--json', 'name', 'example/library'],
