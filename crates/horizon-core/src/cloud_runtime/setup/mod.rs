@@ -218,5 +218,7 @@ fn defaults(root: &Path) -> Settings {
         anthropic_workspace_id: None,
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),
+        hetzner: None,
+        placement: None,
     }
 }

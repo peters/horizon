@@ -125,6 +125,13 @@ impl CloudConfig {
             {
                 return Err(ProfileError::Invalid(crate::runpod::volumes::INVALID_REQUEST_SIZE));
             }
+            if profile.provider == crate::hetzner::PROVIDER
+                && !crate::hetzner::volumes::SIZE_GB.contains(&u32::from(profile.storage.volume_gb))
+            {
+                return Err(ProfileError::Invalid(
+                    "A Hetzner workspace volume must be between 10 and 10,240 GB",
+                ));
+            }
         }
         Ok(config)
     }
@@ -154,10 +161,24 @@ impl Profile {
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
         self.capabilities.validate()?;
-        if self.provider != "runpod" && !(design_fixture && matches!(self.provider.as_str(), "daytona" | "fly")) {
+        let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
+        let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
+        if !(supported || fixture) {
             return Err(ProfileError::Invalid(
-                "Only RunPod can deploy workers; Daytona and Fly.io are design fixtures",
+                "Supported providers are RunPod and Hetzner; Daytona and Fly.io are design fixtures",
             ));
+        }
+        if self.provider == crate::hetzner::PROVIDER {
+            if self.gpu {
+                return Err(ProfileError::Invalid(
+                    "Hetzner has no GPU workers; use RunPod for a GPU profile",
+                ));
+            }
+            if self.capabilities.browserstack.is_some() {
+                return Err(ProfileError::Invalid(
+                    "Hosted devices are not available on Hetzner clouds yet",
+                ));
+            }
         }
         if self.cpu == 0 || self.memory_gb == 0 || self.storage.container_gb == 0 || self.storage.volume_gb == 0 {
             return Err(ProfileError::Invalid("CPU, memory and storage must be positive"));
@@ -273,6 +294,39 @@ mod tests {
             }
         }
         assert!(CloudConfig::parse_design_fixture(&serde_yaml::to_string(&fixture).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn hetzner_profiles_are_cpu_only_with_hetzner_volume_limits() {
+        for (size, accepted) in [(9, false), (10, true), (4001, true), (10_240, true), (10_241, false)] {
+            let mut config = CloudConfig::parse(EXAMPLE).unwrap();
+            config.profiles.retain(|name, _| name == "image-only");
+            config.default = "image-only".into();
+            let profile = config.profiles.get_mut("image-only").unwrap();
+            profile.provider = crate::hetzner::PROVIDER.into();
+            profile.storage.volume_gb = size;
+            let yaml = serde_yaml::to_string(&config).unwrap();
+            assert_eq!(CloudConfig::parse(&yaml).is_ok(), accepted, "size={size}");
+        }
+        let mut profile = CloudConfig::parse(EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("image-only")
+            .unwrap();
+        profile.provider = crate::hetzner::PROVIDER.into();
+        assert!(profile.validate(false).is_ok());
+        profile.gpu = true;
+        assert!(profile.validate(false).is_err(), "Hetzner has no hourly GPUs");
+        profile.gpu = false;
+        profile.capabilities.browserstack = Some(crate::BrowserStack {
+            provider: crate::BrowserStack::default_provider(),
+            targets: ["ios_phone".into()].into(),
+            local_ports: [8080].into(),
+        });
+        assert!(
+            profile.validate(false).is_err(),
+            "hosted devices are not wired for Hetzner"
+        );
     }
 
     #[test]
