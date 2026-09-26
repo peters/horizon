@@ -140,18 +140,32 @@ impl State {
     }
 }
 
-/// The ready clouds whose worker lacks the prices observed at `observed`, first one first.
+/// The next ready cloud whose worker lacks the prices observed at `observed`. Workers
+/// not tried since they last took prices, or since they replaced another, come first;
+/// failed ones follow once their retry is due, the longest waiting first, so unreachable
+/// workers never hold up the rest.
 fn due<'a>(
     delivered: &HashMap<String, Delivery>,
     ready: &'a [(String, String)],
     observed: Instant,
     now: Instant,
 ) -> Option<&'a (String, String)> {
-    ready.iter().find(|(cloud, worker)| {
+    let untried = ready.iter().find(|(cloud, worker)| {
         delivered.get(cloud).is_none_or(|delivery| {
-            delivery.worker != *worker
-                || (delivery.observed != Some(observed) && delivery.retry_at.is_none_or(|at| now >= at))
+            delivery.worker != *worker || (delivery.observed != Some(observed) && delivery.retry_at.is_none())
         })
+    });
+    untried.or_else(|| {
+        ready
+            .iter()
+            .filter_map(|entry| {
+                let delivery = delivered.get(&entry.0)?;
+                let retry_at = delivery.retry_at?;
+                (delivery.worker == entry.1 && delivery.observed != Some(observed) && now >= retry_at)
+                    .then_some((retry_at, entry))
+            })
+            .min_by_key(|(retry_at, _)| *retry_at)
+            .map(|(_, entry)| entry)
     })
 }
 
@@ -258,6 +272,42 @@ mod tests {
         assert_eq!(due(&delivered, &ready, now, now + RETRY), Some(&ready[0]));
         let replaced = vec![("a".to_owned(), "w3".to_owned())];
         assert_eq!(due(&delivered, &replaced, now, now), Some(&replaced[0]));
+        // A worker never tried goes before failed ones whose retry is due, and among
+        // those the longest waiting goes first.
+        let three = vec![
+            ("a".to_owned(), "w1".to_owned()),
+            ("b".to_owned(), "w2".to_owned()),
+            ("c".to_owned(), "w4".to_owned()),
+        ];
+        let failed = |retry_at| Delivery {
+            worker: String::new(),
+            observed: None,
+            retry_at: Some(retry_at),
+        };
+        let mut retries = HashMap::new();
+        retries.insert(
+            "a".to_owned(),
+            Delivery {
+                worker: "w1".into(),
+                ..failed(now + RETRY)
+            },
+        );
+        retries.insert(
+            "b".to_owned(),
+            Delivery {
+                worker: "w2".into(),
+                ..failed(now)
+            },
+        );
+        assert_eq!(due(&retries, &three, now, now + RETRY), Some(&three[2]));
+        retries.insert(
+            "c".to_owned(),
+            Delivery {
+                worker: "w4".into(),
+                ..failed(now + RETRY * 2)
+            },
+        );
+        assert_eq!(due(&retries, &three, now, now + RETRY), Some(&three[1]));
     }
 
     #[test]
