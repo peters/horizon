@@ -31,14 +31,21 @@ load_layout() {
     [ -n "$primary" ] && [ "${#siblings[@]}" -gt 0 ] || { echo 'Invalid session layout' >&2; exit 3; }
     worktree="$root/$primary"
 }
-present() { [ -e "$1/.git" ] && [ "$(git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; }
+# A worktree counts only when it belongs to its own repository; another clone at that path does not.
+present() {
+    local common expected
+    [ -e "$1/.git" ] || return 1
+    common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    expected="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    [ -n "$expected" ] && [ "$(cd "$common" && pwd -P)" = "$expected" ]
+}
 # Sibling entries are "ALIAS DIRECTORY REVISION".
 all_present() {
-    present "$worktree" || return 1
+    present "$worktree" /workspace/repository.git || return 1
     local entry fields
     for entry in "${siblings[@]}"; do
         read -r -a fields <<< "$entry"
-        present "$root/${fields[1]}" || return 1
+        present "$root/${fields[1]}" "/workspace/siblings/${fields[0]}/repository.git" || return 1
     done
 }
 prepare() {

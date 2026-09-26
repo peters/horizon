@@ -270,7 +270,8 @@ Every worktree is on branch `agent/SESSION` of its own repository: the primary a
 session's revision, each sibling at its manifest revision. Submodules and LFS content
 are prepared from each repository's own material before the launch fence, so relative
 paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch
-refuses with exit 3 when any worktree of the layout is missing and never recreates it.
+refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
+its own repository, and never recreates it.
 
 ### Session data directory
 

@@ -354,6 +354,22 @@ class SessionRelaunchTests(unittest.TestCase):
         self.assertEqual(len(self.launches()), 1)
         self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
 
+    def test_relaunch_refuses_another_repository_at_a_worktree_path(self):
+        _, _, sibling = self.launch_beside_sibling()
+        self.reset_container()
+        for replaced in [sibling, self.worktree]:
+            moved = replaced.with_name(replaced.name + '.moved')
+            replaced.rename(moved)
+            self.git('init', '--quiet', replaced)
+            refused = self.relaunch()
+            self.assertEqual(refused.returncode, 3, replaced)
+            self.assertIn('worktree is missing', refused.stderr)
+            shutil.rmtree(replaced)
+            moved.rename(replaced)
+        self.assertEqual(len(self.launches()), 1)
+        self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
+        self.assertEqual(self.relaunch().returncode, 0)
+
     def test_interrupted_preparation_completes_the_sibling_on_the_next_attach(self):
         library = self.add_sibling('lib', {'library.txt': 'library base\n'})
         self.set_siblings([('lib', 'native-lib', library)])
