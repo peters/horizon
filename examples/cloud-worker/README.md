@@ -106,6 +106,42 @@ Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
 
+## Running on a rented virtual machine
+
+Providers that rent whole servers instead of containers run the same image under
+Docker on the host. `horizon-cloud::host` renders the server's `#cloud-config` user
+data; the host needs Ubuntu with Docker already installed (for example Hetzner's
+`docker-ce` image) and an ext4 volume attached at creation. On first boot it:
+
+- mounts the volume at `/mnt/horizon-volume` (fstab `nofail`) and gives the
+  container its `workspace` subdirectory as `/workspace`, so the filesystem's
+  `lost+found` stays out of view; the service refuses to start without the mount;
+- writes the container environment, the image digest and any registry login as
+  root-only files, and pulls the image by digest with retries;
+- masks the host's own SSH service and locks the root password (cloud-init also
+  disables root and password login), so port 22 belongs to the container and the
+  host has no remote login; if either step fails, the worker is never started;
+- starts `horizon-worker.service`, which runs the container with `--rm`, publishes
+  port 22, keeps at most 50 MB of container logs (Docker's rotating `local` driver)
+  and restarts it on failure and after a reboot.
+
+Before every container start the service drops container traffic to the
+link-local range 169.254.0.0/16, which holds the metadata service, because that
+service returns the user data, including the registry login. The container does
+not start if the rule cannot be applied.
+
+The login file stays on the host (root only, never mounted into the container) so a
+restarted host can pull again if its image cache is lost. The credential also stays
+readable in the server's user data for the server's whole life, so callers must pass
+a short-lived, read-only token scoped to the one repository. Because host SSH is
+masked and root is locked, host recovery uses the provider's rescue system rather
+than a login.
+
+String values are written as data files and never interpolated into commands; only
+the range-checked shared memory size appears in the start script. Stopping the
+server ends every container process, as on any other provider; `/workspace` keeps
+its files.
+
 ## Session relaunch after a container reset
 
 A container reset, such as an image replacement, keeps `/workspace` but ends tmux
