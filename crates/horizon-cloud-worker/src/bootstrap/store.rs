@@ -12,6 +12,14 @@ const FLAGS: OFlags = OFlags::RDONLY.union(OFlags::NOFOLLOW).union(OFlags::CLOEX
 const LOCK: &str = "allocation.lock";
 const STAGED: &str = ".recovery.next";
 
+fn record_limit(name: &str) -> u64 {
+    if name == super::recovery::MANIFEST || name == STAGED {
+        horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES as u64
+    } else {
+        LIMIT
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Publication {
     Staged,
@@ -42,6 +50,9 @@ impl Drop for Store {
 }
 
 impl Store {
+    pub(super) fn path(&self) -> &Path {
+        &self.root
+    }
     /// The same open-file description fences surviving source helpers after an
     /// abrupt worker exit. Once leased, closing the last holder releases the lock.
     pub(super) fn lease(&self) -> io::Result<File> {
@@ -169,8 +180,8 @@ impl Store {
             Err(error) => return Err(error),
         };
         let mut bytes = Vec::new();
-        file.take(LIMIT + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > LIMIT {
+        file.take(record_limit(name) + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > record_limit(name) {
             return Err(invalid());
         }
         self.verify()?;
@@ -209,7 +220,7 @@ impl Store {
         bytes: &[u8],
         checkpoint: &mut impl FnMut(Publication) -> io::Result<()>,
     ) -> io::Result<()> {
-        if bytes.len() as u64 > LIMIT || self.read(name)?.as_deref() != expected {
+        if bytes.len() as u64 > record_limit(name) || self.read(name)?.as_deref() != expected {
             return Err(invalid());
         }
         // An unpublished staging file has no authority. A prior crash may leave

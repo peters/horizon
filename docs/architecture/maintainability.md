@@ -709,3 +709,16 @@ staging has a content digest; exposed data is checked only through fixed root
 identities so normal file, Git and home changes survive retries and startup.
 Uncertain builds remain retained and fence cancellation. None of these records
 authorizes an agent process or public project attachment.
+
+
+Persistent session runtime uses the same signed membership journal for one-shot
+start and terminal stop intent. Protocol `session_runtime` separates fresh status
+observations from historical receipts. Host `project_reservations::session_runtime`
+checks pending base/next revisions without mutating the journal. Worker
+`bootstrap::session_runtime` owns authenticated dispatch; `records` binds external
+launch evidence and durability barriers, `policy` fixes executable/environment
+qualification, `supervisor` owns private tmux and inherited launch authority, and
+`process` owns Linux process identity, pidfds and subreaper cleanup. Long-lived
+supervisors release the allocation lease between observations. Only an intact
+supervisor can establish terminal cleanup; restart never replays a launch or
+signals persisted PIDs. Published session data remains mutable and retained.

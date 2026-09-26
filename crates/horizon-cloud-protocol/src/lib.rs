@@ -7,6 +7,7 @@ mod identity;
 pub mod inspection;
 pub mod membership;
 mod placement;
+pub mod session_runtime;
 pub mod signed;
 
 pub use identity::{AllocationId, ControllerId, OperationId, ProjectId, ProjectIdentity};

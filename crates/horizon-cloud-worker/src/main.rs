@@ -30,6 +30,14 @@ fn main() -> std::process::ExitCode {
         Some("configure-agent-tools") => configuration::run(),
         Some("recover-allocation") => bootstrap::run(),
         Some("inspect-allocation") => bootstrap::inspect(),
+        Some("inspect-project-session") => bootstrap::session_runtime(false),
+        Some("supervise-project-session") => bootstrap::session_runtime(true),
+        Some("start-project-session") => {
+            bootstrap::membership(horizon_cloud_protocol::signed::Action::StartProjectSession)
+        }
+        Some("stop-project-session") => {
+            bootstrap::membership(horizon_cloud_protocol::signed::Action::StopProjectSession)
+        }
         Some("prepare-project-namespace") => {
             bootstrap::membership(horizon_cloud_protocol::signed::Action::ReconcileProject)
         }

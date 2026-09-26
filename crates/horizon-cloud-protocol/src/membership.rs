@@ -13,7 +13,7 @@ pub type SessionId = uuid::Uuid;
 pub const MAX_PROJECTS: usize = 32;
 pub const MAX_OPERATIONS: usize = 64;
 pub const MAX_SESSIONS: usize = 8;
-pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 128 * 1024;
 // Includes the complete encoded mutation, not just its payload.
 pub const CANCELLATION_BYTES: usize = 4096;
 
@@ -47,6 +47,12 @@ pub enum Request {
     PrepareSession {
         session_id: SessionId,
     },
+    StartSession {
+        session_id: SessionId,
+    },
+    StopSession {
+        session_id: SessionId,
+    },
     Cancel {},
 }
 
@@ -59,6 +65,8 @@ impl Request {
             Self::ImportSource { .. } => Action::ImportProjectSource,
             Self::ReserveSession { .. } => Action::ReserveProjectSession,
             Self::PrepareSession { .. } => Action::PrepareProjectSession,
+            Self::StartSession { .. } => Action::StartProjectSession,
+            Self::StopSession { .. } => Action::StopProjectSession,
             Self::Cancel {} => Action::RemoveProject,
         }
     }
@@ -138,6 +146,10 @@ pub struct Member {
     pub sessions: Vec<Session>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preparations: Vec<SessionId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launches: Vec<SessionId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stops: Vec<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,13 +314,21 @@ impl Manifest {
                 self.prepare_session(identity, session_id)?;
                 State::Importing
             }
+            Request::StartSession { session_id } => {
+                self.session_runtime(identity, session_id, false)?;
+                State::Importing
+            }
+            Request::StopSession { session_id } => {
+                self.session_runtime(identity, session_id, true)?;
+                State::Importing
+            }
             Request::Cancel {} => {
                 let member = self
                     .members
                     .iter_mut()
                     .find(|member| &member.identity == identity)
                     .ok_or(Error)?;
-                if member.state == State::Removed {
+                if member.state == State::Removed || member.launches.iter().any(|id| !member.stops.contains(id)) {
                     return Err(Error);
                 }
                 member.state = State::Removed;
@@ -322,22 +342,39 @@ impl Manifest {
             payload: payload.into(),
             receipt: receipt.clone(),
         };
-        if state == State::Removed && serde_json::to_vec(&mutation).map_err(|_| Error)?.len() + 1 > CANCELLATION_BYTES {
+        let terminal_growth = match intent.action() {
+            Action::RemoveProject => 1,
+            // The first stop adds the entire optional field (49 bytes),
+            // plus a history separator and a revision digit (at most two
+            // digits under MAX_OPERATIONS).
+            Action::StopProjectSession => 51,
+            _ => 0,
+        };
+        if terminal_growth != 0
+            && serde_json::to_vec(&mutation).map_err(|_| Error)?.len() + terminal_growth > CANCELLATION_BYTES
+        {
             return Err(Error);
         }
         self.operations.push(mutation);
-        let live = self
+        self.require_terminal_capacity()?;
+        Ok(receipt)
+    }
+
+    fn require_terminal_capacity(&self) -> Result<(), Error> {
+        let live: usize = self
             .members
             .iter()
             .filter(|member| member.state != State::Removed)
-            .count();
-        // Keep room for every live reservation's cancellation even at capacity.
+            .map(|member| 1 + member.launches.iter().filter(|id| !member.stops.contains(id)).count())
+            .sum();
+        // Every launched session retains a terminal stop slot as well as its
+        // project's cancellation slot; admission cannot consume cleanup capacity.
         if self.operations.len() + live > MAX_OPERATIONS
             || serde_json::to_vec(self).map_err(|_| Error)?.len() + live * CANCELLATION_BYTES > MAX_MANIFEST_BYTES
         {
             return Err(Error);
         }
-        Ok(receipt)
+        Ok(())
     }
 
     fn receipt(&self, intent: &Intent, identity: &ProjectIdentity, state: State) -> Result<Receipt, Error> {
@@ -364,6 +401,31 @@ impl Manifest {
             return Err(Error);
         }
         member.preparations.push(session_id);
+        Ok(())
+    }
+
+    fn session_runtime(&mut self, identity: &ProjectIdentity, id: SessionId, stop: bool) -> Result<(), Error> {
+        let member = self.members.iter_mut().find(|m| &m.identity == identity).ok_or(Error)?;
+        if member.state != State::Importing || !member.preparations.contains(&id) {
+            return Err(Error);
+        }
+        if stop {
+            if !member.launches.contains(&id) || member.stops.contains(&id) {
+                return Err(Error);
+            }
+            member.stops.push(id);
+        } else {
+            if member.launches.contains(&id)
+                || member.stops.contains(&id)
+                || member.capabilities.desktop
+                || member.capabilities.browser_tools()
+                || !member.ports.is_empty()
+                || !member.sessions.iter().any(|s| s.id == id && s.agent == Agent::Claude)
+            {
+                return Err(Error);
+            }
+            member.launches.push(id);
+        }
         Ok(())
     }
 
@@ -422,6 +484,8 @@ impl Manifest {
             state: State::Attaching,
             sessions: Vec::new(),
             preparations: Vec::new(),
+            launches: Vec::new(),
+            stops: Vec::new(),
         });
         Ok(())
     }
@@ -435,6 +499,241 @@ mod tests {
         rand::SystemRandom,
         signature::{Ed25519KeyPair, KeyPair},
     };
+
+    struct RuntimeFixture {
+        manifest: Manifest,
+        key: Ed25519KeyPair,
+    }
+    impl RuntimeFixture {
+        fn new() -> Self {
+            let key =
+                Ed25519KeyPair::from_pkcs8(Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap().as_ref())
+                    .unwrap();
+            let binding = ControllerBinding::new(
+                AllocationId::generate(),
+                ControllerId::generate(),
+                key.public_key().as_ref().try_into().unwrap(),
+            );
+            let startup = Startup {
+                version: 1,
+                controller: binding,
+                token: OperationId::generate(),
+                sharing: crate::SharingMode::TrustedShared,
+                worker_operation: "worker-operation".into(),
+                volume_id: "volume-one".into(),
+                data_center_id: "center-one".into(),
+            };
+            Self {
+                manifest: Manifest::empty(startup, "worker-one".into()),
+                key,
+            }
+        }
+        fn request(&self, project: &ProjectIdentity, request: &Request) -> (String, String) {
+            let payload = serde_json::to_string(request).unwrap();
+            let intent = Intent::new(
+                &self.manifest.startup.controller,
+                OperationId::generate(),
+                self.manifest.revision,
+                Target::Project {
+                    identity: project.clone(),
+                },
+                request.action(),
+                payload.as_bytes(),
+            )
+            .unwrap();
+            (
+                serde_json::to_string(
+                    &SignedIntent::sign(intent, &self.manifest.startup.controller, &self.key).unwrap(),
+                )
+                .unwrap(),
+                payload,
+            )
+        }
+        fn apply(&mut self, project: &ProjectIdentity, request: &Request) -> Result<(String, String), Error> {
+            let wire = self.request(project, request);
+            let (next, _) = self.manifest.next(&wire.0, &wire.1)?;
+            self.manifest = next;
+            Ok(wire)
+        }
+        fn project(&mut self, n: usize) -> (ProjectIdentity, Vec<SessionId>) {
+            let project = ProjectIdentity::new(
+                ProjectId::generate(),
+                "s".repeat(100),
+                "w".repeat(100),
+                format!("{n:0100}"),
+            )
+            .unwrap();
+            self.apply(
+                &project,
+                &Request::Reserve {
+                    capabilities: serde_json::from_str(r#"{"agents":["claude"]}"#).unwrap(),
+                    ports: BTreeSet::new(),
+                },
+            )
+            .unwrap();
+            self.apply(&project, &Request::PrepareNamespace {}).unwrap();
+            let source = Source {
+                version: 1,
+                revision: "a".repeat(40),
+                pack: Artifact {
+                    length: 32,
+                    sha256: [1; 32],
+                },
+                material: Artifact {
+                    length: 1024,
+                    sha256: [2; 32],
+                },
+            };
+            self.apply(
+                &project,
+                &Request::ImportSource {
+                    descriptor: source.clone(),
+                },
+            )
+            .unwrap();
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let session = Session::new(Agent::Claude, source.revision.clone());
+                let id = session.id;
+                self.apply(&project, &Request::ReserveSession { session }).unwrap();
+                self.apply(&project, &Request::PrepareSession { session_id: id })
+                    .unwrap();
+                ids.push(id);
+            }
+            (project, ids)
+        }
+    }
+
+    #[test]
+    fn six_runtime_sessions_retain_stop_and_cancel_capacity_after_admission_exhaustion() {
+        let mut f = RuntimeFixture::new();
+        let projects: Vec<_> = (0..3).map(|n| f.project(n)).collect();
+        for (project, ids) in &projects {
+            for id in ids {
+                f.apply(project, &Request::StartSession { session_id: *id }).unwrap();
+            }
+        }
+        let size = serde_json::to_vec(&f.manifest).unwrap().len();
+        assert!(
+            size + 9 * CANCELLATION_BYTES > 65536,
+            "the old bound cannot admit this required fixture"
+        );
+        for n in 3..100 {
+            let project =
+                ProjectIdentity::new(ProjectId::generate(), "s".into(), "w".into(), format!("cloud-{n}")).unwrap();
+            if f.apply(
+                &project,
+                &Request::Reserve {
+                    capabilities: serde_json::from_str("{}").unwrap(),
+                    ports: BTreeSet::new(),
+                },
+            )
+            .is_err()
+            {
+                break;
+            }
+        }
+        for (project, ids) in &projects {
+            assert!(f.apply(project, &Request::Cancel {}).is_err());
+            for id in ids {
+                f.apply(project, &Request::StopSession { session_id: *id }).unwrap();
+            }
+            f.apply(project, &Request::Cancel {}).unwrap();
+        }
+        let live: Vec<_> = f
+            .manifest
+            .members
+            .iter()
+            .filter(|m| m.state != State::Removed)
+            .map(|m| m.identity.clone())
+            .collect();
+        for project in live {
+            f.apply(&project, &Request::Cancel {}).unwrap();
+        }
+        f.manifest.validate().unwrap();
+        assert!(f.manifest.members.iter().all(|m| m.state == State::Removed));
+    }
+
+    #[test]
+    fn runtime_intent_is_one_shot_terminal_and_old_empty_fields_keep_their_encoding() {
+        let mut f = RuntimeFixture::new();
+        let (project, ids) = f.project(0);
+        let encoded = serde_json::to_string(&f.manifest).unwrap();
+        assert!(!encoded.contains("\"launches\"") && !encoded.contains("\"stops\""));
+        serde_json::from_str::<Manifest>(&encoded).unwrap().validate().unwrap();
+        let request = Request::StartSession { session_id: ids[0] };
+        let (message, payload) = f.apply(&project, &request).unwrap();
+        let (same, _) = f.manifest.next(&message, &payload).unwrap();
+        assert_eq!(same, f.manifest);
+        assert!(f.apply(&project, &request).is_err());
+        f.apply(&project, &Request::StopSession { session_id: ids[0] }).unwrap();
+        assert!(f.apply(&project, &request).is_err());
+        assert!(f.apply(&project, &Request::StopSession { session_id: ids[1] }).is_err());
+        assert!(
+            f.apply(
+                &project,
+                &Request::StartSession {
+                    session_id: SessionId::new_v4()
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn first_stop_reserves_its_optional_field_and_history_separator() {
+        let mut f = RuntimeFixture::new();
+        let (project, ids) = f.project(0);
+        f.apply(&project, &Request::StartSession { session_id: ids[0] })
+            .unwrap();
+        f.apply(&project, &Request::StartSession { session_id: ids[1] })
+            .unwrap();
+        assert_eq!(f.manifest.revision, 9);
+        let before = serde_json::to_vec(&f.manifest).unwrap().len();
+        f.apply(&project, &Request::StopSession { session_id: ids[0] }).unwrap();
+        let mutation = serde_json::to_vec(f.manifest.operations.last().unwrap()).unwrap().len();
+        let growth = serde_json::to_vec(&f.manifest).unwrap().len() - before - mutation;
+        assert_eq!(growth, 51);
+        assert!(mutation + growth <= CANCELLATION_BYTES);
+    }
+
+    #[test]
+    fn older_cancellation_at_its_original_byte_limit_remains_valid() {
+        let mut f = RuntimeFixture::new();
+        let (project, _) = f.project(0);
+        for padding in 0..CANCELLATION_BYTES {
+            let payload = format!("{}{{\"action\":\"cancel\"}}", " ".repeat(padding));
+            let intent = Intent::new(
+                &f.manifest.startup.controller,
+                OperationId::generate(),
+                f.manifest.revision,
+                Target::Project {
+                    identity: project.clone(),
+                },
+                Action::RemoveProject,
+                payload.as_bytes(),
+            )
+            .unwrap();
+            let message = serde_json::to_string(
+                &SignedIntent::sign(intent.clone(), &f.manifest.startup.controller, &f.key).unwrap(),
+            )
+            .unwrap();
+            let mut receipt = f.manifest.receipt(&intent, &project, State::Removed).unwrap();
+            receipt.revision += 1;
+            let mutation = Mutation {
+                message: message.clone(),
+                payload: payload.clone(),
+                receipt,
+            };
+            let size = serde_json::to_vec(&mutation).unwrap().len();
+            if size < CANCELLATION_BYTES && size + 40 > CANCELLATION_BYTES {
+                let (next, _) = f.manifest.next(&message, &payload).unwrap();
+                next.validate().unwrap();
+                return;
+            }
+        }
+        panic!("failed to construct a cancellation at the old boundary");
+    }
 
     #[test]
     fn cancellation_budget_covers_maximum_identity_and_signature_encoding() {

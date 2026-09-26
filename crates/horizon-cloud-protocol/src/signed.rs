@@ -54,6 +54,9 @@ pub enum Action {
     ImportProjectSource,
     ReserveProjectSession,
     PrepareProjectSession,
+    StartProjectSession,
+    StopProjectSession,
+    InspectProjectSession,
     ReconcileProject,
     StopProjectSessions,
     RemoveProject,
@@ -76,6 +79,9 @@ impl Action {
             | Self::ImportProjectSource
             | Self::ReserveProjectSession
             | Self::PrepareProjectSession
+            | Self::StartProjectSession
+            | Self::StopProjectSession
+            | Self::InspectProjectSession
             | Self::InspectProject
             | Self::ReconcileProject
             | Self::StopProjectSessions

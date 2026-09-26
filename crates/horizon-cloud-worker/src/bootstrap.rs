@@ -14,12 +14,30 @@ mod recovery;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]
+mod session_runtime;
+#[cfg(target_os = "linux")]
 mod sessions;
 #[cfg(target_os = "linux")]
 mod source;
 #[cfg(target_os = "linux")]
 mod store;
 use std::io;
+
+pub(super) fn session_runtime(supervise: bool) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        if supervise {
+            session_runtime::supervise()
+        } else {
+            session_runtime::inspect()
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = supervise;
+        Err(io::Error::other("Session runtime requires a qualified Linux worker"))
+    }
+}
 
 pub(super) fn inspect() -> io::Result<()> {
     #[cfg(target_os = "linux")]
@@ -101,7 +119,7 @@ pub(super) fn prepare() -> io::Result<()> {
         lock.try_lock().map_err(|_| invalid())?;
         match std::fs::symlink_metadata(ROOT) {
             Ok(_) => {
-                let store = Store::open(Path::new(ROOT))?;
+                let store = session_runtime::open()?;
                 let record: Bootstrap = decode(&store.read(BOOTSTRAP)?.ok_or_else(invalid)?)?;
                 record.validate(&store, &runtime)?;
                 if record.version != 2 {
