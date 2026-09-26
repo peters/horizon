@@ -6,15 +6,28 @@ pub(super) const CAPABILITIES_ENV: &str = "HORIZON_WORKER_CAPABILITIES";
 const CAPABILITIES_MARKER: &str = "horizon-capabilities-contract=1";
 const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
 const CONTAINER_STARTED_MARKER: &str = "horizon-container-started=";
+const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
+/// A reason longer than this was not written by `horizon-worker-stop`.
+const SELF_STOP_REASON_LIMIT: usize = 200;
+
+/// A stop an agent asked for on its worker, with the reason it gave.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SelfStop {
+    /// Milliseconds since the epoch by the worker's clock.
+    pub at: u64,
+    pub reason: String,
+}
 
 /// Optional worker features the checker reports beside the required markers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkerContract {
     /// `horizon-worker-session --relaunch` can replace a session process lost in a
     /// container reset, in its existing worktree. Older images report such sessions lost.
     pub session_restart: bool,
     /// When the worker's container started, by the worker's clock. Older images do not report it.
     pub container_started: Option<std::time::SystemTime>,
+    /// The newest stop an agent asked for on this worker. Older images do not report it.
+    pub last_self_stop: Option<SelfStop>,
 }
 
 impl WorkerContract {
@@ -27,6 +40,15 @@ impl WorkerContract {
                 .filter(|millis| !millis.is_empty() && millis.bytes().all(|b| b.is_ascii_digit()))
                 .and_then(|millis| millis.parse().ok())
                 .and_then(|millis| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))),
+            last_self_stop: output
+                .lines()
+                .find_map(|line| line.strip_prefix(LAST_SELF_STOP_MARKER))
+                .and_then(|json| serde_json::from_str::<SelfStop>(json).ok())
+                .filter(|stop| {
+                    !stop.reason.trim().is_empty()
+                        && stop.reason.chars().count() <= SELF_STOP_REASON_LIMIT
+                        && !stop.reason.chars().any(char::is_control)
+                }),
         }
     }
 }

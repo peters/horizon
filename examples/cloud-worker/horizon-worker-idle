@@ -1,10 +1,13 @@
 #!/usr/bin/python3
-"""Stop this dedicated worker after its configured period without agent activity."""
+"""Stop this dedicated worker after its configured period without agent activity, or
+when an agent whose task is done asks through horizon-worker-stop."""
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -19,6 +22,14 @@ POLL_SECONDS = 60
 RETRY_SECONDS = 600
 # Average cores used by the container that still count as work, such as a quiet build.
 BUSY_CORES = 0.5
+# Agents ask for a stop here; only this watcher holds the worker credential.
+STOP_SOCKET = Path('/run/horizon-worker/stop.sock')
+# Kept on the workspace volume, so it survives the stop and the checker reports it on resume.
+STOP_LOG = Path('/workspace/.horizon/self-stops.jsonl')
+# Another agent session with output this recent is still working.
+QUIET_SECONDS = 120
+CPU_SAMPLE_SECONDS = 3
+REASON_LIMIT = 200
 
 
 def last_output():
@@ -84,6 +95,114 @@ def stop_worker(pod_id, key):
     return True
 
 
+class Refused(Exception):
+    """A stop this worker must not make now, with the reason to give the agent."""
+
+
+def reason_text(reason):
+    text = ' '.join(str(reason or '').split())
+    if not text:
+        raise Refused('Give a short reason for stopping this worker.')
+    return text[:REASON_LIMIT]
+
+
+def other_output(own):
+    """Newest output time of any agent window except `own`, or None without others."""
+    try:
+        listing = subprocess.run(['tmux', '-L', 'horizon-cloud', 'list-windows', '-a', '-F',
+                                  '#{window_id} #{window_activity}'],
+                                 capture_output=True, text=True, timeout=10, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    stamps = []
+    for line in listing.splitlines():
+        window, _, stamp = line.partition(' ')
+        if window != own and stamp.isdigit():
+            stamps.append(int(stamp))
+    return max(stamps, default=None)
+
+
+def busy_cores(sample=CPU_SAMPLE_SECONDS):
+    """Average cores the container used over a short sample, or None where it is not exposed."""
+    before = cpu_seconds()
+    time.sleep(sample)
+    after = cpu_seconds()
+    if before is None or after is None:
+        return None
+    return (after - before) / sample
+
+
+def self_stop(reason, window, pod_id, key, log=STOP_LOG, now=time.time, output=other_output, cores=busy_cores,
+              request=None):
+    """Checks, records and requests a stop an agent asked for. Returns the agent's message."""
+    text = reason_text(reason)
+    newest = output(window)
+    if newest is not None and now() - newest < QUIET_SECONDS:
+        raise Refused('Another agent session on this worker produced output in the last two minutes; '
+                      'leave the worker running.')
+    used = cores()
+    if used is not None and used >= BUSY_CORES:
+        raise Refused(f'This worker is busy ({used:.1f} cores in use); leave it running.')
+    log.parent.mkdir(parents=True, exist_ok=True)
+    before = log.stat().st_size if log.exists() else 0
+    with log.open('a') as file:
+        file.write(json.dumps({'at': int(now() * 1000), 'reason': text}) + '\n')
+    os.sync()
+    try:
+        stopped = (request or stop_worker)(pod_id, key)
+    # Any failure of this one request is reported; an escaping error would end the watcher.
+    except Exception as error:
+        print('Stop request failed: ' + type(error).__name__, flush=True)
+        stopped = False
+    if not stopped:
+        # Only stops the provider accepted stay on record.
+        with log.open('r+') as file:
+            file.truncate(before)
+        raise Refused('The provider did not accept the stop request; the worker keeps running.')
+    print('Stopping this worker at an agent\'s request: ' + text, flush=True)
+    return 'Stop requested. This worker is stopping; the person can resume it.'
+
+
+def answer(line, pod_id, key, stop=self_stop):
+    """The reply to one request line from horizon-worker-stop."""
+    try:
+        request = json.loads(line)
+        if not isinstance(request, dict):
+            raise ValueError
+        message = stop(request.get('reason'), request.get('window'), pod_id, key)
+        return {'ok': True, 'message': message}
+    except Refused as refusal:
+        return {'ok': False, 'message': str(refusal)}
+    except ValueError:
+        return {'ok': False, 'message': 'Malformed stop request.'}
+
+
+def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop):
+    """Answers stop requests one at a time on a socket only this machine can reach."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(path))
+        path.chmod(0o600)
+        server.listen(4)
+    # Idle stop keeps working; agents are told the worker cannot stop itself.
+    except OSError as error:
+        print('Stop requests from agents unavailable: ' + type(error).__name__, flush=True)
+        return
+    while True:
+        connection, _ = server.accept()
+        with connection:
+            try:
+                connection.settimeout(30)
+                line = connection.makefile('r').readline(4096)
+                reply = answer(line, pod_id, key, stop)
+                connection.sendall((json.dumps(reply) + '\n').encode())
+            # One bad client must not end the watcher.
+            except Exception as error:
+                print('Stop request connection failed: ' + type(error).__name__, flush=True)
+
+
 def passive(reason):
     # Exiting would end the supervised worker; stay passive instead.
     print('Idle stop disabled: ' + reason, flush=True)
@@ -99,6 +218,7 @@ def main():
     pod_id, key = os.environ.get('RUNPOD_POD_ID'), os.environ.get('RUNPOD_API_KEY')
     if not pod_id or not key:
         passive('the provider supplied no worker credential')
+    threading.Thread(target=serve_stop_requests, args=(pod_id, key), daemon=True).start()
     activity = Activity(minutes * 60, time.time(), cpu_seconds())
     next_request = 0
     while True:

@@ -146,3 +146,30 @@ fn incidental_capability_marker_does_not_enable_modern_readiness() {
         assert!(result.success());
     }
 }
+
+#[test]
+fn the_newest_stop_an_agent_asked_for_is_read_only_when_well_formed() {
+    let current = "horizon-worker-contract=1\n";
+    assert_eq!(WorkerContract::reported(current).last_self_stop, None);
+    let reported = WorkerContract::reported(&format!(
+        "{current}horizon-last-self-stop={{\"at\":1790000000000,\"reason\":\"PR 12 merged\"}}\n"
+    ));
+    assert_eq!(
+        reported.last_self_stop,
+        Some(SelfStop {
+            at: 1_790_000_000_000,
+            reason: "PR 12 merged".into(),
+        })
+    );
+    let long = "x".repeat(201);
+    for invalid in [
+        "{\"at\":1,\"reason\":\"  \"}".to_owned(),
+        "{\"at\":1,\"reason\":\"line\\nbreak\"}".to_owned(),
+        format!("{{\"at\":1,\"reason\":\"{long}\"}}"),
+        "{\"at\":-1,\"reason\":\"negative\"}".to_owned(),
+        "not json".to_owned(),
+    ] {
+        let output = format!("{current}horizon-last-self-stop={invalid}\n");
+        assert_eq!(WorkerContract::reported(&output).last_self_stop, None, "{invalid}");
+    }
+}

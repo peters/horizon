@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Let an agent stop this dedicated worker when its task is done, without a controller.
+
+`horizon-worker-stop --reason TEXT` asks from a shell, `horizon-worker-stop mcp` offers
+the same request to agents as one MCP tool, and `--last` prints the newest recorded stop.
+The idle watcher holds the worker credential, checks the request and makes the stop.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+
+
+STOP_SOCKET = Path('/run/horizon-worker/stop.sock')
+STOP_LOG = Path('/workspace/.horizon/self-stops.jsonl')
+TOOL = 'stop_this_worker'
+GUIDANCE = (
+    'Stop this cloud worker when your task\'s goal is confirmed complete, for example your pull request is '
+    'merged, and nothing else on this worker needs it. Stopping ends every process here; files on the '
+    'workspace volume are kept and the person can resume the worker. It is refused while another agent '
+    'session is producing output or the worker is busy. Never stop the worker to escape a failing or stuck '
+    'task; report the problem instead. Give a short reason; it is shown to the person after the worker resumes.'
+)
+NOT_ALLOWED = ('This worker cannot stop itself: its cloud profile does not set idle_stop_minutes, '
+               'or the provider supplied no worker credential.')
+
+
+def own_window():
+    """The tmux window of the calling agent, whose own output is not other activity."""
+    pane = os.environ.get('TMUX_PANE')
+    if not pane:
+        return None
+    try:
+        return subprocess.run(['tmux', '-L', 'horizon-cloud', 'display-message', '-p', '-t', pane, '#{window_id}'],
+                              capture_output=True, text=True, timeout=10, check=True).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def request_stop(reason, path=STOP_SOCKET, window=own_window):
+    """Asks the idle watcher to stop this worker. Returns (accepted, message)."""
+    if not path.exists():
+        return False, NOT_ALLOWED
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            # The watcher samples CPU for a few seconds before it answers.
+            client.settimeout(60)
+            client.connect(str(path))
+            client.sendall((json.dumps({'reason': reason, 'window': window()}) + '\n').encode())
+            reply = json.loads(client.makefile('r').readline(4096))
+    except (OSError, ValueError):
+        return False, NOT_ALLOWED
+    if not isinstance(reply, dict) or not isinstance(reply.get('message'), str):
+        return False, 'The worker gave no answer to the stop request.'
+    return reply.get('ok') is True, reply['message']
+
+
+def last_stop(log=STOP_LOG):
+    """The newest recorded stop as {'at', 'reason'}, or None."""
+    try:
+        lines = log.read_text().splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(record, dict) and isinstance(record.get('at'), int)
+                and isinstance(record.get('reason'), str) and record['reason'].strip()):
+            return {'at': record['at'], 'reason': ' '.join(record['reason'].split())[:200]}
+    return None
+
+
+def respond(message, stop=request_stop):
+    """One MCP reply for a JSON-RPC message, or None for notifications."""
+    method, ident = message.get('method'), message.get('id')
+    if ident is None:
+        return None
+    params = message.get('params') if isinstance(message.get('params'), dict) else {}
+    if method == 'initialize':
+        result = {'protocolVersion': params.get('protocolVersion') or '2025-06-18', 'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'horizon-worker', 'version': '1'}}
+    elif method == 'ping':
+        result = {}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': TOOL, 'description': GUIDANCE, 'inputSchema': {
+            'type': 'object', 'required': ['reason'],
+            'properties': {'reason': {'type': 'string', 'description': 'Why the task is done, in one line.'}}}}]}
+    elif method == 'tools/call' and params.get('name') == TOOL:
+        arguments = params.get('arguments') if isinstance(params.get('arguments'), dict) else {}
+        accepted, text = stop(arguments.get('reason'))
+        result = {'content': [{'type': 'text', 'text': text}], 'isError': not accepted}
+    else:
+        return {'jsonrpc': '2.0', 'id': ident, 'error': {'code': -32601, 'message': 'Unknown method'}}
+    return {'jsonrpc': '2.0', 'id': ident, 'result': result}
+
+
+def serve(stdin=sys.stdin, stdout=sys.stdout):
+    for line in stdin:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        reply = respond(message) if isinstance(message, dict) else None
+        if reply is not None:
+            stdout.write(json.dumps(reply) + '\n')
+            stdout.flush()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('mode', nargs='?', choices=['mcp'], help='serve the stop as an MCP tool')
+    parser.add_argument('--reason', help='why the task is done, shown to the person after a resume')
+    parser.add_argument('--last', action='store_true', help='print the newest recorded stop as JSON')
+    args = parser.parse_args(argv)
+    if args.mode == 'mcp':
+        serve()
+        return 0
+    if args.last:
+        print(json.dumps(last_stop()))
+        return 0
+    accepted, text = request_stop(args.reason)
+    print(text, file=sys.stdout if accepted else sys.stderr)
+    return 0 if accepted else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

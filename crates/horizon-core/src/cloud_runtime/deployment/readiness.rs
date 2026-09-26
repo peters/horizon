@@ -28,7 +28,7 @@ pub(super) fn wait(
     store.save(state)?;
     (runner.emit)(Event::stage(state.stage));
     let capabilities = state.profile.capabilities.clone();
-    poll(&deadline, runner.cancel, |deadline| {
+    let (connection, contract) = poll(&deadline, runner.cancel, |deadline| {
         let id = &state
             .worker
             .as_ref()
@@ -61,7 +61,13 @@ pub(super) fn wait(
             }
             Ok(None)
         })
-    })
+    })?;
+    // Only a report changes what the card says; older images keep the last reason shown.
+    if contract.last_self_stop.is_some() && contract.last_self_stop != state.last_self_stop {
+        state.last_self_stop.clone_from(&contract.last_self_stop);
+        store.save(state)?;
+    }
+    Ok((connection, contract))
 }
 
 fn with_verified_worker<T>(

@@ -138,7 +138,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         browser_auth.install(&connection, &runner)?;
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
-    replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
+    replacement::relaunch_sessions(&store, &mut state, &contract, emit, relaunch)?;
     state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
     finish_ready(state, &store, started, emit)
 }
@@ -394,6 +394,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             image_replacement: None,
             session_restart: None,
             timeline: None,
+            last_self_stop: None,
         }
     };
     store.save(&state)?;

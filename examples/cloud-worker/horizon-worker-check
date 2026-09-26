@@ -94,6 +94,22 @@ def container_started():
         return None
 
 
+def last_self_stop():
+    # The newest stop an agent asked for, so Horizon can say why the worker stopped.
+    # Optional: older images or failures only omit it.
+    if not shutil.which('horizon-worker-stop'):
+        return None
+    try:
+        reply = subprocess.run(['horizon-worker-stop', '--last'], capture_output=True, text=True,
+                               timeout=10, check=True).stdout
+        record = json.loads(reply)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+    if isinstance(record, dict) and isinstance(record.get('at'), int) and isinstance(record.get('reason'), str):
+        return {'at': record['at'], 'reason': record['reason']}
+    return None
+
+
 def idle_stop_supported():
     # The watcher alone is not enough: the supervisor must declare that it starts it.
     # Older supervisors reject the unknown option, which reports no support.
@@ -182,6 +198,9 @@ try:
         started = container_started()
         if started is not None:
             print(f'horizon-container-started={started}')
+        stopped = last_self_stop()
+        if stopped is not None:
+            print('horizon-last-self-stop=' + json.dumps(stopped, separators=(',', ':')))
     if args.write_runtime:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')

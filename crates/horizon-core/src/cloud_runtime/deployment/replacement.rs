@@ -216,7 +216,7 @@ fn settle_with(steps: &impl Provider, store: &Store, state: &mut Deployment) -> 
 pub(super) fn relaunch_sessions(
     store: &Store,
     state: &mut Deployment,
-    contract: WorkerContract,
+    contract: &WorkerContract,
     emit: &dyn Fn(Event),
     mut run: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
