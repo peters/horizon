@@ -133,7 +133,7 @@ impl State {
 
     /// Stock of `size` for `profile`: `None` while it is being checked, including when
     /// its last answer has expired, so old stock is never shown as current.
-    pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<SizeAvailability, &str>> {
+    pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<&SizeAvailability, &str>> {
         let sized = Profile {
             cpu: size.0,
             memory_gb: size.1,
@@ -145,7 +145,7 @@ impl State {
         }
         match self.sizes.get(&key)? {
             Ok(fetched) if stale(fetched.at) => None,
-            Ok(fetched) => Some(Ok(fetched.value)),
+            Ok(fetched) => Some(Ok(&fetched.value)),
             Err(error) => Some(Err(error.as_str())),
         }
     }
@@ -191,6 +191,27 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
     Some(result)
 }
 
+/// Prices and exact-size stock as if the provider had just answered, for UI tests that
+/// never contact it.
+#[cfg(test)]
+impl State {
+    pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
+        self.list = Some(Fetched {
+            value: (list, preferences),
+            at: Instant::now(),
+        });
+        for (profile, size) in sizes {
+            self.sizes.insert(
+                key(&profile),
+                Ok(Fetched {
+                    value: size,
+                    at: Instant::now(),
+                }),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +222,7 @@ mod tests {
             provider: "RunPod",
             cpu: Vec::new(),
             gpus: Vec::new(),
+            data_centers: Vec::new(),
             storage: prices::RUNPOD_STORAGE,
         }
     }
@@ -221,10 +243,14 @@ mod tests {
         }
     }
 
-    const AVAILABLE: SizeAvailability = SizeAvailability {
-        best: Availability::High,
-        centers: 2,
-    };
+    fn available() -> SizeAvailability {
+        SizeAvailability {
+            centers: vec![
+                ("EU-RO-1".into(), Availability::High),
+                ("US-MO-2".into(), Availability::Low),
+            ],
+        }
+    }
 
     #[test]
     fn finished_fetches_are_kept_until_a_refresh_and_failures_wait_for_one() {
@@ -258,7 +284,7 @@ mod tests {
     fn size_stock_is_looked_up_for_the_chosen_size() {
         let profile = profile();
         let mut state = State::default();
-        let available = AVAILABLE;
+        let available = available();
         let small = Profile {
             memory_gb: 16,
             ..profile.clone()
@@ -266,12 +292,12 @@ mod tests {
         state.sizes.insert(
             key(&small),
             Ok(Fetched {
-                value: available,
+                value: available.clone(),
                 at: Instant::now(),
             }),
         );
         state.sizes.insert(key(&profile), Err("No stock data".into()));
-        assert_eq!(state.size(&profile, (8, 16)), Some(Ok(available)));
+        assert_eq!(state.size(&profile, (8, 16)), Some(Ok(&available)));
         assert_eq!(state.size(&profile, (8, 32)), Some(Err("No stock data")));
         assert_eq!(state.size(&profile, (4, 8)), None);
         state.refresh();
@@ -301,7 +327,7 @@ mod tests {
         state.refresh();
         assert!(!state.loading() && state.list_error.is_none() && state.size_jobs.is_empty());
         assert!(list_tx.send(Ok(now((list(), Preferences::default())))).is_err());
-        assert!(size_tx.send(Ok(now(AVAILABLE))).is_err());
+        assert!(size_tx.send(Ok(now(available()))).is_err());
     }
 
     #[test]
@@ -316,7 +342,7 @@ mod tests {
         state.sizes.insert(
             key(&cpu),
             Ok(Fetched {
-                value: AVAILABLE,
+                value: available(),
                 at: Instant::now(),
             }),
         );
@@ -348,7 +374,7 @@ mod tests {
         let (tx, rx) = channel();
         state.size_jobs.insert(key(&profile()), rx);
         tx.send(Ok(Fetched {
-            value: AVAILABLE,
+            value: available(),
             at: answered,
         }))
         .unwrap();
@@ -364,8 +390,8 @@ mod tests {
     fn expired_or_rechecking_stock_reads_as_checking() {
         let profile = profile();
         let mut state = State::default();
-        state.sizes.insert(key(&profile), Ok(now(AVAILABLE)));
-        assert_eq!(state.size(&profile, (8, 32)), Some(Ok(AVAILABLE)));
+        state.sizes.insert(key(&profile), Ok(now(available())));
+        assert_eq!(state.size(&profile, (8, 32)), Some(Ok(&available())));
         let (_tx, rx) = channel();
         state.size_jobs.insert(key(&profile), rx);
         assert_eq!(state.size(&profile, (8, 32)), None);
@@ -375,7 +401,7 @@ mod tests {
             state.sizes.insert(
                 key(&profile),
                 Ok(Fetched {
-                    value: AVAILABLE,
+                    value: available(),
                     at: expired,
                 }),
             );

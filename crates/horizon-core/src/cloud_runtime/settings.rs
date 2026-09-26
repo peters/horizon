@@ -47,6 +47,16 @@ impl Settings {
         value.validate()?;
         Ok(value)
     }
+
+    /// The machine settings narrowed to one cloud's placement, so every attempt,
+    /// retry and redeploy of that cloud asks for the data centers chosen for it.
+    /// # Errors
+    /// As [`Settings::load`].
+    pub fn for_cloud(path: &Path, placement: &crate::cloud_panel::Placement) -> Result<Self> {
+        let mut settings = Self::load(path)?;
+        placement.apply(&mut settings.data_centers);
+        Ok(settings)
+    }
     /// # Errors
     /// Validates bindings supplied through either the file or Rust interface.
     pub fn validate(&self) -> Result<()> {
@@ -132,6 +142,30 @@ pub(super) fn validate_private_key_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cloud_asks_only_for_the_data_centers_chosen_for_it() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+                "docker_config": absolute("docker"), "registry_pull_auth_id": null,
+                "cpu_flavors": ["cpu3c"], "gpu_types": [], "data_centers": ["US-MO-2"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let any = crate::cloud_panel::Placement::default();
+        assert_eq!(Settings::for_cloud(&path, &any).unwrap().data_centers, ["US-MO-2"]);
+        let europe = crate::cloud_panel::Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into()],
+        };
+        assert_eq!(Settings::for_cloud(&path, &europe).unwrap().data_centers, ["EU-RO-1"]);
+    }
 
     #[test]
     fn ssh_identity_requires_a_readable_nonempty_private_file() {

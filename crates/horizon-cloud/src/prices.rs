@@ -23,8 +23,18 @@ pub struct GpuPrice {
     pub name: String,
     pub memory_gb: u16,
     pub hourly: f64,
-    /// Best availability across the allowed data centers.
-    pub availability: Availability,
+}
+
+/// An allowed data center, with the GPU types it has in stock.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DataCenter {
+    pub id: String,
+    /// The provider's region, such as `EUROPE`.
+    pub region: String,
+    /// Whether CPU clouds can keep their workspace volume here.
+    pub workspace_storage: bool,
+    /// Availability of each GPU type listed here.
+    pub gpus: Vec<(String, Availability)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +43,8 @@ pub struct PriceList {
     pub provider: &'static str,
     pub cpu: Vec<CpuFlavorPrice>,
     pub gpus: Vec<GpuPrice>,
+    /// The allowed data centers.
+    pub data_centers: Vec<DataCenter>,
     pub storage: StoragePrices,
 }
 
@@ -93,22 +105,59 @@ impl PriceList {
         self.gpus.iter().find(|gpu| gpu.id == id)
     }
 
-    /// The cheapest GPU available right now, for a hint when preferences are sold out.
+    /// Best availability of GPU type `id` in the data centers `within`, or in every
+    /// allowed one when `within` is empty.
     #[must_use]
-    pub fn cheapest_available_gpu(&self) -> Option<&GpuPrice> {
+    pub fn gpu_availability(&self, id: &str, within: &[String]) -> Availability {
+        self.data_centers
+            .iter()
+            .filter(|center| within.is_empty() || within.contains(&center.id))
+            .flat_map(|center| &center.gpus)
+            .filter(|(gpu, _)| gpu == id)
+            .map(|&(_, level)| level)
+            .min()
+            .unwrap_or(Availability::None)
+    }
+
+    /// The cheapest GPU available right now in `within` (every allowed data center when
+    /// empty), for a hint when preferences are sold out.
+    #[must_use]
+    pub fn cheapest_available_gpu(&self, within: &[String]) -> Option<&GpuPrice> {
         self.gpus
             .iter()
-            .filter(|gpu| gpu.availability != Availability::None)
+            .filter(|gpu| self.gpu_availability(&gpu.id, within) != Availability::None)
             .min_by(|a, b| a.hourly.total_cmp(&b.hourly))
     }
 }
 
-/// Availability of one CPU worker size across the allowed data centers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Stock of one CPU worker size in the allowed data centers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SizeAvailability {
-    pub best: Availability,
-    /// Data centers with this exact size in stock.
-    pub centers: usize,
+    /// Data centers with this exact size in stock; the others have none.
+    pub centers: Vec<(String, Availability)>,
+}
+
+impl SizeAvailability {
+    /// Best availability in the data centers `within`, or in every allowed one when empty.
+    #[must_use]
+    pub fn best(&self, within: &[String]) -> Availability {
+        self.in_scope(within)
+            .map(|&(_, level)| level)
+            .min()
+            .unwrap_or(Availability::None)
+    }
+
+    /// How many data centers in `within` (every allowed one when empty) have this size.
+    #[must_use]
+    pub fn count(&self, within: &[String]) -> usize {
+        self.in_scope(within).count()
+    }
+
+    fn in_scope<'a>(&'a self, within: &'a [String]) -> impl Iterator<Item = &'a (String, Availability)> {
+        self.centers
+            .iter()
+            .filter(move |(id, _)| within.is_empty() || within.contains(id))
+    }
 }
 
 #[cfg(test)]
@@ -121,20 +170,25 @@ mod tests {
             name: id.into(),
             per_vcpu_hour,
         };
-        let gpu = |id: &str, hourly, availability| GpuPrice {
+        let gpu = |id: &str, hourly| GpuPrice {
             id: id.into(),
             name: id.into(),
             memory_gb: 24,
             hourly,
-            availability,
+        };
+        let center = |id: &str, gpus: &[(&str, Availability)]| DataCenter {
+            id: id.into(),
+            region: "EUROPE".into(),
+            workspace_storage: true,
+            gpus: gpus.iter().map(|&(gpu, level)| (gpu.into(), level)).collect(),
         };
         PriceList {
             provider: "RunPod",
             cpu: vec![flavor("cpu3c", 0.03), flavor("cpu5c", 0.035), flavor("cpu3g", 0.04)],
-            gpus: vec![
-                gpu("a6000", 0.49, Availability::None),
-                gpu("ada", 0.28, Availability::Low),
-                gpu("l4", 0.49, Availability::High),
+            gpus: vec![gpu("a6000", 0.49), gpu("ada", 0.28), gpu("l4", 0.49)],
+            data_centers: vec![
+                center("EU-RO-1", &[("a6000", Availability::None), ("ada", Availability::Low)]),
+                center("EU-SE-1", &[("l4", Availability::High)]),
             ],
             storage: crate::runpod::prices::STORAGE,
         }
@@ -162,10 +216,27 @@ mod tests {
     }
 
     #[test]
-    fn the_cheapest_available_gpu_skips_sold_out_types() {
+    fn gpu_stock_and_the_cheapest_gpu_follow_the_chosen_data_centers() {
         let list = list();
-        assert_eq!(list.cheapest_available_gpu().unwrap().id, "ada");
-        assert_eq!(list.gpu("l4").unwrap().availability, Availability::High);
+        assert_eq!(list.cheapest_available_gpu(&[]).unwrap().id, "ada");
+        assert_eq!(list.cheapest_available_gpu(&["EU-SE-1".into()]).unwrap().id, "l4");
+        assert_eq!(list.gpu_availability("l4", &[]), Availability::High);
+        assert_eq!(list.gpu_availability("l4", &["EU-RO-1".into()]), Availability::None);
+        assert_eq!(list.gpu_availability("a6000", &[]), Availability::None);
         assert!(Availability::High < Availability::Low && Availability::Low < Availability::None);
+    }
+
+    #[test]
+    fn size_stock_counts_only_the_chosen_data_centers() {
+        let size = SizeAvailability {
+            centers: vec![
+                ("EU-RO-1".into(), Availability::Low),
+                ("US-MO-2".into(), Availability::High),
+            ],
+        };
+        assert_eq!((size.best(&[]), size.count(&[])), (Availability::High, 2));
+        let europe = ["EU-RO-1".to_owned(), "EUR-IS-1".to_owned()];
+        assert_eq!((size.best(&europe), size.count(&europe)), (Availability::Low, 1));
+        assert_eq!(size.best(&["AP-JP-1".into()]), Availability::None);
     }
 }

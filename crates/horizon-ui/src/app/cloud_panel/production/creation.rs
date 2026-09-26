@@ -3,10 +3,11 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, dir_search};
+use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement, dir_search};
 use std::path::Path;
 
 mod costs;
+mod placement;
 mod pricing;
 
 #[derive(Default)]
@@ -187,6 +188,7 @@ impl HorizonApp {
             form.profiles = None;
             form.selected_profile.clear();
             form.size = None;
+            form.placement = Placement::default();
             form.launch.accounts_checked = false;
             self.cloud_prototype.error = None;
         }
@@ -278,11 +280,19 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
-            let (size, refresh) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb));
-            if let Some(size) = size {
+            if let Some(size) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {
                 form.size = Some(size);
             }
-            if refresh {
+            let sized = horizon_core::cloud_runtime::prices::Profile {
+                cpu,
+                memory_gb,
+                ..profile.clone()
+            };
+            if let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement) {
+                form.placement = placement;
+            }
+            ui.add_space(4.0);
+            if pricing::card(ui, &form.prices, &sized, &form.placement) {
                 form.prices.refresh();
             }
         }
@@ -342,6 +352,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 {
                     if form.selected_profile != *name {
                         form.size = None;
+                        form.placement = Placement::default();
                     }
                     form.selected_profile.clone_from(name);
                     form.launch.accounts_checked = false;
@@ -358,6 +369,14 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 .size(13.0)
                 .color(theme::FG_SOFT()),
             );
+            let sized = horizon_core::cloud_runtime::prices::Profile {
+                cpu,
+                memory_gb,
+                ..profile.clone()
+            };
+            if let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement) {
+                form.placement = placement;
+            }
         }
     } else {
         ui.label(

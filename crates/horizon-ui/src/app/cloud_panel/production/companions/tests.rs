@@ -12,6 +12,7 @@ fn groups() -> CloudGroups {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles["dev"].clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     CloudGroups(vec![group])
 }

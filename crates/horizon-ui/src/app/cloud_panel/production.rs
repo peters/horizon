@@ -60,6 +60,8 @@ pub(super) struct Production {
     selected_profile: String,
     /// A CPU worker size chosen for the selected profile; `None` keeps the profile's size.
     size: Option<machine_size::Size>,
+    /// Where the new cloud may be placed; any allowed data center by default.
+    placement: horizon_core::cloud_panel::Placement,
     /// Provider prices and stock shown while choosing the size.
     prices: prices::State,
     setup_agent: Option<PanelKind>,
@@ -480,7 +482,7 @@ impl HorizonApp {
                 return;
             }
         };
-        let settings = match Settings::load(&root.join("settings.json")) {
+        let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
             Ok(settings) => settings,
             Err(error) => {
                 self.cloud_prototype.production.runtimes.entry(id).or_default().error =

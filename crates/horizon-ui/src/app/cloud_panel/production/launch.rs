@@ -1,7 +1,7 @@
 //! Capture launch context and prepare the repository while the user enters a title.
 use super::{HorizonApp, cloud_runtime};
 use egui::Context;
-use horizon_core::{WorkspaceId, cloud_runtime::repository::launch::Prepared};
+use horizon_core::{WorkspaceId, cloud_panel::Placement, cloud_runtime::repository::launch::Prepared};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 struct Loaded {
@@ -53,6 +53,7 @@ impl HorizonApp {
         form.profiles = None;
         form.selected_profile.clear();
         form.size = None;
+        form.placement = Placement::default();
         form.creating = true;
         form.focus_title_on_open = true;
         self.read_cloud_profiles(ctx);
@@ -126,6 +127,7 @@ impl HorizonApp {
                     if !prepared.config.profiles.contains_key(&form.selected_profile) {
                         form.selected_profile.clone_from(&prepared.config.default);
                         form.size = None;
+                        form.placement = Placement::default();
                     }
                     // A reread profile keeps a chosen size only while it still offers it.
                     let profile = prepared.config.profiles.get(&form.selected_profile);
@@ -194,6 +196,7 @@ mod tests {
             revision: "a".repeat(40),
             profile_name: "dev".into(),
             profile: loaded(temp.path()).prepared.config.profiles["dev"].clone(),
+            placement: horizon_core::cloud_panel::Placement::default(),
         });
         app.cloud_prototype.groups.0.push(group);
         let runtime_path = session.runtime_state_path.clone();

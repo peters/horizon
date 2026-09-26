@@ -2,6 +2,7 @@ use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, Store, c
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
+mod placement;
 mod rebuild;
 #[cfg(test)]
 mod tests;
@@ -168,6 +169,7 @@ fn profile_details(
     ui.label(RichText::new(&launch.profile_name).size(15.0).color(theme::FG_DIM()));
     let resize = machine_size(ui, id, launch, runtime);
     ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
+    placement::where_it_lives(ui, launch, runtime.state.as_ref());
     ui.small(format!(
         "Agents: {}",
         if launch.profile.capabilities.agents.is_empty() {

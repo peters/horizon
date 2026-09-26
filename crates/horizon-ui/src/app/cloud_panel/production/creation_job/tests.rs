@@ -20,6 +20,7 @@ fn pending(app: &mut HorizonApp) -> std::sync::mpsc::Sender<cloud_runtime::Resul
             revision: String::new(),
             profile_name: "dev".into(),
             profile: config.profiles["dev"].clone(),
+            placement: horizon_core::cloud_panel::Placement::default(),
         },
     });
     sender
@@ -287,6 +288,7 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles["dev"].clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.into());
