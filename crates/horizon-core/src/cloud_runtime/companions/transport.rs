@@ -73,6 +73,10 @@ impl<'a> Live<'a> {
     ) -> Result<super::super::offer_publication::Published> {
         use super::super::offer_publication::Published;
         snapshot.validate().map_err(Error::Invalid)?;
+        // The worker refuses larger input, so such prices are never worth an SSH attempt.
+        if serde_json::to_vec(snapshot).map_or(true, |bytes| bytes.len() > horizon_cloud_protocol::offers::MAX_BYTES) {
+            return Err(Error::Invalid("Cloud offer prices are too large for a worker"));
+        }
         if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
             return Ok(Published::NotReady);
         }
@@ -232,8 +236,13 @@ mod tests {
         assert_eq!(live.send_offers("cloud", &snapshot).unwrap(), Published::NotReady);
         let unsupported = Snapshot {
             version: VERSION + 1,
-            ..snapshot
+            ..snapshot.clone()
         };
         assert!(live.send_offers("cloud", &unsupported).is_err());
+        // Prices a worker would refuse as too large are refused here, before any SSH.
+        let mut oversized = snapshot;
+        oversized.preferences.gpu_types = vec!["x".repeat(8 * 1024); 64];
+        assert!(oversized.validate().is_ok());
+        assert!(live.send_offers("cloud", &oversized).is_err());
     }
 }
