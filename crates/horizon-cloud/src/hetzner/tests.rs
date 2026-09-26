@@ -226,10 +226,17 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
     let pricing = json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.0572"}},
         "primary_ips": [{"type": "ipv4", "prices": [{"location": "hel1", "price_monthly": {"net": "0.50"}}]},
                         {"type": "ipv6", "prices": [{"location": "hel1", "price_monthly": {"net": "0"}}]}]}});
+    let locations = json!([
+        {"id": 1, "name": "hel1", "network_zone": "eu-central", "country": "FI", "city": "Helsinki"},
+        {"id": 2, "name": "ash", "network_zone": "us-east", "country": "US", "city": "Ashburn, VA"},
+        {"id": 3, "name": "sin", "network_zone": "ap-southeast", "country": "SG", "city": "Singapore"},
+    ]);
     let (hetzner, requests, task) = provider(vec![
         (200, listing("server_types", types.clone())),
+        (200, listing("locations", locations.clone())),
         (200, pricing),
         (200, listing("server_types", types)),
+        (200, listing("locations", locations)),
         (
             200,
             json!({"pricing": {"currency": "USD", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}),
@@ -253,6 +260,11 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
     assert!((catalog.offers[1].monthly_eur - 69.49).abs() < 1e-9);
     assert!((catalog.volume_gb_month_eur - 0.0572).abs() < 1e-9);
     assert_eq!(catalog.ipv4_month_eur.len(), 1);
+    assert_eq!(catalog.regions["hel1"], "EUROPE");
+    assert_eq!(catalog.regions["ash"], "NORTH_AMERICA");
+    assert_eq!(catalog.regions["sin"], "ASIA");
+    let encoded = serde_json::to_value(&catalog).unwrap();
+    assert_eq!(serde_json::from_value::<catalog::Catalog>(encoded).unwrap(), catalog);
     assert!(matches!(
         hetzner.catalog(&Cancellation::default()),
         Err(CloudError::InvalidResponse)

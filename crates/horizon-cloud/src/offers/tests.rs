@@ -66,6 +66,12 @@ fn cpu_offers_meet_the_size_and_rank_by_estimated_total() {
     let storage = 20.0 * 0.07 * 10.0 / MONTH_HOURS;
     assert!((first.estimated_total - (0.16 * 10.0 + storage)).abs() < 1e-9);
     assert_eq!(first.availability, "checked_at_creation");
+    assert_eq!(
+        (first.currency, first.monthly, first.location.as_deref()),
+        ("USD", None, None)
+    );
+    // A stopped CPU cloud keeps its 20 GB network volume.
+    assert!((first.stopped_monthly - 20.0 * 0.07).abs() < 1e-9);
     assert!(
         offers
             .iter()

@@ -2,10 +2,11 @@
 //! a worker before requesting one. Prices are Hetzner's net euro amounts.
 use super::{Hetzner, Method};
 use crate::{Cancellation, CloudError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Offer {
     pub server_type: String,
     pub location: String,
@@ -25,13 +26,18 @@ pub struct Offer {
     pub recommended: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Catalog {
     /// Cheapest first.
     pub offers: Vec<Offer>,
     pub volume_gb_month_eur: f64,
     /// A primary IPv4 address per month, by location.
     pub ipv4_month_eur: BTreeMap<String, f64>,
+    /// The region of each location, named as other providers' regions are, such as
+    /// `EUROPE`.
+    #[serde(default)]
+    pub regions: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -91,6 +97,11 @@ struct IpPrice {
     location: String,
     price_monthly: Amount,
 }
+#[derive(Deserialize)]
+struct Location {
+    name: String,
+    network_zone: String,
+}
 
 impl Hetzner {
     /// Every x86 server type in every location that prices it and has not deprecated it.
@@ -98,6 +109,7 @@ impl Hetzner {
     /// Reports provider failures, non-euro pricing and malformed amounts.
     pub fn catalog(&self, cancel: &Cancellation) -> Result<Catalog, CloudError> {
         let types: Vec<ServerType> = self.list_all("/server_types", "", "server_types", cancel)?;
+        let locations: Vec<Location> = self.list_all("/locations", "", "locations", cancel)?;
         let pricing: PricingEnvelope = serde_json::from_value(self.send(Method::Get, "/pricing", None, cancel)?)
             .map_err(|_| CloudError::InvalidResponse)?;
         let pricing = pricing.pricing;
@@ -144,7 +156,21 @@ impl Hetzner {
             offers,
             volume_gb_month_eur: amount(&pricing.volume.price_per_gb_month)?,
             ipv4_month_eur,
+            regions: locations
+                .into_iter()
+                .map(|location| (location.name, region(&location.network_zone)))
+                .collect(),
         })
+    }
+}
+
+/// The region label other providers use for a Hetzner network zone.
+fn region(zone: &str) -> String {
+    match zone {
+        "eu-central" => "EUROPE".to_owned(),
+        "us-east" | "us-west" => "NORTH_AMERICA".to_owned(),
+        "ap-southeast" => "ASIA".to_owned(),
+        other => other.to_ascii_uppercase().replace('-', "_"),
     }
 }
 

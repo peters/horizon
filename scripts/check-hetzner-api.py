@@ -59,6 +59,8 @@ USED = [
      prefixed("ssh_keys.[]", SSH_KEY) + ["meta.pagination.next_page"]),
     ("post", "/ssh_keys", [], ["name", "public_key", "labels"], "201", prefixed("ssh_key", SSH_KEY)),
     ("delete", "/ssh_keys/{id}", [], [], "204", []),
+    ("get", "/locations", ["page", "per_page"], [], "200",
+     ["locations.[].name", "locations.[].network_zone", "meta.pagination.next_page"]),
 ]
 
 
