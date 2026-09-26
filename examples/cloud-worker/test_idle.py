@@ -35,12 +35,17 @@ class IdleTests(unittest.TestCase):
         self.assertFalse(activity.observe(1599, output=None, cpu=None))
         self.assertTrue(activity.observe(1600, output=None, cpu=None))
 
-    def test_cgroup_usage_is_read_in_seconds(self):
+    def test_cgroup_v2_and_v1_usage_is_read_in_seconds(self):
         with tempfile.TemporaryDirectory() as root:
             stat = Path(root, 'cpu.stat')
             stat.write_text('usage_usec 2500000\nuser_usec 2000000\n')
             self.assertEqual(MODULE['cpu_seconds'](stat), 2.5)
-            self.assertIsNone(MODULE['cpu_seconds'](Path(root, 'missing')))
+            missing = Path(root, 'missing')
+            self.assertIsNone(MODULE['cpu_seconds'](missing, accounting=(missing,)))
+            # cgroup v1 hosts report nanoseconds in cpuacct.usage.
+            usage = Path(root, 'cpuacct.usage')
+            usage.write_text('1216209670\n')
+            self.assertAlmostEqual(MODULE['cpu_seconds'](missing, accounting=(missing, usage)), 1.21620967)
 
     def test_newest_window_output_wins_and_no_server_means_no_sessions(self):
         listing = subprocess.CompletedProcess([], 0, stdout='100\n300\n200\n')

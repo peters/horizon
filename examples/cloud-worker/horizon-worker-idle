@@ -10,6 +10,8 @@ import urllib.request
 
 
 CPU_STAT = Path('/sys/fs/cgroup/cpu.stat')
+# Some provider hosts still use cgroup v1, which reports nanoseconds instead.
+CPU_ACCOUNTING = (Path('/sys/fs/cgroup/cpuacct/cpuacct.usage'), Path('/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage'))
 # The pod credential is refused by the REST API but accepted by GraphQL, as runpodctl uses it.
 GRAPHQL_URL = 'https://api.runpod.io/graphql'
 STOP = 'mutation Stop($pod: String!) { podStop(input: {podId: $pod}) { id desiredStatus } }'
@@ -29,7 +31,7 @@ def last_output():
     return max((int(stamp) for stamp in listing.split() if stamp.isdigit()), default=None)
 
 
-def cpu_seconds(path=CPU_STAT):
+def cpu_seconds(path=CPU_STAT, accounting=CPU_ACCOUNTING):
     """CPU time used by this container's cgroup, or None where it is not exposed."""
     try:
         for line in path.read_text().splitlines():
@@ -38,6 +40,11 @@ def cpu_seconds(path=CPU_STAT):
                 return int(value) / 1e6
     except (OSError, ValueError):
         pass
+    for usage in accounting:
+        try:
+            return int(usage.read_text()) / 1e9
+        except (OSError, ValueError):
+            continue
     return None
 
 
