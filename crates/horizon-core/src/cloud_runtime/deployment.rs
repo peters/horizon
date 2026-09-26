@@ -42,6 +42,12 @@ pub fn prepare(request: &Request) -> Result<()> {
 /// Records any uncertain allocation durably and never deletes workers on disconnect.
 pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     let started = Instant::now();
+    let timeline = super::timeline::Recorder::default();
+    let recorded = |event: Event| {
+        timeline.observe(&event);
+        emit(event);
+    };
+    let emit: &dyn Fn(Event) = &recorded;
     emit(Event::stage(Stage::Validate));
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
@@ -50,6 +56,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
+    let reconnected = super::timeline::reconnects(&state);
     if state.stage == Stage::Deleted {
         let public_key = current_public_key(&request.settings.ssh_identity_file)?;
         redeploy::reopen(&store, &mut state, &public_key)?;
@@ -124,17 +131,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
-    if let Some(git_auth) = git_auth {
-        git_auth.install(&connection, &runner)?;
-    } else {
-        runner.run(
-            "Git credential removal",
-            &mut connection.command(
-                "if command -v horizon-worker-git-auth >/dev/null 2>&1; then horizon-worker-git-auth clear; fi",
-            ),
-            Duration::from_secs(20),
-        )?;
-    }
+    configure_git_auth(git_auth, &connection, &runner)?;
     if let Some(browser_auth) = browser_auth {
         state.browserstack_targets.clone_from(browser_auth.targets());
         store.arm_browserstack(&mut state)?;
@@ -142,6 +139,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
     replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
+    state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
     finish_ready(state, &store, started, emit)
 }
 
@@ -222,6 +220,23 @@ fn provision(
     Ok(())
 }
 
+/// Installs the repository's Git binding, or removes any earlier one from the worker.
+fn configure_git_auth(
+    git_auth: Option<super::git_auth::Prepared>,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    if let Some(git_auth) = git_auth {
+        return git_auth.install(connection, runner);
+    }
+    runner.run(
+        "Git credential removal",
+        &mut connection
+            .command("if command -v horizon-worker-git-auth >/dev/null 2>&1; then horizon-worker-git-auth clear; fi"),
+        Duration::from_secs(20),
+    )?;
+    Ok(())
+}
 fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
     state.source_ready = true;
     state.stage = Stage::Sessions;
@@ -378,6 +393,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             browserstack_targets: std::collections::BTreeSet::new(),
             image_replacement: None,
             session_restart: None,
+            timeline: None,
         }
     };
     store.save(&state)?;

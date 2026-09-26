@@ -49,14 +49,14 @@ pub(super) fn wait(
         with_verified_worker(worker, spec, store, state, |worker| {
             if let Ok(connection) = Connection::new(worker, &request.settings, store.root()) {
                 (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
-                    "Waiting for SSH and worker services",
+                    super::super::timeline::AWAITING_SERVICES,
                 )));
                 if let Ok(contract) = connection.ready(runner, &capabilities, deadline.remaining(runner.cancel)?) {
                     return Ok(Some((connection, contract)));
                 }
             } else {
                 (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
-                    "Waiting for the provider to publish an SSH endpoint",
+                    super::super::timeline::AWAITING_ENDPOINT,
                 )));
             }
             Ok(None)

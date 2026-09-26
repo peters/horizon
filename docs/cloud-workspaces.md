@@ -368,6 +368,17 @@ Cached image layers are excluded from transfer speed. Expand verbose output for
 command details. Per-stage timing resets on retry. The recorded worker-readiness
 duration survives reconnect.
 
+After a successful deployment or reconnection the card shows how long it took,
+a ribbon of its phases in order, and **Where the time went**, largest first:
+repository checks, image build and push, the provider request, the image
+download, worker boot, readiness checks, source upload and import, and sessions.
+Workers whose image reports its container start separate the image download from
+boot; older images count boot as part of the download. A resume includes the
+provider's start request, and only a worker that was ready before counts as a
+reconnection. The breakdown is kept
+with the cloud and survives restarting Horizon. The `cloud_deploy` harness
+prints the same phases and timestamps every line.
+
 ## Planned shared workers
 
 Explicit sharing of a compatible CPU worker across trusted projects is tracked in

@@ -96,17 +96,37 @@ fn run() -> cloud_runtime::Result<()> {
     Ok(())
 }
 
+/// Prefixes each line with the seconds since this command started, for timing a deployment.
 fn print_event(event: Event) {
+    static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let at = STARTED.get_or_init(std::time::Instant::now).elapsed().as_secs_f64();
     match event {
-        Event::Stage(stage, _) => println!("Stage: {}", stage.label()),
+        Event::Stage(stage, _) => println!("[{at:7.1}s] Stage: {}", stage.label()),
         Event::Progress(progress) => println!(
-            "Progress: {} completed={} total={:?}",
+            "[{at:7.1}s] Progress: {} completed={} total={:?}",
             progress.detail, progress.completed, progress.total
         ),
-        Event::Output(line) => println!("{line}"),
+        // One output event can carry a whole chunk of command output.
+        Event::Output(chunk) => {
+            for line in chunk.lines() {
+                println!("[{at:7.1}s] {line}");
+            }
+        }
         Event::Ready(state, _) => {
-            if let Some(worker) = state.worker {
-                println!("Ready: worker={} rate_per_hour={:?}", worker.id, worker.cost_per_hr);
+            if let Some(worker) = &state.worker {
+                println!(
+                    "[{at:7.1}s] Ready: worker={} rate_per_hour={:?}",
+                    worker.id, worker.cost_per_hr
+                );
+            }
+            if let Some(timeline) = &state.timeline {
+                for (phase, duration) in timeline.phases() {
+                    println!(
+                        "[{at:7.1}s]   {:>7.1}s  {}",
+                        duration.as_secs_f64(),
+                        timeline.label(phase)
+                    );
+                }
             }
         }
         _ => {}

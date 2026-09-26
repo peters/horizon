@@ -82,6 +82,18 @@ def require(binary):
 def probe(command):
     subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def container_started():
+    # Milliseconds since the epoch when PID 1 started, so Horizon can separate the
+    # provider's image download from worker boot. Optional: failure only omits it.
+    try:
+        btime = next(int(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+                     if line.startswith('btime '))
+        ticks = int(Path('/proc/1/stat').read_text().rsplit(') ', 1)[1].split()[19])
+        return int((btime + ticks / os.sysconf('SC_CLK_TCK')) * 1000)
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
 def idle_stop_supported():
     # The watcher alone is not enough: the supervisor must declare that it starts it.
     # Older supervisors reject the unknown option, which reports no support.
@@ -167,6 +179,9 @@ try:
         if active != selected:
             raise ValueError('Active worker capabilities differ from this cloud profile')
         services_ready(selected)
+        started = container_started()
+        if started is not None:
+            print(f'horizon-container-started={started}')
     if args.write_runtime:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')

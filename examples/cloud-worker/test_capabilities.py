@@ -189,6 +189,10 @@ class CapabilitiesTests(unittest.TestCase):
             with mock.patch('socket.create_connection', return_value=connection) as connect:
                 status, output, commands = self.run_check('--ready')
             self.assertEqual(status, 0, output)
+            # Readiness also reports when the container started, from the kernel's PID 1 record.
+            started = [line for line in output.splitlines() if line.startswith('horizon-container-started=')]
+            self.assertEqual(len(started), 1, output)
+            self.assertGreater(int(started[0].split('=', 1)[1]), 1_600_000_000_000)
             self.assertIn(mock.call(['horizon-worker-supervise', '--check'], check=True, timeout=20,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), commands)
             self.assertEqual([call.args[0][1] for call in connect.call_args_list], expected)

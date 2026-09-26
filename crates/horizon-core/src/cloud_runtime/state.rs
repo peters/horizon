@@ -65,6 +65,9 @@ pub struct Deployment {
     /// A committed image replacement reset the worker's container; its sessions must relaunch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_restart: Option<OperationId>,
+    /// Where the last successful deployment or reconnection spent its time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<super::timeline::Timeline>,
 }
 
 impl Deployment {

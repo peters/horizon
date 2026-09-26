@@ -611,7 +611,10 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
         }
     });
     let operation = OperationId::generate();
-    let restart = WorkerContract { session_restart: true };
+    let restart = WorkerContract {
+        session_restart: true,
+        ..WorkerContract::default()
+    };
     for (contract, statuses, lost) in [
         (restart, vec!["0", "5", "3"], Some(vec!["agent3"])),
         (restart, vec!["4", "0", "0"], Some(vec!["agent1"])),

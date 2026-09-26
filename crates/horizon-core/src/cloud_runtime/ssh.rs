@@ -107,7 +107,7 @@ impl Connection {
         }
         self.upload(pack, "horizon-transfer.pack", runner)?;
         runner.run(
-            "Git object import",
+            super::timeline::IMPORTING_OBJECTS,
             &mut self.command(&format!("horizon-worker-import {revision}")),
             Duration::from_secs(120),
         )?;
@@ -118,7 +118,7 @@ impl Connection {
     pub fn transfer_material(&self, archive: &Path, runner: &Runner<'_>) -> Result<()> {
         self.upload(archive, "horizon-source.tar", runner)?;
         runner.run(
-            "Source dependency import",
+            super::timeline::IMPORTING_DEPENDENCIES,
             &mut self.command("horizon-worker-source import"),
             Duration::from_secs(300),
         )?;
@@ -145,7 +145,7 @@ impl Connection {
         };
         scp.arg(source).arg(format!("root@{host}:/workspace/{destination}"));
         runner.transfer(
-            "Uploading source",
+            super::timeline::UPLOADING_SOURCE,
             &scp,
             super::command::terminal_progress::Transfer::File(source.metadata()?.len()),
             Duration::from_secs(600),
