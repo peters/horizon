@@ -4,12 +4,13 @@ use crate::{
     bootstrap::Startup,
     signed::{Action, Intent, SignedIntent, Target},
 };
-use horizon_cloud::Capabilities;
+use horizon_cloud::{Agent, Capabilities};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
 pub const MAX_PROJECTS: usize = 32;
 pub const MAX_OPERATIONS: usize = 64;
+pub const MAX_SESSIONS: usize = 8;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 // Includes the complete encoded mutation, not just its payload.
 pub const CANCELLATION_BYTES: usize = 4096;
@@ -38,6 +39,9 @@ pub enum Request {
     ImportSource {
         descriptor: Source,
     },
+    ReserveSession {
+        session: Session,
+    },
     Cancel {},
 }
 
@@ -48,7 +52,30 @@ impl Request {
             Self::Reserve { .. } => Action::AttachProject,
             Self::PrepareNamespace {} => Action::ReconcileProject,
             Self::ImportSource { .. } => Action::ImportProjectSource,
+            Self::ReserveSession { .. } => Action::ReserveProjectSession,
             Self::Cancel {} => Action::RemoveProject,
+        }
+    }
+}
+
+/// Stable agent identity and initial source selection. Reserving this record does
+/// not create a worktree, provision credentials or authorize a process launch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Session {
+    pub id: uuid::Uuid,
+    pub agent: Agent,
+    pub revision: String,
+}
+
+impl Session {
+    /// Generate once and persist before requesting the corresponding reservation.
+    #[must_use]
+    pub fn new(agent: Agent, revision: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            agent,
+            revision,
         }
     }
 }
@@ -101,6 +128,8 @@ pub struct Member {
     pub capabilities: Capabilities,
     pub ports: BTreeSet<u16>,
     pub state: State,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<Session>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +286,10 @@ impl Manifest {
                 member.state = State::Importing;
                 State::Importing
             }
+            Request::ReserveSession { session } => {
+                self.reserve_session(identity, session)?;
+                State::Importing
+            }
             Request::Cancel {} => {
                 let member = self
                     .members
@@ -306,6 +339,33 @@ impl Manifest {
         })
     }
 
+    fn reserve_session(&mut self, identity: &ProjectIdentity, session: Session) -> Result<(), Error> {
+        if session.id.is_nil()
+            || self.members.iter().any(|member| member.sessions.iter().any(|saved| saved.id == session.id))
+            || !self.operations.iter().any(|entry| {
+                &entry.receipt.identity == identity
+                    && serde_json::from_str::<Request>(&entry.payload).is_ok_and(|request| {
+                        matches!(request, Request::ImportSource { descriptor } if descriptor.revision == session.revision)
+                    })
+            })
+        {
+            return Err(Error);
+        }
+        let member = self
+            .members
+            .iter_mut()
+            .find(|member| &member.identity == identity)
+            .ok_or(Error)?;
+        if member.state != State::Importing
+            || member.sessions.len() >= MAX_SESSIONS
+            || !member.capabilities.agents.contains(&session.agent)
+        {
+            return Err(Error);
+        }
+        member.sessions.push(session);
+        Ok(())
+    }
+
     fn reserve(
         &mut self,
         identity: &ProjectIdentity,
@@ -332,6 +392,7 @@ impl Manifest {
             capabilities,
             ports,
             state: State::Attaching,
+            sessions: Vec::new(),
         });
         Ok(())
     }

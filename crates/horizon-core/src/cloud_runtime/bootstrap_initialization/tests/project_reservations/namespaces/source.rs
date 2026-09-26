@@ -1,5 +1,7 @@
 use super::*;
 use crate::cloud_runtime::project_reservations::{journal::Journal, source};
+use horizon_cloud::Agent;
+use horizon_cloud_protocol::membership::{Artifact, Session, Source};
 use sha2::{Digest, Sha256};
 use std::{io::Read, path::Path, process::Command};
 
@@ -73,6 +75,115 @@ fn prepare_host(f: &mut CoordinatorFixture, request: &Reservation, worker: &mut 
     ] {
         transact(f, &change, &mut |_, _, bytes| Ok(apply(worker, bytes))).unwrap();
     }
+}
+
+fn declared_source() -> Source {
+    Source {
+        version: 1,
+        revision: "a".repeat(40),
+        pack: Artifact {
+            length: 32,
+            sha256: [1; 32],
+        },
+        material: Artifact {
+            length: 1024,
+            sha256: [2; 32],
+        },
+    }
+}
+
+#[test]
+fn agent_session_journal_distinguishes_sessions_and_resumes_exact_signed_requests() {
+    let mut f = ready();
+    let mut request = reservation(&f, "one", 8000);
+    request.capabilities.agents = [Agent::Codex, Agent::Claude].into();
+    let mut worker = remote(&f);
+    prepare_host(&mut f, &request, &mut worker);
+    let descriptor = declared_source();
+    transact(
+        &mut f,
+        &Change::ImportSource(request.project.clone(), descriptor.clone()),
+        &mut |_, _, bytes| Ok(apply(&mut worker, bytes)),
+    )
+    .unwrap();
+    let mut originals = Vec::new();
+    for (index, agent) in [Agent::Codex, Agent::Claude].into_iter().enumerate() {
+        let session = Session::new(agent, descriptor.revision.clone());
+        let change = Change::ReserveSession(request.project.clone(), session.clone());
+        let mut sent = Vec::new();
+        let vault = f.vault.clone();
+        assert!(
+            transact(&mut f, &change, &mut |_, command, bytes| {
+                assert_eq!(command, "horizon-cloud-worker reserve-project-session");
+                sent = bytes.to_vec();
+                let reply = apply(&mut worker, bytes);
+                if index == 0 {
+                    Err(ReservationError::Invalid)
+                } else {
+                    vault.fail_after(Some(0));
+                    Ok(reply)
+                }
+            })
+            .is_err()
+        );
+        let mut changed = session.clone();
+        changed.revision = "b".repeat(40);
+        assert!(
+            transact(
+                &mut f,
+                &Change::ReserveSession(request.project.clone(), changed),
+                &mut |_, _, _| panic!("changed pending session")
+            )
+            .is_err()
+        );
+        assert!(
+            transact(&mut f, &Change::Cancel(request.project.clone()), &mut |_, _, _| panic!(
+                "pending session cancellation"
+            ))
+            .is_err()
+        );
+        f = f.reopen();
+        let journal = Journal::load(&f.owner).unwrap().unwrap();
+        assert_eq!(
+            reservations::timeout_limit(&Change::Resume, Some(&journal)),
+            Source::CONTROLLER_TIMEOUT
+        );
+        let receipt = transact(&mut f, &Change::Resume, &mut |_, command, bytes| {
+            assert_eq!(command, "horizon-cloud-worker reserve-project-session");
+            assert_eq!(bytes, sent);
+            Ok(apply(&mut worker, bytes))
+        })
+        .unwrap();
+        assert_eq!(worker.members[0].sessions.len(), index + 1);
+        originals.push((change, sent, receipt));
+    }
+    for (change, sent, receipt) in &originals {
+        assert_eq!(
+            transact(&mut f, change, &mut |_, _, bytes| {
+                assert_eq!(bytes, sent);
+                Ok(apply(&mut worker, bytes))
+            })
+            .unwrap(),
+            *receipt
+        );
+    }
+    let mut changed = worker.members[0].sessions[0].clone();
+    changed.agent = Agent::Claude;
+    assert!(
+        transact(
+            &mut f,
+            &Change::ReserveSession(request.project.clone(), changed),
+            &mut |_, _, _| panic!("changed completed session")
+        )
+        .is_err()
+    );
+    let before = worker.members[0].sessions.clone();
+    transact(&mut f, &Change::Cancel(request.project), &mut |_, _, bytes| {
+        Ok(apply(&mut worker, bytes))
+    })
+    .unwrap();
+    assert_eq!(worker.members[0].sessions, before);
+    assert!(transact(&mut f, &originals[0].0, &mut |_, _, _| panic!("cancelled session")).is_err());
 }
 
 #[test]
@@ -604,7 +715,8 @@ fn native_ssh_project_sources() {
     complete(&mut f.owner, &mut f.record, &target, &cancellation, startup_deadline()).unwrap();
     let mut projects = Vec::new();
     for (index, name) in ["one", "two", "three"].iter().enumerate() {
-        let request = reservation(&f, name, 8000 + u16::try_from(index).unwrap());
+        let mut request = reservation(&f, name, 8000 + u16::try_from(index).unwrap());
+        request.capabilities.agents = [Agent::Codex, Agent::Claude].into();
         f = native_prepare(f, &target, &runner, &directory, &request, 1);
         let repo = directory.join(format!("repo-{name}"));
         let revision = repository(&repo, name);
@@ -662,12 +774,14 @@ fn native_ssh_project_sources() {
             .join(request.project.project_id().to_string())
             .join("repository/source");
         verify_import(&source_root, &revision, name);
+        f = native_sessions(f, &target, &runner, &directory, &request, &revision, index);
         projects.push((request, source_root));
     }
     let before: Vec<_> = projects
         .iter()
         .map(|(_, root)| fs::read(root.join("repository.git/HEAD")).unwrap())
         .collect();
+    let sessions = Journal::load(&f.owner).unwrap().unwrap().manifest.members;
     reservations::coordinate(
         &mut f.owner,
         &target,
@@ -681,7 +795,86 @@ fn native_ssh_project_sources() {
     for ((_, root), expected) in projects.iter().zip(before) {
         assert_eq!(fs::read(root.join("repository.git/HEAD")).unwrap(), expected);
     }
+    let after = Journal::load(&f.owner).unwrap().unwrap().manifest;
+    assert_eq!(after.members[0].sessions, sessions[0].sessions);
+    assert_eq!(&after.members[1..], &sessions[1..]);
     assert_bootstrap_fenced(&mut f);
+}
+
+fn native_sessions(
+    mut f: CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    directory: &Path,
+    request: &Reservation,
+    revision: &str,
+    index: usize,
+) -> CoordinatorFixture {
+    let mut saved = None;
+    for (agent_index, agent) in [Agent::Codex, Agent::Claude].into_iter().enumerate() {
+        let change = Change::ReserveSession(request.project.clone(), Session::new(agent, revision.into()));
+        let vault = f.vault.clone();
+        let mut wire = Vec::new();
+        let response = reservations::coordinate(
+            &mut f.owner,
+            target,
+            &request.image_digest,
+            &change,
+            &mut |connection, command, bytes| {
+                assert_eq!(command, "horizon-cloud-worker reserve-project-session");
+                wire = bytes.to_vec();
+                let reply =
+                    runner.private_exchange(&mut connection.pinned_command(command), bytes, Duration::from_secs(90))?;
+                if agent_index == 0 && index == 0 {
+                    return Err(ReservationError::Invalid);
+                }
+                if agent_index == 0 && index == 2 {
+                    vault.fail_after(Some(0));
+                }
+                Ok(reply)
+            },
+        );
+        if agent_index == 0 && index != 1 {
+            assert!(response.is_err());
+            fs::write(directory.join("restart"), "session reservation recovery").unwrap();
+            f = f.reopen();
+            reservations::coordinate(
+                &mut f.owner,
+                target,
+                &request.image_digest,
+                &Change::Resume,
+                &mut |connection, command, bytes| {
+                    assert_eq!(bytes, wire);
+                    Ok(runner.private_exchange(
+                        &mut connection.pinned_command(command),
+                        bytes,
+                        Duration::from_secs(90),
+                    )?)
+                },
+            )
+            .unwrap();
+        } else {
+            response.unwrap();
+        }
+        if agent_index == 0 {
+            saved = Some((change, wire));
+        }
+    }
+    let (change, wire) = saved.unwrap();
+    reservations::coordinate(
+        &mut f.owner,
+        target,
+        &request.image_digest,
+        &change,
+        &mut |connection, command, bytes| {
+            assert_eq!(bytes, wire);
+            Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, Duration::from_secs(90))?)
+        },
+    )
+    .unwrap();
+    let journal = Journal::load(&f.owner).unwrap().unwrap();
+    assert_eq!(journal.manifest.members[index].sessions.len(), 2);
+    f
 }
 
 fn verify_import(source_root: &Path, revision: &str, name: &str) {

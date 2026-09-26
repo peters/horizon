@@ -52,6 +52,7 @@ pub enum Action {
     AttachProject,
     InspectProject,
     ImportProjectSource,
+    ReserveProjectSession,
     ReconcileProject,
     StopProjectSessions,
     RemoveProject,
@@ -72,6 +73,7 @@ impl Action {
             | Self::ResumeWorker => false,
             Self::AttachProject
             | Self::ImportProjectSource
+            | Self::ReserveProjectSession
             | Self::InspectProject
             | Self::ReconcileProject
             | Self::StopProjectSessions

@@ -691,3 +691,11 @@ exclusive publication, and its embedded Python helper validates Git/LFS/submodul
 material without checkout or network access. Membership `importing` remains an
 intent state; the separate source record proves durable publication. Startup and
 cancellation validate that record, and published source is never repaired in place.
+
+Agent-session reservations extend the same membership history and host journal.
+`membership::Session` fixes the opaque session identity, granted agent and imported
+revision; host retries select the project and session ID rather than only the
+action. Worker membership checks source publication independently before saving
+the reservation. Source history traversal identifies import payloads explicitly,
+because session reservations retain the project's `importing` state. No session
+process or worktree lifecycle is inferred from these logical records.

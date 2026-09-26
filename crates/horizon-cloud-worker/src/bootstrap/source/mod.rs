@@ -177,11 +177,10 @@ fn entries(manifest: &Manifest) -> io::Result<Vec<(&Receipt, Source)>> {
         .operations
         .iter()
         .filter(|entry| entry.receipt.state == State::Importing)
-        .map(|entry| {
-            let Request::ImportSource { descriptor } = decode(entry.payload.as_bytes())? else {
-                return Err(invalid());
-            };
-            Ok((&entry.receipt, descriptor))
+        .filter_map(|entry| match decode::<Request>(entry.payload.as_bytes()) {
+            Ok(Request::ImportSource { descriptor }) => Some(Ok((&entry.receipt, descriptor))),
+            Ok(Request::ReserveSession { .. }) => None,
+            _ => Some(Err(invalid())),
         })
         .collect()
 }
@@ -206,7 +205,16 @@ pub(super) fn validate(store: &Store, manifest: &Manifest, settled: bool) -> io:
 }
 
 pub(super) fn require_settled(store: &Store, manifest: &Manifest, identity: &ProjectIdentity) -> io::Result<()> {
-    let deadline = Instant::now() + Source::WORKER_TIMEOUT;
+    require_settled_until(store, manifest, identity, Instant::now() + Source::WORKER_TIMEOUT)
+}
+
+pub(super) fn require_settled_until(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &ProjectIdentity,
+    deadline: Instant,
+) -> io::Result<()> {
+    remaining(deadline)?;
     for (receipt, descriptor) in entries(manifest)?
         .into_iter()
         .filter(|(receipt, _)| &receipt.identity == identity)
@@ -217,5 +225,6 @@ pub(super) fn require_settled(store: &Store, manifest: &Manifest, identity: &Pro
             .validate(true)?;
         super::store::same(&parent, &namespaces::repository(store, manifest, identity)?)?;
     }
+    remaining(deadline)?;
     Ok(())
 }

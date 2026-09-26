@@ -23,7 +23,7 @@ import paramiko
 
 LIMIT = 64 * 1024
 COMMANDS = {b"horizon-cloud-worker " + name: name.decode() for name in
-            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"cancel-project-reservation", b"prepare-project-namespace", b"prepare-project-source", b"import-project-source"]}
+            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"reserve-project-session", b"cancel-project-reservation", b"prepare-project-namespace", b"prepare-project-source", b"import-project-source"]}
 COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 
 
@@ -47,7 +47,15 @@ def run(options):
         (root / "bin" / name).chmod(0o700)
     shutil.copy2(sshd, root / "bin/sshd")
     os.link(root / "worker", root / "bin/horizon-cloud-worker")
-    (root / "image-capabilities.json").write_text("{}")
+    image_capabilities = {}
+    if options.scenario == "sources":
+        # Version-only probes qualify reservation routing, never agent startup.
+        image_capabilities["agents"] = ["codex", "claude"]
+        for name in image_capabilities["agents"]:
+            probe = root / "bin" / name
+            probe.write_text('#!/usr/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 64\nprintf "%s\\n" "fixture agent 1.0.0"\n')
+            probe.chmod(0o700)
+    (root / "image-capabilities.json").write_text(json.dumps(image_capabilities))
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "recovery-fixture", "-f", str(root / "id_ed25519")], check=True)
     allowed = base64.b64decode((root / "id_ed25519.pub").read_text().split()[1])
     (root / "run").mkdir(mode=0o700)
@@ -202,9 +210,13 @@ def run(options):
     assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
     expected = {"initialization": [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
                 "reservations": [0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1],
-                "host-reservations": [0] * 11, "namespaces": [0] * 13, "sources": [0] * 20}[options.scenario]
+                "host-reservations": [0] * 11, "namespaces": [0] * 13, "sources": [0] * 31}[options.scenario]
     assert [session["exit_code"] for session in sessions] == expected
     assert report["same_host_key"]
+    if options.scenario == "sources":
+        agent_sessions = [session for session in sessions if session["command"] == "reserve-project-session"]
+        assert len(agent_sessions) == 11
+        assert len({session["request_sha256"] for session in agent_sessions}) == 6
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1
     if options.scenario in ["host-reservations", "namespaces", "sources"]:
         assert not any(session["command"] == "abandon-bootstrap" for session in sessions)

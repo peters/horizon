@@ -645,3 +645,34 @@ committed repositories with history, LFS and submodules through real local SSH,
 including host/worker restarts after lost replies and failed completion saves.
 It uses synthetic provider ownership; live-provider and physical power-loss
 qualification remain separate gates under #805.
+
+### Durable agent-session reservations
+
+The Linux worker command `reserve-project-session` accepts a signed
+`reserve_project_session` action with a `reserve_session` payload containing
+`session: { id, agent, revision }`. The owning-host core API is
+`project_reservations::reserve_session`. Generate the session UUID once with
+`membership::Session::new` and persist it with the calling project's immutable
+binding before requesting its reservation. A changed agent or revision cannot
+reuse the same session ID, including after project cancellation.
+
+The selected agent must belong to the project's capability grant and the revision
+must equal its imported commit. The worker checks the independent source
+publication record and current capabilities before acknowledging new or repeated
+requests. Source checks share one 600-second deadline across publication checks;
+the owning-host operation uses the existing source-verification timeout lane,
+including after a lost reply or restart. Shorter caller deadlines still apply.
+
+Each project can retain at most eight sessions. Session IDs are unique across the
+allocation, including removed members. Signed history reconstructs the session
+list; existing manifests without sessions remain valid. The existing 64-operation
+and 64-KiB limits still apply and reserve room for terminal project cancellation.
+Cancellation retains session identities, source and sibling records. No session
+identifier is recycled or implicitly transferred to another project.
+
+This is reservation only: it creates no agent worktrees, homes, credentials,
+processes or tool grants. The project remains `importing`, and its receipt is not
+permission to launch. Session provisioning and public UI/CLI/MCP activation are
+subsequent #805 work. The local `sources` SSH scenario additionally checks two
+session reservations per project and recovery of exact signed requests. Its agent
+fixtures answer version probes only; they do not qualify real agent startup.
