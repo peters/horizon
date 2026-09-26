@@ -203,6 +203,13 @@ missing or older than 15 minutes, and says how old they are. Without a running
 Horizon or cloud settings the tool fails rather than returning old prices. It only
 reads prices; renting stays with the person.
 
+Agents on a cloud worker with browser tools get the same answer from the prices its
+Horizon last sent. While any cloud is ready, Horizon refreshes prices every 15
+minutes and sends each fresh list to every ready worker over the SSH connection
+companions use; a worker that misses one is asked again after five minutes. Only
+prices travel: the RunPod key stays on this computer. A worker without prices, or
+with prices older than 20 minutes, answers with an error instead of old prices.
+
 When the allowed data centers span more than one region, New cloud also shows a
 **Region** row: **Any region** (the default, where Horizon picks a data center
 with stock) and each region with how many of its data centers have the chosen
