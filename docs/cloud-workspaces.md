@@ -46,12 +46,17 @@ time, such as a native library and the application that consumes its binaries.
 The sibling is checked out beside the declaring repository on the same worker, in
 a directory named after its repository name without the owner, so relative paths
 such as `../consumer` in repository scripts keep working. Same-worker siblings in
-one configuration need distinct repository names, compared case-insensitively.
+one configuration need distinct repository names, compared case-insensitively,
+that do not start with a dot. A clash with the declaring repository's own name
+can only be detected when a cloud is created, as part of the planned sibling
+checkout.
 A same-worker sibling never provisions, starts or stops a cloud, and it is not
 listed among the separate-cloud companions, their grants or the worker's
 companion catalog. Selecting siblings when creating a cloud, building the layered
 image and preparing their checkouts are planned (#910) and not yet available;
-today the declaration is validated and otherwise inactive.
+today the declaration is validated and otherwise inactive. Horizon versions that
+predate `placement` reject a configuration that uses it, including for launching
+the declaring repository's own cloud.
 
 ## One-time machine setup
 
@@ -483,8 +488,8 @@ choice; existing clouds continue to use dedicated workers.
 
 ### Companion access in cloud panels
 
-In a saved session, each cloud panel lists the companions declared in its
-committed `.horizon/cloud.yml`. Check a repository to allow access to an existing
+In a saved session, each cloud panel lists the separate-cloud companions declared
+in its committed `.horizon/cloud.yml`; same-worker siblings are not listed. Check a repository to allow access to an existing
 cloud with that repository and profile in the same workspace. When more than
 one cloud matches, choose its stable cloud ID first. A missing cloud cannot be
 selected. The selection does not create, start, resume, or keep a worker running.

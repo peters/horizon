@@ -297,6 +297,15 @@ fn placement_rejects_unknown_values_and_colliding_sibling_directories() {
     for repository in ["example/.", "example/.."] {
         assert!(sibling(repository).validate().is_err());
     }
+    let hidden = BTreeMap::from([("dot".into(), sibling("example/.github"))]);
+    assert!(validate_declarations(&hidden).is_err());
+    assert!(
+        validate_declarations(&BTreeMap::from([(
+            "dot".into(),
+            Declaration::new("example/.github", "cpu")
+        )]))
+        .is_ok()
+    );
 }
 
 #[test]

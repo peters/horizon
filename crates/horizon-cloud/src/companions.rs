@@ -158,11 +158,13 @@ pub fn validate_declarations(declarations: &BTreeMap<String, Declaration>) -> Re
             return Err(ProfileError::Invalid("Invalid companion alias"));
         }
         declaration.validate()?;
+        // Hidden names are reserved for tooling state beside the checkouts.
         if declaration.placement == Placement::SameWorker
-            && !directories.insert(declaration.directory_name().to_ascii_lowercase())
+            && (declaration.directory_name().starts_with('.')
+                || !directories.insert(declaration.directory_name().to_ascii_lowercase()))
         {
             return Err(ProfileError::Invalid(
-                "Same-worker companions need distinct repository names",
+                "Same-worker companions need distinct repository names that do not start with a dot",
             ));
         }
     }
