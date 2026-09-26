@@ -1,5 +1,5 @@
 use super::*;
-use horizon_cloud::prices::{CpuFlavorPrice, GpuPrice};
+use crate::prices::{CpuFlavorPrice, GpuPrice};
 
 fn list() -> PriceList {
     let center = |id: &str, region: &str, gpus: &[(&str, Availability)]| DataCenter {
@@ -42,7 +42,7 @@ fn list() -> PriceList {
             ),
         ],
         regions: std::collections::BTreeMap::new(),
-        storage: horizon_cloud::runpod::prices::STORAGE,
+        storage: crate::runpod::prices::STORAGE,
     }
 }
 

@@ -6,6 +6,7 @@ mod capabilities;
 pub mod companions;
 pub mod hetzner;
 pub mod host;
+pub mod offers;
 pub mod prices;
 mod profile;
 mod reason;
