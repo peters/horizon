@@ -176,6 +176,66 @@ that fails after the fence is persisted is not replayed. A later operation with 
 identifier can relaunch the session again. Images without the marker keep reporting
 such sessions lost.
 
+## Sibling repositories
+
+A repository coupled to the primary at build time, such as a native library and the
+application that consumes its binaries, can live on the same worker as a sibling.
+Each sibling has an alias: a lowercase letter followed by at most 63 lowercase
+letters, digits, `_` or `-`. Its committed source is kept apart from the primary's:
+
+| Content | Primary | Sibling |
+|---------|---------|---------|
+| Committed objects, `refs/heads/base` | `/workspace/repository.git` | `/workspace/siblings/ALIAS/repository.git` |
+| Submodules, LFS objects, `manifest.json` | `/workspace/source` | `/workspace/siblings/ALIAS/source` |
+| Uploaded pack | `/workspace/horizon-transfer.pack` | `/workspace/siblings/ALIAS/horizon-transfer.pack` |
+| Uploaded source archive | `/workspace/horizon-source.tar` | `/workspace/siblings/ALIAS/horizon-source.tar` |
+
+Each sibling has its own upload paths, so an upload or retry for one repository never
+replaces or deletes another's. Create the sibling's private upload directory (mode
+0700) before the first upload; the command prints its path and may be repeated:
+
+```
+horizon-worker-siblings stage ALIAS
+```
+
+Then upload the pack and archive there and import them:
+
+```
+horizon-worker-import REVISION --sibling ALIAS
+horizon-worker-source import --sibling ALIAS
+```
+
+Both validate and replay exactly like the primary import: a second import of the same
+revision succeeds, and a different revision for an existing sibling fails with
+`Cloud base revision mismatch`. The global `lfs.storage` names the primary's store,
+so a sibling repository and the submodule checkouts that
+`horizon-worker-source checkout WORKTREE --sibling ALIAS` prepares each set
+`lfs.storage` to the sibling's own store. LFS content never hydrates from another
+repository's objects. A checkout inside a session root is accepted only for a
+worktree of the repository whose material it names.
+
+After importing every sibling, record the set with its checkout directories:
+
+```
+horizon-worker-siblings set < manifest.json
+horizon-worker-siblings show
+```
+
+```json
+{"version":1,"primary":"app","siblings":[{"alias":"native-lib","directory":"native-lib","revision":"<40 or 64 hex>"}]}
+```
+
+`primary` and each `directory` name the checkout directories inside a session root:
+one path component of letters, digits, `.`, `_` or `-` that does not start with `.`
+or `-` (so never `.`, `..` or `.git`), and unique ignoring case. `set` refuses unknown keys, more than 16 siblings, input over 64 KiB,
+and a sibling whose `revision` differs from its imported `refs/heads/base` or whose
+source material has not been imported; a refused manifest leaves the previous one in
+place. The manifest is replaced atomically at `/workspace/siblings.json`. `show`
+prints the validated manifest, or `{"version":1,"primary":null,"siblings":[]}` when
+none was recorded. An empty `siblings` list is valid and means no siblings; with an
+empty list `primary` may be `null`, so sending back what `show` printed before any
+manifest clears the siblings.
+
 ## Optional Git credentials
 
 Git transfer is opt-in in machine-local `~/.horizon/cloud/settings.json`, never

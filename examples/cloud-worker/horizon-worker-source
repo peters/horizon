@@ -5,13 +5,23 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 
-ROOT = Path('/workspace/source')
+PRIMARY = Path('/workspace/source')
+AGENTS = Path('/workspace/agents')
+
+
+def material(alias=None):
+    if alias is None:
+        return PRIMARY
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', alias):
+        raise ValueError('Invalid sibling alias')
+    return Path('/workspace/siblings') / alias / 'source'
 
 
 def git(*args, **kwargs):
@@ -27,17 +37,22 @@ def manifest(root):
     return value
 
 
-def import_source():
+def staging(alias=None):
+    # Each sibling has its own upload path, so no upload can replace another repository's.
+    return material(alias).parent / 'horizon-source.tar' if alias else Path('/workspace/horizon-source.tar')
+
+
+def import_source(root, upload):
     with tempfile.TemporaryDirectory(dir='/workspace') as temporary:
         folder = Path(temporary)
-        with tarfile.open('/workspace/horizon-source.tar') as archive:
+        with tarfile.open(upload) as archive:
             if any(not (m.isfile() or m.isdir()) for m in archive.getmembers()):
                 raise ValueError('Unexpected source archive member')
             archive.extractall(folder, filter='data')
         value = manifest(folder)
-        if (ROOT / 'manifest.json').exists() and manifest(ROOT) != value:
+        if (root / 'manifest.json').exists() and manifest(root) != value:
             raise ValueError('Cloud source dependency identity mismatch')
-        ROOT.mkdir(exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
         for asset in value['assets']:
             oid = asset['oid']
             if len(oid) != 64 or any(c not in '0123456789abcdef' for c in oid):
@@ -47,11 +62,11 @@ def import_source():
                 digest = hashlib.file_digest(stream, 'sha256').hexdigest()
             if digest != oid or content.stat().st_size != asset['size']:
                 raise ValueError('LFS transfer checksum mismatch')
-            destination = ROOT / 'lfs' / 'objects' / oid[:2] / oid[2:4] / oid
+            destination = root / 'lfs' / 'objects' / oid[:2] / oid[2:4] / oid
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(content, destination)
         for index, module in enumerate(value['modules']):
-            repo = ROOT / f'module-{index}.git'
+            repo = root / f'module-{index}.git'
             revision = module['revision']
             if len(revision) not in (40, 64) or any(c not in '0123456789abcdef' for c in revision):
                 raise ValueError('Invalid submodule revision')
@@ -65,35 +80,50 @@ def import_source():
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
             git('--git-dir', repo, 'update-ref', 'refs/heads/base', module['revision'])
-        with (ROOT / 'manifest.json.new').open('wb') as destination:
+        with (root / 'manifest.json.new').open('wb') as destination:
             destination.write((folder / 'manifest.json').read_bytes())
             destination.flush()
             os.fsync(destination.fileno())
-        os.replace(ROOT / 'manifest.json.new', ROOT / 'manifest.json')
-        descriptor = os.open(ROOT, os.O_RDONLY)
+        os.replace(root / 'manifest.json.new', root / 'manifest.json')
+        descriptor = os.open(root, os.O_RDONLY)
         try:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-    Path('/workspace/horizon-source.tar').unlink()
+    upload.unlink()
 
 
-def checkout(worktree):
-    root = Path(worktree).resolve()
-    if root.parent not in (Path('/workspace/agents'), Path('/workspace/companions/worktrees')):
+def beside_siblings(worktree, repository):
+    # /workspace/agents/SESSION/DIRECTORY: a worktree of exactly this repository in a
+    # session root that is not itself a worktree.
+    if worktree.parent.parent != AGENTS or not (worktree / '.git').is_file() or (worktree.parent / '.git').exists():
+        return False
+    common = subprocess.run(['git', '-C', str(worktree), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                            capture_output=True, text=True, check=False)
+    return common.returncode == 0 and Path(common.stdout.strip()).resolve() == repository.resolve()
+
+
+def checkout(worktree, alias=None):
+    root = material(alias)
+    worktree = Path(worktree).resolve()
+    alone = alias is None and worktree.parent in (AGENTS, Path('/workspace/companions/worktrees'))
+    if not (alone or beside_siblings(worktree, root.parent / 'repository.git' if alias else Path('/workspace/repository.git'))):
         raise ValueError('Invalid agent worktree')
-    if not (ROOT / 'manifest.json').exists():
+    if not (root / 'manifest.json').exists():
         raise ValueError('Source dependencies have not been imported')
-    for index, module in enumerate(manifest(ROOT)['modules']):
-        path = root / module['path']
-        if not path.resolve().is_relative_to(root):
+    for index, module in enumerate(manifest(root)['modules']):
+        path = worktree / module['path']
+        if not path.resolve().is_relative_to(worktree):
             raise ValueError('Submodule checkout escapes agent worktree')
-        origin = ROOT / f'module-{index}.git'
+        origin = root / f'module-{index}.git'
         if not (path / '.git').exists():
             git('clone', '--no-checkout', origin, path)
         actual = subprocess.check_output(['git', '-C', str(path), 'remote', 'get-url', 'origin'], text=True).strip()
         if actual != str(origin):
             raise ValueError('Submodule source binding mismatch')
+        if alias is not None:
+            # The global lfs.storage names the primary's store.
+            git('-C', path, 'config', 'lfs.storage', root / 'lfs')
         # Called only before the session launch fence: finish an interrupted checkout.
         git('-C', path, 'checkout', '--force', '--detach', module['revision'])
         git('-C', path, 'reset', '--hard', module['revision'])
@@ -103,9 +133,12 @@ if __name__ == '__main__':
     os.umask(0o077)
     with open('/workspace/source.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if sys.argv[1:] == ['import']:
-            import_source()
-        elif len(sys.argv) == 3 and sys.argv[1] == 'checkout':
-            checkout(sys.argv[2])
+        command, sibling = sys.argv[1:], None
+        if len(command) in (3, 4) and command[-2] == '--sibling':
+            command, sibling = command[:-2], command[-1]
+        if command == ['import']:
+            import_source(material(sibling), staging(sibling))
+        elif len(command) == 2 and command[0] == 'checkout':
+            checkout(command[1], sibling)
         else:
-            raise ValueError('Usage: horizon-worker-source import|checkout WORKTREE')
+            raise ValueError('Usage: horizon-worker-source import|checkout WORKTREE [--sibling ALIAS]')
