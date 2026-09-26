@@ -15,7 +15,6 @@ pub struct CpuFlavorPrice {
     pub id: String,
     pub name: String,
     pub per_vcpu_hour: f64,
-    pub memory_per_vcpu: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,15 +38,18 @@ pub struct PriceList {
 }
 
 impl PriceList {
-    /// Hourly price range of `vcpu` vCPUs across `flavors`, cheapest first.
+    /// Hourly price range of `vcpu` vCPUs across `flavors`, cheapest first. `None` unless
+    /// every flavor has a price: an unpriced one may be the one allocated.
     #[must_use]
     pub fn cpu_hourly(&self, flavors: &[String], vcpu: u16) -> Option<(f64, f64)> {
-        let prices = self
-            .cpu
+        let prices: Vec<f64> = flavors
             .iter()
-            .filter(|flavor| flavors.contains(&flavor.id))
-            .map(|flavor| flavor.per_vcpu_hour * f64::from(vcpu));
-        prices.fold(None, |range, price| match range {
+            .map(|id| {
+                let flavor = self.cpu.iter().find(|flavor| &flavor.id == id)?;
+                Some(flavor.per_vcpu_hour * f64::from(vcpu))
+            })
+            .collect::<Option<_>>()?;
+        prices.into_iter().fold(None, |range, price| match range {
             None => Some((price, price)),
             Some((low, high)) => Some((f64::min(low, price), f64::max(high, price))),
         })
@@ -81,11 +83,10 @@ mod tests {
     use super::*;
 
     fn list() -> PriceList {
-        let flavor = |id: &str, per_vcpu_hour, memory_per_vcpu| CpuFlavorPrice {
+        let flavor = |id: &str, per_vcpu_hour| CpuFlavorPrice {
             id: id.into(),
             name: id.into(),
             per_vcpu_hour,
-            memory_per_vcpu,
         };
         let gpu = |id: &str, hourly, availability| GpuPrice {
             id: id.into(),
@@ -96,11 +97,7 @@ mod tests {
         };
         PriceList {
             provider: "RunPod",
-            cpu: vec![
-                flavor("cpu3c", 0.03, 2),
-                flavor("cpu5c", 0.035, 2),
-                flavor("cpu3g", 0.04, 4),
-            ],
+            cpu: vec![flavor("cpu3c", 0.03), flavor("cpu5c", 0.035), flavor("cpu3g", 0.04)],
             gpus: vec![
                 gpu("a6000", 0.49, Availability::None),
                 gpu("ada", 0.28, Availability::Low),
@@ -116,6 +113,9 @@ mod tests {
         let range = list.cpu_hourly(&["cpu3c".into(), "cpu5c".into()], 8).unwrap();
         assert!((range.0 - 0.24).abs() < 1e-9 && (range.1 - 0.28).abs() < 1e-9);
         assert!(list.cpu_hourly(&["unknown".into()], 8).is_none());
+        // An unpriced flavor could be the one allocated, so no partial range is shown.
+        assert!(list.cpu_hourly(&["cpu3c".into(), "cpu5m".into()], 8).is_none());
+        assert!(list.cpu_hourly(&[], 8).is_none());
     }
 
     #[test]

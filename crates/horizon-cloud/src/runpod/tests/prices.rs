@@ -11,7 +11,8 @@ fn catalog_server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<Strin
 fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
     let cpus = json!({"cpus": [
         {"id": "cpu3c", "name": "Compute-Optimized", "price": {"securePerVcpu": 0.03}, "ramGbPerVcpu": 2},
-        {"id": "cpu9x", "name": "Serverless only", "price": {"serverlessPerVcpu": 0.02}, "ramGbPerVcpu": 2}
+        {"id": "cpu9x", "name": "Serverless only", "price": {"serverlessPerVcpu": 0.02}, "ramGbPerVcpu": 2},
+        {"id": "cpu7x", "name": "Fractional memory", "price": {"securePerVcpu": 0.05}, "ramGbPerVcpu": 2.5}
     ]});
     let gpus = json!({"gpus": [
         {"id": "NVIDIA RTX A6000", "name": "RTX A6000", "memory": 48, "secure": true, "price": {"secure": 0.49, "community": 0.33}},
@@ -33,8 +34,8 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
         .unwrap();
     task.join().unwrap();
     assert_eq!(list.provider, "RunPod");
-    assert_eq!(list.cpu.len(), 1);
-    assert_eq!(list.cpu[0].memory_per_vcpu, 2);
+    let flavors: Vec<&str> = list.cpu.iter().map(|flavor| flavor.id.as_str()).collect();
+    assert_eq!(flavors, ["cpu3c", "cpu7x"]);
     assert_eq!(list.gpus.len(), 2);
     let ada = list.gpu("NVIDIA RTX 4000 Ada Generation").unwrap();
     assert_eq!(

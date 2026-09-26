@@ -47,7 +47,6 @@ impl RunPod {
                     id: flavor.id,
                     name: flavor.name,
                     per_vcpu_hour: flavor.price.secure_per_vcpu,
-                    memory_per_vcpu: flavor.ram_gb_per_vcpu,
                 })
                 .collect(),
             gpus: gpus
@@ -125,12 +124,10 @@ struct CpuCatalog {
     cpus: Vec<CpuFlavor>,
 }
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct CpuFlavor {
     id: String,
     name: String,
     price: CpuPrice,
-    ram_gb_per_vcpu: u16,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
