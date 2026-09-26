@@ -218,7 +218,15 @@ impl HorizonApp {
             ctx.request_repaint_after(Duration::from_secs(30));
             return;
         };
-        ctx.request_repaint_after(super::prices::FRESH.saturating_sub(fetched.at.elapsed()).min(RETRY));
+        // Wake for the next refresh or the earliest recorded retry, whichever comes first.
+        let refresh = super::prices::FRESH.saturating_sub(fetched.at.elapsed());
+        let retry = publication
+            .delivered
+            .values()
+            .filter_map(|delivery| delivery.retry_at)
+            .min()
+            .map(|at| at.saturating_duration_since(now));
+        ctx.request_repaint_after(retry.map_or(refresh, |retry| retry.min(refresh)));
         publication.step(&root, &ready, fetched, now, ctx);
     }
 }
