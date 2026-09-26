@@ -166,8 +166,14 @@ mod tests {
                     .iter()
                     .find(|tool| tool["name"] == "cloud_offers")
                     .expect("cloud_offers tool");
-                for field in ["min_vcpu", "gpu", "gpu_type", "max_hourly", "hours", "region", "limit"] {
-                    assert!(offers["inputSchema"]["properties"].get(field).is_some(), "{field}");
+                // Every requirement is described for the agent.
+                let properties = offers["inputSchema"]["properties"].as_object().expect("properties");
+                assert_eq!(properties.len(), 11);
+                for (field, schema) in properties {
+                    assert!(
+                        schema["description"].as_str().is_some_and(|text| !text.is_empty()),
+                        "{field}"
+                    );
                 }
             }
         }
