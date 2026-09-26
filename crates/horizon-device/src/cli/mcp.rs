@@ -264,6 +264,8 @@ impl ServerHandler for Server {
     ) -> impl Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> {
         std::future::ready(Ok(rmcp::model::ListToolsResult {
             tools: Self::tool_router().list_all(),
+            ttl_ms: Some(0),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
             ..Default::default()
         }))
     }

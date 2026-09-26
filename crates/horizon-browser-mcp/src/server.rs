@@ -539,6 +539,8 @@ impl ServerHandler for HorizonBrowserMcp {
     ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> {
         std::future::ready(Ok(ListToolsResult {
             tools: self.tool_router.list_all(),
+            ttl_ms: Some(0),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
             ..Default::default()
         }))
     }
