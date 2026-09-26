@@ -562,6 +562,14 @@ recipe, drives the journaled switch of its bound worker, settles an interrupted 
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
 SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
 tested offline.
+`horizon-cloud::runpod` uses REST v2 throughout. Its `wire` leaf translates
+provider responses into the existing durable worker representation; `pages` owns
+complete cursor traversal, and `create` owns ordered single-compute requests with
+persisted uncertainty fences. `stock` asks the catalog for the exact CPU size.
+Storage attachment checks reject accounts with Serverless endpoints because v2
+cannot enumerate all historical worker mounts; this guard also runs before new
+CPU storage is allocated. Provider wire changes never rewrite saved allocation
+identities or manufacture direct-create receipts.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate

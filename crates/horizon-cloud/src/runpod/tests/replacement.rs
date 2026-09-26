@@ -22,7 +22,7 @@ fn third() -> String {
 /// created for `current`.
 fn pod(current: &WorkerSpec, on: &WorkerSpec) -> Value {
     let mut value = worker(current);
-    value["imageName"] = json!(on.image_digest);
+    value["image"] = json!(on.image_digest);
     value["env"] = json!({"HORIZON_CLOUD_OPERATION": current.operation_id, "PUBLIC_KEY": current.public_key});
     value
 }
@@ -37,7 +37,7 @@ fn methods(requests: &Mutex<Vec<String>>) -> Vec<String> {
         .map(|request| request.split(" HTTP/").next().unwrap().to_owned())
         .collect()
 }
-const INSPECT: &str = "GET /pods/worker1?includeNetworkVolume=true";
+const INSPECT: &str = "GET /pods/worker1";
 const UPDATE: &str = "PATCH /pods/worker1";
 const MOUNTS: &str = "GET /pods/worker1";
 
@@ -53,10 +53,7 @@ fn update_sends_only_the_new_image_to_a_verified_running_worker() {
             .unwrap();
         task.join().unwrap();
         assert_eq!(methods(&requests), [INSPECT, UPDATE]);
-        assert_eq!(
-            body(&requests.lock().unwrap()[1]),
-            json!({"imageName": next.image_digest})
-        );
+        assert_eq!(body(&requests.lock().unwrap()[1]), json!({"image": next.image_digest}));
     }
 }
 
@@ -77,9 +74,9 @@ fn registry_credential_is_sent_only_when_it_changes() {
             .replace_image(&current, &next, "worker1", &Cancellation::default())
             .unwrap();
         task.join().unwrap();
-        let mut expected = json!({"imageName": next.image_digest});
+        let mut expected = json!({"image": next.image_digest});
         if let Some(id) = sent {
-            expected["containerRegistryAuthId"] = json!(id);
+            expected["registry"] = json!(id);
         }
         assert_eq!(body(&requests.lock().unwrap()[1]), expected);
     }
@@ -182,7 +179,7 @@ fn refuses_to_update_a_stopped_lost_or_unverified_worker() {
     let unverified: fn(&CloudError) -> bool = |error| matches!(error, CloudError::IdentityMismatch);
     let mut cases = Vec::new();
     let mut stopped = pod(&current, &current);
-    stopped["desiredStatus"] = json!("EXITED");
+    stopped["status"] = json!("EXITED");
     let not_running: fn(&CloudError) -> bool = |error| {
         matches!(
             error,
@@ -194,7 +191,7 @@ fn refuses_to_update_a_stopped_lost_or_unverified_worker() {
     renamed["name"] = json!("unrelated-worker");
     cases.push((200, renamed, unverified));
     let mut unknown = pod(&current, &current);
-    unknown["imageName"] = json!(third());
+    unknown["image"] = json!(third());
     cases.push((200, unknown, unverified));
     let mut foreign = pod(&current, &current);
     foreign["env"]["HORIZON_CLOUD_OPERATION"] = json!("other-operation");
@@ -292,7 +289,7 @@ fn only_the_image_and_its_credential_may_change() {
 fn either_image_verifies_while_plain_verification_stays_strict() {
     let current = spec();
     let next = next(&current);
-    let parse = |value: Value| serde_json::from_value::<Worker>(value).unwrap();
+    let parse = |value: Value| wire::worker(value).unwrap();
     let previous = parse(pod(&current, &current));
     let replaced = parse(pod(&current, &next));
     assert_eq!(previous.verify_either(&current, &next).unwrap(), ImageSide::Previous);
@@ -305,11 +302,7 @@ fn either_image_verifies_while_plain_verification_stays_strict() {
     unmarked["env"] = json!({});
     assert_eq!(parse(unmarked).verify_either(&current, &next).unwrap(), ImageSide::Next);
     let mut rejected = Vec::new();
-    for (field, value) in [
-        ("imageName", json!(third())),
-        ("name", json!("unrelated-worker")),
-        ("id", json!("../worker1")),
-    ] {
+    for (field, value) in [("image", json!(third())), ("name", json!("unrelated-worker"))] {
         let mut changed = pod(&current, &next);
         changed[field] = value;
         rejected.push(changed);
@@ -356,8 +349,7 @@ fn observation_reports_the_recorded_image_of_the_pair() {
     let current = spec();
     let next = next(&current);
     let mut restarting = pod(&current, &next);
-    restarting["publicIp"] = json!("");
-    restarting["portMappings"] = Value::Null;
+    restarting["ssh"]["direct"] = Value::Null;
     for (inspected, expected) in [
         (pod(&current, &current), Observed::Previous),
         (pod(&current, &next), Observed::Next),
@@ -375,9 +367,9 @@ fn observation_fails_closed_on_a_third_image_foreign_owner_or_lost_worker() {
     let current = spec();
     let next = next(&current);
     let mut unknown = pod(&current, &next);
-    unknown["imageName"] = json!(third());
+    unknown["image"] = json!(third());
     let mut unmarked = pod(&current, &next);
-    unmarked.as_object_mut().unwrap().remove("env");
+    unmarked["env"] = json!({});
     let mut foreign = pod(&current, &next);
     foreign["env"]["HORIZON_CLOUD_OPERATION"] = json!("other-operation");
     for inspected in [unknown, unmarked, foreign] {
@@ -434,7 +426,7 @@ mod mounted {
     }
 
     #[test]
-    fn both_apis_must_report_the_same_image_before_the_replacement_settles() {
+    fn consecutive_reads_must_report_the_same_image_before_replacement_settles() {
         let current = spec();
         let next = next(&current);
         let volume = volume(&current);
@@ -476,7 +468,7 @@ mod mounted {
             assert_eq!(methods(&requests), [INSPECT, MOUNTS]);
         }
         let mut unknown = pod(&current, &next);
-        unknown["imageName"] = json!(third());
+        unknown["image"] = json!(third());
         let (provider, requests, task) = server(vec![(200, unknown.to_string())]);
         assert!(matches!(
             observe(&provider, &current, &next, Some(&volume)),

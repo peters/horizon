@@ -31,7 +31,12 @@ fn ensure(provider: &RunPod, state: &mut State) {
 
 #[test]
 fn direct_creation_receipt_survives_persistence_and_read_only_inspection() {
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (201, response()), (200, response())]);
+    let (provider, requests, task) = server(vec![
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
+        (201, response()),
+        (200, response()),
+    ]);
     let mut state = State::Prepared;
     let mut durable = Vec::new();
     provider
@@ -60,13 +65,14 @@ fn direct_creation_receipt_survives_persistence_and_read_only_inspection() {
 fn uncertain_response_and_failed_receipt_persistence_never_promote_reconciliation() {
     for fail_persistence in [false, true] {
         let (provider, requests, task) = server(vec![
-            (200, "[]".into()),
+            (200, endpoints(&json!([]))),
+            (200, volumes(&json!([]))),
             if fail_persistence {
                 (201, response())
             } else {
                 (503, "uncertain".into())
             },
-            (200, json!([volume()]).to_string()),
+            (200, volumes(&json!([volume()]))),
             (200, response()),
         ]);
         let mut state = State::Prepared;
@@ -118,7 +124,11 @@ fn legacy_bound_and_deleting_shapes_round_trip_without_creation_authority() {
 
 #[test]
 fn changed_receipt_or_volume_blocks_inspection_and_deletion_before_io() {
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (201, response())]);
+    let (provider, requests, task) = server(vec![
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
+        (201, response()),
+    ]);
     let mut state = State::Prepared;
     ensure(&provider, &mut state);
     task.join().unwrap();
@@ -151,16 +161,18 @@ fn changed_receipt_or_volume_blocks_inspection_and_deletion_before_io() {
             Err(CloudError::IdentityMismatch)
         ));
     }
-    assert_eq!(requests.lock().unwrap().len(), 2);
+    assert_eq!(requests.lock().unwrap().len(), 3);
 }
 
 #[test]
 fn deletion_retains_creation_evidence_without_exposing_bootstrap_permission() {
     let (provider, _, task) = server(vec![
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
         (201, response()),
         (200, response()),
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([]))),
         (503, "uncertain".into()),
         (404, String::new()),
     ]);

@@ -268,6 +268,12 @@ pub struct Worker {
     pub env: BTreeMap<String, String>,
 }
 impl Worker {
+    /// Provisioning and starting workers retain their identity while readiness is polled.
+    #[must_use]
+    pub fn is_starting_or_running(&self) -> bool {
+        matches!(self.desired_status.as_str(), "PROVISIONING" | "STARTING" | "RUNNING")
+    }
+
     #[must_use]
     pub fn ssh_address(&self) -> Option<SocketAddr> {
         Some(SocketAddr::new(
@@ -279,7 +285,7 @@ impl Worker {
     pub fn status(&self) -> WorkerStatus {
         match self.desired_status.as_str() {
             "RUNNING" if self.ssh_address().is_some() => WorkerStatus::Running,
-            "RUNNING" => WorkerStatus::Starting,
+            "RUNNING" | "PROVISIONING" | "STARTING" => WorkerStatus::Starting,
             "EXITED" => WorkerStatus::Stopped,
             _ => WorkerStatus::Lost,
         }

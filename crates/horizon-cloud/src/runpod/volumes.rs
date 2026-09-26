@@ -41,6 +41,7 @@ pub struct Volume {
     pub id: String,
     pub name: String,
     pub size: u32,
+    #[serde(alias = "dataCenter")]
     pub data_center_id: String,
 }
 impl Volume {
@@ -199,7 +200,10 @@ impl RunPod {
                 ));
             }
             // New limits must not prevent recovery or deletion of saved allocations.
-            State::Prepared => validate_request_size(spec.size)?,
+            State::Prepared => {
+                validate_request_size(spec.size)?;
+                self.require_no_serverless_endpoints(cancel)?;
+            }
             State::Requested => {}
         }
         let matches: Vec<_> = self
@@ -232,8 +236,8 @@ impl RunPod {
         transition(state, State::Requested, &mut persist)?;
         let response = self.request(
             "POST",
-            "/networkvolumes",
-            Some(json!({"name":spec.name(),"size":spec.size,"dataCenterId":spec.data_center_id})),
+            "/network-volumes",
+            Some(json!({"name":spec.name(),"size":spec.size,"dataCenter":spec.data_center_id,"type":"STANDARD"})),
             cancel,
         );
         let value = match response {
@@ -318,7 +322,7 @@ impl RunPod {
                 &mut persist,
             )?;
             progress(Progress::DeletingVolume);
-            match self.request("DELETE", &format!("/networkvolumes/{}", volume.id), None, cancel) {
+            match self.request("DELETE", &format!("/network-volumes/{}", volume.id), None, cancel) {
                 Ok(_) | Err(CloudError::Http(404, _)) => {}
                 Err(error) => return Err(error),
             }
@@ -332,7 +336,7 @@ impl RunPod {
         transition(state, State::Deleted, &mut persist)
     }
 
-    /// Confirms CPU mount identity using the current API; the legacy API omits CPU attachments.
+    /// Confirms the current CPU mount identity before source transfer.
     /// # Errors
     /// Refuses missing, extra, misplaced or differently owned mounts before source transfer.
     pub fn confirm_workspace_mount(
@@ -393,6 +397,7 @@ impl RunPod {
         progress: &mut impl FnMut(Progress),
     ) -> Result<bool> {
         progress(Progress::CheckingAttachments);
+        self.require_no_serverless_endpoints(cancel)?;
         let workers = self.list(cancel)?;
         let count = workers.len();
         for (index, worker) in workers.into_iter().enumerate() {
@@ -442,15 +447,31 @@ impl RunPod {
         Ok(false)
     }
 
+    fn require_no_serverless_endpoints(&self, cancel: &Cancellation) -> Result<()> {
+        // v2 exposes only active serverless workers without their mounts. Even
+        // an unrelated endpoint can retain older releases with other attachments.
+        if !self.pages("/serverless", "endpoints", cancel)?.is_empty() {
+            return Err(CloudError::Invalid(
+                "Cannot prove workspace storage is detached while serverless endpoints exist; the provider API does not expose all worker mounts",
+            ));
+        }
+        Ok(())
+    }
+
     fn list_volumes(&self, cancel: &Cancellation) -> Result<Vec<Volume>> {
-        serde_json::from_value(self.request("GET", "/networkvolumes", None, cancel)?)
-            .map_err(|_| CloudError::InvalidResponse)
+        serde_json::from_value(
+            self.request("GET", "/network-volumes", None, cancel)?
+                .get("networkVolumes")
+                .cloned()
+                .ok_or(CloudError::InvalidResponse)?,
+        )
+        .map_err(|_| CloudError::InvalidResponse)
     }
     fn inspect_volume(&self, id: &str, cancel: &Cancellation) -> Result<Option<Volume>> {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid workspace volume ID"));
         }
-        match self.request("GET", &format!("/networkvolumes/{id}"), None, cancel) {
+        match self.request("GET", &format!("/network-volumes/{id}"), None, cancel) {
             Err(CloudError::Http(404, _)) => Ok(None),
             result => {
                 let volume: Volume = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;

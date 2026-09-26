@@ -47,8 +47,10 @@ impl RunPod {
     /// # Errors
     /// Lists binding metadata only, never provider-returned passwords.
     pub fn registry_bindings(&self, cancel: &Cancellation) -> Result<Vec<Binding>, CloudError> {
-        let value = self.registry_request("GET", "/containerregistryauth", None, cancel)?;
-        let bindings: Vec<Binding> = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
+        let value = self.registry_request("GET", "/registries", None, cancel)?;
+        let bindings: Vec<Binding> =
+            serde_json::from_value(value.get("registries").cloned().ok_or(CloudError::InvalidResponse)?)
+                .map_err(|_| CloudError::InvalidResponse)?;
         if bindings.iter().any(|binding| !valid_id(&binding.id)) {
             return Err(CloudError::InvalidResponse);
         }
@@ -97,7 +99,7 @@ impl RunPod {
         // failure cannot establish whether the provider accepted the credential.
         let value = self.registry_request(
             "POST",
-            "/containerregistryauth",
+            "/registries",
             Some(serde_json::json!({
                 "name": name, "username": input.username, "password": input.credential.value(),
             })),
@@ -178,12 +180,7 @@ impl RunPod {
             return Err(CloudError::IdentityMismatch);
         }
         transition(state, State::Revoking(binding.clone()), &mut persist)?;
-        self.registry_request(
-            "DELETE",
-            &format!("/containerregistryauth/{}", binding.id),
-            None,
-            cancel,
-        )?;
+        self.registry_request("DELETE", &format!("/registries/{}", binding.id), None, cancel)?;
         if self.match_registry_binding(&name, state, cancel)?.is_some() {
             return Err(CloudError::Invalid("Registry revocation is pending; reconcile again"));
         }

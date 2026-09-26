@@ -379,6 +379,23 @@ fn inactive_recovery_retains_deletion_without_automatic_reconnect() {
 }
 
 #[test]
+fn provisioning_restore_resumes_readiness_on_the_bound_worker() {
+    for status in ["PROVISIONING", "STARTING", "RUNNING"] {
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"recovery-fixture","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Readiness","operation":{"state":"bound","worker_id":"worker1"},"spec":null,
+            "worker":{"id":"worker1","name":"recovery-fixture","imageName":"registry.example/worker","desiredStatus":status},
+            "sessions":[]
+        })).unwrap();
+        assert!(!super::super::Runtime::needs_provider_check(&state));
+        assert!(super::super::Runtime::reconnects_on_restore(&state));
+        state.stop_requested = true;
+        assert!(!super::super::Runtime::reconnects_on_restore(&state));
+    }
+}
+
+#[test]
 fn restored_bound_records_can_check_provider_after_failed_reconnect() {
     for worker in [
         serde_json::Value::Null,

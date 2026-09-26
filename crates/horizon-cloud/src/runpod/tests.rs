@@ -10,6 +10,7 @@ mod registry;
 mod replacement;
 mod startup;
 mod storage;
+mod v2;
 mod volume_limits;
 use std::{
     io::{Read, Write},
@@ -30,9 +31,27 @@ fn spec() -> WorkerSpec {
         startup_metadata: None,
     }
 }
-fn worker(spec: &WorkerSpec) -> Value {
+fn saved_worker(spec: &WorkerSpec) -> Value {
     json!({"id":"worker1","name":spec.name(),"imageName":spec.image_digest,"desiredStatus":"RUNNING","publicIp":"192.0.2.1","portMappings":{"22":22001}})
 }
+fn worker(spec: &WorkerSpec) -> Value {
+    json!({"id":"worker1","name":spec.name(),"image":spec.image_digest,"status":"RUNNING",
+        "ssh":{"direct":{"host":"192.0.2.1","port":22001,"username":"root"}},
+        "disk":spec.profile.storage.container_gb,"mounts":{},"env":{},"cost":0.04,"startedAt":null})
+}
+fn pods(rows: &Value) -> String {
+    json!({"pods":rows,"pagination":{"hasNextPage":false,"nextCursor":null}}).to_string()
+}
+fn endpoints(rows: &Value) -> String {
+    json!({"endpoints":rows,"pagination":{"hasNextPage":false,"nextCursor":null}}).to_string()
+}
+fn volumes(rows: &Value) -> String {
+    json!({"networkVolumes":rows}).to_string()
+}
+fn registries(rows: &Value) -> String {
+    json!({"registries":rows}).to_string()
+}
+
 #[test]
 fn power_actions_verify_identity_and_accept_empty_success_bodies() {
     let spec = spec();
@@ -46,8 +65,8 @@ fn power_actions_verify_identity_and_accept_empty_success_bodies() {
     provider.start(&spec, "worker1", &Cancellation::default()).unwrap();
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert!(requests[1].starts_with("POST /pods/worker1/stop "));
-    assert!(requests[3].starts_with("POST /pods/worker1/start "));
+    assert!(requests[1].starts_with("POST /pods/worker1/action "));
+    assert!(requests[3].starts_with("POST /pods/worker1/action "));
     let mut wrong = worker(&spec);
     wrong["name"] = json!("unrelated-worker");
     let (provider, requests, task) = server(vec![(200, wrong.to_string())]);
@@ -71,7 +90,7 @@ fn patch_sends_json_and_keeps_definite_refusals_apart_from_uncertain_failures() 
         (503, json!({"error": "echoed secret-test-key"}).to_string()),
     ]);
     let cancel = Cancellation::default();
-    let patch = || provider.request("PATCH", "/pods/worker1", Some(json!({"imageName": "next"})), &cancel);
+    let patch = || provider.request("PATCH", "/pods/worker1", Some(json!({"image": "next"})), &cancel);
     assert_eq!(patch().unwrap(), Value::Null);
     assert_eq!(patch().unwrap(), Value::Null);
     assert!(matches!(patch(), Err(CloudError::Rejected(_))));
@@ -92,16 +111,15 @@ fn patch_sends_json_and_keeps_definite_refusals_apart_from_uncertain_failures() 
         assert!(request.starts_with("PATCH /pods/worker1 "));
         assert!(request.contains("Bearer secret-test-key"));
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(body, json!({"imageName": "next"}));
+        assert_eq!(body, json!({"image": "next"}));
     }
 }
 #[test]
 fn stopped_worker_without_an_address_does_not_break_account_reconciliation() {
     let mut value = worker(&spec());
-    value["desiredStatus"] = json!("EXITED");
-    value["publicIp"] = json!("");
-    value["portMappings"] = Value::Null;
-    let (provider, _, task) = server(vec![(200, json!([value]).to_string())]);
+    value["status"] = json!("EXITED");
+    value["ssh"]["direct"] = Value::Null;
+    let (provider, _, task) = server(vec![(200, pods(&json!([value])))]);
     let workers = provider.list(&Cancellation::default()).unwrap();
     assert_eq!(workers[0].status(), crate::WorkerStatus::Stopped);
     assert!(workers[0].ssh_address().is_none());
@@ -116,11 +134,23 @@ fn delayed_server(
 ) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
     let requests = Arc::new(Mutex::new(vec![]));
     let observed = requests.clone();
     let task = thread::spawn(move || {
         for (index, (status, body)) in responses.into_iter().enumerate() {
-            let (mut stream, _) = listener.accept().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("missing fixture request {index}: {error}"),
+                }
+            };
             stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut input = Vec::new();
             let mut buf = [0; 4096];
@@ -160,6 +190,8 @@ fn delayed_server(
     });
     let mut provider = RunPod::new(Credential::new("secret-test-key".into()).unwrap());
     provider.endpoint = format!("http://{addr}");
+    provider.api_endpoint.clone_from(&provider.endpoint);
+    provider.catalog_endpoint.clone_from(&provider.endpoint);
     (provider, requests, task)
 }
 
@@ -169,9 +201,9 @@ fn timed_out_post_reconciles_created_worker_without_repeating_allocation() {
     let created = worker(&spec);
     let (mut provider, requests, task) = delayed_server(
         vec![
-            (200, "[]".into()),
+            (200, pods(&json!([]))),
             (201, created.to_string()),
-            (200, json!([created]).to_string()),
+            (200, pods(&json!([created]))),
         ],
         Some((1, Duration::from_millis(600))),
     );
@@ -226,7 +258,7 @@ fn timed_out_post_reconciles_created_worker_without_repeating_allocation() {
 fn create_persists_fence_before_post_and_reconnect_never_allocates() {
     let spec = spec();
     let response = worker(&spec).to_string();
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (201, response.clone()), (200, response)]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (201, response.clone()), (200, response)]);
     let mut state = CreateState::Prepared;
     let mut saved = vec![];
     let first = provider
@@ -261,9 +293,9 @@ fn create_persists_fence_before_post_and_reconnect_never_allocates() {
 fn uncertain_post_and_empty_reconciliation_never_retry() {
     let spec = spec();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (503, "SECRET BODY".into()),
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
     ]);
     let mut state = CreateState::Prepared;
     let err = provider
@@ -290,8 +322,8 @@ fn uncertain_post_and_empty_reconciliation_never_retry() {
 fn persistence_failure_prevents_allocation_and_duplicates_fail_closed() {
     let spec = spec();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
-        (200, json!([worker(&spec), worker(&spec)]).to_string()),
+        (200, pods(&json!([]))),
+        (200, pods(&json!([worker(&spec), worker(&spec)]))),
     ]);
     let mut state = CreateState::Prepared;
     assert!(matches!(
@@ -334,9 +366,9 @@ fn cancellation_and_removed_worker_do_not_create() {
 #[test]
 fn cpu_gpu_specs_and_credential_debug() {
     let mut spec = spec();
-    assert_eq!(create_body(&spec)["computeType"], "CPU");
+    assert_eq!(create_body(&spec)["cpu"]["id"], "cpu3g");
     spec.profile.gpu = true;
-    assert_eq!(create_body(&spec)["minRAMPerGPU"], 8);
+    assert_eq!(create_body(&spec)["gpu"]["minRamPerGpu"], 8);
     assert!(!format!("{:?}", Credential::new("secret-value".into()).unwrap()).contains("secret-value"));
 }
 
@@ -345,7 +377,7 @@ fn failed_requests_carry_the_provider_reason_without_resolving_creation() {
     let spec = spec();
     let refusal = "create pod: There are no longer any instances available with the requested specifications.";
     let (provider, _, task) = server(vec![
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (500, json!({"error": refusal, "status": 500}).to_string()),
         (
             422,
@@ -388,9 +420,9 @@ fn failed_requests_carry_the_provider_reason_without_resolving_creation() {
 fn definite_refusal_can_retry_but_no_post_after_pre_send_cancel() {
     let spec = spec();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (400, "refused".into()),
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (201, worker(&spec).to_string()),
     ]);
     let mut state = CreateState::Prepared;
@@ -414,7 +446,7 @@ fn definite_refusal_can_retry_but_no_post_after_pre_send_cancel() {
             .count(),
         2
     );
-    let (provider, requests, task) = server(vec![(200, "[]".into())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([])))]);
     let cancel = Cancellation::default();
     let mut state = CreateState::Prepared;
     assert!(matches!(
@@ -437,9 +469,7 @@ fn definite_refusal_can_retry_but_no_post_after_pre_send_cancel() {
 fn documented_response_alias_and_empty_stop_response() {
     let spec = spec();
     let mut response = worker(&spec);
-    response["image"] = response["imageName"].take();
-    response.as_object_mut().unwrap().remove("imageName");
-    response["costPerHr"] = json!("0.74");
+    response["cost"] = json!(0.74);
     let (provider, _, task) = server(vec![(200, response.to_string()), (200, String::new())]);
     provider.stop(&spec, "worker1", &Cancellation::default()).unwrap();
     task.join().unwrap();
@@ -480,9 +510,9 @@ fn termination_checks_identity_then_proves_absence() {
         ]
     );
     let requests = requests.lock().unwrap();
-    assert!(requests[0].starts_with("GET /pods/worker1?"));
+    assert!(requests[0].starts_with("GET /pods/worker1 "));
     assert!(requests[1].starts_with("DELETE /pods/worker1 "));
-    assert!(requests[2].starts_with("GET /pods/worker1?"));
+    assert!(requests[2].starts_with("GET /pods/worker1 "));
     let (provider, _, task) = server(vec![(404, "{}".into())]);
     let mut state = bound;
     let mut reported = Vec::new();
@@ -550,7 +580,7 @@ fn saved_workers_stay_reconcilable_when_flavor_limits_change() {
 #[test]
 fn readiness_requires_reported_resources_and_a_gpu_when_requested() {
     let mut spec = spec();
-    let mut value = worker(&spec);
+    let mut value = saved_worker(&spec);
     let parse = |value: &Value| serde_json::from_value::<Worker>(value.clone()).unwrap();
     assert!(parse(&value).verify_resources(&spec).is_err());
     value["vcpuCount"] = json!(spec.profile.cpu);

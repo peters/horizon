@@ -133,7 +133,7 @@ impl RunPod {
             if *state == CreateState::Requested {
                 bind(state, worker, &mut persist)?;
             }
-            result.outcome = if worker.desired_status == "RUNNING" {
+            result.outcome = if worker.is_starting_or_running() {
                 Outcome::Found {
                     worker_id: worker.id.clone(),
                 }

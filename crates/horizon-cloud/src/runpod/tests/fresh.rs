@@ -1,4 +1,4 @@
-use crate::runpod::tests::{server, spec as base_spec, worker};
+use crate::runpod::tests::{endpoints, pods, server, spec as base_spec, volumes, worker};
 use crate::runpod::volumes::{Spec, State, Volume};
 use crate::{Cancellation, CloudError, CreateState, WorkerSpec};
 use serde_json::{Value, json};
@@ -42,10 +42,12 @@ fn mount() -> Value {
 }
 fn creation_responses() -> Vec<(u16, String)> {
     vec![
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
         (201, serde_json::to_string(&volume()).unwrap()),
-        (200, "[]".into()),
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([]))),
+        (200, pods(&json!([]))),
         (201, observed().to_string()),
     ]
 }
@@ -56,7 +58,8 @@ fn direct_creation_and_exact_first_attachment_produce_a_consumable_witness() {
     responses.extend([
         (200, observed().to_string()),
         (200, mount().to_string()),
-        (200, json!([observed()]).to_string()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([observed()]))),
     ]);
     let (mut provider, requests, task) = server(responses);
     provider.api_endpoint = provider.endpoint.clone();
@@ -102,8 +105,8 @@ fn direct_creation_and_exact_first_attachment_produce_a_consumable_witness() {
 #[test]
 fn an_existing_matching_worker_is_never_a_direct_creation_witness() {
     let mut responses = creation_responses();
-    responses.truncate(3);
-    responses.push((200, json!([observed()]).to_string()));
+    responses.truncate(5);
+    responses.push((200, pods(&json!([observed()]))));
     let (provider, requests, task) = server(responses);
     let cancel = Cancellation::default();
     let fresh = provider
@@ -130,10 +133,10 @@ fn uncertain_creation_and_failed_persistence_never_return_a_witness() {
     for failure in 0..3 {
         let mut responses = creation_responses();
         if failure == 0 {
-            responses[4] = (503, "uncertain".into());
+            responses[6] = (503, "uncertain".into());
         }
         if failure == 1 {
-            responses.truncate(4);
+            responses.truncate(6);
         }
         let (provider, requests, task) = server(responses);
         let cancel = Cancellation::default();
@@ -178,8 +181,9 @@ fn changed_mount_or_another_attachment_cannot_qualify_created_resources() {
         if sibling {
             let mut other = observed();
             other["id"] = json!("sibling");
-            other["networkVolume"] = json!({"id":"volume1"});
-            responses.push((200, json!([observed(), other]).to_string()));
+            other["mounts"] = json!({"network":[{"volumeId":"volume1","path":"/workspace"}]});
+            responses.push((200, endpoints(&json!([]))));
+            responses.push((200, pods(&json!([observed(), other]))));
         }
         let (mut provider, _, task) = server(responses);
         provider.api_endpoint = provider.endpoint.clone();

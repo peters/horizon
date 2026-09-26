@@ -1,7 +1,7 @@
 use super::*;
 
 fn assigned(spec: &WorkerSpec) -> Value {
-    let mut value = worker(spec);
+    let mut value = saved_worker(spec);
     value["vcpuCount"] = json!(spec.profile.cpu);
     value["memoryInGb"] = json!(spec.profile.memory_gb);
     value["gpuCount"] = json!(1);
@@ -24,10 +24,16 @@ fn both_compute_profiles_require_confirmed_storage_capacity_and_mount() {
         let mut spec = spec();
         spec.profile.gpu = gpu;
         let request = create_body(&spec);
-        assert_eq!(request["containerDiskInGb"], spec.profile.storage.container_gb);
-        assert_eq!(request["volumeInGb"], spec.profile.storage.volume_gb);
-        assert_eq!(request["volumeMountPath"], "/workspace");
-        assert!(request.get("networkVolumeId").is_none());
+        assert_eq!(request["disk"], spec.profile.storage.container_gb);
+        if gpu {
+            assert_eq!(request["mounts"]["persistent"]["size"], spec.profile.storage.volume_gb);
+            assert_eq!(request["mounts"]["persistent"]["path"], "/workspace");
+        } else {
+            assert!(
+                request.get("mounts").is_none(),
+                "CPU storage is explicitly attached by its owned volume"
+            );
+        }
         let value = assigned(&spec);
         assert!(check(&value, &spec).is_ok());
         for field in ["containerDiskInGb", "volumeInGb", "volumeMountPath"] {
@@ -92,11 +98,11 @@ fn old_worker_records_remain_readable_but_cannot_certify_storage() {
 #[test]
 fn rejected_storage_keeps_allocation_bound_and_explicit_deletion_available() {
     let spec = spec();
-    let mut inadequate = assigned(&spec);
-    inadequate["volumeInGb"] = json!(0);
+    let mut inadequate = worker(&spec);
+    inadequate["mounts"] = json!({"persistent":{"size":0,"path":"/workspace"}});
     let body = inadequate.to_string();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (201, body.clone()),
         (200, body.clone()),
         (200, body),
@@ -163,7 +169,7 @@ mod volumes {
     #[test]
     fn current_api_confirms_cpu_mount_missing_from_legacy_worker() {
         let (provider, requests, task) = server(vec![(200, mounted_worker().to_string())]);
-        let mut worker: Worker = serde_json::from_value(worker(&spec())).unwrap();
+        let mut worker: Worker = serde_json::from_value(saved_worker(&spec())).unwrap();
         assert!(worker.network_volume.is_none());
         provider
             .confirm_workspace_mount(&mut worker, &volume(), &Cancellation::default(), Duration::from_secs(2))
@@ -195,7 +201,7 @@ mod volumes {
         }
         for value in cases {
             let (provider, _, task) = server(vec![(200, value.to_string())]);
-            let mut worker: Worker = serde_json::from_value(worker(&spec())).unwrap();
+            let mut worker: Worker = serde_json::from_value(saved_worker(&spec())).unwrap();
             assert!(
                 provider
                     .confirm_workspace_mount(&mut worker, &volume(), &Cancellation::default(), Duration::from_secs(2))
@@ -211,7 +217,8 @@ mod volumes {
         let pod = worker(&spec());
         let (provider, requests, task) = server(vec![
             (200, value()),
-            (200, json!([pod]).to_string()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([pod]))),
             (200, mounted_worker().to_string()),
         ]);
         let mut state = State::Bound {
@@ -233,7 +240,8 @@ mod volumes {
         let pod = worker(&spec());
         let (provider, requests, task) = server(vec![
             (200, value()),
-            (200, json!([pod]).to_string()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([pod]))),
             (404, String::new()),
             (200, pod.to_string()),
         ]);
@@ -258,7 +266,8 @@ mod volumes {
             current["mounts"] = mounts;
             let (provider, requests, task) = server(vec![
                 (200, value()),
-                (200, json!([worker(&spec())]).to_string()),
+                (200, endpoints(&json!([]))),
+                (200, pods(&json!([worker(&spec())]))),
                 (200, current.to_string()),
                 (204, String::new()),
                 (404, String::new()),
@@ -299,7 +308,8 @@ mod volumes {
         };
         let (provider, requests, task) = server(vec![
             (200, value()),
-            (200, json!([listed("worker1"), listed("worker2")]).to_string()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([listed("worker1"), listed("worker2")]))),
             (200, unmounted("worker1").to_string()),
             (200, unmounted("worker2").to_string()),
             (204, String::new()),
@@ -327,13 +337,13 @@ mod volumes {
             [
                 (Progress::ConfirmingVolume, 0),
                 (Progress::CheckingAttachments, 1),
-                (Progress::InspectingMounts { worker: 1, workers: 2 }, 2),
-                (Progress::InspectingMounts { worker: 2, workers: 2 }, 3),
-                (Progress::DeletingVolume, 4),
-                (Progress::ConfirmingVolumeDeletion, 5),
+                (Progress::InspectingMounts { worker: 1, workers: 2 }, 3),
+                (Progress::InspectingMounts { worker: 2, workers: 2 }, 4),
+                (Progress::DeletingVolume, 5),
+                (Progress::ConfirmingVolumeDeletion, 6),
             ]
         );
-        assert!(requests.lock().unwrap()[4].starts_with("DELETE /networkvolumes/volume1 "));
+        assert!(requests.lock().unwrap()[5].starts_with("DELETE /network-volumes/volume1 "));
     }
 
     fn volume_spec() -> Spec {
@@ -358,13 +368,17 @@ mod volumes {
 
     #[test]
     fn volume_allocation_is_fenced_and_bound_before_worker_request() {
-        let (provider, requests, task) = server(vec![(200, "[]".into()), (201, value())]);
+        let (provider, requests, task) = server(vec![
+            (200, endpoints(&json!([]))),
+            (200, super::super::volumes(&json!([]))),
+            (201, value()),
+        ]);
         let mut state = State::Prepared;
         let mut saved = Vec::new();
         provider
             .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |next| {
                 if *next == State::Requested {
-                    assert_eq!(requests.lock().unwrap().len(), 1);
+                    assert_eq!(requests.lock().unwrap().len(), 2);
                 }
                 saved.push(next.clone());
                 Ok(())
@@ -375,15 +389,16 @@ mod volumes {
         assert_eq!(saved[0], State::Requested);
         assert!(saved[1].creation_receipt(&volume_spec()).unwrap().is_some());
         assert_eq!(state, saved[1]);
-        assert!(requests.lock().unwrap()[1].starts_with("POST /networkvolumes "));
+        assert!(requests.lock().unwrap()[2].starts_with("POST /network-volumes "));
     }
 
     #[test]
     fn uncertain_volume_create_reconciles_without_a_second_post() {
         let (provider, requests, task) = server(vec![
-            (200, "[]".into()),
+            (200, endpoints(&json!([]))),
+            (200, super::super::volumes(&json!([]))),
             (503, "unavailable".into()),
-            (200, json!([volume()]).to_string()),
+            (200, super::super::volumes(&json!([volume()]))),
         ]);
         let mut state = State::Prepared;
         assert!(
@@ -412,7 +427,7 @@ mod volumes {
 
     #[test]
     fn reconciling_a_requested_volume_is_named_before_its_request() {
-        let (provider, requests, task) = server(vec![(200, "[]".into())]);
+        let (provider, requests, task) = server(vec![(200, super::super::volumes(&json!([])))]);
         let mut state = State::Requested;
         let mut reported = Vec::new();
         assert!(
@@ -434,7 +449,7 @@ mod volumes {
     #[test]
     fn empty_or_conflicting_evidence_never_resets_the_volume_fence() {
         for response in [json!([]), json!([volume(), volume()])] {
-            let (provider, requests, task) = server(vec![(200, response.to_string())]);
+            let (provider, requests, task) = server(vec![(200, super::super::volumes(&response))]);
             let mut state = State::Requested;
             assert!(
                 provider
@@ -445,7 +460,10 @@ mod volumes {
             task.join().unwrap();
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
-        let (provider, requests, task) = server(vec![(200, json!([volume()]).to_string())]);
+        let (provider, requests, task) = server(vec![
+            (200, endpoints(&json!([]))),
+            (200, super::super::volumes(&json!([volume()]))),
+        ]);
         let mut state = State::Prepared;
         assert!(
             provider
@@ -454,12 +472,15 @@ mod volumes {
         );
         assert_eq!(state, State::Prepared);
         task.join().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
     #[test]
     fn failed_volume_fence_persistence_prevents_allocation() {
-        let (provider, requests, task) = server(vec![(200, "[]".into())]);
+        let (provider, requests, task) = server(vec![
+            (200, endpoints(&json!([]))),
+            (200, super::super::volumes(&json!([]))),
+        ]);
         let mut state = State::Prepared;
         assert!(matches!(
             provider.ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Err(
@@ -469,7 +490,7 @@ mod volumes {
         ));
         task.join().unwrap();
         assert_eq!(state, State::Prepared);
-        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -493,7 +514,8 @@ mod volumes {
     fn volume_cleanup_retries_lost_delete_response_and_confirms_absence() {
         let (provider, requests, task) = server(vec![
             (200, value()),
-            (200, "[]".into()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([]))),
             (503, String::new()),
             (404, String::new()),
         ]);
@@ -532,8 +554,12 @@ mod volumes {
             json!({"id":"../invalid"}),
         ] {
             let mut pod = worker(&spec());
-            pod["networkVolume"] = attachment;
-            let (provider, requests, task) = server(vec![(200, value()), (200, json!([pod]).to_string())]);
+            pod["mounts"] = json!({"network":[{"volumeId":attachment.get("id"),"path":"/workspace"}]});
+            let (provider, requests, task) = server(vec![
+                (200, value()),
+                (200, endpoints(&json!([]))),
+                (200, pods(&json!([pod]))),
+            ]);
             let mut state = State::Bound {
                 volume: volume(),
                 creation: None,
@@ -558,8 +584,12 @@ mod volumes {
     #[test]
     fn attached_or_mismatching_storage_cannot_be_deleted() {
         let mut pod = worker(&spec());
-        pod["networkVolume"] = json!({"id":volume().id});
-        let (provider, requests, task) = server(vec![(200, value()), (200, json!([pod]).to_string())]);
+        pod["mounts"] = json!({"network":[{"volumeId":volume().id,"path":"/workspace"}]});
+        let (provider, requests, task) = server(vec![
+            (200, value()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([pod]))),
+        ]);
         let mut state = State::Bound {
             volume: volume(),
             creation: None,
@@ -570,7 +600,7 @@ mod volumes {
                 .is_err()
         );
         task.join().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 2);
+        assert_eq!(requests.lock().unwrap().len(), 3);
         let mut wrong = volume();
         wrong.name = "unrelated".into();
         let (provider, requests, task) = server(vec![(200, serde_json::to_string(&wrong).unwrap())]);
@@ -586,7 +616,7 @@ mod volumes {
     #[test]
     fn worker_request_pins_the_owned_network_volume_and_location() {
         let spec = spec();
-        let (provider, requests, task) = server(vec![(200, "[]".into()), (201, worker(&spec).to_string())]);
+        let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (201, worker(&spec).to_string())]);
         provider
             .ensure_with_volume(
                 &spec,
@@ -600,16 +630,16 @@ mod volumes {
         task.join().unwrap();
         let requests = requests.lock().unwrap();
         let body: Value = serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(body["networkVolumeId"], volume().id);
+        assert_eq!(body["mounts"]["network"][0]["volumeId"], volume().id);
         assert_eq!(body["dataCenterIds"], json!([volume().data_center_id]));
-        assert_eq!(body["volumeInGb"], 0);
-        assert_eq!(body["volumeMountPath"], "/workspace");
+        assert!(body["mounts"].get("persistent").is_none());
+        assert_eq!(body["mounts"]["network"][0]["path"], "/workspace");
     }
 
     #[test]
     fn resource_gate_requires_exact_owned_volume_and_storage_shape() {
         let spec = spec();
-        let mut value = worker(&spec);
+        let mut value = saved_worker(&spec);
         value["vcpuCount"] = json!(spec.profile.cpu);
         value["memoryInGb"] = json!(spec.profile.memory_gb);
         value["containerDiskInGb"] = json!(spec.profile.storage.container_gb);
