@@ -25,12 +25,13 @@ pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetD
     if requirements.gpu {
         return Vec::new();
     }
-    // Validated requirements stay within a year; anything else is priced as a year.
-    let hours = requirements
-        .hours
-        .filter(|hours| hours.is_finite())
-        .unwrap_or(1.0)
-        .clamp(0.0, MAX_HOURS);
+    // Validated requirements stay within a year; a longer or unreadable duration is
+    // priced as a year rather than understated. One hour when none is given.
+    let hours = match requirements.hours {
+        None => 1.0,
+        Some(hours) if hours.is_nan() => MAX_HOURS,
+        Some(hours) => hours.clamp(0.0, MAX_HOURS),
+    };
     // The workspace volume is kept while the cloud is stopped; the server and its
     // IPv4 address are deleted then.
     let volume_month = catalog.volume_gb_month_eur * f64::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));

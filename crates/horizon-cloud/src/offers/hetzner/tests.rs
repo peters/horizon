@@ -158,13 +158,21 @@ fn an_offer_whose_address_cannot_be_priced_is_left_out() {
 }
 
 #[test]
-fn unvalidated_hours_never_price_as_nan() {
-    let infinite = Requirements {
-        hours: Some(f64::INFINITY),
-        ..Requirements::default()
+fn unvalidated_hours_are_priced_as_a_year_never_as_nan_or_one_hour() {
+    let start = at(2026, time::Month::October, 5, 9, 0);
+    let priced = |hours: Option<f64>| {
+        let requirements = Requirements {
+            hours,
+            ..Requirements::default()
+        };
+        hetzner_at(&catalog(), &requirements, start)[0].estimated_total
     };
-    let offers = hetzner(&catalog(), &infinite);
-    assert!(!offers.is_empty() && offers.iter().all(|offer| offer.estimated_total.is_finite()));
+    let year = priced(Some(MAX_HOURS));
+    for unreadable in [f64::INFINITY, f64::NAN, 1e12] {
+        let total = priced(Some(unreadable));
+        assert!(total.is_finite() && (total - year).abs() < 1e-9, "{unreadable}");
+    }
+    assert!(priced(None) < year, "one hour when no duration is given");
 }
 
 #[test]
