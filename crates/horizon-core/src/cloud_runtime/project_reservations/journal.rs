@@ -148,14 +148,26 @@ impl Journal {
                     descriptor: descriptor.clone(),
                 },
             ),
+            Change::ReserveSession(identity, session) => (
+                identity,
+                Request::ReserveSession {
+                    session: session.clone(),
+                },
+            ),
             Change::Cancel(identity) => (identity, Request::Cancel {}),
             Change::Resume => return Err(Error::Missing),
         };
         let action = payload.action();
-        let payload = serde_json::to_string(&payload).map_err(|_| Error::Invalid)?;
+        let request = payload;
+        let payload = serde_json::to_string(&request).map_err(|_| Error::Invalid)?;
         let message = if let Some(saved) = self.manifest.operations.iter().find(|entry| {
             entry.receipt.identity == *identity
-                && serde_json::from_str::<Request>(&entry.payload).is_ok_and(|request| request.action() == action)
+                && serde_json::from_str::<Request>(&entry.payload).is_ok_and(|saved| match (&request, &saved) {
+                    (Request::ReserveSession { session }, Request::ReserveSession { session: old }) => {
+                        session.id == old.id
+                    }
+                    _ => saved.action() == action,
+                })
         }) {
             if saved.payload != payload {
                 return Err(Error::Invalid);
@@ -205,6 +217,13 @@ impl Pending {
                             descriptor: descriptor.clone(),
                         })
             }
+            Change::ReserveSession(identity, session) => {
+                self.receipt.identity == *identity
+                    && payload
+                        == (Request::ReserveSession {
+                            session: session.clone(),
+                        })
+            }
             Change::Cancel(identity) => self.receipt.identity == *identity && payload == (Request::Cancel {}),
             Change::Resume => true,
         })
@@ -216,6 +235,7 @@ impl Pending {
                 Request::Reserve { .. } => "horizon-cloud-worker reserve-project",
                 Request::PrepareNamespace {} => "horizon-cloud-worker prepare-project-namespace",
                 Request::ImportSource { .. } => "horizon-cloud-worker prepare-project-source",
+                Request::ReserveSession { .. } => "horizon-cloud-worker reserve-project-session",
                 Request::Cancel {} => "horizon-cloud-worker cancel-project-reservation",
             },
         )

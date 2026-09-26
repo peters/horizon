@@ -6,7 +6,10 @@ use super::{
     command::Runner, owner::Owner, ssh::Connection,
 };
 use horizon_cloud::Capabilities;
-use horizon_cloud_protocol::{ProjectIdentity, membership::Receipt};
+use horizon_cloud_protocol::{
+    ProjectIdentity,
+    membership::{Receipt, Session},
+};
 use journal::Journal;
 pub use source::import_source;
 use std::{
@@ -51,6 +54,7 @@ pub(super) enum Change {
     Reserve(Reservation),
     PrepareNamespace(ProjectIdentity),
     ImportSource(ProjectIdentity, horizon_cloud_protocol::membership::Source),
+    ReserveSession(ProjectIdentity, Session),
     Cancel(ProjectIdentity),
     Resume,
 }
@@ -87,6 +91,28 @@ pub fn prepare_namespace(
         owner,
         allocation,
         &Change::PrepareNamespace(project.clone()),
+        cancellation,
+        timeout,
+    )
+}
+
+/// Reserve one immutable agent session after source publication. Persist the
+/// generated session ID with the caller's binding before invoking this method.
+/// This creates no worktree, credentials or process and is not launch authority.
+/// # Errors
+/// Rejects unavailable source, ungranted agents, changed retries and pending work.
+pub fn reserve_session(
+    owner: &mut Owner,
+    allocation: &bootstrap_initialization::Request,
+    project: &ProjectIdentity,
+    session: &Session,
+    cancellation: &Cancellation,
+    timeout: Duration,
+) -> Result<Receipt> {
+    execute(
+        owner,
+        allocation,
+        &Change::ReserveSession(project.clone(), session.clone()),
         cancellation,
         timeout,
     )
@@ -175,11 +201,17 @@ fn execute(
 }
 
 pub(super) fn timeout_limit(change: &Change, saved: Option<&Journal>) -> Duration {
-    if matches!(change, Change::ImportSource(..))
+    if matches!(change, Change::ImportSource(..) | Change::ReserveSession(..))
         || matches!(change, Change::Resume)
             && saved
                 .and_then(|journal| journal.pending.as_ref())
-                .is_some_and(|pending| pending.receipt.state == horizon_cloud_protocol::membership::State::Importing)
+                .is_some_and(|pending| {
+                    matches!(
+                        pending.command(),
+                        Ok("horizon-cloud-worker prepare-project-source"
+                            | "horizon-cloud-worker reserve-project-session")
+                    )
+                })
     {
         horizon_cloud_protocol::membership::Source::CONTROLLER_TIMEOUT
     } else {

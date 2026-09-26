@@ -1,6 +1,8 @@
 use super::*;
 use crate::bootstrap::source::{self, Boundary as SourceBoundary};
+use horizon_cloud::Agent;
 use horizon_cloud_protocol::membership::{Artifact, Source};
+use horizon_cloud_protocol::membership::{MAX_SESSIONS, Session};
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
@@ -106,6 +108,247 @@ fn prepared(f: &Fixture, name: &str, port: u16) -> ProjectIdentity {
     let project = reserved(f, name, port);
     f.change(&prepare(f, &project)).unwrap();
     project
+}
+
+fn agent_project(f: &Fixture, name: &str, port: u16) -> ProjectIdentity {
+    let project = identity(name);
+    let mut payload = reserve(port, false);
+    let Request::Reserve { capabilities, .. } = &mut payload else {
+        unreachable!()
+    };
+    capabilities.agents = [Agent::Codex, Agent::Claude].into();
+    f.change(&f.membership(&project, f.manifest().revision, OperationId::generate(), &payload))
+        .unwrap();
+    f.change(&prepare(f, &project)).unwrap();
+    project
+}
+
+fn session(revision: &str, agent: Agent) -> Session {
+    Session::new(agent, revision.into())
+}
+
+fn session_request(f: &Fixture, project: &ProjectIdentity, session: Session) -> RecoveryRequest {
+    f.membership(
+        project,
+        f.manifest().revision,
+        OperationId::generate(),
+        &Request::ReserveSession { session },
+    )
+}
+
+#[test]
+fn agent_sessions_survive_restart_without_creating_runtime_and_cancellation_retains_siblings() {
+    let f = Fixture::ready();
+    let (descriptor, bytes) = bytes();
+    let mut projects = Vec::new();
+    let mut requests = Vec::new();
+    for (index, name) in ["one", "two", "three"].into_iter().enumerate() {
+        let project = agent_project(&f, name, 8000 + u16::try_from(index).unwrap());
+        import(&f, &request(&f, &project, descriptor.clone()), &bytes, &mut |_| Ok(())).unwrap();
+        for agent in [Agent::Codex, Agent::Claude] {
+            let request = session_request(&f, &project, session(&descriptor.revision, agent));
+            let receipt = f.change(&request).unwrap();
+            assert_eq!(receipt.state, State::Importing);
+            requests.push((request, receipt));
+        }
+        for name in ["worktrees", "homes", "runtime", "logs", "tools"] {
+            assert_eq!(fs::read_dir(project_root(&f, &project).join(name)).unwrap().count(), 0);
+        }
+        projects.push(project);
+    }
+    boot(&f).unwrap();
+    let before = f.manifest();
+    for (request, receipt) in &requests {
+        assert_eq!(&f.change(request).unwrap(), receipt);
+    }
+    assert_eq!(f.manifest(), before);
+    let mut corrupt = before.clone();
+    corrupt.members[0].sessions[0].agent = Agent::Grok;
+    assert!(corrupt.validate().is_err());
+    f.change(&cancel(&f, &projects[0])).unwrap();
+    let after = f.manifest();
+    assert_eq!(after.members[0].sessions, before.members[0].sessions);
+    assert_eq!(&after.members[1..], &before.members[1..]);
+    assert!(f.change(&requests[0].0).is_err());
+    assert!(
+        f.change(&session_request(
+            &f,
+            &projects[1],
+            before.members[0].sessions[0].clone()
+        ))
+        .is_err()
+    );
+    boot(&f).unwrap();
+}
+
+#[test]
+fn session_grants_revision_identity_and_capacity_reject_without_consuming_cancellation() {
+    let f = Fixture::ready();
+    let (descriptor, bytes) = bytes();
+    let project = agent_project(&f, "one", 8000);
+    let valid = session(&descriptor.revision, Agent::Codex);
+    assert!(f.change(&session_request(&f, &project, valid.clone())).is_err());
+    import(&f, &request(&f, &project, descriptor.clone()), &bytes, &mut |_| Ok(())).unwrap();
+    for invalid in [
+        Session {
+            id: "00000000-0000-0000-0000-000000000000".parse().unwrap(),
+            ..valid.clone()
+        },
+        Session {
+            agent: Agent::Grok,
+            ..valid.clone()
+        },
+        Session {
+            revision: "0".repeat(40),
+            ..valid.clone()
+        },
+    ] {
+        let before = f.manifest();
+        assert!(f.change(&session_request(&f, &project, invalid)).is_err());
+        assert_eq!(f.manifest(), before);
+    }
+    f.change(&session_request(&f, &project, valid.clone())).unwrap();
+    assert!(
+        f.change(&session_request(
+            &f,
+            &project,
+            Session {
+                agent: Agent::Claude,
+                ..valid
+            }
+        ))
+        .is_err()
+    );
+    for _ in 1..MAX_SESSIONS {
+        f.change(&session_request(
+            &f,
+            &project,
+            session(&descriptor.revision, Agent::Codex),
+        ))
+        .unwrap();
+    }
+    assert!(
+        f.change(&session_request(
+            &f,
+            &project,
+            session(&descriptor.revision, Agent::Claude)
+        ))
+        .is_err()
+    );
+    f.change(&cancel(&f, &project)).unwrap();
+    assert_eq!(f.manifest().members[0].sessions.len(), MAX_SESSIONS);
+    boot(&f).unwrap();
+}
+
+#[test]
+fn session_reservation_requires_published_source_and_rechecks_capability_on_retry() {
+    let f = Fixture::ready();
+    let (descriptor, bytes) = bytes();
+    let project = agent_project(&f, "one", 8000);
+    let source_request = request(&f, &project, descriptor.clone());
+    {
+        let store = Store::open(&f.root()).unwrap();
+        source::prepare(
+            &store,
+            &f.runtime,
+            &source_request,
+            std::time::Instant::now() + Source::WORKER_TIMEOUT,
+            |_| Ok(()),
+        )
+        .unwrap();
+    }
+    let request = session_request(&f, &project, session(&descriptor.revision, Agent::Codex));
+    let before = f.manifest();
+    assert!(f.change(&request).is_err());
+    assert_eq!(f.manifest(), before);
+    import(&f, &source_request, &bytes, &mut |_| Ok(())).unwrap();
+    for retry in [false, true] {
+        let before = f.manifest();
+        let mut probed = false;
+        assert!(
+            mutate(
+                &Store::open(&f.root()).unwrap(),
+                &f.runtime,
+                &request,
+                Action::ReserveProjectSession,
+                |capabilities| {
+                    assert!(capabilities.agents.contains(&Agent::Codex));
+                    probed = true;
+                    Err(io::Error::other("agent unavailable"))
+                },
+                &mut |_| Ok(())
+            )
+            .is_err()
+        );
+        assert!(probed);
+        assert_eq!(f.manifest(), before);
+        if !retry {
+            f.change(&request).unwrap();
+        }
+    }
+    fs::write(
+        project_root(&f, &project).join("repository/source/repository.git/HEAD"),
+        b"changed",
+    )
+    .unwrap();
+    assert!(f.change(&request).is_err());
+}
+
+#[test]
+fn session_publication_recovers_every_manifest_boundary_and_rechecks_source_before_commit() {
+    let (descriptor, bytes) = bytes();
+    for boundary in [Publication::Staged, Publication::Renamed, Publication::Durable] {
+        let f = Fixture::ready();
+        let project = agent_project(&f, "one", 8000);
+        import(&f, &request(&f, &project, descriptor.clone()), &bytes, &mut |_| Ok(())).unwrap();
+        let request = session_request(&f, &project, session(&descriptor.revision, Agent::Codex));
+        assert!(
+            mutate(
+                &Store::open(&f.root()).unwrap(),
+                &f.runtime,
+                &request,
+                Action::ReserveProjectSession,
+                |_| Ok(()),
+                &mut |at| {
+                    if at == boundary {
+                        Err(io::Error::other("interrupted session reservation"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            )
+            .is_err()
+        );
+        boot(&f).unwrap();
+        let receipt = f.change(&request).unwrap();
+        assert_eq!(f.change(&request).unwrap(), receipt);
+        assert_eq!(f.manifest().members[0].sessions.len(), 1);
+    }
+    let f = Fixture::ready();
+    let project = agent_project(&f, "one", 8000);
+    import(&f, &request(&f, &project, descriptor.clone()), &bytes, &mut |_| Ok(())).unwrap();
+    let request = session_request(&f, &project, session(&descriptor.revision, Agent::Codex));
+    let before = f.manifest();
+    assert!(
+        mutate(
+            &Store::open(&f.root()).unwrap(),
+            &f.runtime,
+            &request,
+            Action::ReserveProjectSession,
+            |_| Ok(()),
+            &mut |at| {
+                if at == Publication::Staged {
+                    fs::write(
+                        project_root(&f, &project).join("repository/source/repository.git/HEAD"),
+                        b"changed",
+                    )?;
+                }
+                Ok(())
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(f.manifest(), before);
 }
 
 #[test]

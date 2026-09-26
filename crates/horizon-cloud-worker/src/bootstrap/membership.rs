@@ -95,6 +95,7 @@ pub(super) fn mutate_with(
     checkpoint: &mut impl FnMut(Publication) -> io::Result<()>,
     namespace_checkpoint: &mut impl FnMut(namespaces::Boundary) -> io::Result<()>,
 ) -> io::Result<Receipt> {
+    let source_deadline = std::time::Instant::now() + horizon_cloud_protocol::membership::Source::WORKER_TIMEOUT;
     let encoded = store.read(BOOTSTRAP)?.ok_or_else(invalid)?;
     let bootstrap: Bootstrap = decode(&encoded)?;
     bootstrap.validate(store, runtime)?;
@@ -114,6 +115,9 @@ pub(super) fn mutate_with(
             namespaces::require_settled(store, &manifest, &receipt.identity)?;
             source::require_settled(store, &manifest, &receipt.identity)?;
         }
+        if matches!(payload, Request::ReserveSession { .. }) {
+            source::require_settled_until(store, &manifest, &receipt.identity, source_deadline)?;
+        }
         bootstrap.validate(store, runtime)?;
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
             return Err(invalid());
@@ -121,7 +125,7 @@ pub(super) fn mutate_with(
         Ok(())
     };
     verify()?;
-    if matches!(payload, Request::ImportSource { .. }) {
+    if matches!(payload, Request::ImportSource { .. } | Request::ReserveSession { .. }) {
         namespaces::repository(store, &manifest, &receipt.identity)?;
         let member = manifest
             .members
