@@ -151,6 +151,17 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
     };
     // Sold-out types are left out unless asked for.
     assert_eq!(gpu(Requirements::default()), ["NVIDIA RTX A5000", "NVIDIA L4"]);
+    let priced = offers(
+        &list(),
+        &Preferences::default(),
+        &Requirements {
+            gpu: true,
+            ..Requirements::default()
+        },
+    );
+    // A stopped GPU cloud keeps its 20 GB pod volume at the stopped rate.
+    assert_eq!((priced[0].currency, priced[0].monthly), ("USD", None));
+    assert!((priced[0].stopped_monthly - 20.0 * 0.20).abs() < 1e-9);
     assert_eq!(
         gpu(Requirements {
             include_unavailable: true,
