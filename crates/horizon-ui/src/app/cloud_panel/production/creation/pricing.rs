@@ -302,39 +302,40 @@ fn gpu_summary(
         );
     } else {
         gpu_rows(ui, &preferred, chosen);
-        if chosen_gpu.is_none()
-            && let Some(cheapest) = list.cheapest_available_gpu(within)
+    }
+    // Offered with or without preferences, so a sold-out or empty list never blocks a cloud.
+    if chosen_gpu.is_none()
+        && let Some(cheapest) = list.cheapest_available_gpu(within)
+    {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "Cheapest in stock now: {} · {} GB · {}/h",
+                cheapest.name,
+                cheapest.memory_gb,
+                money(cheapest.hourly)
+            ))
+            .size(12.0)
+            .color(theme::FG_SOFT()),
+        );
+        let label = RichText::new(format!("Use {} instead", cheapest.name)).color(theme::FG());
+        if ui
+            .add(
+                Button::new(label)
+                    .corner_radius(8)
+                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.25)),
+            )
+            .clicked()
         {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(format!(
-                    "Cheapest in stock now: {} · {} GB · {}/h",
-                    cheapest.name,
-                    cheapest.memory_gb,
-                    money(cheapest.hourly)
-                ))
-                .size(12.0)
-                .color(theme::FG_SOFT()),
-            );
-            let label = RichText::new(format!("Use {} instead", cheapest.name)).color(theme::FG());
-            if ui
-                .add(Button::new(label).corner_radius(8).fill(theme::blend(
-                    theme::PANEL_BG_ALT(),
-                    theme::ACCENT(),
-                    0.25,
-                )))
-                .clicked()
-            {
-                use_gpu = Some(cheapest.id.clone());
-            }
-            ui.label(
-                RichText::new(format!(
-                    "Only this cloud changes. Other GPU types are under Advanced; the defaults are {GPU_SETTING}."
-                ))
-                .size(11.0)
-                .color(theme::FG_DIM()),
-            );
+            use_gpu = Some(cheapest.id.clone());
         }
+        ui.label(
+            RichText::new(format!(
+                "Only this cloud changes. Other GPU types are under Advanced; the defaults are {GPU_SETTING}."
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM()),
+        );
     }
     // Storage is billed whichever GPU the cloud gets, so it shows even when none is in stock.
     costs::show(ui, list, profile, chosen_gpu.map(|(gpu, _)| (gpu.hourly, gpu.hourly)));

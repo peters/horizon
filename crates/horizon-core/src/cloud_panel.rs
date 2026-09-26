@@ -117,6 +117,16 @@ impl Placement {
         self.data_centers.is_empty() && self.gpu_types.is_empty()
     }
 
+    /// This placement for a profile with or without a GPU: a GPU type chosen while the
+    /// profile had one never reaches a CPU cloud.
+    #[must_use]
+    pub fn for_profile(&self, gpu: bool) -> Self {
+        Self {
+            gpu_types: if gpu { self.gpu_types.clone() } else { Vec::new() },
+            ..self.clone()
+        }
+    }
+
     /// Replaces the machine's `data_centers` and `gpu_types` with this placement's
     /// choices, where it made one.
     pub fn apply(&self, data_centers: &mut Vec<String>, gpu_types: &mut Vec<String>) {
@@ -740,6 +750,9 @@ mod tests {
             "a GPU choice alone keeps the data centers"
         );
         assert!(a5000.is_any() && !a5000.is_default());
+        assert_eq!(a5000.for_profile(true), a5000);
+        assert!(a5000.for_profile(false).is_default(), "a CPU cloud keeps no GPU choice");
+        assert_eq!(europe.for_profile(false), europe);
 
         let legacy = serde_json::json!({
             "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",

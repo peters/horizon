@@ -279,6 +279,10 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if let Some(config) = &form.profiles {
         ui.small(&form.repository);
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
+            // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
+            if !profile.gpu {
+                form.placement.gpu_types.clear();
+            }
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
             if let Some(size) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {

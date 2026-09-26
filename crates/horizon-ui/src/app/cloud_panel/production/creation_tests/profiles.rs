@@ -322,8 +322,9 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
     assert_eq!(launch.placement, europe, "the cloud keeps where it may be placed");
 }
 
-#[test]
-fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
+/// A GPU profile whose price list has only the RTX A5000 in stock, with `preferred`
+/// as the machine's GPU preferences.
+fn gpu_dialog(preferred: &[&str]) -> (tempfile::TempDir, egui::Context, HorizonApp) {
     use horizon_core::cloud_runtime::prices::{
         Availability, DataCenter, GpuPrice, Preferences, PriceList, RUNPOD_STORAGE,
     };
@@ -358,17 +359,24 @@ fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
     };
     let preferences = Preferences {
         cpu_flavors: Vec::new(),
-        gpu_types: vec!["NVIDIA RTX A6000".into()],
+        gpu_types: preferred.iter().map(|&gpu| gpu.to_owned()).collect(),
     };
     production.prices.answered(list, preferences, Vec::new());
-    // A tall window keeps the price card inside the dialog's scroll area.
-    let tall = |ctx: &egui::Context, app: &mut HorizonApp| {
-        let input = raw_input([1000.0, 1600.0], None);
-        ctx.run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
-            .discard_textures()
-    };
-    tall(&ctx, &mut app);
-    let output = tall(&ctx, &mut app);
+    (temp, ctx, app)
+}
+
+/// A tall window keeps the price card inside the dialog's scroll area.
+fn tall_frame(ctx: &egui::Context, app: &mut HorizonApp) -> egui::FullOutput {
+    let input = raw_input([1000.0, 1600.0], None);
+    ctx.run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
+        .discard_textures()
+}
+
+#[test]
+fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
+    let (_temp, ctx, mut app) = gpu_dialog(&["NVIDIA RTX A6000"]);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(&output, "None of your preferred GPUs is in stock"));
     click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
     assert_eq!(
@@ -376,7 +384,7 @@ fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
         ["NVIDIA RTX A5000"],
         "only this cloud changes"
     );
-    let output = tall(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(
         &output,
         "RTX A5000 · 24 GB · chosen for this cloud · Secure Cloud"
@@ -385,6 +393,20 @@ fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
     finish_creation(&ctx, &mut app);
     let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
     assert_eq!(launch.placement.gpu_types, ["NVIDIA RTX A5000"]);
+}
+
+#[test]
+fn a_gpu_in_stock_is_offered_without_preferences_and_dropped_for_a_cpu_profile() {
+    let (_temp, ctx, mut app) = gpu_dialog(&[]);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
+    assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
+    // Reread as a CPU profile, the GPU choice no longer applies.
+    let config = app.cloud_prototype.production.profiles.as_mut().unwrap();
+    config.profiles.get_mut("development").unwrap().gpu = false;
+    tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.placement.gpu_types.is_empty());
 }
 
 #[test]
