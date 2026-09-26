@@ -527,10 +527,10 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 
 1. **Ctrl+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
 2. Click the address bar, type any site (`https://example.com`, a docs page, or `http://127.0.0.1:3000`), and press Enter.
-3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. Horizon looks for Chrome, Chromium, Edge, Brave, Firefox, and `safaridriver` in the usual places. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
+3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. On Windows it searches for `chrome.exe`, `msedge.exe`, and `chromium.exe`, plus the usual Chrome and Edge install folders; set `browser.command` when you want Brave there. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
 4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
 
-Chromium and Firefox start headless and paint into the panel. Each panel keeps its own profile under `~/.horizon/browser-profiles`. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
+Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
 
 ```yaml
 workspaces:
@@ -556,7 +556,7 @@ That needs a working desktop. The native window can appear briefly at startup an
 
 The same kind of panel can show a page running on BrowserStack: a desktop browser, or a physical phone. Horizon allocates the session, draws the live page, and releases the device when the panel closes.
 
-Name the account and the targets in `~/.horizon/config.yaml`. The file stores credential references, never the access key. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers**, enter the BrowserStack username and access key, and save them to the OS credential store (or keep them for this run only). The same tab shows that account's running, allowed, and queued sessions.
+Name the account and the targets in `~/.horizon/config.yaml`. The file stores credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
 
 ```yaml
 browser:
@@ -588,12 +588,11 @@ browser:
         device: { kind: physical, model: iPhone 16, os_version: "18" }
 ```
 
-`device.kind: any` skips the physical-or-emulated check. A model or OS version on the target is still checked against BrowserStack's session record. `windows_chrome` is a desktop browser because it names Chrome on Windows and leaves the phone model empty. `device.kind: physical` requires a real device, and Horizon keeps that panel only when the session record confirms it. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Another provider block, with its own username and access key, is a separate account. Reusing the same credential references shares one account on purpose.
+`device.kind: any` skips the physical-or-emulated check. A model or OS version on the target is still checked against BrowserStack's session record. `windows_chrome` is a desktop browser because it names Chrome on Windows and leaves the phone model empty. `device.kind: physical` requires a real device, and Horizon keeps that panel only when the session record confirms it. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Two targets on this provider share the account. A second provider shares it when it uses the same endpoint and the same OS-store slot, or the same session reference at that endpoint. A different slot stores a different secret.
 
-An agent panel in the workspace opens the target. Ask it for the page, and it calls `browser_create` with `target` set to `windows_chrome` or `ios_phone` and `url` set to the address. A checked plan does the same thing. Build `horizon-browser` from source, then run the plan from a terminal Horizon launched so it uses this board's providers and credentials:
+An agent panel in the workspace opens the target. Ask it for the page. It calls `browser_create` with `target` set to `windows_chrome` or `ios_phone` and `url` set to the address. Codex, Claude, and default Grok panels already have that tool. A shell panel does not: it has no browser identity, so `browser_create` from a shell cannot use this board's providers. The same call as a checked plan, run from the agent panel after `cargo build -p horizon-browser-cli`:
 
 ```bash
-cargo build -p horizon-browser-cli
 target/debug/horizon-browser run open-site.json
 ```
 
