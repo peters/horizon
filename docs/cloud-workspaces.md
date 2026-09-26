@@ -22,6 +22,12 @@ CPU availability is queried for the requested vCPU count and Pod product; a posi
 catalog answer is not a reservation. Configured compute preferences are tried in
 order only after a definite rejection. Ambiguous creation responses remain fenced.
 
+The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
+It uses the provider-injected Pod-scoped credential, which the live qualification
+for #966 found was refused by REST and accepted by GraphQL. This migration changes
+the shared account-credential adapter; it does not put account credentials inside
+workers or remove that independently qualified idle-stop path.
+
 CPU workspaces require standard network storage and an account with no Serverless
 endpoints. The v2 API does not expose complete mounts for stale or scaled-down
 Serverless workers. Horizon therefore refuses new CPU storage allocations, initial

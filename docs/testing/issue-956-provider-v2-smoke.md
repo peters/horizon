@@ -4,8 +4,8 @@ Temporary validation plan for #956. Record the final commit, executable hashes,
 image indices and embedded helper hashes before execution. Every behavior-changing
 push invalidates affected smoke evidence. Keep evidence private and publish only
 sanitized results. This plan qualifies the migration PR, not every outstanding item
-in #813/#790. The worker updater fix in #945 is a separate dependency: record any
-combined integration candidate distinctly and do not credit it as exact-head proof.
+in #813/#790. The current base includes the worker updater fix from #945. Rebuild
+all worker images after rebasing; earlier image hashes do not qualify the new base.
 
 ## Preconditions and evidence
 
