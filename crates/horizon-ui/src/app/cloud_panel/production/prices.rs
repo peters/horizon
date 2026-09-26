@@ -41,28 +41,49 @@ impl State {
         if cfg!(test) {
             return;
         }
-        let stale = |at: Instant| at.elapsed() >= FRESH;
         if self.list_job.is_none() && self.list.as_ref().is_none_or(|list| stale(list.at)) && self.list_error.is_none()
         {
             self.list_job = Some(spawn(root, ctx, |settings, cancel| {
                 prices::price_list(settings, cancel)
             }));
         }
-        if profile.gpu {
-            return;
-        }
         let key = key(profile);
         let current = self
             .sizes
             .get(&key)
             .is_some_and(|size| size.as_ref().is_ok_and(|size| !stale(size.at)));
-        if !current && !self.size_jobs.contains_key(&key) && !matches!(self.sizes.get(&key), Some(Err(_))) {
+        if !profile.gpu
+            && !current
+            && !self.size_jobs.contains_key(&key)
+            && !matches!(self.sizes.get(&key), Some(Err(_)))
+        {
             let profile = profile.clone();
             let job = spawn(root, ctx, move |settings, cancel| {
                 prices::size_availability(settings, &profile, cancel)
             });
             self.size_jobs.insert(key, job);
         }
+        // Fetches repaint when they finish; an idle dialog still has to wake when its prices go stale.
+        if let Some(wait) = self.until_stale(profile) {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// Time until the prices or stock shown for `profile` go stale, unless a fetch is running.
+    fn until_stale(&self, profile: &Profile) -> Option<Duration> {
+        let list = self
+            .list
+            .as_ref()
+            .filter(|_| self.list_job.is_none())
+            .map(|list| list.at);
+        let size = Some(key(profile))
+            .filter(|key| !profile.gpu && !self.size_jobs.contains_key(key))
+            .and_then(|key| self.sizes.get(&key)?.as_ref().ok())
+            .map(|size| size.at);
+        list.into_iter()
+            .chain(size)
+            .map(|at| FRESH.saturating_sub(at.elapsed()))
+            .min()
     }
 
     /// Collects finished fetches.
@@ -76,7 +97,11 @@ impl State {
                     });
                     self.list_error = None;
                 }
-                Err(error) => self.list_error = Some(error),
+                // Prices that could not be refreshed are no longer shown as current.
+                Err(error) => {
+                    self.list = None;
+                    self.list_error = Some(error);
+                }
             }
         }
         let keys: Vec<SizeKey> = self.size_jobs.keys().copied().collect();
@@ -101,11 +126,13 @@ impl State {
         }
     }
 
-    /// Forgets fetched prices and errors so the next frame asks again.
+    /// Forgets fetched prices, errors and checks in flight so the next frame asks again.
     pub fn refresh(&mut self) {
         self.list = None;
         self.list_error = None;
+        self.list_job = None;
         self.sizes.clear();
+        self.size_jobs.clear();
     }
 
     pub fn loading(&self) -> bool {
@@ -123,6 +150,10 @@ impl State {
             .get(&key(&sized))
             .map(|size| size.as_ref().map(|size| size.value).map_err(String::as_str))
     }
+}
+
+fn stale(at: Instant) -> bool {
+    at.elapsed() >= FRESH
 }
 
 fn key(profile: &Profile) -> SizeKey {
@@ -171,6 +202,20 @@ mod tests {
         }
     }
 
+    fn profile() -> Profile {
+        horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n",
+        )
+        .unwrap()
+        .profiles["dev"]
+        .clone()
+    }
+
+    const AVAILABLE: SizeAvailability = SizeAvailability {
+        best: Availability::High,
+        centers: 2,
+    };
+
     #[test]
     fn finished_fetches_are_kept_until_a_refresh_and_failures_wait_for_one() {
         let mut state = State::default();
@@ -201,17 +246,9 @@ mod tests {
 
     #[test]
     fn size_stock_is_looked_up_for_the_chosen_size() {
-        let profile = horizon_core::cloud_panel::CloudConfig::parse(
-            "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n",
-        )
-        .unwrap()
-        .profiles["dev"]
-        .clone();
+        let profile = profile();
         let mut state = State::default();
-        let available = SizeAvailability {
-            best: Availability::High,
-            centers: 2,
-        };
+        let available = AVAILABLE;
         let small = Profile {
             memory_gb: 16,
             ..profile.clone()
@@ -229,5 +266,61 @@ mod tests {
         assert_eq!(state.size(&profile, (4, 8)), None);
         state.refresh();
         assert_eq!(state.size(&profile, (8, 16)), None);
+    }
+
+    #[test]
+    fn a_failed_refresh_hides_old_prices_and_refresh_drops_checks_in_flight() {
+        let mut state = State {
+            list: Some(Fetched {
+                value: (list(), Preferences::default()),
+                at: Instant::now(),
+            }),
+            ..State::default()
+        };
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err("RunPod is unreachable".into())).unwrap();
+        state.poll();
+        assert!(state.list.is_none());
+        assert_eq!(state.list_error.as_deref(), Some("RunPod is unreachable"));
+
+        let (list_tx, rx) = channel();
+        state.list_job = Some(rx);
+        let (size_tx, rx) = channel();
+        state.size_jobs.insert(key(&profile()), rx);
+        state.refresh();
+        assert!(!state.loading() && state.list_error.is_none() && state.size_jobs.is_empty());
+        assert!(list_tx.send(Ok((list(), Preferences::default()))).is_err());
+        assert!(size_tx.send(Ok(AVAILABLE)).is_err());
+    }
+
+    #[test]
+    fn an_idle_dialog_wakes_when_its_prices_go_stale() {
+        let cpu = profile();
+        let gpu = Profile {
+            gpu: true,
+            ..cpu.clone()
+        };
+        let mut state = State::default();
+        assert_eq!(state.until_stale(&cpu), None);
+        state.sizes.insert(
+            key(&cpu),
+            Ok(Fetched {
+                value: AVAILABLE,
+                at: Instant::now(),
+            }),
+        );
+        let wait = state.until_stale(&cpu).unwrap();
+        assert!(wait <= FRESH && wait > Duration::from_mins(14));
+        assert_eq!(state.until_stale(&gpu), None);
+
+        state.list = Some(Fetched {
+            value: (list(), Preferences::default()),
+            at: Instant::now(),
+        });
+        assert!(state.until_stale(&gpu).is_some());
+        let (_tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert_eq!(state.until_stale(&gpu), None);
     }
 }

@@ -6,7 +6,7 @@ use super::super::{
 use crate::theme;
 use egui::{
     Align, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, Sense, Stroke, TextFormat, Ui, Vec2,
-    text::LayoutJob,
+    WidgetInfo, WidgetType, text::LayoutJob,
 };
 use horizon_core::cloud_runtime::prices::{self, Availability, GpuPrice, Preferences, PriceList, Profile};
 
@@ -177,7 +177,7 @@ fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Pref
     let storage = f64::from(profile.storage.volume_gb) * list.storage_gb_month;
     estimates(
         ui,
-        low,
+        (low, high),
         Some(&(
             format!("{}/mo", money(storage)),
             format!(
@@ -270,7 +270,7 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
         );
     }
     if let Some(gpu) = chosen {
-        estimates(ui, gpu.hourly, None);
+        estimates(ui, (gpu.hourly, gpu.hourly), None);
     }
 }
 
@@ -301,13 +301,12 @@ fn pill(ui: &mut Ui, stock: &Stock, compact: bool) {
                 Availability::Low => ("Low stock", theme::PALETTE_YELLOW()),
                 Availability::None => ("Out of stock", theme::PALETTE_RED()),
             };
-            let hover = centers.map(|centers| match centers {
-                1 => "In stock in 1 allowed data center".to_owned(),
-                count => format!("In stock in {count} allowed data centers"),
-            });
-            (text.to_owned(), color, hover)
+            (text.to_owned(), color, centers.map(in_centers))
         }
     };
+    let description = hover
+        .as_ref()
+        .map_or_else(|| text.clone(), |hover| format!("{text}. {hover}"));
     // Painted at its own size, so it stays compact in any parent layout.
     let galley = ui.painter().layout_no_wrap(text, FontId::proportional(11.5), color);
     let padding = Vec2::new(8.0, if compact { 2.0 } else { 4.0 });
@@ -326,20 +325,31 @@ fn pill(ui: &mut Ui, stock: &Stock, compact: bool) {
     painter.circle_filled(egui::pos2(left + DOT / 2.0, rect.center().y), DOT / 2.0, color);
     let text_top = rect.center().y - galley.size().y / 2.0;
     painter.galley(egui::pos2(left + DOT + GAP, text_top), galley, color);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, &description));
     if let Some(hover) = hover {
         response.on_hover_text(hover);
     }
 }
 
-fn estimates(ui: &mut Ui, hourly: f64, storage: Option<&(String, String)>) {
+fn in_centers(centers: usize) -> String {
+    match centers {
+        0 => "Out of stock in every allowed data center".to_owned(),
+        1 => "In stock in 1 allowed data center".to_owned(),
+        count => format!("In stock in {count} allowed data centers"),
+    }
+}
+
+/// Totals for `hourly`, the lowest and highest price a deployment may be charged.
+fn estimates(ui: &mut Ui, hourly: (f64, f64), storage: Option<&(String, String)>) {
     ui.add_space(10.0);
     let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
     ui.painter().rect_filled(line, 0.0, theme::BORDER_SUBTLE());
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 32.0;
-        stat(ui, "8 HOURS", &money(hourly * 8.0), None);
-        stat(ui, "24 HOURS", &money(hourly * 24.0), None);
+        let (low, high) = hourly;
+        stat(ui, "8 HOURS", &range(low * 8.0, high * 8.0), None);
+        stat(ui, "24 HOURS", &range(low * 24.0, high * 24.0), None);
         if let Some((value, hover)) = storage {
             stat(ui, "STORAGE", value, Some(hover));
         }
@@ -391,11 +401,13 @@ fn money(value: f64) -> String {
     }
 }
 
+/// One amount when both ends read the same once rounded, otherwise a range.
 fn range(low: f64, high: f64) -> String {
-    if (high - low).abs() < 0.005 {
-        money(low)
+    let (low, high) = (money(low), money(high));
+    if low == high {
+        low
     } else {
-        format!("{}–{}", money(low), money(high).trim_start_matches('$'))
+        format!("{low}–{}", high.trim_start_matches('$'))
     }
 }
 
@@ -418,7 +430,17 @@ mod tests {
         assert_eq!(money(242.0), "$242");
         assert_eq!(range(0.24, 0.24), "$0.24");
         assert_eq!(range(0.24, 0.28), "$0.24–0.28");
+        assert_eq!(range(0.244, 0.248), "$0.24–0.25");
+        assert_eq!(range(0.241, 0.244), "$0.24");
+        assert_eq!(range(1.92, 2.24), "$1.92–2.24");
         assert_eq!(ago(std::time::Duration::from_secs(20)), "just now");
         assert_eq!(ago(std::time::Duration::from_secs(150)), "2 min ago");
+    }
+
+    #[test]
+    fn stock_details_name_the_data_centers() {
+        assert_eq!(in_centers(0), "Out of stock in every allowed data center");
+        assert_eq!(in_centers(1), "In stock in 1 allowed data center");
+        assert_eq!(in_centers(3), "In stock in 3 allowed data centers");
     }
 }
