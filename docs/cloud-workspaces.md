@@ -177,8 +177,13 @@ with the date they were checked. Storage is shown for GPU profiles even when non
 of their GPUs is in stock. For GPU profiles the card also lists your
 preferred GPU types (`gpu_types` in the settings file) in the order Horizon
 requests them, marks the first one in stock, shows types the catalog does not
-list as not offered, and suggests the cheapest GPU in stock when none of them
-is. The 8 and 24 hour estimates are ranges when the size may land on flavors
+list as not offered, and offers the cheapest GPU in stock when none of them is:
+**Use <GPU> instead** requests that GPU type for this cloud only. **Advanced**
+also lists every GPU type in stock where the cloud may go, cheapest first with
+its memory and hourly price, next to **Your preferences**. A GPU type chosen
+this way is saved with the cloud like its region, replaces the `gpu_types`
+setting for every attempt, retry and redeploy of that cloud, and is named on its
+card. The 8 and 24 hour estimates are ranges when the size may land on flavors
 with different prices. Prices come
 from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
 is open; Refresh fetches them at once. Only providers Horizon can deploy to show

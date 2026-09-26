@@ -36,6 +36,18 @@ pub(super) fn where_it_lives(
     if let Some(text) = describe(launch, state, region_of) {
         ui.small(text);
     }
+    if let Some(text) = gpu_choice(launch) {
+        ui.small(text);
+    }
+}
+
+/// The GPU types chosen for this cloud in New cloud, when they replace the preferences.
+fn gpu_choice(launch: &CloudLaunch) -> Option<String> {
+    match launch.placement.gpu_types.as_slice() {
+        [] => None,
+        [one] => Some(format!("GPU: {one}")),
+        many => Some(format!("GPUs: {}", many.join(", "))),
+    }
 }
 
 fn describe(
@@ -104,6 +116,7 @@ mod tests {
         let europe = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(describe(&launch(Placement::default()), None, &unknown), None);
         assert_eq!(
@@ -132,10 +145,21 @@ mod tests {
         let one = Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
+            gpu_types: Vec::new(),
         };
         assert_eq!(
             describe(&launch(one), None, &unknown).as_deref(),
             Some("Data center: EU-RO-1 · Europe")
         );
+    }
+
+    #[test]
+    fn the_card_names_a_gpu_chosen_for_the_cloud() {
+        assert_eq!(gpu_choice(&launch(Placement::default())), None);
+        let a5000 = Placement {
+            gpu_types: vec!["NVIDIA RTX A5000".into()],
+            ..Placement::default()
+        };
+        assert_eq!(gpu_choice(&launch(a5000)).as_deref(), Some("GPU: NVIDIA RTX A5000"));
     }
 }

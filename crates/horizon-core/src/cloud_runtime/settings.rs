@@ -49,12 +49,13 @@ impl Settings {
     }
 
     /// The machine settings narrowed to one cloud's placement, so every attempt,
-    /// retry and redeploy of that cloud asks for the data centers chosen for it.
+    /// retry and redeploy of that cloud asks for the data centers and GPU types
+    /// chosen for it.
     /// # Errors
     /// As [`Settings::load`].
     pub fn for_cloud(path: &Path, placement: &crate::cloud_panel::Placement) -> Result<Self> {
         let mut settings = Self::load(path)?;
-        placement.apply(&mut settings.data_centers);
+        placement.apply(&mut settings.data_centers, &mut settings.gpu_types);
         Ok(settings)
     }
     /// # Errors
@@ -144,7 +145,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_cloud_asks_only_for_the_data_centers_chosen_for_it() {
+    fn a_cloud_asks_only_for_the_data_centers_and_gpu_types_chosen_for_it() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.json");
         let absolute = |name: &str| root.path().join(name);
@@ -163,8 +164,11 @@ mod tests {
         let europe = crate::cloud_panel::Placement {
             region: Some("Europe".into()),
             data_centers: vec!["EU-RO-1".into()],
+            gpu_types: vec!["NVIDIA RTX A5000".into()],
         };
-        assert_eq!(Settings::for_cloud(&path, &europe).unwrap().data_centers, ["EU-RO-1"]);
+        let settings = Settings::for_cloud(&path, &europe).unwrap();
+        assert_eq!(settings.data_centers, ["EU-RO-1"]);
+        assert_eq!(settings.gpu_types, ["NVIDIA RTX A5000"]);
     }
 
     #[test]
