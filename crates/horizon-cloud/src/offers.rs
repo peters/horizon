@@ -105,7 +105,8 @@ pub struct Offer {
     pub currency: &'static str,
     /// `cpu` or `gpu`.
     pub kind: &'static str,
-    /// The CPU size as `cpu-<vCPU>-<GB>`, or the GPU type ID to request.
+    /// What to request: for `RunPod`, the CPU size as `cpu-<vCPU>-<GB>` or the GPU type
+    /// ID; for Hetzner, the server type, such as `cx43`, in `location`.
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
