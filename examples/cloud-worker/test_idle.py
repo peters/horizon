@@ -1,4 +1,5 @@
 """A dedicated worker stops itself only after its whole idle period without activity."""
+import json
 from pathlib import Path
 import runpy
 import subprocess
@@ -52,16 +53,23 @@ class IdleTests(unittest.TestCase):
                 MODULE['main'].__globals__['passive'].assert_called_once()
 
     def test_stop_targets_only_this_worker_with_its_own_credential(self):
-        response = mock.MagicMock(status=200)
-        response.__enter__.return_value = response
-        with mock.patch('urllib.request.urlopen', return_value=response) as opened:
+        def reply(payload):
+            response = mock.MagicMock(status=200)
+            response.__enter__.return_value = response
+            response.read.return_value = json.dumps(payload).encode()
+            return response
+        stopped = {'data': {'podStop': {'id': 'pod123', 'desiredStatus': 'EXITED'}}}
+        with mock.patch('urllib.request.urlopen', return_value=reply(stopped)) as opened:
             self.assertTrue(MODULE['stop_worker']('pod123', 'pod-scoped'))
         request = opened.call_args[0][0]
-        self.assertEqual(request.full_url, 'https://rest.runpod.io/v1/pods/pod123/stop')
-        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.full_url, 'https://api.runpod.io/graphql')
+        self.assertEqual(json.loads(request.data)['variables'], {'pod': 'pod123'})
         self.assertEqual(request.get_header('Authorization'), 'Bearer pod-scoped')
         self.assertEqual(request.get_header('User-agent'), 'horizon-worker-idle/1')
-
+        for refused in [{'errors': [{'message': 'denied'}]}, {'data': {'podStop': None}},
+                        {'data': {'podStop': {'id': 'other'}}}]:
+            with mock.patch('urllib.request.urlopen', return_value=reply(refused)):
+                self.assertFalse(MODULE['stop_worker']('pod123', 'pod-scoped'))
 
 if __name__ == '__main__':
     unittest.main()

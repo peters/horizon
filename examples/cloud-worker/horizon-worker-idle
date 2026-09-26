@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Stop this dedicated worker after its configured period without agent activity."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -10,7 +11,9 @@ import urllib.request
 
 
 CPU_STAT = Path('/sys/fs/cgroup/cpu.stat')
-STOP_URL = 'https://rest.runpod.io/v1/pods/{}/stop'
+# The pod credential is refused by the REST API but accepted by GraphQL, as runpodctl uses it.
+GRAPHQL_URL = 'https://api.runpod.io/graphql'
+STOP = 'mutation Stop($pod: String!) { podStop(input: {podId: $pod}) { id desiredStatus } }'
 POLL_SECONDS = 60
 RETRY_SECONDS = 600
 # Average cores used by the container that still count as work, such as a quiet build.
@@ -58,12 +61,18 @@ class Activity:
 
 
 def stop_worker(pod_id, key):
-    request = urllib.request.Request(STOP_URL.format(pod_id), data=b'{}', method='POST',
+    body = json.dumps({'query': STOP, 'variables': {'pod': pod_id}}).encode()
+    request = urllib.request.Request(GRAPHQL_URL, data=body, method='POST',
                                      headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
                                               # The provider's edge rejects the default Python agent.
                                               'User-Agent': 'horizon-worker-idle/1'})
     with urllib.request.urlopen(request, timeout=30) as response:
-        return 200 <= response.status < 300
+        reply = json.load(response)
+    stopped = (reply.get('data') or {}).get('podStop') or {}
+    if reply.get('errors') or stopped.get('id') != pod_id:
+        print('Stop request refused: ' + json.dumps(reply.get('errors'))[:300], flush=True)
+        return False
+    return True
 
 
 def passive(reason):
@@ -90,11 +99,12 @@ def main():
         os.sync()
         try:
             stopped = stop_worker(pod_id, key)
-        except (OSError, urllib.error.URLError):
+        except (OSError, ValueError, urllib.error.URLError) as error:
+            print('Stop request failed: ' + type(error).__name__, flush=True)
             stopped = False
         if stopped:
             passive('stop requested')
-        print('Stop request failed; retrying later', flush=True)
+        print('Retrying the stop later', flush=True)
         time.sleep(RETRY_SECONDS)
 
 
