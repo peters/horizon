@@ -9,6 +9,7 @@ mod creation_tests;
 mod launch;
 mod lifecycle;
 mod machine_size;
+mod offers;
 mod presentation;
 mod prices;
 mod progress;

@@ -12,6 +12,7 @@ pub mod deployment;
 pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
+pub mod offers;
 pub mod owner;
 pub mod prices;
 pub mod progress;

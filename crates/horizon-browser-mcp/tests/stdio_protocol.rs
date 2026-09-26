@@ -188,7 +188,7 @@ fn assert_device_panel_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(23));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(24));
     assert_catalog_contract(tools);
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());

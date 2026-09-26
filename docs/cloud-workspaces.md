@@ -191,6 +191,17 @@ is open; Refresh fetches them at once. Only providers Horizon can deploy to show
 prices. Details such as how many data centers have stock are written in the card
 rather than in tooltips, which would draw below the dialog.
 
+Agents in Horizon panels can ask for the same prices through the `cloud_offers`
+tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
+Europe for 10 hours". It returns up to 50 offers, cheapest estimated total first:
+each with its hourly price, an estimate for the expected hours including 20 GB (or
+the requested size) of workspace storage, availability (CPU sizes are confirmed
+when a cloud is created), the regions with that GPU in stock, and that it runs on
+provider-operated hosts. The running Horizon answers, fetching prices when they are
+missing or older than 15 minutes, and says how old they are. Without a running
+Horizon or cloud settings the tool fails rather than returning old prices. It only
+reads prices; renting stays with the person.
+
 When the allowed data centers span more than one region, New cloud also shows a
 **Region** row: **Any region** (the default, where Horizon picks a data center
 with stock) and each region with how many of its data centers have the chosen

@@ -81,6 +81,22 @@ impl State {
         }
     }
 
+    /// Fetches the price list when there is none or it is older than [`FRESH`], for
+    /// answering agents' offer requests with current prices.
+    pub fn request_fresh_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// The price list while it is current, never an older one.
+    pub fn fresh_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
+        self.list.as_ref().filter(|list| !stale(list.at))
+    }
+
     /// The region of `data_center` as people say it, once a price list has been fetched.
     pub fn region_of(&self, data_center: &str) -> Option<&str> {
         self.regions.get(data_center).map(String::as_str)

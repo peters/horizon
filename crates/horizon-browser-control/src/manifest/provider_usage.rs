@@ -26,6 +26,9 @@ pub struct UsageRequest {
     pub deadline_at_millis: i64,
     #[serde(default)]
     pub catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
+    /// Requirements for ranked cloud compute offers, validated by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_offers: Option<serde_json::Value>,
     claimed: bool,
 }
 
@@ -37,6 +40,9 @@ pub struct UsageResult {
     pub providers: Vec<ProviderUsageSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<horizon_browser::provider_catalog::CatalogPage>,
+    /// Ranked cloud compute offers with the time the host observed their prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offers: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
@@ -49,6 +55,7 @@ impl UsageRequest {
             host_instance: self.host_instance.clone(),
             providers,
             catalog: None,
+            offers: None,
             error,
         }
     }
@@ -116,6 +123,28 @@ pub fn enqueue_catalog(
     )
 }
 
+/// Queues a read-only request for ranked cloud compute offers, answered by the live host
+/// from prices it observed; nothing is rented.
+/// # Errors
+/// Invalid host identity, oversized requirements, a full queue or unavailable private storage.
+pub fn enqueue_cloud_offers(identity: AgentIdentity<'_>, requirements: serde_json::Value) -> std::io::Result<String> {
+    enqueue_offers_at(BrowserRuntimePaths::resolve().root(), identity, requirements)
+}
+
+fn enqueue_offers_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    requirements: serde_json::Value,
+) -> std::io::Result<String> {
+    if !requirements.is_object() || serde_json::to_vec(&requirements).map_or(true, |bytes| bytes.len() > 4096) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud offer requirements",
+        ));
+    }
+    enqueue_request_at(root, identity, None, None, Some(requirements))
+}
+
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
     enqueue_query_at(root, identity, provider, None)
 }
@@ -125,6 +154,16 @@ fn enqueue_query_at(
     identity: AgentIdentity<'_>,
     provider: Option<String>,
     catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
+) -> std::io::Result<String> {
+    enqueue_request_at(root, identity, provider, catalog, None)
+}
+
+fn enqueue_request_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    provider: Option<String>,
+    catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
+    cloud_offers: Option<serde_json::Value>,
 ) -> std::io::Result<String> {
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
@@ -167,6 +206,7 @@ fn enqueue_query_at(
         deadline_at_millis: super::now_millis() + 15_000,
         claimed: false,
         catalog,
+        cloud_offers,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
@@ -323,6 +363,29 @@ mod tests {
             offset: 0,
         };
         assert!(enqueue_query_at(root.path(), identity, Some("account".into()), Some(invalid)).is_err());
+    }
+
+    #[test]
+    fn cloud_offer_requests_carry_their_requirements_and_reject_non_objects() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let requirements = serde_json::json!({"gpu": true, "max_hourly": 0.5});
+        let id = enqueue_offers_at(root.path(), identity, requirements.clone()).unwrap();
+        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        let request = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(
+            (request.cloud_offers.as_ref(), request.catalog.is_none()),
+            (Some(&requirements), true)
+        );
+        let mut result = request.result(Vec::new(), None);
+        result.offers = Some(serde_json::json!({"offers": []}));
+        complete_at(root.path(), &result).unwrap();
+        let taken = take_at(root.path(), identity, &id).unwrap().unwrap();
+        assert_eq!(taken.offers, Some(serde_json::json!({"offers": []})));
+        for invalid in [serde_json::json!([1]), serde_json::json!({"text": "x".repeat(5000)})] {
+            assert!(enqueue_offers_at(root.path(), identity, invalid).is_err());
+        }
+        assert!(enqueue_offers_at(root.path(), AgentIdentity::new("horizon:agent", None), requirements).is_err());
     }
 
     #[test]
