@@ -191,6 +191,14 @@ class ClientTests(unittest.TestCase):
                            '{"at": -3, "reason": "negative"}\n{"at": true, "reason": "flag"}\n'
                            '{"at": 4, "reason": "line\\nbreak"}\n{"at": 5, "reason": "' + 'x' * 201 + '"}\n')
             self.assertEqual(STOP['last_stop'](log), {'at': 1, 'reason': 'first', 'agent': '', 'session': ''})
+            # A log with lines but none readable is not "no stop recorded" either.
+            corrupt = Path(root, 'corrupt.jsonl')
+            corrupt.write_text('broken\n{"at": -1, "reason": "x"}\n')
+            with self.assertRaises(OSError):
+                STOP['last_stop'](corrupt)
+            empty = Path(root, 'empty.jsonl')
+            empty.write_text('\n')
+            self.assertIsNone(STOP['last_stop'](empty))
             # A log that exists but cannot be read is not "no stop recorded".
             unreadable = Path(root, 'directory.jsonl')
             unreadable.mkdir()
