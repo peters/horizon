@@ -89,6 +89,17 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_offers",
+        description = "Rank cloud compute offers Horizon can rent for given requirements, cheapest estimated total first, without renting anything. Pass minimum vCPU and memory for CPU workers, or gpu=true with an optional minimum GPU memory or GPU type, plus an optional maximum hourly price, expected hours, workspace storage in GB and region. Each offer has its hourly price (for a CPU size, the highest among the flavors Horizon requests for it, since the provider picks one), an estimated total for the hours including workspace storage, availability (CPU sizes are confirmed when a cloud is created), regions with GPU stock, and host trust. Prices come from the running Horizon, which fetches them when they are older than 15 minutes; the result says when they were observed. Without a running Horizon or cloud settings the tool returns an error rather than old prices. Offers are informational, never a reservation."
+    )]
+    async fn cloud_offers(
+        &self,
+        Parameters(input): Parameters<crate::controller::provider_usage::CloudOffersInput>,
+    ) -> Result<Json<serde_json::Value>, String> {
+        self.controller.cloud_offers(input).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_provider_devices",
         description = "Discover any browser, OS and device combination currently offered by a configured remote provider account, without allocating a session. Pass provider and optional search words and offset. Returns at most 50 combinations and next_offset; pass a returned target to browser_create with backend omitted. No preconfigured device target is needed. Availability in this catalog is not account entitlement, live capacity or a reservation. The host uses only its configured or explicitly granted credentials; never supply credentials, endpoints or raw capabilities."
     )]
@@ -654,6 +665,7 @@ mod tests {
                 "browser_video",
                 "browser_visibility",
                 "browser_wait",
+                "cloud_offers",
                 "device_panel",
             ]
         );

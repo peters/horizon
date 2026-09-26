@@ -14,6 +14,7 @@ mod browser_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_scroll;
+mod cloud_offers;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud_panel;
 mod detached_viewports;

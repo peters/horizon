@@ -15,6 +15,8 @@ use std::{
 
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_mins(15);
+/// How long agents' requests get the same failed price fetch before one asks again.
+const RETRY_FAILED: Duration = Duration::from_secs(30);
 
 pub(super) struct Fetched<T> {
     pub value: T,
@@ -30,6 +32,8 @@ type Job<T> = Receiver<Result<Fetched<T>, String>>;
 pub(super) struct State {
     pub list: Option<Fetched<(PriceList, Preferences)>>,
     pub list_error: Option<String>,
+    /// When the price fetch behind `list_error` failed.
+    pub list_failed_at: Option<Instant>,
     list_job: Option<Job<(PriceList, Preferences)>>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
@@ -81,6 +85,33 @@ impl State {
         }
     }
 
+    /// Fetches the price list when there is none or it is older than [`FRESH`], for
+    /// answering agents' offer requests with current prices.
+    pub fn request_fresh_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// The failed price fetch agents' requests report, the same one for every request
+    /// that waited on it. Once it is older than [`RETRY_FAILED`] it is forgotten, so the
+    /// next request asks the provider again.
+    pub fn recent_list_error(&mut self) -> Option<&str> {
+        if self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
+            self.list_error = None;
+            self.list_failed_at = None;
+        }
+        self.list_error.as_deref()
+    }
+
+    /// The price list while it is current, never an older one.
+    pub fn fresh_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
+        self.list.as_ref().filter(|list| !stale(list.at))
+    }
+
     /// The region of `data_center` as people say it, once a price list has been fetched.
     pub fn region_of(&self, data_center: &str) -> Option<&str> {
         self.regions.get(data_center).map(String::as_str)
@@ -129,11 +160,13 @@ impl State {
                 Ok(fetched) => {
                     self.accept(fetched);
                     self.list_error = None;
+                    self.list_failed_at = None;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
                 Err(error) => {
                     self.list = None;
                     self.list_error = Some(error);
+                    self.list_failed_at = Some(Instant::now());
                 }
             }
         }
@@ -157,6 +190,7 @@ impl State {
     pub fn refresh(&mut self) {
         self.list = None;
         self.list_error = None;
+        self.list_failed_at = None;
         self.list_job = None;
         self.sizes.clear();
         self.size_jobs.clear();

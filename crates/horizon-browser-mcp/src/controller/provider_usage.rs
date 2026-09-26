@@ -80,3 +80,70 @@ impl BrowserController {
         }
     }
 }
+
+/// Requirements for `cloud_offers`. Every field is optional.
+#[derive(Debug, Deserialize, serde::Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CloudOffersInput {
+    /// Minimum vCPUs.
+    pub min_vcpu: Option<u16>,
+    /// Minimum memory in GB.
+    pub min_memory_gb: Option<u16>,
+    /// GPU workers instead of CPU workers.
+    #[serde(default)]
+    pub gpu: bool,
+    /// Minimum GPU memory in GB.
+    pub min_gpu_memory_gb: Option<u16>,
+    /// A GPU type ID or name, such as "NVIDIA RTX A5000" or "RTX A5000".
+    pub gpu_type: Option<String>,
+    /// Highest acceptable hourly price in US dollars.
+    pub max_hourly: Option<f64>,
+    /// Expected running hours for the estimated total, at most a year. One hour when omitted.
+    pub hours: Option<f64>,
+    /// Workspace storage in GB priced into the estimate: 10 to 4000 for CPU workers, at
+    /// least 1 for GPU workers, and 20 when omitted.
+    pub storage_gb: Option<u16>,
+    /// A region such as "EUROPE" or "North America".
+    pub region: Option<String>,
+    /// With gpu=true, also list GPU types without stock where the worker may go.
+    #[serde(default)]
+    pub include_unavailable: bool,
+    /// At most this many offers, cheapest first: 1 to 50, and 10 when omitted.
+    pub limit: Option<usize>,
+}
+
+/// The request's deadline plus a moment for the host's answer to be read.
+const OFFERS_WAIT: Duration = Duration::from_millis(provider_usage::REQUEST_DEADLINE_MILLIS.unsigned_abs() + 1_000);
+
+impl BrowserController {
+    pub(crate) async fn cloud_offers(&self, input: CloudOffersInput) -> Result<Value, String> {
+        let requirements = serde_json::to_value(&input).map_err(|_| "cloud_offers_invalid_request".to_string())?;
+        let id = provider_usage::enqueue_cloud_offers(self.identity(), requirements).map_err(|error| {
+            match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "cloud_offers_unavailable: requires a Horizon agent panel",
+                std::io::ErrorKind::InvalidInput => "cloud_offers_invalid_request",
+                _ => "cloud_offers_unavailable: could not queue the request",
+            }
+            .to_string()
+        })?;
+        let started = Instant::now();
+        loop {
+            if let Some(result) = provider_usage::take_provider_usage_result(self.identity(), &id)
+                .map_err(|_| "cloud_offers_result_unavailable".to_string())?
+            {
+                if let Some(error) = result.error {
+                    return Err(error);
+                }
+                return result
+                    .offers
+                    .ok_or_else(|| "cloud_offers_result_unavailable".to_string());
+            }
+            // The host answers before the request expires, with offers or an error, even
+            // while it is still fetching prices; after that nothing answers.
+            if started.elapsed() >= OFFERS_WAIT {
+                return Err("cloud_offers_timed_out: Horizon did not answer; is it running?".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+}

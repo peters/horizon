@@ -31,6 +31,8 @@ pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pub(super) catalog: super::browser_provider_catalog::CatalogHostState,
     pub(super) provider_usage: super::browser_provider_usage::UsageHostState,
+    /// Claimed `cloud_offers` requests waiting for current prices.
+    pub(super) cloud_offers: Vec<manifest::provider_usage::UsageRequest>,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
