@@ -188,12 +188,29 @@ fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Pref
     );
 }
 
-fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
-    let preferred: Vec<&GpuPrice> = preferences.gpu_types.iter().filter_map(|id| list.gpu(id)).collect();
+/// Where GPU preferences are set until New cloud offers its own GPU choice.
+const GPU_SETTING: &str = "gpu_types in ~/.horizon/cloud/settings.json";
+
+/// Every preferred GPU type in the order deployments request them, with its catalog
+/// entry when the provider offers it, and the first one in stock.
+fn ranked<'a>(
+    list: &'a PriceList,
+    preferences: &'a Preferences,
+) -> (Vec<(&'a str, Option<&'a GpuPrice>)>, Option<&'a GpuPrice>) {
+    let preferred: Vec<_> = preferences
+        .gpu_types
+        .iter()
+        .map(|id| (id.as_str(), list.gpu(id)))
+        .collect();
     let chosen = preferred
         .iter()
-        .copied()
+        .filter_map(|(_, gpu)| *gpu)
         .find(|gpu| gpu.availability != Availability::None);
+    (preferred, chosen)
+}
+
+fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
+    let (preferred, chosen) = ranked(list, preferences);
     match chosen {
         Some(gpu) => {
             headline(ui, &money(gpu.hourly), &Stock::Known(gpu.availability, None));
@@ -215,67 +232,83 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
             );
         }
     }
-    if !preferred.is_empty() {
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("REQUESTED IN THIS ORDER")
-                .size(10.5)
-                .color(theme::FG_DIM()),
-        );
-        egui::Grid::new("cloud-creation-gpu-prices")
-            .num_columns(5)
-            .spacing([14.0, 6.0])
-            .show(ui, |ui| {
-                for (rank, gpu) in preferred.iter().enumerate() {
-                    let first = chosen.is_some_and(|chosen| chosen.id == gpu.id);
-                    let color = if first { theme::FG() } else { theme::FG_SOFT() };
-                    let marker = if first { theme::ACCENT() } else { theme::FG_DIM() };
-                    ui.label(RichText::new(format!("{}", rank + 1)).size(12.0).strong().color(marker));
-                    ui.label(RichText::new(&gpu.name).size(12.5).color(color));
-                    ui.label(
-                        RichText::new(format!("{} GB", gpu.memory_gb))
-                            .size(12.0)
-                            .color(theme::FG_DIM()),
-                    );
-                    ui.label(
-                        RichText::new(format!("{}/h", money(gpu.hourly)))
-                            .size(12.5)
-                            .monospace()
-                            .color(color),
-                    );
-                    pill(ui, &Stock::Known(gpu.availability, None), true);
-                    ui.end_row();
-                }
-            });
-    }
     if preferred.is_empty() {
         ui.label(
-            RichText::new("Add preferred GPU types in Cloud settings to see their prices.")
-                .size(12.0)
-                .color(theme::FG_DIM()),
-        );
-    } else if chosen.is_none()
-        && let Some(cheapest) = list.cheapest_available_gpu()
-    {
-        ui.add_space(4.0);
-        ui.label(
             RichText::new(format!(
-                "Cheapest in stock now: {} · {} GB · {}/h. Change GPU preferences in Cloud settings.",
-                cheapest.name,
-                cheapest.memory_gb,
-                money(cheapest.hourly)
+                "Set {GPU_SETTING} to see prices for the GPUs this cloud may use."
             ))
             .size(12.0)
-            .color(theme::FG_SOFT()),
+            .color(theme::FG_DIM()),
         );
+    } else {
+        gpu_rows(ui, &preferred, chosen);
+        if chosen.is_none()
+            && let Some(cheapest) = list.cheapest_available_gpu()
+        {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "Cheapest in stock now: {} · {} GB · {}/h. GPU preferences are {GPU_SETTING}.",
+                    cheapest.name,
+                    cheapest.memory_gb,
+                    money(cheapest.hourly)
+                ))
+                .size(12.0)
+                .color(theme::FG_SOFT()),
+            );
+        }
     }
     if let Some(gpu) = chosen {
         estimates(ui, (gpu.hourly, gpu.hourly), None);
     }
 }
 
+fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option<&GpuPrice>) {
+    ui.add_space(8.0);
+    ui.label(
+        RichText::new("REQUESTED IN THIS ORDER")
+            .size(10.5)
+            .color(theme::FG_DIM()),
+    );
+    egui::Grid::new("cloud-creation-gpu-prices")
+        .num_columns(5)
+        .spacing([14.0, 6.0])
+        .show(ui, |ui| {
+            for (rank, (id, gpu)) in preferred.iter().enumerate() {
+                let first = chosen.zip(*gpu).is_some_and(|(chosen, gpu)| chosen.id == gpu.id);
+                let color = if first { theme::FG() } else { theme::FG_SOFT() };
+                let marker = if first { theme::ACCENT() } else { theme::FG_DIM() };
+                ui.label(RichText::new(format!("{}", rank + 1)).size(12.0).strong().color(marker));
+                let Some(gpu) = gpu else {
+                    ui.label(RichText::new(*id).size(12.5).color(theme::FG_DIM()));
+                    ui.label("");
+                    ui.label("");
+                    pill(ui, &Stock::NotOffered, true);
+                    ui.end_row();
+                    continue;
+                };
+                ui.label(RichText::new(&gpu.name).size(12.5).color(color));
+                ui.label(
+                    RichText::new(format!("{} GB", gpu.memory_gb))
+                        .size(12.0)
+                        .color(theme::FG_DIM()),
+                );
+                ui.label(
+                    RichText::new(format!("{}/h", money(gpu.hourly)))
+                        .size(12.5)
+                        .monospace()
+                        .color(color),
+                );
+                pill(ui, &Stock::Known(gpu.availability, None), true);
+                ui.end_row();
+            }
+        });
+}
+
 enum Stock {
     Checking,
+    /// The provider's catalog does not list this type.
+    NotOffered,
     Known(Availability, Option<usize>),
     Unknown(String),
 }
@@ -294,6 +327,11 @@ const GAP: f32 = 6.0;
 fn pill(ui: &mut Ui, stock: &Stock, compact: bool) {
     let (text, color, hover) = match stock {
         Stock::Checking => ("Checking stock".to_owned(), theme::FG_DIM(), None),
+        Stock::NotOffered => (
+            "Not offered".to_owned(),
+            theme::FG_DIM(),
+            Some("RunPod's Secure Cloud catalog does not list this GPU type".to_owned()),
+        ),
         Stock::Unknown(error) => ("Stock unknown".to_owned(), theme::FG_DIM(), Some(error.clone())),
         Stock::Known(level, centers) => {
             let (text, color) = match level {
@@ -442,5 +480,41 @@ mod tests {
         assert_eq!(in_centers(0), "Out of stock in every allowed data center");
         assert_eq!(in_centers(1), "In stock in 1 allowed data center");
         assert_eq!(in_centers(3), "In stock in 3 allowed data centers");
+    }
+
+    #[test]
+    fn gpu_preferences_keep_their_rank_when_the_catalog_lacks_one() {
+        let gpu = |id: &str, hourly, availability| GpuPrice {
+            id: id.into(),
+            name: id.into(),
+            memory_gb: 24,
+            hourly,
+            availability,
+        };
+        let list = PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: vec![
+                gpu("ada", 0.28, Availability::None),
+                gpu("l4", 0.49, Availability::High),
+            ],
+            storage_gb_month: 0.07,
+        };
+        let preferences = Preferences {
+            cpu_flavors: Vec::new(),
+            gpu_types: vec!["retired".into(), "ada".into(), "l4".into()],
+        };
+        let (preferred, chosen) = ranked(&list, &preferences);
+        let ids: Vec<(&str, bool)> = preferred.iter().map(|(id, gpu)| (*id, gpu.is_some())).collect();
+        assert_eq!(ids, [("retired", false), ("ada", true), ("l4", true)]);
+        assert_eq!(chosen.map(|gpu| gpu.id.as_str()), Some("l4"));
+
+        let retired = Preferences {
+            cpu_flavors: Vec::new(),
+            gpu_types: vec!["retired".into()],
+        };
+        let (preferred, chosen) = ranked(&list, &retired);
+        assert_eq!(preferred.len(), 1);
+        assert!(chosen.is_none());
     }
 }
