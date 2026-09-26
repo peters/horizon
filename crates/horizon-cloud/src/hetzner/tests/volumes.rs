@@ -138,3 +138,51 @@ fn deletion_refuses_attached_volumes_and_proves_absence() {
     task.join().unwrap();
     assert!(requests.lock().unwrap()[2].starts_with("DELETE /volumes/9 "));
 }
+
+#[test]
+fn volume_creation_reconciles_names_resets_on_refusal_and_checks_what_it_adopts() {
+    let mut foreign = volume(9, None);
+    foreign["name"] = json!("someone-else");
+    let mut creating = volume(9, None);
+    creating["status"] = json!("creating");
+    let mut elsewhere = volume(9, None);
+    elsewhere["location"]["name"] = json!("nbg1");
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("volumes", json!([]))),
+        (409, error("uniqueness_error", "name is already used")),
+        (200, listing("volumes", json!([volume(9, None)]))),
+        (200, listing("volumes", json!([]))),
+        (403, error("resource_limit_exceeded", "volume limit reached")),
+        (200, listing("volumes", json!([foreign]))),
+        (200, listing("volumes", json!([creating]))),
+        (200, listing("volumes", json!([elsewhere]))),
+    ]);
+    let cancel = Cancellation::default();
+    let ensure = |state: &mut CreateState| hetzner.ensure_volume(OPERATION, "hel1", 10, state, &cancel, |_| Ok(()));
+    let mut state = CreateState::Prepared;
+    assert_eq!(ensure(&mut state).unwrap().id, 9);
+    assert_eq!(state, CreateState::Bound { worker_id: "9".into() });
+    let mut state = CreateState::Prepared;
+    assert!(matches!(ensure(&mut state), Err(CloudError::Rejected(_))));
+    assert_eq!(state, CreateState::Prepared);
+    assert!(matches!(
+        ensure(&mut CreateState::Prepared),
+        Err(CloudError::IdentityMismatch)
+    ));
+    assert_eq!(
+        ensure(&mut CreateState::Prepared).unwrap_err().to_string(),
+        "The workspace volume is still being created; check again shortly"
+    );
+    assert_eq!(
+        ensure(&mut CreateState::Prepared).unwrap_err().to_string(),
+        "The operation's volume is in another location or smaller than requested"
+    );
+    task.join().unwrap();
+    let posts = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.starts_with("POST /volumes "))
+        .count();
+    assert_eq!(posts, 2);
+}

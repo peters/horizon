@@ -33,7 +33,7 @@ fn request(placements: &[Placement]) -> ServerRequest<'_> {
 }
 
 fn created(id: u64) -> Value {
-    json!({"server": server(id), "action": action(1, "running"), "next_actions": [], "root_password": null})
+    json!({"server": server(id), "action": action(1, "success"), "next_actions": [], "root_password": null})
 }
 
 fn posts(requests: &Requests) -> Vec<Value> {
@@ -370,4 +370,110 @@ fn provider_states_map_to_worker_states() {
     let server: Server = serde_json::from_value(value).unwrap();
     assert_eq!(server.status(), WorkerStatus::Starting);
     assert!(server.ssh_address().is_none());
+}
+
+#[test]
+fn a_placement_error_also_moves_on_and_the_body_attaches_the_volume() {
+    let placements = [("cpx22", "hel1"), ("cpx32", "hel1")].map(|(server_type, location)| Placement {
+        server_type: server_type.into(),
+        location: location.into(),
+    });
+    let volume: Volume = serde_json::from_value(super::volumes::volume(9, None)).unwrap();
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([]))),
+        (422, error("placement_error", "error during placement")),
+        (201, created(42)),
+    ]);
+    let request = ServerRequest {
+        volume: Some(&volume),
+        ..request(&placements)
+    };
+    let mut state = CreateState::Prepared;
+    hetzner
+        .ensure_server(&request, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    let bodies = posts(&requests);
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[1]["server_type"], "cpx32");
+    assert_eq!(bodies[1]["volumes"], json!([9]));
+    assert_eq!(bodies[1]["automount"], false);
+}
+
+#[test]
+fn cancellation_or_a_failed_fence_before_sending_never_posts() {
+    let placements = placements();
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([]))),
+        (200, listing("servers", json!([]))),
+    ]);
+    let cancel = Cancellation::default();
+    let mut state = CreateState::Prepared;
+    let result = hetzner.ensure_server(
+        &request(&placements),
+        &mut state,
+        &cancel,
+        |_| Ok(()),
+        |step| {
+            if step == Progress::Requesting {
+                cancel.cancel();
+            }
+        },
+    );
+    assert!(matches!(result, Err(CloudError::Cancelled)));
+    assert_eq!(state, CreateState::Prepared);
+    let mut state = CreateState::Prepared;
+    assert!(matches!(
+        hetzner.ensure_server(
+            &request(&placements),
+            &mut state,
+            &Cancellation::default(),
+            |_| Err(CloudError::Persistence),
+            |_| {}
+        ),
+        Err(CloudError::Persistence)
+    ));
+    assert_eq!(state, CreateState::Prepared);
+    task.join().unwrap();
+    assert!(posts(&requests).is_empty());
+}
+
+#[test]
+fn a_failed_create_action_keeps_the_server_bound_for_deletion() {
+    let placements = placements();
+    let mut failed = created(42);
+    failed["action"] = json!({"id": 1, "status": "error", "error": {"code": "x", "message": "image unavailable"}});
+    let (hetzner, _, task) = provider(vec![(200, listing("servers", json!([]))), (201, failed)]);
+    let mut state = CreateState::Prepared;
+    let error = hetzner
+        .ensure_server(
+            &request(&placements),
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap_err();
+    task.join().unwrap();
+    assert_eq!(
+        error.to_string(),
+        "Provider rejected the request or capacity is unavailable: image unavailable"
+    );
+    assert_eq!(state, CreateState::Bound { worker_id: "42".into() });
+}
+
+#[test]
+fn a_server_still_present_after_deletion_stays_bound() {
+    let (hetzner, _, task) = provider(vec![
+        (200, json!({"server": server(42)})),
+        (200, json!({"action": action(5, "success")})),
+        (200, json!({"server": server(42)})),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "42".into() };
+    assert!(matches!(
+        hetzner.delete_server(OPERATION, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
+        Err(CloudError::Invalid("Termination pending; reconcile again"))
+    ));
+    task.join().unwrap();
+    assert_eq!(state, CreateState::Bound { worker_id: "42".into() });
 }

@@ -2,6 +2,10 @@
 //! create request after an uncertain response; a lost response is reconciled
 //! through the operation label. Hetzner has no hourly GPUs, and a volume can
 //! only attach to servers in the location that created it.
+//!
+//! Targets the current Hetzner Cloud API as described by its `OpenAPI` spec, not
+//! the human-readable pages, which can lag behind removals. Run
+//! `scripts/check-hetzner-api.py` before changing the API surface used here.
 use crate::{Cancellation, CloudError, Credential, Reason};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -48,7 +52,8 @@ pub(crate) enum Failure {
 impl Failure {
     /// The requested server type is not available in that location right now.
     pub(crate) fn capacity(&self) -> bool {
-        matches!(self, Self::Provider { code, .. } if code == "resource_unavailable" || code == "placement_error")
+        matches!(self, Self::Provider { status: 412, code, .. } if code == "resource_unavailable")
+            || matches!(self, Self::Provider { status: 422, code, .. } if code == "placement_error")
     }
     pub(crate) fn not_found(&self) -> bool {
         matches!(self, Self::Provider { status: 404, .. })
@@ -89,6 +94,13 @@ impl From<Failure> for CloudError {
             Failure::Provider { status, reason, .. } => Self::Http(status, reason),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Method {
+    Get,
+    Post,
+    Delete,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -145,7 +157,7 @@ impl Hetzner {
         for _ in 0..MAX_PAGES {
             let separator = if query.is_empty() { "" } else { "&" };
             let mut value = self.send(
-                "GET",
+                Method::Get,
                 &format!("{path}?{query}{separator}page={page}&per_page={PAGE_SIZE}"),
                 None,
                 cancel,
@@ -187,7 +199,7 @@ impl Hetzner {
             std::thread::sleep(self.poll);
             cancel.check()?;
             let envelope: ActionEnvelope =
-                serde_json::from_value(self.send("GET", &format!("/actions/{}", current.id), None, cancel)?)
+                serde_json::from_value(self.send(Method::Get, &format!("/actions/{}", current.id), None, cancel)?)
                     .map_err(|_| CloudError::InvalidResponse)?;
             if envelope.action.id != current.id {
                 return Err(CloudError::InvalidResponse);
@@ -199,7 +211,7 @@ impl Hetzner {
     /// Sends one request. Success without a body is `Value::Null`.
     pub(crate) fn send(
         &self,
-        method: &str,
+        method: Method,
         path: &str,
         body: Option<Value>,
         cancel: &Cancellation,
@@ -208,13 +220,13 @@ impl Hetzner {
         let url = format!("{}{path}", self.endpoint);
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
         let response = match method {
-            "POST" => self
+            Method::Post => self
                 .agent
                 .post(&url)
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or_else(|| Value::Object(serde_json::Map::new()))),
-            "DELETE" => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
-            _ => self.agent.get(&url).header("Authorization", auth.as_str()).call(),
+            Method::Delete => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
+            Method::Get => self.agent.get(&url).header("Authorization", auth.as_str()).call(),
         };
         let mut response = response.map_err(|_| Failure::Local(CloudError::Transport))?;
         let status = response.status().as_u16();

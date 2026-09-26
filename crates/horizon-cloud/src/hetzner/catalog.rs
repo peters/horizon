@@ -1,9 +1,9 @@
 //! Prices and live availability of x86 server types per location, for choosing
 //! a worker before requesting one. Prices are Hetzner's net euro amounts.
-use super::Hetzner;
+use super::{Hetzner, Method};
 use crate::{Cancellation, CloudError};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Offer {
@@ -18,9 +18,11 @@ pub struct Offer {
     /// The most a server is billed in a month, running or powered off.
     pub monthly_eur: f64,
     /// Whether Hetzner lists the type as orderable in this location right now. The
-    /// list is advisory: a create can succeed for an unlisted type, and fail for a
+    /// flag is advisory: a create can succeed for an unlisted type, and fail for a
     /// listed one, so placement still relies on the create response.
     pub available: bool,
+    /// Hetzner's suggested type for new servers in this location.
+    pub recommended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,16 +36,25 @@ pub struct Catalog {
 
 #[derive(Deserialize)]
 struct ServerType {
-    id: u64,
     name: String,
     cores: u32,
     memory: f64,
     disk: u32,
     cpu_type: String,
     architecture: String,
+    prices: Vec<LocationPrice>,
+    locations: Vec<TypeLocation>,
+}
+/// A server type's standing in one location. Types and locations are deprecated
+/// separately, so a type can still be current in some locations.
+#[derive(Deserialize)]
+struct TypeLocation {
+    name: String,
     #[serde(default)]
     deprecation: Option<serde_json::Value>,
-    prices: Vec<LocationPrice>,
+    available: bool,
+    #[serde(default)]
+    recommended: bool,
 }
 #[derive(Deserialize)]
 struct LocationPrice {
@@ -54,19 +65,6 @@ struct LocationPrice {
 #[derive(Deserialize)]
 struct Amount {
     net: String,
-}
-#[derive(Deserialize)]
-struct Datacenter {
-    location: Named,
-    server_types: Supported,
-}
-#[derive(Deserialize)]
-struct Named {
-    name: String,
-}
-#[derive(Deserialize)]
-struct Supported {
-    available: Vec<u64>,
 }
 #[derive(Deserialize)]
 struct PricingEnvelope {
@@ -95,35 +93,26 @@ struct IpPrice {
 }
 
 impl Hetzner {
-    /// Every current x86 server type in every location that prices it.
+    /// Every x86 server type in every location that prices it and has not deprecated it.
     /// # Errors
     /// Reports provider failures, non-euro pricing and malformed amounts.
     pub fn catalog(&self, cancel: &Cancellation) -> Result<Catalog, CloudError> {
         let types: Vec<ServerType> = self.list_all("/server_types", "", "server_types", cancel)?;
-        let centers: Vec<Datacenter> = self.list_all("/datacenters", "", "datacenters", cancel)?;
-        let pricing: PricingEnvelope = serde_json::from_value(self.send("GET", "/pricing", None, cancel)?)
+        let pricing: PricingEnvelope = serde_json::from_value(self.send(Method::Get, "/pricing", None, cancel)?)
             .map_err(|_| CloudError::InvalidResponse)?;
         let pricing = pricing.pricing;
         if pricing.currency != "EUR" {
             return Err(CloudError::InvalidResponse);
         }
-        let available: BTreeSet<(String, u64)> = centers
-            .into_iter()
-            .flat_map(|center| {
-                let location = center.location.name;
-                center
-                    .server_types
-                    .available
-                    .into_iter()
-                    .map(move |id| (location.clone(), id))
-            })
-            .collect();
         let mut offers = Vec::new();
-        for kind in types
-            .into_iter()
-            .filter(|kind| kind.architecture == "x86" && kind.deprecation.is_none())
-        {
+        for kind in types.iter().filter(|kind| kind.architecture == "x86") {
             for price in &kind.prices {
+                let Some(standing) = kind.locations.iter().find(|location| location.name == price.location) else {
+                    continue;
+                };
+                if standing.deprecation.is_some() {
+                    continue;
+                }
                 offers.push(Offer {
                     server_type: kind.name.clone(),
                     location: price.location.clone(),
@@ -133,7 +122,8 @@ impl Hetzner {
                     dedicated: kind.cpu_type == "dedicated",
                     hourly_eur: amount(&price.price_hourly)?,
                     monthly_eur: amount(&price.price_monthly)?,
-                    available: available.contains(&(price.location.clone(), kind.id)),
+                    available: standing.available,
+                    recommended: standing.recommended,
                 });
             }
         }

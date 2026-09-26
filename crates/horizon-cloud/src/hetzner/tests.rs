@@ -94,7 +94,7 @@ fn failures_keep_their_codes_and_map_to_cloud_errors() {
         (403, error("maintenance", "maintenance in progress")),
     ]);
     let cancel = Cancellation::default();
-    let fail = || hetzner.send("GET", "/servers", None, &cancel).unwrap_err();
+    let fail = || hetzner.send(Method::Get, "/servers", None, &cancel).unwrap_err();
     assert!(matches!(fail().into(), CloudError::Unauthorized));
     assert!(matches!(fail().into(), CloudError::Unauthorized));
     assert_eq!(
@@ -124,7 +124,7 @@ fn failures_keep_their_codes_and_map_to_cloud_errors() {
     }
     cancel.cancel();
     assert!(matches!(
-        hetzner.send("GET", "/servers", None, &cancel),
+        hetzner.send(Method::Get, "/servers", None, &cancel),
         Err(Failure::Local(CloudError::Cancelled))
     ));
 }
@@ -185,48 +185,50 @@ fn actions_are_awaited_and_failed_actions_carry_their_message() {
 #[test]
 fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
     let price = |location: &str, hourly: &str, monthly: &str| json!({"location": location, "price_hourly": {"net": hourly, "gross": "0"}, "price_monthly": {"net": monthly, "gross": "0"}});
-    let kind = |id: u64, name: &str, architecture: &str, deprecation: Value, prices: Value| {
-        json!({"id": id, "name": name, "cores": 8, "memory": 16.0, "disk": 320, "cpu_type": "shared",
-            "architecture": architecture, "deprecation": deprecation, "prices": prices})
+    let standing = |name: &str, available: bool, deprecated: bool| {
+        let deprecation = if deprecated {
+            json!({"announced": "2025-10-16T00:00:00Z"})
+        } else {
+            Value::Null
+        };
+        json!({"id": 1, "name": name, "available": available, "recommended": available, "deprecation": deprecation})
+    };
+    let kind = |name: &str, architecture: &str, prices: Value, locations: Value| {
+        json!({"id": 1, "name": name, "cores": 8, "memory": 16.0, "disk": 320, "cpu_type": "shared",
+            "architecture": architecture, "deprecation": null, "prices": prices, "locations": locations})
     };
     let types = json!([
         kind(
-            1,
             "cpx42",
             "x86",
-            Value::Null,
-            json!([price("hel1", "0.1114", "69.49"), price("fsn1", "0.1114", "69.49")])
+            json!([price("hel1", "0.1114", "69.49"), price("fsn1", "0.1114", "69.49")]),
+            json!([standing("hel1", true, false), standing("fsn1", false, false)])
         ),
+        // Deprecated in hel1 only, and priced in a location it does not list.
         kind(
-            2,
             "cpx41",
             "x86",
-            Value::Null,
-            json!([price("ash", "0.1931", "120.49")])
+            json!([
+                price("ash", "0.1931", "120.49"),
+                price("hel1", "0.05", "32"),
+                price("sin", "0.08", "50")
+            ]),
+            json!([standing("ash", true, false), standing("hel1", false, true)])
         ),
-        kind(3, "cax31", "arm", Value::Null, json!([price("hel1", "0.02", "12")])),
         kind(
-            4,
-            "cx41",
-            "x86",
-            json!({"announced": "2024-01-01T00:00:00Z"}),
-            json!([price("hel1", "0.01", "5")])
+            "cax31",
+            "arm",
+            json!([price("hel1", "0.02", "12")]),
+            json!([standing("hel1", true, false)])
         ),
-    ]);
-    let centers = json!([
-        {"location": {"name": "hel1"}, "server_types": {"available": [1, 3], "supported": [1, 3, 4]}},
-        {"location": {"name": "fsn1"}, "server_types": {"available": [], "supported": [1]}},
-        {"location": {"name": "ash"}, "server_types": {"available": [2], "supported": [2]}},
     ]);
     let pricing = json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.0572"}},
         "primary_ips": [{"type": "ipv4", "prices": [{"location": "hel1", "price_monthly": {"net": "0.50"}}]},
                         {"type": "ipv6", "prices": [{"location": "hel1", "price_monthly": {"net": "0"}}]}]}});
-    let (hetzner, _, task) = provider(vec![
+    let (hetzner, requests, task) = provider(vec![
         (200, listing("server_types", types.clone())),
-        (200, listing("datacenters", centers.clone())),
         (200, pricing),
         (200, listing("server_types", types)),
-        (200, listing("datacenters", centers)),
         (
             200,
             json!({"pricing": {"currency": "USD", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}),
@@ -246,6 +248,7 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
             ("cpx41", "ash", true)
         ]
     );
+    assert!(catalog.offers[1].recommended && !catalog.offers[0].recommended);
     assert!((catalog.offers[1].monthly_eur - 69.49).abs() < 1e-9);
     assert!((catalog.volume_gb_month_eur - 0.0572).abs() < 1e-9);
     assert_eq!(catalog.ipv4_month_eur.len(), 1);
@@ -254,6 +257,14 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
         Err(CloudError::InvalidResponse)
     ));
     task.join().unwrap();
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.contains("/datacenters")),
+        "the datacenters endpoint is removed after 1 October 2026"
+    );
 }
 
 #[test]

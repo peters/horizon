@@ -1,6 +1,6 @@
 //! Workspace volumes. A volume belongs to one location and attaches to one
 //! server at a time; it outlives its servers until deleted explicitly.
-use super::{Action, Hetzner, OPERATION_LABEL, resource_name, servers::Location, valid_name};
+use super::{Action, Hetzner, Method, OPERATION_LABEL, resource_name, servers::Location, valid_name};
 use crate::{Cancellation, CloudError, CreateState, Progress};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -79,16 +79,26 @@ impl Hetzner {
                     .map_err(|_| CloudError::Invalid("Invalid volume ID"))?;
                 let volume = self.inspect_volume(id, cancel)?.ok_or(CloudError::WorkerLost)?;
                 volume.verify(operation_id)?;
-                return Ok(volume);
+                return usable(volume, location, size_gb);
             }
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),
-            CreateState::Requested => return self.reconcile_volume(operation_id, state, cancel, &mut persist),
+            CreateState::Requested => {
+                return usable(
+                    self.reconcile_volume(operation_id, state, cancel, &mut persist)?,
+                    location,
+                    size_gb,
+                );
+            }
             CreateState::Prepared => {}
         }
-        match self.find_volumes(operation_id, cancel)?.len() {
-            0 => {}
-            1 => return self.reconcile_volume(operation_id, state, cancel, &mut persist),
-            _ => return Err(CloudError::DuplicateWorkers),
+        let mut found = self.find_volumes(operation_id, cancel)?;
+        if found.len() > 1 {
+            return Err(CloudError::DuplicateWorkers);
+        }
+        if let Some(volume) = found.pop() {
+            volume.verify(operation_id)?;
+            bind(state, &volume, &mut persist)?;
+            return usable(volume, location, size_gb);
         }
         persist(&CreateState::Requested)?;
         *state = CreateState::Requested;
@@ -96,10 +106,14 @@ impl Hetzner {
             "name": name, "size": size_gb, "location": location, "format": "ext4",
             "labels": {OPERATION_LABEL: operation_id},
         });
-        let created: Created = match self.send("POST", "/volumes", Some(body), cancel) {
+        let created: Created = match self.send(Method::Post, "/volumes", Some(body), cancel) {
             Ok(value) => serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?,
             Err(failure) if failure.name_taken() => {
-                return self.reconcile_volume(operation_id, state, cancel, &mut persist);
+                return usable(
+                    self.reconcile_volume(operation_id, state, cancel, &mut persist)?,
+                    location,
+                    size_gb,
+                );
             }
             Err(failure) if failure.definite() || failure.capacity() => {
                 persist(&CreateState::Prepared)?;
@@ -111,14 +125,16 @@ impl Hetzner {
         created.volume.verify(operation_id)?;
         bind(state, &created.volume, &mut persist)?;
         self.wait(&created.action, cancel)?;
-        self.inspect_volume(created.volume.id, cancel)?
-            .ok_or(CloudError::WorkerLost)
+        let volume = self
+            .inspect_volume(created.volume.id, cancel)?
+            .ok_or(CloudError::WorkerLost)?;
+        usable(volume, location, size_gb)
     }
 
     /// # Errors
     /// Returns transport, authentication or response errors. HTTP 404 is a missing volume.
     pub fn inspect_volume(&self, id: u64, cancel: &Cancellation) -> Result<Option<Volume>, CloudError> {
-        match self.send("GET", &format!("/volumes/{id}"), None, cancel) {
+        match self.send(Method::Get, &format!("/volumes/{id}"), None, cancel) {
             Err(failure) if failure.not_found() => Ok(None),
             result => {
                 let single: Single = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
@@ -208,7 +224,7 @@ impl Hetzner {
                 ));
             }
             progress(Progress::DeletingVolume);
-            match self.send("DELETE", &format!("/volumes/{id}"), None, cancel) {
+            match self.send(Method::Delete, &format!("/volumes/{id}"), None, cancel) {
                 Ok(_) => {}
                 Err(failure) if failure.not_found() => {}
                 Err(failure) => return Err(failure.into()),
@@ -231,7 +247,7 @@ impl Hetzner {
         body: Option<serde_json::Value>,
         cancel: &Cancellation,
     ) -> Result<(), CloudError> {
-        let value = self.send("POST", &format!("/volumes/{id}/actions/{action}"), body, cancel)?;
+        let value = self.send(Method::Post, &format!("/volumes/{id}/actions/{action}"), body, cancel)?;
         let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
         self.wait(&acted.action, cancel)
     }
@@ -255,6 +271,23 @@ impl Hetzner {
             _ => Err(CloudError::DuplicateWorkers),
         }
     }
+}
+
+/// A volume the caller can attach: in the requested location, at least the
+/// requested size, and finished creating. Adopted and reconciled volumes are
+/// checked the same way as new ones.
+fn usable(volume: Volume, location: &str, size_gb: u32) -> Result<Volume, CloudError> {
+    if volume.location.name != location || volume.size < size_gb {
+        return Err(CloudError::Invalid(
+            "The operation's volume is in another location or smaller than requested",
+        ));
+    }
+    if volume.status != "available" {
+        return Err(CloudError::Invalid(
+            "The workspace volume is still being created; check again shortly",
+        ));
+    }
+    Ok(volume)
 }
 
 fn bind(

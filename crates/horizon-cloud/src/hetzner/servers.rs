@@ -1,6 +1,6 @@
 //! Servers. A worker is one server named and labelled after its operation; the
 //! caller durably persists `CreateState` before every create request.
-use super::{Action, Failure, Hetzner, OPERATION_LABEL, resource_name, valid_name, volumes::Volume};
+use super::{Action, Failure, Hetzner, Method, OPERATION_LABEL, resource_name, valid_name, volumes::Volume};
 use crate::{Cancellation, CloudError, CreateState, Progress, Reason, WorkerStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -94,6 +94,7 @@ impl Server {
 #[derive(Deserialize)]
 struct Created {
     server: Server,
+    action: Action,
 }
 #[derive(Deserialize)]
 struct Single {
@@ -154,12 +155,14 @@ impl Hetzner {
             persist(&CreateState::Requested)?;
             *state = CreateState::Requested;
             progress(Progress::Requesting);
-            match self.send("POST", "/servers", Some(create_body(request, placement)?), cancel) {
+            match self.send(Method::Post, "/servers", Some(create_body(request, placement)?), cancel) {
                 Ok(value) => {
                     let created: Created = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
                     created.server.verify(request.operation_id)?;
                     bind(state, &created.server, &mut persist)?;
                     progress(Progress::WorkerFound(created.server.id.to_string()));
+                    // The server stays bound if its creation fails later, so it can be deleted.
+                    self.wait(&created.action, cancel)?;
                     return Ok(created.server);
                 }
                 Err(failure) if failure.name_taken() => {
@@ -186,7 +189,7 @@ impl Hetzner {
     /// # Errors
     /// Returns transport, authentication or response errors. HTTP 404 is a missing server.
     pub fn inspect_server(&self, id: u64, cancel: &Cancellation) -> Result<Option<Server>, CloudError> {
-        match self.send("GET", &format!("/servers/{id}"), None, cancel) {
+        match self.send(Method::Get, &format!("/servers/{id}"), None, cancel) {
             Err(failure) if failure.not_found() => Ok(None),
             result => {
                 let single: Single = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
@@ -255,7 +258,7 @@ impl Hetzner {
         if let Some(server) = self.inspect_server(id, cancel)? {
             server.verify(operation_id)?;
             progress(Progress::Terminating);
-            match self.send("DELETE", &format!("/servers/{id}"), None, cancel) {
+            match self.send(Method::Delete, &format!("/servers/{id}"), None, cancel) {
                 Ok(value) => {
                     let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
                     self.wait(&acted.action, cancel)?;
@@ -278,7 +281,7 @@ impl Hetzner {
         self.inspect_server(id, cancel)?
             .ok_or(CloudError::WorkerLost)?
             .verify(operation_id)?;
-        let value = self.send("POST", &format!("/servers/{id}/actions/{action}"), None, cancel)?;
+        let value = self.send(Method::Post, &format!("/servers/{id}/actions/{action}"), None, cancel)?;
         let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
         self.wait(&acted.action, cancel)
     }
