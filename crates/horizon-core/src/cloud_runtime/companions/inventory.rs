@@ -54,8 +54,17 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
     })
 }
 
-fn identity(path: &Path, runner: &Runner<'_>) -> Result<String> {
-    let remote = runner.run(
+/// The GitHub `owner/name` of a checkout's origin. The origin URL is never emitted, since
+/// it may embed a credential that is refused only after it is read.
+/// # Errors
+/// The checkout has no origin, or one that is not a credential-free GitHub URL.
+pub(in crate::cloud_runtime) fn identity(path: &Path, runner: &Runner<'_>) -> Result<String> {
+    let remote = Runner {
+        cancel: runner.cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    }
+    .run(
         "Read companion repository identity",
         Command::new("git")
             .arg("-C")
