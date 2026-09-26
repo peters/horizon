@@ -30,7 +30,9 @@
   <a href="#install">Install</a> ·
   <a href="#keyboard-and-mouse">Shortcuts</a> ·
   <a href="#configuration">Config</a> ·
-  <a href="#browser-panels">Browser</a> ·
+  <a href="#browse-any-website">Browse</a> ·
+  <a href="#watch-an-app-over-vnc">VNC</a> ·
+  <a href="#browser-panels">Browser reference</a> ·
   <a href="#speech-input-opt-in">Speech</a>
 </p>
 
@@ -38,7 +40,7 @@
 
 ## Why Horizon?
 
-Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal, agent, browser, and editor lives as a panel you can place, resize, and group.
+Tabbed terminals hide your work. Tiled terminals box you in. **Horizon gives you a canvas** — an infinite 2D surface where every terminal, agent, browser, VNC desktop, and editor lives as a panel you can place, resize, and group.
 
 Think of it as a whiteboard for live sessions, with a structured workflow on top: color-coded workspaces, preset panels, a command palette, and fit-to-workspace whenever you want a clean overview.
 
@@ -100,7 +102,7 @@ You do not need a config file to start. Launch Horizon, then:
 5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for presets and actions.
 6. Close Horizon. Reopen it tomorrow — the session, layout, canvas pan/zoom, and terminal history are still there.
 
-Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a Browser panel for a live page, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
+Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a [Browser panel](#browse-any-website) for any site on this machine or on BrowserStack, a [Device panel](#watch-an-app-over-vnc) for each VNC desktop you want to watch, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
 
 ---
 
@@ -145,7 +147,7 @@ First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, 
 <td>
 
 ### Live Browser
-Run Chromium, Firefox, or Safari automation on the canvas. You and an agent share the same live page — navigate, inspect, click, fill, capture network traffic, then hand control back and forth.
+Open any site in Chromium, Firefox, or Safari on this machine, or on a BrowserStack browser or phone you name in config. On this machine you and an agent share the page: navigate, inspect, click, fill, capture network traffic, and hand control back and forth. A BrowserStack panel shows the live page and takes the same navigate, click, and fill actions.
 
 </td>
 </tr>
@@ -174,6 +176,8 @@ The **SSH | VNC** switch (or **Tab**) picks what opening a host creates: a termi
 The **in** picker chooses the workspace that receives the session. It defaults to `remote_hosts.default_workspace` (**Remote Sessions**, created as a grid on first use); pick any other workspace for one session (**Alt+↑/↓** cycles it from the keyboard), or **Set default** (**Alt+D**) to make it the new default in the config file Horizon loaded (`~/.horizon/config.yaml` unless `--config` named another). Set default waits while the Settings editor has unsaved edits, so the two never overwrite each other.
 
 Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut** and **Save VNC shortcut**. A saved shortcut is an ordinary preset (`SSH: <host>` or `VNC: <host>`, with the `user@` override applied) written to the config file, so the command palette and the preset picker can add that host to any workspace later.
+
+The same viewer also watches loopback VNC servers on this computer, one port per copy of an app. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
 </td>
 <td>
@@ -515,9 +519,109 @@ docker run --rm \
 
 ---
 
+## Browse any website
+
+A Browser panel is a real browser drawn on the canvas. Type an address and the page renders there. You and an agent share that same panel. Two places can run the page: a browser on this computer, or a browser or physical device on [BrowserStack](https://www.browserstack.com/).
+
+### On this computer
+
+1. **Ctrl+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
+2. Click the address bar, type any site (`https://example.com`, a docs page, or `http://127.0.0.1:3000`), and press Enter.
+3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. On Windows it searches for `chrome.exe`, `msedge.exe`, and `chromium.exe`, plus the usual Chrome and Edge install folders; set `browser.command` when you want Brave there. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
+4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
+
+Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
+
+```yaml
+workspaces:
+  - name: Web
+    terminals:
+      - name: Docs
+        kind: browser
+        command: https://example.com
+```
+
+Some sites refuse a headless browser. For those, run headed Chromium with its native window minimized behind the panel:
+
+```yaml
+browser:
+  backend: chromium
+  headless: false
+  hide_native_window: true
+```
+
+That needs a working desktop. The native window can appear briefly at startup and stays in the taskbar or Dock. The embedded page keeps running while the Horizon panel is unfocused.
+
+### On BrowserStack
+
+The same kind of panel can show a page running on BrowserStack: a desktop browser, or a physical phone. Horizon allocates the session, draws the live page, and releases the device when the panel closes.
+
+Name the account and the targets in `~/.horizon/config.yaml`. The file stores credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
+
+```yaml
+browser:
+  remote:
+    providers:
+      browserstack:
+        adapter: browserstack
+        endpoint: https://hub-cloud.browserstack.com/wd/hub
+        authentication:
+          kind: basic
+          username_ref: browserstack-user
+          password_ref: browserstack-key
+        credential_bindings:
+          browserstack-user: { store: os_keychain, slot: remote-browser/browserstack/username }
+          browserstack-key: { store: os_keychain, slot: remote-browser/browserstack/access-key }
+    targets:
+      windows_chrome:
+        provider: browserstack
+        browser_name: Chrome
+        platform_name: Windows
+        device: { kind: any, os_version: "11" }
+        capability_extensions:
+          bstack:options:
+            os: Windows
+      ios_phone:
+        provider: browserstack
+        browser_name: safari
+        platform_name: iOS
+        device: { kind: physical, model: iPhone 16, os_version: "18" }
+```
+
+`device.kind: any` skips the physical-or-emulated check. A model or OS version on the target is still checked against BrowserStack's session record. `windows_chrome` is a desktop browser because it names Chrome on Windows and leaves the phone model empty. `device.kind: physical` requires a real device, and Horizon keeps that panel only when the session record confirms it. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Two targets on this provider share the account. Each OS-store binding on one endpoint needs its own slot; Horizon rejects a repeated slot at that endpoint. A second provider on the same endpoint shares a username or access key when both bindings use `store: session` and the same reference name. Each distinct OS-store slot holds its own secret.
+
+An agent panel in the workspace opens the target. Ask it for the page. It calls `browser_create` with `target` set to `windows_chrome` or `ios_phone` and `url` set to the address. Codex, Claude, and default Grok panels already have that tool. A shell panel does not: it has no browser identity, so `browser_create` from a shell cannot use this board's providers. The same call as a checked plan, run from the agent panel after `cargo build -p horizon-browser-cli`:
+
+```bash
+target/debug/horizon-browser run open-site.json
+```
+
+```json
+{
+  "version": 1,
+  "steps": [
+    {
+      "id": "open",
+      "tool": "browser_create",
+      "arguments": {
+        "target": "ios_phone",
+        "url": "https://example.com",
+        "visible": true
+      }
+    }
+  ]
+}
+```
+
+The panel's top row names the BrowserStack browser and device once the session is ready. The address bar loads another page in that same session. Closing the panel releases the device. When a release stays unresolved, **Settings → Remote browsers** lists it under **Remote allocations**, and **Reconcile** checks that session with BrowserStack.
+
+Local Chromium and Firefox panels also capture network traffic, record a WebM, and let you take the page until you press **Done — hand back to agent**. A BrowserStack panel shows the live page and is driven with the same navigate, click, and fill actions. The full provider schema, including a generic WebDriver grid and environment variables for CI, is in [remote browser sessions](docs/architecture/remote-browser-sessions.md).
+
+---
+
 ## Browser Panels
 
-Browser panels render a real browser on the canvas through the first-party `horizon-browser` engine. Add one from the **Browser** (`web`) preset, or declare it in a workspace — `command` is the initial URL:
+Browser panels render a real browser on the canvas through the first-party `horizon-browser` engine. [Browse any website](#browse-any-website) is the short path. This section is the engine, the profile, and the agent contract. Add a panel from the **Browser** (`web`) preset, or declare it in a workspace — `command` is the initial URL:
 
 ```yaml
 workspaces:
@@ -607,6 +711,55 @@ cargo build -p horizon-browser-cli
 target/debug/horizon-browser "Go to example.com, extract the heading, save to heading.txt"
 target/debug/horizon-browser run browser-job.json --output browser-report.json
 target/debug/horizon-browser mcp --backend firefox --visible
+```
+
+---
+
+## Watch an app over VNC
+
+A Device panel is a native VNC viewer on the canvas. Use one panel per running copy of the app you are building, and keep those copies side by side while you test.
+
+You start each copy, on its own display, with a VNC server for that display listening on loopback. Give every copy its own port, then add a preset for each port:
+
+```yaml
+presets:
+  - name: App A
+    alias: va
+    kind: device
+    command: 127.0.0.1:5900
+  - name: App B
+    alias: vb
+    kind: device
+    command: 127.0.0.1:5901
+```
+
+1. Start copy A so a VNC server accepts connections on `127.0.0.1:5900`, and copy B on `127.0.0.1:5901`. The address is a numeric loopback IP and a nonzero port: `127.0.0.1` or `[::1]`. Use a server that accepts a shared connection and does not ask for a VNC password. Horizon has no password field. On another machine, SSH is the access check.
+2. **Ctrl+double-click** empty canvas and pick **App A**. That creates a workspace with the first copy. **Ctrl+double-click inside that workspace** and pick **App B**, so both panels belong to it. **Ctrl+Shift+K** and `va` or `vb` adds a panel to the workspace you are in.
+3. Each panel connects and shows that desktop. Drag the panels apart, or use **Rows**, **Cols**, or **Grid** on that workspace. **Ctrl+Shift+9** fits them on screen.
+4. The picture starts read-only. Turn **Interact** on in the panel you want to drive, then click the image. Your mouse and keyboard go to that desktop until you click outside the image or turn **Interact** off. The other panels stay viewers. **Interact** is a switch on the panel; agents leave it off.
+5. **View controls** on the panel choose **Fit** or **1:1**, a crop, and local frame-rate and image-size limits. Those settings change the image in this panel. The desktop stays at the size the VNC server reports.
+6. After Horizon restarts, a restored Device panel stays disconnected until you press **Reconnect**. The same port may belong to a different process than the one you saved.
+
+A desktop on another machine uses this viewer through SSH. Press **Ctrl+Shift+H**, switch to **VNC**, and open the host. Horizon runs `ssh -W 127.0.0.1:<port>` and requires the host key to already be trusted (open the host over SSH once). Per-host ports live in `remote_hosts.vnc_ports`. The overlay is described under [Remote Hosts](#remote-hosts).
+
+An agent in the workspace can open these viewers with the `device_panel` tool: `create` with the loopback endpoint, then `inspect` until the panel is connected and showing frames. On Linux, an agent drives a copy with `horizon-device --target` and a private target file that names that copy's X11 display:
+
+```json
+{"id":"app-a","endpoint":{"kind":"local_x11","display":":99"}}
+```
+
+There is no fallback to the ambient `DISPLAY`. The Device panel does not hand its VNC address to that tool. The panel remains the view.
+
+```yaml
+workspaces:
+  - name: App under test
+    terminals:
+      - name: Copy A
+        kind: device
+        command: 127.0.0.1:5900
+      - name: Copy B
+        kind: device
+        command: 127.0.0.1:5901
 ```
 
 ---
