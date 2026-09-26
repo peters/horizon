@@ -1,9 +1,11 @@
 """An agent whose task is done stops its worker through the idle watcher, never while
-another agent is working, and the reason survives the stop."""
+another agent is working, and the reason and requester survive the stop."""
 import io
 import json
+import os
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 import threading
 import time
@@ -14,28 +16,42 @@ ROOT = Path(__file__).parent
 IDLE = runpy.run_path(str(ROOT / 'horizon-worker-idle'))
 STOP = runpy.run_path(str(ROOT / 'horizon-worker-stop'))
 Refused = IDLE['Refused']
+REQUESTER = ('@1', 'agent-a', 'claude')
 
 
 class WatcherTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.log = Path(temp.name, 'workspace', '.horizon', 'self-stops.jsonl')
+        self.root = Path(temp.name)
+        self.log = self.root / 'workspace' / '.horizon' / 'self-stops.jsonl'
         self.requests = []
+        self.steps = []
 
-    def stop(self, reason='PR 12 merged', window='@1', output=None, cores=None, accepted=True):
+    def stop(self, reason='PR 12 merged', output=None, cores=None, accepted=True):
         def request(pod, key):
             self.requests.append((pod, key))
             return accepted
-        return IDLE['self_stop'](reason, window, 'pod1', 'pod-key', log=self.log, now=lambda: 10_000.0,
-                                 output=lambda own: output, cores=lambda: cores, request=request)
 
-    def test_a_quiet_worker_records_the_reason_then_stops(self):
+        def sample():
+            self.steps.append('cores')
+            return cores
+
+        def newest(own):
+            self.steps.append(('output', own))
+            return output
+        return IDLE['self_stop'](reason, REQUESTER, 'pod1', 'pod-key', log=self.log, now=lambda: 10_000.0,
+                                 output=newest, cores=sample, request=request)
+
+    def test_a_quiet_worker_records_the_reason_and_requester_then_stops(self):
         self.assertIn('Stop requested', self.stop(output=10_000 - 600, cores=0.1))
         self.assertEqual(self.requests, [('pod1', 'pod-key')])
         record = json.loads(self.log.read_text())
-        self.assertEqual(record, {'at': 10_000_000, 'reason': 'PR 12 merged'})
+        self.assertEqual(record, {'at': 10_000_000, 'reason': 'PR 12 merged', 'session': 'agent-a',
+                                  'agent': 'claude'})
         self.assertEqual(STOP['last_stop'](self.log), record)
+        # Other sessions are checked after the CPU sample, right before the stop.
+        self.assertEqual(self.steps, ['cores', ('output', '@1')])
 
     def test_another_working_agent_or_a_busy_worker_refuses_the_stop(self):
         with self.assertRaisesRegex(Refused, 'Another agent session'):
@@ -47,17 +63,6 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.requests, [])
         self.assertFalse(self.log.exists())
 
-    def test_the_callers_own_window_is_not_other_activity(self):
-        listing = '@1 9990\n@2 9000\n'
-        other = IDLE['other_output']
-        original = IDLE['subprocess'].run
-        IDLE['subprocess'].run = lambda *args, **kwargs: IDLE['subprocess'].CompletedProcess(args, 0, stdout=listing)
-        try:
-            self.assertEqual(other('@1'), 9000)
-            self.assertEqual(other('@2'), 9990)
-        finally:
-            IDLE['subprocess'].run = original
-
     def test_a_refused_provider_request_leaves_no_record(self):
         self.stop(reason='first stop')
         with self.assertRaisesRegex(Refused, 'did not accept'):
@@ -65,26 +70,63 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(STOP['last_stop'](self.log)['reason'], 'first stop')
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
 
-    def test_requests_arrive_over_the_socket_and_malformed_ones_are_answered(self):
-        self.assertEqual(IDLE['answer']('not json', 'pod1', 'key'), {'ok': False, 'message': 'Malformed stop request.'})
-        with tempfile.TemporaryDirectory() as root:
-            path = Path(root, 'stop.sock')
-            seen = []
+    def test_the_caller_is_found_from_its_process_tree_not_its_own_claim(self):
+        panes = '100 @1 agent-a\n200 @2 agent-b\n'
+        parents = {510: 505, 505: 100, 700: 1}
+        sessions = self.root / 'sessions'
+        (sessions / 'agent-a').mkdir(parents=True)
+        (sessions / 'agent-a' / 'agent').write_text('codex\n')
+        caller = IDLE['caller']
+        query = lambda *args: panes
+        self.assertEqual(caller(510, query=query, parent_of=parents.get, sessions=sessions),
+                         ('@1', 'agent-a', 'codex'))
+        # A process outside every agent session cannot stop the worker.
+        with self.assertRaisesRegex(Refused, 'Only an agent session'):
+            caller(700, query=query, parent_of=lambda pid: parents.get(pid, 0), sessions=sessions)
+        # A session without a readable agent binding still identifies its window.
+        self.assertEqual(caller(200, query=query, parent_of=parents.get, sessions=sessions), ('@2', 'agent-b', ''))
 
-            def stop(reason, window, pod, key):
-                seen.append((reason, window, pod, key))
-                if reason == 'busy':
-                    raise Refused('This worker is busy')
-                return 'Stop requested.'
-            threading.Thread(target=IDLE['serve_stop_requests'], args=('pod1', 'key', path, stop),
-                             daemon=True).start()
-            deadline = time.time() + 5
-            while not path.exists() and time.time() < deadline:
-                time.sleep(0.01)
-            request = STOP['request_stop']
-            self.assertEqual(request('done', path=path, window=lambda: '@4'), (True, 'Stop requested.'))
-            self.assertEqual(request('busy', path=path, window=lambda: None), (False, 'This worker is busy'))
-            self.assertEqual(seen[0], ('done', '@4', 'pod1', 'key'))
+    def test_windows_other_than_the_callers_count_and_tmux_failures_refuse(self):
+        listing = lambda *args: '@1 9990\n@2 9000\n'
+        self.assertEqual(IDLE['other_output']('@1', query=listing), 9000)
+        self.assertEqual(IDLE['other_output']('@2', query=listing), 9990)
+        self.assertIsNone(IDLE['other_output']('@1', query=lambda *args: '@1 9990\n'))
+
+        def broken(*args, **kwargs):
+            raise subprocess.TimeoutExpired('tmux', 10)
+        with self.assertRaisesRegex(Refused, 'cannot be checked'):
+            IDLE['tmux']('list-windows', run=broken)
+
+    def test_the_parent_of_a_process_comes_from_proc(self):
+        proc = self.root / 'proc'
+        (proc / '42').mkdir(parents=True)
+        (proc / '42' / 'stat').write_text('42 (a (strange) name) S 17 42 42 0 -1\n')
+        self.assertEqual(IDLE['parent'](42, proc=proc), 17)
+        self.assertEqual(IDLE['parent'](43, proc=proc), 0)
+
+    def test_requests_arrive_over_the_socket_with_the_kernels_caller(self):
+        self.assertEqual(IDLE['answer']('not json', 1, 'pod1', 'key'),
+                         {'ok': False, 'message': 'Malformed stop request.'})
+        path = self.root / 'stop.sock'
+        seen = []
+
+        def identify(pid):
+            seen.append(pid)
+            return REQUESTER
+
+        def stop(reason, requester, pod, key):
+            if reason == 'busy':
+                raise Refused('This worker is busy')
+            return f'Stop requested by {requester[1]}.'
+        threading.Thread(target=IDLE['serve_stop_requests'], args=('pod1', 'key', path, stop, identify),
+                         daemon=True).start()
+        deadline = time.time() + 5
+        while not path.exists() and time.time() < deadline:
+            time.sleep(0.01)
+        request = STOP['request_stop']
+        self.assertEqual(request('done', path=path), (True, 'Stop requested by agent-a.'))
+        self.assertEqual(request('busy', path=path), (False, 'This worker is busy'))
+        self.assertEqual(seen, [os.getpid(), os.getpid()])
 
 
 class ClientTests(unittest.TestCase):
@@ -117,12 +159,12 @@ class ClientTests(unittest.TestCase):
         self.assertEqual([json.loads(line) for line in stdout.getvalue().splitlines()],
                          [{'jsonrpc': '2.0', 'id': 1, 'result': {}}])
 
-    def test_last_stop_skips_unreadable_lines(self):
+    def test_last_stop_skips_unreadable_lines_and_fills_a_missing_requester(self):
         with tempfile.TemporaryDirectory() as root:
             log = Path(root, 'self-stops.jsonl')
             self.assertIsNone(STOP['last_stop'](log))
             log.write_text('{"at": 1, "reason": "first"}\n{"at": 2, "reason": "   "}\nbroken\n')
-            self.assertEqual(STOP['last_stop'](log), {'at': 1, 'reason': 'first'})
+            self.assertEqual(STOP['last_stop'](log), {'at': 1, 'reason': 'first', 'agent': '', 'session': ''})
 
 
 if __name__ == '__main__':

@@ -42,10 +42,16 @@ this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other 
 The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
 `stop_this_worker` tool on opted-in workers, asks it to stop the worker when a task is
-done. Only the watcher holds the provider credential; it refuses while another agent
-window printed output in the last two minutes or the container averages half a core,
-records accepted stops in `/workspace/.horizon/self-stops.jsonl`, and `--ready`
-reports the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
+done. The watcher is the only process that uses the provider credential, but agent
+sessions run as root today, so this is not an isolation boundary (per-agent credential
+isolation is tracked separately). It identifies the requesting session from the
+connecting process through the kernel's peer credentials and its tmux pane, never from
+the request, and refuses callers outside an agent session. It refuses while another
+agent window printed output in the last two minutes, checked after its CPU sample and
+right before the stop, while the container averages half a core, or when tmux cannot
+be inspected. Accepted stops are recorded with the requesting session and agent in
+`/workspace/.horizon/self-stops.jsonl`; `--ready` reports `horizon-self-stop-contract=1`
+and the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.
 Disabled agent requests are rejected before writing session or worktree state.
 

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -106,16 +107,49 @@ def reason_text(reason):
     return text[:REASON_LIMIT]
 
 
-def other_output(own):
-    """Newest output time of any agent window except `own`, or None without others."""
+def tmux(*args, run=subprocess.run):
+    """Output of one tmux query; any failure refuses the stop, since activity is unknown."""
     try:
-        listing = subprocess.run(['tmux', '-L', 'horizon-cloud', 'list-windows', '-a', '-F',
-                                  '#{window_id} #{window_activity}'],
-                                 capture_output=True, text=True, timeout=10, check=True).stdout
+        return run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=10,
+                   check=True).stdout
     except (OSError, subprocess.SubprocessError):
-        return None
+        raise Refused('Agent sessions on this worker cannot be checked right now; leave it running.') from None
+
+
+def parent(pid, proc=Path('/proc')):
+    """The parent process of `pid`, or 0 when it has ended."""
+    try:
+        return int((proc / str(pid) / 'stat').read_text().rsplit(') ', 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def caller(pid, query=tmux, parent_of=parent, sessions=Path('/workspace/sessions')):
+    """The agent session whose process tree `pid` belongs to, as (window, session, agent).
+    The kernel names the connecting process, so a caller cannot speak for another window."""
+    panes = {}
+    for line in query('list-panes', '-a', '-F', '#{pane_pid} #{window_id} #{session_name}').splitlines():
+        fields = line.split(' ', 2)
+        if len(fields) == 3 and fields[0].isdigit():
+            panes[int(fields[0])] = (fields[1], fields[2])
+    seen = set()
+    while pid > 1 and pid not in seen:
+        if pid in panes:
+            window, session = panes[pid]
+            try:
+                agent = (sessions / session / 'agent').read_text().strip()
+            except OSError:
+                agent = ''
+            return window, session, agent if agent.isalnum() and len(agent) <= 20 else ''
+        seen.add(pid)
+        pid = parent_of(pid)
+    raise Refused('Only an agent session on this worker can stop it.')
+
+
+def other_output(own, query=tmux):
+    """Newest output time of any agent window except `own`, or None without others."""
     stamps = []
-    for line in listing.splitlines():
+    for line in query('list-windows', '-a', '-F', '#{window_id} #{window_activity}').splitlines():
         window, _, stamp = line.partition(' ')
         if window != own and stamp.isdigit():
             stamps.append(int(stamp))
@@ -132,21 +166,25 @@ def busy_cores(sample=CPU_SAMPLE_SECONDS):
     return (after - before) / sample
 
 
-def self_stop(reason, window, pod_id, key, log=STOP_LOG, now=time.time, output=other_output, cores=busy_cores,
+def self_stop(reason, requester, pod_id, key, log=STOP_LOG, now=time.time, output=other_output, cores=busy_cores,
               request=None):
-    """Checks, records and requests a stop an agent asked for. Returns the agent's message."""
+    """Checks, records and requests a stop that the agent session `requester`, as
+    (window, session, agent), asked for. Returns the agent's message."""
     text = reason_text(reason)
+    window, session, agent = requester
+    used = cores()
+    if used is not None and used >= BUSY_CORES:
+        raise Refused(f'This worker is busy ({used:.1f} cores in use); leave it running.')
+    # Checked after the CPU sample, right before the stop, so the sample is no blind spot.
     newest = output(window)
     if newest is not None and now() - newest < QUIET_SECONDS:
         raise Refused('Another agent session on this worker produced output in the last two minutes; '
                       'leave the worker running.')
-    used = cores()
-    if used is not None and used >= BUSY_CORES:
-        raise Refused(f'This worker is busy ({used:.1f} cores in use); leave it running.')
     log.parent.mkdir(parents=True, exist_ok=True)
     before = log.stat().st_size if log.exists() else 0
     with log.open('a') as file:
-        file.write(json.dumps({'at': int(now() * 1000), 'reason': text}) + '\n')
+        record = {'at': int(now() * 1000), 'reason': text, 'session': session, 'agent': agent}
+        file.write(json.dumps(record) + '\n')
     os.sync()
     try:
         stopped = (request or stop_worker)(pod_id, key)
@@ -159,17 +197,24 @@ def self_stop(reason, window, pod_id, key, log=STOP_LOG, now=time.time, output=o
         with log.open('r+') as file:
             file.truncate(before)
         raise Refused('The provider did not accept the stop request; the worker keeps running.')
-    print('Stopping this worker at an agent\'s request: ' + text, flush=True)
+    print(f'Stopping this worker at the request of session {session}: {text}', flush=True)
     return 'Stop requested. This worker is stopping; the person can resume it.'
 
 
-def answer(line, pod_id, key, stop=self_stop):
-    """The reply to one request line from horizon-worker-stop."""
+def peer_pid(connection):
+    """The process on the other end of a Unix socket, as the kernel reports it."""
+    pid, _, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                            struct.calcsize('3i')))
+    return pid
+
+
+def answer(line, pid, pod_id, key, stop=self_stop, identify=caller):
+    """The reply to one request line from the process `pid`."""
     try:
         request = json.loads(line)
         if not isinstance(request, dict):
             raise ValueError
-        message = stop(request.get('reason'), request.get('window'), pod_id, key)
+        message = stop(request.get('reason'), identify(pid), pod_id, key)
         return {'ok': True, 'message': message}
     except Refused as refusal:
         return {'ok': False, 'message': str(refusal)}
@@ -177,7 +222,7 @@ def answer(line, pod_id, key, stop=self_stop):
         return {'ok': False, 'message': 'Malformed stop request.'}
 
 
-def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop):
+def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop, identify=caller):
     """Answers stop requests one at a time on a socket only this machine can reach."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,7 +241,7 @@ def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop):
             try:
                 connection.settimeout(30)
                 line = connection.makefile('r').readline(4096)
-                reply = answer(line, pod_id, key, stop)
+                reply = answer(line, peer_pid(connection), pod_id, key, stop, identify)
                 connection.sendall((json.dumps(reply) + '\n').encode())
             # One bad client must not end the watcher.
             except Exception as error:

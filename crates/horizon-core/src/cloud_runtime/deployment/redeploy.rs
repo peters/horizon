@@ -51,6 +51,8 @@ pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) ->
     state.stop_requested = false;
     state.browserstack_released = true;
     state.browserstack_targets.clear();
+    // A new worker starts without the previous worker's stop reason.
+    state.last_self_stop = None;
     store.save(state)
 }
 

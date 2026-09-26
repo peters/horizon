@@ -3,14 +3,13 @@
 
 `horizon-worker-stop --reason TEXT` asks from a shell, `horizon-worker-stop mcp` offers
 the same request to agents as one MCP tool, and `--last` prints the newest recorded stop.
-The idle watcher holds the worker credential, checks the request and makes the stop.
+The idle watcher, the only process that uses the worker credential, identifies the
+calling agent session, checks the request and makes the stop.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import socket
-import subprocess
 import sys
 
 
@@ -28,19 +27,7 @@ NOT_ALLOWED = ('This worker cannot stop itself: its cloud profile does not set i
                'or the provider supplied no worker credential.')
 
 
-def own_window():
-    """The tmux window of the calling agent, whose own output is not other activity."""
-    pane = os.environ.get('TMUX_PANE')
-    if not pane:
-        return None
-    try:
-        return subprocess.run(['tmux', '-L', 'horizon-cloud', 'display-message', '-p', '-t', pane, '#{window_id}'],
-                              capture_output=True, text=True, timeout=10, check=True).stdout.strip() or None
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def request_stop(reason, path=STOP_SOCKET, window=own_window):
+def request_stop(reason, path=STOP_SOCKET):
     """Asks the idle watcher to stop this worker. Returns (accepted, message)."""
     if not path.exists():
         return False, NOT_ALLOWED
@@ -49,7 +36,7 @@ def request_stop(reason, path=STOP_SOCKET, window=own_window):
             # The watcher samples CPU for a few seconds before it answers.
             client.settimeout(60)
             client.connect(str(path))
-            client.sendall((json.dumps({'reason': reason, 'window': window()}) + '\n').encode())
+            client.sendall((json.dumps({'reason': reason}) + '\n').encode())
             reply = json.loads(client.makefile('r').readline(4096))
     except (OSError, ValueError):
         return False, NOT_ALLOWED
@@ -59,7 +46,7 @@ def request_stop(reason, path=STOP_SOCKET, window=own_window):
 
 
 def last_stop(log=STOP_LOG):
-    """The newest recorded stop as {'at', 'reason'}, or None."""
+    """The newest recorded stop as {'at', 'reason', 'agent', 'session'}, or None."""
     try:
         lines = log.read_text().splitlines()
     except OSError:
@@ -71,7 +58,9 @@ def last_stop(log=STOP_LOG):
             continue
         if (isinstance(record, dict) and isinstance(record.get('at'), int)
                 and isinstance(record.get('reason'), str) and record['reason'].strip()):
-            return {'at': record['at'], 'reason': ' '.join(record['reason'].split())[:200]}
+            text = lambda key: record[key] if isinstance(record.get(key), str) else ''
+            return {'at': record['at'], 'reason': ' '.join(record['reason'].split())[:200],
+                    'agent': text('agent'), 'session': text('session')}
     return None
 
 

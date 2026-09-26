@@ -7,15 +7,42 @@ const CAPABILITIES_MARKER: &str = "horizon-capabilities-contract=1";
 const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
 const CONTAINER_STARTED_MARKER: &str = "horizon-container-started=";
 const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
+const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
-/// A stop an agent asked for on its worker, with the reason it gave.
+/// A stop an agent asked for on its worker, with the reason it gave and who asked.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SelfStop {
     /// Milliseconds since the epoch by the worker's clock.
     pub at: u64,
     pub reason: String,
+    /// The requesting session's agent, such as `claude`, when the worker knew it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// The requesting Horizon session, as the watcher identified it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+impl SelfStop {
+    fn well_formed(mut self) -> Option<Self> {
+        let reason_ok = !self.reason.trim().is_empty()
+            && self.reason.chars().count() <= SELF_STOP_REASON_LIMIT
+            && !self.reason.chars().any(char::is_control);
+        // Older records and unknown requesters carry empty names; keep only plain ones.
+        self.agent = self
+            .agent
+            .filter(|agent| !agent.is_empty() && agent.len() <= 20 && agent.chars().all(|c| c.is_ascii_alphanumeric()));
+        self.session = self.session.filter(|session| {
+            !session.is_empty()
+                && session.len() <= 100
+                && session
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        });
+        reason_ok.then_some(self)
+    }
 }
 
 /// Optional worker features the checker reports beside the required markers.
@@ -28,6 +55,8 @@ pub struct WorkerContract {
     pub container_started: Option<std::time::SystemTime>,
     /// The newest stop an agent asked for on this worker. Older images do not report it.
     pub last_self_stop: Option<SelfStop>,
+    /// The image supports agent stops, so a missing `last_self_stop` means none was recorded.
+    pub self_stop_reported: bool,
 }
 
 impl WorkerContract {
@@ -44,11 +73,8 @@ impl WorkerContract {
                 .lines()
                 .find_map(|line| line.strip_prefix(LAST_SELF_STOP_MARKER))
                 .and_then(|json| serde_json::from_str::<SelfStop>(json).ok())
-                .filter(|stop| {
-                    !stop.reason.trim().is_empty()
-                        && stop.reason.chars().count() <= SELF_STOP_REASON_LIMIT
-                        && !stop.reason.chars().any(char::is_control)
-                }),
+                .and_then(SelfStop::well_formed),
+            self_stop_reported: reports(output, SELF_STOP_MARKER),
         }
     }
 }

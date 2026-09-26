@@ -106,7 +106,7 @@ def last_self_stop():
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         return None
     if isinstance(record, dict) and isinstance(record.get('at'), int) and isinstance(record.get('reason'), str):
-        return {'at': record['at'], 'reason': record['reason']}
+        return {key: record[key] for key in ('at', 'reason', 'agent', 'session') if key in record}
     return None
 
 
@@ -198,6 +198,9 @@ try:
         started = container_started()
         if started is not None:
             print(f'horizon-container-started={started}')
+        if shutil.which('horizon-worker-stop'):
+            # Lets Horizon tell "no stop recorded on this worker" from an older image.
+            print('horizon-self-stop-contract=1')
         stopped = last_self_stop()
         if stopped is not None:
             print('horizon-last-self-stop=' + json.dumps(stopped, separators=(',', ':')))

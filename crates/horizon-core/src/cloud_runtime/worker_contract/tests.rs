@@ -159,8 +159,26 @@ fn the_newest_stop_an_agent_asked_for_is_read_only_when_well_formed() {
         Some(SelfStop {
             at: 1_790_000_000_000,
             reason: "PR 12 merged".into(),
+            agent: None,
+            session: None,
         })
     );
+    assert!(!reported.self_stop_reported);
+    let requester = WorkerContract::reported(&format!(
+        "{current}horizon-self-stop-contract=1\nhorizon-last-self-stop={{\"at\":1,\"reason\":\"done\",\"agent\":\"codex\",\"session\":\"agent-a\"}}\n"
+    ));
+    assert!(requester.self_stop_reported);
+    let stop = requester.last_self_stop.unwrap();
+    assert_eq!(
+        (stop.agent.as_deref(), stop.session.as_deref()),
+        (Some("codex"), Some("agent-a"))
+    );
+    // Empty or unusual requester names are dropped, keeping the reason.
+    let unnamed = WorkerContract::reported(&format!(
+        "{current}horizon-last-self-stop={{\"at\":1,\"reason\":\"done\",\"agent\":\"\",\"session\":\"a b\"}}\n"
+    ));
+    let stop = unnamed.last_self_stop.unwrap();
+    assert_eq!((stop.agent, stop.session), (None, None));
     let long = "x".repeat(201);
     for invalid in [
         "{\"at\":1,\"reason\":\"  \"}".to_owned(),

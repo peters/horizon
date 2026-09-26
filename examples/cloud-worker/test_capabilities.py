@@ -211,12 +211,15 @@ class CapabilitiesTests(unittest.TestCase):
             status, output, _ = self.run_check('--ready', reported=reported)
         self.assertEqual(status, 0, output)
         self.assertIn('horizon-last-self-stop={"at":1790000000000,"reason":"PR 12 merged"}', output.splitlines())
-        # Without a record, or with an older image, readiness reports nothing about it.
-        for reported, missing in [({'horizon-worker-stop': b'null\n'}, ()), ({}, ('horizon-worker-stop',))]:
+        self.assertIn('horizon-self-stop-contract=1', output.splitlines())
+        # Without a record the image still says it supports them; an older image says neither.
+        for reported, missing, supported in [({'horizon-worker-stop': b'null\n'}, (), True),
+                                             ({}, ('horizon-worker-stop',), False)]:
             with mock.patch('socket.create_connection', return_value=connection):
                 status, output, _ = self.run_check('--ready', reported=reported, missing=missing)
             self.assertEqual(status, 0, output)
             self.assertNotIn('horizon-last-self-stop=', output)
+            self.assertEqual('horizon-self-stop-contract=1' in output.splitlines(), supported)
 
     def test_agents_get_the_stop_tool_only_where_the_profile_opts_in(self):
         self.write('/workspace/capabilities.json', {'agents': ['claude']})

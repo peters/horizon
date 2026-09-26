@@ -62,12 +62,24 @@ pub(super) fn wait(
             Ok(None)
         })
     })?;
-    // Only a report changes what the card says; older images keep the last reason shown.
-    if contract.last_self_stop.is_some() && contract.last_self_stop != state.last_self_stop {
-        state.last_self_stop.clone_from(&contract.last_self_stop);
+    if record_self_stop(state, &contract) {
         store.save(state)?;
     }
     Ok((connection, contract))
+}
+
+/// Keeps the newest stop an agent asked for as the worker reports it. An image that
+/// supports agent stops also clears it when none is recorded; older images change nothing.
+/// Returns whether the record changed.
+fn record_self_stop(state: &mut super::Deployment, contract: &WorkerContract) -> bool {
+    let reported = if contract.self_stop_reported || contract.last_self_stop.is_some() {
+        contract.last_self_stop.clone()
+    } else {
+        state.last_self_stop.clone()
+    };
+    let changed = reported != state.last_self_stop;
+    state.last_self_stop = reported;
+    changed
 }
 
 fn with_verified_worker<T>(
@@ -210,5 +222,43 @@ mod tests {
             assert!(matches!(result, Err(Error::Invalid(TIMEOUT))));
             assert_eq!(probes, 1);
         }
+    }
+
+    #[test]
+    fn a_supporting_image_reports_or_clears_the_last_agent_stop_and_older_images_keep_it() {
+        let mut state: super::super::Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"self-stop","repository":"/fixture","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Readiness","operation":{"state":"bound","worker_id":"worker1"},"spec":null,
+            "worker":null,"sessions":[]
+        }))
+        .unwrap();
+        let stop = crate::cloud_runtime::SelfStop {
+            at: 1_790_000_000_000,
+            reason: "PR 12 merged".into(),
+            agent: Some("claude".into()),
+            session: Some("agent-a".into()),
+        };
+        let reported = WorkerContract {
+            last_self_stop: Some(stop.clone()),
+            self_stop_reported: true,
+            ..WorkerContract::default()
+        };
+        assert!(record_self_stop(&mut state, &reported));
+        assert!(
+            !record_self_stop(&mut state, &reported),
+            "an unchanged report saves nothing"
+        );
+        assert!(
+            !record_self_stop(&mut state, &WorkerContract::default()),
+            "older images keep it"
+        );
+        assert_eq!(state.last_self_stop, Some(stop));
+        let none_recorded = WorkerContract {
+            self_stop_reported: true,
+            ..WorkerContract::default()
+        };
+        assert!(record_self_stop(&mut state, &none_recorded));
+        assert_eq!(state.last_self_stop, None);
     }
 }

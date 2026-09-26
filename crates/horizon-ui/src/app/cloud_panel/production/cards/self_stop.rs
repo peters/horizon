@@ -12,8 +12,9 @@ fn describe(stop: &SelfStop, now: SystemTime) -> String {
     let age = UNIX_EPOCH
         .checked_add(Duration::from_millis(stop.at))
         .and_then(|at| now.duration_since(at).ok());
+    let who = stop.agent.as_deref().unwrap_or("an agent");
     format!(
-        "Stopped by an agent {}: {}",
+        "Stopped by {who} {}: {}",
         age.map_or_else(|| "just now".into(), ago),
         stop.reason
     )
@@ -34,9 +35,11 @@ mod tests {
 
     #[test]
     fn the_card_says_when_and_why_an_agent_stopped_the_worker() {
-        let stop = SelfStop {
+        let mut stop = SelfStop {
             at: 1_790_000_000_000,
             reason: "PR 12 merged".into(),
+            agent: None,
+            session: None,
         };
         let at = UNIX_EPOCH + Duration::from_millis(stop.at);
         let after = |seconds| at + Duration::from_secs(seconds);
@@ -57,6 +60,11 @@ mod tests {
         assert_eq!(
             describe(&stop, at - Duration::from_secs(60)),
             "Stopped by an agent just now: PR 12 merged"
+        );
+        stop.agent = Some("claude".into());
+        assert_eq!(
+            describe(&stop, after(600)),
+            "Stopped by claude 10 min ago: PR 12 merged"
         );
     }
 }
