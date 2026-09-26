@@ -2,6 +2,7 @@
 //! are asked; today that is `RunPod`.
 use super::{Cancellation, Result, settings::Settings};
 use horizon_cloud::runpod::RunPod;
+pub use horizon_cloud::runpod::prices::STORAGE as RUNPOD_STORAGE;
 pub use horizon_cloud::{
     Profile,
     prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability, StoragePrices},

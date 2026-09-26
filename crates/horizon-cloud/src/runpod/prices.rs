@@ -12,14 +12,16 @@ use crate::{
 };
 use serde::{Deserialize, de::DeserializeOwned};
 
-/// `RunPod`'s storage list prices (September 2026): standard network volumes at $0.07
-/// for the first TB and $0.05 beyond it, and pod volumes at $0.10 while running and
-/// $0.20 while stopped. The catalog does not publish them.
+/// `RunPod`'s storage list prices: standard network volumes at $0.07 per GB-month for
+/// the first TB and $0.05 beyond it, pod volumes at $0.10 while running and $0.20 while
+/// stopped, and container disks at $0.10 while running. The catalog does not publish them.
 pub const STORAGE: StoragePrices = StoragePrices {
     network: 0.07,
     network_tier_gb: 1000,
     network_beyond: 0.05,
     pod_volume: (0.10, 0.20),
+    container: 0.10,
+    confirmed: "2026-09-26",
 };
 
 impl RunPod {
