@@ -13,6 +13,8 @@ const MONTH_HOURS: f64 = 730.0;
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
 const DEFAULT_STORAGE_GB: u16 = 20;
+/// The longest expected duration priced: a year.
+const MAX_HOURS: f64 = 24.0 * 366.0;
 
 /// What the work needs. Every field is optional; an empty request lists the cheapest CPU
 /// workers.
@@ -33,7 +35,8 @@ pub struct Requirements {
     pub gpu_type: Option<String>,
     #[serde(default)]
     pub max_hourly: Option<f64>,
-    /// Expected running time for the estimated total. One hour when omitted.
+    /// Expected running time for the estimated total, at most a year. One hour when
+    /// omitted.
     #[serde(default)]
     pub hours: Option<f64>,
     /// Workspace storage priced into the estimate: 10 to 4000 GB for CPU workers, at
@@ -53,12 +56,23 @@ pub struct Requirements {
 
 impl Requirements {
     /// # Errors
-    /// Rejects negative or non-finite amounts, an empty GPU type or region, storage Horizon
-    /// could not create, and a limit outside 1 to 50.
+    /// Rejects negative or non-finite amounts, more than a year of hours, requirements for
+    /// the other kind of worker, an empty GPU type or region, storage Horizon could not
+    /// create, and a limit outside 1 to 50.
     pub fn validate(&self) -> Result<(), &'static str> {
         let finite = |value: Option<f64>| value.is_none_or(|value| value.is_finite() && value >= 0.0);
         if !finite(self.max_hourly) || !finite(self.hours) {
             return Err("Prices and hours must be zero or more");
+        }
+        if self.hours.is_some_and(|hours| hours > MAX_HOURS) {
+            return Err("Hours must be at most a year");
+        }
+        // A requirement the offers cannot meet or report is refused, never ignored.
+        if self.gpu && (self.min_vcpu.is_some() || self.min_memory_gb.is_some()) {
+            return Err("vCPU and memory minimums apply to CPU workers; GPU offers are chosen by GPU memory or type");
+        }
+        if !self.gpu && (self.min_gpu_memory_gb.is_some() || self.gpu_type.is_some() || self.include_unavailable) {
+            return Err("GPU memory, GPU type and include_unavailable need gpu=true");
         }
         if self.gpu_type.as_deref().is_some_and(|value| value.trim().is_empty())
             || self.region.as_deref().is_some_and(|value| value.trim().is_empty())
@@ -509,6 +523,46 @@ mod tests {
         assert!(!storage(false, 0) && !storage(false, 9) && !storage(false, 4001));
         assert!(storage(false, 10) && storage(false, 4000));
         assert!(!storage(true, 0) && storage(true, 5));
+        // Requirements for the other kind of worker are refused rather than ignored.
+        let rejected = [
+            Requirements {
+                gpu_type: Some("RTX A5000".into()),
+                ..Requirements::default()
+            },
+            Requirements {
+                min_gpu_memory_gb: Some(24),
+                ..Requirements::default()
+            },
+            Requirements {
+                include_unavailable: true,
+                ..Requirements::default()
+            },
+            Requirements {
+                gpu: true,
+                min_vcpu: Some(32),
+                ..Requirements::default()
+            },
+            Requirements {
+                gpu: true,
+                min_memory_gb: Some(64),
+                ..Requirements::default()
+            },
+            Requirements {
+                hours: Some(f64::MAX),
+                ..Requirements::default()
+            },
+        ];
+        for requirements in rejected {
+            assert!(requirements.validate().is_err(), "{requirements:?}");
+        }
+        assert!(
+            Requirements {
+                hours: Some(MAX_HOURS),
+                ..Requirements::default()
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(Requirements::default().validate().is_ok());
     }
 }

@@ -98,19 +98,22 @@ pub(crate) struct CloudOffersInput {
     pub gpu_type: Option<String>,
     /// Highest acceptable hourly price in US dollars.
     pub max_hourly: Option<f64>,
-    /// Expected running hours, for the estimated total. One hour when omitted.
+    /// Expected running hours for the estimated total, at most a year. One hour when omitted.
     pub hours: Option<f64>,
     /// Workspace storage in GB priced into the estimate: 10 to 4000 for CPU workers, at
     /// least 1 for GPU workers, and 20 when omitted.
     pub storage_gb: Option<u16>,
     /// A region such as "EUROPE" or "North America".
     pub region: Option<String>,
-    /// Also list GPU types without stock where the worker may go.
+    /// With gpu=true, also list GPU types without stock where the worker may go.
     #[serde(default)]
     pub include_unavailable: bool,
     /// At most this many offers, cheapest first: 1 to 50, and 10 when omitted.
     pub limit: Option<usize>,
 }
+
+/// The request's deadline plus a moment for the host's answer to be read.
+const OFFERS_WAIT: Duration = Duration::from_millis(provider_usage::REQUEST_DEADLINE_MILLIS.unsigned_abs() + 1_000);
 
 impl BrowserController {
     pub(crate) async fn cloud_offers(&self, input: CloudOffersInput) -> Result<Value, String> {
@@ -135,8 +138,9 @@ impl BrowserController {
                     .offers
                     .ok_or_else(|| "cloud_offers_result_unavailable".to_string());
             }
-            // The host may fetch prices first, which takes a few seconds.
-            if started.elapsed() >= Duration::from_secs(25) {
+            // The host answers before the request expires, with offers or an error, even
+            // while it is still fetching prices; after that nothing answers.
+            if started.elapsed() >= OFFERS_WAIT {
                 return Err("cloud_offers_timed_out: Horizon did not answer; is it running?".into());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

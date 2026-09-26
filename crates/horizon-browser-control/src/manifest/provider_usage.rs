@@ -123,6 +123,9 @@ pub fn enqueue_catalog(
     )
 }
 
+/// How long the host has to answer a request before it expires.
+pub const REQUEST_DEADLINE_MILLIS: i64 = 15_000;
+
 /// Queues a read-only request for ranked cloud compute offers, answered by the live host
 /// from prices it observed; nothing is rented.
 /// # Errors
@@ -203,7 +206,7 @@ fn enqueue_request_at(
         actor: identity.actor.to_string(),
         host_instance: host.unwrap_or_default().to_string(),
         provider,
-        deadline_at_millis: super::now_millis() + 15_000,
+        deadline_at_millis: super::now_millis() + REQUEST_DEADLINE_MILLIS,
         claimed: false,
         catalog,
         cloud_offers,
