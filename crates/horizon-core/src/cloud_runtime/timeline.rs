@@ -94,9 +94,34 @@ pub struct Timeline {
     #[serde(default)]
     pub reconnected: bool,
     pub spans: Vec<Span>,
+    /// Milliseconds since the epoch when an explicit resume asked the provider to start
+    /// the worker. Set until the reconnection that follows completes the timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_requested: Option<u64>,
 }
 
+/// A resume request older than this is not counted as part of a later reconnection.
+const RESUME_WINDOW: Duration = Duration::from_secs(600);
+
 impl Timeline {
+    /// The pending timeline of an explicit resume, completed by the reconnection after it.
+    #[must_use]
+    pub fn resume_requested(at: SystemTime) -> Self {
+        let millis = at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        Self {
+            reconnected: true,
+            spans: Vec::new(),
+            resume_requested: u64::try_from(millis).ok(),
+        }
+    }
+
+    fn resume_started(&self) -> Option<SystemTime> {
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(self.resume_requested?))
+    }
+
     #[must_use]
     pub fn total(&self) -> Duration {
         Duration::from_millis(self.spans.iter().map(|span| span.millis).sum())
@@ -177,12 +202,26 @@ impl Recorder {
     }
 
     /// Closes the attempt at `end`. When the worker reported its container start, the
-    /// provider phase ends there, so the image download is separated from boot.
-    pub fn finish(&self, reconnected: bool, container_started: Option<SystemTime>, end: SystemTime) -> Timeline {
+    /// provider phase ends there, so the image download is separated from boot. A recent
+    /// explicit resume in `pending` adds its start request before the reconnection.
+    pub fn finish(
+        &self,
+        reconnected: bool,
+        container_started: Option<SystemTime>,
+        end: SystemTime,
+        pending: Option<&Timeline>,
+    ) -> Timeline {
         let Ok(marks) = self.0.lock() else {
             return Timeline::default();
         };
         let mut spans = Vec::new();
+        if let (Some(requested), Some((_, first))) = (pending.and_then(Timeline::resume_started), marks.entered.first())
+            && first
+                .duration_since(requested)
+                .is_ok_and(|waited| waited <= RESUME_WINDOW)
+        {
+            push(&mut spans, Phase::Provision, requested, *first);
+        }
         for (index, (phase, start)) in marks.entered.iter().enumerate() {
             let stop = marks.entered.get(index + 1).map_or(end, |(_, next)| *next);
             if *phase == Phase::ProviderStart {
@@ -198,8 +237,37 @@ impl Recorder {
                 push(&mut spans, *phase, *start, stop);
             }
         }
-        Timeline { reconnected, spans }
+        Timeline {
+            reconnected,
+            spans,
+            resume_requested: None,
+        }
     }
+}
+
+impl Recorder {
+    /// Completes the attempt now, continuing a pending resume saved in `state`.
+    pub fn complete(
+        &self,
+        state: &super::state::Deployment,
+        reconnected: bool,
+        container_started: Option<SystemTime>,
+    ) -> Timeline {
+        self.finish(
+            reconnected,
+            container_started,
+            SystemTime::now(),
+            state.timeline.as_ref(),
+        )
+    }
+}
+
+/// Only a worker that was ready before is reconnected; retrying a first deployment
+/// whose worker already exists still completes that deployment.
+#[must_use]
+pub(crate) fn reconnects(state: &super::state::Deployment) -> bool {
+    matches!(state.operation, super::CreateState::Bound { .. })
+        && state.ready_history == super::state::ReadyHistory::Observed
 }
 
 fn push(spans: &mut Vec<Span>, phase: Phase, start: SystemTime, stop: SystemTime) {

@@ -183,6 +183,7 @@ mod tests {
         Timeline {
             reconnected,
             spans: spans.iter().map(|&(phase, millis)| Span { phase, millis }).collect(),
+            resume_requested: None,
         }
     }
 

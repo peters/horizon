@@ -56,7 +56,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
-    let reconnected = matches!(state.operation, CreateState::Bound { .. });
+    let reconnected = super::timeline::reconnects(&state);
     if state.stage == Stage::Deleted {
         let public_key = current_public_key(&request.settings.ssh_identity_file)?;
         redeploy::reopen(&store, &mut state, &public_key)?;
@@ -139,7 +139,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
     replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
-    state.timeline = Some(timeline.finish(reconnected, contract.container_started, std::time::SystemTime::now()));
+    state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
     finish_ready(state, &store, started, emit)
 }
 

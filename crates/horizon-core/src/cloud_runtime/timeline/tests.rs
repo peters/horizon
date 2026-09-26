@@ -45,7 +45,7 @@ fn fresh_deployment() -> Recorder {
 
 #[test]
 fn the_container_start_separates_the_image_download_from_boot_and_publication() {
-    let timeline = fresh_deployment().finish(false, Some(at(1698)), at(2567));
+    let timeline = fresh_deployment().finish(false, Some(at(1698)), at(2567), None);
     assert_eq!(timeline.label(Phase::ProviderStart), "Image download");
     assert_eq!(timeline.total(), Duration::from_millis(256_700));
     assert_eq!(millis(&timeline, Phase::Prepare), 9_800);
@@ -66,7 +66,7 @@ fn the_container_start_separates_the_image_download_from_boot_and_publication() 
 
 #[test]
 fn older_workers_keep_boot_inside_the_provider_phase() {
-    let timeline = fresh_deployment().finish(false, None, at(2567));
+    let timeline = fresh_deployment().finish(false, None, at(2567), None);
     assert_eq!(millis(&timeline, Phase::ProviderStart), 164_500);
     assert_eq!(millis(&timeline, Phase::WorkerStart), 0);
     assert!(timeline.spans.iter().all(|span| span.phase != Phase::WorkerStart));
@@ -76,7 +76,7 @@ fn older_workers_keep_boot_inside_the_provider_phase() {
 #[test]
 fn a_skewed_or_early_container_start_is_clamped_into_the_readiness_window() {
     for (reported, provider) in [(100, 0), (4_000, 165_800), (1_000, 78_100)] {
-        let timeline = fresh_deployment().finish(false, Some(at(reported)), at(2567));
+        let timeline = fresh_deployment().finish(false, Some(at(reported)), at(2567), None);
         assert_eq!(millis(&timeline, Phase::ProviderStart), provider, "{reported}");
         assert_eq!(timeline.total(), Duration::from_millis(256_700));
     }
@@ -90,7 +90,7 @@ fn a_reconnection_with_a_known_endpoint_counts_boot_as_readiness() {
     stage(&recorder, Stage::Readiness, 12);
     activity(&recorder, AWAITING_SERVICES, 25);
     stage(&recorder, Stage::Sessions, 284);
-    let timeline = recorder.finish(true, Some(at(60)), at(322));
+    let timeline = recorder.finish(true, Some(at(60)), at(322), None);
     assert!(timeline.reconnected);
     assert_eq!(timeline.label(Phase::ProviderStart), "Worker start");
     assert_eq!(timeline.label(Phase::Sessions), Phase::Sessions.label());
@@ -105,7 +105,7 @@ fn saved_timelines_round_trip_and_unrelated_events_are_ignored() {
     let recorder = fresh_deployment();
     recorder.observe_at(&Event::Output("hint: branch".into()), at(2500));
     activity(&recorder, "Removed agent credential bindings", 2555);
-    let timeline = recorder.finish(false, Some(at(1698)), at(2567));
+    let timeline = recorder.finish(false, Some(at(1698)), at(2567), None);
     let json = serde_json::to_value(&timeline).unwrap();
     assert_eq!(
         json["spans"][0],
@@ -116,4 +116,49 @@ fn saved_timelines_round_trip_and_unrelated_events_are_ignored() {
         serde_json::from_str::<Timeline>(r#"{"spans":[]}"#).unwrap(),
         Timeline::default()
     );
+}
+
+#[test]
+fn a_recent_resume_request_leads_the_reconnection_and_an_old_one_is_ignored() {
+    let reconnection = || {
+        let recorder = Recorder::default();
+        stage(&recorder, Stage::Validate, 30);
+        stage(&recorder, Stage::Readiness, 40);
+        activity(&recorder, AWAITING_SERVICES, 50);
+        stage(&recorder, Stage::Sessions, 300);
+        recorder
+    };
+    let recent = Timeline::resume_requested(at(3));
+    let timeline = reconnection().finish(true, None, at(320), Some(&recent));
+    assert_eq!(
+        timeline.spans[0],
+        Span {
+            phase: Phase::Provision,
+            millis: 2_700
+        }
+    );
+    assert_eq!(timeline.total(), Duration::from_millis(31_700));
+    assert_eq!(timeline.resume_requested, None);
+    let old = Timeline::resume_requested(at(0) - Duration::from_secs(3_600));
+    let timeline = reconnection().finish(true, None, at(320), Some(&old));
+    assert_eq!(timeline.total(), Duration::from_secs(29));
+    // A pending resume shows nothing until its reconnection completes it.
+    assert!(recent.total().is_zero());
+}
+
+#[test]
+fn only_a_worker_that_was_ready_before_counts_as_a_reconnection() {
+    let state = |operation: serde_json::Value, history: &str| -> crate::cloud_runtime::state::Deployment {
+        let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"timeline","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":"Readiness","operation":operation,"spec":null,"worker":null,
+            "sessions":[],"ready_history":history
+        }))
+        .unwrap()
+    };
+    let bound = serde_json::json!({"state":"bound","worker_id":"worker1"});
+    assert!(reconnects(&state(bound.clone(), "Observed")));
+    assert!(!reconnects(&state(bound, "Unobserved")));
+    assert!(!reconnects(&state(serde_json::json!({"state":"prepared"}), "Observed")));
 }

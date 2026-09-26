@@ -197,9 +197,11 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
         .inspect(worker_id, cancel)?
         .ok_or(horizon_cloud::CloudError::WorkerLost)?;
     worker.verify(spec)?;
+    let requested = std::time::SystemTime::now();
     if worker.status() == WorkerStatus::Stopped {
         provider.start(spec, worker_id, cancel)?;
     }
+    state.timeline = Some(super::timeline::Timeline::resume_requested(requested));
     state.stop_requested = false;
     state.stage = Stage::Readiness;
     store.save(&state)

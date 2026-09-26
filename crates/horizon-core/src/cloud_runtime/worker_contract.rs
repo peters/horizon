@@ -26,7 +26,7 @@ impl WorkerContract {
                 .find_map(|line| line.strip_prefix(CONTAINER_STARTED_MARKER))
                 .filter(|millis| !millis.is_empty() && millis.bytes().all(|b| b.is_ascii_digit()))
                 .and_then(|millis| millis.parse().ok())
-                .map(|millis| std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis)),
+                .and_then(|millis| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))),
         }
     }
 }

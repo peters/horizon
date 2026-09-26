@@ -53,6 +53,8 @@ fn the_container_start_is_read_only_from_its_exact_marker() {
             "{invalid}"
         );
     }
+    // The largest value must never panic; platforms with a smaller time range report none.
+    let _ = WorkerContract::reported(&format!("{current}horizon-container-started={}\n", u64::MAX));
     // An optional report never substitutes for a required contract marker.
     assert!(validate("horizon-container-started=5", &Capabilities::default(), false, false).is_err());
 }
