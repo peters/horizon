@@ -106,7 +106,12 @@ fn print_event(event: Event) {
             "[{at:7.1}s] Progress: {} completed={} total={:?}",
             progress.detail, progress.completed, progress.total
         ),
-        Event::Output(line) => println!("[{at:7.1}s] {line}"),
+        // One output event can carry a whole chunk of command output.
+        Event::Output(chunk) => {
+            for line in chunk.lines() {
+                println!("[{at:7.1}s] {line}");
+            }
+        }
         Event::Ready(state, _) => {
             if let Some(worker) = &state.worker {
                 println!(
@@ -116,7 +121,11 @@ fn print_event(event: Event) {
             }
             if let Some(timeline) = &state.timeline {
                 for (phase, duration) in timeline.phases() {
-                    println!("  {:>7.1}s  {}", duration.as_secs_f64(), timeline.label(phase));
+                    println!(
+                        "[{at:7.1}s]   {:>7.1}s  {}",
+                        duration.as_secs_f64(),
+                        timeline.label(phase)
+                    );
                 }
             }
         }

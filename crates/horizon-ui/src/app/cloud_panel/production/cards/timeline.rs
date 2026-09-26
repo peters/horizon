@@ -51,40 +51,36 @@ fn ribbon(ui: &mut egui::Ui, timeline: &Timeline) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), RIBBON_HEIGHT), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::same(RIBBON_RADIUS), theme::BORDER_SUBTLE());
-    let visible: Vec<_> = timeline.spans.iter().filter(|span| span.millis > 0).collect();
+    let visible = || timeline.spans.iter().filter(|span| span.millis > 0);
+    let last = visible().count().saturating_sub(1);
     let mut left = rect.left();
     let mut hovered = None;
-    for (index, span) in visible.iter().enumerate() {
+    for (index, span) in visible().enumerate() {
         let width = rect.width() * Duration::from_millis(span.millis).as_secs_f32() / total;
         let segment = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + width, rect.bottom()));
         // Only the outer ends are rounded, so adjacent phases meet flush.
         let corners = CornerRadius {
             nw: if index == 0 { RIBBON_RADIUS } else { 0 },
             sw: if index == 0 { RIBBON_RADIUS } else { 0 },
-            ne: if index + 1 == visible.len() { RIBBON_RADIUS } else { 0 },
-            se: if index + 1 == visible.len() { RIBBON_RADIUS } else { 0 },
+            ne: if index == last { RIBBON_RADIUS } else { 0 },
+            se: if index == last { RIBBON_RADIUS } else { 0 },
         };
         painter.rect_filled(segment, corners, color(span.phase));
         if response
             .hover_pos()
             .is_some_and(|pointer| segment.x_range().contains(pointer.x))
         {
-            hovered = Some(span.phase);
+            hovered = Some(span);
         }
         left += width;
     }
-    if let Some(phase) = hovered {
-        let spent: Duration = timeline
-            .spans
-            .iter()
-            .filter(|span| span.phase == phase)
-            .map(|span| Duration::from_millis(span.millis))
-            .sum();
+    // A phase can repeat (upload and import alternate); the tooltip describes this segment.
+    if let Some(span) = hovered {
         response.on_hover_text_at_pointer(format!(
             "{} · {}\n{}",
-            timeline.label(phase),
-            short(spent),
-            timeline.detail(phase)
+            timeline.label(span.phase),
+            short(Duration::from_millis(span.millis)),
+            timeline.detail(span.phase)
         ));
     }
 }
