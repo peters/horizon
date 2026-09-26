@@ -80,14 +80,14 @@ fn run() -> cloud_runtime::Result<()> {
         .get(&args[3])
         .cloned()
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
-    let request = deployment::Request {
-        cloud_id: args[5].clone(),
+    let request = deployment::Request::new(
+        args[5].clone(),
         repository,
         revision,
         profile,
-        state_root: PathBuf::from(&args[4]),
+        PathBuf::from(&args[4]),
         settings,
-    };
+    );
     if args[0] == "prepare-image" {
         prepare_image(&request, &cancel, &print_event)?;
     } else {
@@ -139,14 +139,14 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
     let state = Store::lock(&root)?
         .load()?
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
-    let request = deployment::Request {
-        cloud_id: state.cloud_id,
-        repository: state.repository,
-        revision: state.revision,
-        profile: state.profile,
-        state_root: root,
+    let request = deployment::Request::new(
+        state.cloud_id,
+        state.repository,
+        state.revision,
+        state.profile,
+        root,
         settings,
-    };
+    );
     match (args[0].as_str(), args.get(3)) {
         ("rebuild", Some(profile)) if args.len() == 4 => replacement::rebuild(&request, profile, cancel, &print_event),
         ("continue-rebuild", None) => replacement::continue_replacement(&request, cancel, &print_event),

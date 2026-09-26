@@ -19,6 +19,7 @@ SERVER = ["id", "name", "status", "public_net.ipv4.ip", "server_type.name", "ser
           "server_type.memory", "server_type.disk", "location.name", "labels", "volumes"]
 VOLUME = ["id", "name", "size", "location.name", "server", "linux_device", "status", "labels"]
 ACTION = ["id", "status", "error.message"]
+SSH_KEY = ["id", "name", "public_key", "labels"]
 SERVER_TYPE = ["name", "cores", "memory", "disk", "cpu_type", "architecture", "prices.[].location",
                "prices.[].price_hourly.net", "prices.[].price_monthly.net", "locations.[].name",
                "locations.[].deprecation", "locations.[].available", "locations.[].recommended"]
@@ -35,8 +36,8 @@ USED = [
     ("get", "/servers", ["label_selector", "page", "per_page"], [], "200",
      prefixed("servers.[]", SERVER) + ["meta.pagination.next_page"]),
     ("post", "/servers", [], ["name", "server_type", "location", "image", "user_data", "labels",
-                              "start_after_create", "public_net.enable_ipv4", "public_net.enable_ipv6",
-                              "volumes", "automount"], "201", prefixed("server", SERVER) + prefixed("action", ACTION)),
+                              "volumes", "automount", "ssh_keys"], "201",
+     prefixed("server", SERVER) + prefixed("action", ACTION) + prefixed("next_actions.[]", ACTION)),
     ("get", "/servers/{id}", [], [], "200", prefixed("server", SERVER)),
     ("delete", "/servers/{id}", [], [], "200", prefixed("action", ACTION)),
     ("post", "/servers/{id}/actions/poweron", [], [], "201", prefixed("action", ACTION)),
@@ -54,12 +55,19 @@ USED = [
     ("get", "/server_types", ["page", "per_page"], [], "200",
      prefixed("server_types.[]", SERVER_TYPE) + ["meta.pagination.next_page"]),
     ("get", "/pricing", [], [], "200", PRICING),
+    ("get", "/ssh_keys", ["label_selector", "page", "per_page"], [], "200",
+     prefixed("ssh_keys.[]", SSH_KEY) + ["meta.pagination.next_page"]),
+    ("post", "/ssh_keys", [], ["name", "public_key", "labels"], "201", prefixed("ssh_key", SSH_KEY)),
+    ("delete", "/ssh_keys/{id}", [], [], "204", []),
 ]
 
 
 # Error codes the adapter classifies, with the HTTP status Hetzner documents for each.
 ERROR_CODES = {
+    "invalid_input": "422",
     "unauthorized": "401",
+    "forbidden": "403",
+    "rate_limit_exceeded": "429",
     "resource_limit_exceeded": "403",
     "maintenance": "403",
     "not_found": "404",
@@ -167,7 +175,11 @@ def self_test(spec):
     moved = spec.error_codes()
     ERROR_CODES.clear()
     ERROR_CODES.update(saved)
-    detected = removed and retired and moved
+    # Each kind of drift the checker claims to catch must actually be reported.
+    body = spec.check("post", "/servers", [], ["no_such_field"], None, [])
+    parameter = spec.check("get", "/servers", ["no_such_parameter"], [], None, [])
+    paging = spec.check("get", "/volumes", [], [], "200", ["meta.pagination.no_such_page"])
+    detected = all((removed, retired, moved, body, parameter, paging))
     return [] if detected else ["self-test: known removed, deprecated or changed API was not detected"]
 
 

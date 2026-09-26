@@ -9,6 +9,7 @@ mod creation_tests;
 mod launch;
 mod lifecycle;
 mod machine_size;
+mod offer_publication;
 mod offers;
 mod presentation;
 mod prices;
@@ -70,6 +71,8 @@ pub(super) struct Production {
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,
+    /// Prices sent to ready workers for their agents' cloud offers.
+    offer_publication: offer_publication::State,
 }
 #[derive(Default, PartialEq, Eq)]
 pub(super) enum Confirmation {
@@ -324,6 +327,7 @@ impl HorizonApp {
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
         self.prepare_cloud_companions(ctx);
+        self.publish_cloud_offers(ctx);
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);
@@ -491,14 +495,14 @@ impl HorizonApp {
                 return;
             }
         };
-        let request = Request {
-            cloud_id: launch.id.clone(),
+        let request = Request::new(
+            launch.id.clone(),
             repository,
-            revision: launch.revision,
-            profile: launch.profile,
+            launch.revision,
+            launch.profile,
             state_root,
             settings,
-        };
+        );
         if let Err(error) = deployment::prepare(&request) {
             self.cloud_prototype.error = Some(error.to_string());
             return;

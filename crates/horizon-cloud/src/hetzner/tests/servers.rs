@@ -1,5 +1,6 @@
 use super::*;
 use crate::hetzner::{
+    keys::SshKey,
     servers::{Placement, Server, ServerRequest},
     volumes::Volume,
 };
@@ -29,6 +30,7 @@ fn request(placements: &[Placement]) -> ServerRequest<'_> {
         image: "docker-ce",
         user_data: "#cloud-config\n",
         volume: None,
+        ssh_key: None,
     }
 }
 
@@ -282,7 +284,10 @@ fn deletion_verifies_identity_waits_for_the_action_and_proves_absence() {
     let (hetzner, requests, task) = provider(vec![
         (200, json!({"server": server(42)})),
         (200, json!({"action": action(5, "running")})),
-        (200, json!({"action": action(5, "success")})),
+        // Hetzner can keep the delete action running after the server is gone.
+        (200, json!({"server": server(42)})),
+        (200, json!({"action": action(5, "running")})),
+        (404, error("not_found", "server not found")),
         (404, error("not_found", "server not found")),
         (404, error("not_found", "server not found")),
     ]);
@@ -314,7 +319,9 @@ fn deletion_verifies_identity_waits_for_the_action_and_proves_absence() {
     task.join().unwrap();
     let requests = requests.lock().unwrap();
     assert!(requests[1].starts_with("DELETE /servers/42 "));
-    assert!(requests[2].starts_with("GET /actions/5 "));
+    assert!(requests[2].starts_with("GET /servers/42 "));
+    assert!(requests[3].starts_with("GET /actions/5 "));
+    assert!(requests[4].starts_with("GET /servers/42 "));
     assert!(matches!(
         hetzner.delete_server(OPERATION, &mut CreateState::Requested, &cancel, |_| Ok(()), |_| {}),
         Err(CloudError::CreationUnresolved)
@@ -383,6 +390,7 @@ fn a_placement_error_also_moves_on_and_the_body_attaches_the_volume() {
     holding["server"]["volumes"] = json!([9]);
     let (hetzner, requests, task) = provider(vec![
         (200, listing("servers", json!([]))),
+        (200, json!({"volume": super::volumes::volume(9, None)})),
         (422, error("placement_error", "error during placement")),
         (201, holding),
     ]);
@@ -529,4 +537,68 @@ fn an_owned_server_in_the_wrong_place_is_bound_but_not_accepted() {
     assert_eq!(ensure(&without_volume), volume_error, "a volume nobody requested");
     task.join().unwrap();
     assert!(posts(&requests).is_empty());
+}
+
+#[test]
+fn a_stale_volume_is_checked_live_and_the_key_goes_into_the_create_body() {
+    let placements = placements();
+    let volume: Volume = serde_json::from_value(super::volumes::volume(9, None)).unwrap();
+    let key: SshKey = serde_json::from_value(super::keys::key(5)).unwrap();
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([]))),
+        (200, json!({"volume": super::volumes::volume(9, Some(77))})),
+        (200, json!({"server": server(77)})),
+        (200, listing("servers", json!([]))),
+        (201, created(42)),
+    ]);
+    let cancel = Cancellation::default();
+    let hel1_only = [placements[0].clone()];
+    let with_volume = ServerRequest {
+        volume: Some(&volume),
+        ..request(&hel1_only)
+    };
+    let mut state = CreateState::Prepared;
+    assert_eq!(
+        hetzner
+            .ensure_server(&with_volume, &mut state, &cancel, |_| Ok(()), |_| {})
+            .unwrap_err()
+            .to_string(),
+        "The workspace volume is attached to another server"
+    );
+    assert_eq!(state, CreateState::Prepared);
+    let with_key = ServerRequest {
+        ssh_key: Some(&key),
+        ..request(&placements)
+    };
+    hetzner
+        .ensure_server(&with_key, &mut state, &cancel, |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    let bodies = posts(&requests);
+    assert_eq!(bodies.len(), 1, "no server is created for a volume held elsewhere");
+    assert_eq!(bodies[0]["ssh_keys"], json!([5]));
+}
+
+#[test]
+fn creation_waits_for_the_follow_up_start() {
+    let placements = placements();
+    let mut starting = created(42);
+    starting["next_actions"] = json!([action(2, "running")]);
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([]))),
+        (201, starting),
+        (200, json!({"action": action(2, "success")})),
+    ]);
+    let mut state = CreateState::Prepared;
+    hetzner
+        .ensure_server(
+            &request(&placements),
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap();
+    task.join().unwrap();
+    assert!(requests.lock().unwrap()[2].starts_with("GET /actions/2 "));
 }

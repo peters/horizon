@@ -143,14 +143,16 @@ fn request(
     launch: horizon_core::cloud_panel::CloudLaunch,
     repository: PathBuf,
 ) -> cloud_runtime::Result<Request> {
-    Ok(Request {
-        state_root: cloud_runtime::state::cloud_directory(root, &launch.id)?,
-        settings: Settings::for_cloud(&root.join("settings.json"), &launch.placement)?,
-        cloud_id: launch.id,
+    let state_root = cloud_runtime::state::cloud_directory(root, &launch.id)?;
+    let settings = Settings::for_cloud(&root.join("settings.json"), &launch.placement)?;
+    Ok(Request::new(
+        launch.id,
         repository,
-        revision: launch.revision,
-        profile: launch.profile,
-    })
+        launch.revision,
+        launch.profile,
+        state_root,
+        settings,
+    ))
 }
 
 fn run(

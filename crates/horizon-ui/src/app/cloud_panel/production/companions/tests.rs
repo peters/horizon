@@ -508,17 +508,11 @@ fn queued_revocation_survives_owner_roundtrips_and_absent_journals() {
             let source = companions::Target {
                 scope: owner.scope.clone(),
                 cloud_id: "source".into(),
-                declaration: companions::Declaration {
-                    repository: "example/library".into(),
-                    profile: "cpu".into(),
-                },
+                declaration: companions::Declaration::new("example/library", "cpu"),
             };
             let target = companions::Target {
                 cloud_id: "target".into(),
-                declaration: companions::Declaration {
-                    repository: "example/consumer".into(),
-                    profile: "cpu".into(),
-                },
+                declaration: companions::Declaration::new("example/consumer", "cpu"),
                 ..source.clone()
             };
             let snapshot = persist_selection.then(|| {
@@ -581,17 +575,11 @@ fn selected_request(root: &Path, owner: Owner) -> horizon_core::cloud_runtime::c
     let source = companions::Target {
         scope: owner.scope.clone(),
         cloud_id: owner.cloud_id.clone(),
-        declaration: companions::Declaration {
-            repository: "example/library".into(),
-            profile: "cpu".into(),
-        },
+        declaration: companions::Declaration::new("example/library", "cpu"),
     };
     let target = companions::Target {
         cloud_id: "target".into(),
-        declaration: companions::Declaration {
-            repository: "example/consumer".into(),
-            profile: "cpu".into(),
-        },
+        declaration: companions::Declaration::new("example/consumer", "cpu"),
         ..source.clone()
     };
     companions::Request {

@@ -1,10 +1,10 @@
 //! Workspace volumes. A volume belongs to one location and attaches to one
 //! server at a time; it outlives its servers until deleted explicitly.
-use super::{Action, Hetzner, Method, OPERATION_LABEL, resource_name, servers::Location, valid_name};
+use super::{ACTION_TIMEOUT, Action, Hetzner, Method, OPERATION_LABEL, resource_name, servers::Location, valid_name};
 use crate::{Cancellation, CloudError, CreateState, Progress};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// Hetzner's volume size limits in GB.
 pub const SIZE_GB: std::ops::RangeInclusive<u32> = 10..=10_240;
@@ -178,7 +178,7 @@ impl Hetzner {
                 "A server can only attach a volume from its own location",
             ));
         }
-        match volume.server {
+        match self.holder(&volume, cancel)? {
             Some(attached) if attached == server_id => return Ok(()),
             Some(_) => return Err(CloudError::Invalid("The volume is attached to another server")),
             None => {}
@@ -193,7 +193,7 @@ impl Hetzner {
     pub fn detach(&self, operation_id: &str, volume_id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
         let volume = self.inspect_volume(volume_id, cancel)?.ok_or(CloudError::WorkerLost)?;
         volume.verify(operation_id)?;
-        if volume.server.is_none() {
+        if self.holder(&volume, cancel)?.is_none() {
             return Ok(());
         }
         self.volume_action(volume_id, "detach", None, cancel)
@@ -218,7 +218,7 @@ impl Hetzner {
         progress(Progress::ConfirmingVolume);
         if let Some(volume) = self.inspect_volume(id, cancel)? {
             volume.verify(operation_id)?;
-            if volume.server.is_some() {
+            if self.holder(&volume, cancel)?.is_some() {
                 return Err(CloudError::Invalid(
                     "The volume is still attached; delete or detach its server first",
                 ));
@@ -238,6 +238,35 @@ impl Hetzner {
         persist(&next)?;
         *state = next;
         Ok(())
+    }
+
+    /// The server that really holds the volume. Hetzner keeps naming a deleted
+    /// server, which already answers 404, for a while and refuses to delete or
+    /// attach the volume until it lets go, so this waits for that release.
+    pub(crate) fn holder(&self, volume: &Volume, cancel: &Cancellation) -> Result<Option<u64>, CloudError> {
+        let Some(server) = volume.server else { return Ok(None) };
+        if self.inspect_server(server, cancel)?.is_some() {
+            return Ok(Some(server));
+        }
+        let deadline = Instant::now() + ACTION_TIMEOUT;
+        loop {
+            match self
+                .inspect_volume(volume.id, cancel)?
+                .and_then(|current| current.server)
+            {
+                None => return Ok(None),
+                Some(stale) if stale == server => {}
+                // Attached elsewhere meanwhile, for example by a concurrent retry.
+                Some(other) => return Ok(Some(other)),
+            }
+            if Instant::now() >= deadline {
+                return Err(CloudError::Invalid(
+                    "Hetzner is still releasing the workspace volume; check again later",
+                ));
+            }
+            std::thread::sleep(self.poll);
+            cancel.check()?;
+        }
     }
 
     fn volume_action(
