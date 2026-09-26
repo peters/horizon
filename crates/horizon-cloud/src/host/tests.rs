@@ -266,3 +266,17 @@ fn only_well_formed_digest_references_are_accepted() {
         assert!(!valid_digest_reference(&invalid), "{invalid}");
     }
 }
+
+#[test]
+fn repository_paths_stop_at_dockers_255_character_limit() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let at_limit = format!("team/{}", "w".repeat(250));
+    assert_eq!(at_limit.len(), 255);
+    assert!(valid_digest_reference(&format!(
+        "registry.example/{at_limit}:tag@{digest}"
+    )));
+    assert!(!valid_digest_reference(&format!(
+        "registry.example/{at_limit}w@{digest}"
+    )));
+    assert!(!valid_digest_reference(&format!("{}@{digest}", "w".repeat(256))));
+}

@@ -60,7 +60,7 @@ struct WriteFile<'a> {
     path: &'a str,
     owner: &'a str,
     permissions: &'a str,
-    content: String,
+    content: &'a str,
 }
 
 impl Plan {
@@ -69,6 +69,15 @@ impl Plan {
     /// Refuses invalid values and user data above `USER_DATA_LIMIT`.
     pub fn cloud_config(&self) -> Result<zeroize::Zeroizing<String>, CloudError> {
         self.validate()?;
+        // Contents that may carry secrets stay in zeroizing storage until encoded.
+        let environment = zeroize::Zeroizing::new(self.environment_file());
+        let registry = self.registry.as_ref().map(registry_config).transpose()?;
+        let (image, guard, start, unit) = (
+            format!("{}\n", self.image),
+            guard_script(),
+            start_script(self.shm_gb),
+            unit(),
+        );
         let file = |path, permissions, content| WriteFile {
             path,
             owner: "root:root",
@@ -76,14 +85,14 @@ impl Plan {
             content,
         };
         let mut write_files = vec![
-            file(ENVIRONMENT_FILE, "0600", self.environment_file()),
-            file(IMAGE_FILE, "0600", format!("{}\n", self.image)),
-            file(GUARD, "0700", guard_script()),
-            file(START, "0700", start_script(self.shm_gb)),
-            file(UNIT, "0644", unit()),
+            file(ENVIRONMENT_FILE, "0600", environment.as_str()),
+            file(IMAGE_FILE, "0600", &image),
+            file(GUARD, "0700", &guard),
+            file(START, "0700", &start),
+            file(UNIT, "0644", &unit),
         ];
-        if let Some(registry) = &self.registry {
-            write_files.push(file(REGISTRY_FILE, "0600", registry_config(registry)?));
+        if let Some(registry) = &registry {
+            write_files.push(file(REGISTRY_FILE, "0600", registry.as_str()));
         }
         let config = CloudConfig {
             write_files,
@@ -205,7 +214,13 @@ fn valid_digest_reference(image: &str) -> bool {
         .skip(usize::from(host.is_some()))
         .chain(std::iter::once(&last))
         .all(|component| valid_path_component(component));
-    digest_valid && tag_valid && paths_valid && host.is_none_or(valid_authority)
+    // Docker limits the repository path, without registry, tag or digest, to 255 characters.
+    let path_length = components[usize::from(host.is_some())..]
+        .iter()
+        .map(|component| component.len() + 1)
+        .sum::<usize>()
+        + last.len();
+    digest_valid && tag_valid && paths_valid && path_length <= 255 && host.is_none_or(valid_authority)
 }
 
 /// Lowercase alphanumeric runs joined by Docker's separators: one `.`, one or two
@@ -262,11 +277,34 @@ fn auth_key(server: &str) -> &str {
     }
 }
 
-fn registry_config(registry: &RegistryLogin) -> Result<String, CloudError> {
-    let pair = zeroize::Zeroizing::new(format!("{}:{}", registry.username, registry.password.value()));
-    let auth = zeroize::Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(pair.as_bytes()));
-    let config = serde_json::json!({"auths": {auth_key(&registry.server): {"auth": auth.as_str()}}});
-    serde_json::to_string(&config).map_err(|_| CloudError::Invalid("Registry login could not be encoded"))
+/// Docker's `config.json` with one login. Every buffer holding the credential is
+/// zeroizing and sized up front, so no copy is left behind by reallocation.
+fn registry_config(registry: &RegistryLogin) -> Result<zeroize::Zeroizing<String>, CloudError> {
+    #[derive(Serialize)]
+    struct Config<'a> {
+        auths: BTreeMap<&'a str, Auth<'a>>,
+    }
+    #[derive(Serialize)]
+    struct Auth<'a> {
+        auth: &'a str,
+    }
+    let password = registry.password.value();
+    let mut pair = zeroize::Zeroizing::new(String::with_capacity(registry.username.len() + 1 + password.len()));
+    pair.push_str(&registry.username);
+    pair.push(':');
+    pair.push_str(password);
+    let mut auth = zeroize::Zeroizing::new(String::with_capacity(pair.len().div_ceil(3) * 4));
+    base64::engine::general_purpose::STANDARD.encode_string(pair.as_bytes(), &mut auth);
+    let key = auth_key(&registry.server);
+    let config = Config {
+        auths: BTreeMap::from([(key, Auth { auth: &auth })]),
+    };
+    let mut json = zeroize::Zeroizing::new(Vec::with_capacity(auth.len() + key.len() + 64));
+    serde_json::to_writer(&mut *json, &config)
+        .map_err(|_| CloudError::Invalid("Registry login could not be encoded"))?;
+    let text = String::from_utf8(std::mem::take(&mut *json))
+        .map_err(|_| CloudError::Invalid("Registry login could not be encoded"))?;
+    Ok(zeroize::Zeroizing::new(text))
 }
 
 /// Runs before every container start. The metadata service serves the user data,
