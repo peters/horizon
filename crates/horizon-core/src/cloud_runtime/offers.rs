@@ -119,7 +119,8 @@ pub struct Offer {
     /// Provider-operated hosts only; third-party hosts are not offered.
     pub host: &'static str,
     pub interruptible: bool,
-    /// Horizon can deploy this today.
+    /// Horizon can deploy this now: false for a GPU type out of stock wherever the worker
+    /// may go.
     pub rentable: bool,
 }
 
@@ -128,7 +129,15 @@ pub struct Offer {
 pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
     let hours = requirements.hours.unwrap_or(1.0);
     let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
-    let within = region_centers(list, requirements.region.as_deref());
+    // Data centers in the requested region, or none (meaning every allowed one) without
+    // a region. A region with no allowed data center has nothing to offer.
+    let within = match requirements.region.as_deref() {
+        Some(region) => region_centers(list, region),
+        None => Vec::new(),
+    };
+    if requirements.region.is_some() && within.is_empty() {
+        return Vec::new();
+    }
     let mut offers = if requirements.gpu {
         gpu_offers(list, requirements, &within, hours, storage_gb)
     } else {
@@ -230,30 +239,20 @@ fn gpu_offers(
                 regions_in_stock: regions_in_stock(list, &gpu.id, within),
                 host: "provider_operated",
                 interruptible: false,
-                rentable: true,
+                rentable: availability != Availability::None,
             })
         })
         .collect()
 }
 
-/// Data centers in `region`, or none (meaning every allowed one) without a region.
-fn region_centers(list: &PriceList, region: Option<&str>) -> Vec<String> {
-    let Some(region) = region else {
-        return Vec::new();
-    };
+/// Allowed data centers in `region`.
+fn region_centers(list: &PriceList, region: &str) -> Vec<String> {
     let wanted = normalize(region);
-    let centers: Vec<String> = list
-        .data_centers
+    list.data_centers
         .iter()
         .filter(|center| normalize(&center.region) == wanted)
         .map(|center| center.id.clone())
-        .collect();
-    // A region with no allowed data center matches nothing rather than everything.
-    if centers.is_empty() {
-        vec![String::new()]
-    } else {
-        centers
-    }
+        .collect()
 }
 
 fn regions_in_stock(list: &PriceList, gpu: &str, within: &[String]) -> Vec<String> {
@@ -427,13 +426,29 @@ mod tests {
             }),
             ["NVIDIA L4"]
         );
+        // An unknown region has nothing to offer, even counting sold-out types.
         assert!(
             gpu(Requirements {
                 region: Some("ASIA".into()),
+                include_unavailable: true,
                 ..Requirements::default()
             })
             .is_empty()
         );
+        let with_sold_out = offers(
+            &list(),
+            &Requirements {
+                gpu: true,
+                include_unavailable: true,
+                ..Requirements::default()
+            },
+        );
+        assert!(
+            with_sold_out
+                .iter()
+                .all(|offer| offer.rentable == (offer.availability != "none"))
+        );
+        assert!(with_sold_out.iter().any(|offer| !offer.rentable));
         assert_eq!(
             gpu(Requirements {
                 gpu_type: Some("l4".into()),
