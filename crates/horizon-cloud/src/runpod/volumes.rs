@@ -6,7 +6,8 @@ use std::time::Duration;
 
 type Result<T> = std::result::Result<T, CloudError>;
 
-pub(crate) const REQUEST_SIZE_GB: std::ops::RangeInclusive<u32> = 10..=4000;
+/// Sizes the provider accepts for a CPU worker's network volume.
+pub const REQUEST_SIZE_GB: std::ops::RangeInclusive<u32> = 10..=4000;
 pub(crate) const INVALID_REQUEST_SIZE: &str = "CPU workspace volume must be between 10 and 4000 GB";
 
 pub(crate) fn validate_request_size(size: u32) -> Result<()> {

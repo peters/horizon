@@ -100,7 +100,8 @@ pub(crate) struct CloudOffersInput {
     pub max_hourly: Option<f64>,
     /// Expected running hours, for the estimated total. One hour when omitted.
     pub hours: Option<f64>,
-    /// Workspace storage in GB priced into the estimate. 20 when omitted.
+    /// Workspace storage in GB priced into the estimate: 10 to 4000 for CPU workers, at
+    /// least 1 for GPU workers, and 20 when omitted.
     pub storage_gb: Option<u16>,
     /// A region such as "EUROPE" or "North America".
     pub region: Option<String>,

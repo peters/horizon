@@ -2,7 +2,10 @@
 //! agent can choose the cheapest suitable worker before anything is rented. Read only:
 //! nothing here allocates compute.
 use horizon_cloud::prices::{Availability, DataCenter, PriceList};
-use horizon_cloud::runpod::flavors::{FLAVORS, VCPU_COUNTS};
+use horizon_cloud::runpod::{
+    flavors::{FLAVORS, VCPU_COUNTS},
+    volumes::REQUEST_SIZE_GB,
+};
 use serde::{Deserialize, Serialize};
 
 /// Hours in an average month, for prorating storage over the expected duration.
@@ -33,7 +36,8 @@ pub struct Requirements {
     /// Expected running time for the estimated total. One hour when omitted.
     #[serde(default)]
     pub hours: Option<f64>,
-    /// Workspace storage priced into the estimate. 20 GB when omitted.
+    /// Workspace storage priced into the estimate: 10 to 4000 GB for CPU workers, at
+    /// least 1 GB for GPU workers, and 20 GB when omitted.
     #[serde(default)]
     pub storage_gb: Option<u16>,
     /// A provider region, such as `EUROPE` or `North America`.
@@ -49,8 +53,8 @@ pub struct Requirements {
 
 impl Requirements {
     /// # Errors
-    /// Rejects negative or non-finite amounts, an empty GPU type or region, and a limit
-    /// outside 1 to 50.
+    /// Rejects negative or non-finite amounts, an empty GPU type or region, storage Horizon
+    /// could not create, and a limit outside 1 to 50.
     pub fn validate(&self) -> Result<(), &'static str> {
         let finite = |value: Option<f64>| value.is_none_or(|value| value.is_finite() && value >= 0.0);
         if !finite(self.max_hourly) || !finite(self.hours) {
@@ -60,6 +64,12 @@ impl Requirements {
             || self.region.as_deref().is_some_and(|value| value.trim().is_empty())
         {
             return Err("GPU type and region must not be empty");
+        }
+        if self
+            .storage_gb
+            .is_some_and(|size| size == 0 || (!self.gpu && !REQUEST_SIZE_GB.contains(&u32::from(size))))
+        {
+            return Err("Workspace storage must be 10 to 4000 GB for CPU workers and at least 1 GB for GPU workers");
         }
         if self.limit.is_some_and(|limit| !(1..=MAX_LIMIT).contains(&limit)) {
             return Err("The limit must be 1 to 50");
@@ -486,6 +496,19 @@ mod tests {
             .validate()
             .is_err()
         );
+        // Storage Horizon could not create is not priced as rentable.
+        let storage = |gpu, storage_gb| {
+            Requirements {
+                gpu,
+                storage_gb: Some(storage_gb),
+                ..Requirements::default()
+            }
+            .validate()
+            .is_ok()
+        };
+        assert!(!storage(false, 0) && !storage(false, 9) && !storage(false, 4001));
+        assert!(storage(false, 10) && storage(false, 4000));
+        assert!(!storage(true, 0) && storage(true, 5));
         assert!(Requirements::default().validate().is_ok());
     }
 }
