@@ -14,13 +14,13 @@ fn volume(spec: &Spec) -> Volume {
         name: spec.name(),
         size: spec.size,
         data_center_id: spec.data_center_id.clone(),
+        tier: Some(crate::runpod::volumes::Tier::Standard),
     }
 }
 fn server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
     let (mut provider, requests, task) = super::server(responses);
     provider.api_endpoint.clone_from(&provider.endpoint);
     provider.catalog_endpoint.clone_from(&provider.endpoint);
-    provider.graphql_endpoint.clone_from(&provider.endpoint);
     (provider, requests, task)
 }
 fn assert_size_error<T: std::fmt::Debug>(result: Result<T, CloudError>) {
@@ -78,7 +78,8 @@ fn boundary_sizes_can_allocate_and_bind() {
         let spec = volume_spec(size);
         let expected = volume(&spec);
         let (provider, requests, task) = server(vec![
-            (200, "[]".into()),
+            (200, endpoints(&json!([]))),
+            (200, volumes(&json!([]))),
             (201, serde_json::to_string(&expected).unwrap()),
         ]);
         let mut state = State::Prepared;
@@ -91,8 +92,8 @@ fn boundary_sizes_can_allocate_and_bind() {
         assert!(matches!(&state, State::Bound { volume, creation: Some(_) } if volume == &expected));
         state.verify(&spec).unwrap();
         task.join().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 2);
-        assert!(requests.lock().unwrap()[1].starts_with("POST /networkvolumes "));
+        assert_eq!(requests.lock().unwrap().len(), 3);
+        assert!(requests.lock().unwrap()[2].starts_with("POST /network-volumes "));
     }
 }
 
@@ -101,10 +102,12 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     let spec = volume_spec(1);
     let expected = volume(&spec);
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
-        (200, json!([expected]).to_string()),
+        (200, volumes(&json!([]))),
+        (200, volumes(&json!([expected]))),
+        (200, endpoints(&json!([]))),
         (200, serde_json::to_string(&expected).unwrap()),
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([]))),
         (204, String::new()),
         (404, "{}".into()),
     ]);
@@ -126,7 +129,7 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     assert_eq!(state, State::Deleted);
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 8);
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
     assert_eq!(
         requests.iter().filter(|request| request.starts_with("DELETE ")).count(),

@@ -264,6 +264,7 @@ mod tests {
             name: record.spec.name(),
             size: record.spec.size,
             data_center_id: record.spec.data_center_id.clone(),
+            tier: None,
         };
         record.state = State::Bound {
             volume: volume.clone(),
@@ -298,6 +299,7 @@ mod tests {
             name: record.spec.name(),
             size: record.spec.size,
             data_center_id: record.spec.data_center_id.clone(),
+            tier: None,
         };
         record.state = State::Bound {
             volume: volume.clone(),
@@ -328,6 +330,7 @@ mod tests {
             name: record.spec.name(),
             size: record.spec.size,
             data_center_id: record.spec.data_center_id.clone(),
+            tier: None,
         };
         record.state = serde_json::from_value(serde_json::json!({
             "state":"bound", "volume":volume,
@@ -358,6 +361,7 @@ mod tests {
             name: record.spec.name(),
             size: record.spec.size,
             data_center_id: record.spec.data_center_id.clone(),
+            tier: None,
         };
         let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
             "version":1,"cloud_id":record.worker.operation_id,"repository":"/synthetic","revision":"a",
@@ -410,6 +414,7 @@ mod tests {
                 name: record.spec.name(),
                 size: record.spec.size,
                 data_center_id: record.spec.data_center_id.clone(),
+                tier: None,
             },
             creation: None,
         };

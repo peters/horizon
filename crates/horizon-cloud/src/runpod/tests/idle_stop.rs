@@ -31,7 +31,7 @@ fn a_worker_must_report_exactly_its_recorded_idle_period() {
     let verify = |spec: &WorkerSpec, env: Value| {
         let mut value = worker(spec);
         value["env"] = env;
-        serde_json::from_value::<Worker>(value).unwrap().verify(spec)
+        wire::worker(value).unwrap().verify(spec)
     };
     let mut spec = spec();
     assert!(verify(&spec, json!({})).is_ok());

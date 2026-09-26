@@ -52,8 +52,8 @@ retains its revocation intent until absence is observed. Do not delete journals 
 clear uncertainty. Journals are tied to the original compute credential; reconcile
 using that credential before changing the compute account/key. Current implementation
 requires a Unix host for durable cloud journals, matching cloud deployment support.
-Provider binding operations follow the documented [create](https://docs.runpod.io/api-reference/container-registry-auths/POST/containerregistryauth)
-and [delete](https://docs.runpod.io/api-reference/container-registry-auths/DELETE/containerregistryauth/containerRegistryAuthId) APIs.
+Provider binding operations follow the documented [create](https://docs.runpod.io/api-reference-v2/registries/create-a-container-registry-credential)
+and [delete](https://docs.runpod.io/api-reference-v2/registries/delete-a-container-registry-credential) APIs.
 
 ## CLI and MCP
 

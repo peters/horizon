@@ -1,147 +1,276 @@
 use super::*;
 use crate::runpod::volumes::{Spec, State, Volume};
-use std::{io::BufRead, sync::mpsc};
 
-fn query_server(
-    respond: impl Fn(&str) -> (u16, Value) + Send + 'static,
-) -> (RunPod, mpsc::Sender<()>, thread::JoinHandle<Vec<String>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let (stop, stopped) = mpsc::channel();
-    let task = thread::spawn(move || {
-        let mut requests = Vec::new();
-        while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-            let (mut stream, _) = match listener.accept() {
-                Ok(connection) => connection,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                Err(error) => panic!("fixture accept failed: {error}"),
-            };
-            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-            let mut reader = std::io::BufReader::new(&mut stream);
-            let mut request = String::new();
-            reader.read_line(&mut request).unwrap();
-            loop {
-                let mut header = String::new();
-                reader.read_line(&mut header).unwrap();
-                if header == "\r\n" || header.is_empty() {
-                    break;
-                }
-            }
-            let (status, body) = respond(&request);
-            requests.push(request);
-            let body = body.to_string();
-            write!(stream, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-        }
-        requests
-    });
-    let mut provider = RunPod::new(Credential::new("synthetic-key".into()).unwrap());
-    provider.endpoint = format!("http://{address}");
-    provider.api_endpoint.clone_from(&provider.endpoint);
-    (provider, stop, task)
-}
-
-#[test]
-fn serverless_attachment_prevents_owned_volume_deletion() {
-    let worker_spec = spec();
-    let volume_spec = Spec {
-        operation_id: worker_spec.operation_id.clone(),
-        size: u32::from(worker_spec.profile.storage.volume_gb),
+fn volume_spec() -> Spec {
+    Spec {
+        operation_id: spec().operation_id,
+        size: 80,
         data_center_id: "test-region".into(),
-    };
-    let volume = Volume {
+    }
+}
+fn volume() -> Volume {
+    Volume {
         id: "owned-volume".into(),
-        name: volume_spec.name(),
-        size: volume_spec.size,
-        data_center_id: volume_spec.data_center_id.clone(),
-    };
-    let mut attached = worker(&worker_spec);
-    attached["id"] = json!("serverless-worker");
-    attached["networkVolume"] = json!({"id":volume.id,"size":volume.size,"dataCenterId":volume.data_center_id});
-    let volume_body = serde_json::to_value(&volume).unwrap();
-    let (provider, stop, task) = query_server(move |request| {
-        if request.starts_with("GET /networkvolumes/owned-volume ") {
-            (200, volume_body.clone())
-        } else if request.starts_with("GET /pods") {
-            (
-                200,
-                if request.contains("includeWorkers=true") {
-                    let mut listed = attached.clone();
-                    if !request.contains("includeNetworkVolume=true") {
-                        listed["networkVolume"] = Value::Null;
-                    }
-                    json!([listed])
-                } else {
-                    json!([])
-                },
-            )
-        } else {
-            (404, json!({}))
-        }
-    });
-    let mut state = State::Bound { volume, creation: None };
-    let original = state.clone();
-    let mut persisted = Vec::new();
-    let mut reported = Vec::new();
-    let result = provider.terminate_volume_with_progress(
-        &volume_spec,
-        &mut state,
-        &Cancellation::default(),
-        |next| {
-            persisted.push(next.clone());
-            Ok(())
-        },
-        |progress| reported.push(progress),
-    );
-    stop.send(()).unwrap();
-    let requests = task.join().unwrap();
-    assert!(matches!(
-        result,
-        Err(CloudError::Invalid(
-            "Workspace volume is still attached to a worker; storage was not deleted"
-        ))
-    ));
-    assert_eq!(state, original);
-    assert!(persisted.is_empty());
-    assert_eq!(
-        reported,
-        [Progress::ConfirmingVolume, Progress::CheckingAttachments],
-        "refused storage never reports a deletion request"
-    );
-    assert!(requests.iter().all(|request| !request.starts_with("DELETE ")));
+        name: volume_spec().name(),
+        size: 80,
+        data_center_id: "test-region".into(),
+        tier: Some(crate::runpod::volumes::Tier::Standard),
+    }
+}
+fn volume_body() -> String {
+    json!({"id":"owned-volume","name":volume_spec().name(),"size":80,"dataCenter":"test-region","type":"STANDARD"})
+        .to_string()
 }
 
 #[test]
-fn fresh_inspection_exposes_unrequested_attachments_for_both_compute_profiles() {
+fn persisted_volume_admission_rechecks_serverless_visibility_and_retains_cleanup_identity() {
+    for requested in [false, true] {
+        for endpoint_response in [
+            (200, endpoints(&json!([{"id":"new-endpoint"}]))),
+            (403, "{}".into()),
+            (503, "{}".into()),
+            (200, json!({"endpoints":[]}).to_string()),
+        ] {
+            let first = if requested {
+                volumes(&json!([volume()]))
+            } else {
+                volume_body()
+            };
+            let (provider, requests, task) = server(vec![
+                (200, first),
+                endpoint_response,
+                // Exact-ID absence can finish cleanup even when admission is blocked.
+                (404, String::new()),
+            ]);
+            let mut state = if requested {
+                State::Requested
+            } else {
+                State::Bound {
+                    volume: volume(),
+                    creation: None,
+                }
+            };
+            assert!(
+                provider
+                    .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                    .is_err()
+            );
+            assert_eq!(
+                state,
+                State::Bound {
+                    volume: volume(),
+                    creation: None
+                }
+            );
+            provider
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .unwrap();
+            assert_eq!(state, State::Deleted);
+            task.join().unwrap();
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[1].starts_with("GET /serverless "));
+            assert!(requests.iter().all(|r| r.starts_with("GET ")));
+        }
+    }
+}
+
+#[test]
+fn any_serverless_endpoint_blocks_storage_admission_and_deletion() {
+    // Current mounts or zero active workers cannot exclude a stale/scaled-down worker.
+    for endpoint in [
+        json!({"id":"endpoint1","networkVolumes":[]}),
+        json!({"id":"endpoint1","networkVolumes":["owned-volume"],"workers":{"min":0,"max":0}}),
+    ] {
+        for prepared in [true, false] {
+            let response = endpoints(&json!([endpoint]));
+            let responses = if prepared {
+                vec![(200, response)]
+            } else {
+                vec![(200, volume_body()), (200, response)]
+            };
+            let (provider, requests, task) = server(responses);
+            let mut state = if prepared {
+                State::Prepared
+            } else {
+                State::Bound {
+                    volume: volume(),
+                    creation: None,
+                }
+            };
+            let original = state.clone();
+            let result = if prepared {
+                provider
+                    .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                        panic!("no mutation is allowed")
+                    })
+                    .map(|_| ())
+            } else {
+                provider.terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                    panic!("no mutation is allowed")
+                })
+            };
+            assert!(matches!(result,Err(CloudError::Invalid(message)) if message.contains("serverless endpoints")));
+            assert_eq!(state, original);
+            task.join().unwrap();
+            assert!(requests.lock().unwrap().iter().all(|r| r.starts_with("GET ")));
+        }
+    }
+}
+
+#[test]
+fn endpoint_on_a_later_page_blocks_admission_even_after_an_empty_page() {
+    let first = json!({"endpoints":[],"pagination":{"hasNextPage":true,"nextCursor":"next/+?"}}).to_string();
+    let (provider, requests, task) = server(vec![(200, first), (200, endpoints(&json!([{"id":"later"}])))]);
+    let mut state = State::Prepared;
+    assert!(
+        provider
+            .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
+                "must not persist"
+            ))
+            .is_err()
+    );
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[1].starts_with("GET /serverless?cursor=next%2F%2B%3F "));
+    assert_eq!(state, State::Prepared);
+}
+
+#[test]
+fn uncertain_serverless_visibility_never_allows_storage_mutation() {
+    for response in [
+        (403, "{}".into()),
+        (503, "{}".into()),
+        (200, "{}".into()),
+        (200, json!({"endpoints":[]}).to_string()),
+    ] {
+        let (provider, requests, task) = server(vec![response]);
+        let mut state = State::Prepared;
+        assert!(
+            provider
+                .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
+                    "must not persist"
+                ))
+                .is_err()
+        );
+        assert_eq!(state, State::Prepared);
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn missing_cursor_cannot_authorize_storage_admission_or_deletion() {
+    for prepared in [true, false] {
+        let malformed = json!({"endpoints":[],"pagination":{"hasNextPage":false}}).to_string();
+        let responses = if prepared {
+            vec![(200, malformed)]
+        } else {
+            vec![(200, volume_body()), (200, malformed)]
+        };
+        let (provider, requests, task) = server(responses);
+        let mut state = if prepared {
+            State::Prepared
+        } else {
+            State::Bound {
+                volume: volume(),
+                creation: None,
+            }
+        };
+        let original = state.clone();
+        let result = if prepared {
+            provider
+                .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                    panic!("incomplete endpoint visibility must not authorize mutation")
+                })
+                .map(|_| ())
+        } else {
+            provider.terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| {
+                panic!("incomplete endpoint visibility must not authorize mutation")
+            })
+        };
+        assert!(matches!(result, Err(CloudError::InvalidResponse)));
+        assert_eq!(state, original);
+        task.join().unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), if prepared { 1 } else { 2 });
+        assert!(requests.iter().all(|request| request.starts_with("GET ")));
+    }
+}
+
+#[test]
+fn cluster_pod_attachment_prevents_storage_deletion() {
+    let mut attached = worker(&spec());
+    attached["cluster"] = json!({"id":"cluster1"});
+    attached["mounts"] = json!({"network":[{"volumeId":"owned-volume","path":"/workspace"}]});
+    let (provider, requests, task) = server(vec![
+        (200, volume_body()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([attached]))),
+    ]);
+    let mut state = State::Bound {
+        volume: volume(),
+        creation: None,
+    };
+    assert!(
+        provider
+            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
+                "must not delete"
+            ))
+            .is_err()
+    );
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[2].starts_with("GET /pods?includeClusterPods=true "));
+    assert!(requests.iter().all(|r| r.starts_with("GET ")));
+}
+
+#[test]
+fn inspection_exposes_unrequested_mounts_for_both_compute_profiles() {
     for gpu in [false, true] {
         let mut spec = spec();
         spec.profile.gpu = gpu;
         let mut assigned = worker(&spec);
-        assigned["vcpuCount"] = json!(spec.profile.cpu);
-        assigned["memoryInGb"] = json!(spec.profile.memory_gb);
-        assigned["gpuCount"] = json!(1);
-        assigned["containerDiskInGb"] = json!(spec.profile.storage.container_gb);
-        assigned["volumeInGb"] = json!(spec.profile.storage.volume_gb);
-        assigned["volumeMountPath"] = json!("/workspace");
-        let (provider, stop, task) = query_server(move |request| {
-            let mut value = assigned.clone();
-            if request.contains("includeNetworkVolume=true") {
-                value["networkVolume"] = json!({"id":"external-volume","size":80,"dataCenterId":"test-region"});
-            }
-            (200, value)
-        });
-        let result = provider.inspect_with_timeout("worker1", &Cancellation::default(), Duration::from_secs(2));
-        stop.send(()).unwrap();
-        let requests = task.join().unwrap();
-        let inspected = result.unwrap().unwrap();
+        assigned[if gpu { "gpu" } else { "cpu" }] =
+            json!({"id":"fixture","vcpuCount":spec.profile.cpu,"memory":spec.profile.memory_gb,"count":1});
+        assigned["mounts"] = json!({"network":[{"volumeId":"external-volume","path":"/workspace"}]});
+        let (provider, requests, task) = server(vec![(200, assigned.to_string())]);
+        let inspected = provider
+            .inspect_with_timeout("worker1", &Cancellation::default(), Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
         inspected.verify(&spec).unwrap();
-        assert!(
-            inspected.verify_resources(&spec).is_err(),
-            "unrequested attachment must block readiness, gpu={gpu}"
-        );
-        assert_eq!(requests.len(), 1);
+        assert!(inspected.verify_resources(&spec).is_err());
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn unsupported_ssh_on_an_unrelated_pod_does_not_hide_its_attachment() {
+    for (host, username) in [("worker.example.invalid", "root"), ("192.0.2.1", "custom-user")] {
+        let mut attached = worker(&spec());
+        attached["name"] = json!("unrelated");
+        attached["ssh"] = json!({"direct":{"host":host,"port":22,"username":username}});
+        attached["mounts"] = json!({"network":[{"volumeId":"owned-volume","path":"/workspace"}]});
+        let (provider, requests, task) = server(vec![
+            (200, volume_body()),
+            (200, endpoints(&json!([]))),
+            (200, pods(&json!([attached]))),
+        ]);
+        let mut state = State::Bound {
+            volume: volume(),
+            creation: None,
+        };
+        assert!(matches!(
+            provider.terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
+                "still attached"
+            )),
+            Err(CloudError::Invalid(
+                "Workspace volume is still attached to a worker; storage was not deleted"
+            ))
+        ));
+        task.join().unwrap();
+        assert!(requests.lock().unwrap().iter().all(|r| r.starts_with("GET ")));
     }
 }

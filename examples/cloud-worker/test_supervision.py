@@ -1,6 +1,7 @@
 """Required services remain owned and healthy across every bootstrap phase."""
 import json
 import os
+import resource
 import signal
 from pathlib import Path
 import runpy
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -45,6 +47,40 @@ class SupervisionTests(unittest.TestCase):
         for name in ['control', 'sshd'] + (['xvfb', 'openbox', 'vnc'] if desktop else []):
             self.start(name)
         self.supervisor.publish(desktop)
+
+    def test_descriptor_cap_is_limited_to_vnc_child(self):
+        inherited = resource.getrlimit(resource.RLIMIT_NOFILE)
+        for name in ('vnc', 'control', 'sshd'):
+            output = self.root / (name + '-limits.json')
+            self.start(name, 'import json,resource,time; from pathlib import Path; Path(' + repr(str(output))
+                       + ').write_text(json.dumps(resource.getrlimit(resource.RLIMIT_NOFILE))); time.sleep(60)')
+            deadline = time.monotonic() + 3
+            while not output.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            limits = tuple(json.loads(output.read_text()))
+            soft = inherited[0]
+            expected = (4096 if soft == resource.RLIM_INFINITY else min(soft, 4096)) if name == 'vnc' else soft
+            self.assertEqual(limits, (expected, inherited[1]))
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE), inherited)
+
+    def test_vnc_cap_preserves_lower_soft_and_hard_limits(self):
+        limit = MODULE['limit_vnc_descriptors']
+        for limits, expected in [((128, 256), (128, 256)), ((4096, 8192), (4096, 8192)),
+                                 ((8192, 16384), (4096, 16384)),
+                                 ((resource.RLIM_INFINITY, resource.RLIM_INFINITY), (4096, resource.RLIM_INFINITY))]:
+            with self.subTest(limits=limits):
+                with mock.patch.object(resource, 'getrlimit', return_value=limits):
+                    with mock.patch.object(resource, 'setrlimit') as apply:
+                        limit()
+                apply.assert_called_once_with(resource.RLIMIT_NOFILE, expected)
+
+    def test_vnc_limit_failure_refuses_child_start(self):
+        def denied():
+            raise OSError('limit refused')
+        with mock.patch.dict(Supervisor.start.__globals__, limit_vnc_descriptors=denied):
+            with self.assertRaises(subprocess.SubprocessError):
+                self.start('vnc')
+        self.assertNotIn('vnc', self.supervisor.children)
 
     def test_early_desktop_exit_cannot_be_hidden_by_successful_configuration(self):
         for service in ['xvfb', 'openbox', 'vnc']:
@@ -201,6 +237,77 @@ class SupervisionTests(unittest.TestCase):
             self.assertTrue(DESKTOP_READY(42))
         for call in calls.call_args_list:
             self.assertEqual(call.args[0][1:3], ['-display', ':99'])
+
+    def monitor_desktop(self, outcomes, on_probe=None):
+        clock = [0.0]
+        calls = []
+        def probe(_pid):
+            delay, healthy = outcomes[len(calls)]
+            calls.append(clock[0])
+            clock[0] += delay
+            if on_probe:
+                on_probe()
+            return healthy
+        def sleep(seconds):
+            clock[0] += seconds
+            if len(calls) == len(outcomes):
+                self.supervisor.stopping = True
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+        with mock.patch.dict(Supervisor.monitor.__globals__, time=fake_time, desktop_ready=probe):
+            with self.assertRaises(ValueError) as error:
+                self.supervisor.monitor(True)
+        return str(error.exception), calls, clock[0]
+
+    def test_single_probe_timeout_can_recover_without_replacing_services(self):
+        self.ready(True)
+        identities = dict(self.supervisor.identities)
+        error, calls, _ = self.monitor_desktop([(2, False), (0, True)])
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.supervisor.identities, identities)
+        for name, child in self.supervisor.children.items():
+            self.assertIsNone(child.poll())
+            self.assertEqual(MODULE['process_identity'](child.pid), identities[name])
+
+    def test_persistently_unhealthy_desktop_exhausts_bounded_grace(self):
+        for duration in (2, 6):
+            with self.subTest(probe_seconds=duration):
+                self.ready(True)
+                error, calls, elapsed = self.monitor_desktop([(duration, False)] * 20)
+                self.assertEqual(error, 'Worker window manager stopped responding')
+                self.assertGreater(len(calls), 1)
+                self.assertGreaterEqual(elapsed, 10)
+                self.assertLessEqual(elapsed, 10 + 1.2 + duration)
+                self.supervisor.close()
+
+    def test_readiness_check_rejects_unhealthy_desktop_without_runtime_grace(self):
+        self.ready(True)
+        with mock.patch.dict(CHECK.__globals__, desktop_ready=lambda _pid: False):
+            with self.assertRaisesRegex(ValueError, 'Worker window manager is not ready'):
+                CHECK(self.root, self.root)
+
+    def test_successful_probe_resets_continuous_failure_window(self):
+        self.ready(True)
+        error, calls, elapsed = self.monitor_desktop(
+            [(2, False), (2, False), (0, True), (2, False), (2, False), (0, True)])
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 6)
+        self.assertGreater(elapsed, 10)
+
+    def test_exited_service_bypasses_desktop_grace(self):
+        self.ready(True)
+        child = self.supervisor.children['openbox']
+        error, calls, _ = self.monitor_desktop([(2, False)] * 20,
+                                             on_probe=lambda: self.stop_unreaped(child))
+        self.assertEqual(error, 'Required worker service exited: openbox')
+        self.assertEqual(len(calls), 1)
+
+    def test_shutdown_during_probe_bypasses_desktop_grace(self):
+        self.ready(True)
+        error, calls, _ = self.monitor_desktop([(2, False)] * 20,
+                                             on_probe=lambda: setattr(self.supervisor, 'stopping', True))
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 1)
 
     def test_shutdown_invalidates_readiness_and_stops_owned_descendants(self):
         child_pid = self.root / 'descendant'

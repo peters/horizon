@@ -9,13 +9,18 @@ const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod billing;
+mod create;
 pub mod flavors;
 pub mod fresh;
+mod pages;
 pub mod prices;
 pub mod recovery;
 pub mod registry;
 pub mod replacement;
 mod stock;
+mod wire;
+#[cfg(test)]
+use create::create_body;
 pub mod volumes;
 
 #[cfg(test)]
@@ -27,7 +32,6 @@ pub struct RunPod {
     endpoint: String,
     catalog_endpoint: String,
     api_endpoint: String,
-    graphql_endpoint: String,
 }
 #[derive(Clone, Copy)]
 enum Provisioning<'a> {
@@ -45,10 +49,9 @@ impl RunPod {
         Self {
             agent: ureq::Agent::new_with_config(config),
             credential,
-            endpoint: "https://rest.runpod.io/v1".into(),
+            endpoint: "https://api.runpod.io/v2".into(),
             catalog_endpoint: "https://api.runpod.io/v2/catalog".into(),
             api_endpoint: "https://api.runpod.io/v2".into(),
-            graphql_endpoint: "https://api.runpod.io/graphql".into(),
         }
     }
 
@@ -131,7 +134,7 @@ impl RunPod {
             CreateState::Bound { worker_id } => {
                 let worker = self.inspect(worker_id, cancel)?.ok_or(CloudError::WorkerLost)?;
                 worker.verify(spec)?;
-                if worker.desired_status != "RUNNING" {
+                if !worker.is_starting_or_running() {
                     return Err(CloudError::Invalid(
                         "Existing worker is not running; check provider before reconnecting",
                     ));
@@ -159,27 +162,8 @@ impl RunPod {
             progress(Progress::WorkerFound(worker.id.clone()));
             return Ok(worker);
         }
-        cancel.check()?;
-        persist(&CreateState::Requested)?;
-        *state = CreateState::Requested;
-        progress(Progress::Requesting);
-        let mut body = create_body(spec);
-        if let Some(volume) = volume {
-            body["networkVolumeId"] = json!(volume.id);
-            body["volumeInGb"] = json!(0);
-            body["dataCenterIds"] = json!([volume.data_center_id]);
-            body["dataCenterPriority"] = json!("custom");
-        }
-        let value = match self.request("POST", "/pods", Some(body), cancel) {
-            Ok(value) => value,
-            Err(error @ (CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled)) => {
-                persist(&CreateState::Prepared)?;
-                *state = CreateState::Prepared;
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        };
-        let worker: Worker = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
+        let value = self.request_worker(spec, volume, state, cancel, &mut persist, &mut progress)?;
+        let worker = wire::worker(value).map_err(|_| CloudError::CreationUnresolved)?;
         worker.verify(spec)?;
         bind(state, &worker, &mut persist)?;
         progress(Progress::WorkerFound(worker.id.clone()));
@@ -188,13 +172,10 @@ impl RunPod {
     /// # Errors
     /// Returns transport, authentication or response errors; failures carry at most a sanitized provider reason.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
-        serde_json::from_value(self.request(
-            "GET",
-            "/pods?includeNetworkVolume=true&includeWorkers=true",
-            None,
-            cancel,
-        )?)
-        .map_err(|_| CloudError::InvalidResponse)
+        self.pages("/pods?includeClusterPods=true", "pods", cancel)?
+            .into_iter()
+            .map(wire::worker)
+            .collect()
     }
     /// # Errors
     /// Rejects invalid IDs and provider failures. HTTP 404 is a missing worker.
@@ -224,16 +205,10 @@ impl RunPod {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid worker ID"));
         }
-        match self.request_with_timeout(
-            "GET",
-            &format!("/pods/{id}?includeNetworkVolume=true"),
-            None,
-            cancel,
-            timeout,
-        ) {
+        match self.request_with_timeout("GET", &format!("/pods/{id}"), None, cancel, timeout) {
             Err(CloudError::Http(404, _)) => Ok(None),
             result => {
-                let worker: Worker = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
+                let worker = wire::worker(result?)?;
                 if worker.id != id {
                     return Err(CloudError::IdentityMismatch);
                 }
@@ -291,14 +266,24 @@ impl RunPod {
     /// Stops an explicitly selected bound worker; storage may remain billable.
     pub fn stop(&self, spec: &WorkerSpec, id: &str, cancel: &Cancellation) -> Result<(), CloudError> {
         self.inspect(id, cancel)?.ok_or(CloudError::WorkerLost)?.verify(spec)?;
-        self.request("POST", &format!("/pods/{id}/stop"), Some(json!({})), cancel)?;
+        self.request(
+            "POST",
+            &format!("/pods/{id}/action"),
+            Some(json!({"action":"stop"})),
+            cancel,
+        )?;
         Ok(())
     }
     /// # Errors
     /// Resumes only the same identity-checked worker. This does not restore processes.
     pub fn start(&self, spec: &WorkerSpec, id: &str, cancel: &Cancellation) -> Result<(), CloudError> {
         self.inspect(id, cancel)?.ok_or(CloudError::WorkerLost)?.verify(spec)?;
-        self.request("POST", &format!("/pods/{id}/start"), Some(json!({})), cancel)?;
+        self.request(
+            "POST",
+            &format!("/pods/{id}/action"),
+            Some(json!({"action":"start"})),
+            cancel,
+        )?;
         Ok(())
     }
     fn request(
@@ -358,12 +343,17 @@ impl RunPod {
         match status {
             204 => return Ok(Value::Null),
             200..=299 => {}
+            // v2 create uses 403 for a pool-specific refusal, so another
+            // configured compute candidate may still be allowed. 401 is global.
+            403 | 422 if method == "POST" && url.ends_with("/pods") => {
+                return Err(CloudError::Http(status, self.failure_reason(&mut response)));
+            }
             401 | 403 => return Err(CloudError::Unauthorized),
             400 | 422 => return Err(CloudError::Rejected(self.failure_reason(&mut response))),
             _ => return Err(CloudError::Http(status, self.failure_reason(&mut response))),
         }
         // An update is confirmed by observing the worker, not by its response body.
-        if matches!(method, "DELETE" | "PATCH") || url.ends_with("/stop") || url.ends_with("/start") {
+        if matches!(method, "DELETE" | "PATCH") || url.ends_with("/action") {
             return Ok(Value::Null);
         }
         response
@@ -398,40 +388,4 @@ fn bind(
     persist(&next)?;
     *state = next;
     Ok(())
-}
-fn create_body(spec: &WorkerSpec) -> Value {
-    let profile = &spec.profile;
-    let mut body = json!({
-        "name":spec.name(),"imageName":spec.image_digest,"cloudType":"SECURE",
-        "computeType":if profile.gpu {"GPU"} else {"CPU"},
-        "containerDiskInGb":profile.storage.container_gb,"volumeInGb":profile.storage.volume_gb,
-        "volumeMountPath":"/workspace","ports":["22/tcp"],"supportPublicIp":true,
-        "env":{"PUBLIC_KEY":spec.public_key,"HORIZON_CLOUD_OPERATION":spec.operation_id,"HORIZON_WORKER_CAPABILITIES":json!(profile.capabilities).to_string()},
-        "interruptible":false,
-    });
-    if let Some(metadata) = &spec.startup_metadata {
-        body["env"][crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
-    }
-    if let Some(minutes) = spec.idle_stop_environment() {
-        body["env"][crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes);
-    }
-    if profile.gpu {
-        body["gpuCount"] = json!(1);
-        body["gpuTypeIds"] = json!(spec.gpu_types);
-        body["gpuTypePriority"] = json!("custom");
-        body["minVCPUPerGPU"] = json!(profile.cpu);
-        body["minRAMPerGPU"] = json!(profile.memory_gb);
-    } else {
-        body["vcpuCount"] = json!(profile.cpu);
-        body["cpuFlavorIds"] = json!(spec.cpu_flavors);
-        body["cpuFlavorPriority"] = json!("custom");
-    }
-    if !spec.data_centers.is_empty() {
-        body["dataCenterIds"] = json!(spec.data_centers);
-        body["dataCenterPriority"] = json!("custom");
-    }
-    if let Some(id) = &spec.registry_auth_id {
-        body["containerRegistryAuthId"] = json!(id);
-    }
-    body
 }

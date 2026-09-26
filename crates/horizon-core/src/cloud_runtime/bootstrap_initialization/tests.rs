@@ -129,6 +129,7 @@ fn native_fixture(directory: &std::path::Path) -> CoordinatorFixture {
         name: volume_spec.name(),
         size: 10,
         data_center_id: startup.data_center_id.clone(),
+        tier: None,
     };
     let mut record = Record {
         version: 1,
@@ -317,6 +318,7 @@ fn pre_startup_cleanup_intent_and_completion_reopen_without_new_creation() {
                 name: "horizon-volume-first-test".into(),
                 size: 10,
                 data_center_id: "EU-NL-1".into(),
+                tier: None,
             },
             creation: None,
         },
@@ -398,6 +400,7 @@ impl CoordinatorFixture {
             name: volume_spec.name(),
             size: 10,
             data_center_id: startup.data_center_id.clone(),
+            tier: None,
         };
         let host_key = request
             .worker

@@ -5,9 +5,9 @@ use crate::runpod::recovery::Outcome;
 fn delayed_visibility_survives_restart_and_never_posts() {
     let spec = spec();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
-        (200, "[]".into()),
-        (200, json!([worker(&spec)]).to_string()),
+        (200, pods(&json!([]))),
+        (200, pods(&json!([]))),
+        (200, pods(&json!([worker(&spec)]))),
     ]);
     let mut state = CreateState::Requested;
     for expected in [
@@ -45,7 +45,7 @@ fn maximum_length_verified_operator_hint_recovers_an_unlisted_worker() {
     let worker_id = "w".repeat(100);
     let mut found = worker(&spec);
     found["id"] = json!(worker_id);
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, found.to_string())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (200, found.to_string())]);
     let mut state = CreateState::Requested;
     let mut saved = Vec::new();
     let report = provider
@@ -65,12 +65,12 @@ fn maximum_length_verified_operator_hint_recovers_an_unlisted_worker() {
     assert!(!encoded.contains("publicIp"));
     assert!(!encoded.contains("env"));
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[1].starts_with(&format!("GET /pods/{worker_id}?includeNetworkVolume=true ")));
+    assert!(requests.lock().unwrap()[1].starts_with(&format!("GET /pods/{worker_id} ")));
 }
 
 #[test]
 fn missing_hint_and_empty_account_do_not_prove_rejection_or_deletion() {
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (404, "{}".into())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (404, "{}".into())]);
     let mut state = CreateState::Requested;
     let report = provider
         .reconcile(&spec(), &mut state, Some("worker1"), &Cancellation::default(), |_| {
@@ -87,7 +87,7 @@ fn missing_hint_and_empty_account_do_not_prove_rejection_or_deletion() {
 fn unrelated_hint_is_not_an_operator_override() {
     let mut unrelated = worker(&spec());
     unrelated["name"] = json!("another-cloud");
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, unrelated.to_string())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (200, unrelated.to_string())]);
     let mut state = CreateState::Requested;
     assert!(matches!(
         provider.reconcile(&spec(), &mut state, Some("worker1"), &Cancellation::default(), |_| Ok(
@@ -111,7 +111,7 @@ fn operator_hint_cannot_select_away_a_second_match() {
     let spec = spec();
     let mut other = worker(&spec);
     other["id"] = json!("worker2");
-    let (provider, _, task) = server(vec![(200, json!([worker(&spec), other]).to_string())]);
+    let (provider, _, task) = server(vec![(200, pods(&json!([worker(&spec), other])))]);
     let mut state = CreateState::Requested;
     let report = provider
         .reconcile(&spec, &mut state, Some("worker1"), &Cancellation::default(), |_| {
@@ -133,7 +133,7 @@ fn mismatching_operation_marker_does_not_bind_a_matching_name() {
     let spec = spec();
     let mut other = worker(&spec);
     other["env"] = json!({"HORIZON_CLOUD_OPERATION":"another-operation"});
-    let (provider, _, task) = server(vec![(200, json!([other]).to_string())]);
+    let (provider, _, task) = server(vec![(200, pods(&json!([other])))]);
     let mut state = CreateState::Requested;
     assert!(matches!(
         provider.reconcile(&spec, &mut state, None, &Cancellation::default(), |_| Ok(())),
@@ -145,13 +145,13 @@ fn mismatching_operation_marker_does_not_bind_a_matching_name() {
 
 #[test]
 fn inactive_matches_bind_identity_without_confirming_cleanup() {
-    for status in ["TERMINATED", "EXITED", "UNKNOWN"] {
+    for status in ["TERMINATED", "EXITED", "ERROR"] {
         let spec = spec();
         let mut inactive = worker(&spec);
-        inactive["desiredStatus"] = json!(status);
+        inactive["status"] = json!(status);
         inactive["lastStatusChange"] = json!("Terminated by User");
         let (provider, requests, task) = server(vec![
-            (200, json!([inactive.clone()]).to_string()),
+            (200, pods(&json!([inactive.clone()]))),
             (200, inactive.to_string()),
             (404, "{}".into()),
             (404, "{}".into()),
@@ -222,7 +222,7 @@ fn explicit_termination_is_permanent_without_provider_access() {
 #[test]
 fn failed_persistence_keeps_requested_identity() {
     let spec = spec();
-    let (provider, _, task) = server(vec![(200, json!([worker(&spec)]).to_string())]);
+    let (provider, _, task) = server(vec![(200, pods(&json!([worker(&spec)])))]);
     let mut state = CreateState::Requested;
     assert!(matches!(
         provider.reconcile(&spec, &mut state, None, &Cancellation::default(), |_| Err(

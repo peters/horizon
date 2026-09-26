@@ -133,6 +133,35 @@ Optional repository Git authentication uses explicit `git_credentials` bindings.
 See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
 
+## Provider API and storage requirements
+
+The shared UI, CLI and MCP adapter uses the [RunPod REST v2 API](https://docs.runpod.io/api-reference-v2/overview)
+for workers, capacity, registry credentials, storage and billing. Existing saved
+worker identities and volume journals remain readable. Upgrading does not replay
+an unresolved creation request or turn an observed resource into a fresh allocation.
+CPU availability is queried for the requested vCPU count and Pod product; a positive
+catalog answer is not a reservation. Configured compute preferences are tried in
+order only after a definite rejection. Ambiguous creation responses remain fenced.
+
+The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
+It uses the provider-injected Pod-scoped credential, which the live qualification
+for #966 found was refused by REST and accepted by GraphQL. This migration changes
+the shared account-credential adapter; it does not put account credentials inside
+workers or remove that independently qualified idle-stop path.
+
+CPU workspaces require standard network storage and an account with no Serverless
+endpoints. The v2 API does not expose complete mounts for stale or scaled-down
+Serverless workers. Horizon therefore refuses new CPU storage allocations, initial
+attachment and storage deletion while any Serverless endpoint exists. This includes
+unrelated endpoints with no currently configured volumes. Use a separate account
+for these CPU workspaces; Horizon never removes unrelated endpoints to pass this
+check. The API credential must permit reading Serverless endpoints as well as Pod,
+volume and registry operations. Failed or incomplete listings block mutation.
+
+GPU workspaces use their Pod's persistent mount and retain the requested CPU/RAM
+minimums. `PROVISIONING` and `STARTING` keep the same bound identity while readiness
+is checked; they do not mean a worker is missing or authorize a replacement.
+
 ## Repository setup and deployment
 
 If the repository has no `.horizon/cloud.yml`, enter its directory in

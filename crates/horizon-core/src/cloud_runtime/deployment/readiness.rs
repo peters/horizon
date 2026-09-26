@@ -36,30 +36,32 @@ pub(super) fn wait(
             .id;
         let inspected = provider.inspect_with_timeout(id, runner.cancel, deadline.remaining(runner.cancel)?);
         deadline.remaining(runner.cancel)?;
-        let mut worker = inspected?.ok_or(horizon_cloud::CloudError::WorkerLost)?;
-        if let Some(volume) = super::storage::expected(store, spec)? {
-            provider.confirm_workspace_mount(
-                &mut worker,
-                &volume,
-                runner.cancel,
-                deadline.remaining(runner.cancel)?,
-            )?;
-            deadline.remaining(runner.cancel)?;
-        }
-        with_verified_worker(worker, spec, store, state, |worker| {
-            if let Ok(connection) = Connection::new(worker, &request.settings, store.root()) {
-                (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
-                    super::super::timeline::AWAITING_SERVICES,
-                )));
-                if let Ok(contract) = connection.ready(runner, &capabilities, deadline.remaining(runner.cancel)?) {
-                    return Ok(Some((connection, contract)));
-                }
-            } else {
-                (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
-                    super::super::timeline::AWAITING_ENDPOINT,
-                )));
+        let worker = inspected?.ok_or(horizon_cloud::CloudError::WorkerLost)?;
+        when_running(worker, spec, store, state, |mut worker, state| {
+            if let Some(volume) = super::storage::expected(store, spec)? {
+                provider.confirm_workspace_mount(
+                    &mut worker,
+                    &volume,
+                    runner.cancel,
+                    deadline.remaining(runner.cancel)?,
+                )?;
+                deadline.remaining(runner.cancel)?;
             }
-            Ok(None)
+            with_verified_worker(worker, spec, store, state, |worker| {
+                if let Ok(connection) = Connection::new(worker, &request.settings, store.root()) {
+                    (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
+                        super::super::timeline::AWAITING_SERVICES,
+                    )));
+                    if let Ok(contract) = connection.ready(runner, &capabilities, deadline.remaining(runner.cancel)?) {
+                        return Ok(Some((connection, contract)));
+                    }
+                } else {
+                    (runner.emit)(Event::Progress(super::super::progress::Progress::activity(
+                        super::super::timeline::AWAITING_ENDPOINT,
+                    )));
+                }
+                Ok(None)
+            })
         })
     })?;
     if record_self_stop(state, &contract) {
@@ -80,6 +82,31 @@ fn record_self_stop(state: &mut super::Deployment, contract: &WorkerContract) ->
     let changed = reported != state.last_self_stop;
     state.last_self_stop = reported;
     changed
+}
+
+/// Pending provider states may not have a data center, resources or mounts yet.
+/// Retain the bound observation, but do not qualify or probe its transport early.
+fn when_running<T>(
+    worker: Worker,
+    spec: &WorkerSpec,
+    store: &Store,
+    state: &mut super::Deployment,
+    ready: impl FnOnce(Worker, &mut super::Deployment) -> Result<Option<T>>,
+) -> Result<Option<T>> {
+    worker.verify(spec)?;
+    if worker.desired_status == "RUNNING" {
+        return ready(worker, state);
+    }
+    let pending = worker.is_starting_or_running();
+    state.worker = Some(worker);
+    store.save(state)?;
+    if pending {
+        Ok(None)
+    } else {
+        Err(Error::Invalid(
+            "Worker stopped or failed during readiness; inspect or explicitly delete the existing worker",
+        ))
+    }
 }
 
 fn with_verified_worker<T>(
@@ -118,6 +145,84 @@ fn poll<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Persisted deployment state requires Unix directory durability.
+    #[cfg(unix)]
+    fn pending_fixture() -> (super::super::Deployment, WorkerSpec, Worker) {
+        let state: super::super::Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"pending","repository":"/fixture","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+            "stage":"Readiness","operation":{"state":"bound","worker_id":"worker1"},"spec":null,
+            "worker":null,"source_ready":false,"sessions":[]
+        }))
+        .unwrap();
+        let spec = WorkerSpec {
+            operation_id: state.cloud_id.clone(),
+            image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+            profile: state.profile.clone(),
+            public_key: String::new(),
+            registry_auth_id: None,
+            gpu_types: Vec::new(),
+            cpu_flavors: vec!["cpu3g".into()],
+            data_centers: Vec::new(),
+            startup_metadata: None,
+        };
+        let worker = serde_json::from_value(serde_json::json!({
+            "id":"worker1","name":spec.name(),"imageName":spec.image_digest,
+            "desiredStatus":"PROVISIONING"
+        }))
+        .unwrap();
+        (state, spec, worker)
+    }
+
+    #[test]
+    #[cfg(unix)] // Store::lock requires Unix directory durability.
+    fn pending_workers_wait_for_running_before_mount_or_ssh_qualification() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let (mut state, spec, mut worker) = pending_fixture();
+        let mut statuses = ["PROVISIONING", "STARTING", "RUNNING"].into_iter();
+        let mut qualified = 0;
+        poll(
+            &Deadline(Instant::now() + Duration::from_secs(10)),
+            &Cancellation::default(),
+            |_| {
+                worker.desired_status = statuses.next().unwrap().into();
+                let result = when_running(worker.clone(), &spec, &store, &mut state, |observed, _| {
+                    assert_eq!(observed.desired_status, "RUNNING");
+                    qualified += 1;
+                    Ok(Some(()))
+                })?;
+                if result.is_none() {
+                    let saved = store.load()?.unwrap();
+                    assert_eq!(saved.worker.unwrap().desired_status, worker.desired_status);
+                    assert_eq!(saved.operation, state.operation);
+                }
+                Ok(result)
+            },
+        )
+        .unwrap();
+        assert_eq!(qualified, 1);
+        assert!(statuses.next().is_none());
+    }
+
+    #[test]
+    #[cfg(unix)] // Store::lock requires Unix directory durability.
+    fn terminal_workers_are_durable_and_never_reach_mount_or_ssh_qualification() {
+        for status in ["EXITED", "ERROR", "TERMINATED"] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::lock(root.path()).unwrap();
+            let (mut state, spec, mut worker) = pending_fixture();
+            worker.desired_status = status.into();
+            assert!(matches!(
+                when_running::<()>(worker, &spec, &store, &mut state, |_, _| panic!(
+                    "terminal worker qualified"
+                )),
+                Err(Error::Invalid(_))
+            ));
+            assert_eq!(store.load().unwrap().unwrap().worker.unwrap().desired_status, status);
+        }
+    }
+
     #[test]
     #[cfg(unix)]
     fn rejected_inspected_storage_is_durable_before_any_ssh_probe() {

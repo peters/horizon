@@ -76,6 +76,9 @@ impl Draft {
                 "Confirm a dedicated repository-scoped read-only pull grant",
             ));
         }
+        if self.pull_username.chars().count() > horizon_cloud::runpod::registry::MAX_USERNAME_LENGTH {
+            return Err(Error::Invalid("Registry pull username exceeds the provider limit"));
+        }
         validate_input(
             &self.pull_username,
             &self.pull_secret,
@@ -83,6 +86,7 @@ impl Draft {
             self.original.as_ref().map(|binding| &binding.pull),
         )?;
         if !self.publish_username.is_empty() {
+            super::validate_publish_username(&self.publish_username)?;
             validate_input(
                 &self.publish_username,
                 &self.publish_secret,
@@ -163,7 +167,6 @@ impl Draft {
 
 fn validate_input(username: &str, value: &str, expiry: &str, saved: Option<&Auth>) -> Result<()> {
     if username.is_empty()
-        || username.len() > 256
         || username
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || c == ':')
