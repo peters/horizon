@@ -15,7 +15,7 @@ pub(super) fn directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let pending = path.with_extension("pending");
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);

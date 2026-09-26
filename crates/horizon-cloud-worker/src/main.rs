@@ -6,6 +6,7 @@ mod companion_tools;
 mod companions;
 mod configuration;
 mod controller;
+mod offers;
 mod queues;
 mod remote;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse};
@@ -57,11 +58,12 @@ fn main() -> std::process::ExitCode {
         }
         Some("companion-control") => companions::run(),
         Some("companions") => companion_tools::run(),
+        Some("cloud-offers") => offers::run(),
         Some("initialize-allocation") => bootstrap::initialize(false),
         Some("abandon-bootstrap") => bootstrap::initialize(true),
         Some("prepare-allocation-ssh") => bootstrap::prepare(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|attach-project-session|prepare-project-session|inspect-project-session|supervise-project-session|start-project-session|stop-project-session|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|reserve-project-session|prepare-project-namespace|prepare-project-source|import-project-source|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
+            "Usage: horizon-cloud-worker serve|connect|attach-project-session|prepare-project-session|inspect-project-session|supervise-project-session|start-project-session|stop-project-session|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|reserve-project-session|prepare-project-namespace|prepare-project-source|import-project-source|cancel-project-reservation|companion-control|companions|cloud-offers|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
         )),
     };
     match result {

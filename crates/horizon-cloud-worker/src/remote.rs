@@ -339,8 +339,8 @@ pub fn poll(
                 catalog.pending.push(request);
                 continue;
             }
-            if let Some(result) = without_offers(&request) {
-                let _ = manifest::provider_usage::complete_provider_usage(&result);
+            if request.cloud_offers.is_some() {
+                let _ = manifest::provider_usage::complete_provider_usage(&super::offers::answer(&request));
                 continue;
             }
             if USAGE_WORKERS
@@ -373,18 +373,6 @@ pub fn poll(
             });
         }
     }
-}
-
-/// Workers hold no prices: only the owning Horizon can fetch them with the provider
-/// account. A cloud offer request is answered as unavailable, never as a usage request.
-fn without_offers(
-    request: &horizon_browser_control::manifest::provider_usage::UsageRequest,
-) -> Option<horizon_browser_control::manifest::provider_usage::UsageResult> {
-    request.cloud_offers.as_ref()?;
-    Some(request.result(
-        Vec::new(),
-        Some("cloud_offers_unavailable: cloud workers have no prices yet; ask Horizon on the computer that owns this cloud".into()),
-    ))
 }
 
 fn usage(
@@ -451,21 +439,6 @@ mod tests {
         assert_eq!(history.orphans["phone"].reference, "retained-reference");
         assert!(history.confirm_closed("phone").is_err());
         assert!(root.path().join("phone").is_file());
-    }
-    #[test]
-    fn cloud_offer_requests_are_not_usage_requests() {
-        let request = |offers: serde_json::Value| -> horizon_browser_control::manifest::provider_usage::UsageRequest {
-            serde_json::from_value(serde_json::json!({
-                "request_id": "offers", "actor": "horizon:cloud-a", "host_instance": "worker",
-                "deadline_at_millis": i64::MAX, "cloud_offers": offers, "claimed": true
-            }))
-            .unwrap()
-        };
-        let answer = without_offers(&request(serde_json::json!({"min_vcpu": 8}))).unwrap();
-        assert!(answer.error.unwrap().starts_with("cloud_offers_unavailable"));
-        assert!(answer.providers.is_empty() && answer.offers.is_none());
-        // A provider usage request still goes to the usage path.
-        assert!(without_offers(&request(serde_json::Value::Null)).is_none());
     }
     #[test]
     fn undeclared_target_fails_before_loading_credentials() {

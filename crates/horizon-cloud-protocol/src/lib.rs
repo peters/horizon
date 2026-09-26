@@ -6,6 +6,7 @@ pub mod companion;
 mod identity;
 pub mod inspection;
 pub mod membership;
+pub mod offers;
 mod placement;
 pub mod session_attachment;
 pub mod session_runtime;

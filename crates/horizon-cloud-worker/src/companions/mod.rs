@@ -1,5 +1,5 @@
 //! Owner-invoked grant setup over SSH. Private keys never leave the source worker.
-mod files;
+pub(crate) mod files;
 mod ssh;
 // Worker grant fixtures use Unix paths and the OpenSSH tools shipped in Linux images.
 #[cfg(all(test, unix))]
