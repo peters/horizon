@@ -23,6 +23,8 @@ GUIDANCE = (
     'session is producing output or the worker is busy. Never stop the worker to escape a failing or stuck '
     'task; report the problem instead. Give a short reason; it is shown to the person after the worker resumes.'
 )
+# MCP protocol versions this server implements, newest first; others get the newest.
+PROTOCOL_VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
 NOT_ALLOWED = ('This worker cannot stop itself: its cloud profile does not set idle_stop_minutes, '
                'or the provider supplied no worker credential.')
 
@@ -71,7 +73,9 @@ def respond(message, stop=request_stop):
         return None
     params = message.get('params') if isinstance(message.get('params'), dict) else {}
     if method == 'initialize':
-        result = {'protocolVersion': params.get('protocolVersion') or '2025-06-18', 'capabilities': {'tools': {}},
+        requested = params.get('protocolVersion')
+        version = requested if requested in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
+        result = {'protocolVersion': version, 'capabilities': {'tools': {}},
                   'serverInfo': {'name': 'horizon-worker', 'version': '1'}}
     elif method == 'ping':
         result = {}

@@ -182,7 +182,11 @@ def self_stop(reason, requester, pod_id, key, log=STOP_LOG, now=time.time, outpu
     text = reason_text(reason)
     window, session, agent = requester
     used = cores()
-    if used is not None and used >= BUSY_CORES:
+    # Without CPU accounting a quiet build cannot be told from idle, so an agent may not stop it.
+    if used is None:
+        raise Refused('This worker cannot measure its CPU use, so it cannot tell whether it is busy; '
+                      'leave it running.')
+    if used >= BUSY_CORES:
         raise Refused(f'This worker is busy ({used:.1f} cores in use); leave it running.')
     # Checked after the CPU sample, right before the stop, so the sample is no blind spot.
     newest = output(window)

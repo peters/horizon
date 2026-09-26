@@ -28,7 +28,7 @@ class WatcherTests(unittest.TestCase):
         self.requests = []
         self.steps = []
 
-    def stop(self, reason='PR 12 merged', output=None, cores=None, accepted=True):
+    def stop(self, reason='PR 12 merged', output=None, cores=0.1, accepted=True):
         def request(pod, key):
             self.requests.append((pod, key))
             return accepted
@@ -58,6 +58,9 @@ class WatcherTests(unittest.TestCase):
             self.stop(output=10_000 - 30)
         with self.assertRaisesRegex(Refused, 'busy'):
             self.stop(cores=IDLE['BUSY_CORES'])
+        # Unknown CPU use is not idle: a quiet build might be running.
+        with self.assertRaisesRegex(Refused, 'cannot measure its CPU use'):
+            self.stop(cores=None)
         with self.assertRaisesRegex(Refused, 'short reason'):
             self.stop(reason='  ')
         self.assertEqual(self.requests, [])
@@ -153,6 +156,10 @@ class ClientTests(unittest.TestCase):
         started = respond({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
                            'params': {'protocolVersion': '2025-06-18'}})
         self.assertEqual(started['result']['protocolVersion'], '2025-06-18')
+        # A version this server does not implement is answered with its newest one.
+        newer = respond({'jsonrpc': '2.0', 'id': 5, 'method': 'initialize',
+                         'params': {'protocolVersion': '2026-07-28'}})
+        self.assertEqual(newer['result']['protocolVersion'], '2025-11-25')
         self.assertIsNone(respond({'jsonrpc': '2.0', 'method': 'notifications/initialized'}))
         tools = respond({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})['result']['tools']
         self.assertEqual([tool['name'] for tool in tools], ['stop_this_worker'])

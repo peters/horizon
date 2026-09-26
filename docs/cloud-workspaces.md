@@ -291,7 +291,7 @@ its pull request is merged, without this computer. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself and
 refuses while another agent session printed output in the last two minutes, while
-the container is busy, or when it cannot check its sessions; the calling agent's own
+the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
 output does not count. The reason and the requesting agent are kept on the
 workspace volume, and after a resume the cloud card shows them, for example
 "Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
