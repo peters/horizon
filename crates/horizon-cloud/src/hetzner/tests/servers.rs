@@ -487,36 +487,46 @@ fn an_owned_server_in_the_wrong_place_is_bound_but_not_accepted() {
     let hel1_only = [placements[0].clone()];
     let mut elsewhere = server(42);
     elsewhere["location"]["name"] = json!("fsn1");
+    let mut other_type = server(42);
+    other_type["server_type"]["name"] = json!("cpx32");
+    let mut extra_volume = server(42);
+    extra_volume["volumes"] = json!([9, 10]);
+    let mut stray_volume = server(42);
+    stray_volume["volumes"] = json!([10]);
     let (hetzner, requests, task) = provider(vec![
         (200, listing("servers", json!([server(42)]))),
+        (200, listing("servers", json!([extra_volume]))),
         (200, listing("servers", json!([elsewhere]))),
+        (200, listing("servers", json!([other_type]))),
+        (200, listing("servers", json!([stray_volume]))),
     ]);
     let cancel = Cancellation::default();
     let with_volume = ServerRequest {
         volume: Some(&volume),
         ..request(&hel1_only)
     };
+    let without_volume = request(&hel1_only);
     let mut state = CreateState::Prepared;
-    assert_eq!(
-        hetzner
-            .ensure_server(&with_volume, &mut state, &cancel, |_| Ok(()), |_| {})
+    let volume_error = "The operation's server does not hold exactly its workspace volume";
+    let placement_error = "The operation's server has a type or location the request does not allow";
+    let mut ensure = |request: &ServerRequest<'_>| {
+        state = CreateState::Prepared;
+        let error = hetzner
+            .ensure_server(request, &mut state, &cancel, |_| Ok(()), |_| {})
             .unwrap_err()
-            .to_string(),
-        "The operation's server does not hold its workspace volume"
-    );
-    assert_eq!(
-        state,
-        CreateState::Bound { worker_id: "42".into() },
-        "still owned, so it can be deleted"
-    );
-    let mut state = CreateState::Prepared;
-    assert_eq!(
-        hetzner
-            .ensure_server(&request(&hel1_only), &mut state, &cancel, |_| Ok(()), |_| {})
-            .unwrap_err()
-            .to_string(),
-        "The operation's server is in a location the request does not allow"
-    );
+            .to_string();
+        assert_eq!(
+            state,
+            CreateState::Bound { worker_id: "42".into() },
+            "still owned, so it can be deleted"
+        );
+        error
+    };
+    assert_eq!(ensure(&with_volume), volume_error, "the volume is missing");
+    assert_eq!(ensure(&with_volume), volume_error, "an extra volume is attached");
+    assert_eq!(ensure(&without_volume), placement_error, "another location");
+    assert_eq!(ensure(&without_volume), placement_error, "another server type");
+    assert_eq!(ensure(&without_volume), volume_error, "a volume nobody requested");
     task.join().unwrap();
     assert!(posts(&requests).is_empty());
 }

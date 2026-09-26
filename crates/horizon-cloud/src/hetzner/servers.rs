@@ -346,24 +346,23 @@ fn validate(request: &ServerRequest<'_>) -> Result<(), CloudError> {
     Ok(())
 }
 
-/// The server satisfies the request: it is in an allowed location and, when the
-/// request has a workspace volume, holds exactly that volume.
+/// The server satisfies the request: its type and location are one of the
+/// requested placements, and it holds exactly the requested workspace volume,
+/// or no volume when none was requested.
 fn placed(server: Server, request: &ServerRequest<'_>) -> Result<Server, CloudError> {
     if !request
         .placements
         .iter()
-        .any(|placement| placement.location == server.location.name)
+        .any(|placement| placement.server_type == server.server_type.name && placement.location == server.location.name)
     {
         return Err(CloudError::Invalid(
-            "The operation's server is in a location the request does not allow",
+            "The operation's server has a type or location the request does not allow",
         ));
     }
-    if request
-        .volume
-        .is_some_and(|volume| !server.volumes.contains(&volume.id))
-    {
+    let expected: Vec<u64> = request.volume.map(|volume| volume.id).into_iter().collect();
+    if server.volumes != expected {
         return Err(CloudError::Invalid(
-            "The operation's server does not hold its workspace volume",
+            "The operation's server does not hold exactly its workspace volume",
         ));
     }
     Ok(server)
