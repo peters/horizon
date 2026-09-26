@@ -53,8 +53,8 @@ fn offers_are_euro_priced_per_started_hour_with_running_storage_and_a_kept_volum
         ("Hetzner", "EUR", "cx43")
     );
     assert_eq!(first.name, "cx43 · 8 vCPU · 16 GB · shared");
-    // Three started hours, plus the volume and IPv4 address for 2.5 hours.
-    let expected = 3.0 * 0.0256 + (0.0572 * 100.0 + 0.5) * 2.5 / 730.0;
+    // Three started hours of compute, volume and IPv4 address.
+    let expected = 3.0 * 0.0256 + (0.0572 * 100.0 + 0.5) * 3.0 / 730.0;
     assert!((first.estimated_total - expected).abs() < 1e-9);
     assert_eq!(first.monthly, Some(15.99));
     assert!(
