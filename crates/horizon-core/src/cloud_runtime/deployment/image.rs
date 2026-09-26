@@ -44,17 +44,8 @@ fn sibling_grants(request: &Request, state: &Deployment, set: &siblings::Set) ->
     if request.settings.git_credentials.is_empty() {
         return Ok(false);
     }
-    let members = set
-        .members
-        .iter()
-        .map(|sibling| {
-            Ok(git_auth::Sibling {
-                alias: &sibling.alias,
-                local_repository: sibling.checkout()?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(!git_auth::select(&request.settings.git_credentials, &state.repository, &members)?.is_empty())
+    let siblings = set.grant_siblings()?;
+    Ok(!git_auth::select(&request.settings.git_credentials, &state.repository, &siblings)?.is_empty())
 }
 
 /// Each sibling's committed snapshot and recipe, in layering order.

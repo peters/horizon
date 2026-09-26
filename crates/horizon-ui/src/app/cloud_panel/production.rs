@@ -626,7 +626,7 @@ impl HorizonApp {
                 agent: agent.into(),
                 tmux: id.clone(),
                 branch: format!("agent/{id}"),
-                worktree: format!("/workspace/agents/{id}"),
+                worktree: cloud_runtime::siblings::session_worktree(&id, saved.siblings.as_ref()),
             };
             if !saved.sessions.iter().any(|s| s.panel_id == id) {
                 saved.sessions.push(session.clone());
