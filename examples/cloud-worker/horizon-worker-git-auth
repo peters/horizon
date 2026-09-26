@@ -22,8 +22,19 @@ GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^
                              re.IGNORECASE)
 SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
 API_REPOSITORY = re.compile(r'/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)')
-POSITIONAL_REPOSITORY_COMMANDS = ('archive', 'clone', 'create', 'delete', 'edit', 'fork',
-                                  'set-default', 'sync', 'unarchive', 'view')
+# `gh repo` commands whose first positional argument is a repository, with the flags that take a
+# separate value, so a flag value is never read as that repository.
+POSITIONAL_REPOSITORY_COMMANDS = {
+    'archive': (), 'delete': (), 'set-default': (), 'unarchive': (),
+    'clone': ('-u', '--upstream-remote-name'),
+    'create': ('-d', '--description', '-g', '--gitignore', '-h', '--homepage', '-l', '--license',
+               '-p', '--template', '-r', '--remote', '-s', '--source', '-t', '--team'),
+    'edit': ('--add-topic', '--default-branch', '-d', '--description', '-h', '--homepage',
+             '--remove-topic', '--visibility'),
+    'fork': ('--fork-name', '--org', '--remote-name'),
+    'sync': ('-b', '--branch', '-s', '--source'),
+    'view': ('-b', '--branch', '--json', '-q', '--jq', '-t', '--template'),
+}
 URL_HOST = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)')
 GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
 TOKEN_VARIABLES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
@@ -240,11 +251,26 @@ def repository_arguments(argv):
                 implied.append(None)
         elif (other := URL_HOST.match(argument)) and other.group(1).lower() not in GITHUB_HOSTS:
             implied.append(None)
-    if argv[:1] == ['repo'] and len(argv) > 1 and argv[1] in POSITIONAL_REPOSITORY_COMMANDS:
-        positional = next((argument for argument in argv[2:] if not argument.startswith('-')), None)
-        if positional is not None and not GITHUB_ARGUMENT.match(positional):
-            implied.append(positional)
+    positional = repository_positional(argv)
+    if positional is not None and not GITHUB_ARGUMENT.match(positional):
+        implied.append(positional)
     return explicit, implied
+
+
+def repository_positional(argv):
+    """The repository argument of `gh repo <command>`, skipping flags and their values."""
+    if argv[:1] != ['repo'] or len(argv) < 2 or argv[1] not in POSITIONAL_REPOSITORY_COMMANDS:
+        return None
+    takes_value = POSITIONAL_REPOSITORY_COMMANDS[argv[1]] + ('-R', '--repo')
+    arguments = iter(argv[2:])
+    for argument in arguments:
+        if argument == '--':
+            return next(arguments, None)
+        if argument in takes_value:
+            next(arguments, None)
+        elif not argument.startswith('-'):
+            return argument
+    return None
 
 
 def repository_name(requested):
