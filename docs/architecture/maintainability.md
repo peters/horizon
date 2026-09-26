@@ -699,3 +699,13 @@ action. Worker membership checks source publication independently before saving
 the reservation. Source history traversal identifies import payloads explicitly,
 because session reservations retain the project's `importing` state. No session
 process or worktree lifecycle is inferred from these logical records.
+
+Session preparation keeps signed intent in membership history and the owning-host
+journal. Worker `bootstrap::sessions` coordinates validated namespace/source
+handles; `sessions::storage` owns external inode records, publication barriers and
+recovery. Its embedded `checkout.py` reads immutable Git stores and writes bounded
+independent repositories and homes, including direct index-v2 generation. Ready
+staging has a content digest; exposed data is checked only through fixed root
+identities so normal file, Git and home changes survive retries and startup.
+Uncertain builds remain retained and fence cancellation. None of these records
+authorizes an agent process or public project attachment.

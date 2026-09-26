@@ -154,6 +154,10 @@ impl<'a> Tree<'a> {
         tree.verify()?;
         Ok(Some(tree))
     }
+    pub fn published(&self) -> io::Result<File> {
+        self.validate(true)?;
+        self.file.try_clone()
+    }
     fn verify(&self) -> io::Result<()> {
         super::remaining(self.deadline)?;
         self.store.verify()?;

@@ -55,6 +55,7 @@ pub(super) enum Change {
     PrepareNamespace(ProjectIdentity),
     ImportSource(ProjectIdentity, horizon_cloud_protocol::membership::Source),
     ReserveSession(ProjectIdentity, Session),
+    PrepareSession(ProjectIdentity, uuid::Uuid),
     Cancel(ProjectIdentity),
     Resume,
 }
@@ -113,6 +114,27 @@ pub fn reserve_session(
         owner,
         allocation,
         &Change::ReserveSession(project.clone(), session.clone()),
+        cancellation,
+        timeout,
+    )
+}
+
+/// Prepare a reserved session's writable checkout and home. This does not start
+/// an agent or grant credentials. Exact retries preserve all published edits.
+/// # Errors
+/// Rejects unreserved sessions, changed bindings and uncertain retained state.
+pub fn prepare_session(
+    owner: &mut Owner,
+    allocation: &bootstrap_initialization::Request,
+    project: &ProjectIdentity,
+    session_id: uuid::Uuid,
+    cancellation: &Cancellation,
+    timeout: Duration,
+) -> Result<Receipt> {
+    execute(
+        owner,
+        allocation,
+        &Change::PrepareSession(project.clone(), session_id),
         cancellation,
         timeout,
     )
@@ -201,17 +223,20 @@ fn execute(
 }
 
 pub(super) fn timeout_limit(change: &Change, saved: Option<&Journal>) -> Duration {
-    if matches!(change, Change::ImportSource(..) | Change::ReserveSession(..))
-        || matches!(change, Change::Resume)
-            && saved
-                .and_then(|journal| journal.pending.as_ref())
-                .is_some_and(|pending| {
-                    matches!(
-                        pending.command(),
-                        Ok("horizon-cloud-worker prepare-project-source"
-                            | "horizon-cloud-worker reserve-project-session")
-                    )
-                })
+    if matches!(
+        change,
+        Change::ImportSource(..) | Change::ReserveSession(..) | Change::PrepareSession(..)
+    ) || matches!(change, Change::Resume)
+        && saved
+            .and_then(|journal| journal.pending.as_ref())
+            .is_some_and(|pending| {
+                matches!(
+                    pending.command(),
+                    Ok("horizon-cloud-worker prepare-project-source"
+                        | "horizon-cloud-worker reserve-project-session"
+                        | "horizon-cloud-worker prepare-project-session")
+                )
+            })
     {
         horizon_cloud_protocol::membership::Source::CONTROLLER_TIMEOUT
     } else {

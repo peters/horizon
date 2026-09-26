@@ -83,7 +83,7 @@ fn descriptor(request: &RecoveryRequest, length: usize) -> io::Result<Source> {
     Ok(descriptor)
 }
 
-fn remaining(deadline: Instant) -> io::Result<Duration> {
+pub(super) fn remaining(deadline: Instant) -> io::Result<Duration> {
     let duration = deadline.saturating_duration_since(Instant::now());
     if duration.is_zero() {
         Err(io::Error::new(io::ErrorKind::TimedOut, "Source deadline expired"))
@@ -179,7 +179,7 @@ fn entries(manifest: &Manifest) -> io::Result<Vec<(&Receipt, Source)>> {
         .filter(|entry| entry.receipt.state == State::Importing)
         .filter_map(|entry| match decode::<Request>(entry.payload.as_bytes()) {
             Ok(Request::ImportSource { descriptor }) => Some(Ok((&entry.receipt, descriptor))),
-            Ok(Request::ReserveSession { .. }) => None,
+            Ok(Request::ReserveSession { .. } | Request::PrepareSession { .. }) => None,
             _ => Some(Err(invalid())),
         })
         .collect()
@@ -227,4 +227,22 @@ pub(super) fn require_settled_until(
     }
     remaining(deadline)?;
     Ok(())
+}
+
+/// Retain an inode handle to verified immutable source for session materialization.
+pub(super) fn published(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &ProjectIdentity,
+    deadline: Instant,
+) -> io::Result<File> {
+    require_settled_until(store, manifest, identity, deadline)?;
+    let (receipt, descriptor) = entries(manifest)?
+        .into_iter()
+        .find(|(receipt, _)| &receipt.identity == identity)
+        .ok_or_else(invalid)?;
+    let parent = namespaces::repository(store, manifest, identity)?;
+    Tree::open(store, &parent, receipt, &descriptor, false, deadline)?
+        .ok_or_else(invalid)?
+        .published()
 }
