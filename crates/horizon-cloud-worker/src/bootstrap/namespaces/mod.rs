@@ -220,6 +220,18 @@ pub(super) fn repository(
     manifest: &Manifest,
     identity: &horizon_cloud_protocol::ProjectIdentity,
 ) -> io::Result<File> {
+    child(store, manifest, identity, "repository")
+}
+
+pub(super) fn child(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &horizon_cloud_protocol::ProjectIdentity,
+    name: &str,
+) -> io::Result<File> {
+    if !CHILDREN.contains(&name) {
+        return Err(invalid());
+    }
     require_settled(store, manifest, identity)?;
     let receipt = preparation(manifest, identity).ok_or_else(invalid)?;
     let (workspace, allocation) = store.namespace_anchors()?;
@@ -236,7 +248,7 @@ pub(super) fn repository(
         true,
     )?
     .ok_or_else(invalid)?;
-    let repository = directory(&project, "repository")?;
+    let repository = directory(&project, name)?;
     require_settled(store, manifest, identity)?;
     same(&projects, &directory(&workspace, "projects")?)?;
     same(&project, &directory(&projects, &identity.project_id().to_string())?)?;

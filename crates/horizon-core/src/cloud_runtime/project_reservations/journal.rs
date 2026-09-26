@@ -154,6 +154,12 @@ impl Journal {
                     session: session.clone(),
                 },
             ),
+            Change::PrepareSession(identity, session_id) => (
+                identity,
+                Request::PrepareSession {
+                    session_id: *session_id,
+                },
+            ),
             Change::Cancel(identity) => (identity, Request::Cancel {}),
             Change::Resume => return Err(Error::Missing),
         };
@@ -165,6 +171,9 @@ impl Journal {
                 && serde_json::from_str::<Request>(&entry.payload).is_ok_and(|saved| match (&request, &saved) {
                     (Request::ReserveSession { session }, Request::ReserveSession { session: old }) => {
                         session.id == old.id
+                    }
+                    (Request::PrepareSession { session_id }, Request::PrepareSession { session_id: old }) => {
+                        session_id == old
                     }
                     _ => saved.action() == action,
                 })
@@ -224,6 +233,13 @@ impl Pending {
                             session: session.clone(),
                         })
             }
+            Change::PrepareSession(identity, session_id) => {
+                self.receipt.identity == *identity
+                    && payload
+                        == (Request::PrepareSession {
+                            session_id: *session_id,
+                        })
+            }
             Change::Cancel(identity) => self.receipt.identity == *identity && payload == (Request::Cancel {}),
             Change::Resume => true,
         })
@@ -236,6 +252,7 @@ impl Pending {
                 Request::PrepareNamespace {} => "horizon-cloud-worker prepare-project-namespace",
                 Request::ImportSource { .. } => "horizon-cloud-worker prepare-project-source",
                 Request::ReserveSession { .. } => "horizon-cloud-worker reserve-project-session",
+                Request::PrepareSession { .. } => "horizon-cloud-worker prepare-project-session",
                 Request::Cancel {} => "horizon-cloud-worker cancel-project-reservation",
             },
         )

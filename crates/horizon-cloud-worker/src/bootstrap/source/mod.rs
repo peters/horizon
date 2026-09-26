@@ -22,6 +22,8 @@ use std::{
 };
 pub(super) use storage::Boundary;
 use storage::Tree;
+#[cfg(test)]
+pub(super) use storage::content_checks;
 
 pub(super) fn run(upload: bool) -> io::Result<()> {
     if std::env::args().len() != 2 {
@@ -83,7 +85,7 @@ fn descriptor(request: &RecoveryRequest, length: usize) -> io::Result<Source> {
     Ok(descriptor)
 }
 
-fn remaining(deadline: Instant) -> io::Result<Duration> {
+pub(super) fn remaining(deadline: Instant) -> io::Result<Duration> {
     let duration = deadline.saturating_duration_since(Instant::now());
     if duration.is_zero() {
         Err(io::Error::new(io::ErrorKind::TimedOut, "Source deadline expired"))
@@ -179,7 +181,7 @@ fn entries(manifest: &Manifest) -> io::Result<Vec<(&Receipt, Source)>> {
         .filter(|entry| entry.receipt.state == State::Importing)
         .filter_map(|entry| match decode::<Request>(entry.payload.as_bytes()) {
             Ok(Request::ImportSource { descriptor }) => Some(Ok((&entry.receipt, descriptor))),
-            Ok(Request::ReserveSession { .. }) => None,
+            Ok(Request::ReserveSession { .. } | Request::PrepareSession { .. }) => None,
             _ => Some(Err(invalid())),
         })
         .collect()
@@ -227,4 +229,69 @@ pub(super) fn require_settled_until(
     }
     remaining(deadline)?;
     Ok(())
+}
+
+/// One authenticated source observation retained through session preparation.
+/// Boundary checks compare descriptor/control identities; content is hashed only
+/// at explicit materialization boundaries, not at every durability checkpoint.
+pub(super) struct Published {
+    pub file: File,
+    parent: File,
+    receipt: Receipt,
+    descriptor: Source,
+    record: Vec<u8>,
+}
+
+pub(super) fn published(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &ProjectIdentity,
+    deadline: Instant,
+) -> io::Result<Published> {
+    let (receipt, descriptor) = entries(manifest)?
+        .into_iter()
+        .find(|(receipt, _)| &receipt.identity == identity)
+        .ok_or_else(invalid)?;
+    let parent = namespaces::repository(store, manifest, identity)?;
+    let tree = Tree::open(store, &parent, receipt, &descriptor, false, deadline)?.ok_or_else(invalid)?;
+    tree.validate(true)?;
+    let file = tree.published_anchor()?;
+    let record = tree.record().to_vec();
+    let published = Published {
+        file,
+        parent,
+        receipt: receipt.clone(),
+        descriptor,
+        record,
+    };
+    published.verify(store, manifest, deadline)?;
+    Ok(published)
+}
+
+impl Published {
+    pub fn verify(&self, store: &Store, manifest: &Manifest, deadline: Instant) -> io::Result<()> {
+        remaining(deadline)?;
+        super::store::same(
+            &self.parent,
+            &namespaces::repository(store, manifest, &self.receipt.identity)?,
+        )?;
+        let tree =
+            Tree::open(store, &self.parent, &self.receipt, &self.descriptor, false, deadline)?.ok_or_else(invalid)?;
+        super::store::same(&self.file, &tree.published_anchor()?)?;
+        if store
+            .read(&format!("source-{}.json", self.receipt.identity.project_id()))?
+            .as_deref()
+            != Some(&self.record)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub fn verify_content(&self, store: &Store, manifest: &Manifest, deadline: Instant) -> io::Result<()> {
+        self.verify(store, manifest, deadline)?;
+        Tree::open(store, &self.parent, &self.receipt, &self.descriptor, false, deadline)?
+            .ok_or_else(invalid)?
+            .validate(true)?;
+        self.verify(store, manifest, deadline)
+    }
 }

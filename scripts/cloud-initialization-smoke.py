@@ -23,7 +23,7 @@ import paramiko
 
 LIMIT = 64 * 1024
 COMMANDS = {b"horizon-cloud-worker " + name: name.decode() for name in
-            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"reserve-project-session", b"cancel-project-reservation", b"prepare-project-namespace", b"prepare-project-source", b"import-project-source"]}
+            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"reserve-project-session", b"prepare-project-session", b"cancel-project-reservation", b"prepare-project-namespace", b"prepare-project-source", b"import-project-source"]}
 COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 
 
@@ -210,11 +210,14 @@ def run(options):
     assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
     expected = {"initialization": [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
                 "reservations": [0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1],
-                "host-reservations": [0] * 11, "namespaces": [0] * 13, "sources": [0] * 31}[options.scenario]
+                "host-reservations": [0] * 11, "namespaces": [0] * 13, "sources": [0] * 42}[options.scenario]
     assert [session["exit_code"] for session in sessions] == expected
     assert report["same_host_key"]
     if options.scenario == "sources":
         agent_sessions = [session for session in sessions if session["command"] == "reserve-project-session"]
+        prepared = [session for session in sessions if session["command"] == "prepare-project-session"]
+        assert len(prepared) == 11
+        assert len({session["request_sha256"] for session in prepared}) == 6
         assert len(agent_sessions) == 11
         assert len({session["request_sha256"] for session in agent_sessions}) == 6
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1

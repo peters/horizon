@@ -11,6 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+thread_local! { static CONTENT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(in crate::bootstrap) fn content_checks() -> usize {
+    CONTENT_CHECKS.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::bootstrap) enum Boundary {
     Anchored,
@@ -154,6 +161,16 @@ impl<'a> Tree<'a> {
         tree.verify()?;
         Ok(Some(tree))
     }
+    pub fn record(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn published_anchor(&self) -> io::Result<File> {
+        self.verify()?;
+        if !self.destination || !self.record.published {
+            return Err(invalid());
+        }
+        self.file.try_clone()
+    }
     fn verify(&self) -> io::Result<()> {
         super::remaining(self.deadline)?;
         self.store.verify()?;
@@ -178,6 +195,10 @@ impl<'a> Tree<'a> {
         self.verify()
     }
     fn helper(&self, build: bool) -> io::Result<String> {
+        #[cfg(test)]
+        if !build {
+            CONTENT_CHECKS.with(|count| count.set(count.get() + 1));
+        }
         self.verify()?;
         let bytes = super::super::inspection::execute_leased(
             Command::new("/usr/bin/python3")

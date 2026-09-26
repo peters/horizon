@@ -8,6 +8,8 @@ use horizon_cloud::{Agent, Capabilities};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
+pub type SessionId = uuid::Uuid;
+
 pub const MAX_PROJECTS: usize = 32;
 pub const MAX_OPERATIONS: usize = 64;
 pub const MAX_SESSIONS: usize = 8;
@@ -42,6 +44,9 @@ pub enum Request {
     ReserveSession {
         session: Session,
     },
+    PrepareSession {
+        session_id: SessionId,
+    },
     Cancel {},
 }
 
@@ -53,6 +58,7 @@ impl Request {
             Self::PrepareNamespace {} => Action::ReconcileProject,
             Self::ImportSource { .. } => Action::ImportProjectSource,
             Self::ReserveSession { .. } => Action::ReserveProjectSession,
+            Self::PrepareSession { .. } => Action::PrepareProjectSession,
             Self::Cancel {} => Action::RemoveProject,
         }
     }
@@ -63,7 +69,7 @@ impl Request {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Session {
-    pub id: uuid::Uuid,
+    pub id: SessionId,
     pub agent: Agent,
     pub revision: String,
 }
@@ -130,6 +136,8 @@ pub struct Member {
     pub state: State,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<Session>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preparations: Vec<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +298,10 @@ impl Manifest {
                 self.reserve_session(identity, session)?;
                 State::Importing
             }
+            Request::PrepareSession { session_id } => {
+                self.prepare_session(identity, session_id)?;
+                State::Importing
+            }
             Request::Cancel {} => {
                 let member = self
                     .members
@@ -337,6 +349,22 @@ impl Manifest {
             identity: identity.clone(),
             state,
         })
+    }
+
+    fn prepare_session(&mut self, identity: &ProjectIdentity, session_id: SessionId) -> Result<(), Error> {
+        let member = self
+            .members
+            .iter_mut()
+            .find(|member| &member.identity == identity)
+            .ok_or(Error)?;
+        if member.state != State::Importing
+            || !member.sessions.iter().any(|session| session.id == session_id)
+            || member.preparations.contains(&session_id)
+        {
+            return Err(Error);
+        }
+        member.preparations.push(session_id);
+        Ok(())
     }
 
     fn reserve_session(&mut self, identity: &ProjectIdentity, session: Session) -> Result<(), Error> {
@@ -393,6 +421,7 @@ impl Manifest {
             ports,
             state: State::Attaching,
             sessions: Vec::new(),
+            preparations: Vec::new(),
         });
         Ok(())
     }

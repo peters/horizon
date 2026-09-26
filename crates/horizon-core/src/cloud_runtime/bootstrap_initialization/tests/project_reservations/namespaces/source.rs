@@ -1,3 +1,4 @@
+mod sessions;
 use super::*;
 use crate::cloud_runtime::project_reservations::{journal::Journal, source};
 use horizon_cloud::Agent;
@@ -719,7 +720,8 @@ fn native_ssh_project_sources() {
         request.capabilities.agents = [Agent::Codex, Agent::Claude].into();
         f = native_prepare(f, &target, &runner, &directory, &request, 1);
         let repo = directory.join(format!("repo-{name}"));
-        let revision = repository(&repo, name);
+        repository(&repo, name);
+        let revision = sessions::extend_fixture(&repo);
         let descriptor = source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &cancellation).unwrap();
         let saved = Journal::load(&f.owner).unwrap().unwrap();
         let root = f.owner.artifact_root().unwrap().to_owned();
@@ -775,6 +777,7 @@ fn native_ssh_project_sources() {
             .join("repository/source");
         verify_import(&source_root, &revision, name);
         f = native_sessions(f, &target, &runner, &directory, &request, &revision, index);
+        f = sessions::native_prepared(f, &target, &runner, &directory, &request, index);
         projects.push((request, source_root));
     }
     let before: Vec<_> = projects

@@ -4,7 +4,7 @@ use super::{
     inspection, namespaces,
     recovery::{BOOTSTRAP, Bootstrap, MANIFEST, Phase, ROOT, decode, read_request},
     runtime::Runtime,
-    source,
+    sessions, source,
     store::{Publication, Store, invalid},
 };
 use horizon_cloud::Capabilities;
@@ -36,7 +36,8 @@ pub(super) fn startup(store: &Store, bootstrap: &Bootstrap) -> io::Result<()> {
     }
     let (_, manifest) = load(store, bootstrap)?;
     namespaces::validate(store, &manifest)?;
-    source::validate(store, &manifest, false)
+    source::validate(store, &manifest, false)?;
+    sessions::validate(store, &manifest, None)
 }
 
 pub(super) fn load(store: &Store, bootstrap: &Bootstrap) -> io::Result<(Vec<u8>, Manifest)> {
@@ -110,13 +111,22 @@ pub(super) fn mutate_with(
     if reserved_operation(&bootstrap, receipt.operation) {
         return Err(invalid());
     }
+    let prepared_source = if matches!(payload, Request::PrepareSession { .. }) {
+        Some(source::published(store, &manifest, &receipt.identity, source_deadline)?)
+    } else {
+        None
+    };
     let verify = || -> io::Result<()> {
         if matches!(payload, Request::Cancel {}) {
             namespaces::require_settled(store, &manifest, &receipt.identity)?;
             source::require_settled(store, &manifest, &receipt.identity)?;
+            sessions::validate(store, &manifest, Some(&receipt.identity))?;
         }
         if matches!(payload, Request::ReserveSession { .. }) {
             source::require_settled_until(store, &manifest, &receipt.identity, source_deadline)?;
+        }
+        if let Some(source) = &prepared_source {
+            source.verify(store, &manifest, source_deadline)?;
         }
         bootstrap.validate(store, runtime)?;
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
@@ -125,7 +135,10 @@ pub(super) fn mutate_with(
         Ok(())
     };
     verify()?;
-    if matches!(payload, Request::ImportSource { .. } | Request::ReserveSession { .. }) {
+    if matches!(
+        payload,
+        Request::ImportSource { .. } | Request::ReserveSession { .. } | Request::PrepareSession { .. }
+    ) {
         namespaces::repository(store, &manifest, &receipt.identity)?;
         let member = manifest
             .members
@@ -168,6 +181,17 @@ pub(super) fn mutate_with(
             }
             Ok(())
         })?;
+    }
+    if let Request::PrepareSession { session_id } = payload {
+        sessions::ensure(
+            store,
+            &next,
+            &receipt,
+            session_id,
+            prepared_source.as_ref().ok_or_else(invalid)?,
+            source_deadline,
+            &mut |_| verify(),
+        )?;
     }
     verify()?;
     if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {

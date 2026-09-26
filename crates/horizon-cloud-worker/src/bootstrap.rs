@@ -14,6 +14,8 @@ mod recovery;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]
+mod sessions;
+#[cfg(target_os = "linux")]
 mod source;
 #[cfg(target_os = "linux")]
 mod store;

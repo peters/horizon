@@ -1,3 +1,4 @@
+mod sessions;
 use super::*;
 use crate::bootstrap::source::{self, Boundary as SourceBoundary};
 use horizon_cloud::Agent;

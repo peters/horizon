@@ -676,3 +676,52 @@ permission to launch. Session provisioning and public UI/CLI/MCP activation are
 subsequent #805 work. The local `sources` SSH scenario additionally checks two
 session reservations per project and recovery of exact signed requests. Its agent
 fixtures answer version probes only; they do not qualify real agent startup.
+
+### Prepared agent checkouts and homes
+
+`prepare-project-session` accepts the signed `prepare_project_session` action
+with `{ "action": "prepare_session", "session_id": "<reserved UUID>" }`.
+The owning-host API is `project_reservations::prepare_session`; its journal
+persists the exact request before SSH and resumes that request after a lost reply
+or completion-save failure. This Linux-only operation requires a reserved agent,
+current granted capabilities and independently published committed source.
+
+Each session publishes `worktrees/<session UUID>/{checkout,home,runtime,logs,tools}`
+inside its project namespace. The writable checkout has independent Git objects,
+index, configuration and recursive-submodule repositories, with branch
+`projects/<project UUID>/<session UUID>`. Committed symlinks are retained without
+following them during materialization. Verified LFS content and cache copies are
+local; hooks, filters, network and inherited Git configuration are disabled while
+preparing. Each writable repository has required local LFS filters so subsequent
+Git additions store pointers without relying on a shared home or global config. No hardlinks or writable alternates connect sessions to immutable
+source. This does not install packages, supply credentials or start an agent.
+
+Preparation retains verified source handles and exact control-record bytes;
+storage checkpoints check these anchors without rehashing source. Full content
+checks run at bounded points before and after materialization.
+
+An external record anchors the session and fixed child-directory identities.
+Initial content is synchronized and recorded before exclusive publication. A
+retry revalidates completed staging before publication. Once published, recovery
+checks fixed directory identities and external control records only: dirty files,
+untracked data, new commits and changed Git/home configuration are preserved.
+A crash before the directory identity is recorded, or during materialization,
+can leave retained uncertain state that blocks preparation and cancellation.
+Retries never accumulate replacement staging trees or reset uncertain data.
+Settled cancellation retains all session files and sibling projects.
+
+Preparation allows 8 GiB of aggregate writes, reserving 64 MiB for metadata and
+control records, with a separate 4-GiB working-tree cap. Independent object stores,
+LFS cache copies and hydrated files are charged separately. Metadata, including
+Git indexes, is written through bounded writers; Git subprocesses only read.
+Preflight includes implicit directories and limits traversal to 65,536 entries,
+16 MiB of path bytes, 4,096 bytes per path, 256 submodules, depth 16 and 8,192 LFS
+entries. Git output is capped at 20 MiB, commands at 60 seconds and the worker
+operation at 600 seconds. A valid source import can exceed these preparation
+limits. Free-space checks do not establish per-project resource quotas.
+
+The local `sources` SSH scenario prepares two sessions in each of three projects,
+including LFS and recursive submodules, then checks exact-request recovery and
+retained edits. These fixtures do not qualify actual agent execution, live-provider
+behavior or physical power-loss durability. Public UI/CLI/MCP admission and process
+lifecycle remain subsequent #805 work; a preparation receipt is not launch authority.
