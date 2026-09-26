@@ -218,11 +218,20 @@ impl Hetzner {
         self.act(operation_id, id, "poweron", cancel)
     }
 
-    /// Asks the operating system to shut down. A powered-off server is still billed.
+    /// Asks the operating system to shut down. The provider confirms only that it
+    /// sent the request; the guest may ignore it, so watch the status and fall back
+    /// to `power_off`. A powered-off server is still billed.
     /// # Errors
     /// As `power_on`.
     pub fn shutdown(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
         self.act(operation_id, id, "shutdown", cancel)
+    }
+
+    /// Cuts power immediately, like pulling the plug; unsynced writes can be lost.
+    /// # Errors
+    /// As `power_on`.
+    pub fn power_off(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
+        self.act(operation_id, id, "poweroff", cancel)
     }
 
     /// Deletes only the server recorded for this operation and proves it is gone.

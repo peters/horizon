@@ -328,10 +328,13 @@ fn power_actions_act_only_on_the_operations_server() {
     let (hetzner, requests, task) = provider(vec![
         (200, json!({"server": server(42)})),
         (201, json!({"action": action(6, "success")})),
+        (200, json!({"server": server(42)})),
+        (201, json!({"action": action(7, "success")})),
         (200, json!({"server": foreign})),
     ]);
     let cancel = Cancellation::default();
     hetzner.shutdown(OPERATION, 42, &cancel).unwrap();
+    hetzner.power_off(OPERATION, 42, &cancel).unwrap();
     assert!(matches!(
         hetzner.power_on(OPERATION, 42, &cancel),
         Err(CloudError::IdentityMismatch)
@@ -339,7 +342,8 @@ fn power_actions_act_only_on_the_operations_server() {
     task.join().unwrap();
     let requests = requests.lock().unwrap();
     assert!(requests[1].starts_with("POST /servers/42/actions/shutdown "));
-    assert_eq!(requests.len(), 3);
+    assert!(requests[3].starts_with("POST /servers/42/actions/poweroff "));
+    assert_eq!(requests.len(), 5);
 }
 
 #[test]

@@ -17,7 +17,9 @@ pub struct Offer {
     pub hourly_eur: f64,
     /// The most a server is billed in a month, running or powered off.
     pub monthly_eur: f64,
-    /// Whether the location can create this type right now.
+    /// Whether Hetzner lists the type as orderable in this location right now. The
+    /// list is advisory: a create can succeed for an unlisted type, and fail for a
+    /// listed one, so placement still relies on the create response.
     pub available: bool,
 }
 
