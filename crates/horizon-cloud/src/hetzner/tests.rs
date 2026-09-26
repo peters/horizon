@@ -295,31 +295,34 @@ fn resource_names_are_host_names_owned_by_one_operation() {
 }
 
 #[test]
-fn a_budgeted_inspection_ends_with_its_budget() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut input = [0; 4096];
-        let _ = stream.read(&mut input);
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 200\r\nConnection: close\r\n\r\n")
+fn a_budgeted_inspection_ends_with_its_budget_as_a_transport_failure() {
+    // Headers arrive in time and the body stalls, for a success and for a refusal.
+    for status in ["200 OK", "503 Service Unavailable"] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut input = [0; 4096];
+            let _ = stream.read(&mut input);
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
+            )
             .unwrap();
-        thread::sleep(Duration::from_millis(600));
-    });
-    let mut hetzner = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
-    hetzner.endpoint = format!("http://{address}");
-    let cancel = Cancellation::default();
-    let started = std::time::Instant::now();
-    assert!(
-        hetzner
-            .inspect_server_within(42, &cancel, Some(Duration::from_millis(100)))
-            .is_err()
-    );
-    assert!(started.elapsed() < Duration::from_millis(500));
-    task.join().unwrap();
+            thread::sleep(Duration::from_millis(600));
+        });
+        let mut hetzner = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
+        hetzner.endpoint = format!("http://{address}");
+        let cancel = Cancellation::default();
+        let started = std::time::Instant::now();
+        let result = hetzner.inspect_server_within(42, &cancel, Some(Duration::from_millis(100)));
+        assert!(matches!(result, Err(CloudError::Transport)), "{status}: {result:?}");
+        assert!(started.elapsed() < Duration::from_millis(500));
+        task.join().unwrap();
+    }
+    let hetzner = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
     assert!(matches!(
-        hetzner.inspect_volume_within(9, &cancel, Some(Duration::ZERO)),
+        hetzner.inspect_volume_within(9, &Cancellation::default(), Some(Duration::ZERO)),
         Err(CloudError::Transport)
     ));
 }
