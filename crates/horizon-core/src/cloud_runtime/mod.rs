@@ -18,6 +18,7 @@ pub mod owner;
 pub mod prices;
 pub mod progress;
 pub mod project_reservations;
+pub mod project_setup;
 pub mod registry;
 pub mod repository;
 pub mod settings;
