@@ -152,6 +152,8 @@ fn delayed_server(
                     Err(error) => panic!("missing fixture request {index}: {error}"),
                 }
             };
+            // Accepted sockets may inherit the listener's nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut input = Vec::new();
             let mut buf = [0; 4096];
