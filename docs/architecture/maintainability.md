@@ -564,6 +564,15 @@ recipe, drives the journaled switch of its bound worker, settles an interrupted 
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
 SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
 tested offline.
+`deployment` orchestrates one deploy and still owns registry binding, provisioning,
+ready bookkeeping, initial state and replacement commits; the other steps have leaves.
+`sizing` applies CPU, memory and machine settings until a worker is requested;
+`image` prepares the worker image and checks its contract before allocation;
+`source` validates and packs the committed source before allocation and transfers
+it to the ready worker; `git_credentials` and `agent_credentials` install or clear
+the worker's credential bindings; `readiness` waits for the worker under one
+deadline; `redeploy` reopens a deleted cloud; and `deletion` deletes the worker
+and its workspace storage. The orchestrator's tests live in `deployment/tests.rs`.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate
