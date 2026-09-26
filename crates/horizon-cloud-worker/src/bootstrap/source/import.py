@@ -1,15 +1,18 @@
 """Private worker helper, embedded in the binary. No checkout, hooks or network."""
+import fcntl
 import hashlib
 import io
 import json
 import os
 from pathlib import Path, PurePosixPath
 import resource
+import select
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
 resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024**3, 8 * 1024**3))
@@ -17,6 +20,8 @@ os.umask(0o077)
 # Keep allocation fencing alive through every helper and Git process.
 LEASE = os.dup(0)
 MAX_MATERIAL_BYTES = 4 * 1024**3
+MAX_GIT_OUTPUT = 16 * 1024**2
+GIT_TIMEOUT = 60
 CONFIG = b"[core]\n\trepositoryformatversion = 0\n\tbare = true\n"
 
 
@@ -47,17 +52,46 @@ def immutable(path, content):
 
 
 def git(repo, args, data=None, source=None, prefix=None, index=None):
-    with tempfile.TemporaryFile() as output:
-        command = ["/usr/bin/git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
-                   "-c", "protocol.allow=never", "--git-dir=" + str(repo), *args]
-        environment = dict(os.environ)
-        if index is not None:
-            environment['GIT_INDEX_FILE'] = index
+    command = ["/usr/bin/git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
+               "-c", "protocol.allow=never", "--git-dir=" + str(repo), *args]
+    environment = dict(os.environ)
+    if index is not None:
+        environment['GIT_INDEX_FILE'] = index
+    if prefix is not None:
+        require(data is None and source is None and args[:2] == ["cat-file", "blob"])
+        return git_prefix(command, environment, prefix)
+    with os.fdopen(os.memfd_create("source-git-output", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING), "w+b") as output:
+        output.truncate(MAX_GIT_OUTPUT + 1)
+        fcntl.fcntl(output, fcntl.F_ADD_SEALS, fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK)
         subprocess.run(command, input=data, stdin=source, stdout=output, stderr=subprocess.DEVNULL,
-                       check=True, timeout=60, env=environment, pass_fds=(LEASE,))
-        require(prefix is not None or output.tell() <= 16 * 1024**2)
+                       check=True, timeout=GIT_TIMEOUT, env=environment, pass_fds=(LEASE,))
+        length = output.tell()
+        require(length <= MAX_GIT_OUTPUT)
         output.seek(0)
-        return output.read() if prefix is None else output.read(prefix)
+        return output.read(length)
+
+
+def git_prefix(command, environment, limit):
+    require(type(limit) is int and 0 < limit <= MAX_GIT_OUTPUT)
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          env=environment, pass_fds=(LEASE,)) as child:
+        deadline = time.monotonic() + GIT_TIMEOUT
+        result = bytearray()
+        try:
+            while len(result) < limit:
+                remaining = deadline - time.monotonic()
+                require(remaining > 0 and select.select([child.stdout], [], [], remaining)[0])
+                block = os.read(child.stdout.fileno(), min(65536, limit - len(result)))
+                if not block:
+                    require(child.wait(timeout=max(0, deadline - time.monotonic())) == 0)
+                    return bytes(result)
+                result.extend(block)
+            # Only the requested prefix is evidence; the rest is deliberately unread.
+            return bytes(result)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
 
 
 def repository_layout(path, pack):

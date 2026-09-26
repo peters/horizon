@@ -285,6 +285,81 @@ for case in ('sparse', 'aggregate', 'link', 'duplicate', 'traversal', 'unexpecte
 }
 
 #[test]
+fn source_git_output_is_bounded_during_execution_and_prefix_children_are_reaped() {
+    let temp = tempfile::tempdir().unwrap();
+    let definitions = include_str!("../../../../source/import.py")
+        .split("if sys.argv[1] ==")
+        .next()
+        .unwrap();
+    let test = r#"
+repo = Path('repository.git')
+subprocess.run(['/usr/bin/git', 'init', '--bare', '-q', str(repo)], check=True)
+os.environ.update(GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                  GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
+original_run = subprocess.run
+def observed_run(*args, **kwargs):
+    try:
+        return original_run(*args, **kwargs)
+    finally:
+        output = kwargs.get('stdout')
+        if hasattr(output, 'fileno'):
+            assert os.fstat(output.fileno()).st_size <= MAX_GIT_OUTPUT + 1
+subprocess.run = observed_run
+def blob(content):
+    return git(repo, ['hash-object', '-w', '--stdin'], data=content).strip().decode()
+attributes = blob(b'value filter=lfs\n')
+pointer = b'version https://git-lfs.github.com/spec/v1\noid sha256:' + b'a' * 64 + b'\nsize 3\n'
+for content, assets, valid in [(b'A' * (20 * 1024**2), [], True),
+                              (pointer + b'A' * (20 * 1024**2), [], False),
+                              (pointer, [{'path': 'value', 'oid': 'a' * 64, 'size': 3}], True)]:
+    oid = blob(content)
+    assert git(repo, ['cat-file', 'blob', oid], prefix=1025) == content[:1025]
+    if len(content) > MAX_GIT_OUTPUT:
+        try:
+            git(repo, ['cat-file', 'blob', oid])
+        except (ValueError, subprocess.CalledProcessError):
+            pass
+        else:
+            raise AssertionError('full output exceeded limit')
+    tree = git(repo, ['mktree'], data=f'100644 blob {attributes}\t.gitattributes\n100644 blob {oid}\tvalue\n'.encode()).strip().decode()
+    revision = git(repo, ['commit-tree', tree], data=b'Fixture\n').strip().decode()
+    try:
+        selected_material({'modules': [], 'assets': assets}, revision)
+    except ValueError:
+        assert not valid
+    else:
+        assert valid
+try:
+    git(repo, ['cat-file', 'blob', '0' * 40], prefix=1025)
+except ValueError:
+    pass
+else:
+    raise AssertionError('failed command accepted as a prefix')
+for output in ('', "os.write(1, b'x' * 4096)"):
+    GIT_TIMEOUT = 1
+    script = "import os,time; open('child.pid','w').write(str(os.getpid())); " + (output or 'pass') + "; time.sleep(5)"
+    try:
+        result = git_prefix([sys.executable, '-I', '-c', script], dict(os.environ), 1025)
+    except ValueError:
+        assert not output
+    else:
+        assert output and result == b'x' * 1025
+    try:
+        os.kill(int(Path('child.pid').read_text()), 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError('prefix child survived completion')
+"#;
+    let output = Command::new("python3")
+        .args(["-I", "-c", &format!("{definitions}\n{test}")])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
 fn source_helper_completes_fixed_file_prefixes_but_fences_unknown_git_locks() {
     let (descriptor, bytes) = bytes();
     for lock in [false, true] {
