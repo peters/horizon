@@ -7,6 +7,7 @@ mod identity;
 pub mod inspection;
 pub mod membership;
 mod placement;
+pub mod session_attachment;
 pub mod session_runtime;
 pub mod signed;
 

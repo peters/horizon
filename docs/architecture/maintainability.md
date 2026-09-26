@@ -722,3 +722,15 @@ qualification, `supervisor` owns private tmux and inherited launch authority, an
 supervisors release the allocation lease between observations. Only an intact
 supervisor can establish terminal cleanup; restart never replays a launch or
 signals persisted PIDs. Published session data remains mutable and retained.
+
+Interactive attachment uses protocol `session_attachment` and a separate signed
+transport action. Host `project_reservations::attachment` revalidates the current
+owning journal and retains private copies of pinned SSH material for the client
+lifetime. Worker `session_runtime::attachment` authenticates membership, launch
+and endpoint identity under the allocation lock. Its `terminal` leaf owns a
+private intermediary PTY and fixed attach-only child; `bridge` owns bounded byte
+and ancillary-descriptor queues. The supervisor publishes endpoint identity only
+on initial launch. Existing records without that binding remain inspectable and
+stoppable but cannot be adopted for attachment. Authorization opens input and
+output forwarding before releasing the same lock that orders terminal stop;
+no allocation lock is held during interactive relay.

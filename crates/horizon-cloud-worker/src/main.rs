@@ -30,6 +30,8 @@ fn main() -> std::process::ExitCode {
         Some("configure-agent-tools") => configuration::run(),
         Some("recover-allocation") => bootstrap::run(),
         Some("inspect-allocation") => bootstrap::inspect(),
+        Some("attach-project-session") => bootstrap::session_attachment(false),
+        Some("attach-project-terminal") => bootstrap::session_attachment(true),
         Some("inspect-project-session") => bootstrap::session_runtime(false),
         Some("supervise-project-session") => bootstrap::session_runtime(true),
         Some("start-project-session") => {
@@ -59,7 +61,7 @@ fn main() -> std::process::ExitCode {
         Some("abandon-bootstrap") => bootstrap::initialize(true),
         Some("prepare-allocation-ssh") => bootstrap::prepare(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|prepare-project-session|inspect-project-session|supervise-project-session|start-project-session|stop-project-session|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|reserve-project-session|prepare-project-namespace|prepare-project-source|import-project-source|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
+            "Usage: horizon-cloud-worker serve|connect|attach-project-session|prepare-project-session|inspect-project-session|supervise-project-session|start-project-session|stop-project-session|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|reserve-project-session|prepare-project-namespace|prepare-project-source|import-project-source|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
         )),
     };
     match result {

@@ -1,4 +1,5 @@
 //! One-shot process launch and conservative, signed lifecycle observation.
+pub(super) mod attachment;
 mod policy;
 mod process;
 mod records;
@@ -73,6 +74,7 @@ pub(super) fn commit(
         supervisor: None,
         agent: None,
         status: Status::Launching,
+        endpoint: None,
     };
     record.save(store, None)?;
     supervisor::spawn(store, manifest, &mut record)

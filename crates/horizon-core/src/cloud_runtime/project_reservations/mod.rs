@@ -1,4 +1,5 @@
 //! Owning-host journals for logical project reservations, not project admission.
+pub(super) mod attachment;
 pub(super) mod journal;
 pub(super) mod session_runtime;
 pub(super) mod source;
@@ -6,6 +7,7 @@ use super::{
     Cancellation, bootstrap_initialization, bootstrap_recovery, bootstrap_recovery::connection::Snapshot,
     command::Runner, owner::Owner, ssh::Connection,
 };
+pub use attachment::{SessionAttachment, SessionTransport, prepare_attachment};
 use horizon_cloud::Capabilities;
 use horizon_cloud_protocol::{
     ProjectIdentity,
