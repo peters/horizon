@@ -86,6 +86,11 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
+    // Hetzner clouds are recorded and validated, but only RunPod can deploy until
+    // the Hetzner deployment path lands; nothing here may reach RunPod for them.
+    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid("Hetzner clouds cannot be deployed yet"));
+    }
     let store = Store::lock(&request.state_root)?;
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
