@@ -1024,6 +1024,12 @@ commit, exact capability grant and generated session IDs in the anchored owning
 journal before worker effects. Repeating identical input returns those same IDs
 and commit even after a branch moves. Existing low-level projects are not adopted.
 
+Before saving a new intent, admission projects all unfinished setup plans against
+the current retained membership history. It reserves operation slots and encoded
+manifest space, including terminal stop/cancellation records, without exporting
+source or contacting the worker. A capacity refusal leaves the journal unchanged.
+Later unrelated low-level operations can still consume this shared history budget.
+
 `advance` performs at most one operation: reservation, namespace preparation,
 committed-source import, session reservation/preparation, then one-shot launch.
 Every selected checkout is prepared before the first launch. Callers may release

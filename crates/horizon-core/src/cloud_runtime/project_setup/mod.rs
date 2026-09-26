@@ -1,4 +1,5 @@
 //! Anchored, incremental setup of one project on an already initialized allocation.
+mod capacity;
 mod intent;
 mod progress;
 use super::{
@@ -22,6 +23,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("Project setup inputs, ownership or retained history are invalid or changed")]
     Invalid,
+    #[error("Project setup exceeds retained membership capacity")]
+    Capacity,
     #[error("Project setup has not been recorded")]
     Missing,
     #[error("Retained work blocks this project setup")]
@@ -139,6 +142,7 @@ pub(in crate::cloud_runtime) fn begin_with(
         revision,
         sessions,
     });
+    capacity::require(&registry, owner, journal.as_ref())?;
     cancellation.check().map_err(super::Error::from)?;
     registry.save(owner)?;
     status(owner, &project)

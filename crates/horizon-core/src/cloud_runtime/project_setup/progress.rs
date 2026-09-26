@@ -7,6 +7,12 @@ use horizon_cloud_protocol::{
 };
 use std::collections::BTreeSet;
 
+pub(super) fn steps(intent: &Intent) -> impl Iterator<Item = Step> + '_ {
+    (0..)
+        .map(|index| step(intent, index))
+        .take_while(|step| *step != Step::Complete)
+}
+
 fn step(intent: &Intent, index: usize) -> Step {
     match index {
         0 => Step::Reserve,
@@ -40,7 +46,7 @@ fn descriptor(intent: &Intent, journal: Option<&Journal>) -> Result<Source> {
         .map(|s| s.descriptor.clone())
         .ok_or(Error::Invalid)
 }
-fn payload(intent: &Intent, next: &Step, journal: Option<&Journal>) -> Result<Request> {
+pub(super) fn payload(intent: &Intent, next: &Step, journal: Option<&Journal>) -> Result<Request> {
     Ok(match next {
         Step::Reserve => Request::Reserve {
             capabilities: intent.request.capabilities.clone(),

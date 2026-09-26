@@ -283,3 +283,135 @@ fn project_setup_rejects_foreign_owner_and_unplanned_sessions() {
     );
     assert_eq!(saved, f.owner.load().unwrap());
 }
+
+fn reject_capacity(f: &mut CoordinatorFixture, request: &SetupRequest) {
+    let before = f.owner.load().unwrap();
+    assert!(matches!(
+        setup::begin_with(
+            &mut f.owner,
+            &resolve(&f.record).unwrap(),
+            request,
+            &Cancellation::default()
+        ),
+        Err(setup::Error::Capacity)
+    ));
+    assert_eq!(f.owner.load().unwrap(), before);
+    assert!(matches!(
+        setup::status(&f.owner, &request.project),
+        Err(setup::Error::Missing)
+    ));
+}
+
+#[test]
+fn project_setup_capacity_reserves_unstarted_plans_and_counts_progress_once() {
+    let mut f = ready();
+    let mut first = setup_request(&f, "one");
+    first.agents = vec![Agent::Claude; 8];
+    let initial = begin_setup(&mut f, &first);
+    let mut second = setup_request(&f, "two");
+    second.agents = vec![Agent::Claude; 8];
+    reject_capacity(&mut f, &second);
+    assert!(!reservations::started(&f.owner).unwrap());
+    let mut worker = remote(&f);
+    for _ in 0..20 {
+        advance_setup(&mut f, &first.project, &mut worker).unwrap();
+    }
+    f = f.reopen();
+    reject_capacity(&mut f, &second);
+    second.agents.truncate(2);
+    let added = begin_setup(&mut f, &second);
+    assert_eq!(begin_setup(&mut f, &first).sessions, initial.sessions);
+    for _ in 0..7 {
+        advance_setup(&mut f, &first.project, &mut worker).unwrap();
+    }
+    for _ in 0..9 {
+        advance_setup(&mut f, &second.project, &mut worker).unwrap();
+    }
+    for (request, status) in [(&first, initial), (&second, added)] {
+        assert_eq!(setup::status(&f.owner, &request.project).unwrap().next, Step::Complete);
+        for session in status.sessions {
+            transact(
+                &mut f,
+                &Change::StopSession(request.project.clone(), session.id),
+                &mut |_, _, bytes| Ok(apply(&mut worker, bytes)),
+            )
+            .unwrap();
+        }
+        transact(&mut f, &Change::Cancel(request.project.clone()), &mut |_, _, bytes| {
+            Ok(apply(&mut worker, bytes))
+        })
+        .unwrap();
+    }
+    assert_eq!(worker.operations.len(), 48);
+    assert!(worker.members.iter().all(|member| member.state == State::Removed));
+}
+
+#[test]
+fn project_setup_capacity_includes_retained_low_level_history() {
+    let mut f = ready();
+    let mut worker = remote(&f);
+    for index in 0..15 {
+        let old = reservation(&f, &format!("legacy-{index}"), 8000);
+        transact(&mut f, &Change::Reserve(old.clone()), &mut |_, _, bytes| {
+            Ok(apply(&mut worker, bytes))
+        })
+        .unwrap();
+        transact(&mut f, &Change::Cancel(old.project), &mut |_, _, bytes| {
+            Ok(apply(&mut worker, bytes))
+        })
+        .unwrap();
+    }
+    assert_eq!(worker.operations.len(), 30);
+    let mut request = setup_request(&f, "new");
+    request.agents = vec![Agent::Claude; 8];
+    reject_capacity(&mut f, &request);
+    request.agents.truncate(1);
+    assert_eq!(begin_setup(&mut f, &request).next, Step::Reserve);
+    assert_eq!(Journal::load(&f.owner).unwrap().unwrap().manifest, worker);
+}
+
+#[test]
+fn project_setup_capacity_releases_terminal_future_work_but_keeps_live_cleanup() {
+    let mut f = ready();
+    let mut first = setup_request(&f, "one");
+    first.agents = vec![Agent::Claude; 8];
+    let initial = begin_setup(&mut f, &first);
+    let mut worker = remote(&f);
+    for _ in 0..24 {
+        advance_setup(&mut f, &first.project, &mut worker).unwrap();
+    }
+    transact(
+        &mut f,
+        &Change::StopSession(first.project.clone(), initial.sessions[0].id),
+        &mut |_, _, bytes| Ok(apply(&mut worker, bytes)),
+    )
+    .unwrap();
+    assert_eq!(setup::status(&f.owner, &first.project).unwrap().next, Step::Terminal);
+    let mut next = setup_request(&f, "two");
+    next.agents = vec![Agent::Claude; 8];
+    reject_capacity(&mut f, &next);
+    next.agents.truncate(7);
+    assert_eq!(begin_setup(&mut f, &next).next, Step::Reserve);
+    assert_eq!(Journal::load(&f.owner).unwrap().unwrap().manifest, worker);
+}
+
+#[test]
+fn project_setup_capacity_reserves_encoded_bytes_before_history_slots_run_out() {
+    let mut f = ready();
+    let mut requests = Vec::new();
+    for name in ["a", "b"] {
+        let mut request = setup_request(&f, name);
+        request.project = ProjectIdentity::new(
+            ProjectId::generate(),
+            "s".repeat(100),
+            "w".repeat(100),
+            name.repeat(100),
+        )
+        .unwrap();
+        request.agents = vec![Agent::Claude; 6];
+        requests.push(request);
+    }
+    begin_setup(&mut f, &requests[0]);
+    reject_capacity(&mut f, &requests[1]);
+    assert!(!reservations::started(&f.owner).unwrap());
+}

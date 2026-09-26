@@ -756,7 +756,7 @@ no allocation lock is held during interactive relay.
 
 The shared-worker owning-host `cloud_runtime/project_setup/` coordinator separates
 immutable anchored intent validation (`intent`) from signed-history sequencing
-(`progress`). Its entry points record, advance one operation, or report durable
+(`progress`) and retained history/cleanup admission (`capacity`). Its entry points record, advance one operation, or report durable
 progress; they compose `project_reservations` rather than implement another worker
 transaction layer. Source export retains its existing uncertainty fence, and the
 coordinator checks the caller deadline again before transfer. Runtime readiness
