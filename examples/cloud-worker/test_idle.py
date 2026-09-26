@@ -43,6 +43,24 @@ class IdleTests(unittest.TestCase):
         with mock.patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'tmux')):
             self.assertIsNone(MODULE['last_output']())
 
+    def test_an_accepted_stop_is_requested_again_while_the_worker_keeps_running(self):
+        environment = {'HORIZON_IDLE_STOP_MINUTES': '10', 'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'key'}
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 4:
+                raise SystemExit
+        stop = mock.Mock(side_effect=[True, OSError('reset')])
+        clock = iter(range(0, 100000, 700))
+        with mock.patch.dict('os.environ', environment, clear=True), \
+                mock.patch.dict(MODULE['main'].__globals__, {'stop_worker': stop, 'last_output': lambda: None,
+                                                            'cpu_seconds': lambda: None}), \
+                mock.patch('time.sleep', side_effect=sleep), mock.patch('time.time', side_effect=lambda: next(clock)), \
+                mock.patch('os.sync'), self.assertRaises(SystemExit):
+            MODULE['main']()
+        self.assertEqual(stop.call_count, 2)
+        self.assertEqual(sleeps, [60, 600, 60, 600])
+
     def test_invalid_settings_stay_passive_instead_of_ending_the_worker(self):
         for environment in [{'HORIZON_IDLE_STOP_MINUTES': '5'},
                             {'HORIZON_IDLE_STOP_MINUTES': '30'}]:
@@ -67,7 +85,9 @@ class IdleTests(unittest.TestCase):
         self.assertEqual(request.get_header('Authorization'), 'Bearer pod-scoped')
         self.assertEqual(request.get_header('User-agent'), 'horizon-worker-idle/1')
         for refused in [{'errors': [{'message': 'denied'}]}, {'data': {'podStop': None}},
-                        {'data': {'podStop': {'id': 'other'}}}, {'data': ['unexpected']}, {'data': None}]:
+                        {'data': {'podStop': {'id': 'other'}}}, {'data': ['unexpected']}, {'data': None},
+                        {'data': {'podStop': {'id': 'pod123', 'desiredStatus': 'RUNNING'}}},
+                        {'data': {'podStop': {'id': 'pod123'}}}]:
             with mock.patch('urllib.request.urlopen', return_value=reply(refused)):
                 self.assertFalse(MODULE['stop_worker']('pod123', 'pod-scoped'))
 
