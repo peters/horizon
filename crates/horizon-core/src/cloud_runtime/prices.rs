@@ -4,7 +4,7 @@ use super::{Cancellation, Result, settings::Settings};
 use horizon_cloud::runpod::RunPod;
 pub use horizon_cloud::{
     Profile,
-    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability},
+    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability, StoragePrices},
 };
 
 /// The preferences a deployment would use, so prices match what would be requested.

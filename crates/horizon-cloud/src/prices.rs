@@ -33,8 +33,36 @@ pub struct PriceList {
     pub provider: &'static str,
     pub cpu: Vec<CpuFlavorPrice>,
     pub gpus: Vec<GpuPrice>,
-    /// Network storage per GB and month, billed while the worker is stopped too.
-    pub storage_gb_month: f64,
+    pub storage: StoragePrices,
+}
+
+/// Storage prices per GB and month.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StoragePrices {
+    /// Network volume rate for the first `network_tier_gb` GB, billed while the
+    /// worker is stopped too.
+    pub network: f64,
+    pub network_tier_gb: u32,
+    /// Network volume rate for the part beyond `network_tier_gb`.
+    pub network_beyond: f64,
+    /// Pod volume disk, where GPU workers keep their files: running, then stopped.
+    pub pod_volume: (f64, f64),
+}
+
+impl StoragePrices {
+    /// Monthly price of a network volume of `gb` GB.
+    #[must_use]
+    pub fn network_month(&self, gb: u32) -> f64 {
+        let first = gb.min(self.network_tier_gb);
+        f64::from(first) * self.network + f64::from(gb - first) * self.network_beyond
+    }
+
+    /// Monthly price of a pod volume of `gb` GB while running and while stopped.
+    #[must_use]
+    pub fn pod_volume_month(&self, gb: u32) -> (f64, f64) {
+        let (running, stopped) = self.pod_volume;
+        (f64::from(gb) * running, f64::from(gb) * stopped)
+    }
 }
 
 impl PriceList {
@@ -103,7 +131,12 @@ mod tests {
                 gpu("ada", 0.28, Availability::Low),
                 gpu("l4", 0.49, Availability::High),
             ],
-            storage_gb_month: 0.07,
+            storage: StoragePrices {
+                network: 0.07,
+                network_tier_gb: 1000,
+                network_beyond: 0.05,
+                pod_volume: (0.10, 0.20),
+            },
         }
     }
 
@@ -116,6 +149,16 @@ mod tests {
         // An unpriced flavor could be the one allocated, so no partial range is shown.
         assert!(list.cpu_hourly(&["cpu3c".into(), "cpu5m".into()], 8).is_none());
         assert!(list.cpu_hourly(&[], 8).is_none());
+    }
+
+    #[test]
+    fn network_volumes_are_cheaper_only_beyond_the_first_tier() {
+        let storage = list().storage;
+        assert!((storage.network_month(100) - 7.0).abs() < 1e-9);
+        assert!((storage.network_month(1000) - 70.0).abs() < 1e-9);
+        assert!((storage.network_month(1500) - 95.0).abs() < 1e-9);
+        let (running, stopped) = storage.pod_volume_month(200);
+        assert!((running - 20.0).abs() < 1e-9 && (stopped - 40.0).abs() < 1e-9);
     }
 
     #[test]

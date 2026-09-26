@@ -201,7 +201,12 @@ mod tests {
             provider: "RunPod",
             cpu: Vec::new(),
             gpus: Vec::new(),
-            storage_gb_month: 0.07,
+            storage: prices::StoragePrices {
+                network: 0.07,
+                network_tier_gb: 1000,
+                network_beyond: 0.05,
+                pod_volume: (0.10, 0.20),
+            },
         }
     }
 

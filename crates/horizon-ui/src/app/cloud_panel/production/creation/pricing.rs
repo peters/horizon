@@ -119,7 +119,7 @@ fn card(ui: &mut Ui, prices: &State, profile: &Profile) -> bool {
                 (Some(fetched), _) => {
                     let (list, preferences) = &fetched.value;
                     if profile.gpu {
-                        gpu_summary(ui, list, preferences);
+                        gpu_summary(ui, list, preferences, profile.storage.volume_gb);
                     } else {
                         cpu_summary(ui, prices, list, preferences, profile);
                     }
@@ -174,16 +174,14 @@ fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Pref
         .size(12.0)
         .color(theme::FG_SOFT()),
     );
-    let storage = f64::from(profile.storage.volume_gb) * list.storage_gb_month;
+    let volume = profile.storage.volume_gb;
+    let storage = list.storage.network_month(u32::from(volume));
     estimates(
         ui,
         (low, high),
         Some(&(
             format!("{}/mo", money(storage)),
-            format!(
-                "{} GB network volume. Storage is billed while the worker is stopped too.",
-                profile.storage.volume_gb
-            ),
+            format!("{volume} GB network volume. Storage is billed while the worker is stopped too."),
         )),
     );
 }
@@ -209,7 +207,7 @@ fn ranked<'a>(
     (preferred, chosen)
 }
 
-fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
+fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, volume_gb: u16) {
     let (preferred, chosen) = ranked(list, preferences);
     match chosen {
         Some(gpu) => {
@@ -259,8 +257,23 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences) {
         }
     }
     if let Some(gpu) = chosen {
-        estimates(ui, (gpu.hourly, gpu.hourly), None);
+        estimates(ui, (gpu.hourly, gpu.hourly), gpu_storage(list, volume_gb).as_ref());
     }
+}
+
+/// The pod volume a GPU worker keeps its files on, billed at a higher rate while stopped.
+fn gpu_storage(list: &PriceList, volume_gb: u16) -> Option<(String, String)> {
+    let (running, stopped) = list.storage.pod_volume_month(u32::from(volume_gb));
+    (volume_gb > 0).then(|| {
+        (
+            format!("{}/mo", range(running, stopped)),
+            format!(
+                "{volume_gb} GB pod volume: {}/mo while running, {}/mo while stopped. A stopped GPU cloud keeps it.",
+                money(running),
+                money(stopped)
+            ),
+        )
+    })
 }
 
 fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option<&GpuPrice>) {
@@ -498,7 +511,12 @@ mod tests {
                 gpu("ada", 0.28, Availability::None),
                 gpu("l4", 0.49, Availability::High),
             ],
-            storage_gb_month: 0.07,
+            storage: horizon_core::cloud_runtime::prices::StoragePrices {
+                network: 0.07,
+                network_tier_gb: 1000,
+                network_beyond: 0.05,
+                pod_volume: (0.10, 0.20),
+            },
         };
         let preferences = Preferences {
             cpu_flavors: Vec::new(),
@@ -516,5 +534,24 @@ mod tests {
         let (preferred, chosen) = ranked(&list, &retired);
         assert_eq!(preferred.len(), 1);
         assert!(chosen.is_none());
+    }
+
+    #[test]
+    fn gpu_storage_shows_the_running_and_stopped_rates() {
+        let list = PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: Vec::new(),
+            storage: horizon_core::cloud_runtime::prices::StoragePrices {
+                network: 0.07,
+                network_tier_gb: 1000,
+                network_beyond: 0.05,
+                pod_volume: (0.10, 0.20),
+            },
+        };
+        let (value, hover) = gpu_storage(&list, 200).unwrap();
+        assert_eq!(value, "$20.00–40.00/mo");
+        assert!(hover.contains("$40.00/mo while stopped"));
+        assert!(gpu_storage(&list, 0).is_none());
     }
 }

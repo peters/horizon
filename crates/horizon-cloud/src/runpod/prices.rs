@@ -8,13 +8,19 @@ use super::{
 };
 use crate::{
     Cancellation, CloudError, Profile,
-    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability},
+    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability, StoragePrices},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 
-/// `RunPod`'s list price for standard network storage (September 2026). The catalog
-/// does not publish it.
-pub const STORAGE_GB_MONTH: f64 = 0.07;
+/// `RunPod`'s storage list prices (September 2026): standard network volumes at $0.07
+/// for the first TB and $0.05 beyond it, and pod volumes at $0.10 while running and
+/// $0.20 while stopped. The catalog does not publish them.
+pub const STORAGE: StoragePrices = StoragePrices {
+    network: 0.07,
+    network_tier_gb: 1000,
+    network_beyond: 0.05,
+    pod_volume: (0.10, 0.20),
+};
 
 impl RunPod {
     /// Secure Cloud prices for CPU flavors and GPU types, with each GPU's best
@@ -61,7 +67,7 @@ impl RunPod {
                     hourly: gpu.price.secure,
                 })
                 .collect(),
-            storage_gb_month: STORAGE_GB_MONTH,
+            storage: STORAGE,
         })
     }
 
