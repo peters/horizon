@@ -186,14 +186,43 @@ fn assert_device_panel_contract(tools: &Value) {
     }
 }
 
+fn assert_provider_tools_contract(tools: &Value) {
+    let usage = listed_tool(tools, "browser_provider_usage");
+    assert!(usage["inputSchema"]["properties"].get("provider").is_some());
+    assert!(usage["inputSchema"]["properties"].get("credentials").is_none());
+    let offers = listed_tool(tools, "cloud_offers");
+    for field in [
+        "min_vcpu",
+        "min_memory_gb",
+        "gpu",
+        "min_gpu_memory_gb",
+        "gpu_type",
+        "max_hourly",
+        "hours",
+        "storage_gb",
+        "region",
+        "include_unavailable",
+        "limit",
+    ] {
+        assert!(
+            offers["inputSchema"]["properties"].get(field).is_some(),
+            "cloud_offers schema lacks {field}"
+        );
+    }
+    assert!(
+        offers["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("without renting anything")),
+        "cloud_offers stays read-only: {offers}"
+    );
+}
+
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(24));
     assert_catalog_contract(tools);
-    let usage = listed_tool(tools, "browser_provider_usage");
-    assert!(usage["inputSchema"]["properties"].get("provider").is_some());
-    assert!(usage["inputSchema"]["properties"].get("credentials").is_none());
     assert_device_panel_contract(tools);
+    assert_provider_tools_contract(tools);
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
