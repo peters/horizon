@@ -362,7 +362,7 @@ def observed_run(*args, **kwargs):
     finally:
         output = kwargs.get('stdout')
         if hasattr(output, 'fileno'):
-            assert os.fstat(output.fileno()).st_size <= MAX_GIT_OUTPUT + 1
+            assert os.fstat(output.fileno()).st_size <= MAX_TREE_OUTPUT + 1
 subprocess.run = observed_run
 def blob(content):
     return git(repo, ['hash-object', '-w', '--stdin'], data=content).strip().decode()
@@ -409,6 +409,73 @@ for output in ('', "os.write(1, b'x' * 4096)"):
         pass
     else:
         raise AssertionError('prefix child survived completion')
+"#;
+    let output = Command::new("python3")
+        .args(["-I", "-c", &format!("{definitions}\n{test}")])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn source_metadata_handles_host_path_boundaries_and_streams_long_non_lfs_attributes() {
+    let temp = tempfile::tempdir().unwrap();
+    let definitions = include_str!("../../../../source/import.py")
+        .split("if sys.argv[1] ==")
+        .next()
+        .unwrap();
+    let test = r#"
+repo = Path('repository.git')
+subprocess.run(['/usr/bin/git', 'init', '--bare', '-q', str(repo)], check=True)
+os.environ.update(GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                  GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
+def blob(content):
+    return git(repo, ['hash-object', '-w', '--stdin'], data=content).strip().decode()
+value = blob(b'ordinary source')
+attributes = blob(b'* filter=' + b'x' * 2048 + b'\n')
+paths = [f'{i:05}-' + 'p' * 234 for i in range(65000)]
+assert len(paths) + 1 <= 65536 and sum(len(p) + 1 for p in paths) + 15 < 16 * 1024**2
+entries = f'100644 blob {attributes}\t.gitattributes\n'.encode()
+entries += b''.join(f'100644 blob {value}\t{p}\n'.encode() for p in paths)
+tree = git(repo, ['mktree'], data=entries).strip().decode()
+revision = git(repo, ['commit-tree', tree], data=b'Boundary fixture\n').strip().decode()
+output = git(repo, ['ls-tree', '-rz', '--full-tree', revision])
+assert MAX_GIT_OUTPUT < len(output) <= MAX_TREE_OUTPUT
+assert len(paths) * (len(paths[0]) + 2048) > MAX_TREE_OUTPUT
+selected_material({'modules': [], 'assets': []}, revision)
+for answer, status, expected in [
+    (b'value\0filter\0lfs\0', 0, {'value'}),
+    (b'value\0filter\0\0', 0, set()),
+    (b'wrong\0filter\0lfs\0', 0, None),
+    (b'value\0other\0lfs\0', 0, None),
+    (b'value\0filter\0lfs', 0, None),
+    (b'value\0filter\0lfs\0extra\0', 0, None),
+    (b'value\0filter\0lfs\0', 7, None),
+]:
+    script = f"import os; os.write(1,{answer!r}); os._exit({status})"
+    git_command = lambda *args: ([sys.executable, '-I', '-c', script], dict(os.environ))
+    try:
+        result = git_attributes(repo, ['value'], 'unused')
+    except ValueError:
+        assert expected is None
+    else:
+        assert result == expected
+GIT_TIMEOUT = 1
+script = "import os,time; open('attribute-child.pid','w').write(str(os.getpid())); os.write(1,b'value\\0filter\\0unfinished'); time.sleep(5)"
+git_command = lambda *args: ([sys.executable, '-I', '-c', script], dict(os.environ))
+try:
+    git_attributes(repo, ['value'], 'unused')
+except ValueError:
+    pass
+else:
+    raise AssertionError('unterminated attribute value accepted')
+try:
+    os.kill(int(Path('attribute-child.pid').read_text()), 0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError('attribute child survived timeout')
 "#;
     let output = Command::new("python3")
         .args(["-I", "-c", &format!("{definitions}\n{test}")])

@@ -21,6 +21,7 @@ os.umask(0o077)
 LEASE = os.dup(0)
 MAX_MATERIAL_BYTES = 4 * 1024**3
 MAX_GIT_OUTPUT = 16 * 1024**2
+MAX_TREE_OUTPUT = MAX_GIT_OUTPUT + 65536 * 64
 GIT_TIMEOUT = 60
 CONFIG = b"[core]\n\trepositoryformatversion = 0\n\tbare = true\n"
 
@@ -51,24 +52,76 @@ def immutable(path, content):
     ensure_stream(path, io.BytesIO(content), len(content))
 
 
-def git(repo, args, data=None, source=None, prefix=None, index=None):
+def git_command(repo, args, index):
     command = ["/usr/bin/git", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
                "-c", "protocol.allow=never", "--git-dir=" + str(repo), *args]
     environment = dict(os.environ)
     if index is not None:
         environment['GIT_INDEX_FILE'] = index
+    return command, environment
+
+
+def git(repo, args, data=None, source=None, prefix=None, index=None):
+    command, environment = git_command(repo, args, index)
     if prefix is not None:
         require(data is None and source is None and args[:2] == ["cat-file", "blob"])
         return git_prefix(command, environment, prefix)
+    limit = MAX_TREE_OUTPUT if args[0] == "ls-tree" else MAX_GIT_OUTPUT
     with os.fdopen(os.memfd_create("source-git-output", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING), "w+b") as output:
-        output.truncate(MAX_GIT_OUTPUT + 1)
+        output.truncate(limit + 1)
         fcntl.fcntl(output, fcntl.F_ADD_SEALS, fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK)
         subprocess.run(command, input=data, stdin=source, stdout=output, stderr=subprocess.DEVNULL,
                        check=True, timeout=GIT_TIMEOUT, env=environment, pass_fds=(LEASE,))
         length = output.tell()
-        require(length <= MAX_GIT_OUTPUT)
+        require(length <= limit)
         output.seek(0)
         return output.read(length)
+
+
+def git_attributes(repo, paths, index):
+    command, environment = git_command(repo, ["check-attr", "--cached", "-z", "--stdin", "filter"], index)
+    result, record, field, offset, matches = set(), 0, 0, 0, True
+    with tempfile.TemporaryFile() as input:
+        for path in paths:
+            encoded = path.encode() + b"\0"
+            require(input.tell() + len(encoded) <= MAX_TREE_OUTPUT)
+            input.write(encoded)
+        input.seek(0)
+        with subprocess.Popen(command, stdin=input, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              env=environment, pass_fds=(LEASE,)) as child:
+            deadline = time.monotonic() + GIT_TIMEOUT
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    require(remaining > 0 and select.select([child.stdout], [], [], remaining)[0])
+                    block = os.read(child.stdout.fileno(), 65536)
+                    if not block:
+                        require(child.wait(timeout=max(0, deadline - time.monotonic())) == 0)
+                        break
+                    pieces = block.split(b"\0")
+                    for position, piece in enumerate(pieces):
+                        if not piece and position == len(pieces) - 1:
+                            continue
+                        require(record < len(paths))
+                        expected = (paths[record].encode(), b"filter", b"lfs")[field]
+                        matches = matches and expected[offset:offset + len(piece)] == piece
+                        offset += len(piece)
+                        if position < len(pieces) - 1:
+                            equal = matches and offset == len(expected)
+                            if field < 2:
+                                require(equal)
+                                field += 1
+                            else:
+                                if equal:
+                                    result.add(paths[record])
+                                record, field = record + 1, 0
+                            offset, matches = 0, True
+                require(record == len(paths) and field == 0 and offset == 0)
+                return result
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                child.wait()
 
 
 def git_prefix(command, environment, limit):
@@ -229,12 +282,9 @@ def selected_material(manifest, revision):
         with tempfile.TemporaryDirectory() as scratch:
             index = scratch + "/index"
             git(repo, ["read-tree", selected], index=index)
-            attributes = git(repo, ["check-attr", "--cached", "-z", "--stdin", "filter"],
-                             data=b"".join(path.encode() + b"\0" for path, _, _ in blobs), index=index).split(b"\0")[:-1]
-        require(len(attributes) == 3 * len(blobs))
-        for index, (path, full, oid) in enumerate(blobs):
-            require(attributes[3 * index] == path.encode() and attributes[3 * index + 1] == b"filter")
-            if attributes[3 * index + 2] != b"lfs":
+            attributes = git_attributes(repo, [path for path, _, _ in blobs], index)
+        for path, full, oid in blobs:
+            if path not in attributes:
                 continue
             pointer = git(repo, ["cat-file", "blob", oid], prefix=1025)
             if not pointer.startswith(b"version https://git-lfs.github.com/spec/v1\n"):

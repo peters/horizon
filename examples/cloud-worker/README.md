@@ -598,7 +598,10 @@ its 120-second limit. The host permits a caller-selected timeout up to 1,260 sec
 for source preparation plus import, including source resumes. Shorter caller
 timeouts remain binding and are polled between host verification/framing chunks. Local export is cancellable and has separate command
 bounds; synchronous filesystem calls are not preempted. Full Git responses are
-capped at 16 MiB during execution, and pointer inspection reads at most 1,025 bytes.
+capped at 16 MiB during execution, except tree listings, whose 20 MiB bound includes
+the host's path budget plus per-entry metadata. Attribute responses are streamed:
+expected paths and keys are checked, while non-LFS values are discarded without
+buffering their full contents. Pointer inspection reads at most 1,025 bytes.
 The helper and each Git child retain the allocation
 lock, fencing new mutations until the final writer exits even if its parent dies.
 Invalid archives, links, traversal, duplicate members,
