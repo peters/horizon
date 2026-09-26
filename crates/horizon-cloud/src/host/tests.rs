@@ -181,3 +181,50 @@ fn a_public_image_needs_no_registry_file_and_secrets_stay_out_of_debug() {
             .all(|file| file["path"] != REGISTRY_FILE)
     );
 }
+
+#[test]
+fn registry_servers_are_host_names_with_an_optional_numeric_port() {
+    for valid in [
+        "registry.example",
+        "registry.example:5000",
+        "localhost",
+        "a-1.b.example:65535",
+    ] {
+        assert!(valid_authority(valid), "{valid}");
+    }
+    for invalid in [
+        "",
+        ":",
+        "registry.example:",
+        "registry.example:abc",
+        "registry.example:+80",
+        "registry.example:0",
+        "registry.example:70000",
+        "registry.example:1:2",
+        "-registry.example",
+        "registry-.example",
+        "registry..example",
+        "Registry.example",
+        "[::1]:5000",
+        "registry.example/path",
+    ] {
+        assert!(!valid_authority(invalid), "{invalid}");
+    }
+}
+
+#[test]
+fn docker_hub_logins_use_the_legacy_index_key() {
+    for hub in ["docker.io", "index.docker.io", "registry-1.docker.io"] {
+        let mut plan = plan();
+        plan.registry.as_mut().unwrap().server = hub.into();
+        let config = parse(&plan);
+        let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
+        assert!(
+            registry["auths"]["https://index.docker.io/v1/"]["auth"].is_string(),
+            "{hub}"
+        );
+    }
+    let config = parse(&plan());
+    let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
+    assert!(registry["auths"]["registry.example"].is_object());
+}

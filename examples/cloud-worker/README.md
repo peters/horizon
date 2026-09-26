@@ -127,8 +127,9 @@ Before every container start the service drops container traffic to the metadata
 service at 169.254.169.254, because that service returns the user data, including
 the registry login. The login file stays on the host (root only, never mounted into
 the container) so a restarted host can pull again if its image cache is lost; use a
-read-only, short-lived pull credential. Values are written as data files and never
-interpolated into commands. Stopping the server ends every container process, as
+read-only, short-lived pull credential. String values are written as data files
+and never interpolated into commands; only the range-checked shared memory size
+appears in the start script. Stopping the server ends every container process, as
 on any other provider; `/workspace` keeps its files.
 
 ## Session relaunch after a container reset

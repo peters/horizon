@@ -1,9 +1,10 @@
 //! Host bootstrap for providers that rent whole virtual machines. A typed plan
 //! becomes `#cloud-config` user data that makes a fresh Ubuntu server with Docker
 //! run the unchanged worker image: the container owns port 22 and serves
-//! `/workspace` from the attached volume. Every value is written through YAML
-//! serialization into files; scripts only read those files, so no plan value is
-//! ever interpolated into a shell command.
+//! `/workspace` from the attached volume. Every string value is written through
+//! YAML serialization into files that scripts only read, so none is interpolated
+//! into a shell command. The one number the start script embeds, the shared
+//! memory size, is range-checked first.
 use crate::{CloudError, Credential, valid_image};
 use base64::Engine as _;
 use serde::Serialize;
@@ -27,7 +28,8 @@ const DEVICE_PREFIX: &str = "/dev/disk/by-id/";
 /// A private registry the host logs in to before pulling the image.
 #[derive(Debug)]
 pub struct RegistryLogin {
-    /// Host name with an optional port, such as `example.azurecr.io`.
+    /// A lowercase DNS host name with an optional numeric port, such as
+    /// `example.azurecr.io` or `registry.example:5000`. IPv6 literals are not supported.
     pub server: String,
     pub username: String,
     pub password: Credential,
@@ -142,12 +144,7 @@ impl Plan {
             return Err(CloudError::Invalid("Shared memory must be between 1 and 64 GB"));
         }
         if let Some(registry) = &self.registry {
-            let server = !registry.server.is_empty()
-                && registry.server.len() <= 253
-                && registry
-                    .server
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-:".contains(&b));
+            let server = valid_authority(&registry.server);
             let username = !registry.username.is_empty()
                 && registry.username.len() <= 256
                 && !registry.username.contains(':')
@@ -177,10 +174,39 @@ fn valid_variable(name: &str) -> bool {
         && name.len() <= 128
 }
 
+/// `host[:port]`: dot-separated DNS labels and an optional port from 1 to 65535.
+fn valid_authority(authority: &str) -> bool {
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let label = |label: &str| {
+        (1..=63).contains(&label.len())
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    host.len() <= 253
+        && host.split('.').all(label)
+        && port.is_none_or(|port| {
+            port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok_and(|port| port > 0)
+        })
+}
+
+/// Docker keeps Docker Hub credentials under its legacy index URL, not the host name.
+fn auth_key(server: &str) -> &str {
+    match server {
+        "docker.io" | "index.docker.io" | "registry-1.docker.io" => "https://index.docker.io/v1/",
+        _ => server,
+    }
+}
+
 fn registry_config(registry: &RegistryLogin) -> Result<String, CloudError> {
     let pair = zeroize::Zeroizing::new(format!("{}:{}", registry.username, registry.password.value()));
     let auth = zeroize::Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(pair.as_bytes()));
-    let config = serde_json::json!({"auths": {registry.server.as_str(): {"auth": auth.as_str()}}});
+    let config = serde_json::json!({"auths": {auth_key(&registry.server): {"auth": auth.as_str()}}});
     serde_json::to_string(&config).map_err(|_| CloudError::Invalid("Registry login could not be encoded"))
 }
 
