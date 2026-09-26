@@ -272,6 +272,14 @@ pub struct Worker {
     pub env: BTreeMap<String, String>,
 }
 impl Worker {
+    /// The data center the worker landed in, from the pod or its workspace volume.
+    #[must_use]
+    pub fn data_center(&self) -> Option<&str> {
+        self.data_center_id
+            .as_deref()
+            .or_else(|| self.network_volume.as_ref()?.data_center_id.as_deref())
+    }
+
     #[must_use]
     pub fn ssh_address(&self) -> Option<SocketAddr> {
         Some(SocketAddr::new(

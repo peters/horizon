@@ -45,6 +45,9 @@ pub struct PriceList {
     pub gpus: Vec<GpuPrice>,
     /// The allowed data centers.
     pub data_centers: Vec<DataCenter>,
+    /// The region of every data center, allowed or not, for naming where a worker
+    /// landed after the allowed set changes.
+    pub regions: std::collections::BTreeMap<String, String>,
     pub storage: StoragePrices,
 }
 
@@ -190,6 +193,7 @@ mod tests {
                 center("EU-RO-1", &[("a6000", Availability::None), ("ada", Availability::Low)]),
                 center("EU-SE-1", &[("l4", Availability::High)]),
             ],
+            regions: std::collections::BTreeMap::new(),
             storage: crate::runpod::prices::STORAGE,
         }
     }

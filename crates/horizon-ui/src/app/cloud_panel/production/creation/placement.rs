@@ -1,6 +1,9 @@
 //! Where a new cloud lives: a region with live stock, or one data center under
 //! Advanced. A cloud's workspace stays where it first starts, so the choice outlives it.
-use super::{super::prices::State, pricing::option};
+use super::{
+    super::prices::{State, region_name},
+    pricing::option,
+};
 use crate::theme;
 use egui::{Color32, CornerRadius, FontId, RichText, Sense, Ui, Vec2};
 use horizon_core::{
@@ -130,25 +133,6 @@ fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
         region.data_centers.sort();
     }
     regions
-}
-
-/// The provider's region as people say it, such as `NORTH_AMERICA` as North America.
-fn region_name(region: &str) -> String {
-    if region.is_empty() {
-        return "Other".to_owned();
-    }
-    region
-        .split('_')
-        .map(|word| {
-            let lower = word.to_ascii_lowercase();
-            let mut letters = lower.chars();
-            letters
-                .next()
-                .map(|first| first.to_ascii_uppercase().to_string() + letters.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn stock_label(in_stock: Count) -> (String, Color32) {
@@ -343,13 +327,6 @@ mod tests {
             center,
             stock,
         }
-    }
-
-    #[test]
-    fn regions_read_as_people_say_them() {
-        assert_eq!(region_name("NORTH_AMERICA"), "North America");
-        assert_eq!(region_name("EUROPE"), "Europe");
-        assert_eq!(region_name(""), "Other");
     }
 
     #[test]

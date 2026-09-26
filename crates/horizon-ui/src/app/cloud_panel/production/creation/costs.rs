@@ -184,6 +184,7 @@ mod tests {
             cpu: Vec::new(),
             gpus: Vec::new(),
             data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
             storage: RUNPOD_STORAGE,
         }
     }

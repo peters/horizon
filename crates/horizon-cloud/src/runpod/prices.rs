@@ -34,6 +34,12 @@ impl RunPod {
         let cpus: CpuCatalog = self.catalog("/cpus", cancel)?;
         let gpus: GpuCatalog = self.catalog("/gpus", cancel)?;
         let centers: Catalog = self.catalog("/datacenters?include=GPU_AVAILABILITY", cancel)?;
+        let regions = centers
+            .data_centers
+            .iter()
+            .filter(|center| valid_id(&center.id) && !center.region.is_empty())
+            .map(|center| (center.id.clone(), center.region.clone()))
+            .collect();
         let centers = centers
             .data_centers
             .into_iter()
@@ -76,6 +82,7 @@ impl RunPod {
                 })
                 .collect(),
             data_centers: centers,
+            regions,
             storage: STORAGE,
         })
     }

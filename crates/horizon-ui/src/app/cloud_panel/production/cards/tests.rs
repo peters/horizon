@@ -79,7 +79,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                         });
                         let id = u32::try_from(id).unwrap();
                         let response = runtime_frame(ui, id, |ui| {
-                            assert!(profile_details(ui, id, &launch, &runtime).is_none());
+                            assert!(profile_details(ui, id, &launch, &runtime, &|_| None).is_none());
                             runtime_actions(ui, id, &mut runtime);
                         });
                         assert!((response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1);
@@ -204,7 +204,7 @@ fn size_frame(
                 events,
                 ..Default::default()
             },
-            |ui| size = profile_details(ui, 1, launch, runtime),
+            |ui| size = profile_details(ui, 1, launch, runtime, &|_| None),
         )
         .discard_textures();
     let texts = output
@@ -839,7 +839,7 @@ fn deleted_cloud_can_redeploy_without_removing_the_card() {
                     ..Default::default()
                 },
                 |ui| {
-                    assert!(profile_details(ui, 1, &launch, runtime).is_none());
+                    assert!(profile_details(ui, 1, &launch, runtime, &|_| None).is_none());
                     action = runtime_actions(ui, 1, runtime);
                 },
             )
@@ -922,7 +922,7 @@ fn an_active_redeploy_keeps_the_selected_size_and_status() {
     };
     let output = ctx
         .run_ui(egui::RawInput::default(), |ui| {
-            assert!(profile_details(ui, 1, &launch, &runtime).is_none());
+            assert!(profile_details(ui, 1, &launch, &runtime, &|_| None).is_none());
             assert!(runtime_actions(ui, 1, &mut runtime).is_none());
         })
         .discard_textures();

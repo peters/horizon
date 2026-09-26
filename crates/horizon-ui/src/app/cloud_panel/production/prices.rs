@@ -33,6 +33,9 @@ pub(super) struct State {
     list_job: Option<Job<(PriceList, Preferences)>>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
+    /// Every data center's region as people say it, kept from the latest list so cards
+    /// can name where a worker landed without work on every frame.
+    regions: HashMap<String, String>,
 }
 
 impl State {
@@ -42,11 +45,8 @@ impl State {
         if cfg!(test) {
             return;
         }
-        if self.list_job.is_none() && self.list.as_ref().is_none_or(|list| stale(list.at)) && self.list_error.is_none()
-        {
-            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
-                prices::price_list(settings, cancel)
-            }));
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
         }
         let key = key(profile);
         let current = self
@@ -67,6 +67,41 @@ impl State {
         // Fetches repaint when they finish; an idle dialog still has to wake when its prices go stale.
         if let Some(wait) = self.until_stale(profile) {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// Fetches the price list once when there is none, for naming the region of the data
+    /// center a cloud landed in on its card. The New cloud dialog keeps it fresh.
+    pub fn request_regions(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.is_none() {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// The region of `data_center` as people say it, once a price list has been fetched.
+    pub fn region_of(&self, data_center: &str) -> Option<&str> {
+        self.regions.get(data_center).map(String::as_str)
+    }
+
+    fn accept(&mut self, fetched: Fetched<(PriceList, Preferences)>) {
+        self.regions = fetched
+            .value
+            .0
+            .regions
+            .iter()
+            .map(|(center, region)| (center.clone(), region_name(region)))
+            .collect();
+        self.list = Some(fetched);
+    }
+
+    fn fetch_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if self.list_job.is_none() && self.list_error.is_none() {
+            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
+                prices::price_list(settings, cancel)
+            }));
         }
     }
 
@@ -92,7 +127,7 @@ impl State {
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
-                    self.list = Some(fetched);
+                    self.accept(fetched);
                     self.list_error = None;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
@@ -151,6 +186,25 @@ impl State {
     }
 }
 
+/// The provider's region as people say it, such as `NORTH_AMERICA` as North America.
+pub(super) fn region_name(region: &str) -> String {
+    if region.is_empty() {
+        return "Other".to_owned();
+    }
+    region
+        .split('_')
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            let mut letters = lower.chars();
+            letters
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + letters.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn stale(at: Instant) -> bool {
     at.elapsed() >= FRESH
 }
@@ -196,7 +250,7 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 #[cfg(all(test, unix))]
 impl State {
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
-        self.list = Some(Fetched {
+        self.accept(Fetched {
             value: (list, preferences),
             at: Instant::now(),
         });
@@ -223,6 +277,7 @@ mod tests {
             cpu: Vec::new(),
             gpus: Vec::new(),
             data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
             storage: prices::RUNPOD_STORAGE,
         }
     }
@@ -250,6 +305,31 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    fn regions_read_as_people_say_them_and_are_found_by_data_center() {
+        assert_eq!(region_name("NORTH_AMERICA"), "North America");
+        assert_eq!(region_name("EUROPE"), "Europe");
+        assert_eq!(region_name(""), "Other");
+        let mut state = State::default();
+        assert_eq!(state.region_of("EU-RO-1"), None);
+        let mut listed = list();
+        // Regions cover data centers the machine no longer allows, which a worker may
+        // have landed in before the setting changed.
+        listed.regions = [("EU-RO-1", "EUROPE"), ("US-MO-2", "NORTH_AMERICA")]
+            .into_iter()
+            .map(|(center, region)| (center.to_owned(), region.to_owned()))
+            .collect();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((listed, Preferences::default())))).unwrap();
+        state.poll();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"));
+        assert_eq!(state.region_of("US-MO-2"), Some("North America"));
+        assert_eq!(state.region_of("AP-JP-1"), None);
+        state.refresh();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
     }
 
     #[test]
