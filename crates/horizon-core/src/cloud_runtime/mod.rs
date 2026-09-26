@@ -22,6 +22,7 @@ pub mod registry;
 pub mod repository;
 pub mod settings;
 pub mod setup;
+pub mod siblings;
 pub mod ssh;
 pub mod state;
 pub mod timeline;
@@ -47,6 +48,8 @@ pub enum Error {
     Busy,
     #[error("{primary}; cleanup also failed: {cleanup}")]
     Cleanup { primary: Box<Self>, cleanup: Box<Self> },
+    #[error(transparent)]
+    Sibling(#[from] siblings::SiblingError),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
