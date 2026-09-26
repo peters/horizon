@@ -243,6 +243,11 @@ fn v2_wire_mapping_preserves_durable_legacy_format_and_actual_status() {
     assert_eq!(observed.memory_in_gb, Some(16));
     assert_eq!(observed.cost_per_hr, Some(0.16));
     assert_eq!(observed.adjusted_cost_per_hr, None);
+    assert_eq!(observed.data_center(), Some("test-region"));
+    assert_eq!(
+        observed.network_volume.as_ref().unwrap().data_center_id.as_deref(),
+        Some("test-region")
+    );
     assert_eq!(
         observed.network_volume.as_ref().unwrap().size,
         None,
@@ -258,6 +263,33 @@ fn v2_wire_mapping_preserves_durable_legacy_format_and_actual_status() {
     let legacy = saved_worker(&spec());
     let reopened: Worker = serde_json::from_value(legacy).unwrap();
     reopened.verify(&spec()).unwrap();
+    assert_eq!(reopened.data_center_id, None);
+    assert!(serde_json::to_value(reopened).unwrap().get("dataCenterId").is_none());
+}
+
+#[test]
+fn v2_gpu_placement_is_retained_without_a_network_volume() {
+    let mut spec = spec();
+    spec.profile.gpu = true;
+    let mut pod = worker(&spec);
+    pod["dataCenterId"] = json!("gpu-region");
+    let observed = wire::worker(pod).unwrap();
+    assert!(observed.network_volume.is_none());
+    assert_eq!(observed.data_center(), Some("gpu-region"));
+    let saved = serde_json::to_value(&observed).unwrap();
+    assert_eq!(saved["dataCenterId"], "gpu-region");
+    let reopened: Worker = serde_json::from_value(saved).unwrap();
+    assert_eq!(reopened.data_center(), Some("gpu-region"));
+}
+
+#[test]
+fn legacy_network_volume_placement_remains_available() {
+    let mut legacy = saved_worker(&spec());
+    legacy["networkVolume"] = json!({"id":"volume1","size":80,"dataCenterId":"legacy-region"});
+    let reopened: Worker = serde_json::from_value(legacy).unwrap();
+    assert_eq!(reopened.data_center_id, None);
+    assert_eq!(reopened.data_center(), Some("legacy-region"));
+    assert!(serde_json::to_value(reopened).unwrap().get("dataCenterId").is_none());
 }
 
 #[test]

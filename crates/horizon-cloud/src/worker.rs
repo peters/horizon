@@ -264,14 +264,20 @@ pub struct Worker {
     pub volume_mount_path: Option<String>,
     #[serde(default)]
     pub network_volume: Option<NetworkVolume>,
+    /// The data center the provider placed the worker in. Omitted when absent, so
+    /// records saved before this field existed re-encode byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_center_id: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 impl Worker {
-    /// Provisioning and starting workers retain their identity while readiness is polled.
+    /// The data center the worker landed in, from the pod or its workspace volume.
     #[must_use]
-    pub fn is_starting_or_running(&self) -> bool {
-        matches!(self.desired_status.as_str(), "PROVISIONING" | "STARTING" | "RUNNING")
+    pub fn data_center(&self) -> Option<&str> {
+        self.data_center_id
+            .as_deref()
+            .or_else(|| self.network_volume.as_ref()?.data_center_id.as_deref())
     }
 
     #[must_use]
@@ -290,6 +296,12 @@ impl Worker {
             _ => WorkerStatus::Lost,
         }
     }
+    /// Provisioning and starting workers retain their identity while readiness is polled.
+    #[must_use]
+    pub fn is_starting_or_running(&self) -> bool {
+        matches!(self.desired_status.as_str(), "PROVISIONING" | "STARTING" | "RUNNING")
+    }
+
     /// # Errors
     /// Prevents adopting or deleting resources with mismatching identities.
     pub fn verify(&self, spec: &WorkerSpec) -> Result<(), CloudError> {

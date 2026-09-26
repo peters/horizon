@@ -106,7 +106,7 @@ impl Pod {
                     Some(NetworkVolume {
                         id: Some(mount.volume_id),
                         size: None,
-                        data_center_id: self.data_center_id,
+                        data_center_id: self.data_center_id.clone(),
                     }),
                     Some(0),
                     Some(mount.path),
@@ -133,6 +133,7 @@ impl Pod {
             volume_in_gb,
             volume_mount_path,
             network_volume,
+            data_center_id: self.data_center_id,
             env: self.env,
         })
     }
