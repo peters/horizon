@@ -54,7 +54,9 @@ compute. No catalog is inferred from repository files.
 Agents use `horizon-cloud-worker companions list` or
 `horizon-cloud-worker companions inspect <alias>`. The stdio MCP server,
 `horizon-cloud-worker companions mcp`, exposes `cloud_companions_list` and
-`cloud_companion_inspect` through the same implementation. MCP receives no
+`cloud_companion_inspect` through the same implementation, plus the read-only
+`cloud_offers`, which ranks compute offers from the prices the owning Horizon
+last sent (`horizon-cloud-worker cloud-offers publish`). MCP receives no
 provider credentials, endpoint, filesystem path, or lifecycle operation from
 the caller. These tools require a current worker; this slice does not yet
 advertise the server automatically in agent configuration.
