@@ -1,8 +1,11 @@
 //! Local Docker/BuildKit image preparation, kept outside horizon-cloud.
 pub mod agents;
 mod contract;
+mod layers;
 use super::{Error, Event, Result, Stage, command::Runner, progress::Progress};
 use horizon_cloud::{Capabilities, Profile, valid_image};
+pub use layers::Layer;
+use layers::{Builder, Recipe};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -31,12 +34,30 @@ impl Images<'_> {
     /// Builds and checks locally, then pushes and resolves the registry digest.
     /// Never performs a provider allocation. `BuildKit` handles cache/.dockerignore.
     pub fn prepare(&self, profile: &Profile, source: &Path, operation_id: &str) -> Result<String> {
-        self.prepare_tagged(profile, source, operation_id, &format!("horizon-{operation_id}"))
+        self.prepare_tagged(profile, source, operation_id, &default_tag(operation_id))
     }
     /// # Errors
     /// As `prepare`, publishing a built image under `tag`. The contract check keeps
     /// its container named by `operation_id`, which recovers an interrupted check.
     pub fn prepare_tagged(&self, profile: &Profile, source: &Path, operation_id: &str, tag: &str) -> Result<String> {
+        self.prepare_layered(profile, source, &[], operation_id, tag, false)
+    }
+    /// # Errors
+    /// As `prepare_tagged`, building each sibling layer on the image before it. The primary
+    /// recipe and every layer but the last get local tags that are never pushed and are
+    /// removed afterwards. Only the final image is checked, additionally for sibling
+    /// checkouts and, with `grants`, for version 2 Git grants, and only it is pushed.
+    /// Without layers `grants` is ignored and the build is exactly `prepare_tagged`'s. Every
+    /// layer must build for the primary's platform.
+    pub fn prepare_layered(
+        &self,
+        profile: &Profile,
+        source: &Path,
+        layers: &[Layer<'_>],
+        operation_id: &str,
+        tag: &str,
+        grants: bool,
+    ) -> Result<String> {
         profile
             .validate(false)
             .map_err(|_| Error::Invalid("Invalid cloud profile"))?;
@@ -46,6 +67,9 @@ impl Images<'_> {
         if !valid_tag(tag) {
             return Err(Error::Invalid("Invalid image tag"));
         }
+        if !layers.is_empty() && profile.build.is_none() {
+            return Err(super::siblings::SiblingError::PrimaryImageOnly.into());
+        }
         let image = if profile.build.is_some() {
             format!("{}:{tag}", repository_name(&profile.image))
         } else {
@@ -54,38 +78,42 @@ impl Images<'_> {
         let mut validated_id = None;
         if let Some(build) = &profile.build {
             (self.runner.emit)(Event::stage(Stage::Build));
-            let context = contained(source, &build.context)?;
-            let dockerfile = contained(source, &build.dockerfile)?;
+            let primary = Recipe::new(source, build)?;
+            let layers = layers
+                .iter()
+                .map(|layer| {
+                    if layer.build.platform != build.platform {
+                        return Err(super::siblings::SiblingError::Platform {
+                            alias: layer.alias.to_owned(),
+                            sibling: layer.build.platform.clone(),
+                            primary: build.platform.clone(),
+                        }
+                        .into());
+                    }
+                    Ok((layer.alias, Recipe::new(layer.source, layer.build)?))
+                })
+                .collect::<Result<Vec<_>>>()?;
             (self.runner.emit)(Event::Progress(Progress::activity(
                 "Looking up the latest agent CLI releases",
             )));
             let releases = agents::latest(self.runner.cancel)?;
             (self.runner.emit)(Event::Output(format!("Agent CLI releases: {}", releases.summary())));
-            self.runner.run(
-                "image build",
-                self.docker()
-                    .args([
-                        "buildx",
-                        "build",
-                        "--load",
-                        "--provenance=false",
-                        "--progress=plain",
-                        "--platform",
-                        &build.platform,
-                    ])
-                    .args(build_arguments(&profile.capabilities, &releases))
-                    .args(["--tag", &image, "--file"])
-                    .arg(dockerfile)
-                    .arg(context),
-                TIMEOUT,
-            )?;
-            let image_id = self.runner.run(
-                "local image identity",
-                self.docker().args(["image", "inspect", "--format", "{{.Id}}", &image]),
-                Duration::from_secs(30),
-            )?;
-            self.validate(image_id.trim(), operation_id, profile)?;
-            validated_id = Some(image_id.trim().to_owned());
+            let arguments = build_arguments(&profile.capabilities, &releases);
+            let builder = Builder {
+                docker: || self.docker(),
+                runner: self.runner,
+            };
+            let image_id = if layers.is_empty() {
+                builder.build(&image, &primary, &arguments)?;
+                let image_id = builder.image_id(&image)?;
+                self.validate(&image_id, operation_id, profile)?;
+                image_id
+            } else {
+                let image_id = builder.build_layers(&image, tag, &primary, &layers, &arguments)?;
+                self.validate_siblings_contract(&image_id, operation_id, profile, grants)?;
+                image_id
+            };
+            validated_id = Some(image_id);
             (self.runner.emit)(Event::stage(Stage::Push));
             self.runner.transfer(
                 "Uploading image",
@@ -152,6 +180,11 @@ impl Images<'_> {
         }
         Ok(reference)
     }
+}
+/// The tag `prepare` publishes a cloud's first image under.
+#[must_use]
+pub fn default_tag(operation_id: &str) -> String {
+    format!("horizon-{operation_id}")
 }
 /// Capability selections plus the exact agent releases that key each install layer.
 fn build_arguments(capabilities: &Capabilities, releases: &agents::Releases) -> Vec<String> {

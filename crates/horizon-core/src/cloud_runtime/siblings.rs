@@ -18,6 +18,8 @@ use std::{
     time::Duration,
 };
 
+/// Printed by `horizon-worker-check` when the worker lays out sibling checkouts per session.
+pub const CONTRACT: &str = "horizon-siblings-contract=1";
 /// The worker's manifest limit.
 const MAX_SIBLINGS: usize = 16;
 
@@ -119,6 +121,10 @@ pub enum SiblingError {
         sibling: String,
         primary: String,
     },
+    #[error(
+        "Sibling `{0}` recipe does not build on the image before it; declare `ARG HORIZON_BASE` before `FROM ${{HORIZON_BASE}}`"
+    )]
+    Base(String),
 }
 
 impl Sibling {
