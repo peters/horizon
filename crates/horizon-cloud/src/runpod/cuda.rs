@@ -15,7 +15,7 @@ const POD_CREATE_VERSIONS: [&str; 12] = [
 
 impl RunPod {
     /// The CUDA versions at or above the profile's floor that hosts of the requested GPU
-    /// types run, newest first. Empty when the profile sets no floor.
+    /// types run with free capacity now, newest first. Empty when the profile sets no floor.
     /// # Errors
     /// Reports a floor no requested GPU type meets, provider errors and malformed catalogs.
     pub(super) fn allowed_cuda_versions(
@@ -32,7 +32,8 @@ impl RunPod {
         for gpu in catalog.gpus.iter().filter(|gpu| spec.gpu_types.contains(&gpu.id)) {
             for offered in &gpu.cuda_versions {
                 let number = cuda_version(&offered.version).ok_or(CloudError::InvalidResponse)?;
-                if number >= minimum && POD_CREATE_VERSIONS.contains(&offered.version.as_str()) {
+                // A version whose hosts are full would only fail the create on capacity.
+                if offered.available && number >= minimum && POD_CREATE_VERSIONS.contains(&offered.version.as_str()) {
                     versions.push((number, offered.version.clone()));
                 }
             }
@@ -72,4 +73,5 @@ struct Gpu {
 #[derive(Deserialize)]
 struct CudaVersion {
     version: String,
+    available: bool,
 }

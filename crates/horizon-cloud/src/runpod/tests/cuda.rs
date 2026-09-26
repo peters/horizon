@@ -13,9 +13,12 @@ fn gpu_spec(floor: Option<&str>) -> WorkerSpec {
     spec
 }
 fn gpu(id: &str, versions: &[&str]) -> Value {
+    gpu_with(id, &versions.iter().map(|version| (*version, true)).collect::<Vec<_>>())
+}
+fn gpu_with(id: &str, versions: &[(&str, bool)]) -> Value {
     let versions: Vec<Value> = versions
         .iter()
-        .map(|version| json!({"version": version, "available": true}))
+        .map(|(version, available)| json!({"version": version, "available": available}))
         .collect();
     json!({"id": id, "name": id, "memory": 24, "secure": true, "price": {"secure": 0.5}, "cudaVersions": versions})
 }
@@ -27,11 +30,15 @@ fn body(request: &str) -> Value {
 }
 
 #[test]
-fn a_cuda_floor_requests_every_offered_version_the_pod_create_accepts() {
+fn a_cuda_floor_requests_every_available_version_the_pod_create_accepts() {
     let spec = gpu_spec(Some("12.8"));
     let catalog = json!({"gpus": [
-        // The catalog already applies the floor; an older entry is still never sent.
-        gpu("NVIDIA RTX A4000", &["12.8", "12.4", "13.1"]),
+        // The catalog already applies the floor; an older entry is still never sent, nor
+        // is 12.9, which is offered but full right now.
+        gpu_with(
+            "NVIDIA RTX A4000",
+            &[("12.8", true), ("12.4", true), ("13.1", true), ("12.9", false)]
+        ),
         gpu("NVIDIA L4", &["13.0", "12.10", "12.8"]),
         gpu("NVIDIA H100 80GB HBM3", &["12.9"]),
         json!({"id": "AMD Instinct MI300X OAM", "name": "MI300X", "memory": 192, "secure": true, "price": {"secure": 2.5}})
@@ -62,6 +69,7 @@ fn a_floor_no_requested_gpu_meets_fails_before_any_allocation() {
     let spec = gpu_spec(Some("13.0"));
     let catalog = json!({"gpus": [
         {"id": "NVIDIA RTX A4000", "name": "RTX A4000", "memory": 16, "secure": true, "price": {"secure": 0.25}, "cudaVersions": []},
+        gpu_with("NVIDIA L4", &[("13.0", false)]),
         gpu("NVIDIA H100 80GB HBM3", &["13.0"])
     ]});
     let (provider, requests, task) = catalog_server(vec![(200, "[]".into()), (200, catalog.to_string())]);
