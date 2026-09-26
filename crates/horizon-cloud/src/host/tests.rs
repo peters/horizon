@@ -54,6 +54,7 @@ fn the_plan_becomes_root_only_files_a_volume_mount_and_one_service() {
         (ENVIRONMENT_FILE, "0600"),
         (IMAGE_FILE, "0600"),
         (REGISTRY_FILE, "0600"),
+        (SETUP, "0700"),
         (GUARD, "0700"),
         (START, "0700"),
         (UNIT, "0644"),
@@ -71,29 +72,22 @@ fn the_plan_becomes_root_only_files_a_volume_mount_and_one_service() {
         serde_yaml::to_string(&config["mounts"]).unwrap(),
         "- - /dev/disk/by-id/scsi-0HC_Volume_101\n  - /mnt/horizon-volume\n  - ext4\n  - defaults,nofail,discard\n  - '0'\n  - '2'\n"
     );
-    let commands: Vec<Vec<&str>> = config["runcmd"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .map(|command| {
-            command
-                .as_sequence()
-                .unwrap()
-                .iter()
-                .map(|a| a.as_str().unwrap())
-                .collect()
-        })
-        .collect();
-    assert_eq!(
-        commands[0],
-        ["systemctl", "disable", "--now", "ssh.socket", "ssh.service"]
+    assert_eq!(config["runcmd"], serde_yaml::to_value([[SETUP]]).unwrap());
+    assert_eq!(config["ssh_pwauth"], Value::Bool(false));
+    assert_eq!(config["disable_root"], Value::Bool(true));
+    let setup = content(&config, SETUP);
+    let steps = [
+        "set -eu",
+        "systemctl mask --now ssh.socket ssh.service",
+        "passwd --lock root",
+        "systemctl enable --now horizon-worker.service",
+    ];
+    let positions: Vec<usize> = steps.iter().map(|step| setup.find(step).unwrap()).collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "the worker starts only after host SSH is masked and root is locked, and any failure stops setup"
     );
-    assert_eq!(commands[1], ["passwd", "--lock", "root"]);
-    assert_eq!(
-        commands.last().unwrap(),
-        &["systemctl", "enable", "--now", "horizon-worker.service"],
-        "host sshd is off before the container claims port 22"
-    );
+    assert!(content(&config, UNIT).contains("Environment=DOCKER_CONFIG=/root/.docker"));
     let start = content(&config, START);
     assert!(start.contains("--shm-size 2g"));
     assert!(start.contains("-p 22:22"));
@@ -111,7 +105,7 @@ fn the_metadata_block_and_volume_check_run_before_every_container_start() {
     assert!(guard_line < start_line);
     assert!(unit.contains(&format!("RequiresMountsFor={VOLUME_MOUNT}")));
     let guard = content(&config, GUARD);
-    assert!(guard.contains("iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP"));
+    assert!(guard.contains("iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP"));
     assert!(guard.contains(&format!("mountpoint -q {VOLUME_MOUNT}")));
     assert!(guard.contains("Docker is not installed"));
     assert!(!content(&config, START).contains("169.254"));
@@ -124,10 +118,10 @@ fn values_are_carried_as_data_and_never_reach_a_script() {
     plan.environment.insert("HOSTILE".into(), hostile.into());
     let config = parse(&plan);
     assert!(content(&config, ENVIRONMENT_FILE).contains(&format!("HOSTILE={hostile}\n")));
-    for script in [GUARD, START, UNIT] {
+    for script in [SETUP, GUARD, START, UNIT] {
         assert!(!content(&config, script).contains("rm -rf"), "{script}");
     }
-    assert_eq!(config["write_files"].as_sequence().unwrap().len(), 6);
+    assert_eq!(config["write_files"].as_sequence().unwrap().len(), 7);
 }
 
 #[test]

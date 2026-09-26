@@ -118,20 +118,29 @@ data; the host needs Ubuntu with Docker already installed (for example Hetzner's
   `lost+found` stays out of view; the service refuses to start without the mount;
 - writes the container environment, the image digest and any registry login as
   root-only files, and pulls the image by digest with retries;
-- disables the host's own SSH service and locks the root password, so port 22
-  belongs to the container and the host has no remote login;
+- masks the host's own SSH service and locks the root password (cloud-init also
+  disables root and password login), so port 22 belongs to the container and the
+  host has no remote login; if either step fails, the worker is never started;
 - starts `horizon-worker.service`, which runs the container with `--rm`, publishes
   port 22, keeps at most 50 MB of container logs (Docker's rotating `local` driver)
   and restarts it on failure and after a reboot.
 
-Before every container start the service drops container traffic to the metadata
-service at 169.254.169.254, because that service returns the user data, including
-the registry login. The login file stays on the host (root only, never mounted into
-the container) so a restarted host can pull again if its image cache is lost; use a
-read-only, short-lived pull credential. String values are written as data files
-and never interpolated into commands; only the range-checked shared memory size
-appears in the start script. Stopping the server ends every container process, as
-on any other provider; `/workspace` keeps its files.
+Before every container start the service drops container traffic to the
+link-local range 169.254.0.0/16, which holds the metadata service, because that
+service returns the user data, including the registry login. The container does
+not start if the rule cannot be applied.
+
+The login file stays on the host (root only, never mounted into the container) so a
+restarted host can pull again if its image cache is lost. The credential also stays
+readable in the server's user data for the server's whole life, so callers must pass
+a short-lived, read-only token scoped to the one repository. Because host SSH is
+masked and root is locked, host recovery uses the provider's rescue system rather
+than a login.
+
+String values are written as data files and never interpolated into commands; only
+the range-checked shared memory size appears in the start script. Stopping the
+server ends every container process, as on any other provider; `/workspace` keeps
+its files.
 
 ## Session relaunch after a container reset
 

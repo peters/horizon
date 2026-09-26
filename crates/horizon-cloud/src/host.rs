@@ -21,6 +21,7 @@ const ENVIRONMENT_FILE: &str = "/etc/horizon-worker/worker.env";
 const IMAGE_FILE: &str = "/etc/horizon-worker/image";
 const REGISTRY_FILE: &str = "/root/.docker/config.json";
 const GUARD: &str = "/usr/local/sbin/horizon-worker-guard";
+const SETUP: &str = "/usr/local/sbin/horizon-worker-setup";
 const START: &str = "/usr/local/sbin/horizon-worker-start";
 const UNIT: &str = "/etc/systemd/system/horizon-worker.service";
 const DEVICE_PREFIX: &str = "/dev/disk/by-id/";
@@ -51,6 +52,8 @@ pub struct Plan {
 
 #[derive(Serialize)]
 struct CloudConfig<'a> {
+    ssh_pwauth: bool,
+    disable_root: bool,
     write_files: Vec<WriteFile<'a>>,
     mounts: Vec<[&'a str; 6]>,
     runcmd: Vec<Vec<&'a str>>,
@@ -72,8 +75,9 @@ impl Plan {
         // Contents that may carry secrets stay in zeroizing storage until encoded.
         let environment = zeroize::Zeroizing::new(self.environment_file());
         let registry = self.registry.as_ref().map(registry_config).transpose()?;
-        let (image, guard, start, unit) = (
+        let (image, setup, guard, start, unit) = (
             format!("{}\n", self.image),
+            setup_script(),
             guard_script(),
             start_script(self.shm_gb),
             unit(),
@@ -87,6 +91,7 @@ impl Plan {
         let mut write_files = vec![
             file(ENVIRONMENT_FILE, "0600", environment.as_str()),
             file(IMAGE_FILE, "0600", &image),
+            file(SETUP, "0700", &setup),
             file(GUARD, "0700", &guard),
             file(START, "0700", &start),
             file(UNIT, "0644", &unit),
@@ -95,6 +100,8 @@ impl Plan {
             write_files.push(file(REGISTRY_FILE, "0600", registry.as_str()));
         }
         let config = CloudConfig {
+            ssh_pwauth: false,
+            disable_root: true,
             write_files,
             mounts: vec![[
                 &self.workspace_device,
@@ -104,13 +111,7 @@ impl Plan {
                 "0",
                 "2",
             ]],
-            runcmd: vec![
-                // The container owns port 22; the host keeps no SSH or password login.
-                vec!["systemctl", "disable", "--now", "ssh.socket", "ssh.service"],
-                vec!["passwd", "--lock", "root"],
-                vec!["systemctl", "daemon-reload"],
-                vec!["systemctl", "enable", "--now", "horizon-worker.service"],
-            ],
+            runcmd: vec![vec![SETUP]],
         };
         let yaml = zeroize::Zeroizing::new(
             serde_yaml::to_string(&config)
@@ -307,8 +308,22 @@ fn registry_config(registry: &RegistryLogin) -> Result<zeroize::Zeroizing<String
     Ok(zeroize::Zeroizing::new(text))
 }
 
+/// Runs once on first boot. The worker service is enabled last, so it never
+/// starts while the host could still accept an SSH or password login.
+fn setup_script() -> String {
+    "#!/bin/sh
+set -eu
+systemctl mask --now ssh.socket ssh.service
+passwd --lock root
+systemctl daemon-reload
+systemctl enable --now horizon-worker.service
+"
+    .to_owned()
+}
+
 /// Runs before every container start. The metadata service serves the user data,
-/// including any registry credential, so the container must never reach it.
+/// including any registry credential, so the container must never reach it or
+/// anything else link-local.
 fn guard_script() -> String {
     format!(
         "#!/bin/sh
@@ -316,7 +331,7 @@ set -eu
 command -v docker >/dev/null || {{ echo 'horizon-worker: Docker is not installed on this host' >&2; exit 1; }}
 mountpoint -q {VOLUME_MOUNT} || {{ echo 'horizon-worker: the workspace volume is not mounted' >&2; exit 1; }}
 mkdir -p {WORKSPACE}
-iptables -C DOCKER-USER -d 169.254.169.254/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP
+iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
 "
     )
 }
@@ -350,6 +365,7 @@ Wants=network-online.target
 RequiresMountsFor={VOLUME_MOUNT}
 
 [Service]
+Environment=DOCKER_CONFIG=/root/.docker
 ExecStartPre={GUARD}
 ExecStartPre=-/usr/bin/docker rm --force horizon-worker
 ExecStart={START}
