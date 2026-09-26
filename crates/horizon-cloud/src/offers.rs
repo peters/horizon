@@ -39,7 +39,8 @@ pub struct Requirements {
     /// A provider GPU type ID or name, such as `NVIDIA RTX A5000` or `RTX A5000`.
     #[serde(default)]
     pub gpu_type: Option<String>,
-    /// Highest acceptable hourly price in US dollars.
+    /// The highest hourly price, in each offer's own currency: US dollars for `RunPod`
+    /// and euros for Hetzner.
     #[serde(default)]
     pub max_hourly: Option<f64>,
     /// Expected running time for the estimated total, at most a year. One hour when

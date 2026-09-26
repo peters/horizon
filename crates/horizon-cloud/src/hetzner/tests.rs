@@ -224,7 +224,7 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
         ),
     ]);
     let pricing = json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.0572"}},
-        "primary_ips": [{"type": "ipv4", "prices": [{"location": "hel1", "price_monthly": {"net": "0.50"}}]},
+        "primary_ips": [{"type": "ipv4", "prices": [{"location": "hel1", "price_hourly": {"net": "0.0008"}, "price_monthly": {"net": "0.50"}}]},
                         {"type": "ipv6", "prices": [{"location": "hel1", "price_monthly": {"net": "0"}}]}]}});
     let locations = json!([
         {"id": 1, "name": "hel1", "network_zone": "eu-central", "country": "FI", "city": "Helsinki"},
@@ -260,6 +260,7 @@ fn catalog_lists_current_x86_offers_cheapest_first_with_live_availability() {
     assert!((catalog.offers[1].monthly_eur - 69.49).abs() < 1e-9);
     assert!((catalog.volume_gb_month_eur - 0.0572).abs() < 1e-9);
     assert_eq!(catalog.ipv4_month_eur.len(), 1);
+    assert!((catalog.ipv4_hour_eur["hel1"] - 0.0008).abs() < 1e-12);
     assert_eq!(catalog.regions["hel1"], "EUROPE");
     assert_eq!(catalog.regions["ash"], "NORTH_AMERICA");
     assert_eq!(catalog.regions["sin"], "ASIA");
