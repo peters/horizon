@@ -107,7 +107,7 @@ pub(crate) struct CloudOffersInput {
     /// Also list GPU types without stock where the worker may go.
     #[serde(default)]
     pub include_unavailable: bool,
-    /// At most this many offers, cheapest first. 10 when omitted, never more than 50.
+    /// At most this many offers, cheapest first: 1 to 50, and 10 when omitted.
     pub limit: Option<usize>,
 }
 

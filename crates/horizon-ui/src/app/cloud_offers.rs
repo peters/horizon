@@ -19,8 +19,13 @@ impl HorizonApp {
             };
             match manifest::provider_usage::complete_provider_usage(&result) {
                 Ok(()) => changed = true,
-                // The agent's request times out; nothing else depends on it.
-                Err(error) => tracing::warn!(kind = ?error.kind(), "could not publish cloud offers"),
+                Err(error) => {
+                    tracing::warn!(kind = ?error.kind(), "could not publish cloud offers");
+                    // Retried on the next poll until the agent stops waiting.
+                    if manifest::now_millis() < request.deadline_at_millis {
+                        self.browser_create_host.cloud_offers.push(request);
+                    }
+                }
             }
         }
         changed

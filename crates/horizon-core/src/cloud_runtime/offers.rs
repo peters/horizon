@@ -42,14 +42,15 @@ pub struct Requirements {
     /// Also list GPU types with no stock where the worker may go.
     #[serde(default)]
     pub include_unavailable: bool,
-    /// At most this many offers, cheapest first; 10 when omitted, never more than 50.
+    /// At most this many offers, cheapest first: 1 to 50, and 10 when omitted.
     #[serde(default)]
     pub limit: Option<usize>,
 }
 
 impl Requirements {
     /// # Errors
-    /// Rejects negative or non-finite amounts and an empty GPU type or region.
+    /// Rejects negative or non-finite amounts, an empty GPU type or region, and a limit
+    /// outside 1 to 50.
     pub fn validate(&self) -> Result<(), &'static str> {
         let finite = |value: Option<f64>| value.is_none_or(|value| value.is_finite() && value >= 0.0);
         if !finite(self.max_hourly) || !finite(self.hours) {
@@ -59,6 +60,9 @@ impl Requirements {
             || self.region.as_deref().is_some_and(|value| value.trim().is_empty())
         {
             return Err("GPU type and region must not be empty");
+        }
+        if self.limit.is_some_and(|limit| !(1..=MAX_LIMIT).contains(&limit)) {
+            return Err("The limit must be 1 to 50");
         }
         Ok(())
     }
@@ -104,7 +108,7 @@ pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
     let mut offers = if requirements.gpu {
         gpu_offers(list, requirements, &within, hours, storage_gb)
     } else {
-        cpu_offers(list, requirements, hours, storage_gb)
+        cpu_offers(list, requirements, &within, hours, storage_gb)
     };
     offers.retain(|offer| requirements.max_hourly.is_none_or(|max| offer.hourly <= max));
     offers.sort_by(|a, b| {
@@ -112,12 +116,27 @@ pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
             .total_cmp(&b.estimated_total)
             .then_with(|| a.name.cmp(&b.name))
     });
-    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT));
+    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
     offers
 }
 
-fn cpu_offers(list: &PriceList, requirements: &Requirements, hours: f64, storage_gb: u32) -> Vec<Offer> {
-    // A CPU worker keeps its workspace on a network volume, billed whether it runs or not.
+fn cpu_offers(
+    list: &PriceList,
+    requirements: &Requirements,
+    within: &[String],
+    hours: f64,
+    storage_gb: u32,
+) -> Vec<Offer> {
+    // A CPU worker keeps its workspace on a network volume, so the region needs a data
+    // center that can hold one. Exact CPU stock is checked when the cloud is created.
+    let hosts_workspace = list
+        .data_centers
+        .iter()
+        .any(|center| center.workspace_storage && (within.is_empty() || within.contains(&center.id)));
+    if !hosts_workspace {
+        return Vec::new();
+    }
+    // The network volume is billed whether the worker runs or not.
     let storage = list.storage.network_month(storage_gb) * hours / MONTH_HOURS;
     let mut offers = Vec::new();
     for price in &list.cpu {
@@ -335,6 +354,26 @@ mod tests {
     }
 
     #[test]
+    fn cpu_offers_need_a_region_that_can_hold_the_workspace() {
+        let cpu = |region: &str, list: &PriceList| {
+            offers(
+                list,
+                &Requirements {
+                    region: Some(region.into()),
+                    ..Requirements::default()
+                },
+            )
+            .len()
+        };
+        let mut prices = list();
+        assert_eq!(cpu("Europe", &prices), DEFAULT_LIMIT);
+        assert_eq!(cpu("ASIA", &prices), 0);
+        prices.data_centers[0].workspace_storage = false;
+        assert_eq!(cpu("EUROPE", &prices), 0);
+        assert_eq!(cpu("NORTH_AMERICA", &prices), DEFAULT_LIMIT);
+    }
+
+    #[test]
     fn gpu_offers_follow_stock_type_memory_region_and_price() {
         let gpu = |requirements: Requirements| -> Vec<String> {
             offers(
@@ -411,11 +450,18 @@ mod tests {
         let limited = offers(
             &list(),
             &Requirements {
-                limit: Some(0),
+                limit: Some(2),
                 ..Requirements::default()
             },
         );
-        assert_eq!(limited.len(), 1, "at least one offer");
+        assert_eq!(limited.len(), 2);
+        for limit in [0, MAX_LIMIT + 1] {
+            let requirements = Requirements {
+                limit: Some(limit),
+                ..Requirements::default()
+            };
+            assert!(requirements.validate().is_err(), "limit {limit}");
+        }
         assert!(
             Requirements {
                 max_hourly: Some(-1.0),
