@@ -75,6 +75,20 @@ pub struct Deployment {
 }
 
 impl Deployment {
+    /// Whether the bound worker is ready for work over SSH: running, reachable, with its
+    /// source in place and no stop requested.
+    #[must_use]
+    pub fn worker_ready(&self) -> bool {
+        self.worker.as_ref().is_some_and(|worker| {
+            matches!(&self.operation, CreateState::Bound { worker_id } if worker_id == &worker.id)
+                && self.stage == Stage::Ready
+                && self.source_ready
+                && !self.stop_requested
+                && worker.desired_status == "RUNNING"
+                && worker.ssh_address().is_some()
+        })
+    }
+
     pub(super) fn normalize_readiness_history(&mut self) {
         if self.stage == Stage::Ready {
             self.ready_history = ReadyHistory::Observed;
@@ -184,6 +198,38 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_bound_running_reachable_worker_with_its_source_is_ready() {
+        let ready = || -> Deployment {
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"ready-fixture","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+                "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"sessions":[],
+                "source_ready":true,
+                "worker":{"id":"worker1","name":"w","imageName":"i","desiredStatus":"RUNNING",
+                    "publicIp":"203.0.113.7","portMappings":{"22":22022}}
+            }))
+            .unwrap()
+        };
+        assert!(ready().worker_ready());
+        let changes: [fn(&mut Deployment); 6] = [
+            |state| state.stage = Stage::Stopping,
+            |state| state.source_ready = false,
+            |state| state.stop_requested = true,
+            |state| {
+                state.operation = CreateState::Bound {
+                    worker_id: "worker2".into(),
+                }
+            },
+            |state| state.worker.as_mut().unwrap().desired_status = "EXITED".into(),
+            |state| state.worker.as_mut().unwrap().port_mappings = None,
+        ];
+        for change in changes {
+            let mut state = ready();
+            change(&mut state);
+            assert!(!state.worker_ready(), "{state:?}");
+        }
+    }
     #[test]
     #[cfg(not(unix))]
     fn unsupported_cloud_control_does_not_create_or_modify_state() {

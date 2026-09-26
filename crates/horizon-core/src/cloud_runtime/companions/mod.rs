@@ -4,7 +4,7 @@ mod journal;
 mod reconcile;
 #[cfg(all(test, unix))]
 mod tests;
-mod transport;
+pub(super) mod transport;
 
 use super::{Cancellation, Error, Result, settings::Settings};
 pub use horizon_cloud::companions::{Declaration, Scope, Target};
