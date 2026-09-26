@@ -163,8 +163,7 @@ impl Runtime {
                     .is_some_and(|worker| !worker.is_starting_or_running()))
     }
 
-    /// A restored cloud reconnects on its own only while its worker is known to run
-    /// its recorded image.
+    /// A restored cloud resumes readiness for an active bound worker on its recorded image.
     fn reconnects_on_restore(state: &Deployment) -> bool {
         matches!(state.operation, cloud_runtime::CreateState::Bound { .. })
             && !state.stop_requested
