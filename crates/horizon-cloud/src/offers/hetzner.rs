@@ -10,6 +10,8 @@ pub const DEPLOYABLE: bool = false;
 const EUR: &str = "EUR";
 
 /// Hetzner offers in `catalog` meeting `requirements`, cheapest estimated total first.
+/// `estimated_total` is the worst case over start times, since Hetzner caps prices per
+/// calendar month.
 /// Hetzner has no hourly GPUs, so a GPU request gets none. `max_hourly` is read in
 /// euros, the currency these offers are in.
 #[must_use]
@@ -61,9 +63,10 @@ fn priced(
     // Every server has a primary IPv4 address; an offer that cannot price it is left out
     // rather than shown as cheaper than it is.
     let ipv4_month = catalog.ipv4_month_eur.get(&offer.location).copied()?;
+    let ipv4_hour = catalog.ipv4_hour_eur.get(&offer.location).copied()?;
     // The volume and address are billed per started hour too, up to their monthly price.
-    let extras_month = volume_month + ipv4_month;
-    let running_extras = compute(extras_month / MONTH_HOURS, extras_month, hours);
+    let running_extras =
+        compute(volume_month / MONTH_HOURS, volume_month, hours) + compute(ipv4_hour, ipv4_month, hours);
     let cpu = if offer.dedicated { "dedicated" } else { "shared" };
     Some(Offer {
         provider: "Hetzner",
@@ -88,11 +91,18 @@ fn priced(
     })
 }
 
-/// An amount billed per started hour, and at most the monthly price for each month.
+/// The shortest calendar month.
+const SHORTEST_MONTH_HOURS: f64 = 28.0 * 24.0;
+
+/// The most an amount billed per started hour, and at most `monthly` in each calendar
+/// month, can cost over `hours`. A run that crosses into another month is capped per
+/// month, so the worst case over every start time is the hourly total, limited by the
+/// cap of each calendar month the run can touch. A created server bills at least one
+/// hour.
 fn compute(hourly: f64, monthly: f64, hours: f64) -> f64 {
-    let months = (hours / MONTH_HOURS).floor();
-    let rest = hours - months * MONTH_HOURS;
-    months * monthly + (rest.ceil() * hourly).min(monthly)
+    let started = hours.ceil().max(1.0);
+    let months = (hours / SHORTEST_MONTH_HOURS).floor() + 2.0;
+    (started * hourly).min(months * monthly)
 }
 
 /// Whole gigabytes of memory, rounded down.

@@ -29,6 +29,7 @@ fn catalog() -> Catalog {
         ],
         volume_gb_month_eur: 0.0572,
         ipv4_month_eur: BTreeMap::from([("hel1".into(), 0.5), ("fsn1".into(), 0.5), ("ash".into(), 0.5)]),
+        ipv4_hour_eur: BTreeMap::from([("hel1".into(), 0.001), ("fsn1".into(), 0.001), ("ash".into(), 0.001)]),
         regions: BTreeMap::from([
             ("hel1".into(), "EUROPE".into()),
             ("fsn1".into(), "EUROPE".into()),
@@ -53,8 +54,8 @@ fn offers_are_euro_priced_per_started_hour_with_running_storage_and_a_kept_volum
         ("Hetzner", "EUR", "cx43")
     );
     assert_eq!(first.name, "cx43 · 8 vCPU · 16 GB · shared");
-    // Three started hours of compute, volume and IPv4 address.
-    let expected = 3.0 * 0.0256 + (0.0572 * 100.0 + 0.5) * 3.0 / 730.0;
+    // Three started hours of compute, volume and IPv4 address, at the address's hourly rate.
+    let expected = 3.0 * 0.0256 + 0.0572 * 100.0 * 3.0 / 730.0 + 3.0 * 0.001;
     assert!((first.estimated_total - expected).abs() < 1e-9);
     assert_eq!(first.monthly, Some(15.99));
     assert!(
@@ -87,11 +88,18 @@ fn advisory_availability_is_reported_but_never_hides_an_offer() {
 }
 
 #[test]
-fn the_monthly_cap_limits_long_runs() {
-    assert!((compute(0.0256, 15.99, 730.0) - 15.99).abs() < 1e-9);
-    assert!((compute(0.0256, 15.99, 800.0) - (15.99 + 70.0 * 0.0256)).abs() < 1e-9);
+fn estimates_are_the_worst_case_over_calendar_months_and_never_zero() {
+    // A 730-hour run that starts mid-month is billed in two months: 365 hours each.
+    assert!((compute(0.0256, 15.99, 730.0) - 730.0 * 0.0256).abs() < 1e-9);
+    // Over a year the hourly total stays below fifteen monthly caps for cx43, while a
+    // pricier hourly rate is limited by the caps of every month the run can touch.
+    assert!((compute(0.0256, 15.99, 8784.0) - 8784.0 * 0.0256).abs() < 1e-9);
+    assert!((compute(0.1, 15.99, 8784.0) - 15.0 * 15.99).abs() < 1e-9);
     assert!((compute(0.0256, 15.99, 0.2) - 0.0256).abs() < 1e-9);
-    assert!(compute(0.0256, 15.99, 0.0).abs() < 1e-9);
+    assert!(
+        (compute(0.0256, 15.99, 0.0) - 0.0256).abs() < 1e-9,
+        "a created server bills an hour"
+    );
 }
 
 #[test]
