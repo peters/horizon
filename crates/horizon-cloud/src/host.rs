@@ -198,7 +198,7 @@ fn valid_digest_reference(image: &str) -> bool {
     });
     let host = components
         .first()
-        .filter(|first| components.len() > 1 || first.contains(['.', ':']) || **first == "localhost")
+        .filter(|first| first.contains(['.', ':']) || **first == "localhost")
         .copied();
     let paths_valid = components
         .iter()
@@ -296,6 +296,7 @@ until docker image inspect \"$image\" >/dev/null 2>&1 || docker pull --quiet \"$
   sleep 15
 done
 exec docker run --rm --name horizon-worker --pull never -p 22:22 --shm-size {shm_gb}g \\
+  --log-driver local --log-opt max-size=10m --log-opt max-file=5 \\
   -v {WORKSPACE}:/workspace --env-file {ENVIRONMENT_FILE} \"$image\"
 "
     )

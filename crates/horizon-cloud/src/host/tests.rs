@@ -99,6 +99,7 @@ fn the_plan_becomes_root_only_files_a_volume_mount_and_one_service() {
     assert!(start.contains("-p 22:22"));
     assert!(start.contains(&format!("-v {WORKSPACE}:/workspace")));
     assert!(start.contains("--pull never"));
+    assert!(start.contains("--log-driver local --log-opt max-size=10m --log-opt max-file=5"));
 }
 
 #[test]
@@ -239,6 +240,7 @@ fn only_well_formed_digest_references_are_accepted() {
         format!("library/worker:1.2_rc-3@{digest}"),
         format!("localhost/worker@{digest}"),
         format!("team/a.b_c__d---e@{digest}"),
+        format!("team_one/project/worker@{digest}"),
     ] {
         assert!(valid_digest_reference(&valid), "{valid}");
     }

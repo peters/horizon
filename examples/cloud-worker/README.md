@@ -121,7 +121,8 @@ data; the host needs Ubuntu with Docker already installed (for example Hetzner's
 - disables the host's own SSH service and locks the root password, so port 22
   belongs to the container and the host has no remote login;
 - starts `horizon-worker.service`, which runs the container with `--rm`, publishes
-  port 22 and restarts it on failure and after a reboot.
+  port 22, keeps at most 50 MB of container logs (Docker's rotating `local` driver)
+  and restarts it on failure and after a reboot.
 
 Before every container start the service drops container traffic to the metadata
 service at 169.254.169.254, because that service returns the user data, including
