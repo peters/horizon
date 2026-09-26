@@ -107,11 +107,20 @@ def reason_text(reason):
     return text[:REASON_LIMIT]
 
 
+# What tmux says when no agent session was ever started, which is not a failed check.
+NO_SERVER = ('no server running', 'error connecting to')
+
+
 def tmux(*args, run=subprocess.run):
-    """Output of one tmux query; any failure refuses the stop, since activity is unknown."""
+    """Output of one tmux query, empty without any agent session. Any other failure
+    refuses the stop, since activity is unknown."""
     try:
         return run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=10,
                    check=True).stdout
+    except subprocess.CalledProcessError as error:
+        if any(message in (error.stderr or '') for message in NO_SERVER):
+            return ''
+        raise Refused('Agent sessions on this worker cannot be checked right now; leave it running.') from None
     except (OSError, subprocess.SubprocessError):
         raise Refused('Agent sessions on this worker cannot be checked right now; leave it running.') from None
 

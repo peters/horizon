@@ -213,7 +213,9 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertIn('horizon-last-self-stop={"at":1790000000000,"reason":"PR 12 merged"}', output.splitlines())
         self.assertIn('horizon-self-stop-contract=1', output.splitlines())
         # Without a record the image still says it supports them; an older image says neither.
+        # A failed read reports neither, so Horizon keeps the reason it showed.
         for reported, missing, supported in [({'horizon-worker-stop': b'null\n'}, (), True),
+                                             ({'horizon-worker-stop': b'not json\n'}, (), False),
                                              ({}, ('horizon-worker-stop',), False)]:
             with mock.patch('socket.create_connection', return_value=connection):
                 status, output, _ = self.run_check('--ready', reported=reported, missing=missing)
@@ -232,6 +234,20 @@ class CapabilitiesTests(unittest.TestCase):
             self.configure()
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+
+    @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
+    def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):
+        self.write('/workspace/capabilities.json', {'agents': ['codex', 'grok']})
+        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertEqual(servers['horizon-worker']['command'], '/usr/local/bin/horizon-worker-stop')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertNotIn('horizon-worker', servers)
 
     def configure(self):
         def run(command, **kwargs):

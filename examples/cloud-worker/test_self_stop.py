@@ -97,6 +97,19 @@ class WatcherTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, 'cannot be checked'):
             IDLE['tmux']('list-windows', run=broken)
 
+        def failed(stderr):
+            def run(*args, **kwargs):
+                raise subprocess.CalledProcessError(1, 'tmux', stderr=stderr)
+            return run
+        with self.assertRaisesRegex(Refused, 'cannot be checked'):
+            IDLE['tmux']('list-windows', run=failed('lost server'))
+        # No agent session was ever started: an empty server, so a caller outside one is
+        # told it is not an agent session.
+        empty = failed('no server running on /tmp/tmux-0/horizon-cloud\n')
+        self.assertEqual(IDLE['tmux']('list-panes', run=empty), '')
+        with self.assertRaisesRegex(Refused, 'Only an agent session'):
+            IDLE['caller'](42, query=lambda *args: IDLE['tmux'](*args, run=empty), parent_of=lambda pid: 1)
+
     def test_the_parent_of_a_process_comes_from_proc(self):
         proc = self.root / 'proc'
         (proc / '42').mkdir(parents=True)
