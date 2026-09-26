@@ -37,6 +37,10 @@ pub struct Settings {
     /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hetzner: Option<Hetzner>,
+    /// The cloud's own placement, kept by [`Settings::for_cloud`] for providers
+    /// that read it themselves. Never stored.
+    #[serde(skip)]
+    pub placement: Option<crate::cloud_panel::Placement>,
 }
 
 /// A Hetzner Cloud project this machine may deploy CPU clouds into. The token
@@ -71,20 +75,7 @@ impl Settings {
     pub fn for_cloud(path: &Path, placement: &crate::cloud_panel::Placement) -> Result<Self> {
         let mut settings = Self::load(path)?;
         placement.apply(&mut settings.data_centers, &mut settings.gpu_types);
-        // A Hetzner cloud's chosen data centers are Hetzner locations, and they can
-        // only narrow the locations this machine allows. A RunPod data center never
-        // names a Hetzner location, so RunPod clouds leave the list unchanged.
-        if let Some(hetzner) = settings.hetzner.as_mut() {
-            let chosen: Vec<String> = placement
-                .data_centers
-                .iter()
-                .filter(|location| hetzner.locations.contains(location))
-                .cloned()
-                .collect();
-            if !chosen.is_empty() {
-                hetzner.locations = chosen;
-            }
-        }
+        settings.placement = Some(placement.clone());
         Ok(settings)
     }
     /// # Errors
@@ -160,6 +151,29 @@ impl Hetzner {
             ));
         }
         Ok(())
+    }
+
+    /// The locations a Hetzner cloud may use: those its placement chose, in that
+    /// order, or every allowed location when it chose none.
+    /// # Errors
+    /// Refuses a placement whose locations this machine does not allow, rather
+    /// than moving the cloud somewhere it was not placed.
+    pub fn locations_for(&self, placement: Option<&crate::cloud_panel::Placement>) -> Result<Vec<String>> {
+        let Some(placement) = placement.filter(|placement| !placement.data_centers.is_empty()) else {
+            return Ok(self.locations.clone());
+        };
+        let chosen: Vec<String> = placement
+            .data_centers
+            .iter()
+            .filter(|location| self.locations.contains(location))
+            .cloned()
+            .collect();
+        if chosen.is_empty() {
+            return Err(Error::Invalid(
+                "None of this cloud's chosen locations is allowed in the Hetzner settings",
+            ));
+        }
+        Ok(chosen)
     }
 
     /// # Errors
@@ -262,31 +276,46 @@ mod tests {
         });
         std::fs::write(&path, with_hetzner.to_string()).unwrap();
         let any = crate::cloud_panel::Placement::default();
+        let settings = Settings::for_cloud(&path, &any).unwrap();
+        let hetzner = settings.hetzner.as_ref().unwrap();
         assert_eq!(
-            Settings::for_cloud(&path, &any).unwrap().hetzner.unwrap().locations,
+            hetzner.locations_for(settings.placement.as_ref()).unwrap(),
             ["hel1", "nbg1"]
         );
-        let nuremberg = crate::cloud_panel::Placement {
-            data_centers: vec!["nbg1".into(), "fsn1".into()],
+        assert_eq!(hetzner.locations_for(None).unwrap(), ["hel1", "nbg1"]);
+        let placed = |locations: &[&str]| crate::cloud_panel::Placement {
+            data_centers: locations.iter().map(|&location| location.into()).collect(),
             ..Default::default()
         };
+        let settings = Settings::for_cloud(&path, &placed(&["nbg1", "fsn1"])).unwrap();
         assert_eq!(
-            Settings::for_cloud(&path, &nuremberg)
-                .unwrap()
+            settings
                 .hetzner
+                .as_ref()
                 .unwrap()
-                .locations,
+                .locations_for(settings.placement.as_ref())
+                .unwrap(),
             ["nbg1"],
             "a placement narrows the allowed locations and cannot add one"
         );
-        let runpod = crate::cloud_panel::Placement {
-            data_centers: vec!["EU-RO-1".into()],
-            ..Default::default()
-        };
-        let settings = Settings::for_cloud(&path, &runpod).unwrap();
-        assert_eq!(settings.hetzner.as_ref().unwrap().locations, ["hel1", "nbg1"]);
+        let settings = Settings::for_cloud(&path, &placed(&["fsn1"])).unwrap();
         assert!(
-            settings.validate().is_ok(),
+            settings
+                .hetzner
+                .as_ref()
+                .unwrap()
+                .locations_for(settings.placement.as_ref())
+                .is_err(),
+            "a cloud placed only outside the allowed locations is refused, not moved"
+        );
+        assert!(
+            serde_json::to_value(&settings).unwrap().get("placement").is_none(),
+            "the placement is never stored"
+        );
+        let runpod = Settings::for_cloud(&path, &placed(&["EU-RO-1"])).unwrap();
+        assert_eq!(runpod.data_centers, ["EU-RO-1"]);
+        assert!(
+            runpod.validate().is_ok(),
             "a RunPod placement never invalidates Hetzner settings"
         );
         for (field, value) in [

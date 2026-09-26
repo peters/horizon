@@ -165,7 +165,7 @@ impl Profile {
         let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
         if !(deployable || fixture) {
             return Err(ProfileError::Invalid(
-                "Only RunPod and Hetzner can deploy workers; Daytona and Fly.io are design fixtures",
+                "Supported providers are RunPod and Hetzner; Daytona and Fly.io are design fixtures",
             ));
         }
         if self.provider == crate::hetzner::PROVIDER {

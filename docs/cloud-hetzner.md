@@ -43,8 +43,9 @@ without it are read and written exactly as before.
   project dedicated to Horizon.
 - `server_types` and `locations` list what Horizon may request, in order of
   preference. Only x86 types fit the worker image.
-- A cloud's chosen data centers narrow `locations` to the ones it names; they
-  cannot add a location that the settings do not allow.
+- A cloud's chosen data centers narrow `locations` to the ones it names. They
+  cannot add a location the settings do not allow; a cloud placed only in
+  locations the settings do not allow is refused rather than moved.
 
 Horizon targets the current Hetzner Cloud API as described by
 <https://docs.hetzner.cloud/cloud.spec.json>. `scripts/check-hetzner-api.py`

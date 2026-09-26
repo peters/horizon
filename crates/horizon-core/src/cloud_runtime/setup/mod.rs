@@ -219,5 +219,6 @@ fn defaults(root: &Path) -> Settings {
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),
         hetzner: None,
+        placement: None,
     }
 }
