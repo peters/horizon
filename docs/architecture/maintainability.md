@@ -502,6 +502,14 @@ provider reports; it keeps no journal, so callers record intent first.
 pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
 `host` renders provider-neutral `#cloud-config` user data that runs the unchanged
 worker image under Docker on a rented virtual machine; it performs no provider I/O.
+`hetzner` is a standalone Hetzner Cloud REST adapter that nothing calls yet. It uses
+the same `CreateState` fence for servers and volumes, reconciles a lost create
+through the operation label and the provider's unique names, and tries placements
+in order only after a capacity refusal. `hetzner::catalog` lists x86 offers with
+live per-location availability. It targets the current API as described by
+Hetzner's OpenAPI spec; `scripts/check-hetzner-api.py` checks every operation and
+field it uses against that spec. Deployment wiring comes after a provider seam in
+`horizon-core`.
 The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 `startup::StartupMetadata` is bounded opaque, non-secret creation data saved in
 `WorkerSpec`. The RunPod request passes it through one environment value, and the
