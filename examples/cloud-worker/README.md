@@ -778,7 +778,8 @@ lines; this does not establish CPU, memory, disk or process quotas.
 The local `runtime` SSH smoke uses synthetic agents in one persistent isolated
 PID namespace. It checks six sessions, lost replies, host and SSH restarts,
 retained edits, agent exit, descendant termination, sibling preservation and
-supervisor-loss fencing. Repeat it with `--runtime-fault server`, `socket` and
+supervisor-loss fencing. Terminal stop must complete while intermittent allocation-lock
+contention continues, with sibling processes still advancing. Repeat it with `--runtime-fault server`, `socket` and
 `stop-race`; this mode requires `strace` and pauses the supervisor until signed
 stop has committed, then resumes it before any executable launch. Socket replacement preserves the replacement
 bytes. The `early-exit` mode retains an immediate agent exit and then stops

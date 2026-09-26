@@ -231,14 +231,16 @@ def run(options):
         transport = paramiko.Transport(sock)
         try:
             with server_lock:
-                if (root / "restart").exists():
+                restarting = (root / "restart").exists()
+                if restarting:
                     if namespace is None:
                         shutil.rmtree(root / "run")
                         (root / "run").mkdir(mode=0o700)
                     (root / "restart").unlink()
-                prepared = worker("prepare-allocation-ssh", startup=True)
-                if prepared.returncode:
-                    raise RuntimeError("Worker startup preparation failed: " + prepared.stderr.decode())
+                if namespace is None or restarting:
+                    prepared = worker("prepare-allocation-ssh", startup=True)
+                    if prepared.returncode:
+                        raise RuntimeError("Worker startup preparation failed: " + prepared.stderr.decode())
                 host_key = paramiko.Ed25519Key.from_private_key_file(str(root / "run/horizon-allocation/ssh-host-key"))
                 host_keys.append(host_key.get_base64())
             transport.add_server_key(host_key)

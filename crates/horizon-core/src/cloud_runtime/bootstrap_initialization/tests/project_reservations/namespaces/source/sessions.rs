@@ -423,13 +423,22 @@ fn runtime_change(
     runner: &Runner<'_>,
     change: &Change,
 ) -> reservations::Result<Receipt> {
+    runtime_change_with_budget(f, target, runner, change, Duration::from_secs(30))
+}
+fn runtime_change_with_budget(
+    f: &mut CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    change: &Change,
+    budget: Duration,
+) -> reservations::Result<Receipt> {
     reservations::coordinate(
         &mut f.owner,
         target,
         &f.record.spec.image_digest,
         change,
         &mut |connection, command, bytes| {
-            Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, Duration::from_secs(30))?)
+            Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, budget)?)
         },
     )
 }
@@ -503,17 +512,7 @@ pub(super) fn runtime_smoke(
     let before = fs::metadata(&descendant).unwrap().len();
     std::thread::sleep(Duration::from_millis(150));
     assert!(fs::metadata(&descendant).unwrap().len() > before);
-    for (project, id, root) in &sessions[..5] {
-        runtime_change(&mut f, target, runner, &Change::StopSession(project.clone(), *id)).unwrap();
-        runtime_wait(&f, target, runner, project, *id, &Status::Stopped);
-        let path = root.join("home/descendant-progress");
-        let before = fs::metadata(&path).unwrap().len();
-        runtime_change(&mut f, target, runner, &Change::StartSession(project.clone(), *id)).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(fs::metadata(&path).unwrap().len(), before);
-        assert_eq!(fs::read_to_string(root.join("home/launch-count")).unwrap(), "launch\n");
-        runtime_wait(&f, target, runner, &sessions[5].0, sessions[5].1, &Status::Running);
-    }
+    runtime_stops(&mut f, target, runner, directory, &sessions);
     let (project, id, root) = &sessions[5];
     fs::write(
         root.join("home/lose-runtime"),
@@ -534,6 +533,100 @@ pub(super) fn runtime_smoke(
     }
     assert_eq!(projects.len(), 3);
     f
+}
+
+fn runtime_stop_request(
+    f: &mut CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    project: &ProjectIdentity,
+    id: uuid::Uuid,
+) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut change = Change::StopSession(project.clone(), id);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("terminal stop budget exhausted");
+        match runtime_change_with_budget(f, target, runner, &change, remaining) {
+            Ok(_) => return,
+            Err(error) => assert!(Instant::now() < deadline, "terminal stop did not resume: {error:?}"),
+        }
+        change = Change::Resume;
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn runtime_stops(
+    f: &mut CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    directory: &Path,
+    sessions: &[(ProjectIdentity, uuid::Uuid, PathBuf)],
+) {
+    use horizon_cloud_protocol::session_runtime::Status;
+    let lock = fs::File::open(directory.join("workspace/.horizon-allocation/allocation.lock")).unwrap();
+    let sibling = sessions[5].2.join("checkout/runtime-progress");
+    let before = fs::metadata(&sibling).unwrap().len();
+    let (ready, started) = std::sync::mpsc::sync_channel(1);
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+    let expired = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let stopped = &stopped;
+        let expired = &expired;
+        let contention = scope.spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(45);
+            let mut first = true;
+            while !stopped.load(std::sync::atomic::Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    expired.store(true, std::sync::atomic::Ordering::Release);
+                    break;
+                }
+                loop {
+                    if stopped.load(std::sync::atomic::Ordering::Acquire) {
+                        return;
+                    }
+                    if Instant::now() >= deadline {
+                        expired.store(true, std::sync::atomic::Ordering::Release);
+                        return;
+                    }
+                    match lock.try_lock() {
+                        Ok(()) => break,
+                        Err(fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(5)),
+                        Err(error) => panic!("contention fixture lock failed: {error}"),
+                    }
+                }
+                if first {
+                    ready.send(()).unwrap();
+                    first = false;
+                }
+                std::thread::sleep(Duration::from_millis(1200));
+                lock.unlock().unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        for (index, (project, id, root)) in sessions[..5].iter().enumerate() {
+            runtime_stop_request(f, target, runner, project, *id);
+            runtime_wait(f, target, runner, project, *id, &Status::Stopped);
+            if index == 0 {
+                assert!(
+                    !expired.load(std::sync::atomic::Ordering::Acquire),
+                    "stop must progress during contention"
+                );
+                stopped.store(true, std::sync::atomic::Ordering::Release);
+            }
+            let path = root.join("home/descendant-progress");
+            let before = fs::metadata(&path).unwrap().len();
+            runtime_change(f, target, runner, &Change::StartSession(project.clone(), *id)).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(fs::metadata(&path).unwrap().len(), before);
+            assert_eq!(fs::read_to_string(root.join("home/launch-count")).unwrap(), "launch\n");
+            runtime_wait(f, target, runner, &sessions[5].0, sessions[5].1, &Status::Running);
+        }
+        contention.join().unwrap();
+    });
+    assert!(fs::metadata(sibling).unwrap().len() > before);
 }
 
 fn runtime_sessions(f: &CoordinatorFixture, directory: &Path) -> Vec<(ProjectIdentity, uuid::Uuid, PathBuf)> {

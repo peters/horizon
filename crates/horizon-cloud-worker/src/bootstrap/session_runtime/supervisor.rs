@@ -161,7 +161,7 @@ fn supervise(permit: &Permit, own: &process::Identity) -> io::Result<()> {
     drop(store);
     loop {
         thread::sleep(Duration::from_secs(1));
-        let store = match Store::open(Path::new(ROOT)) {
+        let store = match open(Instant::now() + Duration::from_secs(10)) {
             Ok(store) => store,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
             Err(error) => return Err(error),
