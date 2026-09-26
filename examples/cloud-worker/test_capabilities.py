@@ -96,11 +96,13 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, _ = self.run_check('--agent', 'shell')
         self.assertEqual((status, output), (0, ''))
 
-    def test_session_environment_is_reported_only_with_its_helper(self):
-        for missing, expected in [((), True), (('horizon-worker-session-env',), False)]:
-            status, output, _ = self.run_check(missing=missing)
-            self.assertEqual(status, 0, output)
-            self.assertEqual('horizon-session-env-contract=1' in output.splitlines(), expected, missing)
+    def test_session_environment_and_gpu_lock_are_reported_only_with_their_helpers(self):
+        for marker, helper in [('horizon-session-env-contract=1', 'horizon-worker-session-env'),
+                               ('horizon-gpu-lock-contract=1', 'horizon-worker-gpu-lock')]:
+            for missing, expected in [((), True), ((helper,), False)]:
+                status, output, _ = self.run_check(missing=missing)
+                self.assertEqual(status, 0, output)
+                self.assertEqual(marker in output.splitlines(), expected, missing)
 
     def test_refused_session_environment_fails_the_image_and_every_session_start(self):
         def run(command, **kwargs):

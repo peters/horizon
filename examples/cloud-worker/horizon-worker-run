@@ -31,6 +31,9 @@ export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"
 export HORIZON_DEVICE_ACTOR="horizon:cloud-$id"
 # Created by horizon-worker-session: this session's private caches and test state.
 export HORIZON_SESSION_DIR="/workspace/session-data/$id"
+# Shared by every session on this worker; see horizon-worker-gpu-lock.
+mkdir -p /workspace/locks
+export HORIZON_GPU_LOCK=/workspace/locks/gpu.lock
 unset HORIZON
 export HORIZON_BROWSER_HOST_INSTANCE="$(cat "$HORIZON_BROWSER_ROOT/cloud-host-instance")"
 [ "$agent" != shell ] || agent=bash

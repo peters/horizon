@@ -13,6 +13,7 @@
 !horizon-worker-import
 !horizon-worker-siblings
 !horizon-worker-session-env
+!horizon-worker-gpu-lock
 !horizon-worker-git-auth
 !horizon-worker-browserstack
 !bin/

@@ -102,8 +102,9 @@ must actually contain the required GPU libraries; its name alone proves nothing.
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
 `horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
 ([session relaunch](#session-relaunch-after-a-container-reset)), `horizon-siblings-contract=1`
-([sibling repositories](#sibling-repositories)) and `horizon-session-env-contract=1`
-([session environment](#session-environment-from-image-layers)). Source transfer carries verified LFS objects and
+([sibling repositories](#sibling-repositories)), `horizon-session-env-contract=1`
+([session environment](#session-environment-from-image-layers)) and `horizon-gpu-lock-contract=1`
+([GPU lock](#gpu-lock)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -332,6 +333,36 @@ no process, records exit status 3 and appends the reason to `/workspace/session-
 Without the directory nothing changes. Companion shells from other clouds do not apply
 the files. The checker reports `horizon-session-env-contract=1` when the image has
 `horizon-worker-session-env`.
+
+## GPU lock
+
+Sessions on one worker share its GPU. Run GPU builds and tests under the worker's GPU
+lock so they never overlap:
+
+```
+horizon-worker-gpu-lock [--wait SECONDS] -- COMMAND [ARGUMENT...]
+```
+
+It runs `COMMAND` while holding an exclusive `flock` on `/workspace/locks/gpu.lock`,
+waiting as long as another holder has it unless `--wait` bounds the wait (`--wait 0`
+tries once). Only the lock command holds the lock, so a background process that
+`COMMAND` leaves behind does not keep it. Every agent session gets the same file as
+`HORIZON_GPU_LOCK`, so a repository script can also call `flock "$HORIZON_GPU_LOCK" ...`
+directly.
+
+| Exit | Meaning |
+|------|---------|
+| `COMMAND`'s status | The lock was acquired and `COMMAND` ran |
+| 2 | Invalid usage |
+| 75 | The lock was not acquired within `--wait` seconds; `COMMAND` did not run |
+| 126 | `COMMAND` names a path that is not executable |
+| 127 | `COMMAND` is not an executable on `PATH`; shell builtins and functions cannot be run |
+| other | `flock` could not use the lock file, for example 66 when it cannot be opened |
+
+The lock is advisory: GPU work started without it is not serialized. It belongs to the
+`horizon-worker-gpu-lock` process: stopping the whole command, as Ctrl-C in a terminal does,
+releases it, but killing only that process leaves `COMMAND` running without the lock. The checker reports
+`horizon-gpu-lock-contract=1` when the image has `horizon-worker-gpu-lock`.
 
 ## Optional Git credentials
 
