@@ -588,7 +588,7 @@ browser:
         device: { kind: physical, model: iPhone 16, os_version: "18" }
 ```
 
-`device.kind: any` is a desktop browser. `device.kind: physical` asks for a real phone; Horizon keeps the panel only when BrowserStack's own session record matches the model and OS version. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Another provider block, with its own username and access key, is a separate account. Reusing the same credential references shares one account on purpose.
+`device.kind: any` skips the physical-or-emulated check. A model or OS version on the target is still checked against BrowserStack's session record. `windows_chrome` is a desktop browser because it names Chrome on Windows and leaves the phone model empty. `device.kind: physical` requires a real device, and Horizon keeps that panel only when the session record confirms it. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Another provider block, with its own username and access key, is a separate account. Reusing the same credential references shares one account on purpose.
 
 An agent panel in the workspace opens the target. Ask it for the page, and it calls `browser_create` with `target` set to `windows_chrome` or `ios_phone` and `url` set to the address. A checked plan does the same thing. Build `horizon-browser` from source, then run the plan from a terminal Horizon launched so it uses this board's providers and credentials:
 
@@ -735,15 +735,21 @@ presets:
 ```
 
 1. Start copy A so a VNC server accepts connections on `127.0.0.1:5900`, and copy B on `127.0.0.1:5901`. The address is a numeric loopback IP and a nonzero port: `127.0.0.1` or `[::1]`. Use a server that accepts a shared connection and does not ask for a VNC password. Horizon has no password field. On another machine, SSH is the access check.
-2. **Ctrl+double-click** the canvas and pick **App A**, then **App B**. Or press **Ctrl+Shift+K** and type `va` or `vb`.
-3. Each panel connects and shows that desktop. Drag the panels apart, or use **Rows**, **Cols**, or **Grid** on the workspace. **Ctrl+Shift+9** fits them on screen.
+2. **Ctrl+double-click** empty canvas and pick **App A**. That creates a workspace with the first copy. **Ctrl+double-click inside that workspace** and pick **App B**, so both panels belong to it. **Ctrl+Shift+K** and `va` or `vb` adds a panel to the workspace you are in.
+3. Each panel connects and shows that desktop. Drag the panels apart, or use **Rows**, **Cols**, or **Grid** on that workspace. **Ctrl+Shift+9** fits them on screen.
 4. The picture starts read-only. Turn **Interact** on in the panel you want to drive, then click the image. Your mouse and keyboard go to that desktop until you click outside the image or turn **Interact** off. The other panels stay viewers. **Interact** is a switch on the panel; agents leave it off.
 5. **View controls** on the panel choose **Fit** or **1:1**, a crop, and local frame-rate and image-size limits. Those settings change the image in this panel. The desktop stays at the size the VNC server reports.
 6. After Horizon restarts, a restored Device panel stays disconnected until you press **Reconnect**. The same port may belong to a different process than the one you saved.
 
 A desktop on another machine uses this viewer through SSH. Press **Ctrl+Shift+H**, switch to **VNC**, and open the host. Horizon runs `ssh -W 127.0.0.1:<port>` and requires the host key to already be trusted (open the host over SSH once). Per-host ports live in `remote_hosts.vnc_ports`. The overlay is described under [Remote Hosts](#remote-hosts).
 
-An agent in the workspace can open these viewers with the `device_panel` tool: `create` with the loopback endpoint, then `inspect` until the panel is connected and showing frames. On Linux, `horizon-device` can click and type into that copy's X11 display. The Device panel remains the view.
+An agent in the workspace can open these viewers with the `device_panel` tool: `create` with the loopback endpoint, then `inspect` until the panel is connected and showing frames. On Linux, an agent drives a copy with `horizon-device --target` and a private target file that names that copy's X11 display:
+
+```json
+{"id":"app-a","endpoint":{"kind":"local_x11","display":":99"}}
+```
+
+There is no fallback to the ambient `DISPLAY`. The Device panel does not hand its VNC address to that tool. The panel remains the view.
 
 ```yaml
 workspaces:
