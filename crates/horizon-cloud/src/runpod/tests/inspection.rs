@@ -20,6 +20,9 @@ fn query_server(
                 }
                 Err(error) => panic!("fixture accept failed: {error}"),
             };
+            // macOS copies the listener's nonblocking flag to accepted sockets, and a read
+            // before the client's bytes arrive then fails with WouldBlock instead of waiting.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut reader = std::io::BufReader::new(&mut stream);
             let mut request = String::new();
