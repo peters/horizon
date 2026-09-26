@@ -23,6 +23,7 @@ use super::{
     command::Runner,
     repository,
     settings::Settings,
+    siblings,
     ssh::Connection,
     state::{Deployment, OperationId, ReadyHistory, Store},
 };
@@ -85,6 +86,18 @@ pub fn prepare(request: &Request) -> Result<()> {
 /// # Errors
 /// Records any uncertain allocation durably and never deletes workers on disconnect.
 pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
+    deploy_with_siblings(request, &[], cancel, emit)
+}
+/// As [`deploy`], first pinning the machine-local same-worker sibling `bindings`, in layering order,
+/// before the image is built. Without bindings a recorded set is kept, as on a reconnect.
+/// # Errors
+/// As [`deploy`], and any sibling refusal.
+pub fn deploy_with_siblings(
+    request: &Request,
+    bindings: &[siblings::Binding],
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<Deployment> {
     let started = Instant::now();
     let timeline = super::timeline::Recorder::default();
     let recorded = |event: Event| {
@@ -130,6 +143,9 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         return Err(Error::Invalid(
             "Worker was explicitly stopped. Resume it before reconnecting; prior processes may be lost.",
         ));
+    }
+    if siblings::bind(bindings, &mut state, &runner)? {
+        store.save(&state)?;
     }
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
     refresh_allocation(request, &store, &mut state)?;
@@ -328,6 +344,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             session_restart: None,
             timeline: None,
             last_self_stop: None,
+            siblings: None,
         }
     };
     store.save(&state)?;

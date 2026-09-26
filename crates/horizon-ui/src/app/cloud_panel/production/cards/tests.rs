@@ -60,6 +60,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                                 session_restart: None,
                                 timeline: None,
                                 last_self_stop: None,
+                                siblings: None,
                             }),
                             ..Default::default()
                         };
@@ -152,6 +153,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         session_restart: None,
         timeline: None,
         last_self_stop: None,
+        siblings: None,
     };
     store.save(&state).unwrap();
     app.resize_production_cloud(1, (16, 64));

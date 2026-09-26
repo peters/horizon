@@ -57,29 +57,31 @@ pub(super) fn reject_duplicate_workers(root: &Path, deployment: &Deployment) -> 
             continue;
         };
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
-        let other: Deployment = if value.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
-            serde_json::from_value(value).map_err(|_| Error::Json)?
-        } else {
-            let intent =
-                super::read_intent(&entry.path())?.ok_or(Error::Invalid("Unknown neighboring deployment ownership"))?;
-            if intent.complete
-                || transaction::read_optional(
-                    &entry
-                        .path()
-                        .parent()
-                        .ok_or(Error::Invalid("Missing cloud parent"))?
-                        .join(".allocations")
-                        .join(intent.allocation.to_string())
-                        .join("transaction.json"),
-                )?
-                .is_some()
-            {
-                transaction::inspect(&entry.path(), intent.allocation, &intent.identity, intent.controller)?
-                    .deployment()
+        let version = value.get("version").and_then(serde_json::Value::as_u64);
+        let other: Deployment =
+            if version == Some(1) || version == Some(u64::from(crate::cloud_runtime::siblings::RECORD_VERSION)) {
+                serde_json::from_value(value).map_err(|_| Error::Json)?
             } else {
-                super::records(&intent)?.deployment()
-            }
-        };
+                let intent = super::read_intent(&entry.path())?
+                    .ok_or(Error::Invalid("Unknown neighboring deployment ownership"))?;
+                if intent.complete
+                    || transaction::read_optional(
+                        &entry
+                            .path()
+                            .parent()
+                            .ok_or(Error::Invalid("Missing cloud parent"))?
+                            .join(".allocations")
+                            .join(intent.allocation.to_string())
+                            .join("transaction.json"),
+                    )?
+                    .is_some()
+                {
+                    transaction::inspect(&entry.path(), intent.allocation, &intent.identity, intent.controller)?
+                        .deployment()
+                } else {
+                    super::records(&intent)?.deployment()
+                }
+            };
         if !owned.is_disjoint(&worker_ids(&other)) {
             return Err(Error::Invalid(
                 "Another legacy project references the same provider worker",

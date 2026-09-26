@@ -3,11 +3,12 @@
 //! A committed `placement: same_worker` declaration only makes a sibling available. The
 //! machine-local [`Binding`] authorizes it and names its checkout; paths never enter
 //! committed configuration. Resolution pins each chosen sibling's committed revision and
-//! recipe before the image is built.
+//! recipe before the image is built, and the deployment record keeps the result.
 use super::{
     Error, Result,
     command::{Runner, TIMED_OUT},
     repository,
+    state::Deployment,
 };
 use horizon_cloud::{Build, CloudConfig, Profile, companions::Placement};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,10 @@ use std::{
 
 /// Printed by `horizon-worker-check` when the worker lays out sibling checkouts per session.
 pub const CONTRACT: &str = "horizon-siblings-contract=1";
+/// The deployment record version that carries siblings. Earlier Horizon versions refuse it
+/// instead of saving the record back without them. Version 2 of `deployment.json` already
+/// names a migration barrier or a migrated project record.
+pub(super) const RECORD_VERSION: u32 = 3;
 /// The worker's manifest limit.
 const MAX_SIBLINGS: usize = 16;
 
@@ -125,9 +130,32 @@ pub enum SiblingError {
         "Sibling `{0}` recipe does not build on the image before it; declare `ARG HORIZON_BASE` before `FROM ${{HORIZON_BASE}}`"
     )]
     Base(String),
+    #[error(
+        "This cloud's same-worker siblings and their checkouts were pinned when it was first deployed; create a new cloud to change them"
+    )]
+    Rebound,
+    #[error("This cloud's image was built without same-worker siblings; create a new cloud to add them")]
+    Late,
+    #[error("Sibling `{0}` checkout is no longer where it was pinned from; restore it there or create a new cloud")]
+    Moved(String),
+    #[error(
+        "Rebuilding the image of a cloud with same-worker siblings is not supported yet; create a new cloud instead"
+    )]
+    Rebuild,
 }
 
 impl Sibling {
+    /// The pinned checkout, which must still be where it was chosen.
+    /// # Errors
+    /// The checkout was moved or removed.
+    pub fn checkout(&self) -> Result<&Path> {
+        if self.local_repository.is_dir() {
+            Ok(&self.local_repository)
+        } else {
+            Err(SiblingError::Moved(self.alias.clone()).into())
+        }
+    }
+
     /// The recipe committed at the pinned revision, checked against the primary platform.
     /// # Errors
     /// The checkout lost the pinned commit, its configuration, profile or build section is
@@ -141,6 +169,82 @@ impl Sibling {
             primary,
             runner,
         )
+    }
+}
+
+/// Pins the siblings chosen for a deployment whose image is not built yet. A later deploy
+/// without bindings, such as a reconnect, keeps the recorded set; a different choice is
+/// refused, as for a different primary revision. Returns whether `state` changed.
+/// # Errors
+/// Any resolution error, and a choice made after the image was built.
+pub(super) fn bind(bindings: &[Binding], state: &mut Deployment, runner: &Runner<'_>) -> Result<bool> {
+    if bindings.is_empty() {
+        return Ok(false);
+    }
+    if let Some(set) = &state.siblings {
+        return if set.chosen_by(bindings, runner)? {
+            Ok(false)
+        } else {
+            Err(SiblingError::Rebound.into())
+        };
+    }
+    if state.spec.is_some() {
+        return Err(SiblingError::Late.into());
+    }
+    let config = repository::launch::committed_config(&state.repository, &state.revision, runner)?.ok_or(
+        Error::Invalid("The primary revision has no readable .horizon/cloud.yml"),
+    )?;
+    let Some(set) = resolve(&state.repository, &config, &state.profile, bindings, runner)? else {
+        return Ok(false);
+    };
+    state.siblings = Some(set);
+    state.version = RECORD_VERSION;
+    Ok(true)
+}
+
+/// # Errors
+/// A cloud with siblings cannot rebuild its image until rebuilds layer the siblings too.
+pub(super) fn refuse_rebuild(state: &Deployment) -> Result<()> {
+    if state.siblings.is_some() {
+        return Err(SiblingError::Rebuild.into());
+    }
+    Ok(())
+}
+
+impl Set {
+    /// A recorded set names at least one sibling, since one without members decodes as
+    /// none, and no more than a worker accepts.
+    #[must_use]
+    pub fn fits(&self) -> bool {
+        (1..=MAX_SIBLINGS).contains(&self.members.len())
+    }
+
+    /// Whether `bindings` name the recorded aliases, in order, at the same checkouts. A
+    /// binding inside a checkout names its top level, as it did when the set was resolved.
+    fn chosen_by(&self, bindings: &[Binding], runner: &Runner<'_>) -> Result<bool> {
+        if self.members.len() != bindings.len() {
+            return Ok(false);
+        }
+        for (sibling, binding) in self.members.iter().zip(bindings) {
+            if sibling.alias != binding.alias {
+                return Ok(false);
+            }
+            let checkout = top_level(&binding.local_repository, runner)
+                .map_err(|error| refused(error, SiblingError::Origin(binding.alias.clone())))?;
+            if checkout != sibling.local_repository {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Decodes a recorded set, treating one without members as no siblings.
+    /// # Errors
+    /// The value is not a set.
+    pub(super) fn decode<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Option<Self>, D::Error> {
+        Ok(Option::<Self>::deserialize(deserializer)?.filter(|set| !set.members.is_empty()))
     }
 }
 

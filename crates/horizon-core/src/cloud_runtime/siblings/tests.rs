@@ -430,3 +430,158 @@ fn an_origin_with_a_credential_is_refused_without_being_emitted() {
     assert_eq!(listed[0].suggested, None);
     assert!(!output.borrow().contains("synthetic-secret"), "{}", output.borrow());
 }
+
+#[test]
+fn a_deployment_keeps_the_siblings_chosen_before_its_image_was_built() {
+    let fixture = Fixture::new();
+    let app = fixture.path("app");
+    std::fs::write(
+        app.join(".horizon/cloud.yml"),
+        format!("{PROFILES}companions:\n{NATIVE}"),
+    )
+    .unwrap();
+    git(&app, &["commit", "--quiet", "-am", "Declare siblings"]);
+    let profile = &primary_config(NATIVE).profiles["dev"];
+    let mut state: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"siblings","repository":app,"revision":git(&app, &["rev-parse", "HEAD"]),
+        "profile":profile,"stage":"Validate","operation":{"state":"prepared"},"spec":null,"worker":null,"sessions":[]
+    }))
+    .unwrap();
+    let runner = fixture.runner();
+    let chosen = [Binding {
+        alias: "native".into(),
+        local_repository: fixture.path("native-lib"),
+    }];
+    assert!(!bind(&[], &mut state, &runner).unwrap());
+    assert!(state.siblings.is_none());
+    assert!(bind(&chosen, &mut state, &runner).unwrap());
+    assert_eq!(state.version, RECORD_VERSION);
+    let pinned = state.siblings.clone().unwrap();
+    git(
+        &fixture.path("native-lib"),
+        &["commit", "--quiet", "--allow-empty", "-m", "Move on"],
+    );
+    assert!(
+        !bind(&chosen, &mut state, &runner).unwrap(),
+        "a retry keeps the pinned revision"
+    );
+    let inside = [Binding {
+        alias: "native".into(),
+        local_repository: fixture.path("native-lib/.horizon"),
+    }];
+    assert!(
+        !bind(&inside, &mut state, &runner).unwrap(),
+        "a retry from inside the checkout names the same checkout"
+    );
+    assert!(!bind(&[], &mut state, &runner).unwrap(), "a reconnect keeps the set");
+    assert_eq!(state.siblings.as_ref(), Some(&pinned));
+    let moved = [Binding {
+        alias: "native".into(),
+        local_repository: app.clone(),
+    }];
+    assert!(matches!(
+        bind(&moved, &mut state, &runner),
+        Err(Error::Sibling(SiblingError::Rebound))
+    ));
+    assert!(matches!(
+        refuse_rebuild(&state),
+        Err(Error::Sibling(SiblingError::Rebuild))
+    ));
+    state.siblings = None;
+    assert!(refuse_rebuild(&state).is_ok());
+    state.spec = Some(serde_json::from_value(serde_json::json!({
+        "operation_id":"siblings","image_digest":format!("example.invalid/worker@sha256:{}", "a".repeat(64)),
+        "profile":profile,"public_key":"unused","registry_auth_id":null,"gpu_types":[],"cpu_flavors":[],"data_centers":[]
+    }))
+    .unwrap());
+    assert!(matches!(
+        bind(&chosen, &mut state, &runner),
+        Err(Error::Sibling(SiblingError::Late))
+    ));
+    assert!(state.siblings.is_none());
+}
+
+#[test]
+fn project_migration_refuses_a_record_it_would_strip_of_siblings() {
+    // Records with siblings are always the sibling record version, which migration refuses.
+    use crate::cloud_runtime::allocation::{AllocationId, ControllerId, ProjectId, ProjectIdentity, legacy::Records};
+    let mut record = serde_json::json!({
+        "version":1,"cloud_id":"legacy-cloud","repository":"/synthetic/app","revision":"a".repeat(40),
+        "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+        "stage":"Ready","operation":{"state":"prepared"},"spec":null,"worker":null,"sessions":[]
+    });
+    let convert = |record: &serde_json::Value| {
+        let identity = ProjectIdentity::new(
+            ProjectId::generate(),
+            "session".into(),
+            "workspace".into(),
+            "legacy-cloud".into(),
+        )
+        .unwrap();
+        Records::from_legacy(
+            &serde_json::to_vec(record).unwrap(),
+            identity,
+            AllocationId::generate(),
+            ControllerId::generate(),
+        )
+    };
+    assert!(convert(&record).is_ok());
+    record["siblings"] = serde_json::json!({"primary_directory":"app","members":[]});
+    assert!(convert(&record).is_err(), "migration never drops a field it was given");
+    record["version"] = RECORD_VERSION.into();
+    record["siblings"]["members"] = serde_json::json!([{
+        "alias":"native","repository":"example/native-lib","directory":"native-lib","revision":"b".repeat(40),
+        "local_repository":"/synthetic/native-lib","profile":"dev"
+    }]);
+    assert!(convert(&record).is_err());
+}
+
+#[test]
+fn a_moved_checkout_is_named_before_it_is_read() {
+    let fixture = Fixture::new();
+    let mut set = fixture
+        .resolve(&primary_config(NATIVE), "dev", &[("native", "native-lib")])
+        .unwrap();
+    assert!(set.members[0].checkout().is_ok());
+    set.members[0].local_repository = fixture.path("moved");
+    match set.members[0].checkout() {
+        Err(Error::Sibling(refusal)) => assert_eq!(refusal, SiblingError::Moved("native".into())),
+        other => panic!("expected a moved checkout, got {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)] // Project migration needs durable directory updates, which only Unix hosts have.
+fn project_migration_checks_a_sibling_record_neighbor_for_the_same_worker() {
+    use crate::cloud_runtime::{allocation::ControllerId, state::migration::MigratedStore};
+    let parent = tempfile::tempdir().unwrap();
+    let parent = parent.path().canonicalize().unwrap();
+    let record = |cloud: &str, worker: &str| {
+        serde_json::json!({
+            "version":1,"cloud_id":cloud,"repository":"/synthetic/app","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Ready","operation":{"state":"bound","worker_id":worker},"spec":null,"worker":null,"sessions":[]
+        })
+    };
+    let write = |cloud: &str, value: &serde_json::Value| {
+        let root = parent.join(cloud);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("deployment.json"), serde_json::to_vec(value).unwrap()).unwrap();
+        root
+    };
+    let mut neighbor = record("neighbor", "shared-worker");
+    neighbor["version"] = RECORD_VERSION.into();
+    neighbor["siblings"] = serde_json::json!({"primary_directory":"app","members":[{
+        "alias":"native","repository":"example/native-lib","directory":"native-lib","revision":"b".repeat(40),
+        "local_repository":"/synthetic/native-lib","profile":"dev"
+    }]});
+    write("neighbor", &neighbor);
+    let legacy = write("legacy", &record("legacy", "shared-worker"));
+    match MigratedStore::migrate(&legacy, "session", "workspace", ControllerId::generate()) {
+        Err(Error::Invalid(message)) => {
+            assert_eq!(message, "Another legacy project references the same provider worker");
+        }
+        Err(other) => panic!("expected the duplicate worker refusal, got {other:?}"),
+        Ok(_) => panic!("a shared worker must not migrate"),
+    }
+}
