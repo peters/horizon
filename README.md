@@ -527,10 +527,10 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 
 1. **Ctrl+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
 2. Click the address bar, type any site (`https://example.com`, a docs page, or `http://127.0.0.1:3000`), and press Enter.
-3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. Horizon looks for Chrome, Chromium, Edge, Brave, Firefox, and `safaridriver` in the usual places. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
+3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. Horizon looks for Chrome, Chromium, Edge, Brave, Firefox, and `safaridriver` in the usual places. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
 4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
 
-Chromium and Firefox start headless and paint into the panel. Each panel keeps its own profile under `~/.horizon/browser-profiles`. A workspace can open straight onto a URL:
+Chromium and Firefox start headless and paint into the panel. Each panel keeps its own profile under `~/.horizon/browser-profiles`. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
 
 ```yaml
 workspaces:
