@@ -148,6 +148,8 @@ def run(options):
             channel.send_exit_status(result.returncode)
             channel.shutdown_write()
             channel.close()
+            # Let the client consume exit status and disconnect before closing TCP.
+            transport.join(timeout=2)
         except Exception as error:
             errors.append(type(error).__name__ + ": " + str(error))
         finally:
