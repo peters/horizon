@@ -70,12 +70,14 @@ impl Server {
     pub fn ssh_address(&self) -> Option<SocketAddr> {
         Some(SocketAddr::new(IpAddr::V4(self.public_net.ipv4.as_ref()?.ip), 22))
     }
+    /// Only `off` is stopped. Every transition, including `stopping`, is reported
+    /// as not yet settled, so a stop is confirmed only once the server is off.
     #[must_use]
     pub fn status(&self) -> WorkerStatus {
         match self.status.as_str() {
             "running" if self.ssh_address().is_some() => WorkerStatus::Running,
-            "running" | "initializing" | "starting" | "migrating" | "rebuilding" => WorkerStatus::Starting,
-            "stopping" | "off" => WorkerStatus::Stopped,
+            "running" | "initializing" | "starting" | "stopping" | "migrating" | "rebuilding" => WorkerStatus::Starting,
+            "off" => WorkerStatus::Stopped,
             _ => WorkerStatus::Lost,
         }
     }
@@ -109,6 +111,8 @@ impl Hetzner {
     /// The caller must hold its operation lock throughout this call. `persist`
     /// must durably commit each transition before returning. A Requested
     /// operation only reconciles by label; finding nothing never permits a second POST.
+    /// A server the operation owns is bound even when it does not match the request,
+    /// so it can still be deleted, but it is then returned as an error.
     /// # Errors
     /// Reports invalid requests, capacity, ambiguous creation and identity conflicts.
     pub fn ensure_server(
@@ -129,13 +133,13 @@ impl Hetzner {
                     .map_err(|_| CloudError::Invalid("Invalid worker ID"))?;
                 let server = self.inspect_server(id, cancel)?.ok_or(CloudError::WorkerLost)?;
                 server.verify(request.operation_id)?;
-                return Ok(server);
+                return placed(server, request);
             }
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),
             CreateState::Requested => {
                 let server = self.reconcile(request.operation_id, state, cancel, &mut persist)?;
                 progress(Progress::WorkerFound(server.id.to_string()));
-                return Ok(server);
+                return placed(server, request);
             }
             CreateState::Prepared => {}
         }
@@ -147,7 +151,7 @@ impl Hetzner {
             server.verify(request.operation_id)?;
             bind(state, &server, &mut persist)?;
             progress(Progress::WorkerFound(server.id.to_string()));
-            return Ok(server);
+            return placed(server, request);
         }
         let mut refusal = Reason::default();
         for placement in request.placements {
@@ -163,12 +167,12 @@ impl Hetzner {
                     progress(Progress::WorkerFound(created.server.id.to_string()));
                     // The server stays bound if its creation fails later, so it can be deleted.
                     self.wait(&created.action, cancel)?;
-                    return Ok(created.server);
+                    return placed(created.server, request);
                 }
                 Err(failure) if failure.name_taken() => {
                     let server = self.reconcile(request.operation_id, state, cancel, &mut persist)?;
                     progress(Progress::WorkerFound(server.id.to_string()));
-                    return Ok(server);
+                    return placed(server, request);
                 }
                 Err(failure) if failure.capacity() || failure.definite() => {
                     persist(&CreateState::Prepared)?;
@@ -340,6 +344,29 @@ fn validate(request: &ServerRequest<'_>) -> Result<(), CloudError> {
         }
     }
     Ok(())
+}
+
+/// The server satisfies the request: it is in an allowed location and, when the
+/// request has a workspace volume, holds exactly that volume.
+fn placed(server: Server, request: &ServerRequest<'_>) -> Result<Server, CloudError> {
+    if !request
+        .placements
+        .iter()
+        .any(|placement| placement.location == server.location.name)
+    {
+        return Err(CloudError::Invalid(
+            "The operation's server is in a location the request does not allow",
+        ));
+    }
+    if request
+        .volume
+        .is_some_and(|volume| !server.volumes.contains(&volume.id))
+    {
+        return Err(CloudError::Invalid(
+            "The operation's server does not hold its workspace volume",
+        ));
+    }
+    Ok(server)
 }
 
 fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<Value, CloudError> {

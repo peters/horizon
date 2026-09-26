@@ -42,14 +42,16 @@ USED = [
     ("post", "/servers/{id}/actions/shutdown", [], [], "201", prefixed("action", ACTION)),
     ("post", "/servers/{id}/actions/poweroff", [], [], "201", prefixed("action", ACTION)),
     ("get", "/actions/{id}", [], [], "200", prefixed("action", ACTION)),
-    ("get", "/volumes", ["label_selector", "page", "per_page"], [], "200", prefixed("volumes.[]", VOLUME)),
+    ("get", "/volumes", ["label_selector", "page", "per_page"], [], "200",
+     prefixed("volumes.[]", VOLUME) + ["meta.pagination.next_page"]),
     ("post", "/volumes", [], ["name", "size", "location", "format", "labels"], "201",
      prefixed("volume", VOLUME) + prefixed("action", ACTION)),
     ("get", "/volumes/{id}", [], [], "200", prefixed("volume", VOLUME)),
     ("delete", "/volumes/{id}", [], [], None, []),
     ("post", "/volumes/{id}/actions/attach", [], ["server", "automount"], "201", prefixed("action", ACTION)),
     ("post", "/volumes/{id}/actions/detach", [], [], "201", prefixed("action", ACTION)),
-    ("get", "/server_types", ["page", "per_page"], [], "200", prefixed("server_types.[]", SERVER_TYPE)),
+    ("get", "/server_types", ["page", "per_page"], [], "200",
+     prefixed("server_types.[]", SERVER_TYPE) + ["meta.pagination.next_page"]),
     ("get", "/pricing", [], [], "200", PRICING),
 ]
 

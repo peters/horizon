@@ -354,7 +354,7 @@ fn provider_states_map_to_worker_states() {
         ("initializing", WorkerStatus::Starting),
         ("starting", WorkerStatus::Starting),
         ("off", WorkerStatus::Stopped),
-        ("stopping", WorkerStatus::Stopped),
+        ("stopping", WorkerStatus::Starting),
         ("deleting", WorkerStatus::Lost),
         ("unknown", WorkerStatus::Lost),
     ] {
@@ -379,10 +379,12 @@ fn a_placement_error_also_moves_on_and_the_body_attaches_the_volume() {
         location: location.into(),
     });
     let volume: Volume = serde_json::from_value(super::volumes::volume(9, None)).unwrap();
+    let mut holding = created(42);
+    holding["server"]["volumes"] = json!([9]);
     let (hetzner, requests, task) = provider(vec![
         (200, listing("servers", json!([]))),
         (422, error("placement_error", "error during placement")),
-        (201, created(42)),
+        (201, holding),
     ]);
     let request = ServerRequest {
         volume: Some(&volume),
@@ -476,4 +478,45 @@ fn a_server_still_present_after_deletion_stays_bound() {
     ));
     task.join().unwrap();
     assert_eq!(state, CreateState::Bound { worker_id: "42".into() });
+}
+
+#[test]
+fn an_owned_server_in_the_wrong_place_is_bound_but_not_accepted() {
+    let placements = placements();
+    let volume: Volume = serde_json::from_value(super::volumes::volume(9, None)).unwrap();
+    let hel1_only = [placements[0].clone()];
+    let mut elsewhere = server(42);
+    elsewhere["location"]["name"] = json!("fsn1");
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([server(42)]))),
+        (200, listing("servers", json!([elsewhere]))),
+    ]);
+    let cancel = Cancellation::default();
+    let with_volume = ServerRequest {
+        volume: Some(&volume),
+        ..request(&hel1_only)
+    };
+    let mut state = CreateState::Prepared;
+    assert_eq!(
+        hetzner
+            .ensure_server(&with_volume, &mut state, &cancel, |_| Ok(()), |_| {})
+            .unwrap_err()
+            .to_string(),
+        "The operation's server does not hold its workspace volume"
+    );
+    assert_eq!(
+        state,
+        CreateState::Bound { worker_id: "42".into() },
+        "still owned, so it can be deleted"
+    );
+    let mut state = CreateState::Prepared;
+    assert_eq!(
+        hetzner
+            .ensure_server(&request(&hel1_only), &mut state, &cancel, |_| Ok(()), |_| {})
+            .unwrap_err()
+            .to_string(),
+        "The operation's server is in a location the request does not allow"
+    );
+    task.join().unwrap();
+    assert!(posts(&requests).is_empty());
 }
