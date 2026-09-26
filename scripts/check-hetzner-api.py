@@ -9,6 +9,7 @@ Run it before changing the adapter; update USED when the adapter changes.
 """
 
 import json
+import re
 import sys
 import urllib.request
 
@@ -54,6 +55,20 @@ USED = [
      prefixed("server_types.[]", SERVER_TYPE) + ["meta.pagination.next_page"]),
     ("get", "/pricing", [], [], "200", PRICING),
 ]
+
+
+# Error codes the adapter classifies, with the HTTP status Hetzner documents for each.
+ERROR_CODES = {
+    "unauthorized": "401",
+    "resource_limit_exceeded": "403",
+    "maintenance": "403",
+    "not_found": "404",
+    "uniqueness_error": "409",
+    "resource_unavailable": "412",
+    "placement_error": "422",
+}
+# Every failed request is read as {"error": {"code", "message"}}.
+ERROR_ENVELOPE = ["error.code", "error.message"]
 
 
 class Spec:
@@ -118,6 +133,22 @@ class Spec:
         if status:
             schema = operation["responses"][status]["content"]["application/json"]["schema"]
             problems += [f"{name} {status} {f}: {p}" for f in fields for p in self.field(schema, f)]
+        failure = operation.get("responses", {}).get("4xx")
+        if failure is None:
+            problems.append(f"{name}: no documented 4xx error response")
+        else:
+            schema = self.resolve(failure)["content"]["application/json"]["schema"]
+            problems += [f"{name} 4xx {f}: {p}" for f in ERROR_ENVELOPE for p in self.field(schema, f)]
+        return problems
+
+    def error_codes(self):
+        """Problems with the documented status of each error code the adapter classifies."""
+        text = json.dumps(self.document).replace("\\n", "\n")
+        problems = []
+        for code, status in ERROR_CODES.items():
+            documented = set(re.findall(r"\|\s*`(\d{3})`\s*\|\s*`" + re.escape(code) + r"`", text))
+            if status not in documented:
+                problems.append(f"error code '{code}': expected status {status}, documented {sorted(documented) or 'none'}")
         return problems
 
 
@@ -125,7 +156,13 @@ def self_test(spec):
     """The checker must catch the changes that already broke a draft of the adapter."""
     removed = spec.check("get", "/servers/{id}", [], [], "200", ["server.datacenter.location.name"])
     retired = spec.check("get", "/datacenters", [], [], None, [])
-    return [] if removed and retired else ["self-test: known removed or deprecated API was not detected"]
+    saved = dict(ERROR_CODES)
+    ERROR_CODES["resource_unavailable"] = "503"
+    moved = spec.error_codes()
+    ERROR_CODES.clear()
+    ERROR_CODES.update(saved)
+    detected = removed and retired and moved
+    return [] if detected else ["self-test: known removed, deprecated or changed API was not detected"]
 
 
 def main():
@@ -136,7 +173,7 @@ def main():
         with urllib.request.urlopen(SPEC_URL, timeout=60) as response:
             document = json.load(response)
     spec = Spec(document)
-    problems = self_test(spec)
+    problems = self_test(spec) + spec.error_codes()
     for entry in USED:
         problems += spec.check(*entry)
     for problem in problems:
