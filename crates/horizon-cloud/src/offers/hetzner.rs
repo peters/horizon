@@ -61,7 +61,9 @@ fn priced(
     // Every server has a primary IPv4 address; an offer that cannot price it is left out
     // rather than shown as cheaper than it is.
     let ipv4_month = catalog.ipv4_month_eur.get(&offer.location).copied()?;
-    let running_extras = (volume_month + ipv4_month) * hours / MONTH_HOURS;
+    // The volume and address are billed per started hour too, up to their monthly price.
+    let extras_month = volume_month + ipv4_month;
+    let running_extras = compute(extras_month / MONTH_HOURS, extras_month, hours);
     let cpu = if offer.dedicated { "dedicated" } else { "shared" };
     Some(Offer {
         provider: "Hetzner",
@@ -86,7 +88,7 @@ fn priced(
     })
 }
 
-/// Compute billed per started hour, and at most the monthly price for each month.
+/// An amount billed per started hour, and at most the monthly price for each month.
 fn compute(hourly: f64, monthly: f64, hours: f64) -> f64 {
     let months = (hours / MONTH_HOURS).floor();
     let rest = hours - months * MONTH_HOURS;
