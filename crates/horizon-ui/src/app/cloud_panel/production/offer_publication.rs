@@ -1,10 +1,11 @@
 //! Keeps this Horizon's prices on its ready workers, so agents there can rank cloud
 //! offers without the provider account. While any cloud is ready, prices refresh every
-//! 15 minutes and each ready worker gets every fresh list once.
+//! 15 minutes and each ready worker gets every fresh list once, with Hetzner's catalog
+//! when this machine has a Hetzner binding.
 use super::{HorizonApp, Runtime, prices::Fetched};
 use horizon_core::cloud_runtime::{
     Cancellation, Stage,
-    offer_publication::{self, Published, Snapshot, VERSION},
+    offer_publication::{self, HetznerSnapshot, Published, Snapshot, VERSION},
     prices::{Preferences, PriceList},
 };
 use std::{
@@ -22,8 +23,9 @@ const RETRY: Duration = Duration::from_mins(5);
 /// Clouds are checked for workers due prices at most this often while nothing is sent.
 const CHECK_EVERY: Duration = Duration::from_secs(5);
 
-/// Sends a snapshot to the worker of a cloud.
-type Publisher = Arc<dyn Fn(&Path, &str, &Snapshot) -> Result<Published, String> + Send + Sync>;
+/// Sends a snapshot, and Hetzner's catalog when there is one, to the worker of a cloud.
+type Publisher =
+    Arc<dyn Fn(&Path, &str, &Snapshot, Option<&HetznerSnapshot>) -> Result<Published, String> + Send + Sync>;
 
 pub(super) struct State {
     /// Per cloud, the delivery its worker last had.
@@ -45,12 +47,26 @@ impl Default for State {
     }
 }
 
-fn publish_over_ssh(root: &Path, cloud: &str, snapshot: &Snapshot) -> Result<Published, String> {
+fn publish_over_ssh(
+    root: &Path,
+    cloud: &str,
+    snapshot: &Snapshot,
+    hetzner: Option<&HetznerSnapshot>,
+) -> Result<Published, String> {
     // UI tests resolve the developer's real Horizon home; they must never reach a worker.
     if cfg!(test) {
         return Ok(Published::NotReady);
     }
-    offer_publication::publish(root, cloud, snapshot, &Cancellation::default()).map_err(|error| error.to_string())
+    let cancel = Cancellation::default();
+    let published = offer_publication::publish(root, cloud, snapshot, &cancel).map_err(|error| error.to_string())?;
+    if published == Published::Sent
+        && let Some(hetzner) = hetzner
+        && let Err(error) = offer_publication::publish_hetzner(root, cloud, hetzner, &cancel)
+    {
+        // Worker images without Hetzner support refuse it; their price list still arrived.
+        tracing::debug!(%error, "could not send Hetzner prices to a cloud worker");
+    }
+    Ok(published)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +127,7 @@ impl State {
         root: &Path,
         ready: &[(String, String)],
         fetched: &Fetched<(PriceList, Preferences)>,
+        hetzner: Option<HetznerSnapshot>,
         now: Instant,
         ctx: &egui::Context,
     ) {
@@ -132,7 +149,7 @@ impl State {
                 Arc::clone(&self.publisher),
                 root.to_owned(),
                 cloud.clone(),
-                snapshot,
+                (snapshot, hetzner),
                 ctx.clone(),
             ),
             cloud,
@@ -218,6 +235,20 @@ impl HorizonApp {
             ctx.request_repaint_after(Duration::from_secs(30));
             return;
         };
+        // Hetzner's catalog travels with the list, so a running fetch is waited for.
+        if prices.hetzner.pending() {
+            ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+        let hetzner = prices
+            .hetzner
+            .fresh()
+            .and_then(|fetched| Some((fetched.value.clone()?, fetched.at)))
+            .map(|(catalog, at)| HetznerSnapshot {
+                version: VERSION,
+                observed_at_millis: observed_at_millis(at),
+                catalog,
+            });
         // Wake for the next refresh or the earliest recorded retry, whichever comes first.
         let refresh = super::prices::FRESH.saturating_sub(fetched.at.elapsed());
         let retry = publication
@@ -227,7 +258,7 @@ impl HorizonApp {
             .min()
             .map(|at| at.saturating_duration_since(now));
         ctx.request_repaint_after(retry.map_or(refresh, |retry| retry.min(refresh)));
-        publication.step(&root, &ready, fetched, now, ctx);
+        publication.step(&root, &ready, fetched, hetzner, now, ctx);
     }
 }
 
@@ -242,12 +273,12 @@ fn start(
     publisher: Publisher,
     root: PathBuf,
     cloud: String,
-    snapshot: Snapshot,
+    (snapshot, hetzner): (Snapshot, Option<HetznerSnapshot>),
     ctx: egui::Context,
 ) -> Receiver<Result<Published, String>> {
     let (sender, receiver) = channel();
     std::thread::spawn(move || {
-        let _ = sender.send(publisher(&root, &cloud, &snapshot));
+        let _ = sender.send(publisher(&root, &cloud, &snapshot, hetzner.as_ref()));
         ctx.request_repaint();
     });
     receiver
@@ -331,10 +362,15 @@ mod tests {
         let (sent, received) = channel();
         let sent = std::sync::Mutex::new(sent);
         let mut state = State {
-            publisher: Arc::new(move |_: &Path, cloud: &str, snapshot: &Snapshot| {
-                sent.lock().unwrap().send((cloud.to_owned(), snapshot.clone())).unwrap();
-                Ok(Published::Sent)
-            }),
+            publisher: Arc::new(
+                move |_: &Path, cloud: &str, snapshot: &Snapshot, hetzner: Option<&HetznerSnapshot>| {
+                    sent.lock()
+                        .unwrap()
+                        .send((cloud.to_owned(), snapshot.clone(), hetzner.cloned()))
+                        .unwrap();
+                    Ok(Published::Sent)
+                },
+            ),
             ..State::default()
         };
         let list = PriceList {
@@ -355,8 +391,25 @@ mod tests {
         };
         let ready = vec![("a".to_owned(), "w1".to_owned())];
         let ctx = egui::Context::default();
-        state.step(Path::new("/unused"), &ready, &fetched, Instant::now(), &ctx);
-        let (cloud, snapshot) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        let catalog: horizon_core::cloud_runtime::prices::HetznerCatalog = serde_json::from_value(serde_json::json!({
+            "offers": [], "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {}, "ipv4_hour_eur": {}, "regions": {},
+        }))
+        .unwrap();
+        let hetzner = HetznerSnapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            catalog,
+        };
+        state.step(
+            Path::new("/unused"),
+            &ready,
+            &fetched,
+            Some(hetzner.clone()),
+            Instant::now(),
+            &ctx,
+        );
+        let (cloud, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(sent_hetzner, Some(hetzner), "Hetzner's catalog travels with the list");
         assert_eq!(cloud, "a");
         assert_eq!(
             (snapshot.version, snapshot.list, snapshot.preferences),
@@ -372,7 +425,7 @@ mod tests {
         assert_eq!(state.delivered["a"].observed, Some(fetched.at));
         assert!(state.next_check.is_none(), "the next frame checks for more due workers");
         // The worker has this list now, so nothing more is sent.
-        state.step(Path::new("/unused"), &ready, &fetched, Instant::now(), &ctx);
+        state.step(Path::new("/unused"), &ready, &fetched, None, Instant::now(), &ctx);
         assert!(state.job.is_none());
     }
 

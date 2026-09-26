@@ -96,12 +96,14 @@ pub(crate) struct CloudOffersInput {
     pub min_gpu_memory_gb: Option<u16>,
     /// A GPU type ID or name, such as "NVIDIA RTX A5000" or "RTX A5000".
     pub gpu_type: Option<String>,
-    /// Highest acceptable hourly price in US dollars.
+    /// Highest acceptable hourly price, in each offer's own currency: US dollars for
+    /// `RunPod` and euros for Hetzner.
     pub max_hourly: Option<f64>,
     /// Expected running hours for the estimated total, at most a year. One hour when omitted.
     pub hours: Option<f64>,
-    /// Workspace storage in GB priced into the estimate: 10 to 4000 for CPU workers, at
-    /// least 1 for GPU workers, and 20 when omitted.
+    /// Workspace storage in GB priced into the estimate: 10 to 10,240 for CPU workers,
+    /// each provider listing only sizes it holds (`RunPod` up to 4000, Hetzner up to
+    /// 10,240), at least 1 for GPU workers, and 20 when omitted.
     pub storage_gb: Option<u16>,
     /// A region such as "EUROPE" or "North America".
     pub region: Option<String>,

@@ -1,7 +1,7 @@
 //! Sends this Horizon's current prices to its ready workers, so agents there can rank
 //! cloud offers. Only prices travel: the provider account never leaves this computer.
 use super::{Cancellation, Result, companions::transport::Live, settings::Settings};
-pub use horizon_cloud_protocol::offers::{Snapshot, VERSION};
+pub use horizon_cloud_protocol::offers::{HetznerSnapshot, Snapshot, VERSION};
 use std::path::Path;
 
 /// What happened to a snapshot sent to a cloud's worker.
@@ -19,4 +19,18 @@ pub enum Published {
 pub fn publish(root: &Path, cloud: &str, snapshot: &Snapshot, cancel: &Cancellation) -> Result<Published> {
     let settings = Settings::load(&root.join("settings.json"))?;
     Live::new(root, &settings, cancel).send_offers(cloud, snapshot)
+}
+
+/// Sends Hetzner's catalog to the worker of `cloud` when it is ready, beside the price
+/// list [`publish`] sends.
+/// # Errors
+/// As [`publish`], and for worker images without Hetzner offer support.
+pub fn publish_hetzner(
+    root: &Path,
+    cloud: &str,
+    snapshot: &HetznerSnapshot,
+    cancel: &Cancellation,
+) -> Result<Published> {
+    let settings = Settings::load(&root.join("settings.json"))?;
+    Live::new(root, &settings, cancel).send_hetzner_offers(cloud, snapshot)
 }

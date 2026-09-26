@@ -28,6 +28,9 @@ impl HorizonApp {
             return Some(Err(format!("cloud_offers_unavailable: {error}")));
         }
         prices.request_fresh_list(&root, ctx);
+        // Other providers are ranked on their own, in their own currency, and a failed
+        // Hetzner fetch is reported there without taking RunPod's offers down.
+        let other_providers = prices.hetzner.sections(&requirements)?;
         let fetched = prices.fresh_list()?;
         let (list, preferences) = &fetched.value;
         let observed = std::time::SystemTime::now()
@@ -39,6 +42,7 @@ impl HorizonApp {
             "observed_at_millis": observed,
             "observed_seconds_ago": fetched.at.elapsed().as_secs(),
             "offers": offers(list, preferences, &requirements),
+            "other_providers": other_providers,
         })))
     }
 }
@@ -88,6 +92,16 @@ mod tests {
             .answered(list, Preferences::default(), Vec::new());
     }
 
+    fn hetzner_catalog() -> horizon_core::cloud_runtime::prices::HetznerCatalog {
+        serde_json::from_value(serde_json::json!({
+            "offers": [{"server_type": "cx43", "location": "hel1", "cores": 8, "memory_gb": 16.0, "disk_gb": 160,
+                "dedicated": false, "hourly_eur": 0.0256, "monthly_eur": 15.99, "available": false, "recommended": false}],
+            "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5}, "ipv4_hour_eur": {"hel1": 0.0008},
+            "regions": {"hel1": "EUROPE"},
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn agents_get_ranked_offers_from_current_prices_or_a_clear_error() {
         let (temp, mut app) = crate::app::test_support::test_app();
@@ -134,5 +148,35 @@ mod tests {
         let cpu = answer(&mut app, serde_json::json!({"min_vcpu": 8})).unwrap().unwrap();
         assert_eq!(cpu["offers"][0]["vcpu"], 8);
         assert_eq!(cpu["offers"][0]["availability"], "checked_at_creation");
+        assert_eq!(
+            cpu["other_providers"],
+            serde_json::json!([]),
+            "no Hetzner binding in tests"
+        );
+        app.cloud_prototype
+            .production
+            .prices
+            .hetzner
+            .answered(Some(hetzner_catalog()));
+        let both = answer(&mut app, serde_json::json!({"min_vcpu": 8})).unwrap().unwrap();
+        assert_eq!(both["offers"][0]["currency"], "USD");
+        let hetzner = &both["other_providers"][0];
+        assert_eq!(
+            (hetzner["provider"].as_str(), hetzner["currency"].as_str()),
+            (Some("Hetzner"), Some("EUR"))
+        );
+        assert_eq!(hetzner["offers"][0]["id"], "cx43");
+        // A failed Hetzner fetch is reported beside RunPod's offers.
+        app.cloud_prototype
+            .production
+            .prices
+            .hetzner
+            .failed("Missing Hetzner token");
+        let degraded = answer(&mut app, serde_json::json!({"min_vcpu": 8})).unwrap().unwrap();
+        assert_eq!(degraded["offers"][0]["vcpu"], 8);
+        assert_eq!(
+            degraded["other_providers"][0]["error"],
+            "cloud_offers_unavailable: Missing Hetzner token"
+        );
     }
 }
