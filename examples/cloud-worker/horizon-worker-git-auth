@@ -21,6 +21,9 @@ GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_
 GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
                              re.IGNORECASE)
 SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
+API_REPOSITORY = re.compile(r'/?repos/([^/?#\s]+/[^/?#\s]+?)(?:[/?#]|$)')
+POSITIONAL_REPOSITORY_COMMANDS = ('archive', 'clone', 'create', 'delete', 'edit', 'fork',
+                                  'set-default', 'sync', 'unarchive', 'view')
 URL_HOST = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)')
 GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
 TOKEN_VARIABLES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
@@ -209,30 +212,39 @@ def credential_reply(entries, request):
     return ''
 
 
-def repository_requests(argv):
-    """Every repository an argument could name, including after `--` and in short-flag clusters,
-    so gh can never act on a repository other than the one whose token it receives. An argument
-    that selects another host is recorded as None, which refuses injection."""
-    requests = []
+def repository_arguments(argv):
+    """Explicit --repo/-R selections (including after `--` and in short-flag clusters) and the
+    repositories other arguments imply: github.com URLs, `gh repo <command> OWNER/REPO` and
+    `gh api repos/OWNER/REPO/...`. An argument that selects another host implies None."""
+    explicit, implied = [], []
     for index, argument in enumerate(argv):
         following = argv[index + 1] if index + 1 < len(argv) else ''
         short = None if argument.startswith('--') else SHORT_REPOSITORY.fullmatch(argument)
         url = GITHUB_ARGUMENT.match(argument)
+        endpoint = API_REPOSITORY.match(argument) if argv[:1] == ['api'] else None
         if argument == '--repo':
-            requests.append(following)
+            explicit.append(following)
         elif argument.startswith('--repo='):
-            requests.append(argument[len('--repo='):])
+            explicit.append(argument[len('--repo='):])
         elif short:
-            requests.append(short.group(1).removeprefix('=') or following)
+            explicit.append(short.group(1).removeprefix('=') or following)
         elif url:
-            requests.append(url.group(1))
+            implied.append(url.group(1))
+        elif endpoint:
+            # gh fills {owner}/{repo} from GH_REPO, which always matches the injected token.
+            if '{' not in endpoint.group(1):
+                implied.append(endpoint.group(1))
         elif argument == '--hostname' or argument.startswith('--hostname='):
             host = following if argument == '--hostname' else argument[len('--hostname='):]
             if host.lower() not in GITHUB_HOSTS:
-                requests.append(None)
+                implied.append(None)
         elif (other := URL_HOST.match(argument)) and other.group(1).lower() not in GITHUB_HOSTS:
-            requests.append(None)
-    return requests
+            implied.append(None)
+    if argv[:1] == ['repo'] and len(argv) > 1 and argv[1] in POSITIONAL_REPOSITORY_COMMANDS:
+        positional = next((argument for argument in argv[2:] if not argument.startswith('-')), None)
+        if positional is not None and not GITHUB_ARGUMENT.match(positional):
+            implied.append(positional)
+    return explicit, implied
 
 
 def repository_name(requested):
@@ -244,19 +256,14 @@ def repository_name(requested):
     return '/'.join(parts) if len(parts) == 2 and requested.isascii() else None
 
 
-def gh_repository(env, argv):
-    """The repository a gh invocation targets: its arguments, GH_REPO, else the working directory's origin.
-    Conflicting or unreadable requests resolve to no repository."""
-    if env.get('GH_HOST', 'github.com').lower() != 'github.com':
+def agreed(requests):
+    names = [repository_name(requested) for requested in requests]
+    if not names or None in names or len({name.lower() for name in names}) != 1:
         return None
-    requests = repository_requests(argv)
-    if not requests and env.get('GH_REPO') is not None:
-        requests = [env['GH_REPO']]
-    if requests:
-        names = [repository_name(requested) for requested in requests]
-        if None in names or len({name.lower() for name in names}) != 1:
-            return None
-        return names[0]
+    return names[0]
+
+
+def origin_repository(env):
     try:
         origin = subprocess.run(['git', 'remote', 'get-url', 'origin'], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
@@ -264,6 +271,24 @@ def gh_repository(env, argv):
         return None
     match = GITHUB_URL.fullmatch(origin.stdout.decode(errors='replace').strip())
     return match.group(1) if origin.returncode == 0 and match else None
+
+
+def gh_repository(env, argv):
+    """The repository a gh invocation targets: --repo/-R, else GH_REPO, else the working
+    directory's origin, else what the arguments imply. Every implied repository must agree with
+    that choice; conflicts, other hosts and unreadable selections resolve to no repository."""
+    if env.get('GH_HOST', 'github.com').lower() != 'github.com':
+        return None
+    explicit, implied = repository_arguments(argv)
+    if explicit:
+        repository = agreed(explicit)
+    elif env.get('GH_REPO') is not None:
+        repository = agreed([env['GH_REPO']])
+    else:
+        repository = origin_repository(env) or agreed(implied[:1])
+    if repository is None or (implied and agreed([repository, *implied]) is None):
+        return None
+    return repository
 
 
 def gh_environment(loaded, env, argv=()):

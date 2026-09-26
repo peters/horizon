@@ -189,11 +189,13 @@ each target repository's own config, so agent worktrees of that repository commi
 and push as that repository.
 
 Git's helper answers only for the repository path it is asked about, with that
-repository's token. The `gh` wrapper chooses the repository from its arguments
-(`--repo`, `-R` including short-flag clusters, and github.com URLs), then
-`GH_REPO`, then the working directory's `origin`, and injects only that
-repository's token. If the repository cannot be determined, the arguments name
-different repositories, an argument or `GH_HOST` selects another host, or it has
+repository's token. The `gh` wrapper chooses the repository from `--repo`/`-R`
+(including short-flag clusters), then `GH_REPO`, then the working directory's
+`origin`, and injects only that repository's token. Repositories that other
+arguments imply (github.com URLs, `gh repo <command> OWNER/REPO` and
+`gh api repos/OWNER/REPO/...`) must agree with that choice; they select the
+repository only when nothing else does. If the repository cannot be determined,
+the arguments disagree, an argument or `GH_HOST` selects another host, or it has
 no grant, `gh` runs without Horizon credentials (a Horizon token inherited from an
 outer `gh` is removed too) and prints one line on stderr. Package restores that
 call `gh auth token` inside a repository therefore read that repository's own
@@ -202,7 +204,8 @@ that can publish packages. Horizon sends version 2 whenever a cloud has siblings
 even if only the primary has a binding, so ordinary `gh` use in a sibling checkout
 does not pick up the primary's token.
 
-This per-repository selection is routing, not isolation: every process in the
+Free-form input such as GraphQL queries is not inspected. This per-repository
+selection is routing, not isolation: every process in the
 container runs as the same user and can read the credential file, so the
 shared trust boundary described above still applies. Version 1 files keep their
 single-repository behavior. Every install first removes the identities the

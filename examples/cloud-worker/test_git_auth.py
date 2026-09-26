@@ -287,7 +287,6 @@ class GitGrantTests(unittest.TestCase):
         for argv in (['pr', 'list', '-R', 'example/consumer'], ['pr', 'list', '--repo=example/consumer'],
                      ['pr', 'list', '-Rexample/consumer'], ['pr', 'list', '--repo', 'example/consumer'],
                      ['issue', 'view', '1', '-cR', 'example/consumer'], ['pr', 'list', '-R=example/consumer'],
-                     ['pr', 'view', 'https://github.com/example/consumer/pull/1'],
                      ['pr', 'list', '-R', 'Example/Consumer', '--repo', 'example/consumer']):
             env, _ = self.gh({'GH_REPO': 'example/library'}, argv)
             self.assertEqual(env['GH_TOKEN'], self.primary['token'])
@@ -307,6 +306,27 @@ class GitGrantTests(unittest.TestCase):
             env, message = self.gh(extra, argv, cwd=primary)
             self.assertNotIn('GH_TOKEN', env)
             self.assertIn('no Git grant', message)
+
+    def test_gh_arguments_that_imply_a_repository_must_agree_with_the_resolved_one(self):
+        primary = self.bare(auth.GIT_DIR)
+        git('config', 'remote.origin.url', 'https://github.com/example/consumer.git', cwd=primary, env=self.env)
+        for argv in (['pr', 'view', 'https://github.com/example/consumer/pull/1'],
+                     ['repo', 'view', 'example/consumer'], ['api', 'repos/example/consumer/pulls'],
+                     ['api', '/repos/{owner}/{repo}/pulls'], ['repo', 'clone', 'example/consumer', 'a/b/c']):
+            env, _ = self.gh({}, argv, cwd=primary)
+            self.assertEqual(env['GH_TOKEN'], self.primary['token'], argv)
+        for argv in (['repo', 'view', 'example/library'], ['repo', 'clone', 'example/library'],
+                     ['api', 'repos/example/library/contents/x'],
+                     ['pr', 'view', 'https://github.com/example/library/pull/1'],
+                     ['pr', 'create', '--body', 'https://github.com/example/library/pull/3'],
+                     ['repo', 'view', 'library']):
+            env, message = self.gh({}, argv, cwd=primary)
+            self.assertNotIn('GH_TOKEN', env, argv)
+            self.assertIn('no Git grant', message)
+        env, _ = self.gh({}, ['repo', 'clone', 'example/library'], cwd=self.path)
+        self.assertEqual((env['GH_TOKEN'], env['GH_REPO']), (self.sibling['token'], 'example/library'))
+        env, _ = self.gh({'GH_REPO': 'example/library'}, ['pr', 'view', 'https://github.com/example/consumer/pull/1'])
+        self.assertNotIn('GH_TOKEN', env)
 
     def test_gh_keeps_github_api_urls_and_drops_inherited_horizon_tokens(self):
         primary = self.bare(auth.GIT_DIR)
