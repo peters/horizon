@@ -46,7 +46,11 @@ pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetD
     };
     // The workspace volume is kept while the cloud is stopped; the server and its
     // IPv4 address are deleted then.
-    let volume_month = catalog.volume_gb_month_eur * f64::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
+    let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
+    if !crate::hetzner::volumes::SIZE_GB.contains(&storage_gb) {
+        return Vec::new();
+    }
+    let volume_month = catalog.volume_gb_month_eur * f64::from(storage_gb);
     let wanted = requirements.region.as_deref().map(normalize);
     let mut offers: Vec<Offer> = catalog
         .offers

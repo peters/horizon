@@ -192,3 +192,17 @@ fn the_answer_section_names_its_provider_and_currency() {
     assert_eq!(section["deployable"], false);
     assert_eq!(section["offers"][0]["id"], "cx43");
 }
+
+#[test]
+fn each_provider_lists_only_the_workspace_sizes_it_can_hold() {
+    let large = requirements(serde_json::json!({"storage_gb": 5000}));
+    assert!(large.validate().is_ok(), "Hetzner holds up to 10,240 GB");
+    let offers = hetzner(&catalog(), &large);
+    assert!(!offers.is_empty());
+    assert!((offers[0].stopped_monthly - 0.0572 * 5000.0).abs() < 1e-9);
+    assert!(
+        requirements(serde_json::json!({"storage_gb": 10_241}))
+            .validate()
+            .is_err()
+    );
+}

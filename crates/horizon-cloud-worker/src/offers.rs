@@ -199,10 +199,17 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
 /// Offers from providers besides the price list, each in its own currency and never
 /// ranked with another's. Empty when the owning Horizon sent no such catalog.
 fn other_providers(requirements: &Requirements, path: &Path, now: i64) -> Vec<serde_json::Value> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
     let unavailable = |error: String| serde_json::json!({"provider": "Hetzner", "error": error});
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        // No Hetzner binding on the owning Horizon, or no catalog sent yet.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(_) => {
+            return vec![unavailable(
+                "cloud_offers_unavailable: the Hetzner prices on this worker cannot be read".to_owned(),
+            )];
+        }
+    };
     let Ok(snapshot) = decode_hetzner(file) else {
         return vec![unavailable(
             "cloud_offers_unavailable: the Hetzner prices on this worker cannot be read".to_owned(),

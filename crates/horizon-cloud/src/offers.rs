@@ -8,6 +8,9 @@ use crate::runpod::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Workspace storage any provider can hold for a CPU worker; each lists only sizes it
+/// supports.
+const CPU_STORAGE_GB: std::ops::RangeInclusive<u32> = 10..=10_240;
 /// Hours in an average month, for prorating storage over the expected duration.
 const MONTH_HOURS: f64 = 730.0;
 /// `RunPod` bills in US dollars.
@@ -47,8 +50,9 @@ pub struct Requirements {
     /// omitted.
     #[serde(default)]
     pub hours: Option<f64>,
-    /// Workspace storage priced into the estimate: 10 to 4000 GB for CPU workers, at
-    /// least 1 GB for GPU workers, and 20 GB when omitted.
+    /// Workspace storage priced into the estimate, 20 GB when omitted. CPU workers take
+    /// 10 to 10,240 GB: `RunPod` offers up to 4000 GB and Hetzner up to 10,240 GB, so
+    /// each provider lists only what it can hold. GPU workers take at least 1 GB.
     #[serde(default)]
     pub storage_gb: Option<u16>,
     /// A provider region, such as `EUROPE` or `North America`.
@@ -89,9 +93,9 @@ impl Requirements {
         }
         if self
             .storage_gb
-            .is_some_and(|size| size == 0 || (!self.gpu && !REQUEST_SIZE_GB.contains(&u32::from(size))))
+            .is_some_and(|size| size == 0 || (!self.gpu && !CPU_STORAGE_GB.contains(&u32::from(size))))
         {
-            return Err("Workspace storage must be 10 to 4000 GB for CPU workers and at least 1 GB for GPU workers");
+            return Err("Workspace storage must be 10 to 10240 GB for CPU workers and at least 1 GB for GPU workers");
         }
         if self.limit.is_some_and(|limit| !(1..=MAX_LIMIT).contains(&limit)) {
             return Err("The limit must be 1 to 50");
@@ -195,7 +199,11 @@ fn cpu_offers(
     (hours, storage_gb): (f64, u32),
 ) -> Vec<Offer> {
     // A CPU worker keeps its workspace on a network volume, so the region needs a data
-    // center that can hold one. Exact CPU stock is checked when the cloud is created.
+    // center that can hold one of this size. Exact CPU stock is checked when the cloud
+    // is created.
+    if !REQUEST_SIZE_GB.contains(&storage_gb) {
+        return Vec::new();
+    }
     let hosts_workspace = list
         .data_centers
         .iter()

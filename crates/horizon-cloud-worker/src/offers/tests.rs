@@ -236,6 +236,25 @@ fn hetzner_offers_come_beside_the_price_list_in_their_own_currency() {
             .unwrap()
             .contains("cannot be read")
     );
+    // A catalog that cannot be opened is reported, not taken for a missing one.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner, NOW).unwrap();
+        std::fs::set_permissions(&hetzner, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads any file, so the check only applies to other users.
+        if std::fs::File::open(&hetzner).is_err() {
+            let unreadable = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+            assert!(
+                unreadable["other_providers"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("cannot be read")
+            );
+        }
+        std::fs::set_permissions(&hetzner, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&hetzner, b"{").unwrap();
+    }
     // Invalid input is refused and leaves the stored catalog alone.
     assert!(publish_hetzner(&b"{\"version\":1}"[..], &hetzner, NOW).is_err());
     assert_eq!(std::fs::read(&hetzner).unwrap(), b"{");
