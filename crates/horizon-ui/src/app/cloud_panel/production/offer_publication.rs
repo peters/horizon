@@ -155,11 +155,12 @@ fn due<'a>(
     })
 }
 
-/// `(cloud, worker)` when the runtime's worker is ready for prices.
+/// `(cloud, worker)` when the runtime's worker is ready for prices, by the same rule the
+/// SSH transport applies, and no newer stage says otherwise.
 fn ready_worker(runtime: &Runtime) -> Option<(String, String)> {
     let state = runtime.state.as_ref()?;
     let worker = state.worker.as_ref()?;
-    (state.stage == Stage::Ready && !state.stop_requested && worker.desired_status == "RUNNING")
+    (state.worker_ready() && runtime.stage.is_none_or(|stage| stage == Stage::Ready))
         .then(|| (state.cloud_id.clone(), worker.id.clone()))
 }
 

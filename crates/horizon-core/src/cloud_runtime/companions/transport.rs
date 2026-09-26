@@ -1,5 +1,5 @@
 use super::super::{
-    Cancellation, CreateState, Stage,
+    Cancellation, Stage,
     command::Runner,
     settings::Settings,
     ssh::Connection,
@@ -146,18 +146,12 @@ impl Transport for Live<'_> {
             return Ok(None);
         };
         let Some(worker) = &state.worker else { return Ok(None) };
-        let bound = matches!(&state.operation, CreateState::Bound { worker_id } if worker_id == &worker.id);
         let status = if state.stop_requested
             || matches!(state.stage, Stage::Stopped | Stage::Stopping)
             || worker.desired_status == "EXITED"
         {
             Status::Stopped
-        } else if bound
-            && state.stage == Stage::Ready
-            && state.source_ready
-            && worker.desired_status == "RUNNING"
-            && worker.ssh_address().is_some()
-        {
+        } else if state.worker_ready() {
             Status::Ready
         } else {
             Status::Unavailable
