@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        mpsc::{Receiver, channel},
+        mpsc::{Receiver, TryRecvError, channel},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -73,8 +73,11 @@ impl State {
     /// Collects a finished send; the next frame then checks for more due workers.
     fn poll(&mut self, now: Instant) {
         let Some(job) = &self.job else { return };
-        let Ok(outcome) = job.receiver.try_recv() else {
-            return;
+        let outcome = match job.receiver.try_recv() {
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Empty) => return,
+            // A send that ended without an answer failed; it is retried like any other.
+            Err(TryRecvError::Disconnected) => Err("the price send ended without an answer".to_owned()),
         };
         self.next_check = None;
         let delivery = match outcome {
@@ -387,6 +390,19 @@ mod tests {
         });
         sender.send(Err("unreachable".into())).unwrap();
         state.poll(now);
+        // A send that ends without an answer is a failure too, never a stuck job.
+        let expected = state.delivered["a"].clone();
+        let (sender, receiver) = channel();
+        drop(sender);
+        state.job = Some(Job {
+            cloud: "a".into(),
+            worker: "w1".into(),
+            observed: now,
+            receiver,
+        });
+        state.poll(now);
+        assert!(state.job.is_none());
+        assert_eq!(state.delivered["a"], expected);
         assert!(state.job.is_none());
         assert_eq!(
             state.delivered["a"],
