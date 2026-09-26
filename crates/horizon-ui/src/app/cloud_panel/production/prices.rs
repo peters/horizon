@@ -131,16 +131,23 @@ impl State {
         self.list_job.is_some()
     }
 
-    /// Stock of `size` for `profile`: `None` while it is being checked.
+    /// Stock of `size` for `profile`: `None` while it is being checked, including when
+    /// its last answer has expired, so old stock is never shown as current.
     pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<SizeAvailability, &str>> {
         let sized = Profile {
             cpu: size.0,
             memory_gb: size.1,
             ..profile.clone()
         };
-        self.sizes
-            .get(&key(&sized))
-            .map(|size| size.as_ref().map(|size| size.value).map_err(String::as_str))
+        let key = key(&sized);
+        if self.size_jobs.contains_key(&key) {
+            return None;
+        }
+        match self.sizes.get(&key)? {
+            Ok(fetched) if stale(fetched.at) => None,
+            Ok(fetched) => Some(Ok(fetched.value)),
+            Err(error) => Some(Err(error.as_str())),
+        }
     }
 }
 
@@ -351,5 +358,28 @@ mod tests {
         assert_eq!(state.list.as_ref().map(|list| list.at), Some(answered));
         let size = state.sizes.get(&key(&profile())).unwrap().as_ref().unwrap();
         assert_eq!(size.at, answered);
+    }
+
+    #[test]
+    fn expired_or_rechecking_stock_reads_as_checking() {
+        let profile = profile();
+        let mut state = State::default();
+        state.sizes.insert(key(&profile), Ok(now(AVAILABLE)));
+        assert_eq!(state.size(&profile, (8, 32)), Some(Ok(AVAILABLE)));
+        let (_tx, rx) = channel();
+        state.size_jobs.insert(key(&profile), rx);
+        assert_eq!(state.size(&profile, (8, 32)), None);
+        state.size_jobs.clear();
+        // A runner booted less than 15 minutes ago cannot express an expired instant.
+        if let Some(expired) = Instant::now().checked_sub(FRESH) {
+            state.sizes.insert(
+                key(&profile),
+                Ok(Fetched {
+                    value: AVAILABLE,
+                    at: expired,
+                }),
+            );
+            assert_eq!(state.size(&profile, (8, 32)), None);
+        }
     }
 }
