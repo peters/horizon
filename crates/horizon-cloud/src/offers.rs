@@ -356,7 +356,7 @@ fn level(availability: Availability) -> &'static str {
 }
 
 mod hetzner;
-pub use hetzner::hetzner;
+pub use hetzner::{hetzner, hetzner_section};
 
 #[cfg(test)]
 mod tests;
