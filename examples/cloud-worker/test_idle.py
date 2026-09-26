@@ -24,6 +24,12 @@ class IdleTests(unittest.TestCase):
         self.assertFalse(activity.observe(2700, output=1450, cpu=70.3))
         self.assertTrue(activity.observe(2720, output=1450, cpu=70.3))
 
+    def test_work_in_the_first_poll_interval_counts(self):
+        activity = Activity(600, now=0, cpu=5.0)
+        self.assertFalse(activity.observe(60, output=None, cpu=65.0))
+        self.assertFalse(activity.observe(659, output=None, cpu=65.0))
+        self.assertTrue(activity.observe(660, output=None, cpu=65.0))
+
     def test_missing_signals_count_as_idle_from_start(self):
         activity = Activity(600, now=1000)
         self.assertFalse(activity.observe(1599, output=None, cpu=None))
@@ -61,7 +67,7 @@ class IdleTests(unittest.TestCase):
         # Idle from 600 s: the first request, then the next only after the 600 s retry gap.
         self.assertEqual(stop.call_count, 2)
         self.assertEqual(set(sleeps), {60})
-        self.assertEqual(len(samples), 12)
+        self.assertEqual(len(samples), 13)
 
     def test_invalid_settings_stay_passive_instead_of_ending_the_worker(self):
         for environment in [{'HORIZON_IDLE_STOP_MINUTES': '5'},

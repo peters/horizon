@@ -42,10 +42,11 @@ def cpu_seconds(path=CPU_STAT):
 
 
 class Activity:
-    def __init__(self, idle_seconds, now):
+    def __init__(self, idle_seconds, now, cpu=None):
         self.idle_seconds = idle_seconds
         self.last_active = now
-        self.last_cpu = None
+        # A baseline at start lets work during the first poll interval count.
+        self.last_cpu = cpu
         self.last_sample = now
 
     def observe(self, now, output, cpu):
@@ -91,7 +92,7 @@ def main():
     pod_id, key = os.environ.get('RUNPOD_POD_ID'), os.environ.get('RUNPOD_API_KEY')
     if not pod_id or not key:
         passive('the provider supplied no worker credential')
-    activity = Activity(minutes * 60, time.time())
+    activity = Activity(minutes * 60, time.time(), cpu_seconds())
     next_request = 0
     while True:
         # Activity is sampled every poll; only the provider request waits between retries.
