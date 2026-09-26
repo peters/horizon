@@ -2,8 +2,9 @@
 
 Hetzner is being added as a second provider for CPU clouds (#972). This page
 covers what is configurable today. Deployment on Hetzner is not wired yet: a
-cloud whose profile names `hetzner` is validated and recorded, and deploying it
-fails with "Hetzner clouds cannot be deployed yet" before anything is created.
+profile that names `hetzner` is accepted configuration, the New cloud dialog
+does not offer it, and preparing or deploying it fails with "Hetzner clouds
+cannot be deployed yet" before any cloud state is created.
 
 ## Profile
 
@@ -47,6 +48,10 @@ without it are read and written exactly as before.
   cannot add a location the settings do not allow; a cloud placed only in
   locations the settings do not allow is refused rather than moved.
 
-Horizon targets the current Hetzner Cloud API as described by
-<https://docs.hetzner.cloud/cloud.spec.json>. `scripts/check-hetzner-api.py`
-checks every operation and field Horizon uses against that spec.
+Horizon targets the Hetzner Cloud API `v1` as described by its OpenAPI spec,
+<https://docs.hetzner.cloud/cloud.spec.json>, and the changelog feed,
+<https://docs.hetzner.cloud/changelog/feed.json>. Last checked on 2026-09-26
+against the spec published on 2026-09-23 (info.version 1.0.0; newest changelog
+entry 2026-09-23). `scripts/check-hetzner-api.py` checks every operation and
+field Horizon uses against the live spec; run it before changing the Hetzner
+integration.

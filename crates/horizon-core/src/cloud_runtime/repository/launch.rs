@@ -39,7 +39,7 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
 
 /// The profiles the New cloud dialog can create. Its prices, credential checks and
 /// sizing are `RunPod`'s, so Hetzner profiles stay out of it until the dialog knows
-/// Hetzner; they deploy through the deployment coordinator directly.
+/// Hetzner. The deployment coordinator refuses them too until Hetzner deploys.
 fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
     config
         .profiles
