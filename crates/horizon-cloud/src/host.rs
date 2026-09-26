@@ -117,7 +117,7 @@ impl Plan {
     }
 
     fn validate(&self) -> Result<(), CloudError> {
-        if !valid_image(&self.image) || !self.image.contains("@sha256:") {
+        if !valid_image(&self.image) || !valid_digest_reference(&self.image) {
             return Err(CloudError::Invalid("Host image must be an immutable image digest"));
         }
         if !self
@@ -172,6 +172,51 @@ fn valid_variable(name: &str) -> bool {
         .is_some_and(|first| first.is_ascii_uppercase() || first == b'_')
         && bytes.all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
         && name.len() <= 128
+}
+
+/// `[host[:port]/]path[:tag]@sha256:<64 hex>`, as Docker parses it, so a plan never
+/// renders a reference every boot would fail to pull.
+fn valid_digest_reference(image: &str) -> bool {
+    let Some((name, digest)) = image.split_once('@') else {
+        return false;
+    };
+    let digest_valid = digest
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    let mut components: Vec<&str> = name.split('/').collect();
+    let Some(last) = components.pop() else {
+        return false;
+    };
+    let (last, tag) = match last.split_once(':') {
+        Some((last, tag)) => (last, Some(tag)),
+        None => (last, None),
+    };
+    let tag_valid = tag.is_none_or(|tag| {
+        (1..=128).contains(&tag.len())
+            && !tag.starts_with(['.', '-'])
+            && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+    });
+    let host = components
+        .first()
+        .filter(|first| components.len() > 1 || first.contains(['.', ':']) || **first == "localhost")
+        .copied();
+    let paths_valid = components
+        .iter()
+        .skip(usize::from(host.is_some()))
+        .chain(std::iter::once(&last))
+        .all(|component| valid_path_component(component));
+    digest_valid && tag_valid && paths_valid && host.is_none_or(valid_authority)
+}
+
+fn valid_path_component(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    !bytes.is_empty()
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && component
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+        && !component.contains("..")
 }
 
 /// `host[:port]`: dot-separated DNS labels and an optional port from 1 to 65535.

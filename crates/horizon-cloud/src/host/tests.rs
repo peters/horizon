@@ -228,3 +228,34 @@ fn docker_hub_logins_use_the_legacy_index_key() {
     let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
     assert!(registry["auths"]["registry.example"].is_object());
 }
+
+#[test]
+fn only_well_formed_digest_references_are_accepted() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    for valid in [
+        format!("registry.example/worker@{digest}"),
+        format!("registry.example:5000/team/worker@{digest}"),
+        format!("worker@{digest}"),
+        format!("library/worker:1.2_rc-3@{digest}"),
+        format!("localhost/worker@{digest}"),
+    ] {
+        assert!(valid_digest_reference(&valid), "{valid}");
+    }
+    for invalid in [
+        format!("registry.example/worker@@{digest}"),
+        format!("registry.example//worker@{digest}"),
+        format!("registry.example/worker/@{digest}"),
+        format!("registry.example/Worker@{digest}"),
+        format!("registry.example/-worker@{digest}"),
+        format!("registry.example/wor..ker@{digest}"),
+        format!("registry.example/worker:@{digest}"),
+        format!("registry.example/worker:-tag@{digest}"),
+        format!("registry.example:x/worker@{digest}"),
+        format!("registry.example/worker@sha256:{}", "A".repeat(64)),
+        format!("registry.example/worker@sha256:{}", "a".repeat(63)),
+        format!("registry.example/worker@sha512:{}", "a".repeat(64)),
+        "registry.example/worker".to_owned(),
+    ] {
+        assert!(!valid_digest_reference(&invalid), "{invalid}");
+    }
+}
