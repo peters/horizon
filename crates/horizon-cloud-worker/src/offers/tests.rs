@@ -56,7 +56,7 @@ fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
     let missing = answer_from(&agent, &path, HOST, NOW);
     assert!(error(&missing).starts_with("cloud_offers_unavailable: no prices"));
 
-    publish(snapshot(u64::try_from(NOW).unwrap() - 60_000).as_slice(), &path).unwrap();
+    publish(snapshot(u64::try_from(NOW).unwrap() - 60_000).as_slice(), &path, NOW).unwrap();
     let answered = answer_from(&agent, &path, HOST, NOW);
     let offers = answered.offers.unwrap();
     assert_eq!(offers["provider"], "RunPod");
@@ -65,17 +65,37 @@ fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
     assert_eq!(offers["offers"][0]["regions_in_stock"][0], "EUROPE");
 
     // Prices the owning Horizon stopped refreshing are not offered as current.
-    publish(snapshot(u64::try_from(NOW).unwrap() - 21 * 60_000).as_slice(), &path).unwrap();
+    publish(
+        snapshot(u64::try_from(NOW).unwrap() - 21 * 60_000).as_slice(),
+        &path,
+        NOW,
+    )
+    .unwrap();
     let stale = answer_from(&agent, &path, HOST, NOW);
     assert!(error(&stale).starts_with("cloud_offers_stale: the newest prices on this worker are 21 minutes old"));
     assert!(stale.offers.is_none());
+    // Prices dated beyond the tolerated clock difference could never go stale.
+    let ahead = u64::try_from(NOW).unwrap() + 6 * 60_000;
+    assert!(publish(snapshot(ahead).as_slice(), &path, NOW).is_err());
+    publish(snapshot(ahead).as_slice(), &path, NOW + 60_000).unwrap();
+    let future = answer_from(&agent, &path, HOST, NOW);
+    assert!(error(&future).ends_with("dated in the future"));
+    // A few minutes of difference is tolerated.
+    publish(
+        snapshot(u64::try_from(NOW).unwrap() + 4 * 60_000).as_slice(),
+        &path,
+        NOW,
+    )
+    .unwrap();
+    let skewed = answer_from(&agent, &path, HOST, NOW);
+    assert_eq!(skewed.offers.unwrap()["observed_seconds_ago"], 0);
 }
 
 #[test]
 fn only_this_workers_agents_with_valid_requirements_get_offers() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("cloud-offers.json");
-    publish(snapshot(u64::try_from(NOW).unwrap()).as_slice(), &path).unwrap();
+    publish(snapshot(u64::try_from(NOW).unwrap()).as_slice(), &path, NOW).unwrap();
     let valid = serde_json::json!({"min_vcpu": 4});
     for refused in [
         request("horizon:agent", HOST, &valid),
@@ -100,7 +120,7 @@ fn only_this_workers_agents_with_valid_requirements_get_offers() {
 fn only_a_valid_snapshot_replaces_the_prices() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("cloud-offers.json");
-    publish(snapshot(1).as_slice(), &path).unwrap();
+    publish(snapshot(1).as_slice(), &path, NOW).unwrap();
     let mut other_version: serde_json::Value = serde_json::from_slice(&snapshot(2)).unwrap();
     other_version["version"] = 2.into();
     let rejected = [
@@ -109,7 +129,7 @@ fn only_a_valid_snapshot_replaces_the_prices() {
         vec![b' '; MAX_BYTES + 1],
     ];
     for bytes in rejected {
-        assert!(publish(bytes.as_slice(), &path).is_err());
+        assert!(publish(bytes.as_slice(), &path, NOW).is_err());
     }
     let kept = decode(std::fs::File::open(&path).unwrap()).unwrap();
     assert_eq!(kept.observed_at_millis, 1);

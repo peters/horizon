@@ -18,18 +18,30 @@ const SNAPSHOT: &str = "/run/sshd/cloud-offers.json";
 /// The owning Horizon sends prices at most 15 minutes old while it runs; older ones are
 /// not offered as current.
 const MAX_AGE_MILLIS: u64 = 20 * 60 * 1000;
+/// Clock difference tolerated between this worker and the owning Horizon. Prices dated
+/// later than that could never go stale, so they are refused.
+const MAX_SKEW_MILLIS: u64 = 5 * 60 * 1000;
 
 pub(crate) fn run() -> io::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
     match args.as_slice() {
-        [command] if command == "publish" => publish(io::stdin().lock(), Path::new(SNAPSHOT)),
+        [command] if command == "publish" => publish(io::stdin().lock(), Path::new(SNAPSHOT), manifest::now_millis()),
         _ => Err(io::Error::other("Usage: horizon-cloud-worker cloud-offers publish")),
     }
 }
 
-fn publish(reader: impl Read, path: &Path) -> io::Result<()> {
+fn publish(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
     let snapshot = decode(reader)?;
+    if future(&snapshot, now) {
+        return Err(io::Error::other(
+            "Cloud offer prices are dated in the future; check this computer's and the worker's clocks",
+        ));
+    }
     super::companions::files::write(path, &serde_json::to_vec(&snapshot)?)
+}
+
+fn future(snapshot: &Snapshot, now: i64) -> bool {
+    snapshot.observed_at_millis > u64::try_from(now).unwrap_or(0).saturating_add(MAX_SKEW_MILLIS)
 }
 
 fn decode(reader: impl Read) -> io::Result<Snapshot> {
@@ -80,6 +92,9 @@ fn ranked(request: &UsageRequest, path: &Path, host: &str, now: i64) -> Result<s
     })?;
     let snapshot =
         decode(file).map_err(|_| "cloud_offers_unavailable: the prices on this worker cannot be read".to_owned())?;
+    if future(&snapshot, now) {
+        return Err("cloud_offers_unavailable: the prices on this worker are dated in the future".to_owned());
+    }
     let age = u64::try_from(now)
         .unwrap_or(0)
         .saturating_sub(snapshot.observed_at_millis);
