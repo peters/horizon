@@ -19,6 +19,7 @@ DESKTOP = {'xvfb', 'openbox', 'vnc'}
 SERVICES = {'control', 'sshd'}
 # Started only when the worker was created with an idle period.
 OPTIONAL = {'idle'}
+DESKTOP_UNHEALTHY_SECONDS = 10
 
 
 def process_identity(pid, allow_exited=False):
@@ -219,13 +220,27 @@ class Supervisor:
         if os.environ.get('HORIZON_IDLE_STOP_MINUTES'):
             self.start('idle', ['horizon-worker-idle'])
         self.publish(desktop)
+        self.monitor(desktop)
+
+    def monitor(self, desktop):
         next_desktop_check = 0
+        unhealthy_since = None
         while True:
             self.assert_running(configuring=True)
             if desktop and time.monotonic() >= next_desktop_check:
-                if not desktop_ready(self.children['openbox'].pid):
+                started = time.monotonic()
+                healthy = desktop_ready(self.children['openbox'].pid)
+                self.assert_running(configuring=True)
+                observed = time.monotonic()
+                if healthy:
+                    unhealthy_since = None
+                elif unhealthy_since is None:
+                    unhealthy_since = started
+                # A transient probe timeout must not destroy healthy sessions.
+                # Probe duration and polling delay can extend the grace period.
+                if unhealthy_since is not None and observed - unhealthy_since >= DESKTOP_UNHEALTHY_SECONDS:
                     raise ValueError('Worker window manager stopped responding')
-                next_desktop_check = time.monotonic() + 1
+                next_desktop_check = observed + 1
             time.sleep(.2)
 
     def close(self):

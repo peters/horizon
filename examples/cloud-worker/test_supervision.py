@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -201,6 +202,77 @@ class SupervisionTests(unittest.TestCase):
             self.assertTrue(DESKTOP_READY(42))
         for call in calls.call_args_list:
             self.assertEqual(call.args[0][1:3], ['-display', ':99'])
+
+    def monitor_desktop(self, outcomes, on_probe=None):
+        clock = [0.0]
+        calls = []
+        def probe(_pid):
+            delay, healthy = outcomes[len(calls)]
+            calls.append(clock[0])
+            clock[0] += delay
+            if on_probe:
+                on_probe()
+            return healthy
+        def sleep(seconds):
+            clock[0] += seconds
+            if len(calls) == len(outcomes):
+                self.supervisor.stopping = True
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+        with mock.patch.dict(Supervisor.monitor.__globals__, time=fake_time, desktop_ready=probe):
+            with self.assertRaises(ValueError) as error:
+                self.supervisor.monitor(True)
+        return str(error.exception), calls, clock[0]
+
+    def test_single_probe_timeout_can_recover_without_replacing_services(self):
+        self.ready(True)
+        identities = dict(self.supervisor.identities)
+        error, calls, _ = self.monitor_desktop([(2, False), (0, True)])
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.supervisor.identities, identities)
+        for name, child in self.supervisor.children.items():
+            self.assertIsNone(child.poll())
+            self.assertEqual(MODULE['process_identity'](child.pid), identities[name])
+
+    def test_persistently_unhealthy_desktop_exhausts_bounded_grace(self):
+        for duration in (2, 6):
+            with self.subTest(probe_seconds=duration):
+                self.ready(True)
+                error, calls, elapsed = self.monitor_desktop([(duration, False)] * 20)
+                self.assertEqual(error, 'Worker window manager stopped responding')
+                self.assertGreater(len(calls), 1)
+                self.assertGreaterEqual(elapsed, 10)
+                self.assertLessEqual(elapsed, 10 + 1.2 + duration)
+                self.supervisor.close()
+
+    def test_readiness_check_rejects_unhealthy_desktop_without_runtime_grace(self):
+        self.ready(True)
+        with mock.patch.dict(CHECK.__globals__, desktop_ready=lambda _pid: False):
+            with self.assertRaisesRegex(ValueError, 'Worker window manager is not ready'):
+                CHECK(self.root, self.root)
+
+    def test_successful_probe_resets_continuous_failure_window(self):
+        self.ready(True)
+        error, calls, elapsed = self.monitor_desktop(
+            [(2, False), (2, False), (0, True), (2, False), (2, False), (0, True)])
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 6)
+        self.assertGreater(elapsed, 10)
+
+    def test_exited_service_bypasses_desktop_grace(self):
+        self.ready(True)
+        child = self.supervisor.children['openbox']
+        error, calls, _ = self.monitor_desktop([(2, False)] * 20,
+                                             on_probe=lambda: self.stop_unreaped(child))
+        self.assertEqual(error, 'Required worker service exited: openbox')
+        self.assertEqual(len(calls), 1)
+
+    def test_shutdown_during_probe_bypasses_desktop_grace(self):
+        self.ready(True)
+        error, calls, _ = self.monitor_desktop([(2, False)] * 20,
+                                             on_probe=lambda: setattr(self.supervisor, 'stopping', True))
+        self.assertEqual(error, 'Worker shutdown requested')
+        self.assertEqual(len(calls), 1)
 
     def test_shutdown_invalidates_readiness_and_stops_owned_descendants(self):
         child_pid = self.root / 'descendant'
