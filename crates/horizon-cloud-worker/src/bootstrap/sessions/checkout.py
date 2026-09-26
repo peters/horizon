@@ -242,7 +242,10 @@ def prepare_repository(item):
     directory(metadata)
     for name in ("objects", "objects/pack", "objects/info", "refs", "refs/heads", "refs/heads/projects", f"refs/heads/projects/{PROJECT}", "lfs", "lfs/objects"):
         directory(metadata / name)
-    content(metadata / "config", b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfilemode = true\n")
+    content(metadata / "config", (
+        b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfilemode = true\n"
+        b"[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n"
+        b"\tprocess = git-lfs filter-process\n\trequired = true\n"))
     content(metadata / "HEAD", f"ref: refs/heads/projects/{PROJECT}/{SESSION}\n".encode())
     content(metadata / f"refs/heads/projects/{PROJECT}" / SESSION, (revision + "\n").encode())
     for source in object_files:

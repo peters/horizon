@@ -692,8 +692,13 @@ index, configuration and recursive-submodule repositories, with branch
 `projects/<project UUID>/<session UUID>`. Committed symlinks are retained without
 following them during materialization. Verified LFS content and cache copies are
 local; hooks, filters, network and inherited Git configuration are disabled while
-preparing. No hardlinks or writable alternates connect sessions to immutable
+preparing. Each writable repository has required local LFS filters so subsequent
+Git additions store pointers without relying on a shared home or global config. No hardlinks or writable alternates connect sessions to immutable
 source. This does not install packages, supply credentials or start an agent.
+
+Preparation retains verified source handles and exact control-record bytes;
+storage checkpoints check these anchors without rehashing source. Full content
+checks run at bounded points before and after materialization.
 
 An external record anchors the session and fixed child-directory identities.
 Initial content is synchronized and recorded before exclusive publication. A

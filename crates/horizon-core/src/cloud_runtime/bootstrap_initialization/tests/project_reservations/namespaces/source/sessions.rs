@@ -237,6 +237,12 @@ fn verify_checkout(checkout: &Path, session: &Session, request: &Reservation, na
         fs::read_to_string(checkout.join("asset")).unwrap(),
         format!("large asset {name}")
     );
+    // This fixture clears global Git configuration: LFS safety must be local.
+    fs::write(checkout.join("asset"), "changed LFS asset").unwrap();
+    git(checkout, &["add", "asset"]);
+    let pointer = git(checkout, &["show", ":asset"]);
+    assert!(pointer.starts_with("version https://git-lfs.github.com/spec/v1\noid sha256:"));
+    assert!(pointer.ends_with("size 17"));
     assert_eq!(
         git(checkout, &["symbolic-ref", "HEAD"]),
         format!("refs/heads/projects/{}/{}", request.project.project_id(), session.id)

@@ -18,6 +18,7 @@ pub(super) fn ensure(
     manifest: &Manifest,
     receipt: &Receipt,
     session_id: horizon_cloud_protocol::membership::SessionId,
+    source: &source::Published,
     deadline: Instant,
     checkpoint: &mut impl FnMut(Boundary) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -34,20 +35,28 @@ pub(super) fn ensure(
         return Err(invalid());
     }
     let parent = namespaces::child(store, manifest, &receipt.identity, "worktrees")?;
-    let source = source::published(store, manifest, &receipt.identity, deadline)?;
+    source.verify_content(store, manifest, deadline)?;
     let verify = || {
         source::remaining(deadline)?;
         same(
             &parent,
             &namespaces::child(store, manifest, &receipt.identity, "worktrees")?,
         )?;
-        same(
-            &source,
-            &source::published(store, manifest, &receipt.identity, deadline)?,
-        )
+        source.verify(store, manifest, deadline)
     };
     let mut tree = Tree::open(store, &parent, receipt, session_id, true, deadline)?.ok_or_else(invalid)?;
-    tree.prepare(&source, &session.revision, checkpoint, &verify)?;
+    tree.prepare(
+        &source.file,
+        &session.revision,
+        &mut |boundary| {
+            checkpoint(boundary)?;
+            if boundary == Boundary::Built {
+                source.verify_content(store, manifest, deadline)?;
+            }
+            Ok(())
+        },
+        &verify,
+    )?;
     verify()
 }
 

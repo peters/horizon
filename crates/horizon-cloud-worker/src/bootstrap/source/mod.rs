@@ -22,6 +22,8 @@ use std::{
 };
 pub(super) use storage::Boundary;
 use storage::Tree;
+#[cfg(test)]
+pub(super) use storage::content_checks;
 
 pub(super) fn run(upload: bool) -> io::Result<()> {
     if std::env::args().len() != 2 {
@@ -229,20 +231,67 @@ pub(super) fn require_settled_until(
     Ok(())
 }
 
-/// Retain an inode handle to verified immutable source for session materialization.
+/// One authenticated source observation retained through session preparation.
+/// Boundary checks compare descriptor/control identities; content is hashed only
+/// at explicit materialization boundaries, not at every durability checkpoint.
+pub(super) struct Published {
+    pub file: File,
+    parent: File,
+    receipt: Receipt,
+    descriptor: Source,
+    record: Vec<u8>,
+}
+
 pub(super) fn published(
     store: &Store,
     manifest: &Manifest,
     identity: &ProjectIdentity,
     deadline: Instant,
-) -> io::Result<File> {
-    require_settled_until(store, manifest, identity, deadline)?;
+) -> io::Result<Published> {
     let (receipt, descriptor) = entries(manifest)?
         .into_iter()
         .find(|(receipt, _)| &receipt.identity == identity)
         .ok_or_else(invalid)?;
     let parent = namespaces::repository(store, manifest, identity)?;
-    Tree::open(store, &parent, receipt, &descriptor, false, deadline)?
-        .ok_or_else(invalid)?
-        .published()
+    let tree = Tree::open(store, &parent, receipt, &descriptor, false, deadline)?.ok_or_else(invalid)?;
+    tree.validate(true)?;
+    let file = tree.published_anchor()?;
+    let record = tree.record().to_vec();
+    let published = Published {
+        file,
+        parent,
+        receipt: receipt.clone(),
+        descriptor,
+        record,
+    };
+    published.verify(store, manifest, deadline)?;
+    Ok(published)
+}
+
+impl Published {
+    pub fn verify(&self, store: &Store, manifest: &Manifest, deadline: Instant) -> io::Result<()> {
+        remaining(deadline)?;
+        super::store::same(
+            &self.parent,
+            &namespaces::repository(store, manifest, &self.receipt.identity)?,
+        )?;
+        let tree =
+            Tree::open(store, &self.parent, &self.receipt, &self.descriptor, false, deadline)?.ok_or_else(invalid)?;
+        super::store::same(&self.file, &tree.published_anchor()?)?;
+        if store
+            .read(&format!("source-{}.json", self.receipt.identity.project_id()))?
+            .as_deref()
+            != Some(&self.record)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+    pub fn verify_content(&self, store: &Store, manifest: &Manifest, deadline: Instant) -> io::Result<()> {
+        self.verify(store, manifest, deadline)?;
+        Tree::open(store, &self.parent, &self.receipt, &self.descriptor, false, deadline)?
+            .ok_or_else(invalid)?
+            .validate(true)?;
+        self.verify(store, manifest, deadline)
+    }
 }

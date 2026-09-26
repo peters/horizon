@@ -111,14 +111,22 @@ pub(super) fn mutate_with(
     if reserved_operation(&bootstrap, receipt.operation) {
         return Err(invalid());
     }
+    let prepared_source = if matches!(payload, Request::PrepareSession { .. }) {
+        Some(source::published(store, &manifest, &receipt.identity, source_deadline)?)
+    } else {
+        None
+    };
     let verify = || -> io::Result<()> {
         if matches!(payload, Request::Cancel {}) {
             namespaces::require_settled(store, &manifest, &receipt.identity)?;
             source::require_settled(store, &manifest, &receipt.identity)?;
             sessions::validate(store, &manifest, Some(&receipt.identity))?;
         }
-        if matches!(payload, Request::ReserveSession { .. } | Request::PrepareSession { .. }) {
+        if matches!(payload, Request::ReserveSession { .. }) {
             source::require_settled_until(store, &manifest, &receipt.identity, source_deadline)?;
+        }
+        if let Some(source) = &prepared_source {
+            source.verify(store, &manifest, source_deadline)?;
         }
         bootstrap.validate(store, runtime)?;
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
@@ -175,7 +183,15 @@ pub(super) fn mutate_with(
         })?;
     }
     if let Request::PrepareSession { session_id } = payload {
-        sessions::ensure(store, &next, &receipt, session_id, source_deadline, &mut |_| verify())?;
+        sessions::ensure(
+            store,
+            &next,
+            &receipt,
+            session_id,
+            prepared_source.as_ref().ok_or_else(invalid)?,
+            source_deadline,
+            &mut |_| verify(),
+        )?;
     }
     verify()?;
     if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {

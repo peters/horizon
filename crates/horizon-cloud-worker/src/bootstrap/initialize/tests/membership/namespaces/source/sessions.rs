@@ -3,6 +3,18 @@ use crate::bootstrap::sessions::{self, Boundary as SessionBoundary};
 use horizon_cloud_protocol::membership::SessionId;
 use std::time::Instant;
 
+fn ensure(
+    store: &Store,
+    manifest: &Manifest,
+    receipt: &Receipt,
+    session_id: SessionId,
+    deadline: Instant,
+    checkpoint: &mut impl FnMut(SessionBoundary) -> io::Result<()>,
+) -> io::Result<()> {
+    let source = source::published(store, manifest, &receipt.identity, deadline)?;
+    sessions::ensure(store, manifest, receipt, session_id, &source, deadline, checkpoint)
+}
+
 fn reserved_session() -> (Fixture, ProjectIdentity, SessionId) {
     let f = Fixture::ready();
     let (descriptor, bytes) = bytes();
@@ -110,7 +122,7 @@ fn publication_boundary_recovery_never_resets_exposed_data_or_restarts_uncertain
             let store = Store::open(&f.root()).unwrap();
             let manifest = f.manifest();
             assert!(
-                sessions::ensure(
+                ensure(
                     &store,
                     &manifest,
                     &receipt,
@@ -193,7 +205,7 @@ fn changed_ready_staging_and_replaced_child_roots_are_never_acknowledged() {
             let receipt = anchored_intent(&f, &request);
             let store = Store::open(&f.root()).unwrap();
             assert!(
-                sessions::ensure(
+                ensure(
                     &store,
                     &f.manifest(),
                     &receipt,
@@ -241,10 +253,10 @@ fn ready_retry_sync_failure_prevents_exposure_and_expired_deadlines_do_no_work()
     let receipt = anchored_intent(&f, &request);
     let store = Store::open(&f.root()).unwrap();
     let manifest = f.manifest();
-    assert!(sessions::ensure(&store, &manifest, &receipt, session_id, Instant::now(), &mut |_| Ok(())).is_err());
+    assert!(ensure(&store, &manifest, &receipt, session_id, Instant::now(), &mut |_| Ok(())).is_err());
     assert!(!f.root().join(format!(".session-{session_id}.next")).exists());
     assert!(
-        sessions::ensure(
+        ensure(
             &store,
             &manifest,
             &receipt,
@@ -262,7 +274,7 @@ fn ready_retry_sync_failure_prevents_exposure_and_expired_deadlines_do_no_work()
     );
     store.fail_sync_after(0);
     assert!(
-        sessions::ensure(
+        ensure(
             &store,
             &manifest,
             &receipt,
@@ -298,4 +310,44 @@ fn helper_enforces_budgets_before_writes_and_never_follows_committed_links() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+}
+
+#[test]
+fn content_hashing_is_bounded_and_changed_source_before_publication_is_rejected() {
+    let (f, project, session_id) = reserved_session();
+    let request = prepare_request(&f, &project, session_id);
+    let before = source::content_checks();
+    f.change(&request).unwrap();
+    assert!(
+        source::content_checks() - before <= 3,
+        "full source hashing must not run at each storage checkpoint"
+    );
+    let before = source::content_checks();
+    f.change(&request).unwrap();
+    assert!(source::content_checks() - before <= 2);
+
+    let (f, project, session_id) = reserved_session();
+    let request = prepare_request(&f, &project, session_id);
+    let receipt = anchored_intent(&f, &request);
+    let store = Store::open(&f.root()).unwrap();
+    assert!(
+        ensure(
+            &store,
+            &f.manifest(),
+            &receipt,
+            session_id,
+            Instant::now() + Source::WORKER_TIMEOUT,
+            &mut |at| {
+                if at == SessionBoundary::Built {
+                    fs::write(
+                        project_root(&f, &project).join("repository/source/repository.git/HEAD"),
+                        "changed immutable source",
+                    )?;
+                }
+                Ok(())
+            }
+        )
+        .is_err()
+    );
+    assert!(!root(&f, &project, session_id).exists());
 }
