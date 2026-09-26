@@ -562,7 +562,8 @@ recipe, drives the journaled switch of its bound worker, settles an interrupted 
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
 SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
 tested offline.
-`deployment` itself only orders the steps of one deploy; each step has a leaf.
+`deployment` orchestrates one deploy and still owns registry binding, provisioning,
+ready bookkeeping, initial state and replacement commits; the other steps have leaves.
 `sizing` applies CPU, memory and machine settings until a worker is requested;
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
