@@ -15,6 +15,7 @@ use std::{
 };
 
 pub mod catalog;
+pub mod keys;
 pub mod servers;
 pub mod volumes;
 
@@ -176,6 +177,18 @@ impl Hetzner {
 
     /// Waits until `action` finishes. A failed action is a refusal carrying its message.
     pub(crate) fn wait(&self, action: &Action, cancel: &Cancellation) -> Result<(), CloudError> {
+        self.wait_until(action, cancel, || Ok(false))
+    }
+
+    /// As `wait`, but also finished once `settled` observes the intended result.
+    /// Hetzner can report an action as running long after its effect is visible,
+    /// such as a deleted server that already answers 404.
+    pub(crate) fn wait_until(
+        &self,
+        action: &Action,
+        cancel: &Cancellation,
+        mut settled: impl FnMut() -> Result<bool, CloudError>,
+    ) -> Result<(), CloudError> {
         let deadline = Instant::now() + ACTION_TIMEOUT;
         let mut current = action.clone();
         loop {
@@ -190,6 +203,9 @@ impl Hetzner {
                 }
                 "running" => {}
                 _ => return Err(CloudError::InvalidResponse),
+            }
+            if settled()? {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(CloudError::Invalid(
