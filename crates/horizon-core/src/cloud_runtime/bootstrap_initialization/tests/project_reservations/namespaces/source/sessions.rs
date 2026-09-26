@@ -1,3 +1,4 @@
+mod attachment;
 use super::*;
 
 fn runtime_observation(worker: &Manifest, bytes: &[u8]) -> Vec<u8> {
@@ -482,6 +483,7 @@ pub(super) fn runtime_smoke(
     );
     fs::remove_file(&managed).unwrap();
     f = runtime_start(f, target, runner, &sessions);
+    let mut attachment = attachment::begin(&f, target, directory, &sessions);
     let lengths: Vec<_> = sessions
         .iter()
         .map(|(_, _, root)| fs::metadata(root.join("checkout/runtime-progress")).unwrap().len())
@@ -499,20 +501,33 @@ pub(super) fn runtime_smoke(
         );
         assert_eq!(fs::read(root.join("home/config")).unwrap(), b"retained home");
     }
-    fs::write(sessions[0].2.join("home/exit-agent"), "exit").unwrap();
-    runtime_wait(
-        &f,
-        target,
-        runner,
-        &sessions[0].0,
-        sessions[0].1,
-        &Status::Exited { code: Some(17) },
-    );
+    if std::env::var_os("HORIZON_ATTACHMENT_RACE").is_none() {
+        fs::write(sessions[0].2.join("home/exit-agent"), "exit").unwrap();
+        runtime_wait(
+            &f,
+            target,
+            runner,
+            &sessions[0].0,
+            sessions[0].1,
+            &Status::Exited { code: Some(17) },
+        );
+    }
+    if let Some(fixture) = &mut attachment {
+        fixture.exited(directory);
+    }
     let descendant = sessions[0].2.join("home/descendant-progress");
     let before = fs::metadata(&descendant).unwrap().len();
     std::thread::sleep(Duration::from_millis(150));
     assert!(fs::metadata(&descendant).unwrap().len() > before);
     runtime_stops(&mut f, target, runner, directory, &sessions);
+    if let Some(fixture) = attachment {
+        fixture.finish(directory);
+        assert!(
+            !fs::read_to_string(sessions[0].2.join("home/terminal-input"))
+                .unwrap()
+                .contains("must-not-cross-stop-gate")
+        );
+    }
     let (project, id, root) = &sessions[5];
     fs::write(
         root.join("home/lose-runtime"),
@@ -608,6 +623,9 @@ fn runtime_stops(
         started.recv_timeout(Duration::from_secs(5)).unwrap();
         for (index, (project, id, root)) in sessions[..5].iter().enumerate() {
             runtime_stop_request(f, target, runner, project, *id);
+            if index == 0 && std::env::var_os("HORIZON_ATTACHMENT_RACE").is_some() {
+                fs::write(directory.join("control/attachment-continue"), "stop committed").unwrap();
+            }
             runtime_wait(f, target, runner, project, *id, &Status::Stopped);
             if index == 0 {
                 assert!(

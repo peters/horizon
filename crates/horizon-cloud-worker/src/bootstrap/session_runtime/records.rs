@@ -12,6 +12,18 @@ use std::io;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct Endpoint {
+    pub server: Identity,
+    pub socket_device: u64,
+    pub socket_inode: u64,
+    pub directory_device: u64,
+    pub directory_inode: u64,
+    pub pane: i32,
+    pub pane_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Record {
     pub version: u32,
     pub launch: Receipt,
@@ -20,6 +32,8 @@ pub(super) struct Record {
     pub supervisor: Option<Identity>,
     pub agent: Option<Identity>,
     pub status: Status,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<Endpoint>,
 }
 impl Record {
     pub fn name(id: SessionId) -> String {

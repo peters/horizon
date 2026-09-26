@@ -7,7 +7,7 @@ use super::{
         store::{Store, invalid, open_directory, same},
     },
     policy, process,
-    records::Record,
+    records::{Endpoint, Record},
 };
 use horizon_cloud_protocol::{
     OperationId, ProjectIdentity,
@@ -155,6 +155,7 @@ fn supervise(permit: &Permit, own: &process::Identity) -> io::Result<()> {
     let roots = sessions::published(&store, &manifest, &permit.project, permit.session)?;
     let runtime = Terminal::start(&store, permit, roots)?;
     let (agent, status) = runtime.observe()?;
+    record.endpoint = Some(runtime.endpoint()?);
     record.agent = agent;
     record.status = status;
     record.save(&store, Some(&bytes))?;
@@ -176,7 +177,7 @@ fn supervise(permit: &Permit, own: &process::Identity) -> io::Result<()> {
             return record.save(&store, Some(&bytes));
         }
         let (agent, status) = runtime.observe()?;
-        if record.agent != agent {
+        if record.agent != agent || record.endpoint.as_ref() != Some(&runtime.endpoint()?) {
             return Err(invalid());
         }
         if status != record.status {
@@ -199,6 +200,7 @@ struct Terminal {
     socket_device: u64,
     agent: Option<process::Identity>,
     pane: i32,
+    pane_id: String,
 }
 fn descriptor(file: &File) -> PathBuf {
     PathBuf::from(format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd()))
@@ -220,7 +222,7 @@ impl Terminal {
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::RUSR | Mode::WUSR,
         )?);
-        config.write_all(b"set-option -g exit-empty off\nset-option -g remain-on-exit on\nset-option -g history-limit 2000\nset-option -g default-shell /bin/sh\nset-option -g update-environment ''\n")?;
+        config.write_all(b"set-option -g exit-empty off\nset-option -g remain-on-exit on\nset-option -g history-limit 2000\nset-option -g default-shell /bin/sh\nset-option -g update-environment ''\nset-option -g status off\nset-option -g window-size smallest\nset-option -g prefix None\nset-option -g prefix2 None\nunbind-key -a\nunbind-key -a -T root\n")?;
         config.sync_all()?;
         directory.sync_all()?;
         parent.sync_all()?;
@@ -250,6 +252,7 @@ impl Terminal {
         let identity = capture_agent(server, agent, &status, process::Identity::capture, || {
             parse(&Self::query(&socket, &session)?)
         })?;
+        let pane_id = Self::pane_id(&socket, &session)?;
         Ok(Self {
             directory,
             parent,
@@ -261,8 +264,39 @@ impl Terminal {
             socket_inode: metadata.ino(),
             socket_device: metadata.dev(),
             agent: identity,
+            pane_id,
             pane: agent,
         })
+    }
+    fn endpoint(&self) -> io::Result<Endpoint> {
+        let metadata = self.directory.metadata()?;
+        Ok(Endpoint {
+            server: self.server.clone(),
+            socket_device: self.socket_device,
+            socket_inode: self.socket_inode,
+            directory_device: metadata.dev(),
+            directory_inode: metadata.ino(),
+            pane: self.pane,
+            pane_id: self.pane_id.clone(),
+        })
+    }
+    fn pane_id(socket: &Path, session: &str) -> io::Result<String> {
+        let bytes = policy::execute(
+            Command::new(policy::TMUX)
+                .arg("-N")
+                .arg("-S")
+                .arg(socket)
+                .args(["display-message", "-p", "-t", &format!("={session}:0.0"), "#{pane_id}"])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", "/nonexistent"),
+            Duration::from_secs(2),
+        )?;
+        let value = std::str::from_utf8(&bytes).map_err(|_| invalid())?.trim();
+        if !super::attachment::valid_pane(value) {
+            return Err(invalid());
+        }
+        Ok(value.into())
     }
     fn query(socket: &Path, session: &str) -> io::Result<Vec<u8>> {
         policy::execute(

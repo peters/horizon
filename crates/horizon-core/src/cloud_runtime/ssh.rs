@@ -82,6 +82,12 @@ impl Connection {
         command.args(self.arguments("yes")).arg(remote);
         command
     }
+    pub(super) fn pinned_attachment(&self, encoded: &str) -> Vec<String> {
+        let mut arguments = self.arguments("yes");
+        arguments.insert(0, "-tt".into());
+        arguments.push(format!("horizon-cloud-worker attach-project-session {encoded}"));
+        arguments
+    }
     /// # Errors
     /// Checks the worker runtime through the existing OpenSSH transport and reports
     /// the optional features of the image that is actually running.

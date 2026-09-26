@@ -19,8 +19,10 @@ import subprocess
 import threading
 import tempfile
 import time
+import traceback
 
 import paramiko
+import cloud_attachment_smoke as attachment
 
 LIMIT = 64 * 1024
 COMMANDS = {b"horizon-cloud-worker " + name: name.decode() for name in
@@ -30,13 +32,17 @@ COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 # This service keeps one task-owned PID namespace alive across SSH commands.
 # Killing its bubblewrap parent tears down every fixture-only descendant.
 NAMESPACE_SERVICE = r'''
-import base64,json,os,signal,socket,subprocess,tempfile,uuid
+import base64,json,os,signal,socket,subprocess,tempfile,uuid,threading
+import sys;sys.path.insert(0,'/control')
+from cloud_attachment_smoke import serve_terminal
 s=socket.socket(socket.AF_UNIX);s.bind('/control/service.sock');s.listen(4)
 while True:
  c,_=s.accept()
  try:
   line=c.makefile('rb').readline(24*1024*1024)
   q=json.loads(line)
+  if q['command']=='attach-project-session':
+   threading.Thread(target=serve_terminal,args=(c,q)).start();continue
   args=['/worker',q['command']]
   if q['command']=='start-project-session' and os.path.exists('/control/stop-race'):
    args=['/usr/bin/strace','-D','-ff','-o','/control/race-trace','-e','inject=setsid:signal=SIGSTOP']+args
@@ -86,7 +92,13 @@ if os.fork()==0:
 os.close(ready_write)
 assert select.select([ready_read],[],[],5)[0] and os.read(ready_read,1)==b'1'
 os.close(ready_read)
+print('interactive-ready',flush=True)
 while True:
+ if select.select([sys.stdin],[],[],0)[0]:
+  line=sys.stdin.readline().strip()
+  with (home/'terminal-input').open('a') as f:f.write(line+'\n')
+  print('echo:'+line,flush=True)
+ (home/'terminal-size').write_text(str(os.get_terminal_size().columns)+' '+str(os.get_terminal_size().lines))
  with (work/'runtime-progress').open('a') as f:f.write('x')
  if (home/'exit-agent').exists():sys.exit(17)
  if (home/'lose-runtime').exists():
@@ -104,6 +116,7 @@ class RuntimeNamespace:
         self.root, self.process = root, None
         self.lock = threading.Lock()
         (root / "control").mkdir(mode=0o700)
+        shutil.copy2(Path(__file__).with_name("cloud_attachment_smoke.py"), root / "control/cloud_attachment_smoke.py")
         (root / "managed").mkdir(mode=0o700)
 
     def exchange(self, arguments, command, request, environment):
@@ -154,14 +167,14 @@ def run(options):
     shutil.copy2(sshd, root / "bin/sshd")
     os.link(root / "worker", root / "bin/horizon-cloud-worker")
     image_capabilities = {}
-    if options.scenario in ["sources", "runtime"]:
+    if options.scenario in ["sources", "runtime", "attachment"]:
         # Version-only probes qualify reservation routing, never agent startup.
         image_capabilities["agents"] = ["codex", "claude"]
         for name in image_capabilities["agents"]:
             probe = root / "bin" / name
             probe.write_text('#!/usr/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 64\nprintf "%s\\n" "fixture agent 1.0.0"\n')
             probe.chmod(0o700)
-        if options.scenario == "runtime":
+        if options.scenario in ["runtime", "attachment"]:
             (root / "bin/claude").write_text(SYNTHETIC_AGENT)
     (root / "image-capabilities.json").write_text(json.dumps(image_capabilities))
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "recovery-fixture", "-f", str(root / "id_ed25519")], check=True)
@@ -177,7 +190,7 @@ def run(options):
     sessions = []
     errors = []
     children = []
-    namespace = RuntimeNamespace(root) if options.scenario == "runtime" else None
+    namespace = RuntimeNamespace(root) if options.scenario in ["runtime", "attachment"] else None
     if namespace and options.runtime_fault == "stop-race":
         (root / "control/stop-race").touch()
 
@@ -185,6 +198,8 @@ def run(options):
         def __init__(self):
             self.executing = threading.Event()
             self.command = None
+            self.dimensions = (90, 25)
+            self.encoded = None
 
         def get_allowed_auths(self, username):
             return "publickey"
@@ -197,7 +212,23 @@ def run(options):
         def check_channel_request(self, kind, chanid):
             return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
+        def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+            self.dimensions = (width, height)
+            return namespace is not None
+
+        def check_channel_window_change_request(self, channel, width, height, pixelwidth, pixelheight):
+            self.dimensions = (width, height)
+            return True
+
         def check_channel_exec_request(self, channel, command):
+            prefix = b"horizon-cloud-worker attach-project-session "
+            if command.startswith(prefix) and namespace is not None:
+                encoded = command[len(prefix):]
+                if not encoded or len(encoded) > 32768 or any(c not in b"0123456789abcdef" for c in encoded):
+                    return False
+                self.command, self.encoded = "attach-project-session", encoded.decode()
+                self.executing.set()
+                return True
             if command not in COMMANDS:
                 return False
             self.command = COMMANDS[command]
@@ -250,6 +281,13 @@ def run(options):
             if channel is None or not server.executing.wait(10):
                 raise RuntimeError("No allowed SSH command received")
             channel.settimeout(10)
+            if server.encoded is not None:
+                code = attachment.forward(channel, root, server.encoded, lambda: server.dimensions)
+                sessions.append({"command":server.command,"exit_code":code,"worker_sha256":worker_hash})
+                if not channel.closed:
+                    channel.send_exit_status(code if code >= 0 else 0)
+                    channel.close()
+                return
             with tempfile.TemporaryFile() as request:
                 request_hash = hashlib.sha256()
                 length = 0
@@ -279,6 +317,8 @@ def run(options):
             transport.join(timeout=2)
         except Exception as error:
             errors.append(type(error).__name__ + ": " + str(error))
+            with (root / "fixture-errors.log").open("a") as log:
+                log.write(traceback.format_exc())
         finally:
             transport.close()
             sock.close()
@@ -316,14 +356,19 @@ def run(options):
         if namespace is not None:
             environment["HORIZON_RUNTIME_SMOKE"] = "1"
             environment["HORIZON_RUNTIME_FAULT"] = options.runtime_fault
+            if options.scenario == "attachment":
+                environment["HORIZON_ATTACHMENT_SMOKE"] = "1"
+                if options.attachment_race:
+                    environment["HORIZON_ATTACHMENT_RACE"] = "1"
         test_name = {"initialization": "native_ssh_worker_initialization",
                      "reservations": "native_ssh_project_reservations",
                      "host-reservations": "native_ssh_host_reservation_recovery",
                      "sources": "native_ssh_project_sources",
                      "runtime": "native_ssh_project_sources",
+                     "attachment": "native_ssh_project_sources",
                      "namespaces": "native_ssh_project_namespaces"}[options.scenario]
         with open(root / "test.log", "w") as output:
-            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=600 if options.scenario == "runtime" else 300).returncode
+            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=600 if options.scenario in ["runtime", "attachment"] else 300).returncode
     except (subprocess.TimeoutExpired, OSError) as error:
         errors.append(type(error).__name__ + ": " + str(error))
     finally:
@@ -340,7 +385,7 @@ def run(options):
     report = {"worker_sha256": worker_hash, "test_exit": test_exit, "same_host_key": len(set(host_keys)) == 1, "sessions": sessions, "errors": errors, "threads_stopped": not thread.is_alive() and all(not child.is_alive() for child in children), "namespace_stopped": namespace is None or namespace.process is None or namespace.process.poll() is not None}
     (root / "ssh-report.json").write_text(json.dumps(report, indent=2))
     assert test_exit == 0 and not errors and report["threads_stopped"] and report["namespace_stopped"], "Inspect private test.log and ssh-report.json"
-    if options.scenario == "runtime":
+    if options.scenario in ["runtime", "attachment"]:
         assert report["same_host_key"]
         expected_starts = 1 if options.runtime_fault in ["stop-race", "early-exit"] else 6
         assert len({s["request_sha256"] for s in sessions if s["command"] == "start-project-session"}) == expected_starts
@@ -371,7 +416,8 @@ def run(options):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources", "runtime"], default="initialization")
+    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources", "runtime", "attachment"], default="initialization")
+    parser.add_argument("--attachment-race", action="store_true", help="Pause attachment after connecting, then commit stop before opening its terminal gate")
     parser.add_argument("--runtime-fault", choices=["supervisor", "server", "socket", "stop-race", "early-exit"], default="supervisor")
     parser.add_argument("--worker", required=True)
     parser.add_argument("--evidence", required=True)

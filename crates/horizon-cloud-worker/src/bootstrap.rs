@@ -23,6 +23,18 @@ mod source;
 mod store;
 use std::io;
 
+pub(super) fn session_attachment(child: bool) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        session_runtime::attachment::run(child)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = child;
+        Err(io::Error::other("Session attachment requires a qualified Linux worker"))
+    }
+}
+
 pub(super) fn session_runtime(supervise: bool) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {

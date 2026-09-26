@@ -782,8 +782,9 @@ is not launch authority. The separate process lifecycle follows below.
 Linux workers accept signed `start-project-session` and `stop-project-session`
 mutations, plus fresh signed `inspect-project-session` requests. Owning-host APIs
 are `project_reservations::{start_session,stop_session,inspect_session}`. The
-project remains `importing`: this slice does not expose public UI/CLI/MCP project
-admission, interactive attachment, credentials or tool grants.
+project remains `importing`. The separate signed attachment transport is described
+below; public UI/CLI/MCP project admission, credentials and tool grants remain
+subsequent work.
 
 A start requires a prepared session, the reserved agent permission, no application
 ports, and no desktop, browser or external-browser grants. The initial fixed
@@ -837,3 +838,42 @@ its remaining descendants. Separate installed-agent policy probes use no credent
 or inference and disable networking; offline interactive startup may exit before
 authentication. Neither those probes nor synthetic process tests qualify
 live-provider execution, authenticated inference or physical power-loss behavior.
+
+### Signed attachment to an existing session
+
+`attach-project-session <authorization>` is an internal Linux worker transport.
+The owning host selects a session with `project_reservations::prepare_attachment`
+and calls its `transport` method immediately before an SSH PTY launcher. Retain
+the returned `SessionTransport` until SSH exits: it owns private copies of the
+verified key and known-host pin. Release the host `Owner` before waiting on the
+interactive process so another operation can inspect or stop it. Never log or
+persist transport arguments in panels or ordinary diagnostics. Authorization is
+bounded lowercase hex, separate from terminal input, and binds the controller,
+allocation startup, worker, project, session, exact launch and current revision.
+Pending host mutations block new attachment until resolved.
+
+The worker requires the supervisor-published server process, socket, directory
+and unique pane identities. Older runtime records without an endpoint binding
+remain inspectable/stoppable but cannot attach. Only running or retained exited
+sessions with an intact supervisor qualify. The verified upstream Unix connection
+is retained across the handoff; it is never reconnected by pathname. A fixed
+`tmux -N` child connects through an authenticated private proxy and receives only
+an intermediary PTY. Both directions to the real SSH terminal remain gated until
+peer authentication and a final signed state check ordered with stop. The relay
+holds no allocation lock and bounds each direction to 64 KiB and 16 ancillary
+descriptors. Managed terminal bindings cannot create, split or respawn panes.
+
+Disconnect detaches without stopping the agent. Reconnect preserves processes,
+checkout edits and private home data. Multiple clients may attach concurrently;
+tmux selects the smallest client terminal size. Explicit stop closes attachments
+and never relaunches. This internal transport does not expose public UI/CLI/MCP
+project admission, grant credentials, or complete shared-worker delivery.
+
+The `attachment` scenario in `scripts/cloud-initialization-smoke.py` exercises real
+SSH with private PTYs and synthetic interactive agents, alongside the runtime
+baseline. Live-provider execution, authenticated inference and physical power-loss
+behavior require separate qualification.
+
+Add `--attachment-race` to pause the attachment process after its upstream
+connection, commit a terminal stop, and verify that the final authorization gate
+rejects queued input. This isolated fault lane requires `strace`.

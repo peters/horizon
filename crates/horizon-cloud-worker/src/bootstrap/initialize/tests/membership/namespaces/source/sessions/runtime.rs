@@ -188,3 +188,104 @@ fn visible_terminal_record_requires_durable_retry_before_acknowledgement() {
         .unwrap();
     assert!(session_runtime::inspect_with(&store, &f.runtime, &request).is_err());
 }
+
+#[test]
+fn attachment_checks_signature_current_revision_launch_grants_and_old_record_compatibility() {
+    use horizon_cloud_protocol::session_attachment::Request as Attach;
+    let (f, project, id) = prepared_runtime();
+    let launch = anchored_intent(
+        &f,
+        &f.membership(
+            &project,
+            f.manifest().revision,
+            OperationId::generate(),
+            &Request::StartSession { session_id: id },
+        ),
+    );
+    let own_pid = std::process::id();
+    let stat = fs::read_to_string(format!("/proc/{own_pid}/stat")).unwrap();
+    let own_identity = serde_json::json!({"pid":own_pid,"boot":fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap(),
+        "start":stat.rsplit_once(") ").unwrap().1.split_whitespace().nth(19).unwrap().parse::<u64>().unwrap(),
+        "namespace":fs::metadata("/proc/self/ns/pid").unwrap().ino()});
+    let record = serde_json::json!({"version":1,"launch":launch,"session":id,"nonce":OperationId::generate(),
+        "supervisor":own_identity,"agent":own_identity,"status":{"state":"running"},
+        "endpoint":{"server":own_identity,"socket_device":1,"socket_inode":2,"directory_device":1,"directory_inode":3,"pane":own_pid,"pane_id":"%0"}});
+    let name = format!("runtime-{id}.json");
+    let store = Store::open(&f.root()).unwrap();
+    store.write(&name, None, &serde_json::to_vec(&record).unwrap()).unwrap();
+    drop(store);
+    let payload = Attach {
+        startup: f.runtime.startup.clone(),
+        worker_id: f.runtime.worker_id.clone(),
+        session_id: id,
+        launch: launch.operation,
+    };
+    let signed = |payload: &Attach, project: &ProjectIdentity, revision| {
+        let payload = serde_json::to_string(payload).unwrap();
+        let binding = &f.runtime.startup.controller;
+        let intent = Intent::new(
+            binding,
+            OperationId::generate(),
+            revision,
+            Target::Project {
+                identity: project.clone(),
+            },
+            horizon_cloud_protocol::signed::Action::AttachProjectSession,
+            payload.as_bytes(),
+        )
+        .unwrap();
+        RecoveryRequest {
+            message: serde_json::to_string(&SignedIntent::sign(intent, binding, &f.controller).unwrap()).unwrap(),
+            payload,
+        }
+    };
+    let check = |request: &RecoveryRequest| {
+        session_runtime::attachment::validate_for_test(&Store::open(&f.root()).unwrap(), &f.runtime, request)
+    };
+    let valid = signed(&payload, &project, f.manifest().revision);
+    check(&valid).unwrap();
+    let mut tampered = RecoveryRequest {
+        message: valid.message.clone(),
+        payload: valid.payload.clone(),
+    };
+    tampered.payload.push(' ');
+    assert!(check(&tampered).is_err());
+    for index in 0..4 {
+        let mut wrong = payload.clone();
+        match index {
+            0 => wrong.launch = OperationId::generate(),
+            1 => wrong.worker_id = "foreign".into(),
+            2 => wrong.session_id = SessionId::new_v4(),
+            _ => wrong.startup.token = OperationId::generate(),
+        }
+        assert!(check(&signed(&wrong, &project, f.manifest().revision)).is_err());
+    }
+    assert!(check(&signed(&payload, &identity("foreign-project"), f.manifest().revision)).is_err());
+    assert!(check(&signed(&payload, &project, f.manifest().revision - 1)).is_err());
+    for state in ["launching", "stopping", "uncertain"] {
+        let mut changed = record.clone();
+        changed["status"] = serde_json::json!({"state":state});
+        fs::write(f.root().join(&name), serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(check(&valid).is_err());
+    }
+    let mut old = record.clone();
+    old.as_object_mut().unwrap().remove("endpoint");
+    fs::write(f.root().join(&name), serde_json::to_vec(&old).unwrap()).unwrap();
+    assert!(check(&valid).is_err());
+    assert_eq!(
+        inspect(&f, &query(&f, &project, id, f.manifest().revision, None))
+            .unwrap()
+            .status,
+        Status::Running
+    );
+    fs::write(f.root().join(&name), serde_json::to_vec(&record).unwrap()).unwrap();
+    f.change(&f.membership(
+        &project,
+        f.manifest().revision,
+        OperationId::generate(),
+        &Request::StopSession { session_id: id },
+    ))
+    .unwrap();
+    assert!(check(&valid).is_err());
+    assert!(check(&signed(&payload, &project, f.manifest().revision)).is_err());
+}
