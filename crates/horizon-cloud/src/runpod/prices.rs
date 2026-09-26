@@ -32,7 +32,7 @@ impl RunPod {
             .filter(|center| data_centers.is_empty() || data_centers.contains(&center.id))
         {
             for gpu in center.gpu_availability {
-                let level = availability(&gpu.availability);
+                let level = availability(&gpu.availability)?;
                 let entry = best.entry(gpu.id).or_insert(level);
                 *entry = (*entry).min(level);
             }
@@ -110,12 +110,14 @@ impl From<Level> for Availability {
     }
 }
 
-fn availability(value: &str) -> Availability {
+/// Unknown values are malformed answers, never shown as out of stock.
+fn availability(value: &str) -> Result<Availability, CloudError> {
     match value.to_ascii_uppercase().as_str() {
-        "HIGH" => Availability::High,
-        "MEDIUM" => Availability::Medium,
-        "LOW" => Availability::Low,
-        _ => Availability::None,
+        "HIGH" => Ok(Availability::High),
+        "MEDIUM" => Ok(Availability::Medium),
+        "LOW" => Ok(Availability::Low),
+        "NONE" => Ok(Availability::None),
+        _ => Err(CloudError::InvalidResponse),
     }
 }
 

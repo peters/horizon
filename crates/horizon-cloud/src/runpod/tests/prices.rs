@@ -53,6 +53,35 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
 }
 
 #[test]
+fn an_unknown_gpu_availability_fails_the_price_list_instead_of_reading_as_sold_out() {
+    let gpus = json!({"gpus": [
+        {"id": "NVIDIA L4", "name": "L4", "memory": 24, "secure": true, "price": {"secure": 0.49}}
+    ]});
+    let catalog = |availability: &str| {
+        vec![
+            (200, json!({"cpus": []}).to_string()),
+            (200, gpus.to_string()),
+            (
+                200,
+                json!({"dataCenters": [
+                    {"id": "EU-RO-1", "gpuAvailability": [{"id": "NVIDIA L4", "availability": availability}]}
+                ]})
+                .to_string(),
+            ),
+        ]
+    };
+    let (provider, _, task) = catalog_server(catalog("NONE"));
+    let list = provider.price_list(&[], &Cancellation::default()).unwrap();
+    task.join().unwrap();
+    assert_eq!(list.gpus[0].availability, crate::prices::Availability::None);
+
+    let (provider, _, task) = catalog_server(catalog("SOMETIMES"));
+    let result = provider.price_list(&[], &Cancellation::default());
+    task.join().unwrap();
+    assert!(matches!(result, Err(CloudError::InvalidResponse)));
+}
+
+#[test]
 fn a_cpu_size_reports_its_best_stock_and_how_many_data_centers_have_it() {
     let mut profile = crate::CloudConfig::parse(crate::EXAMPLE).unwrap().profiles["image-only"].clone();
     profile.cpu = 8;
