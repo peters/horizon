@@ -101,8 +101,9 @@ must actually contain the required GPU libraries; its name alone proves nothing.
 
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
 `horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
-([session relaunch](#session-relaunch-after-a-container-reset)) and `horizon-siblings-contract=1`
-([sibling repositories](#sibling-repositories)). Source transfer carries verified LFS objects and
+([session relaunch](#session-relaunch-after-a-container-reset)), `horizon-siblings-contract=1`
+([sibling repositories](#sibling-repositories)) and `horizon-session-env-contract=1`
+([session environment](#session-environment-from-image-layers)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -283,6 +284,49 @@ again by relaunch when missing. `horizon-worker-run` exports it to the agent as
 there, such as a package cache that must not be shared with another session on the
 same worker. Horizon sets no ecosystem-specific variables; a repository's own scripts
 choose what to place in the directory.
+
+## Session environment from image layers
+
+Sessions start over SSH, so they do not inherit a recipe's `ENV` instructions: a toolkit
+directory such as `/usr/local/cuda/bin` that only `ENV PATH` adds is missing in every
+session. A recipe adds session environment by writing a file to
+`/etc/horizon-worker/session-env.d/`, and each layer, the primary's and every sibling's,
+adds its own file, so layers compose instead of replacing each other:
+
+```dockerfile
+RUN mkdir -p /etc/horizon-worker/session-env.d \
+    && printf 'PATH_PREPEND=/usr/local/cuda/bin\nCUDA_CACHE_MAXSIZE=4294967296\n' \
+        > /etc/horizon-worker/session-env.d/20-gpu-library.env
+```
+
+Name each file `NN-REPOSITORY.env`, with two digits that place it among the layers (for
+example 20 for the primary and 30 for its siblings). Files are read in lexical order of
+their names, so `100-x.env` sorts before `20-y.env`. A name is letters, digits, `.`, `_`
+or `-`, starts with a letter or digit and ends in `.env`. Each file is data, never shell,
+with one entry per line:
+
+| Line | Effect |
+|------|--------|
+| `KEY=VALUE` | Sets `KEY` to everything after the first `=`, taken literally. A later line or file replaces an earlier value |
+| `PATH_PREPEND=DIR` | Puts the absolute directory `DIR` first on `PATH`, so a later file's directory is searched before an earlier file's |
+| `PATH_APPEND=DIR` | Adds `DIR` to the end of `PATH`, in file order |
+| empty, or starting with `#` | Ignored |
+
+`PATH` starts from the one SSH gives the session, and a directory listed more than once
+keeps only its first position. `KEY` is a letter or `_` followed by letters, digits or `_`.
+`PATH`, `HOME` and every `HORIZON_` variable belong to the worker and are refused. The
+directory holds at most 64 regular files of at most 16 KiB each, and a value is at most
+4096 characters. Any other line, a control character, invalid UTF-8, another kind of
+entry or a larger file is refused with its file and line.
+
+`horizon-worker-check` validates the files, so a malformed file fails the image check,
+worker readiness and every session attach or relaunch before anything is started.
+`horizon-worker-run` applies them to agent sessions, with or without siblings, before
+setting the worker's own variables; if they are refused at that point, it starts no
+process, records exit status 3 and appends the reason to `/workspace/session-env.log`.
+Without the directory nothing changes. Companion shells from other clouds do not apply
+the files. The checker reports `horizon-session-env-contract=1` when the image has
+`horizon-worker-session-env`.
 
 ## Optional Git credentials
 

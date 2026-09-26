@@ -36,14 +36,16 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None):
+    def run_check(self, *args, missing=(), environment=None, reported=None, run=None):
         output = io.StringIO()
-        def run(command, **kwargs):
+        def reply(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout=reported.get(command[0], b''))
+        if run is None and reported is not None:
+            run = reply
         with mock.patch('pathlib.Path', side_effect=self.path), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
-                mock.patch('subprocess.run', side_effect=run if reported is not None else None) as commands, \
+                mock.patch('subprocess.run', side_effect=run) as commands, \
                 mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
@@ -94,6 +96,25 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, _ = self.run_check('--agent', 'shell')
         self.assertEqual((status, output), (0, ''))
 
+    def test_session_environment_is_reported_only_with_its_helper(self):
+        for missing, expected in [((), True), (('horizon-worker-session-env',), False)]:
+            status, output, _ = self.run_check(missing=missing)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-session-env-contract=1' in output.splitlines(), expected, missing)
+
+    def test_refused_session_environment_fails_the_image_and_every_session_start(self):
+        def run(command, **kwargs):
+            if command[0] == 'horizon-worker-session-env':
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, stdout=b'')
+        for args in [(), ('--agent', 'shell'), ('--ready',)]:
+            status, output, _ = self.run_check(*args, run=run)
+            self.assertEqual(status, 1, args)
+            self.assertNotIn('contract=1', output)
+        # Without the helper there is nothing to validate.
+        status, output, _ = self.run_check('--agent', 'shell', missing=('horizon-worker-session-env',))
+        self.assertEqual((status, output), (0, ''))
+
     def test_remote_only_requires_tools_and_tunnel_but_no_local_browser(self):
         selected = {'browserstack': {'targets': ['iphone'], 'local_ports': [8080]}}
         self.write('/workspace/capabilities.json', selected)
@@ -126,7 +147,8 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
         self.assertEqual([call.args[0] for call in commands],
-                         [['git', 'lfs', 'version'], ['horizon-worker-supervise', '--idle-stop-contract']])
+                         [['horizon-worker-session-env', 'check'], ['git', 'lfs', 'version'],
+                          ['horizon-worker-supervise', '--idle-stop-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})

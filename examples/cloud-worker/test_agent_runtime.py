@@ -29,13 +29,20 @@ keys = ['DISABLE_AUTOUPDATER', 'HOME', 'HORIZON', 'HORIZON_BROWSER_ACTOR',
         'HORIZON_BROWSER_HOST_INSTANCE', 'ANTHROPIC_API_KEY',
         'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR']
 Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
-    'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys}}))
+    'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys},
+    'path': os.environ['PATH'], 'toolkit': os.environ.get('TOOLKIT')}))
 sys.exit(23)
 '''
         for name, body in [('claude', child), ('grok', child), ('sleep', 'import sys\nsys.exit(0)\n')]:
             tool = tools / name
             tool.write_text('#!' + sys.executable + '\n' + body)
             tool.chmod(0o700)
+        self.fragments = self.root / 'session-env.d'
+        helper = tools / 'horizon-worker-session-env'
+        helper.write_text('#!' + sys.executable + '\n' + Path(__file__).with_name('horizon-worker-session-env')
+                          .read_text().replace('/etc/horizon-worker/session-env.d', str(self.fragments)))
+        helper.chmod(0o700)
+        self.tools = tools
         self.script = self.root / 'horizon-worker-run'
         source = Path(__file__).with_name('horizon-worker-run').read_text()
         self.script.write_text(source.replace('/workspace', str(self.workspace)))
@@ -60,6 +67,8 @@ sys.exit(23)
             'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
             'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
             'HORIZON_SESSION_DIR': str(self.workspace / 'session-data/test-panel')})
+        self.assertEqual(child['path'], self.env['PATH'])
+        self.assertIsNone(child['toolkit'])
 
     def test_inherited_environment_cannot_enable_background_updates(self):
         self.assertEqual(self.launch(DISABLE_AUTOUPDATER='0')['env']['DISABLE_AUTOUPDATER'], '1')
@@ -74,6 +83,28 @@ sys.exit(23)
     def test_inherited_session_directory_is_replaced(self):
         child = self.launch(HORIZON_SESSION_DIR='/elsewhere')
         self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/test-panel'))
+
+    def test_image_layers_extend_the_session_environment(self):
+        self.fragments.mkdir()
+        (self.fragments / '20-library.env').write_text('PATH_PREPEND=/opt/cuda/bin\nTOOLKIT=library\n')
+        (self.fragments / '30-consumer.env').write_text('PATH_PREPEND=/opt/consumer/bin\nTOOLKIT=consumer\n')
+        child = self.launch('grok')
+        self.assertEqual(child['path'], '/opt/consumer/bin:/opt/cuda/bin:' + self.env['PATH'])
+        self.assertEqual(child['toolkit'], 'consumer')
+        self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/test-panel'))
+
+    def test_refused_session_environment_starts_no_process(self):
+        self.fragments.mkdir()
+        (self.fragments / '20-library.env').write_text('source /opt/toolkit.sh\n')
+        result = subprocess.run(['bash', str(self.script), 'test-panel', 'claude'], env=self.env,
+                                capture_output=True, text=True, timeout=10, check=True)
+        self.assertFalse((self.root / 'child.json').exists())
+        self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '3\n')
+        self.assertIn('20-library.env:1: expected KEY=VALUE', result.stderr)
+        self.assertIn('no process was started', result.stdout)
+        log = (self.workspace / 'session-env.log').read_text()
+        self.assertIn('session test-panel: Session environment refused:', log)
+        self.assertIn('20-library.env:1', log)
 
 
 if __name__ == '__main__':
