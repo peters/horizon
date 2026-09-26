@@ -191,6 +191,25 @@ fn fingerprint(file: &mut File, cancellation: &Cancellation, mut output: Option<
         sha256: hash.finalize().into(),
     })
 }
+#[cfg(target_os = "linux")]
+fn auxiliary(repository: &Path, revision: &str, retained: &Path, owner_root: &Path, runner: &Runner<'_>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // Scratch must stay outside the replaceable owner tree, even with a custom TMPDIR.
+    let scratch = tempfile::Builder::new()
+        .prefix("horizon-source-material-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/tmp")?;
+    if scratch.path().starts_with(owner_root) {
+        return Err(Error::Invalid);
+    }
+    let archive = repository::auxiliary(repository, revision, scratch.path(), runner)?;
+    let mut output = File::create_new(retained.join("source-material.tar"))?;
+    fingerprint(&mut File::open(archive)?, runner.cancel, Some(&mut output))?;
+    output.sync_all()?;
+    scratch.close()?;
+    Ok(())
+}
+
 impl Artifacts {
     #[cfg(target_os = "linux")]
     fn create(
@@ -223,7 +242,7 @@ impl Artifacts {
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
         repository::pack(repository, &selected, &anchored.join("pack"), &runner)?;
-        repository::auxiliary(repository, &selected, &anchored, &runner)?;
+        auxiliary(repository, &selected, &anchored, root, &runner)?;
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
         let payload = |name| -> Result<File> {

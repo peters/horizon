@@ -138,6 +138,11 @@ fn retained_source_artifacts_survive_reopen_and_later_local_changes() {
     assert!(source::prepare(&mut f.owner, &request.project, &repo, "HEAD~1", &cancellation).is_err());
     let payload = journal(&f.owner);
     let directory = payload["sources"][0]["directory"].as_str().unwrap();
+    let retained = fs::read_dir(root.join(directory))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(retained, ["pack".into(), "source-material.tar".into()].into());
     fs::remove_file(root.join(directory).join("pack")).unwrap();
     fs::write(root.join(directory).join("pack"), b"replacement").unwrap();
     assert!(source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &cancellation).is_err());
