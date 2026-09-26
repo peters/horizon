@@ -299,6 +299,16 @@ fn placement_rejects_unknown_values_and_colliding_sibling_directories() {
     }
     let hidden = BTreeMap::from([("dot".into(), sibling("example/.github"))]);
     assert!(validate_declarations(&hidden).is_err());
+    let option_like = BTreeMap::from([("dash".into(), sibling("example/-lib"))]);
+    assert!(validate_declarations(&option_like).is_err());
+    assert!(
+        validate_declarations(&BTreeMap::from([(
+            "dash".into(),
+            Declaration::new("example/-lib", "cpu")
+        )]))
+        .is_ok(),
+        "separate clouds keep their own checkout names"
+    );
     assert!(
         validate_declarations(&BTreeMap::from([(
             "dot".into(),

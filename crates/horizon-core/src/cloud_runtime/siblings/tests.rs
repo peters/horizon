@@ -181,7 +181,10 @@ fn resolution_refuses_checkouts_from_another_repository_or_the_primary() {
         SiblingError::Directory("clash".into())
     );
     checkout(&fixture.path("dash"), "https://github.com/example/-lib", PROFILES);
-    let dash = primary_config("  dash:\n    repository: example/-lib\n    profile: dev\n    placement: same_worker\n");
+    // Parsing already refuses this; resolution does not rely on it.
+    let mut dash =
+        primary_config("  dash:\n    repository: example/lib\n    profile: dev\n    placement: same_worker\n");
+    dash.companions.get_mut("dash").unwrap().repository = "example/-lib".into();
     assert_eq!(
         fixture.refusal(&dash, "dev", &[("dash", "dash")]),
         SiblingError::DirectoryName("-lib".into())
@@ -237,8 +240,15 @@ fn resolution_requires_a_github_primary_and_a_layerable_sibling_recipe() {
         fixture.refusal(&declared("dev"), "dev", &[("native", "native-lib")]),
         SiblingError::InvalidConfig("native".into())
     );
+    std::fs::write(lib.join(".horizon/cloud.yml"), "#".repeat(5 * 1024 * 1024)).unwrap();
+    git(&lib, &["add", "."]);
+    git(&lib, &["commit", "--quiet", "-m", "Grow configuration"]);
+    match fixture.resolve(&declared("dev"), "dev", &[("native", "native-lib")]) {
+        Err(Error::Invalid(message)) => assert!(message.contains("exceeded its bound"), "{message}"),
+        other => panic!("an operational failure is not a sibling refusal: {other:?}"),
+    }
     // Profiles accept only linux/amd64 today; the check keeps a later platform from mixing.
-    let revision = git(&lib, &["rev-parse", "HEAD~2"]);
+    let revision = git(&lib, &["rev-parse", "HEAD~3"]);
     let arm = Build {
         platform: "linux/arm64".into(),
         ..declared("dev").profiles["dev"].build.clone().unwrap()

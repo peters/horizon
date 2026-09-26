@@ -369,7 +369,13 @@ fn recipe(
 ) -> Result<Build> {
     repository::resolve_with_runner(repository, revision, runner)
         .map_err(|error| refused(error, SiblingError::RevisionUnavailable(alias.to_owned())))?;
-    let config = committed_config(alias, repository, revision, runner)?;
+    let config = repository::launch::committed_config(repository, revision, runner)
+        .map_err(|error| match error {
+            Error::Invalid(repository::launch::INVALID_CONFIG) => SiblingError::InvalidConfig(alias.to_owned()).into(),
+            // Git that could not run, timed out or produced too much output is not the sibling's fault.
+            other => other,
+        })?
+        .ok_or_else(|| SiblingError::MissingConfig(alias.to_owned()))?;
     let selected = config
         .profiles
         .get(profile)
@@ -390,27 +396,6 @@ fn recipe(
         .into());
     }
     Ok(build)
-}
-
-/// The configuration committed at `revision`. Only a failed lookup means it is missing;
-/// its content is never emitted, since it may hold invalid secret-bearing fields.
-fn committed_config(alias: &str, repository: &Path, revision: &str, runner: &Runner<'_>) -> Result<CloudConfig> {
-    let yaml = Runner {
-        cancel: runner.cancel,
-        emit: &|_| {},
-        secrets: Vec::new(),
-    }
-    .run(
-        "Read sibling cloud configuration",
-        Command::new("git").arg("-C").arg(repository).args([
-            "cat-file",
-            "blob",
-            &format!("{revision}:.horizon/cloud.yml"),
-        ]),
-        Duration::from_secs(30),
-    )
-    .map_err(|error| refused(error, SiblingError::MissingConfig(alias.to_owned())))?;
-    CloudConfig::parse(&yaml).map_err(|_| SiblingError::InvalidConfig(alias.to_owned()).into())
 }
 
 /// The GitHub `owner/name` of a checkout's origin.
