@@ -15,7 +15,8 @@ SIBLINGS = Path('/workspace/siblings')
 HOME = '/workspace/home'
 FIELDS = {'repository', 'token', 'author_name', 'author_email'}
 MAX_GRANTS = 16
-MAX_BYTES = 65536
+# 16 maximal grants whose tokens and identities are all JSON escapes serialize to about 90 KB.
+MAX_BYTES = 131072
 ALIAS = re.compile(r'[a-z][a-z0-9_-]{0,63}')
 GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?')
 GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',

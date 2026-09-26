@@ -409,15 +409,21 @@ class GitGrantTests(unittest.TestCase):
             auth.parse('{"version": 2, "version": 2, "grants": []}')
         self.assertEqual(auth.grants({'version': 2, 'grants': many[:16]})[0], 2)
 
-    def test_largest_accepted_payload_fits_the_private_file(self):
-        identity = '\U0001F600' * 50
-        grants = [{'repository': 'o' * 100 + '/' + 'r' * 98 + '%02d' % index, 'token': 't' * 2048,
-                   'author_name': identity, 'author_email': identity,
+    def test_largest_escape_heavy_payload_installs_and_fits_the_private_file(self):
+        # Every token and identity character needs a JSON escape: the largest valid encoding.
+        self.bare(auth.GIT_DIR)
+        grants = [{'repository': 'o' * 100 + '/' + 'r' * 98 + '%02d' % index, 'token': '"\\' * 1024,
+                   'author_name': '\U0001F600' * 50, 'author_email': '\\' * 200,
                    'target': 'sibling:' + 's' * 62 + '%02d' % index} for index in range(16)]
         grants[0]['target'] = 'primary'
+        for grant in grants[1:]:
+            self.bare(auth.SIBLINGS / grant['target'].removeprefix('sibling:') / 'repository.git')
         value = {'version': 2, 'grants': grants}
-        auth.grants(value)
-        auth.write_private(value)
+        source = json.dumps(value)
+        self.assertGreater(len(source.encode()), 65536)
+        with mock.patch.object(auth.sys, 'argv', ['horizon-worker-git-auth', 'install']), \
+                mock.patch.object(auth.sys, 'stdin', io.StringIO(source)):
+            auth.main()
         self.assertLessEqual(auth.CREDENTIAL.stat().st_size, auth.MAX_BYTES)
         self.assertEqual(auth.read_grants(), (2, grants))
 

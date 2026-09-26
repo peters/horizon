@@ -10,6 +10,8 @@ use zeroize::Zeroize;
 /// Printed by `horizon-worker-check --git-auth` when the worker accepts version 2 grants.
 pub const GRANTS_CONTRACT: &str = "horizon-git-auth-contract=2";
 const MAX_GRANTS: usize = 16;
+/// The worker's `MAX_BYTES`; the largest valid payload serializes well below it.
+const MAX_PAYLOAD_BYTES: u64 = 128 * 1024;
 const SIBLING_PREFIX: &str = "sibling:";
 
 /// The bare repository on the worker that a grant configures.
@@ -199,7 +201,11 @@ impl Prepared {
             grants,
         };
         set.validate()?;
-        Self::private(&set).map(Some)
+        let prepared = Self::private(&set)?;
+        if prepared.0.as_file().metadata()?.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::Invalid("Git credential grants are too large for the worker"));
+        }
+        Ok(Some(prepared))
     }
 }
 

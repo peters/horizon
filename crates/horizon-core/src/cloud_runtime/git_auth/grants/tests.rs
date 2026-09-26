@@ -193,6 +193,40 @@ fn ambiguous_or_duplicate_grants_fail_before_any_token_is_read() {
 }
 
 #[test]
+fn the_largest_escape_heavy_payload_fits_the_worker_limit() {
+    let fixture = Fixture::new();
+    let checkouts: Vec<_> = (0..15).map(|_| tempfile::tempdir().unwrap()).collect();
+    let aliases: Vec<_> = (0..15).map(|index| format!("{}{index:02}", "s".repeat(62))).collect();
+    let token = "\"\\".repeat(1024);
+    let mut bindings = vec![fixture.binding(
+        fixture.primary.path(),
+        &format!("{}/primary", "o".repeat(100)),
+        token.as_bytes(),
+    )];
+    for (index, checkout) in checkouts.iter().enumerate() {
+        let repository = format!("{}/{}{index:02}", "o".repeat(100), "r".repeat(98));
+        bindings.push(fixture.binding(checkout.path(), &repository, token.as_bytes()));
+    }
+    for binding in &mut bindings {
+        binding.author_name = "\\".repeat(200);
+        binding.author_email = "\"".repeat(200);
+    }
+    let siblings: Vec<_> = aliases
+        .iter()
+        .zip(&checkouts)
+        .map(|(alias, checkout)| Sibling {
+            alias,
+            local_repository: checkout.path(),
+        })
+        .collect();
+    let prepared = Prepared::for_repositories(&bindings, fixture.primary.path(), &siblings)
+        .unwrap()
+        .unwrap();
+    let size = prepared.0.as_file().metadata().unwrap().len();
+    assert!(size > 64 * 1024 && size <= MAX_PAYLOAD_BYTES, "{size}");
+}
+
+#[test]
 fn more_than_sixteen_grants_are_refused() {
     let fixture = Fixture::new();
     let checkouts: Vec<_> = (0..16).map(|_| tempfile::tempdir().unwrap()).collect();
