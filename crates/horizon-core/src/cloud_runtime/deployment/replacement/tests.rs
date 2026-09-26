@@ -616,10 +616,10 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
         ..WorkerContract::default()
     };
     for (contract, statuses, lost) in [
-        (restart, vec!["0", "5", "3"], Some(vec!["agent3"])),
-        (restart, vec!["4", "0", "0"], Some(vec!["agent1"])),
-        (restart, vec!["0", "1"], None),
-        (restart, vec!["0", ""], None),
+        (restart.clone(), vec!["0", "5", "3"], Some(vec!["agent3"])),
+        (restart.clone(), vec!["4", "0", "0"], Some(vec!["agent1"])),
+        (restart.clone(), vec!["0", "1"], None),
+        (restart.clone(), vec!["0", ""], None),
         (
             WorkerContract::default(),
             vec![],
@@ -634,7 +634,7 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
         let result = relaunch_sessions(
             &store,
             &mut state,
-            contract,
+            &contract,
             &|event| {
                 if let Event::Output(line) = event {
                     reported.borrow_mut().push(line.split(' ').nth(1).unwrap().to_owned());
@@ -670,10 +670,10 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
     // Nothing runs without a request, and an invalid identity never reaches the shell.
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
-    relaunch_sessions(&store, &mut state, restart, &|_| {}, |_| panic!("no request")).unwrap();
+    relaunch_sessions(&store, &mut state, &restart, &|_| {}, |_| panic!("no request")).unwrap();
     state.session_restart = Some(operation);
     state.sessions[0].panel_id = "agent1; reboot".into();
-    assert!(relaunch_sessions(&store, &mut state, restart, &|_| {}, |_| panic!("invalid")).is_err());
+    assert!(relaunch_sessions(&store, &mut state, &restart, &|_| {}, |_| panic!("invalid")).is_err());
 }
 
 #[test]

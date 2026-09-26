@@ -1,10 +1,14 @@
 #!/usr/bin/python3
-"""Stop this dedicated worker after its configured period without agent activity."""
+"""Stop this dedicated worker after its configured period without agent activity, or
+when an agent whose task is done asks through horizon-worker-stop."""
 import json
 import os
 from pathlib import Path
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -19,6 +23,14 @@ POLL_SECONDS = 60
 RETRY_SECONDS = 600
 # Average cores used by the container that still count as work, such as a quiet build.
 BUSY_CORES = 0.5
+# Agents ask for a stop here; only this watcher holds the worker credential.
+STOP_SOCKET = Path('/run/horizon-worker/stop.sock')
+# Kept on the workspace volume, so it survives the stop and the checker reports it on resume.
+STOP_LOG = Path('/workspace/.horizon/self-stops.jsonl')
+# Another agent session with output this recent is still working.
+QUIET_SECONDS = 120
+CPU_SAMPLE_SECONDS = 3
+REASON_LIMIT = 200
 
 
 def last_output():
@@ -84,6 +96,181 @@ def stop_worker(pod_id, key):
     return True
 
 
+class Refused(Exception):
+    """A stop this worker must not make now, with the reason to give the agent."""
+
+
+def reason_text(reason):
+    # Only text is a reason; anything else fails closed rather than being coerced.
+    text = ' '.join(reason.split()) if isinstance(reason, str) else ''
+    text = ''.join(character for character in text if character.isprintable())
+    if not text:
+        raise Refused('Give a short reason for stopping this worker.')
+    return text[:REASON_LIMIT]
+
+
+# What tmux says when no agent session was ever started, which is not a failed check.
+NO_SERVER = ('no server running', 'error connecting to')
+
+
+def tmux(*args, run=subprocess.run):
+    """Output of one tmux query, empty without any agent session. Any other failure
+    refuses the stop, since activity is unknown."""
+    try:
+        return run(['tmux', '-L', 'horizon-cloud', *args], capture_output=True, text=True, timeout=10,
+                   check=True).stdout
+    except subprocess.CalledProcessError as error:
+        if any(message in (error.stderr or '') for message in NO_SERVER):
+            return ''
+        raise Refused('Agent sessions on this worker cannot be checked right now; leave it running.') from None
+    except (OSError, subprocess.SubprocessError):
+        raise Refused('Agent sessions on this worker cannot be checked right now; leave it running.') from None
+
+
+def parent(pid, proc=Path('/proc')):
+    """The parent process of `pid`, or 0 when it has ended."""
+    try:
+        return int((proc / str(pid) / 'stat').read_text().rsplit(') ', 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+# Agents horizon-worker-session binds; its other kind, shell, is a person's terminal.
+AGENTS = ('claude', 'codex', 'grok')
+
+
+def caller(pid, query=tmux, parent_of=parent, sessions=Path('/workspace/sessions')):
+    """The agent session whose process tree `pid` belongs to, as (window, session, agent).
+    The kernel names the connecting process, so a caller cannot speak for another window."""
+    panes = {}
+    for line in query('list-panes', '-a', '-F', '#{pane_pid} #{window_id} #{session_name}').splitlines():
+        fields = line.split(' ', 2)
+        if len(fields) == 3 and fields[0].isdigit():
+            panes[int(fields[0])] = (fields[1], fields[2])
+    seen = set()
+    while pid > 1 and pid not in seen:
+        if pid in panes:
+            window, session = panes[pid]
+            # A pane is an agent session only with the binding horizon-worker-session
+            # wrote for it; a plain shell or an ad-hoc tmux session is not one.
+            try:
+                agent = (sessions / session / 'agent').read_text().strip()
+            except OSError:
+                agent = ''
+            if agent not in AGENTS:
+                break
+            return window, session, agent
+        seen.add(pid)
+        pid = parent_of(pid)
+    raise Refused('Only an agent session on this worker can stop it.')
+
+
+def other_output(own, query=tmux):
+    """Newest output time of any agent window except `own`, or None without others."""
+    stamps = []
+    for line in query('list-windows', '-a', '-F', '#{window_id} #{window_activity}').splitlines():
+        window, _, stamp = line.partition(' ')
+        if window != own and stamp.isdigit():
+            stamps.append(int(stamp))
+    return max(stamps, default=None)
+
+
+def busy_cores(sample=CPU_SAMPLE_SECONDS):
+    """Average cores the container used over a short sample, or None where it is not exposed."""
+    before = cpu_seconds()
+    time.sleep(sample)
+    after = cpu_seconds()
+    if before is None or after is None:
+        return None
+    return (after - before) / sample
+
+
+def self_stop(reason, requester, pod_id, key, log=STOP_LOG, now=time.time, output=other_output, cores=busy_cores,
+              request=None):
+    """Checks, records and requests a stop that the agent session `requester`, as
+    (window, session, agent), asked for. Returns the agent's message."""
+    text = reason_text(reason)
+    window, session, agent = requester
+    used = cores()
+    # Without CPU accounting a quiet build cannot be told from idle, so an agent may not stop it.
+    if used is None:
+        raise Refused('This worker cannot measure its CPU use, so it cannot tell whether it is busy; '
+                      'leave it running.')
+    if used >= BUSY_CORES:
+        raise Refused(f'This worker is busy ({used:.1f} cores in use); leave it running.')
+    # Checked after the CPU sample, right before the stop, so the sample is no blind spot.
+    newest = output(window)
+    if newest is not None and now() - newest < QUIET_SECONDS:
+        raise Refused('Another agent session on this worker produced output in the last two minutes; '
+                      'leave the worker running.')
+    log.parent.mkdir(parents=True, exist_ok=True)
+    before = log.stat().st_size if log.exists() else 0
+    with log.open('a') as file:
+        record = {'at': int(now() * 1000), 'reason': text, 'session': session, 'agent': agent}
+        file.write(json.dumps(record) + '\n')
+    os.sync()
+    try:
+        stopped = (request or stop_worker)(pod_id, key)
+    # Any failure of this one request is reported; an escaping error would end the watcher.
+    except Exception as error:
+        print('Stop request failed: ' + type(error).__name__, flush=True)
+        stopped = False
+    if not stopped:
+        # Only stops the provider accepted stay on record.
+        with log.open('r+') as file:
+            file.truncate(before)
+        raise Refused('The provider did not accept the stop request; the worker keeps running.')
+    print(f'Stopping this worker at the request of session {session}: {text}', flush=True)
+    return 'Stop requested. This worker is stopping; the person can resume it.'
+
+
+def peer_pid(connection):
+    """The process on the other end of a Unix socket, as the kernel reports it."""
+    pid, _, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                            struct.calcsize('3i')))
+    return pid
+
+
+def answer(line, pid, pod_id, key, stop=self_stop, identify=caller):
+    """The reply to one request line from the process `pid`."""
+    try:
+        request = json.loads(line)
+        if not isinstance(request, dict):
+            raise ValueError
+        message = stop(request.get('reason'), identify(pid), pod_id, key)
+        return {'ok': True, 'message': message}
+    except Refused as refusal:
+        return {'ok': False, 'message': str(refusal)}
+    except ValueError:
+        return {'ok': False, 'message': 'Malformed stop request.'}
+
+
+def serve_stop_requests(pod_id, key, path=STOP_SOCKET, stop=self_stop, identify=caller):
+    """Answers stop requests one at a time on a socket only this machine can reach."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(path))
+        path.chmod(0o600)
+        server.listen(4)
+    # Idle stop keeps working; agents are told the worker cannot stop itself.
+    except OSError as error:
+        print('Stop requests from agents unavailable: ' + type(error).__name__, flush=True)
+        return
+    while True:
+        connection, _ = server.accept()
+        with connection:
+            try:
+                connection.settimeout(30)
+                line = connection.makefile('r').readline(4096)
+                reply = answer(line, peer_pid(connection), pod_id, key, stop, identify)
+                connection.sendall((json.dumps(reply) + '\n').encode())
+            # One bad client must not end the watcher.
+            except Exception as error:
+                print('Stop request connection failed: ' + type(error).__name__, flush=True)
+
+
 def passive(reason):
     # Exiting would end the supervised worker; stay passive instead.
     print('Idle stop disabled: ' + reason, flush=True)
@@ -99,6 +286,7 @@ def main():
     pod_id, key = os.environ.get('RUNPOD_POD_ID'), os.environ.get('RUNPOD_API_KEY')
     if not pod_id or not key:
         passive('the provider supplied no worker credential')
+    threading.Thread(target=serve_stop_requests, args=(pod_id, key), daemon=True).start()
     activity = Activity(minutes * 60, time.time(), cpu_seconds())
     next_request = 0
     while True:

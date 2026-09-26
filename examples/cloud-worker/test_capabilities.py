@@ -201,6 +201,54 @@ class CapabilitiesTests(unittest.TestCase):
                 status, _, _ = self.run_check('--ready')
             self.assertEqual(status, 1)
 
+    def test_readiness_reports_the_newest_stop_an_agent_asked_for(self):
+        self.write('/workspace/capabilities.json', {})
+        connection = mock.MagicMock()
+        stream = connection.__enter__.return_value.makefile.return_value.__enter__.return_value
+        stream.readline.return_value = b'{"browsers":[],"error":null}\n'
+        reported = {'horizon-worker-stop': b'{"at": 1790000000000, "reason": "PR 12 merged"}\n'}
+        with mock.patch('socket.create_connection', return_value=connection):
+            status, output, _ = self.run_check('--ready', reported=reported)
+        self.assertEqual(status, 0, output)
+        self.assertIn('horizon-last-self-stop={"at":1790000000000,"reason":"PR 12 merged"}', output.splitlines())
+        self.assertIn('horizon-self-stop-contract=1', output.splitlines())
+        # Without a record the image still says it supports them; an older image says neither.
+        # A failed read reports neither, so Horizon keeps the reason it showed.
+        for reported, missing, supported in [({'horizon-worker-stop': b'null\n'}, (), True),
+                                             ({'horizon-worker-stop': b'not json\n'}, (), False),
+                                             ({}, ('horizon-worker-stop',), False)]:
+            with mock.patch('socket.create_connection', return_value=connection):
+                status, output, _ = self.run_check('--ready', reported=reported, missing=missing)
+            self.assertEqual(status, 0, output)
+            self.assertNotIn('horizon-last-self-stop=', output)
+            self.assertEqual('horizon-self-stop-contract=1' in output.splitlines(), supported)
+
+    def test_agents_get_the_stop_tool_only_where_the_profile_opts_in(self):
+        self.write('/workspace/capabilities.json', {'agents': ['claude']})
+        for environment, expected in [({'HORIZON_IDLE_STOP_MINUTES': '30'}, True), ({}, False)]:
+            with mock.patch.dict(os.environ, environment, clear=True):
+                self.configure()
+            servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
+            self.assertEqual('horizon-worker' in servers, expected, environment)
+        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+            self.configure()
+        self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
+                         {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+
+    @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
+    def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):
+        self.write('/workspace/capabilities.json', {'agents': ['codex', 'grok']})
+        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertEqual(servers['horizon-worker']['command'], '/usr/local/bin/horizon-worker-stop')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertNotIn('horizon-worker', servers)
+
     def configure(self):
         def run(command, **kwargs):
             if command[0] == 'horizon-cloud-worker':

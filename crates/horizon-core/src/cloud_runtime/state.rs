@@ -68,6 +68,10 @@ pub struct Deployment {
     /// Where the last successful deployment or reconnection spent its time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<super::timeline::Timeline>,
+    /// The newest stop an agent asked for on this cloud's worker, as its checker last
+    /// reported. Omitted when none, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_self_stop: Option<super::worker_contract::SelfStop>,
 }
 
 impl Deployment {

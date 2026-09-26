@@ -4,6 +4,7 @@ use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
 mod placement;
 mod rebuild;
+mod self_stop;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -174,6 +175,7 @@ fn profile_details(
     let resize = machine_size(ui, id, launch, runtime);
     ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
     placement::where_it_lives(ui, launch, runtime.state.as_ref(), region_of);
+    self_stop::show(ui, runtime.state.as_ref());
     ui.small(format!(
         "Agents: {}",
         if launch.profile.capabilities.agents.is_empty() {

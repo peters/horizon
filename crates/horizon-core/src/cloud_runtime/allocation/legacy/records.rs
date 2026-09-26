@@ -89,6 +89,7 @@ impl Records {
             image_replacement,
             session_restart,
             timeline: _,
+            last_self_stop: _,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -147,8 +148,10 @@ impl Records {
             browserstack_targets: self.project.browserstack_targets.clone(),
             image_replacement: self.allocation.image_replacement.clone(),
             session_restart: self.project.session_restart,
-            // Presentation only: a split record starts without a deployment timeline.
+            // Presentation only: a split record starts without a deployment timeline or the
+            // reason an agent last stopped the worker; the next readiness check reports it again.
             timeline: None,
+            last_self_stop: None,
         }
     }
 }

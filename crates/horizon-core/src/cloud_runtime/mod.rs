@@ -25,7 +25,7 @@ pub mod state;
 pub mod timeline;
 pub mod tunnel;
 mod worker_contract;
-pub use worker_contract::WorkerContract;
+pub use worker_contract::{SelfStop, WorkerContract};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

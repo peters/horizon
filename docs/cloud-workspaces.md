@@ -291,7 +291,19 @@ itself, using the provider's credential scoped to that worker, and never deletes
 anything. Choose **Check provider** on the card afterwards: a worker confirmed
 stopped offers Resume like an explicitly stopped one, and nothing resumes it
 automatically. Profiles without the field never stop on their own, and workers
-shared across workspaces and profiles with hosted devices do not support it. Resume
+shared across workspaces and profiles with hosted devices do not support it.
+
+The same opt-in lets an agent stop its worker when its task is done, such as when
+its pull request is merged, without this computer. Agents get a
+`stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
+one-line reason. The worker identifies the requesting agent session itself,
+refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
+refuses while another agent session printed output in the last two minutes, while
+the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
+output does not count. The reason and the requesting agent are kept on the
+workspace volume, and after a resume the cloud card shows them, for example
+"Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
+previous worker's reason. Resume
 starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any
