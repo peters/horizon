@@ -88,8 +88,12 @@ impl Hetzner {
     /// # Errors
     /// Refuses keys another operation owns and reports unfinished deletion.
     pub fn delete_ssh_key(&self, operation_id: &str, cancel: &Cancellation) -> Result<(), CloudError> {
-        for key in self.find_ssh_keys(operation_id, cancel)? {
+        let keys = self.find_ssh_keys(operation_id, cancel)?;
+        // Every labelled key must be ours before any is deleted.
+        for key in &keys {
             key.verify(operation_id)?;
+        }
+        for key in keys {
             match self.send(Method::Delete, &format!("/ssh_keys/{}", key.id), None, cancel) {
                 Ok(_) => {}
                 Err(failure) if failure.not_found() => {}

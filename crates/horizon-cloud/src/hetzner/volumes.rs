@@ -250,9 +250,14 @@ impl Hetzner {
         }
         let deadline = Instant::now() + ACTION_TIMEOUT;
         loop {
-            match self.inspect_volume(volume.id, cancel)? {
-                Some(current) if current.server.is_some() => {}
-                _ => return Ok(None),
+            match self
+                .inspect_volume(volume.id, cancel)?
+                .and_then(|current| current.server)
+            {
+                None => return Ok(None),
+                Some(stale) if stale == server => {}
+                // Attached elsewhere meanwhile, for example by a concurrent retry.
+                Some(other) => return Ok(Some(other)),
             }
             if Instant::now() >= deadline {
                 return Err(CloudError::Invalid(

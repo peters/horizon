@@ -193,3 +193,26 @@ fn volume_creation_reconciles_names_resets_on_refusal_and_checks_what_it_adopts(
         .count();
     assert_eq!(posts, 2);
 }
+
+#[test]
+fn a_release_wait_ends_when_another_server_takes_the_volume() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, json!({"volume": volume(9, Some(42))})),
+        (404, error("not_found", "server not found")),
+        (200, json!({"volume": volume(9, Some(43))})),
+    ]);
+    let mut state = CreateState::Bound { worker_id: "9".into() };
+    assert_eq!(
+        hetzner
+            .delete_volume(OPERATION, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+            .unwrap_err()
+            .to_string(),
+        "The volume is still attached; delete or detach its server first"
+    );
+    task.join().unwrap();
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        3,
+        "no waiting after the new holder appears"
+    );
+}

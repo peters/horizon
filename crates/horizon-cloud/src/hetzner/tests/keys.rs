@@ -76,7 +76,8 @@ fn deleting_the_key_proves_none_remains() {
         (200, listing("ssh_keys", json!([key(5)]))),
         (204, Value::Null),
         (200, listing("ssh_keys", json!([]))),
-        (200, listing("ssh_keys", json!([foreign]))),
+        // Ours first, then a foreign key under the same label: nothing is deleted.
+        (200, listing("ssh_keys", json!([key(5), foreign]))),
     ]);
     let cancel = Cancellation::default();
     hetzner.delete_ssh_key(OPERATION, &cancel).unwrap();
@@ -85,7 +86,12 @@ fn deleting_the_key_proves_none_remains() {
         Err(CloudError::IdentityMismatch)
     ));
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[1].starts_with("DELETE /ssh_keys/5 "));
+    let requests = requests.lock().unwrap();
+    assert!(requests[1].starts_with("DELETE /ssh_keys/5 "));
+    assert_eq!(
+        requests.iter().filter(|request| request.starts_with("DELETE ")).count(),
+        1
+    );
     let key: SshKey = serde_json::from_value(key(5)).unwrap();
     assert!(key.verify("op-2").is_err());
 }
