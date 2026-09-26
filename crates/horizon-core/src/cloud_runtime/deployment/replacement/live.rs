@@ -5,9 +5,8 @@ use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
     deployment::{Request, storage},
-    git_auth,
     image::Images,
-    registry, repository,
+    registry, repository, siblings,
     ssh::Connection,
     state::{Deployment, ReplacementImage, Store},
 };
@@ -124,7 +123,7 @@ impl<'a> Live<'a> {
             },
             registry: RefCell::new(registry),
             generation: binding.map(|binding| binding.generation.clone()),
-            git_auth: git_auth::Prepared::for_repository(&settings.git_credentials, &state.repository)?.is_some(),
+            git_auth: siblings::git_grants(&settings.git_credentials, state)?.is_some(),
         })
     }
 

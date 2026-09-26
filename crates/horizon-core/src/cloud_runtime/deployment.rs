@@ -132,7 +132,6 @@ pub fn deploy_with_siblings(
             .as_ref()
             .map_or_else(Vec::new, super::registry::Prepared::redactions),
     };
-    let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
     let browser_auth = super::browser_auth::Prepared::for_repository(
         &request.settings.browserstack_credentials,
         &state.repository,
@@ -147,6 +146,8 @@ pub fn deploy_with_siblings(
     if siblings::bind(bindings, &mut state, &runner)? {
         store.save(&state)?;
     }
+    // Only after binding: the first deploy of a cloud with siblings sends their grants too.
+    let git_auth = siblings::git_grants(&request.settings.git_credentials, &state)?;
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
     refresh_allocation(request, &store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;

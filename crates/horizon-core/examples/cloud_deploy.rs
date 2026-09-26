@@ -31,7 +31,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -67,7 +67,11 @@ fn run() -> cloud_runtime::Result<()> {
     if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
         return rebuild(&args, settings, &cancel);
     }
-    if !matches!(args[0].as_str(), "deploy" | "prepare-image") || !(6..=7).contains(&args.len()) {
+    let (args, siblings) = sibling_bindings(&args)?;
+    if !matches!(args[0].as_str(), "deploy" | "prepare-image")
+        || !(6..=7).contains(&args.len())
+        || (args[0] == "prepare-image" && !siblings.is_empty())
+    {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
     let repository = PathBuf::from(&args[2]).canonicalize()?;
@@ -91,9 +95,35 @@ fn run() -> cloud_runtime::Result<()> {
     if args[0] == "prepare-image" {
         prepare_image(&request, &cancel, &print_event)?;
     } else {
-        deployment::deploy(&request, &cancel, &print_event)?;
+        deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
     }
     Ok(())
+}
+
+/// Separates `--sibling ALIAS=PATH` options, in their order, from the other arguments.
+fn sibling_bindings(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Vec<cloud_runtime::siblings::Binding>)> {
+    let mut positional = Vec::new();
+    let mut siblings = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg != "--sibling" {
+            positional.push(arg.clone());
+            continue;
+        }
+        let (alias, path) = args
+            .next()
+            .and_then(|binding| binding.split_once('='))
+            .ok_or(cloud_runtime::Error::Invalid("Use --sibling ALIAS=PATH"))?;
+        let local_repository = PathBuf::from(path).canonicalize().map_err(|error| {
+            eprintln!("--sibling {alias}={path}: {error}");
+            cloud_runtime::Error::Invalid("A --sibling checkout does not exist")
+        })?;
+        siblings.push(cloud_runtime::siblings::Binding {
+            alias: alias.to_owned(),
+            local_repository,
+        });
+    }
+    Ok((positional, siblings))
 }
 
 /// Prefixes each line with the seconds since this command started, for timing a deployment.

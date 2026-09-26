@@ -19,6 +19,9 @@ use std::{
     time::Duration,
 };
 
+mod worker;
+pub use worker::{git_grants, session_worktree};
+
 /// Printed by `horizon-worker-check` when the worker lays out sibling checkouts per session.
 pub const CONTRACT: &str = "horizon-siblings-contract=1";
 /// The deployment record version that carries siblings. Earlier Horizon versions refuse it
