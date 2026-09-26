@@ -13,6 +13,7 @@ pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
 pub mod owner;
+pub mod prices;
 pub mod progress;
 pub mod project_reservations;
 pub mod registry;

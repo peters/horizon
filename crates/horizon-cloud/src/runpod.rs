@@ -11,6 +11,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub mod billing;
 pub mod flavors;
 pub mod fresh;
+pub mod prices;
 pub mod recovery;
 pub mod registry;
 pub mod replacement;

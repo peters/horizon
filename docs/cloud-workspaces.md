@@ -158,6 +158,16 @@ computer online until image/source upload and readiness complete. Expand verbose
 output for build and push progress. Failures retain a retryable card and the
 persisted operation identity.
 
+While you choose a size, New cloud shows RunPod's current prices and stock: each
+vCPU and memory choice carries its hourly price, and a price card shows the
+chosen size's price, whether it is in stock in the allowed data centers, 8 and 24
+hour estimates and the network storage cost. For GPU profiles it lists your
+preferred GPU types in the order Horizon requests them, marks the first one in
+stock and suggests the cheapest GPU in stock when none of them is. Prices come
+from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
+is open; Refresh fetches them at once. Only providers Horizon can deploy to show
+prices.
+
 Until a worker is requested, including after a failed attempt or a definite
 provider rejection, the cloud card offers vCPU and memory drop-downs for CPU
 profiles, listing only sizes RunPod offers with the profile's container disk.

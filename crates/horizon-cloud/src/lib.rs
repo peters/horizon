@@ -4,6 +4,7 @@
 
 mod capabilities;
 pub mod companions;
+pub mod prices;
 mod profile;
 mod reason;
 mod startup;

@@ -3,6 +3,7 @@ mod fresh;
 mod idle_stop;
 mod inspection;
 mod placement;
+mod prices;
 mod provenance;
 mod recovery;
 mod registry;

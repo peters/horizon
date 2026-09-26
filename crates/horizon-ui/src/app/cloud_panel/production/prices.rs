@@ -1,0 +1,233 @@
+//! Provider prices and stock for the New cloud dialog, fetched in the background and
+//! refreshed while the dialog stays open. Only providers Horizon can deploy to are asked.
+use super::machine_size::Size;
+use horizon_core::cloud_runtime::{
+    Cancellation,
+    prices::{self, Preferences, PriceList, Profile, SizeAvailability},
+    settings::Settings,
+};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::mpsc::{Receiver, TryRecvError, channel},
+    time::{Duration, Instant},
+};
+
+/// Prices and stock older than this are fetched again while the dialog is open.
+pub(super) const FRESH: Duration = Duration::from_mins(15);
+
+pub(super) struct Fetched<T> {
+    pub value: T,
+    pub at: Instant,
+}
+
+/// A CPU size together with the container disk that limits which flavors offer it.
+type SizeKey = (u16, u16, u16);
+type Job<T> = Receiver<Result<T, String>>;
+
+#[derive(Default)]
+pub(super) struct State {
+    pub list: Option<Fetched<(PriceList, Preferences)>>,
+    pub list_error: Option<String>,
+    list_job: Option<Job<(PriceList, Preferences)>>,
+    sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
+    size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
+}
+
+impl State {
+    /// Starts background fetches for anything missing or stale about `profile`.
+    pub fn request(&mut self, root: &Path, profile: &Profile, ctx: &egui::Context) {
+        // UI tests resolve the developer's real Horizon home; they must never reach the provider.
+        if cfg!(test) {
+            return;
+        }
+        let stale = |at: Instant| at.elapsed() >= FRESH;
+        if self.list_job.is_none() && self.list.as_ref().is_none_or(|list| stale(list.at)) && self.list_error.is_none()
+        {
+            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
+                prices::price_list(settings, cancel)
+            }));
+        }
+        if profile.gpu {
+            return;
+        }
+        let key = key(profile);
+        let current = self
+            .sizes
+            .get(&key)
+            .is_some_and(|size| size.as_ref().is_ok_and(|size| !stale(size.at)));
+        if !current && !self.size_jobs.contains_key(&key) && !matches!(self.sizes.get(&key), Some(Err(_))) {
+            let profile = profile.clone();
+            let job = spawn(root, ctx, move |settings, cancel| {
+                prices::size_availability(settings, &profile, cancel)
+            });
+            self.size_jobs.insert(key, job);
+        }
+    }
+
+    /// Collects finished fetches.
+    pub fn poll(&mut self) {
+        if let Some(result) = finished(&mut self.list_job) {
+            match result {
+                Ok(value) => {
+                    self.list = Some(Fetched {
+                        value,
+                        at: Instant::now(),
+                    });
+                    self.list_error = None;
+                }
+                Err(error) => self.list_error = Some(error),
+            }
+        }
+        let keys: Vec<SizeKey> = self.size_jobs.keys().copied().collect();
+        for key in keys {
+            let mut job = self.size_jobs.remove(&key);
+            match finished(&mut job) {
+                Some(result) => {
+                    self.sizes.insert(
+                        key,
+                        result.map(|value| Fetched {
+                            value,
+                            at: Instant::now(),
+                        }),
+                    );
+                }
+                None => {
+                    if let Some(job) = job {
+                        self.size_jobs.insert(key, job);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Forgets fetched prices and errors so the next frame asks again.
+    pub fn refresh(&mut self) {
+        self.list = None;
+        self.list_error = None;
+        self.sizes.clear();
+    }
+
+    pub fn loading(&self) -> bool {
+        self.list_job.is_some()
+    }
+
+    /// Stock of `size` for `profile`: `None` while it is being checked.
+    pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<SizeAvailability, &str>> {
+        let sized = Profile {
+            cpu: size.0,
+            memory_gb: size.1,
+            ..profile.clone()
+        };
+        self.sizes
+            .get(&key(&sized))
+            .map(|size| size.as_ref().map(|size| size.value).map_err(String::as_str))
+    }
+}
+
+fn key(profile: &Profile) -> SizeKey {
+    (profile.cpu, profile.memory_gb, profile.storage.container_gb)
+}
+
+fn spawn<T: Send + 'static>(
+    root: &Path,
+    ctx: &egui::Context,
+    fetch: impl FnOnce(&Settings, &Cancellation) -> horizon_core::cloud_runtime::Result<T> + Send + 'static,
+) -> Job<T> {
+    let (tx, rx) = channel();
+    let path = root.join("settings.json");
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let result = Settings::load(&path)
+            .and_then(|settings| fetch(&settings, &Cancellation::default()))
+            .map_err(|error| error.to_string());
+        let _ = tx.send(result);
+        ctx.request_repaint();
+    });
+    rx
+}
+
+fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<T, String>> {
+    let result = match job.as_ref()?.try_recv() {
+        Ok(result) => result,
+        Err(TryRecvError::Empty) => return None,
+        Err(TryRecvError::Disconnected) => Err("Price check ended without a result".into()),
+    };
+    *job = None;
+    Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::cloud_runtime::prices::Availability;
+
+    fn list() -> PriceList {
+        PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: Vec::new(),
+            storage_gb_month: 0.07,
+        }
+    }
+
+    #[test]
+    fn finished_fetches_are_kept_until_a_refresh_and_failures_wait_for_one() {
+        let mut state = State::default();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(state.loading());
+        state.poll();
+        assert!(state.list.is_none() && state.loading());
+        tx.send(Ok((list(), Preferences::default()))).unwrap();
+        state.poll();
+        assert!(!state.loading());
+        assert_eq!(state.list.as_ref().unwrap().value.0.provider, "RunPod");
+        state.refresh();
+        assert!(state.list.is_none());
+
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err("Missing RunPod API key".into())).unwrap();
+        state.poll();
+        assert_eq!(state.list_error.as_deref(), Some("Missing RunPod API key"));
+        drop(state.list_job.take());
+        let (tx, rx) = channel::<Result<(PriceList, Preferences), String>>();
+        drop(tx);
+        state.list_job = Some(rx);
+        state.poll();
+        assert_eq!(state.list_error.as_deref(), Some("Price check ended without a result"));
+    }
+
+    #[test]
+    fn size_stock_is_looked_up_for_the_chosen_size() {
+        let profile = horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n",
+        )
+        .unwrap()
+        .profiles["dev"]
+        .clone();
+        let mut state = State::default();
+        let available = SizeAvailability {
+            best: Availability::High,
+            centers: 2,
+        };
+        let small = Profile {
+            memory_gb: 16,
+            ..profile.clone()
+        };
+        state.sizes.insert(
+            key(&small),
+            Ok(Fetched {
+                value: available,
+                at: Instant::now(),
+            }),
+        );
+        state.sizes.insert(key(&profile), Err("No stock data".into()));
+        assert_eq!(state.size(&profile, (8, 16)), Some(Ok(available)));
+        assert_eq!(state.size(&profile, (8, 32)), Some(Err("No stock data")));
+        assert_eq!(state.size(&profile, (4, 8)), None);
+        state.refresh();
+        assert_eq!(state.size(&profile, (8, 16)), None);
+    }
+}
