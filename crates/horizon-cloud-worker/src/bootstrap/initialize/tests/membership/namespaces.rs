@@ -1,3 +1,4 @@
+mod source;
 use super::*;
 use crate::bootstrap::{membership::mutate_with, namespaces::Boundary};
 use std::os::unix::fs::{MetadataExt, symlink};

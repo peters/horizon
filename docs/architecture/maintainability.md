@@ -681,3 +681,13 @@ project identity and startup/cancellation validation; its `storage` leaf owns
 staged directory creation, inode anchors and exclusive publication. Published
 trees are validated without repair, and cancellation retains their data. The
 `preparing` membership state does not imply source or session readiness.
+
+First source import uses `membership::Source` to bind the selected commit and
+transport byte identities. `project_reservations::source` retains local artifacts
+and frames private file streams; the existing host journal retains the exact
+signed request until worker publication is verified. Worker `bootstrap::source`
+coordinates preparation and recovery, its `storage` leaf owns inode anchors and
+exclusive publication, and its embedded Python helper validates Git/LFS/submodule
+material without checkout or network access. Membership `importing` remains an
+intent state; the separate source record proves durable publication. Startup and
+cancellation validate that record, and published source is never repaired in place.

@@ -67,6 +67,11 @@ enum Boundary {
 }
 
 impl Owner {
+    pub(crate) fn artifact_root(&self) -> Result<&Path> {
+        self.current()?;
+        Ok(&self.root)
+    }
+
     /// Create a new allocation identity and register a new, absent journal directory.
     /// Existing directories are never adopted, even when empty or missing state.
     ///

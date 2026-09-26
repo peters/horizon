@@ -15,7 +15,48 @@ use std::{
 pub(super) struct Material {
     pub modules: Vec<Module>,
     pub assets: Vec<Asset>,
+    #[serde(skip)]
+    budget: Option<CollectionBudget>,
 }
+struct CollectionBudget {
+    entries: usize,
+    paths: usize,
+    assets: usize,
+    bytes: u64,
+}
+impl CollectionBudget {
+    fn entry(&mut self, length: usize) -> Result<()> {
+        if length > 4096 {
+            return Err(Error::Invalid("Source path exceeds its collection limit"));
+        }
+        self.entries = self
+            .entries
+            .checked_sub(1)
+            .ok_or(Error::Invalid("Source tree exceeds its entry limit"))?;
+        self.paths = self
+            .paths
+            .checked_sub(length)
+            .ok_or(Error::Invalid("Source paths exceed their collection limit"))?;
+        Ok(())
+    }
+    fn asset(&mut self, size: u64) -> Result<()> {
+        self.assets = self
+            .assets
+            .checked_sub(1)
+            .ok_or(Error::Invalid("Source material exceeds its asset limit"))?;
+        self.bytes = self
+            .bytes
+            .checked_sub(size)
+            .ok_or(Error::Invalid("Source material exceeds its verification byte limit"))?;
+        Ok(())
+    }
+}
+struct Entry {
+    name: String,
+    oid: git2::Oid,
+    mode: i32,
+}
+
 #[derive(Serialize)]
 pub(super) struct Module {
     pub path: String,
@@ -36,6 +77,53 @@ impl Material {
         let mut result = Self::default();
         result.visit(repository, revision, Path::new(""), 0, runner)?;
         Ok(result)
+    }
+    #[cfg(target_os = "linux")]
+    pub fn collect_bounded(repository: &Path, revision: &str, runner: &Runner<'_>, limit: u64) -> Result<Self> {
+        let mut result = Self {
+            budget: Some(CollectionBudget {
+                entries: 65536,
+                paths: 16 * 1024 * 1024,
+                assets: 8192,
+                bytes: limit,
+            }),
+            ..Self::default()
+        };
+        result.visit(repository, revision, Path::new(""), 0, runner)?;
+        Ok(result)
+    }
+    fn entries(&mut self, tree: &git2::Tree<'_>, prefix: &Path, runner: &Runner<'_>) -> Result<Vec<Entry>> {
+        let mut entries = Vec::new();
+        let mut failure = None;
+        let walk = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+            let mut inspect = || -> Result<()> {
+                runner.cancel.check()?;
+                let name = entry.name().map_err(|_| Error::Invalid("Source paths must be UTF-8"))?;
+                if let Some(budget) = &mut self.budget {
+                    budget.entry(prefix.as_os_str().len() + root.len() + name.len() + 1)?;
+                }
+                if entry.kind() != Some(ObjectType::Tree) {
+                    entries.push(Entry {
+                        name: format!("{root}{name}"),
+                        oid: entry.id(),
+                        mode: entry.filemode(),
+                    });
+                }
+                Ok(())
+            };
+            match inspect() {
+                Ok(()) => TreeWalkResult::Ok,
+                Err(error) => {
+                    failure = Some(error);
+                    TreeWalkResult::Abort
+                }
+            }
+        });
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        walk.map_err(|_| Error::Invalid("Cannot inspect committed source tree"))?;
+        Ok(entries)
     }
     fn visit(
         &mut self,
@@ -70,29 +158,17 @@ impl Material {
             .revparse_single(revision)
             .and_then(|object| object.peel_to_tree())
             .map_err(|_| Error::Invalid("Selected submodule commit is not available locally"))?;
-        let mut entries = Vec::new();
-        let mut invalid_name = false;
-        let walk = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
-            let Ok(name) = entry.name() else {
-                invalid_name = true;
-                return TreeWalkResult::Abort;
-            };
-            if entry.kind() != Some(ObjectType::Tree) {
-                entries.push((format!("{root}{name}"), entry.id(), entry.filemode()));
-            }
-            TreeWalkResult::Ok
-        });
-        if invalid_name {
-            return Err(Error::Invalid("Source paths must be UTF-8"));
-        }
-        walk.map_err(|_| Error::Invalid("Cannot inspect committed source tree"))?;
+        let entries = self.entries(&tree, prefix, runner)?;
         let mut media = None;
         let attributes = super::attributes::Attributes::new(&repo, &tree)?;
-        for (name, oid, mode) in entries {
+        for Entry { name, oid, mode } in entries {
             runner.cancel.check()?;
             safe_path(Path::new(&name))?;
             let path = prefix.join(&name);
             if mode == 0o160_000 {
+                if self.modules.len() >= 256 {
+                    return Err(Error::Invalid("Source exceeds the supported submodule count"));
+                }
                 let local = directory.join(&name);
                 self.modules.push(Module {
                     path: portable_path(&path)?,
@@ -108,6 +184,9 @@ impl Material {
                 let Some((oid, size)) = pointer(&bytes)? else {
                     continue;
                 };
+                if let Some(budget) = &mut self.budget {
+                    budget.asset(size)?;
+                }
                 if media.is_none() {
                     media = Some(media_directory(directory, runner)?);
                 }
@@ -228,9 +307,19 @@ fn media_directory(repository: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
         .ok_or(Error::Invalid("Cannot locate local Git LFS objects"))
 }
 fn verify_object(path: &Path, oid: &str, size: u64, runner: &Runner<'_>) -> Result<()> {
-    let mut file = std::fs::File::open(path)
+    runner.cancel.check()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+    }
+    let mut file = options
+        .open(path)
         .map_err(|_| Error::Invalid("Fetch selected Git LFS objects locally before deploying"))?;
-    if file.metadata()?.len() != size {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() != size {
         return Err(Error::Invalid("Local Git LFS object size mismatch"));
     }
     let mut hash = Sha256::new();
@@ -253,8 +342,11 @@ fn verify_object(path: &Path, oid: &str, size: u64, runner: &Runner<'_>) -> Resu
         if n == 0 {
             break;
         }
-        hash.update(&buffer[..n]);
         completed += n as u64;
+        if completed > size {
+            return Err(Error::Invalid("Local Git LFS object grew during verification"));
+        }
+        hash.update(&buffer[..n]);
         if reported.elapsed() >= Duration::from_millis(250) {
             progress(completed);
             reported = Instant::now();
@@ -266,7 +358,7 @@ fn verify_object(path: &Path, oid: &str, size: u64, runner: &Runner<'_>) -> Resu
         use std::fmt::Write as _;
         let _ = write!(digest, "{byte:02x}");
     }
-    if digest != oid {
+    if completed != size || digest != oid {
         return Err(Error::Invalid("Local Git LFS object checksum mismatch"));
     }
     Ok(())

@@ -14,6 +14,8 @@ mod recovery;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]
+mod source;
+#[cfg(target_os = "linux")]
 mod store;
 use std::io;
 
@@ -118,4 +120,16 @@ pub(super) fn prepare() -> io::Result<()> {
     }
     #[cfg(not(target_os = "linux"))]
     Err(io::Error::other("Allocation startup requires a qualified Linux worker"))
+}
+
+pub(super) fn source(upload: bool) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        source::run(upload)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = upload;
+        Err(io::Error::other("Project source requires a qualified Linux worker"))
+    }
 }

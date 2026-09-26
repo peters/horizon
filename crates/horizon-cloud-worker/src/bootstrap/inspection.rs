@@ -73,6 +73,10 @@ fn inspect(
 }
 
 pub(super) fn probe(capabilities: &Capabilities) -> io::Result<()> {
+    probe_with_timeout(capabilities, Duration::from_secs(60))
+}
+
+pub(super) fn probe_with_timeout(capabilities: &Capabilities, timeout: Duration) -> io::Result<()> {
     // Version probes may create configuration. Keep it away from retained
     // project homes, credentials, global runtime files and the worker workspace.
     let home = tempfile::tempdir()?;
@@ -86,7 +90,7 @@ pub(super) fn probe(capabilities: &Capabilities) -> io::Result<()> {
             .env("XDG_CACHE_HOME", home.path())
             .env("XDG_DATA_HOME", home.path())
             .current_dir(home.path()),
-        Duration::from_secs(60),
+        timeout.min(Duration::from_secs(60)),
     )?;
     let output = std::str::from_utf8(&output).map_err(|_| invalid())?;
     for marker in [
@@ -116,6 +120,12 @@ impl Drop for ProbeProcess {
 }
 
 fn execute(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
+    execute_input(command, timeout, Stdio::null())
+}
+pub(super) fn execute_leased(command: &mut Command, timeout: Duration, lease: File) -> io::Result<Vec<u8>> {
+    execute_input(command, timeout, Stdio::from(lease))
+}
+fn execute_input(command: &mut Command, timeout: Duration, input: Stdio) -> io::Result<Vec<u8>> {
     let mut output = File::from(rustix::fs::memfd_create(
         "allocation-inspection",
         rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
@@ -127,7 +137,7 @@ fn execute(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
     let mut child = ProbeProcess(
         command
             .process_group(0)
-            .stdin(Stdio::null())
+            .stdin(input)
             .stdout(output.try_clone()?)
             .stderr(Stdio::null())
             .spawn()?,

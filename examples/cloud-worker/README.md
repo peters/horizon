@@ -556,4 +556,92 @@ project trees, host/worker restarts after a lost preparation reply and a failed
 host completion save, exact retries and retained sibling files over real local
 SSH. Provider identity is synthetic; this does not qualify a deployed image,
 live provider execution or physical power loss. Public UI/CLI/MCP attachment,
-source/session provisioning and worker-wide lifecycle remain pending.
+session provisioning and worker-wide lifecycle remain pending.
+
+### First committed project source
+
+The initial source-export host lane requires Linux descriptor paths; other host
+platforms fail closed until their anchored subprocess export is qualified.
+`project_reservations::import_source` exports one selected committed SHA-1 Git
+revision, its reachable history, local verified LFS objects and recursively pinned
+submodules. It retains private immutable transfer files beside the anchored host
+journal before signing `ImportProjectSource`. Retries of the same local repository
+and revision selector reuse those bytes even if the selector now resolves to a
+new commit; `resume` needs no original repository. There is no refresh operation.
+Before creating an export directory, the host durably records one generation
+intent with the selected project, repository, revision and directory name. Successful
+artifact publication replaces that intent atomically. An incomplete generation,
+including an uncertain save or ordinary export failure, blocks new exports on that
+owner after restart; it cannot accumulate a fresh directory on each retry. Its files
+remain retained. Automatic recovery or cleanup of incomplete generation is not
+supported; replacement paths are never adopted or recursively removed.
+Generation enforces one 4 GiB byte budget while writing the retained pack and tar
+and the disposable LFS/submodule staging files. It reserves a second copy of each
+retained byte plus the maximum request header for the temporary SSH input frame.
+Framing rechecks that budget and rejects artifact growth before copying excess
+bytes. This conservative reservation keeps retained transfer data below 2 GiB;
+material staging reduces the available capacity further. Scratch is private, outside
+the owner directory, and removed on ordinary completion or error; only pack and
+tar are retained after a successful export. Collection stops before exceeding
+65,536 tree entries, 16 MiB of accumulated project-relative path bytes (4 KiB per
+path), 256 submodules or 8,192 LFS references. Declared LFS bytes, including repeated
+references, share a verification limit equal to the production budget; excess
+references are rejected before hashing. Local LFS storage may resolve through
+symlinks, but the opened object must be a regular file with the declared size.
+FIFO or device substitution is rejected without waiting for a peer.
+
+`prepare-project-source` verifies the signed project request, live membership,
+settled namespace and current capabilities on every attempt, including historical
+retries. The host also repeats the existing read-only provider qualification and
+immutable image check. The worker's runtime/controller binding and the pinned SSH
+connection identify the actual target; the worker does not independently attest
+its provider image digest. Membership becomes `importing`, which records intent,
+not completed import or permission to start sessions.
+
+`import-project-source` repeats preparation under the allocation lock, then reads
+a four-byte big-endian JSON request length, that exact request, the declared Git
+pack and the auxiliary tar. The descriptor binds both lengths and SHA-256 hashes;
+the aggregate wire limit is 4 GiB including the length prefix and exact request bytes. Each worker request shares a 600-second deadline
+across input, capability probes and validation helpers; each helper also retains
+its 120-second limit. The host permits a caller-selected timeout up to 1,260 seconds
+for source preparation plus import, including source resumes. Shorter caller
+timeouts remain binding and are polled between host verification/framing chunks. Local export is cancellable and has separate command
+bounds; synchronous filesystem calls are not preempted. Full Git responses are
+capped at 16 MiB during execution, except tree listings, whose 20 MiB bound includes
+the host's path budget plus per-entry metadata. Attribute responses are streamed:
+expected paths and keys are checked, while non-LFS values are discarded without
+buffering their full contents. Pointer inspection reads at most 1,025 bytes.
+The helper and each Git child retain the allocation
+lock, fencing new mutations until the final writer exits even if its parent dies.
+Invalid archives, links, traversal, duplicate members,
+missing commits and mismatched committed submodule/LFS identities are rejected.
+Import does not check out files, fetch remotes, transfer Git config or run hooks.
+
+The completed store publishes exclusively at
+`/workspace/projects/<project-UUID>/repository/source`. It contains a bare
+`repository.git`, bare `module-N.git` repositories, verified `material/lfs` assets
+and the retained transfer files. Source ownership, parent/staging inode identities,
+descriptor and a complete file inventory digest are anchored in the allocation
+journal outside the store. Published content is validated without mutation.
+
+An exact retry checks any retained stream prefix, completes owned staging, or
+reconciles a durable import/rename whose reply was lost. A conflicting prefix,
+unknown directory, changed published store, or mkdir-to-inode-anchor interruption
+is fenced; recovery never resets or adopts it. Partial fixed metadata and uploaded file prefixes
+can be completed only when they match the expected bytes. Unknown Git locks or
+temporary object files left by an interrupted Git object publication remain
+fenced; they are not deleted or included in a published source store. Attribute
+inspection uses a disposable external index, so its interrupted lock does not
+block a later source retry. The tests inject publication boundaries and selected
+mid-helper states; they do not qualify arbitrary physical power-loss behavior.
+Startup accepts anchored pending
+imports for explicit recovery. Cancellation requires completed source publication
+and retains source and sibling data. Delayed source requests cannot revive a
+cancelled project. Source import adds no worktrees, homes, credentials, sessions,
+routes or public UI/CLI/MCP activation.
+
+The `sources` scenario in `scripts/cloud-initialization-smoke.py` exercises three
+committed repositories with history, LFS and submodules through real local SSH,
+including host/worker restarts after lost replies and failed completion saves.
+It uses synthetic provider ownership; live-provider and physical power-loss
+qualification remain separate gates under #805.

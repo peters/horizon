@@ -51,6 +51,7 @@ pub enum Action {
     ResumeWorker,
     AttachProject,
     InspectProject,
+    ImportProjectSource,
     ReconcileProject,
     StopProjectSessions,
     RemoveProject,
@@ -70,6 +71,7 @@ impl Action {
             | Self::CancelWorkerTransition
             | Self::ResumeWorker => false,
             Self::AttachProject
+            | Self::ImportProjectSource
             | Self::InspectProject
             | Self::ReconcileProject
             | Self::StopProjectSessions

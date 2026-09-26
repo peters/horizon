@@ -1,5 +1,6 @@
 //! Owning-host journals for logical project reservations, not project admission.
-mod journal;
+pub(super) mod journal;
+pub(super) mod source;
 use super::{
     Cancellation, bootstrap_initialization, bootstrap_recovery, bootstrap_recovery::connection::Snapshot,
     command::Runner, owner::Owner, ssh::Connection,
@@ -7,6 +8,7 @@ use super::{
 use horizon_cloud::Capabilities;
 use horizon_cloud_protocol::{ProjectIdentity, membership::Receipt};
 use journal::Journal;
+pub use source::import_source;
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
@@ -15,6 +17,8 @@ use std::{
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Private source artifact I/O failed")]
+    ArtifactsIo(#[from] std::io::Error),
     #[error("Project reservation context, request or receipt is invalid or changed")]
     Invalid,
     #[error("A retained project operation must be resumed before another operation")]
@@ -46,6 +50,7 @@ pub struct Reservation {
 pub(super) enum Change {
     Reserve(Reservation),
     PrepareNamespace(ProjectIdentity),
+    ImportSource(ProjectIdentity, horizon_cloud_protocol::membership::Source),
     Cancel(ProjectIdentity),
     Resume,
 }
@@ -130,10 +135,11 @@ fn execute(
     cancellation: &Cancellation,
     timeout: Duration,
 ) -> Result<Receipt> {
-    let deadline = Instant::now() + timeout.min(Duration::from_secs(180));
-    remaining(deadline)?;
+    let started = Instant::now();
     cancellation.check().map_err(super::Error::from)?;
     let saved = Journal::load(owner)?;
+    let deadline = started + timeout.min(timeout_limit(change, saved.as_ref()));
+    remaining(deadline)?;
     let image = match change {
         Change::Reserve(request) => request.image_digest.clone(),
         _ => saved.as_ref().ok_or(Error::Missing)?.image_digest.clone(),
@@ -148,10 +154,37 @@ fn execute(
         emit: &|_| {},
         secrets: Vec::new(),
     };
+    let artifact_root = owner.artifact_root()?.to_owned();
     coordinate(owner, &target, &image, change, &mut |connection, command, bytes| {
         remaining(deadline)?;
-        Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, remaining(deadline)?)?)
+        if command == "horizon-cloud-worker import-project-source" {
+            let artifacts = source::for_request(saved.as_ref().ok_or(Error::Missing)?, bytes)?;
+            let input = artifacts.frame(&artifact_root, bytes, cancellation, deadline)?;
+            Ok(runner.private_file_exchange(&mut connection.pinned_command(command), input, remaining(deadline)?)?)
+        } else {
+            if command == "horizon-cloud-worker prepare-project-source" {
+                source::for_request(saved.as_ref().ok_or(Error::Missing)?, bytes)?.verify(
+                    &artifact_root,
+                    cancellation,
+                    Some(deadline),
+                )?;
+            }
+            Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, remaining(deadline)?)?)
+        }
     })
+}
+
+pub(super) fn timeout_limit(change: &Change, saved: Option<&Journal>) -> Duration {
+    if matches!(change, Change::ImportSource(..))
+        || matches!(change, Change::Resume)
+            && saved
+                .and_then(|journal| journal.pending.as_ref())
+                .is_some_and(|pending| pending.receipt.state == horizon_cloud_protocol::membership::State::Importing)
+    {
+        horizon_cloud_protocol::membership::Source::CONTROLLER_TIMEOUT
+    } else {
+        Duration::from_secs(180)
+    }
 }
 
 pub(super) fn coordinate(
@@ -188,6 +221,20 @@ pub(super) fn coordinate(
         || bootstrap_recovery::require_existing(owner, target)? != snapshot.binding
     {
         return Err(Error::Invalid);
+    }
+    if pending.command()? == "horizon-cloud-worker prepare-project-source" {
+        let reply = exchange(
+            &snapshot.connection,
+            "horizon-cloud-worker import-project-source",
+            pending.request.as_bytes(),
+        )?;
+        if reply.len() > horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES
+            || serde_json::from_slice::<Receipt>(&reply).map_err(|_| Error::Invalid)? != pending.receipt
+            || Journal::load(owner)?.as_ref() != Some(&journal)
+            || bootstrap_recovery::require_existing(owner, target)? != snapshot.binding
+        {
+            return Err(Error::Invalid);
+        }
     }
     let receipt = pending.receipt.clone();
     journal.manifest = pending.next.clone();
