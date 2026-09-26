@@ -54,13 +54,13 @@ fn cpu_offers_meet_the_size_and_rank_by_estimated_total() {
         hours: Some(10.0),
         ..Requirements::default()
     };
-    let offers = offers(&list(), &requirements);
+    let offers = offers(&list(), &Preferences::default(), &requirements);
     let first = &offers[0];
     // 4 vCPU general purpose has 16 GB at $0.16/h, cheaper than 8 vCPU compute-optimized
     // (also 16 GB) at $0.24/h.
     assert_eq!(
-        (first.id.as_str(), first.vcpu, first.memory_gb),
-        ("cpu3g", Some(4), Some(16))
+        (first.id.as_str(), first.flavors.as_slice(), first.memory_gb),
+        ("cpu-4-16", &["cpu3g".to_owned()][..], Some(16))
     );
     // Ten hours of compute plus ten hours of a 20 GB network volume.
     let storage = 20.0 * 0.07 * 10.0 / MONTH_HOURS;
@@ -84,10 +84,35 @@ fn cpu_offers_meet_the_size_and_rank_by_estimated_total() {
 }
 
 #[test]
+fn cpu_offers_request_the_preferred_flavors_and_quote_the_dearest() {
+    let preferences = Preferences {
+        cpu_flavors: vec!["cpu3c".into(), "cpu3g".into()],
+        gpu_types: Vec::new(),
+    };
+    let requirements = Requirements {
+        min_vcpu: Some(4),
+        ..Requirements::default()
+    };
+    let offers = offers(&list(), &preferences, &requirements);
+    // Both preferred flavors offer 4 vCPU and 8 GB, so a cloud of that size requests
+    // both and the provider may allocate the dearer one.
+    let small = offers.iter().find(|offer| offer.id == "cpu-4-8").unwrap();
+    assert_eq!(small.flavors, ["cpu3c", "cpu3g"]);
+    assert!((small.hourly - 0.04 * 4.0).abs() < 1e-9);
+    assert_eq!(small.name, "Compute-Optimized or General Purpose · 4 vCPU · 8 GB");
+    // Only General Purpose offers 16 GB at 4 vCPU.
+    let larger = offers.iter().find(|offer| offer.id == "cpu-4-16").unwrap();
+    assert_eq!(larger.flavors, ["cpu3g"]);
+    // A size whose flavor has no price is left out rather than guessed.
+    assert!(offers.iter().all(|offer| offer.id != "cpu-4-32"));
+}
+
+#[test]
 fn cpu_offers_need_a_region_that_can_hold_the_workspace() {
     let cpu = |region: &str, list: &PriceList| {
         offers(
             list,
+            &Preferences::default(),
             &Requirements {
                 region: Some(region.into()),
                 ..Requirements::default()
@@ -108,6 +133,7 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
     let gpu = |requirements: Requirements| -> Vec<String> {
         offers(
             &list(),
+            &Preferences::default(),
             &Requirements {
                 gpu: true,
                 ..requirements
@@ -144,6 +170,7 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
     );
     let with_sold_out = offers(
         &list(),
+        &Preferences::default(),
         &Requirements {
             gpu: true,
             include_unavailable: true,
@@ -180,6 +207,7 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
     );
     let a5000 = &offers(
         &list(),
+        &Preferences::default(),
         &Requirements {
             gpu: true,
             ..Requirements::default()
@@ -195,6 +223,7 @@ fn gpu_offers_follow_stock_type_memory_region_and_price() {
 fn limits_apply_and_bad_amounts_are_rejected() {
     let limited = offers(
         &list(),
+        &Preferences::default(),
         &Requirements {
             limit: Some(2),
             ..Requirements::default()

@@ -1,9 +1,10 @@
 //! Ranked compute offers for given requirements, from a provider's price list, so an
 //! agent can choose the cheapest suitable worker before anything is rented. Read only:
 //! nothing here allocates compute.
+use super::prices::Preferences;
 use horizon_cloud::prices::{Availability, DataCenter, PriceList};
 use horizon_cloud::runpod::{
-    flavors::{FLAVORS, VCPU_COUNTS},
+    flavors::{self, Flavor, VCPU_COUNTS},
     volumes::REQUEST_SIZE_GB,
 };
 use serde::{Deserialize, Serialize};
@@ -98,7 +99,7 @@ pub struct Offer {
     pub provider: &'static str,
     /// `cpu` or `gpu`.
     pub kind: &'static str,
-    /// The CPU flavor or GPU type ID to request.
+    /// The CPU size as `cpu-<vCPU>-<GB>`, or the GPU type ID to request.
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,7 +108,12 @@ pub struct Offer {
     pub memory_gb: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_memory_gb: Option<u16>,
+    /// For a CPU size, the highest price among `flavors`, since the provider picks one.
     pub hourly: f64,
+    /// The CPU flavors a cloud of this size requests, from the preferences in cloud
+    /// settings; the provider allocates one of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flavors: Vec<String>,
     /// Compute for the expected hours plus the workspace storage for that time.
     pub estimated_total: f64,
     /// `high`, `medium`, `low`, `none`, or `checked_at_creation` for CPU sizes, whose exact
@@ -124,9 +130,10 @@ pub struct Offer {
     pub rentable: bool,
 }
 
-/// Offers in `list` meeting `requirements`, cheapest estimated total first.
+/// Offers in `list` meeting `requirements`, cheapest estimated total first. CPU sizes
+/// request the flavors `preferences` choose, as a deployment would.
 #[must_use]
-pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
+pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
     let hours = requirements.hours.unwrap_or(1.0);
     let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
     // Data centers in the requested region, or none (meaning every allowed one) without
@@ -141,7 +148,13 @@ pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
     let mut offers = if requirements.gpu {
         gpu_offers(list, requirements, &within, hours, storage_gb)
     } else {
-        cpu_offers(list, requirements, &within, hours, storage_gb)
+        cpu_offers(
+            list,
+            &preferences.cpu_flavors,
+            requirements,
+            &within,
+            (hours, storage_gb),
+        )
     };
     offers.retain(|offer| requirements.max_hourly.is_none_or(|max| offer.hourly <= max));
     offers.sort_by(|a, b| {
@@ -155,10 +168,10 @@ pub fn offers(list: &PriceList, requirements: &Requirements) -> Vec<Offer> {
 
 fn cpu_offers(
     list: &PriceList,
+    preferred: &[String],
     requirements: &Requirements,
     within: &[String],
-    hours: f64,
-    storage_gb: u32,
+    (hours, storage_gb): (f64, u32),
 ) -> Vec<Offer> {
     // A CPU worker keeps its workspace on a network volume, so the region needs a data
     // center that can hold one. Exact CPU stock is checked when the cloud is created.
@@ -171,26 +184,49 @@ fn cpu_offers(
     }
     // The network volume is billed whether the worker runs or not.
     let storage = list.storage.network_month(storage_gb) * hours / MONTH_HOURS;
-    let mut offers = Vec::new();
-    for price in &list.cpu {
-        let Some(flavor) = FLAVORS.iter().find(|flavor| flavor.id == price.id) else {
-            continue;
-        };
-        for vcpu in VCPU_COUNTS {
-            let memory_gb = vcpu * flavor.memory_per_vcpu;
-            if vcpu < requirements.min_vcpu.unwrap_or(0) || memory_gb < requirements.min_memory_gb.unwrap_or(0) {
+    let mut offers: Vec<Offer> = Vec::new();
+    for vcpu in VCPU_COUNTS {
+        for (size_memory, _) in flavors::memory_options(vcpu, 0) {
+            // The flavors a deployment of this size requests, never one on its own.
+            let Ok(requested) = flavors::for_size((vcpu, size_memory), 0, preferred) else {
+                continue;
+            };
+            let prices: Option<Vec<_>> = requested
+                .iter()
+                .map(|id| list.cpu.iter().find(|price| &price.id == id))
+                .collect();
+            let Some(prices) = prices else {
+                continue;
+            };
+            // The memory every one of them guarantees.
+            let memory_gb = requested
+                .iter()
+                .filter_map(|id| Flavor::get(id))
+                .map(|flavor| vcpu * flavor.memory_per_vcpu)
+                .min()
+                .unwrap_or(size_memory);
+            let duplicate = offers
+                .iter()
+                .any(|offer| offer.vcpu == Some(vcpu) && offer.flavors == requested);
+            if duplicate
+                || vcpu < requirements.min_vcpu.unwrap_or(0)
+                || memory_gb < requirements.min_memory_gb.unwrap_or(0)
+            {
                 continue;
             }
-            let hourly = price.per_vcpu_hour * f64::from(vcpu);
+            let hourly = prices.iter().map(|price| price.per_vcpu_hour).fold(0.0, f64::max) * f64::from(vcpu);
+            let mut names: Vec<&str> = prices.iter().map(|price| price.name.as_str()).collect();
+            names.dedup();
             offers.push(Offer {
                 provider: list.provider,
                 kind: "cpu",
-                id: price.id.clone(),
-                name: format!("{} · {vcpu} vCPU · {memory_gb} GB", price.name),
+                id: format!("cpu-{vcpu}-{memory_gb}"),
+                name: format!("{} · {vcpu} vCPU · {memory_gb} GB", names.join(" or ")),
                 vcpu: Some(vcpu),
                 memory_gb: Some(memory_gb),
                 gpu_memory_gb: None,
                 hourly,
+                flavors: requested,
                 estimated_total: hourly * hours + storage,
                 availability: "checked_at_creation",
                 regions_in_stock: Vec::new(),
@@ -234,6 +270,7 @@ fn gpu_offers(
                 memory_gb: None,
                 gpu_memory_gb: Some(gpu.memory_gb),
                 hourly: gpu.hourly,
+                flavors: Vec::new(),
                 estimated_total: gpu.hourly * hours + storage,
                 availability: level(availability),
                 regions_in_stock: regions_in_stock(list, &gpu.id, within),

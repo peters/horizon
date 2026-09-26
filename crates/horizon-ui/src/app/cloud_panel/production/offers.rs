@@ -23,13 +23,13 @@ impl HorizonApp {
         };
         let prices = &mut self.cloud_prototype.production.prices;
         prices.poll();
-        // A failed fetch is reported once; the next request asks the provider again.
-        if let Some(error) = prices.list_error.take() {
+        // Every request waiting on a failed fetch gets its error; a later one asks again.
+        if let Some(error) = prices.recent_list_error() {
             return Some(Err(format!("cloud_offers_unavailable: {error}")));
         }
         prices.request_fresh_list(&root, ctx);
         let fetched = prices.fresh_list()?;
-        let (list, _) = &fetched.value;
+        let (list, preferences) = &fetched.value;
         let observed = std::time::SystemTime::now()
             .checked_sub(fetched.at.elapsed())
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
@@ -38,7 +38,7 @@ impl HorizonApp {
             "provider": list.provider,
             "observed_at_millis": observed,
             "observed_seconds_ago": fetched.at.elapsed().as_secs(),
-            "offers": offers(list, &requirements),
+            "offers": offers(list, preferences, &requirements),
         })))
     }
 }
@@ -103,15 +103,21 @@ mod tests {
         app.cloud_prototype.root = Some(temp.path().to_path_buf());
         // Without prices, and with fetching disabled in tests, the request keeps waiting.
         assert_eq!(answer(&mut app, serde_json::json!({})), None);
-        app.cloud_prototype.production.prices.list_error = Some("Missing RunPod API key".into());
-        assert_eq!(
-            answer(&mut app, serde_json::json!({})),
-            Some(Err("cloud_offers_unavailable: Missing RunPod API key".to_owned()))
-        );
-        assert!(
-            app.cloud_prototype.production.prices.list_error.is_none(),
-            "the next request asks again"
-        );
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.list_error = Some("Missing RunPod API key".into());
+        prices.list_failed_at = Some(std::time::Instant::now());
+        // Every request waiting on the failed fetch gets its error.
+        for _ in 0..2 {
+            assert_eq!(
+                answer(&mut app, serde_json::json!({})),
+                Some(Err("cloud_offers_unavailable: Missing RunPod API key".to_owned()))
+            );
+        }
+        // A later request asks the provider again.
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.list_failed_at = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(31));
+        assert_eq!(answer(&mut app, serde_json::json!({})), None);
+        assert!(app.cloud_prototype.production.prices.list_error.is_none());
         let invalid = answer(&mut app, serde_json::json!({"max_hourly": -1}));
         assert!(matches!(invalid, Some(Err(error)) if error.starts_with("cloud_offers_invalid_request")));
         let unknown = answer(&mut app, serde_json::json!({"rent": true}));
