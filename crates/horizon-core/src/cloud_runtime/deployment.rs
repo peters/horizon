@@ -9,7 +9,7 @@ pub mod replacement;
 mod sizing;
 mod source;
 pub(super) mod storage;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use agent_credentials::{configure_agent_auth, validate_agent_auth};
