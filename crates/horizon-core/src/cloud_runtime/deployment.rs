@@ -120,7 +120,6 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     )));
     provision(&provider, &store, &mut state, &spec, cancel, emit)?;
     let (connection, contract) = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
-    let container_started = contract.container_started;
     if !state.source_ready {
         state.stage = Stage::Worktrees;
         store.save(&state)?;
@@ -132,17 +131,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
-    if let Some(git_auth) = git_auth {
-        git_auth.install(&connection, &runner)?;
-    } else {
-        runner.run(
-            "Git credential removal",
-            &mut connection.command(
-                "if command -v horizon-worker-git-auth >/dev/null 2>&1; then horizon-worker-git-auth clear; fi",
-            ),
-            Duration::from_secs(20),
-        )?;
-    }
+    configure_git_auth(git_auth, &connection, &runner)?;
     if let Some(browser_auth) = browser_auth {
         state.browserstack_targets.clone_from(browser_auth.targets());
         store.arm_browserstack(&mut state)?;
@@ -150,7 +139,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
     replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
-    state.timeline = Some(timeline.finish(reconnected, container_started, std::time::SystemTime::now()));
+    state.timeline = Some(timeline.finish(reconnected, contract.container_started, std::time::SystemTime::now()));
     finish_ready(state, &store, started, emit)
 }
 
@@ -231,6 +220,23 @@ fn provision(
     Ok(())
 }
 
+/// Installs the repository's Git binding, or removes any earlier one from the worker.
+fn configure_git_auth(
+    git_auth: Option<super::git_auth::Prepared>,
+    connection: &Connection,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    if let Some(git_auth) = git_auth {
+        return git_auth.install(connection, runner);
+    }
+    runner.run(
+        "Git credential removal",
+        &mut connection
+            .command("if command -v horizon-worker-git-auth >/dev/null 2>&1; then horizon-worker-git-auth clear; fi"),
+        Duration::from_secs(20),
+    )?;
+    Ok(())
+}
 fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
     state.source_ready = true;
     state.stage = Stage::Sessions;

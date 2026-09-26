@@ -113,7 +113,7 @@ impl Timeline {
                 None => phases.push((span.phase, duration)),
             }
         }
-        phases.sort_by(|a, b| b.1.cmp(&a.1));
+        phases.sort_by_key(|(_, spent)| std::cmp::Reverse(*spent));
         phases
     }
 }
