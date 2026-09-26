@@ -27,6 +27,9 @@ const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 const RESPONSE_LIMIT: u64 = 4 * 1024 * 1024;
 /// The per-request budget.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The profile `provider` value that selects Hetzner. Profiles may name it; the
+/// deployment coordinator refuses it until the Hetzner deployment path exists.
+pub const PROVIDER: &str = "hetzner";
 /// Label on every resource this adapter creates, naming the operation that owns it.
 pub const OPERATION_LABEL: &str = "horizon-operation";
 /// The largest page Hetzner serves.

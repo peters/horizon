@@ -176,6 +176,30 @@ fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does
     );
 }
 #[test]
+fn a_hetzner_cloud_is_refused_before_any_provider_or_state_access() {
+    let root = tempfile::tempdir().unwrap();
+    let request = Request {
+        cloud_id: "hetzner-fixture".into(),
+        repository: root.path().join("repository-is-not-mounted"),
+        revision: "a".repeat(40),
+        profile: serde_json::from_value(
+            serde_json::json!({"provider":"hetzner","image":"registry.example.com/worker","cpu":4,"memory_gb":8}),
+        )
+        .unwrap(),
+        state_root: root.path().join("state"),
+        settings: serde_json::from_value(
+            serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]}),
+        )
+        .unwrap(),
+    };
+    // The UI prepares a record first and then deploys; neither may write state.
+    let error = prepare(&request).unwrap_err();
+    assert_eq!(error.to_string(), "Hetzner clouds cannot be deployed yet");
+    let error = deploy(&request, &Cancellation::default(), &|_| {}).unwrap_err();
+    assert_eq!(error.to_string(), "Hetzner clouds cannot be deployed yet");
+    assert!(!request.state_root.exists(), "no deployment state was written");
+}
+#[test]
 #[cfg(unix)]
 fn preparation_preserves_pinned_revision_without_reading_a_repository() {
     let root = tempfile::tempdir().unwrap();
