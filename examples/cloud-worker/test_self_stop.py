@@ -63,6 +63,10 @@ class WatcherTests(unittest.TestCase):
             self.stop(cores=None)
         with self.assertRaisesRegex(Refused, 'short reason'):
             self.stop(reason='  ')
+        # Only text is a reason; other JSON values fail closed.
+        for invalid in [123, {'text': 'done'}, ['done'], None, True]:
+            with self.assertRaisesRegex(Refused, 'short reason'):
+                self.stop(reason=invalid)
         self.assertEqual(self.requests, [])
         self.assertFalse(self.log.exists())
 
@@ -183,7 +187,9 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             log = Path(root, 'self-stops.jsonl')
             self.assertIsNone(STOP['last_stop'](log))
-            log.write_text('{"at": 1, "reason": "first"}\n{"at": 2, "reason": "   "}\nbroken\n')
+            log.write_text('{"at": 1, "reason": "first"}\n{"at": 2, "reason": "   "}\nbroken\n'
+                           '{"at": -3, "reason": "negative"}\n{"at": true, "reason": "flag"}\n'
+                           '{"at": 4, "reason": "line\\nbreak"}\n{"at": 5, "reason": "' + 'x' * 201 + '"}\n')
             self.assertEqual(STOP['last_stop'](log), {'at': 1, 'reason': 'first', 'agent': '', 'session': ''})
             # A log that exists but cannot be read is not "no stop recorded".
             unreadable = Path(root, 'directory.jsonl')

@@ -101,7 +101,9 @@ class Refused(Exception):
 
 
 def reason_text(reason):
-    text = ' '.join(str(reason or '').split())
+    # Only text is a reason; anything else fails closed rather than being coerced.
+    text = ' '.join(reason.split()) if isinstance(reason, str) else ''
+    text = ''.join(character for character in text if character.isprintable())
     if not text:
         raise Refused('Give a short reason for stopping this worker.')
     return text[:REASON_LIMIT]

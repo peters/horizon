@@ -59,12 +59,21 @@ def last_stop(log=STOP_LOG):
             record = json.loads(line)
         except ValueError:
             continue
-        if (isinstance(record, dict) and isinstance(record.get('at'), int)
-                and isinstance(record.get('reason'), str) and record['reason'].strip()):
+        if well_formed(record):
             text = lambda key: record[key] if isinstance(record.get(key), str) else ''
-            return {'at': record['at'], 'reason': ' '.join(record['reason'].split())[:200],
-                    'agent': text('agent'), 'session': text('session')}
+            return {'at': record['at'], 'reason': record['reason'], 'agent': text('agent'), 'session': text('session')}
     return None
+
+
+def well_formed(record):
+    """The same rules Horizon applies to a reported stop, so a record it would reject is
+    skipped here rather than reported and mistaken for no stop at all."""
+    if not isinstance(record, dict):
+        return False
+    at, reason = record.get('at'), record.get('reason')
+    return (isinstance(at, int) and not isinstance(at, bool) and 0 <= at < 2 ** 64
+            and isinstance(reason, str) and reason.strip() != '' and len(reason) <= 200
+            and all(character.isprintable() for character in reason))
 
 
 def respond(message, stop=request_stop):
