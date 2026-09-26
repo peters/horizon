@@ -192,6 +192,9 @@ fn a_hetzner_cloud_is_refused_before_any_provider_or_state_access() {
         )
         .unwrap(),
     };
+    // The UI prepares a record first and then deploys; neither may write state.
+    let error = prepare(&request).unwrap_err();
+    assert_eq!(error.to_string(), "Hetzner clouds cannot be deployed yet");
     let error = deploy(&request, &Cancellation::default(), &|_| {}).unwrap_err();
     assert_eq!(error.to_string(), "Hetzner clouds cannot be deployed yet");
     assert!(!request.state_root.exists(), "no deployment state was written");

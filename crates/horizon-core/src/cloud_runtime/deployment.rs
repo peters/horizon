@@ -62,6 +62,15 @@ impl Request {
         }
     }
 }
+/// Hetzner profiles are validated and recorded, but only `RunPod` can deploy until
+/// the Hetzner deployment path lands. Checked before any state or provider access,
+/// in both preparation and deployment, so nothing reaches `RunPod` for them.
+fn deployable(profile: &horizon_cloud::Profile) -> Result<()> {
+    if profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid("Hetzner clouds cannot be deployed yet"));
+    }
+    Ok(())
+}
 /// # Errors
 /// Saves a retryable record for an already resolved commit before persisting deployment intent.
 /// Does not invoke Git; deployment validates the committed tree before allocation.
@@ -69,6 +78,7 @@ pub fn prepare(request: &Request) -> Result<()> {
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
+    deployable(&request.profile)?;
     let store = Store::lock(&request.state_root)?;
     initial_state(request, &store).map(|_| ())
 }
@@ -86,11 +96,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
-    // Hetzner clouds are recorded and validated, but only RunPod can deploy until
-    // the Hetzner deployment path lands; nothing here may reach RunPod for them.
-    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid("Hetzner clouds cannot be deployed yet"));
-    }
+    deployable(&request.profile)?;
     let store = Store::lock(&request.state_root)?;
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
