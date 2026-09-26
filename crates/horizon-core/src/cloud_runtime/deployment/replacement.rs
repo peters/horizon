@@ -15,7 +15,7 @@ use super::{
     },
     Error, Event, Request, Result, Stage, Store,
 };
-use crate::cloud_runtime::command::Runner;
+use crate::cloud_runtime::{command::Runner, siblings};
 use horizon_cloud::{
     Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
     runpod::{
@@ -295,6 +295,7 @@ fn same_worker(state: &Deployment) -> Result<()> {
 
 fn ready(state: &Deployment) -> Result<()> {
     state.refuse_pending_replacement()?;
+    siblings::refuse_rebuild(state)?;
     if state.profile.build.is_none() {
         return Err(Error::Invalid(NO_RECIPE));
     }

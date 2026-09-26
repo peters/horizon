@@ -90,6 +90,8 @@ impl Records {
             session_restart,
             timeline: _,
             last_self_stop: _,
+            // Records with siblings are the sibling record version, which `from_legacy` refuses.
+            siblings: _,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -152,6 +154,7 @@ impl Records {
             // reason an agent last stopped the worker; the next readiness check reports it again.
             timeline: None,
             last_self_stop: None,
+            siblings: None,
         }
     }
 }

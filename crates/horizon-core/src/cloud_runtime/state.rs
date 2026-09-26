@@ -72,6 +72,14 @@ pub struct Deployment {
     /// reported. Omitted when none, so earlier records keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_self_stop: Option<super::worker_contract::SelfStop>,
+    /// Same-worker siblings pinned before the image was built. Omitted when none, so
+    /// single-repository records keep their encoding; a set without members is none.
+    #[serde(
+        default,
+        deserialize_with = "super::siblings::Set::decode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub siblings: Option<super::siblings::Set>,
 }
 
 impl Deployment {
@@ -87,6 +95,14 @@ impl Deployment {
                 && worker.desired_status == "RUNNING"
                 && worker.ssh_address().is_some()
         })
+    }
+
+    /// Version 1 records have no siblings; only the sibling record version carries them.
+    fn supported_version(&self) -> bool {
+        match &self.siblings {
+            None => self.version == 1,
+            Some(set) => self.version == super::siblings::RECORD_VERSION && set.fits(),
+        }
     }
 
     pub(super) fn normalize_readiness_history(&mut self) {
@@ -159,7 +175,7 @@ impl Store {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let mut state: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
-                if state.version != 1 {
+                if !state.supported_version() {
                     return Err(Error::Invalid("Unsupported cloud state"));
                 }
                 state.normalize_readiness_history();
@@ -178,6 +194,11 @@ impl Store {
     /// # Errors
     /// Syncs file contents and parent directory before returning to the provider.
     pub fn save(&self, state: &Deployment) -> Result<()> {
+        if !state.supported_version() {
+            return Err(Error::Invalid(
+                "Cloud state version does not match its same-worker siblings",
+            ));
+        }
         let bytes = serde_json::to_vec_pretty(state).map_err(|_| Error::Json)?;
         let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
         file.write_all(&bytes)?;
@@ -322,5 +343,54 @@ mod tests {
         assert!(state.image_replacement.is_none() && state.session_restart.is_none());
         let encoded = serde_json::to_vec_pretty(&state).unwrap();
         assert_eq!(String::from_utf8(encoded).unwrap(), LEGACY_ENCODING);
+        assert!(state.siblings.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)] // Store::lock needs durable directory updates, which only Unix hosts have.
+    fn only_the_sibling_record_version_loads_pinned_siblings() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        let mut set = super::super::siblings::Set {
+            primary_directory: "app".into(),
+            members: vec![super::super::siblings::Sibling {
+                alias: "native".into(),
+                repository: "example/native-lib".into(),
+                directory: "native-lib".into(),
+                revision: "b".repeat(40),
+                local_repository: "/synthetic/native-lib".into(),
+                profile: "gpu".into(),
+            }],
+        };
+        let write = |state: &Deployment| {
+            assert!(store.save(state).is_err(), "an unloadable record is never saved");
+            std::fs::write(root.path().join("deployment.json"), serde_json::to_vec(state).unwrap()).unwrap();
+        };
+        state.siblings = Some(set.clone());
+        write(&state);
+        assert!(store.load().is_err(), "version 1 never carries siblings");
+        state.version = super::super::siblings::RECORD_VERSION;
+        store.save(&state).unwrap();
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.siblings, state.siblings);
+        let encoded = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(encoded["siblings"]["members"][0]["directory"], "native-lib");
+        state.siblings = None;
+        write(&state);
+        assert!(store.load().is_err(), "the sibling version needs siblings");
+        set.members.clear();
+        state.siblings = Some(set);
+        assert!(
+            store.save(&state).is_err(),
+            "a set without members would not load again"
+        );
+        state.version = 1;
+        write(&state);
+        assert_eq!(
+            store.load().unwrap().unwrap().siblings,
+            None,
+            "a set without members is no siblings"
+        );
     }
 }
