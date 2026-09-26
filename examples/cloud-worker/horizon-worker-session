@@ -55,6 +55,8 @@ prepare() {
             git --git-dir="$repository" branch "agent/$id" "$base"
         fi
         git --git-dir="$repository" worktree add "$path" "agent/$id"
+    elif ! present "$path" "$repository"; then
+        echo 'Session worktree belongs to another repository. No process was started.' >&2; exit 3
     fi
     [ "$(git -C "$path" rev-parse HEAD)" = "$base" ] || { echo 'Initial worktree revision mismatch' >&2; exit 3; }
     # No process has been launched: finish a checkout interrupted after Git wrote HEAD.
@@ -94,7 +96,7 @@ if [ -n "$operation" ]; then
         echo 'Session was never launched; attaching starts it. No process was started.' >&2; exit 5
     fi
     if ! all_present; then
-        echo 'Session worktree is missing. No replacement process was started.' >&2; exit 3
+        echo 'Session worktree is missing or belongs to another repository. No replacement process was started.' >&2; exit 3
     fi
     session_data
     # Persist the fence before starting: a retry of this operation never starts a second process.

@@ -271,7 +271,8 @@ session's revision, each sibling at its manifest revision. Submodules and LFS co
 are prepared from each repository's own material before the launch fence, so relative
 paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch
 refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
-its own repository, and never recreates it.
+its own repository, and never recreates it. Attach refuses the same way when a path it
+would complete after an interrupted preparation holds another repository.
 
 ### Session data directory
 

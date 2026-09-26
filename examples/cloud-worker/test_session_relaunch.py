@@ -355,20 +355,49 @@ class SessionRelaunchTests(unittest.TestCase):
         self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
 
     def test_relaunch_refuses_another_repository_at_a_worktree_path(self):
-        _, _, sibling = self.launch_beside_sibling()
+        library, _, sibling = self.launch_beside_sibling()
         self.reset_container()
-        for replaced in [sibling, self.worktree]:
+        primary = self.workspace / 'repository.git'
+        library_repository = self.workspace / 'siblings/lib/repository.git'
+        cases = [(sibling, library_repository, primary, self.revision),
+                 (self.worktree, primary, library_repository, library)]
+        for replaced, own, other, other_revision in cases:
             moved = replaced.with_name(replaced.name + '.moved')
             replaced.rename(moved)
-            self.git('init', '--quiet', replaced)
-            refused = self.relaunch()
-            self.assertEqual(refused.returncode, 3, replaced)
-            self.assertIn('worktree is missing', refused.stderr)
-            shutil.rmtree(replaced)
+            # An unrelated repository, a clone of the path's own repository and a worktree of the other one.
+            for create in [lambda: self.git('init', '--quiet', replaced),
+                           lambda: self.git('clone', '--quiet', own, replaced),
+                           lambda: self.git('--git-dir', other, 'worktree', 'add', '--quiet', '--detach',
+                                            replaced, other_revision)]:
+                create()
+                refused = self.relaunch()
+                self.assertEqual(refused.returncode, 3, (replaced, refused.stderr))
+                self.assertIn('belongs to another repository', refused.stderr)
+                shutil.rmtree(replaced)
+                self.git('--git-dir', other, 'worktree', 'prune')
             moved.rename(replaced)
         self.assertEqual(len(self.launches()), 1)
         self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
-        self.assertEqual(self.relaunch().returncode, 0)
+        relaunched = self.relaunch()
+        self.assertEqual(relaunched.returncode, 0, relaunched.stderr)
+
+    def test_attach_refuses_another_repository_at_an_interrupted_worktree_path(self):
+        library = self.add_sibling('lib', {'library.txt': 'library base\n'})
+        self.set_siblings([('lib', 'native-lib', library)])
+        (self.tools / 'horizon-worker-source').write_text('#!/bin/sh\nexit 1\n')
+        self.assertNotEqual(self.run_session().returncode, 0)
+        (self.tools / 'horizon-worker-source').write_text('#!' + sys.executable + '\n' + SOURCE)
+        primary = self.worktree / 'app'
+        shutil.rmtree(primary)
+        # A clone at the session revision passes the revision check; only its repository differs.
+        self.git('clone', '--quiet', self.workspace / 'repository.git', primary)
+        (primary / 'file.txt').write_text('clone edit\n')
+        refused = self.run_session()
+        self.assertEqual(refused.returncode, 3, refused.stderr)
+        self.assertIn('belongs to another repository', refused.stderr)
+        self.assertEqual((primary / 'file.txt').read_text(), 'clone edit\n')
+        self.assertFalse((self.worktree / 'native-lib').exists())
+        self.assertEqual(self.launches(), [])
 
     def test_interrupted_preparation_completes_the_sibling_on_the_next_attach(self):
         library = self.add_sibling('lib', {'library.txt': 'library base\n'})
