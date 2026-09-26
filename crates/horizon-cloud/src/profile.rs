@@ -287,7 +287,17 @@ mod tests {
     #[test]
     fn idle_stop_is_optional_bounded_and_excludes_hosted_devices() {
         let mut config = CloudConfig::parse(EXAMPLE).unwrap();
-        assert_eq!(config.profiles["development"].idle_stop_minutes, Some(30));
+        assert!(
+            config
+                .profiles
+                .values()
+                .all(|profile| profile.idle_stop_minutes.is_none())
+        );
+        let yaml = EXAMPLE.replace("    # idle_stop_minutes: 30", "    idle_stop_minutes: 30");
+        assert_eq!(
+            CloudConfig::parse(&yaml).unwrap().profiles["development"].idle_stop_minutes,
+            Some(30)
+        );
         let mut profile = config.profiles.remove("image-only").unwrap();
         let saved = serde_json::to_value(&profile).unwrap();
         assert!(saved.get("idle_stop_minutes").is_none());

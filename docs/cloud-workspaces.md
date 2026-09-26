@@ -230,8 +230,8 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends running processes; storage can remain billable. A profile can set
-`idle_stop_minutes` (10 to 1440) so a dedicated worker stops itself after that
+Stop ends running processes; storage can remain billable. Idle stop is off unless
+a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops itself after that
 long without agent activity, even while this computer is offline. The worker
 counts as active while any agent terminal prints output or its container uses
 at least half a CPU core, so a quiet build keeps it running. It stops only
