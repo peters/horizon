@@ -188,7 +188,12 @@ impl HorizonApp {
         let production = &mut self.cloud_prototype.production;
         let publication = &mut production.offer_publication;
         publication.poll(now);
-        if publication.job.is_some() || publication.next_check.is_some_and(|at| now < at) {
+        if publication.job.is_some() {
+            return;
+        }
+        if let Some(at) = publication.next_check.filter(|at| now < *at) {
+            // An earlier frame must not swallow the check: ask for one when it is due.
+            ctx.request_repaint_after(at - now);
             return;
         }
         publication.next_check = Some(now + CHECK_EVERY);
