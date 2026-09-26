@@ -318,9 +318,10 @@ already on it, from that base or an earlier line, stays where it is. `KEY` is a 
 sets or clears for every session are refused: `PATH`, `HOME`, `DISPLAY`, `HORIZON`, every
 `HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
 and `ANTHROPIC_CUSTOM_HEADERS`. The directory holds at most 64 regular files
-of at most 16 KiB each, and a value is at most 4096 characters. Any other line, a control
-character (including tab, on any line), invalid UTF-8, another kind of entry or a larger
-file is refused with its file and line.
+of at most 16 KiB each, and a value is at most 4096 characters. A line that is not one of
+the entries above, contains a control character (including tab, on any line) or breaks a
+limit is refused with its file and line; invalid UTF-8, an oversized or misnamed file, another kind of
+entry, too many files or a path that is not a directory is refused with its path.
 
 `horizon-worker-check` validates the files, so a malformed file fails the image check,
 worker readiness and every session attach or relaunch before anything is started.
