@@ -35,7 +35,8 @@ pub struct Catalog {
     /// A primary IPv4 address per month, by location.
     pub ipv4_month_eur: BTreeMap<String, f64>,
     /// A primary IPv4 address per started hour, by location. Hetzner's hourly rate is
-    /// above a thirtieth of the monthly one, so short runs use it.
+    /// above the monthly price divided by 730, so short runs use it. A location
+    /// without one is left out, and so are its offers.
     #[serde(default)]
     pub ipv4_hour_eur: BTreeMap<String, f64>,
     /// The region of each location, named as other providers' regions are, such as
@@ -163,10 +164,8 @@ impl Hetzner {
             .map(|price| Ok((price.location.clone(), amount(&price.price_monthly)?)))
             .collect::<Result<_, CloudError>>()?;
         let ipv4_hour_eur = ipv4()
-            .map(|price| {
-                let hourly = price.price_hourly.as_ref().ok_or(CloudError::InvalidResponse)?;
-                Ok((price.location.clone(), amount(hourly)?))
-            })
+            .filter_map(|price| Some((price.location.clone(), price.price_hourly.as_ref()?)))
+            .map(|(location, hourly)| Ok((location, amount(hourly)?)))
             .collect::<Result<_, CloudError>>()?;
         Ok(Catalog {
             offers,

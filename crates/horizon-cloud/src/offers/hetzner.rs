@@ -1,7 +1,7 @@
 //! Hetzner offers, ranked from its catalog. Hetzner bills compute per started hour up
 //! to a monthly cap, in euros net of VAT, and its availability flag is advisory, so it
 //! is reported but never used to hide an offer.
-use super::{DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_LIMIT, MONTH_HOURS, Offer, Requirements, normalize};
+use super::{DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_HOURS, MAX_LIMIT, MONTH_HOURS, Offer, Requirements, normalize};
 use crate::hetzner::catalog::{self, Catalog};
 use time::{Date, Month, OffsetDateTime};
 
@@ -25,7 +25,12 @@ pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetD
     if requirements.gpu {
         return Vec::new();
     }
-    let hours = requirements.hours.unwrap_or(1.0);
+    // Validated requirements stay within a year; anything else is priced as a year.
+    let hours = requirements
+        .hours
+        .filter(|hours| hours.is_finite())
+        .unwrap_or(1.0)
+        .clamp(0.0, MAX_HOURS);
     // The workspace volume is kept while the cloud is stopped; the server and its
     // IPv4 address are deleted then.
     let volume_month = catalog.volume_gb_month_eur * f64::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));

@@ -158,6 +158,16 @@ fn an_offer_whose_address_cannot_be_priced_is_left_out() {
 }
 
 #[test]
+fn unvalidated_hours_never_price_as_nan() {
+    let infinite = Requirements {
+        hours: Some(f64::INFINITY),
+        ..Requirements::default()
+    };
+    let offers = hetzner(&catalog(), &infinite);
+    assert!(!offers.is_empty() && offers.iter().all(|offer| offer.estimated_total.is_finite()));
+}
+
+#[test]
 fn memory_is_counted_in_whole_gigabytes() {
     assert_eq!(whole_gb(16.0), Some(16));
     assert_eq!(whole_gb(0.5), Some(0));

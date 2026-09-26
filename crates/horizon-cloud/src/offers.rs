@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
 const DEFAULT_STORAGE_GB: u16 = 20;
 /// The longest expected duration priced: a year.
-const MAX_HOURS: f64 = 24.0 * 366.0;
+pub(crate) const MAX_HOURS: f64 = 24.0 * 366.0;
 
 /// What the work needs. Every field is optional; an empty request lists the cheapest CPU
 /// workers.
