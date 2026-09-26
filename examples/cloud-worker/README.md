@@ -32,7 +32,9 @@ on reconnect. Inside an explicit capability section, omitted lists are empty and
 omitted desktop support is disabled.
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
-control service. Device control/ownership works without a browser executable or
+control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
+supervisor also owns `horizon-worker-idle`, which stops this worker through the
+provider after that period without agent output or container CPU use. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.
 Disabled agent requests are rejected before writing session or worktree state.
 

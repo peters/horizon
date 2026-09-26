@@ -410,6 +410,9 @@ fn create_body(spec: &WorkerSpec) -> Value {
     });
     if let Some(metadata) = &spec.startup_metadata {
         body["env"][crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
+    } else if let Some(minutes) = profile.idle_stop_minutes {
+        // Only a dedicated worker's supervisor runs the idle watcher.
+        body["env"][crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes.to_string());
     }
     if profile.gpu {
         body["gpuCount"] = json!(1);

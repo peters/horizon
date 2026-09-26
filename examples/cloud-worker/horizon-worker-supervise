@@ -17,6 +17,8 @@ RUNTIME = Path('/run/horizon-worker')
 WORKSPACE = Path('/workspace')
 DESKTOP = {'xvfb', 'openbox', 'vnc'}
 SERVICES = {'control', 'sshd'}
+# Started only when the worker was created with an idle period.
+OPTIONAL = {'idle'}
 
 
 def process_identity(pid, allow_exited=False):
@@ -66,7 +68,7 @@ def check_ready(runtime=RUNTIME, workspace=WORKSPACE):
     selected = json.loads((workspace / 'capabilities.json').read_text())
     state = json.loads((runtime / 'services.json').read_text())
     expected = SERVICES | (DESKTOP if selected.get('desktop', False) else set())
-    if set(state['services']) != expected:
+    if set(state['services']) - OPTIONAL != expected:
         raise ValueError('Required worker service ownership is incomplete')
     for identity in [state['supervisor'], *state['services'].values()]:
         if process_identity(identity['pid']) != identity:
@@ -194,7 +196,7 @@ class Supervisor:
 
     def publish(self, desktop):
         self.assert_running(configuring=True)
-        names = SERVICES | (DESKTOP if desktop else set())
+        names = SERVICES | (DESKTOP if desktop else set()) | (OPTIONAL & set(self.children))
         state = {'supervisor': process_identity(os.getpid()),
                  'services': {name: self.identities[name] for name in sorted(names)}}
         pending = self.runtime / 'services.new'
@@ -214,6 +216,8 @@ class Supervisor:
         self.configure(['horizon-worker-configure'])
         self.start('control', ['horizon-cloud-worker', 'serve'])
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
+        if os.environ.get('HORIZON_IDLE_STOP_MINUTES'):
+            self.start('idle', ['horizon-worker-idle'])
         self.publish(desktop)
         next_desktop_check = 0
         while True:

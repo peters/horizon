@@ -33,6 +33,9 @@ pub struct Profile {
     pub bootstrap: Bootstrap,
     #[serde(default)]
     pub capabilities: crate::Capabilities,
+    /// Minutes without agent activity before a dedicated worker stops itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_stop_minutes: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -141,6 +144,17 @@ impl Profile {
                 "Unsupported worker contract or readiness timeout",
             ));
         }
+        if let Some(minutes) = self.idle_stop_minutes {
+            if !IDLE_STOP_MINUTES.contains(&minutes) {
+                return Err(ProfileError::Invalid("idle_stop_minutes must be between 10 and 1440"));
+            }
+            // A stopped worker cannot release hosted devices it still holds.
+            if self.capabilities.browserstack.is_some() {
+                return Err(ProfileError::Invalid(
+                    "idle_stop_minutes cannot be combined with hosted devices",
+                ));
+            }
+        }
         if !valid_image(&self.image) {
             return Err(ProfileError::Invalid("Invalid registry image reference"));
         }
@@ -156,6 +170,10 @@ impl Profile {
         Ok(())
     }
 }
+/// Worker environment variable carrying a dedicated worker's idle period in minutes.
+pub const IDLE_STOP_ENVIRONMENT_KEY: &str = "HORIZON_IDLE_STOP_MINUTES";
+/// Accepted idle periods: long enough to outlast a quiet build, at most one day.
+pub const IDLE_STOP_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
 #[must_use]
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -265,6 +283,26 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn idle_stop_is_optional_bounded_and_excludes_hosted_devices() {
+        let mut config = CloudConfig::parse(EXAMPLE).unwrap();
+        assert_eq!(config.profiles["development"].idle_stop_minutes, Some(30));
+        let mut profile = config.profiles.remove("image-only").unwrap();
+        let saved = serde_json::to_value(&profile).unwrap();
+        assert!(saved.get("idle_stop_minutes").is_none());
+        assert_eq!(serde_json::from_value::<Profile>(saved).unwrap(), profile);
+        for (minutes, accepted) in [(9, false), (10, true), (30, true), (1440, true), (1441, false)] {
+            profile.idle_stop_minutes = Some(minutes);
+            assert_eq!(profile.validate(false).is_ok(), accepted, "minutes={minutes}");
+        }
+        profile.idle_stop_minutes = Some(30);
+        profile.capabilities.browserstack = Some(crate::BrowserStack {
+            provider: crate::BrowserStack::default_provider(),
+            targets: ["ios_phone".into()].into(),
+            local_ports: [8080].into(),
+        });
+        assert!(profile.validate(false).is_err());
     }
     #[test]
     fn rejects_unsupported_and_secret_bearing_input_without_echoing() {
