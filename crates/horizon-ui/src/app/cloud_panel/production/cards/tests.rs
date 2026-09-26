@@ -14,6 +14,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
         revision: "a".repeat(40),
         profile_name: "Long development profile ".repeat(8),
         profile: config.profiles.remove("dev").unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     };
     let ctx = egui::Context::default();
     for _ in 0..3 {
@@ -116,6 +117,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.path().into());
@@ -181,6 +183,7 @@ fn size_launch() -> CloudLaunch {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles.remove("dev").unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     }
 }
 

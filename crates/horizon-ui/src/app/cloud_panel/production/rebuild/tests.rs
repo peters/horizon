@@ -149,6 +149,7 @@ fn seed_built_cloud(app: &mut HorizonApp, root: &Path) -> std::path::PathBuf {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: state.profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(root.into());
@@ -317,6 +318,7 @@ fn a_busy_cloud_does_not_start_a_rebuild() {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: deployment(temp.path(), true, Phase::None).profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.path().into());

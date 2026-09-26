@@ -29,7 +29,7 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
             gb: volume,
             running,
             stopped: Some(stopped),
-            note: "Holds your files. Billed at twice the rate while stopped.",
+            note: "The pod volume holds your files and costs twice as much while stopped.",
         });
     } else {
         let month = rates.network_month(u32::from(volume));
@@ -38,7 +38,7 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
             gb: volume,
             running: month,
             stopped: Some(month),
-            note: "Holds your files and stays in its data center.",
+            note: "The network volume holds your files and stays in its data center.",
         });
     }
     let container = profile.storage.container_gb;
@@ -47,7 +47,7 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
         gb: container,
         running: f64::from(container) * rates.container,
         stopped: None,
-        note: "Cleared and no longer billed when the cloud stops.",
+        note: "The container disk is cleared when the cloud stops.",
     });
     items.retain(|item| item.gb > 0);
     items
@@ -74,22 +74,16 @@ pub(super) fn show(ui: &mut Ui, list: &PriceList, profile: &Profile, hourly: Opt
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
         if let Some((low, high)) = hourly {
-            let compute = "Compute only. Storage is billed per month.";
-            stat(ui, "8 HOURS", &range(low * 8.0, high * 8.0), compute);
-            stat(ui, "24 HOURS", &range(low * 24.0, high * 24.0), compute);
+            stat(ui, "8 HOURS", &range(low * 8.0, high * 8.0), "compute");
+            stat(ui, "24 HOURS", &range(low * 24.0, high * 24.0), "compute");
             stat(
                 ui,
                 "RUNNING",
                 &format!("{}/mo", range(running_low, running_high)),
-                "Running all month: compute plus storage.",
+                "compute and storage",
             );
         }
-        stat(
-            ui,
-            "STOPPED",
-            &format!("{}/mo", money(stopped)),
-            "Stopped all month: the storage it keeps.",
-        );
+        stat(ui, "STOPPED", &format!("{}/mo", money(stopped)), "storage it keeps");
     });
     if !storage.is_empty() {
         ui.add_space(10.0);
@@ -110,17 +104,13 @@ fn breakdown(ui: &mut Ui, storage: &[Storage], list: &PriceList) {
         .num_columns(4)
         .spacing([18.0, 5.0])
         .show(ui, |ui| {
-            ui.label(heading("STORAGE")).on_hover_text(format!(
-                "{} storage list prices, checked {}.",
-                list.provider, list.storage.confirmed
-            ));
+            ui.label(heading("STORAGE"));
             ui.label("");
             ui.label(heading("RUNNING"));
             ui.label(heading("STOPPED"));
             ui.end_row();
             for item in storage {
-                ui.label(RichText::new(item.kind).size(12.5).color(theme::FG_SOFT()))
-                    .on_hover_text(item.note);
+                ui.label(RichText::new(item.kind).size(12.5).color(theme::FG_SOFT()));
                 ui.label(
                     RichText::new(format!("{} GB", item.gb))
                         .size(12.0)
@@ -131,6 +121,19 @@ fn breakdown(ui: &mut Ui, storage: &[Storage], list: &PriceList) {
                 ui.end_row();
             }
         });
+    // Said in words: hover text would draw below this modal.
+    let notes: Vec<&str> = storage.iter().map(|item| item.note).collect();
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(format!(
+            "{} {} storage list prices, checked {}.",
+            notes.join(" "),
+            list.provider,
+            list.storage.confirmed
+        ))
+        .size(11.0)
+        .color(theme::FG_DIM()),
+    );
 }
 
 fn amount(value: Option<f64>) -> RichText {
@@ -143,14 +146,13 @@ fn amount(value: Option<f64>) -> RichText {
     }
 }
 
-fn stat(ui: &mut Ui, label: &str, value: &str, hover: &str) {
+fn stat(ui: &mut Ui, label: &str, value: &str, caption: &str) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.label(RichText::new(label).size(10.5).color(theme::FG_DIM()));
         ui.label(RichText::new(value).size(16.0).color(theme::FG()));
-    })
-    .response
-    .on_hover_text(hover);
+        ui.label(RichText::new(caption).size(10.5).color(theme::FG_DIM()));
+    });
 }
 
 pub(super) fn money(value: f64) -> String {
@@ -181,6 +183,7 @@ mod tests {
             provider: "RunPod",
             cpu: Vec::new(),
             gpus: Vec::new(),
+            data_centers: Vec::new(),
             storage: RUNPOD_STORAGE,
         }
     }

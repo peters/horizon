@@ -983,6 +983,7 @@ mod tests {
             deployment_started: false,
             profile_name: "cpu".into(),
             profile: config.profiles.remove("cpu").unwrap(),
+            placement: horizon_core::cloud_panel::Placement::default(),
         });
         app.cloud_prototype.groups = CloudGroups(vec![group]);
         app.sync_board_cloud_groups();

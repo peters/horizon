@@ -20,8 +20,8 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
         {"id": "NVIDIA A100-SXM4-40GB", "name": "A100 SXM 40GB", "memory": 40, "secure": false, "price": {"community": 1.0, "secure": 0}}
     ]});
     let centers = json!({"dataCenters": [
-        {"id": "EU-RO-1", "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "LOW"}]},
-        {"id": "EU-SE-1", "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "HIGH"}]},
+        {"id": "EU-RO-1", "region": "EUROPE", "networkVolumeTypes": ["STANDARD"], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "LOW"}]},
+        {"id": "EU-SE-1", "region": "EUROPE", "networkVolumeTypes": [], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "HIGH"}]},
         {"id": "US-TX-3", "gpuAvailability": [{"id": "NVIDIA RTX A6000", "availability": "HIGH"}]}
     ]});
     let (provider, requests, task) = catalog_server(vec![
@@ -38,15 +38,23 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
     assert_eq!(flavors, ["cpu3c", "cpu7x"]);
     assert_eq!(list.gpus.len(), 2);
     let ada = list.gpu("NVIDIA RTX 4000 Ada Generation").unwrap();
+    assert_eq!(ada.memory_gb, 20);
+    assert_eq!(list.gpu_availability(&ada.id, &[]), crate::prices::Availability::High);
     assert_eq!(
-        (ada.memory_gb, ada.availability),
-        (20, crate::prices::Availability::High)
+        list.gpu_availability(&ada.id, &["EU-RO-1".into()]),
+        crate::prices::Availability::Low
     );
     // The A6000 is only in stock outside the allowed data centers.
     assert_eq!(
-        list.gpu("NVIDIA RTX A6000").unwrap().availability,
+        list.gpu_availability("NVIDIA RTX A6000", &[]),
         crate::prices::Availability::None
     );
+    let centers: Vec<(&str, &str, bool)> = list
+        .data_centers
+        .iter()
+        .map(|center| (center.id.as_str(), center.region.as_str(), center.workspace_storage))
+        .collect();
+    assert_eq!(centers, [("EU-RO-1", "EUROPE", true), ("EU-SE-1", "EUROPE", false)]);
     let requests = requests.lock().unwrap();
     assert!(requests[0].starts_with("GET /cpus "));
     assert!(requests[2].starts_with("GET /datacenters?include=GPU_AVAILABILITY "));
@@ -73,7 +81,10 @@ fn an_unknown_gpu_availability_fails_the_price_list_instead_of_reading_as_sold_o
     let (provider, _, task) = catalog_server(catalog("NONE"));
     let list = provider.price_list(&[], &Cancellation::default()).unwrap();
     task.join().unwrap();
-    assert_eq!(list.gpus[0].availability, crate::prices::Availability::None);
+    assert_eq!(
+        list.gpu_availability("NVIDIA L4", &[]),
+        crate::prices::Availability::None
+    );
 
     let (provider, _, task) = catalog_server(catalog("SOMETIMES"));
     let result = provider.price_list(&[], &Cancellation::default());
@@ -101,8 +112,9 @@ fn a_cpu_size_reports_its_best_stock_and_how_many_data_centers_have_it() {
         .cpu_size_availability(&profile, &["cpu3c".into()], &[], &Cancellation::default())
         .unwrap();
     task.join().unwrap();
-    assert_eq!(size.best, crate::prices::Availability::Medium);
-    assert_eq!(size.centers, 2);
+    assert_eq!(size.best(&[]), crate::prices::Availability::Medium);
+    assert_eq!(size.count(&[]), 2);
+    assert_eq!(size.best(&["EU-SE-1".into()]), crate::prices::Availability::Medium);
     let requests = requests.lock().unwrap();
     assert!(requests[1].contains("cpu3c-8-16"), "{}", requests[1]);
     // Data centers without standard network storage are never asked.

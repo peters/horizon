@@ -247,6 +247,80 @@ fn chosen_size_starts_the_cloud_at_that_size() {
 }
 
 #[test]
+fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() {
+    use horizon_core::cloud_runtime::prices::{
+        Availability, CpuFlavorPrice, DataCenter, PriceList, RUNPOD_STORAGE, SizeAvailability,
+    };
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let center = |id: &str, region: &str| DataCenter {
+        id: id.into(),
+        region: region.into(),
+        workspace_storage: true,
+        gpus: Vec::new(),
+    };
+    let list = PriceList {
+        provider: "RunPod",
+        cpu: vec![CpuFlavorPrice {
+            id: "cpu3c".into(),
+            name: "Compute-Optimized".into(),
+            per_vcpu_hour: 0.03,
+        }],
+        gpus: Vec::new(),
+        data_centers: vec![
+            center("EU-RO-1", "EUROPE"),
+            center("EUR-IS-1", "EUROPE"),
+            center("US-MO-2", "NORTH_AMERICA"),
+        ],
+        storage: RUNPOD_STORAGE,
+    };
+    let production = &mut app.cloud_prototype.production;
+    let profile = production.profiles.as_ref().unwrap().profiles["development"].clone();
+    let preferences = horizon_core::cloud_runtime::prices::Preferences {
+        cpu_flavors: vec!["cpu3c".into()],
+        gpu_types: Vec::new(),
+    };
+    let stock = SizeAvailability {
+        centers: vec![("EU-RO-1".into(), Availability::High)],
+    };
+    production.prices.answered(list, preferences, vec![(profile, stock)]);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "Region"));
+    assert!(has_label(&output, "Any region\n1 in stock"));
+    assert!(has_label(
+        &output,
+        "Horizon picks a data center with stock. The workspace stays there, and a stopped cloud resumes there."
+    ));
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "North America\nnone in stock").center(),
+    );
+    assert!(
+        app.cloud_prototype.production.placement.is_any(),
+        "a sold-out region cannot be chosen"
+    );
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Europe\n1 in stock").center());
+    let europe = horizon_core::cloud_panel::Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+    };
+    assert_eq!(app.cloud_prototype.production.placement, europe);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(
+        &output,
+        "The workspace stays in Europe, and a stopped cloud resumes there."
+    ));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.placement, europe, "the cloud keeps where it may be placed");
+}
+
+#[test]
 fn size_choice_resets_with_the_profile_or_repository_and_gpu_size_is_fixed() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

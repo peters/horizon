@@ -5,7 +5,7 @@ use horizon_cloud::runpod::RunPod;
 pub use horizon_cloud::runpod::prices::STORAGE as RUNPOD_STORAGE;
 pub use horizon_cloud::{
     Profile,
-    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability, StoragePrices},
+    prices::{Availability, CpuFlavorPrice, DataCenter, GpuPrice, PriceList, SizeAvailability, StoragePrices},
 };
 
 /// The preferences a deployment would use, so prices match what would be requested.

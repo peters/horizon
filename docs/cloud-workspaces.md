@@ -182,7 +182,23 @@ is. The 8 and 24 hour estimates are ranges when the size may land on flavors
 with different prices. Prices come
 from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
 is open; Refresh fetches them at once. Only providers Horizon can deploy to show
-prices.
+prices. Details such as how many data centers have stock are written in the card
+rather than in tooltips, which would draw below the dialog.
+
+When the allowed data centers span more than one region, New cloud also shows a
+**Region** row: **Any region** (the default, where Horizon picks a data center
+with stock) and each region with how many of its data centers have the chosen
+size, or one of the profile's preferred GPUs, in stock. A region known to be sold
+out stays visible but cannot be chosen. CPU clouds only count data centers with
+standard network volumes, since their workspace lives on one. **Advanced** lists
+the individual data centers with stock for choosing exactly one. The machine's
+`data_centers` setting still limits what is offered.
+
+The choice is saved with the cloud: every attempt, retry and redeploy asks the
+provider only for the chosen data centers. A cloud's workspace stays in the data
+center it first starts in, and a stopped cloud resumes there, so the dialog says
+so under the Region row. Once a worker exists, the cloud card names its data
+center.
 
 Until a worker is requested, including after a failed attempt or a definite
 provider rejection, the cloud card offers vCPU and memory drop-downs for CPU

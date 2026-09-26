@@ -478,7 +478,9 @@ pub(super) struct Catalog {
 pub(super) struct Center {
     pub(super) id: String,
     #[serde(default)]
-    network_volume_types: Vec<String>,
+    pub(super) region: String,
+    #[serde(default)]
+    pub(super) network_volume_types: Vec<String>,
     #[serde(default)]
     cpu_availability: Vec<Capacity>,
     #[serde(default)]

@@ -83,6 +83,36 @@ pub struct CloudLaunch {
     pub revision: String,
     pub profile_name: String,
     pub profile: horizon_cloud::Profile,
+    /// Omitted when any allowed data center will do, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Placement::is_any")]
+    pub placement: Placement,
+}
+
+/// Where a cloud may be placed, chosen when it is created. A cloud's workspace stays
+/// where it is first placed, so this matters beyond the first start.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Placement {
+    /// A label shown to people, such as `Europe`, for a chosen region or the region of
+    /// a chosen data center; `None` when any data center will do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// The data centers to choose from; empty for the machine's `data_centers` setting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_centers: Vec<String>,
+}
+
+impl Placement {
+    #[must_use]
+    pub fn is_any(&self) -> bool {
+        self.data_centers.is_empty()
+    }
+
+    /// Narrows `data_centers` from the machine settings to this placement.
+    pub fn apply(&self, data_centers: &mut Vec<String>) {
+        if !self.is_any() {
+            data_centers.clone_from(&self.data_centers);
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize)]
@@ -661,6 +691,35 @@ impl CloudGroups {
 mod tests {
     use super::*;
     use crate::{PanelKind, PanelOptions};
+
+    #[test]
+    fn a_cloud_keeps_its_placement_and_records_without_one_keep_their_encoding() {
+        let mut settings = vec!["EU-RO-1".to_owned(), "US-MO-2".to_owned()];
+        Placement::default().apply(&mut settings);
+        assert_eq!(
+            settings,
+            ["EU-RO-1", "US-MO-2"],
+            "any placement keeps the machine setting"
+        );
+        let europe = Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+        };
+        europe.apply(&mut settings);
+        assert_eq!(settings, ["EU-RO-1", "EUR-IS-1"]);
+
+        let legacy = serde_json::json!({
+            "deployment_started": true, "id": "cloud", "revision": "a".repeat(40), "profile_name": "dev",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8},
+        });
+        let mut launch: CloudLaunch = serde_json::from_value(legacy).unwrap();
+        assert!(launch.placement.is_any());
+        assert!(serde_json::to_value(&launch).unwrap().get("placement").is_none());
+        launch.placement = europe.clone();
+        let saved = serde_json::to_value(&launch).unwrap();
+        assert_eq!(saved["placement"]["region"], "Europe");
+        assert_eq!(serde_json::from_value::<CloudLaunch>(saved).unwrap().placement, europe);
+    }
 
     #[test]
     fn fractional_panel_resize_keeps_containment_bounds_ordered() {

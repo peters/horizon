@@ -145,7 +145,7 @@ fn request(
 ) -> cloud_runtime::Result<Request> {
     Ok(Request {
         state_root: cloud_runtime::state::cloud_directory(root, &launch.id)?,
-        settings: Settings::load(&root.join("settings.json"))?,
+        settings: Settings::for_cloud(&root.join("settings.json"), &launch.placement)?,
         cloud_id: launch.id,
         repository,
         revision: launch.revision,

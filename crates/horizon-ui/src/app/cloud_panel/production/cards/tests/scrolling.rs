@@ -60,6 +60,7 @@ fn overflowing_runtime_scrolls_without_panning_at_normal_and_scaled_zoom() {
             revision: "a".repeat(40),
             profile_name: "long profile ".repeat(50),
             profile,
+            placement: horizon_core::cloud_panel::Placement::default(),
         });
         app.cloud_prototype.groups.0.push(group);
         for step in 0..3 {
@@ -139,6 +140,7 @@ fn a_runtime_contact_cannot_scroll_another_runtime_card() {
             revision: "a".repeat(40),
             profile_name: "long profile ".repeat(50),
             profile: profile.clone(),
+            placement: horizon_core::cloud_panel::Placement::default(),
         });
         app.cloud_prototype.groups.0.push(group);
     }
@@ -228,6 +230,7 @@ fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     (temp, ctx, app)

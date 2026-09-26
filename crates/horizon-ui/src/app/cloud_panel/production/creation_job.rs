@@ -120,6 +120,7 @@ impl HorizonApp {
                 revision: String::new(),
                 profile_name: form.selected_profile.clone(),
                 profile,
+                placement: form.placement.clone(),
             },
         });
         self.cloud_prototype.error = None;

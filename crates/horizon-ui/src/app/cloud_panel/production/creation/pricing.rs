@@ -1,7 +1,7 @@
 //! Worker size choices with their prices, and a price card with live stock, for New cloud.
 use super::{
     super::{
-        machine_size::{self, Choice, Size},
+        machine_size::{self, Size},
         prices::{FRESH, State},
     },
     costs::{self, money, range},
@@ -11,11 +11,13 @@ use egui::{
     Align, Button, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, Sense, Stroke, TextFormat, Ui, Vec2,
     WidgetInfo, WidgetType, text::LayoutJob,
 };
-use horizon_core::cloud_runtime::prices::{self, Availability, GpuPrice, Preferences, PriceList, Profile};
+use horizon_core::{
+    cloud_panel::Placement,
+    cloud_runtime::prices::{self, Availability, GpuPrice, Preferences, PriceList, Profile},
+};
 
-/// Size buttons for a CPU profile, each with its hourly price, then the price card.
-/// Returns a newly chosen size and whether prices should be fetched again.
-pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current: Size) -> (Option<Size>, bool) {
+/// Size buttons for a CPU profile, each with its hourly price. Returns a newly chosen size.
+pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current: Size) -> Option<Size> {
     ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
     let mut chosen = None;
     if profile.gpu {
@@ -37,15 +39,18 @@ pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current
                         .map(|(low, _)| low)
                         .min_by(f64::total_cmp)
                 });
-                if option(ui, &choice, from.map(|low| format!("from {}/h", money(low)))) {
+                let from = from.map(|low| format!("from {}/h", money(low)));
+                if option(ui, &choice.label, choice.selected, from.as_deref(), None) {
                     chosen = Some(choice.size);
                 }
             }
         });
         ui.horizontal_wrapped(|ui| {
             for choice in machine_size::memory_choices(current, disk) {
-                let price = list.and_then(|(list, preferences)| hourly(list, preferences, profile, choice.size));
-                if option(ui, &choice, price.map(|(low, high)| format!("{}/h", range(low, high)))) {
+                let price = list
+                    .and_then(|(list, preferences)| hourly(list, preferences, profile, choice.size))
+                    .map(|(low, high)| format!("{}/h", range(low, high)));
+                if option(ui, &choice.label, choice.selected, price.as_deref(), None) {
                     chosen = Some(choice.size);
                 }
             }
@@ -59,36 +64,27 @@ pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current
             ));
         }
     }
-    ui.add_space(4.0);
-    let sized = Profile {
-        cpu: current.0,
-        memory_gb: current.1,
-        ..profile.clone()
-    };
-    (chosen.filter(|size| *size != current), card(ui, prices, &sized))
+    chosen.filter(|size| *size != current)
 }
 
-fn option(ui: &mut Ui, choice: &Choice, price: Option<String>) -> bool {
+/// A choice button with an optional second line, such as a price or stock, drawn in
+/// `tint` or else in the accent color when selected.
+pub(super) fn option(ui: &mut Ui, label: &str, selected: bool, detail: Option<&str>, tint: Option<Color32>) -> bool {
     let mut job = LayoutJob::default();
     let format = |size: f32, color: Color32| TextFormat {
         font_id: FontId::proportional(size),
         color,
         ..TextFormat::default()
     };
-    job.append(&choice.label, 0.0, format(13.0, theme::FG()));
-    let two_lines = price.is_some();
-    if let Some(price) = price {
-        let color = if choice.selected {
-            theme::ACCENT()
-        } else {
-            theme::FG_DIM()
-        };
-        job.append(&format!("\n{price}"), 0.0, format(11.0, color));
+    job.append(label, 0.0, format(13.0, theme::FG()));
+    if let Some(detail) = detail {
+        let color = tint.unwrap_or(if selected { theme::ACCENT() } else { theme::FG_DIM() });
+        job.append(&format!("\n{detail}"), 0.0, format(11.0, color));
     }
     ui.add(
         Button::new(job)
-            .selected(choice.selected)
-            .min_size(Vec2::new(0.0, if two_lines { 42.0 } else { 30.0 }))
+            .selected(selected)
+            .min_size(Vec2::new(0.0, if detail.is_some() { 42.0 } else { 30.0 }))
             .corner_radius(8),
     )
     .clicked()
@@ -104,9 +100,9 @@ fn hourly(list: &PriceList, preferences: &Preferences, profile: &Profile, size: 
     list.cpu_hourly(&prices::requested_flavors(&sized, preferences), size.0)
 }
 
-/// The price card, once a price check has started. Returns whether prices should be
-/// fetched again.
-fn card(ui: &mut Ui, prices: &State, profile: &Profile) -> bool {
+/// The price card for `profile` at its chosen size in `placement`, once a price check
+/// has started. Returns whether prices should be fetched again.
+pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &Placement) -> bool {
     let mut refresh = false;
     if prices.list.is_none() && prices.list_error.is_none() && !prices.loading() {
         return refresh;
@@ -122,9 +118,9 @@ fn card(ui: &mut Ui, prices: &State, profile: &Profile) -> bool {
                 (Some(fetched), _) => {
                     let (list, preferences) = &fetched.value;
                     if profile.gpu {
-                        gpu_summary(ui, list, preferences, profile);
+                        gpu_summary(ui, list, preferences, profile, placement);
                     } else {
-                        cpu_summary(ui, prices, list, preferences, profile);
+                        cpu_summary(ui, prices, list, preferences, profile, placement);
                     }
                     ui.add_space(10.0);
                     refresh = footer(ui, list.provider, fetched.at.elapsed(), prices.loading());
@@ -149,15 +145,23 @@ fn card(ui: &mut Ui, prices: &State, profile: &Profile) -> bool {
     refresh
 }
 
-fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Preferences, profile: &Profile) {
+fn cpu_summary(
+    ui: &mut Ui,
+    prices: &State,
+    list: &PriceList,
+    preferences: &Preferences,
+    profile: &Profile,
+    placement: &Placement,
+) {
     let flavors = prices::requested_flavors(profile, preferences);
     let Some((low, high)) = list.cpu_hourly(&flavors, profile.cpu) else {
         ui.label(RichText::new("RunPod publishes no price for this size").color(theme::FG_SOFT()));
         return;
     };
+    let within = &placement.data_centers;
     let stock = match prices.size(profile, (profile.cpu, profile.memory_gb)) {
         None => Stock::Checking,
-        Some(Ok(size)) => Stock::Known(size.best, Some(size.centers)),
+        Some(Ok(size)) => Stock::Known(size.best(within), Some(in_scope(size.count(within), placement))),
         Some(Err(error)) => Stock::Unknown(error.to_owned()),
     };
     headline(ui, &range(low, high), &stock);
@@ -177,35 +181,72 @@ fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Pref
         .size(12.0)
         .color(theme::FG_SOFT()),
     );
+    stock_detail(ui, &stock);
     costs::show(ui, list, profile, Some((low, high)));
+}
+
+/// What the stock pill summarizes, in words: hover text would draw below this modal.
+fn stock_detail(ui: &mut Ui, stock: &Stock) {
+    let detail = match stock {
+        Stock::Known(_, Some(detail)) => detail.clone(),
+        Stock::Unknown(error) => format!("Stock unknown: {error}"),
+        Stock::Checking | Stock::NotOffered | Stock::Known(_, None) => return,
+    };
+    ui.label(RichText::new(detail).size(11.5).color(theme::FG_DIM()));
 }
 
 /// Where GPU preferences are set until New cloud offers its own GPU choice.
 const GPU_SETTING: &str = "gpu_types in ~/.horizon/cloud/settings.json";
 
-/// Every preferred GPU type in the order deployments request them, with its catalog
-/// entry when the provider offers it, and the first one in stock.
+/// A preferred GPU type in the order deployments request them, with its catalog entry
+/// when the provider offers it and its best availability in the chosen data centers.
+struct Ranked<'a> {
+    id: &'a str,
+    gpu: Option<&'a GpuPrice>,
+    availability: Availability,
+}
+
+/// Every preferred GPU type in request order, and the first one in stock.
 fn ranked<'a>(
     list: &'a PriceList,
     preferences: &'a Preferences,
-) -> (Vec<(&'a str, Option<&'a GpuPrice>)>, Option<&'a GpuPrice>) {
-    let preferred: Vec<_> = preferences
+    within: &[String],
+) -> (Vec<Ranked<'a>>, Option<usize>) {
+    let preferred: Vec<Ranked<'a>> = preferences
         .gpu_types
         .iter()
-        .map(|id| (id.as_str(), list.gpu(id)))
+        .map(|id| Ranked {
+            id,
+            gpu: list.gpu(id),
+            availability: list.gpu_availability(id, within),
+        })
         .collect();
     let chosen = preferred
         .iter()
-        .filter_map(|(_, gpu)| *gpu)
-        .find(|gpu| gpu.availability != Availability::None);
+        .position(|row| row.gpu.is_some() && row.availability != Availability::None);
     (preferred, chosen)
 }
 
-fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile: &Profile) {
-    let (preferred, chosen) = ranked(list, preferences);
-    match chosen {
-        Some(gpu) => {
-            headline(ui, &money(gpu.hourly), &Stock::Known(gpu.availability, None));
+/// Data centers in `within` (every allowed one when empty) with GPU type `id` in stock.
+fn gpu_centers(list: &PriceList, id: &str, within: &[String]) -> usize {
+    list.data_centers
+        .iter()
+        .filter(|center| within.is_empty() || within.contains(&center.id))
+        .filter(|center| list.gpu_availability(id, std::slice::from_ref(&center.id)) != Availability::None)
+        .count()
+}
+
+fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile: &Profile, placement: &Placement) {
+    let within = &placement.data_centers;
+    let (preferred, chosen) = ranked(list, preferences, within);
+    let chosen_gpu = chosen.and_then(|index| Some((preferred[index].gpu?, preferred[index].availability)));
+    match chosen_gpu {
+        Some((gpu, availability)) => {
+            let stock = Stock::Known(
+                availability,
+                Some(in_scope(gpu_centers(list, &gpu.id, within), placement)),
+            );
+            headline(ui, &money(gpu.hourly), &stock);
             ui.label(
                 RichText::new(format!(
                     "{} · {} GB · first preferred GPU in stock · Secure Cloud",
@@ -214,6 +255,7 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile
                 .size(12.0)
                 .color(theme::FG_SOFT()),
             );
+            stock_detail(ui, &stock);
         }
         None => {
             ui.label(
@@ -234,8 +276,8 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile
         );
     } else {
         gpu_rows(ui, &preferred, chosen);
-        if chosen.is_none()
-            && let Some(cheapest) = list.cheapest_available_gpu()
+        if chosen_gpu.is_none()
+            && let Some(cheapest) = list.cheapest_available_gpu(within)
         {
             ui.add_space(4.0);
             ui.label(
@@ -251,10 +293,10 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile
         }
     }
     // Storage is billed whichever GPU the cloud gets, so it shows even when none is in stock.
-    costs::show(ui, list, profile, chosen.map(|gpu| (gpu.hourly, gpu.hourly)));
+    costs::show(ui, list, profile, chosen_gpu.map(|(gpu, _)| (gpu.hourly, gpu.hourly)));
 }
 
-fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option<&GpuPrice>) {
+fn gpu_rows(ui: &mut Ui, preferred: &[Ranked<'_>], chosen: Option<usize>) {
     ui.add_space(8.0);
     ui.label(
         RichText::new("REQUESTED IN THIS ORDER")
@@ -265,13 +307,13 @@ fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option
         .num_columns(5)
         .spacing([14.0, 6.0])
         .show(ui, |ui| {
-            for (rank, (id, gpu)) in preferred.iter().enumerate() {
-                let first = chosen.zip(*gpu).is_some_and(|(chosen, gpu)| chosen.id == gpu.id);
+            for (rank, row) in preferred.iter().enumerate() {
+                let first = chosen == Some(rank);
                 let color = if first { theme::FG() } else { theme::FG_SOFT() };
                 let marker = if first { theme::ACCENT() } else { theme::FG_DIM() };
                 ui.label(RichText::new(format!("{}", rank + 1)).size(12.0).strong().color(marker));
-                let Some(gpu) = gpu else {
-                    ui.label(RichText::new(*id).size(12.5).color(theme::FG_DIM()));
+                let Some(gpu) = row.gpu else {
+                    ui.label(RichText::new(row.id).size(12.5).color(theme::FG_DIM()));
                     ui.label("");
                     ui.label("");
                     pill(ui, &Stock::NotOffered, true);
@@ -290,17 +332,25 @@ fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option
                         .monospace()
                         .color(color),
                 );
-                pill(ui, &Stock::Known(gpu.availability, None), true);
+                pill(ui, &Stock::Known(row.availability, None), true);
                 ui.end_row();
             }
         });
+    if preferred.iter().any(|row| row.gpu.is_none()) {
+        ui.label(
+            RichText::new("Not offered: RunPod's Secure Cloud catalog does not list that GPU type.")
+                .size(11.5)
+                .color(theme::FG_DIM()),
+        );
+    }
 }
 
 enum Stock {
     Checking,
     /// The provider's catalog does not list this type.
     NotOffered,
-    Known(Availability, Option<usize>),
+    /// A level, and in words where it applies.
+    Known(Availability, Option<String>),
     Unknown(String),
 }
 
@@ -316,26 +366,17 @@ const DOT: f32 = 7.0;
 const GAP: f32 = 6.0;
 
 fn pill(ui: &mut Ui, stock: &Stock, compact: bool) {
-    let (text, color, hover) = match stock {
-        Stock::Checking => ("Checking stock".to_owned(), theme::FG_DIM(), None),
-        Stock::NotOffered => (
-            "Not offered".to_owned(),
-            theme::FG_DIM(),
-            Some("RunPod's Secure Cloud catalog does not list this GPU type".to_owned()),
-        ),
-        Stock::Unknown(error) => ("Stock unknown".to_owned(), theme::FG_DIM(), Some(error.clone())),
-        Stock::Known(level, centers) => {
-            let (text, color) = match level {
-                Availability::High | Availability::Medium => ("In stock", theme::PALETTE_GREEN()),
-                Availability::Low => ("Low stock", theme::PALETTE_YELLOW()),
-                Availability::None => ("Out of stock", theme::PALETTE_RED()),
-            };
-            (text.to_owned(), color, centers.map(in_centers))
+    let (text, color, detail) = match stock {
+        Stock::Checking => ("Checking stock", theme::FG_DIM(), None),
+        Stock::NotOffered => ("Not offered", theme::FG_DIM(), None),
+        Stock::Unknown(error) => ("Stock unknown", theme::FG_DIM(), Some(error.as_str())),
+        Stock::Known(level, detail) => {
+            let (text, color) = level_text(*level);
+            (text, color, detail.as_deref())
         }
     };
-    let description = hover
-        .as_ref()
-        .map_or_else(|| text.clone(), |hover| format!("{text}. {hover}"));
+    let text = text.to_owned();
+    let description = detail.map_or_else(|| text.clone(), |detail| format!("{text}. {detail}"));
     // Painted at its own size, so it stays compact in any parent layout.
     let galley = ui.painter().layout_no_wrap(text, FontId::proportional(11.5), color);
     let padding = Vec2::new(8.0, if compact { 2.0 } else { 4.0 });
@@ -355,16 +396,33 @@ fn pill(ui: &mut Ui, stock: &Stock, compact: bool) {
     let text_top = rect.center().y - galley.size().y / 2.0;
     painter.galley(egui::pos2(left + DOT + GAP, text_top), galley, color);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, &description));
-    if let Some(hover) = hover {
-        response.on_hover_text(hover);
+}
+
+pub(super) fn level_text(level: Availability) -> (&'static str, Color32) {
+    match level {
+        Availability::High | Availability::Medium => ("In stock", theme::PALETTE_GREEN()),
+        Availability::Low => ("Low stock", theme::PALETTE_YELLOW()),
+        Availability::None => ("Out of stock", theme::PALETTE_RED()),
     }
 }
 
-fn in_centers(centers: usize) -> String {
-    match centers {
-        0 => "Out of stock in every allowed data center".to_owned(),
-        1 => "In stock in 1 allowed data center".to_owned(),
-        count => format!("In stock in {count} allowed data centers"),
+/// Where a size or GPU is in stock, in the words of the chosen placement.
+fn in_scope(count: usize, placement: &Placement) -> String {
+    let place = match (placement.data_centers.as_slice(), placement.region.as_deref()) {
+        ([], _) => None,
+        ([one], _) => Some(one.clone()),
+        (_, Some(region)) => Some(region.to_owned()),
+        (_, None) => Some("the chosen data centers".to_owned()),
+    };
+    let one = placement.data_centers.len() == 1;
+    match (count, place) {
+        (0, None) => "Out of stock in every allowed data center".to_owned(),
+        (1, None) => "In stock in 1 allowed data center".to_owned(),
+        (count, None) => format!("In stock in {count} allowed data centers"),
+        (0, Some(place)) => format!("Out of stock in {place}"),
+        (_, Some(place)) if one => format!("In stock in {place}"),
+        (1, Some(place)) => format!("In stock in 1 data center in {place}"),
+        (count, Some(place)) => format!("In stock in {count} data centers in {place}"),
     }
 }
 
@@ -373,14 +431,14 @@ fn footer(ui: &mut Ui, provider: &str, age: std::time::Duration, loading: bool) 
     let mut refresh = false;
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!("{provider} list prices · updated {}", ago(age)))
-                .size(11.0)
-                .color(theme::FG_DIM()),
-        )
-        .on_hover_text(format!(
-            "Prices refresh every {} minutes while this dialog is open.",
-            FRESH.as_secs() / 60
-        ));
+            RichText::new(format!(
+                "{provider} list prices · updated {} · refreshed every {} min",
+                ago(age),
+                FRESH.as_secs() / 60
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM()),
+        );
         if loading {
             ui.spinner();
         } else {
@@ -411,27 +469,47 @@ mod tests {
     }
 
     #[test]
-    fn stock_details_name_the_data_centers() {
-        assert_eq!(in_centers(0), "Out of stock in every allowed data center");
-        assert_eq!(in_centers(1), "In stock in 1 allowed data center");
-        assert_eq!(in_centers(3), "In stock in 3 allowed data centers");
+    fn stock_details_name_where_the_cloud_may_go() {
+        let any = Placement::default();
+        assert_eq!(in_scope(0, &any), "Out of stock in every allowed data center");
+        assert_eq!(in_scope(1, &any), "In stock in 1 allowed data center");
+        assert_eq!(in_scope(3, &any), "In stock in 3 allowed data centers");
+        let europe = Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+        };
+        assert_eq!(in_scope(0, &europe), "Out of stock in Europe");
+        assert_eq!(in_scope(1, &europe), "In stock in 1 data center in Europe");
+        assert_eq!(in_scope(2, &europe), "In stock in 2 data centers in Europe");
+        let one = Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into()],
+        };
+        assert_eq!(in_scope(1, &one), "In stock in EU-RO-1");
+        assert_eq!(in_scope(0, &one), "Out of stock in EU-RO-1");
     }
 
     #[test]
     fn gpu_preferences_keep_their_rank_when_the_catalog_lacks_one() {
-        let gpu = |id: &str, hourly, availability| GpuPrice {
+        let gpu = |id: &str, hourly| GpuPrice {
             id: id.into(),
             name: id.into(),
             memory_gb: 24,
             hourly,
-            availability,
+        };
+        let center = |id: &str, gpus: &[(&str, Availability)]| horizon_core::cloud_runtime::prices::DataCenter {
+            id: id.into(),
+            region: "EUROPE".into(),
+            workspace_storage: false,
+            gpus: gpus.iter().map(|&(gpu, level)| (gpu.into(), level)).collect(),
         };
         let list = PriceList {
             provider: "RunPod",
             cpu: Vec::new(),
-            gpus: vec![
-                gpu("ada", 0.28, Availability::None),
-                gpu("l4", 0.49, Availability::High),
+            gpus: vec![gpu("ada", 0.28), gpu("l4", 0.49)],
+            data_centers: vec![
+                center("EU-RO-1", &[("ada", Availability::None), ("l4", Availability::High)]),
+                center("EU-SE-1", &[("ada", Availability::Low)]),
             ],
             storage: horizon_core::cloud_runtime::prices::RUNPOD_STORAGE,
         };
@@ -439,16 +517,19 @@ mod tests {
             cpu_flavors: Vec::new(),
             gpu_types: vec!["retired".into(), "ada".into(), "l4".into()],
         };
-        let (preferred, chosen) = ranked(&list, &preferences);
-        let ids: Vec<(&str, bool)> = preferred.iter().map(|(id, gpu)| (*id, gpu.is_some())).collect();
+        let (preferred, chosen) = ranked(&list, &preferences, &["EU-RO-1".into()]);
+        let ids: Vec<(&str, bool)> = preferred.iter().map(|row| (row.id, row.gpu.is_some())).collect();
         assert_eq!(ids, [("retired", false), ("ada", true), ("l4", true)]);
-        assert_eq!(chosen.map(|gpu| gpu.id.as_str()), Some("l4"));
+        assert_eq!(chosen, Some(2));
+        // In another data center the second preference is in stock and comes first.
+        assert_eq!(ranked(&list, &preferences, &["EU-SE-1".into()]).1, Some(1));
+        assert_eq!(gpu_centers(&list, "ada", &[]), 1);
 
         let retired = Preferences {
             cpu_flavors: Vec::new(),
             gpu_types: vec!["retired".into()],
         };
-        let (preferred, chosen) = ranked(&list, &retired);
+        let (preferred, chosen) = ranked(&list, &retired, &[]);
         assert_eq!(preferred.len(), 1);
         assert!(chosen.is_none());
     }
