@@ -48,6 +48,9 @@ runtimes, with networking disabled. Requested features are supplied through the
 nonsecret `HORIZON_WORKER_CAPABILITIES` environment binding, preserving legacy
 checker arguments. Capability-aware images still validate the entire requested
 selection, including the full default selection, and run their readiness checks.
+Managed Claude sessions disable background CLI updates so their runtime continues
+to match the image's recorded version when reconnecting. Upgrade the runtime by
+rebuilding the image. Manual runtime changes can still fail the version check.
 Old images can satisfy the legacy selection;
 explicit reduced/expanded selections need the capability-aware worker bootstrap.
 The provider receives the nonsecret selected features, and worker startup writes
