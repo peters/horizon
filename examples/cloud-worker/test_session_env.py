@@ -55,10 +55,11 @@ class SessionEnvironmentTests(unittest.TestCase):
             '/opt/consumer/bin', '/usr/local/cuda/bin', '/usr/local/bin', '/usr/bin', '/bin',
             '/opt/library/tools', '/opt/consumer/tools']))
 
-    def test_a_directory_keeps_only_its_first_position(self):
+    def test_a_directory_already_on_path_stays_where_it_is(self):
         self.layer('20-a.env', 'PATH_APPEND=/usr/bin\nPATH_PREPEND=/opt/tool/bin\n')
-        self.layer('30-b.env', 'PATH_APPEND=/opt/tool/bin\n')
-        self.assertEqual(self.applied('/usr/bin:/bin')['PATH'], '/opt/tool/bin:/usr/bin:/bin')
+        self.layer('30-b.env', 'PATH_APPEND=/opt/tool/bin\nPATH_APPEND=/opt/x\n')
+        self.layer('40-c.env', 'PATH_PREPEND=/opt/x\nPATH_PREPEND=/bin\n')
+        self.assertEqual(self.applied('/usr/bin:/bin:/usr/bin')['PATH'], '/opt/tool/bin:/usr/bin:/bin:/opt/x')
 
     def test_later_files_override_in_lexical_order(self):
         self.layer('20-library.env', 'TOOLKIT=library\nONLY_LIBRARY=1\n')
@@ -73,18 +74,27 @@ class SessionEnvironmentTests(unittest.TestCase):
             ('20-x.env', 'export TOOLKIT=1\n', '20-x.env:1: invalid variable name'),
             ('20-x.env', 'TOOLKIT\n', '20-x.env:1: expected KEY=VALUE'),
             ('20-x.env', '# ok\nTOOLKIT=$(id)\n BAD=1\n', '20-x.env:3: invalid variable name'),
-            ('20-x.env', 'PATH=/opt/bin\n', '20-x.env:1: PATH is set by the worker'),
-            ('20-x.env', 'HOME=/root\n', 'HOME is set by the worker'),
-            ('20-x.env', 'HORIZON_SESSION_DIR=/tmp\n', 'HORIZON_SESSION_DIR is set by the worker'),
+            ('20-x.env', 'PATH=/opt/bin\n', '20-x.env:1: PATH cannot be set by an image layer'),
+            ('20-x.env', 'HOME=/root\n', 'HOME cannot be set'),
+            ('20-x.env', 'HORIZON_SESSION_DIR=/tmp\n', 'HORIZON_SESSION_DIR cannot be set'),
+            ('20-x.env', 'UID=0\n', 'UID cannot be set'),
+            ('20-x.env', 'BASHOPTS=x\n', 'BASHOPTS cannot be set'),
+            ('20-x.env', 'K' * 129 + '=1\n', 'at most 128'),
             ('20-x.env', 'PATH_PREPEND=opt/bin\n', 'PATH_PREPEND needs one absolute directory'),
             ('20-x.env', 'PATH_APPEND=/a:/b\n', 'PATH_APPEND needs one absolute directory'),
             ('20-x.env', 'TOOLKIT=a\r\n', 'control character'),
             ('20-x.env', b'TOOLKIT=a\0b\n', 'control character'),
+            ('20-x.env', 'TOOLKIT=a\tb\n', '20-x.env:1: control character'),
+            ('20-x.env', 'TOOLKIT=a\x0bb\n', 'control character'),
+            ('20-x.env', 'TOOLKIT=a\x7fb\n', 'control character'),
+            ('20-x.env', 'TOOLKIT=a\x85b\n', 'control character'),
+            ('20-x.env', 'VALID=1\n# comment\x1b[31m\n', '20-x.env:2: control character'),
             ('20-x.env', b'TOOLKIT=\xff\n', 'not UTF-8'),
             ('20-x.env', 'TOOLKIT=' + 'a' * 4097 + '\n', 'value longer than 4096'),
             ('20-x.env', ('# padding\n' * 2000), 'larger than 16384 bytes'),
             ('20-x.conf', 'TOOLKIT=1\n', 'name must be'),
             ('.hidden.env', 'TOOLKIT=1\n', 'name must be'),
+            ('2' * 97 + '.env', 'TOOLKIT=1\n', 'name must be at most 100'),
         ]
         for name, content, message in cases:
             with self.subTest(content=content[:40], name=name):
@@ -94,6 +104,10 @@ class SessionEnvironmentTests(unittest.TestCase):
                 self.assertIn('Session environment refused:', refused)
                 self.assertIn(message, refused)
                 path.unlink()
+
+    def test_names_and_keys_at_their_limits_are_accepted(self):
+        self.layer('2' * 96 + '.env', 'K' * 128 + '=1\n')
+        self.assertEqual(self.applied(), {'K' * 128: '1'})
 
     def test_entries_other_than_regular_files_are_refused(self):
         self.layer('10-real.env', 'VALID=1\n')

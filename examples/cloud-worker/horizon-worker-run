@@ -11,16 +11,21 @@ if [ "$agent" = companion ]; then
     exec /bin/bash
 fi
 # Image layers add the session environment first, so the worker's own variables below win.
-session_env="$(mktemp)"
-if ! refusal="$(horizon-worker-session-env apply 2>&1 >"$session_env")"; then
-    rm -f "$session_env"
-    printf '%s\n' "$refusal" >&2
-    printf '%s session %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" "$refusal" >> /workspace/session-env.log
+refuse_session_env() {
+    printf '%s\n' "$1" >&2
+    printf '%s session %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" "$1" >> /workspace/session-env.log
     printf '3\n' > "/workspace/sessions/$id/exit-status"
     printf '\nThe session environment was refused, so no process was started.\n'
     exec sleep infinity
+}
+session_env="$(mktemp)"
+if ! refusal="$(horizon-worker-session-env apply 2>&1 >"$session_env")"; then
+    rm -f "$session_env"
+    refuse_session_env "$refusal"
 fi
-while IFS= read -r -d '' assignment; do export "$assignment"; done < "$session_env"
+while IFS= read -r -d '' assignment; do
+    export "$assignment" 2>/dev/null || { rm -f "$session_env"; refuse_session_env "Session environment refused: cannot set ${assignment%%=*}"; }
+done < "$session_env"
 rm -f "$session_env"
 export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
 export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"

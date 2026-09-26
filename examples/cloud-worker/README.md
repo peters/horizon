@@ -301,9 +301,9 @@ RUN mkdir -p /etc/horizon-worker/session-env.d \
 
 Name each file `NN-REPOSITORY.env`, with two digits that place it among the layers (for
 example 20 for the primary and 30 for its siblings). Files are read in lexical order of
-their names, so `100-x.env` sorts before `20-y.env`. A name is letters, digits, `.`, `_`
-or `-`, starts with a letter or digit and ends in `.env`. Each file is data, never shell,
-with one entry per line:
+their names, so `100-x.env` sorts before `20-y.env`. A name is at most 100 letters,
+digits, `.`, `_` or `-`, starts with a letter or digit and ends in `.env`. Each file is
+data, never shell, with one entry per line:
 
 | Line | Effect |
 |------|--------|
@@ -312,12 +312,14 @@ with one entry per line:
 | `PATH_APPEND=DIR` | Adds `DIR` to the end of `PATH`, in file order |
 | empty, or starting with `#` | Ignored |
 
-`PATH` starts from the one SSH gives the session, and a directory listed more than once
-keeps only its first position. `KEY` is a letter or `_` followed by letters, digits or `_`.
-`PATH`, `HOME` and every `HORIZON_` variable belong to the worker and are refused. The
-directory holds at most 64 regular files of at most 16 KiB each, and a value is at most
-4096 characters. Any other line, a control character, invalid UTF-8, another kind of
-entry or a larger file is refused with its file and line.
+`PATH` starts from the one SSH gives the session. A directory already on it, from that
+base or an earlier line, stays where it is. `KEY` is a letter or `_` followed by letters,
+digits or `_`, at most 128 characters. `PATH`, `HOME` and every `HORIZON_` variable belong
+to the worker, and Bash cannot set `BASHOPTS`, `BASH_VERSINFO`, `EUID`, `PPID`,
+`SHELLOPTS` or `UID`; all of them are refused. The directory holds at most 64 regular files
+of at most 16 KiB each, and a value is at most 4096 characters. Any other line, a control
+character (including tab, on any line), invalid UTF-8, another kind of entry or a larger
+file is refused with its file and line.
 
 `horizon-worker-check` validates the files, so a malformed file fails the image check,
 worker readiness and every session attach or relaunch before anything is started.

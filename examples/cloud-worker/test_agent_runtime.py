@@ -106,6 +106,17 @@ sys.exit(23)
         self.assertIn('session test-panel: Session environment refused:', log)
         self.assertIn('20-library.env:1', log)
 
+    def test_a_variable_bash_cannot_set_starts_no_process(self):
+        # The helper refuses such names; this is the launcher's own backstop.
+        helper = self.tools / 'horizon-worker-session-env'
+        helper.write_text('#!/bin/sh\nprintf "TOOLKIT=1\\0UID=0\\0"\n')
+        result = subprocess.run(['bash', str(self.script), 'test-panel', 'claude'], env=self.env,
+                                capture_output=True, text=True, timeout=10, check=True)
+        self.assertFalse((self.root / 'child.json').exists())
+        self.assertEqual((self.workspace / 'sessions/test-panel/exit-status').read_text(), '3\n')
+        self.assertIn('cannot set UID', result.stderr)
+        self.assertIn('cannot set UID', (self.workspace / 'session-env.log').read_text())
+
 
 if __name__ == '__main__':
     unittest.main()
