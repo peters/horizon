@@ -135,10 +135,11 @@ fn execute(
     cancellation: &Cancellation,
     timeout: Duration,
 ) -> Result<Receipt> {
-    let deadline = Instant::now() + timeout.min(Duration::from_secs(180));
-    remaining(deadline)?;
+    let started = Instant::now();
     cancellation.check().map_err(super::Error::from)?;
     let saved = Journal::load(owner)?;
+    let deadline = started + timeout.min(timeout_limit(change, saved.as_ref()));
+    remaining(deadline)?;
     let image = match change {
         Change::Reserve(request) => request.image_digest.clone(),
         _ => saved.as_ref().ok_or(Error::Missing)?.image_digest.clone(),
@@ -168,6 +169,19 @@ fn execute(
             Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, remaining(deadline)?)?)
         }
     })
+}
+
+pub(super) fn timeout_limit(change: &Change, saved: Option<&Journal>) -> Duration {
+    if matches!(change, Change::ImportSource(..))
+        || matches!(change, Change::Resume)
+            && saved
+                .and_then(|journal| journal.pending.as_ref())
+                .is_some_and(|pending| pending.receipt.state == horizon_cloud_protocol::membership::State::Importing)
+    {
+        horizon_cloud_protocol::membership::Source::CONTROLLER_TIMEOUT
+    } else {
+        Duration::from_secs(180)
+    }
 }
 
 pub(super) fn coordinate(

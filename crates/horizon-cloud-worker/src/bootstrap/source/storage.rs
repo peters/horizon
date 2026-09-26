@@ -8,7 +8,7 @@ use std::{
     io::{self, Read, Seek, Write},
     os::{fd::AsRawFd, unix::fs::MetadataExt},
     process::Command,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +63,7 @@ pub(super) struct Tree<'a> {
     bytes: Vec<u8>,
     record: Record,
     destination: bool,
+    deadline: Instant,
 }
 fn directory(parent: &File, name: &str) -> io::Result<File> {
     let file = File::from(openat(
@@ -88,7 +89,9 @@ impl<'a> Tree<'a> {
         receipt: &Receipt,
         descriptor: &Source,
         create: bool,
+        deadline: Instant,
     ) -> io::Result<Option<Self>> {
+        super::remaining(deadline)?;
         descriptor.validate().map_err(|_| invalid())?;
         let (_, allocation) = store.namespace_anchors()?;
         let name = format!("source-{}.json", receipt.identity.project_id());
@@ -146,11 +149,13 @@ impl<'a> Tree<'a> {
             bytes,
             record,
             destination,
+            deadline,
         };
         tree.verify()?;
         Ok(Some(tree))
     }
     fn verify(&self) -> io::Result<()> {
+        super::remaining(self.deadline)?;
         self.store.verify()?;
         self.record.parent.require(self.parent)?;
         self.record.tree.require(&self.file)?;
@@ -191,7 +196,7 @@ impl<'a> Tree<'a> {
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_NO_REPLACE_OBJECTS", "1")
                 .env("GIT_TERMINAL_PROMPT", "0"),
-            Duration::from_secs(120),
+            super::remaining(self.deadline)?.min(Duration::from_secs(120)),
             self.store.lease()?,
         )?;
         self.verify()?;

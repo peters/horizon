@@ -6,7 +6,7 @@ use crate::{
 };
 use horizon_cloud::Capabilities;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 pub const MAX_PROJECTS: usize = 32;
 pub const MAX_OPERATIONS: usize = 64;
@@ -71,6 +71,8 @@ pub struct Artifact {
 }
 impl Source {
     pub const MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    pub const WORKER_TIMEOUT: Duration = Duration::from_secs(600);
+    pub const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(Self::WORKER_TIMEOUT.as_secs() * 2 + 60);
     /// # Errors
     /// Rejects unsupported revisions, formats and transfer sizes.
     pub fn validate(&self) -> Result<(), Error> {

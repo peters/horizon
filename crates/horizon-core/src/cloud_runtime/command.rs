@@ -154,6 +154,41 @@ impl Runner<'_> {
         timeout: Duration,
         limit: usize,
     ) -> Result<Vec<u8>> {
+        let mut output = Vec::new();
+        self.capture(name, command, timeout, limit as u64, true, |bytes| {
+            output.extend_from_slice(bytes);
+            Ok(())
+        })?;
+        Ok(output)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn bounded_file(
+        &self,
+        command: &mut Command,
+        output: &mut std::fs::File,
+        limit: u64,
+        timeout: Duration,
+    ) -> Result<u64> {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut length = 0;
+        self.capture("Bounded source export", command, timeout, limit, false, |bytes| {
+            output.write_all(bytes)?;
+            length += bytes.len() as u64;
+            Ok(())
+        })?;
+        Ok(length)
+    }
+
+    fn capture(
+        &self,
+        name: &'static str,
+        command: &mut Command,
+        timeout: Duration,
+        limit: u64,
+        log_stdout: bool,
+        mut consume: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
         self.cancel.check()?;
         (self.emit)(Event::Progress(super::progress::Progress::activity(name)));
         #[cfg(unix)]
@@ -162,45 +197,32 @@ impl Runner<'_> {
             command.process_group(0);
         }
         let mut child = command.spawn()?;
-        let (tx, rx) = mpsc::sync_channel(256);
-        for (stdout, stream) in [
-            (true, child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-            (false, child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-        ] {
-            if let Some(mut stream) = stream {
-                let tx = tx.clone();
-                thread::spawn(move || {
-                    let mut buffer = [0; 4096];
-                    loop {
-                        match stream.read(&mut buffer) {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                if tx.send((stdout, buffer[..n].to_vec())).is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        }
-        drop(tx);
+        let rx = output_streams(&mut child);
         let started = Instant::now();
-        let mut output = Vec::new();
+        let mut output_length = 0_u64;
         let mut status = None;
         let mut pending_stdout = Vec::new();
         let mut pending_stderr = Vec::new();
         loop {
             let mut disconnected = false;
+            let mut received = false;
             for _ in 0..64 {
                 match rx.try_recv() {
-                    Ok((stdout, bytes)) => {
+                    Ok(Ok(OutputChunk { stdout, bytes })) => {
+                        received = true;
                         if stdout {
-                            if output.len() + bytes.len() > limit {
+                            if bytes.len() as u64 > limit.saturating_sub(output_length) {
                                 stop(&mut child);
                                 return Err(Error::Invalid("Command output exceeded its bound"));
                             }
-                            output.extend_from_slice(&bytes);
+                            if let Err(error) = consume(&bytes) {
+                                stop(&mut child);
+                                return Err(error);
+                            }
+                            output_length += bytes.len() as u64;
+                            if !log_stdout {
+                                continue;
+                            }
                         }
                         let pending = if stdout {
                             &mut pending_stdout
@@ -216,6 +238,10 @@ impl Runner<'_> {
                             self.log(pending);
                             pending.clear();
                         }
+                    }
+                    Ok(Err(error)) => {
+                        stop(&mut child);
+                        return Err(error.into());
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -238,12 +264,14 @@ impl Runner<'_> {
                 self.log(&pending_stdout);
                 self.log(&pending_stderr);
                 return if status.success() {
-                    Ok(output)
+                    Ok(())
                 } else {
                     Err(Error::Command(name))
                 };
             }
-            thread::sleep(Duration::from_millis(20));
+            if !received {
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     }
     fn redact(&self, mut value: String) -> String {
@@ -262,6 +290,47 @@ impl Runner<'_> {
         }
     }
 }
+struct OutputChunk {
+    stdout: bool,
+    bytes: Vec<u8>,
+}
+fn output_streams(child: &mut Child) -> mpsc::Receiver<std::io::Result<OutputChunk>> {
+    let (tx, rx) = mpsc::sync_channel(256);
+    for (stdout, stream) in [
+        (true, child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
+        (false, child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
+    ] {
+        if let Some(mut stream) = stream {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut buffer = [0; 4096];
+                loop {
+                    match stream.read(&mut buffer) {
+                        Ok(0) => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) => {
+                            let _ = tx.send(Err(error));
+                            break;
+                        }
+                        Ok(n) => {
+                            if tx
+                                .send(Ok(OutputChunk {
+                                    stdout,
+                                    bytes: buffer[..n].to_vec(),
+                                }))
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    rx
+}
+
 fn stop(child: &mut Child) {
     #[cfg(unix)]
     if let Some(id) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
@@ -273,6 +342,35 @@ fn stop(child: &mut Child) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounded_file_stops_a_live_producer_before_any_excess_bytes_are_written() {
+        let cancel = Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: vec![],
+        };
+        for oversized in [false, true] {
+            let mut output = tempfile::tempfile().unwrap();
+            let script = if oversized {
+                "head -c 65536 /dev/zero; sleep 30"
+            } else {
+                "head -c 4096 /dev/zero"
+            };
+            let started = Instant::now();
+            let result = runner.bounded_file(
+                Command::new("sh").args(["-c", script]).stdin(Stdio::null()),
+                &mut output,
+                4096,
+                Duration::from_secs(10),
+            );
+            assert_eq!(result.is_err(), oversized);
+            assert!(output.metadata().unwrap().len() <= 4096);
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+    }
+
     #[test]
     fn descendant_inheriting_output_cannot_bypass_deadline() {
         let cancel = Cancellation::default();

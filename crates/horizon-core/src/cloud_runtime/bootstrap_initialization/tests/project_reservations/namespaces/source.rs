@@ -108,6 +108,20 @@ fn retained_source_artifacts_survive_reopen_and_later_local_changes() {
         )
         .is_err()
     );
+    let pending = Journal::load(&f.owner).unwrap().unwrap();
+    let source_limit = crate::cloud_runtime::project_reservations::timeout_limit(&Change::Resume, Some(&pending));
+    assert_eq!(
+        source_limit,
+        horizon_cloud_protocol::membership::Source::CONTROLLER_TIMEOUT
+    );
+    assert!(source_limit > horizon_cloud_protocol::membership::Source::WORKER_TIMEOUT * 2);
+    assert_eq!(
+        crate::cloud_runtime::project_reservations::timeout_limit(
+            &Change::Cancel(request.project.clone()),
+            Some(&pending)
+        ),
+        std::time::Duration::from_secs(180)
+    );
     assert!(
         transact(&mut f, &Change::Cancel(request.project.clone()), &mut |_, _, _| panic!(
             "pending import"
@@ -146,6 +160,82 @@ fn retained_source_artifacts_survive_reopen_and_later_local_changes() {
     fs::remove_file(root.join(directory).join("pack")).unwrap();
     fs::write(root.join(directory).join("pack"), b"replacement").unwrap();
     assert!(source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &cancellation).is_err());
+}
+
+#[test]
+fn source_generation_never_writes_beyond_the_shared_pack_material_and_archive_budget() {
+    fn size(path: &Path) -> u64 {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let meta = entry.metadata().unwrap();
+                if meta.is_dir() { size(&entry.path()) } else { meta.len() }
+            })
+            .sum()
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repository");
+    let revision = repository(&repo, "budget");
+    let retained = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let cancellation = Cancellation::default();
+    let runner = runner(&cancellation);
+    let export = |retained: &Path, scratch: &Path, limit| {
+        crate::cloud_runtime::repository::bounded_source(&repo, &revision, retained, scratch, &runner, limit)
+    };
+    export(retained.path(), scratch.path(), 1024 * 1024).unwrap();
+    let pack = fs::metadata(retained.path().join("pack")).unwrap().len();
+    let total = size(retained.path()) + size(scratch.path());
+    for limit in [pack - 1, pack + 1, total - 1, total] {
+        let retained = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(export(retained.path(), scratch.path(), limit).is_ok(), limit == total);
+        assert!(size(retained.path()) + size(scratch.path()) <= limit);
+    }
+}
+
+#[test]
+fn source_generation_rejects_asset_fifo_substitution_without_waiting_for_a_writer() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repository");
+    let revision = repository(&repo, "fifo");
+    let pointer = fs::read_to_string(repo.join("asset")).unwrap();
+    let oid = pointer.lines().nth(1).unwrap().strip_prefix("oid sha256:").unwrap();
+    let asset = repo.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]).join(oid);
+    let replaced = std::cell::Cell::new(false);
+    let cancellation = Cancellation::default();
+    let emit = |event| {
+        if let crate::cloud_runtime::Event::Progress(progress) = event
+            && progress.detail == "Bounded source export"
+            && !replaced.replace(true)
+        {
+            fs::rename(&asset, asset.with_extension("saved")).unwrap();
+            assert!(Command::new("mkfifo").arg(&asset).status().unwrap().success());
+        }
+    };
+    let runner = crate::cloud_runtime::command::Runner {
+        cancel: &cancellation,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    let retained = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let started = std::time::Instant::now();
+    assert!(
+        crate::cloud_runtime::repository::bounded_source(
+            &repo,
+            &revision,
+            retained.path(),
+            scratch.path(),
+            &runner,
+            1024 * 1024,
+        )
+        .is_err()
+    );
+    assert!(replaced.get());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(fs::read(asset.with_extension("saved")).unwrap(), b"large asset fifo");
 }
 
 #[test]

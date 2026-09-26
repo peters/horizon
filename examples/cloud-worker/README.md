@@ -560,6 +560,11 @@ journal before signing `ImportProjectSource`. Retries of the same local reposito
 and revision selector reuse those bytes even if the selector now resolves to a
 new commit; `resume` needs no original repository. There is no refresh operation.
 Unreferenced artifacts after a failed initial save remain local and are not adopted.
+Generation enforces one 4 GiB byte budget while writing the retained pack and tar
+and the disposable LFS/submodule staging files. Material-heavy repositories can
+reach this production budget below the wire limit. Scratch is private, outside
+the owner directory, and removed on ordinary completion or error; only pack and
+tar are retained after a successful export.
 
 `prepare-project-source` verifies the signed project request, live membership,
 settled namespace and current capabilities on every attempt, including historical
@@ -572,8 +577,14 @@ not completed import or permission to start sessions.
 `import-project-source` repeats preparation under the allocation lock, then reads
 a four-byte big-endian JSON request length, that exact request, the declared Git
 pack and the auxiliary tar. The descriptor binds both lengths and SHA-256 hashes;
-the aggregate source limit is 4 GiB. Input and helper execution have deadlines and
-private bounded responses. The helper and each Git child retain the allocation
+the aggregate wire limit is 4 GiB. Each worker request shares a 600-second deadline
+across input, capability probes and validation helpers; each helper also retains
+its 120-second limit. The host permits a caller-selected timeout up to 1,260 seconds
+for source preparation plus import, including source resumes. Shorter caller
+timeouts remain binding. Local export is cancellable and has separate command
+bounds; synchronous filesystem calls are not preempted. Full Git responses are
+capped at 16 MiB during execution, and pointer inspection reads at most 1,025 bytes.
+The helper and each Git child retain the allocation
 lock, fencing new mutations until the final writer exits even if its parent dies.
 Invalid archives, links, traversal, duplicate members,
 missing commits and mismatched committed submodule/LFS identities are rejected.

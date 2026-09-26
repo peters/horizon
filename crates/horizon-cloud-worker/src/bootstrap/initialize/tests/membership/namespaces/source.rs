@@ -89,14 +89,64 @@ fn import(
     checkpoint: &mut impl FnMut(SourceBoundary) -> io::Result<()>,
 ) -> io::Result<Receipt> {
     let store = Store::open(&f.root())?;
-    let receipt = source::prepare(&store, &f.runtime, request, |_| Ok(()))?;
-    source::import(&store, &f.runtime, request, &receipt, &mut &bytes[..], checkpoint)?;
+    let deadline = std::time::Instant::now() + Source::WORKER_TIMEOUT;
+    let receipt = source::prepare(&store, &f.runtime, request, deadline, |_| Ok(()))?;
+    source::import(
+        &store,
+        &f.runtime,
+        request,
+        &receipt,
+        &mut &bytes[..],
+        deadline,
+        checkpoint,
+    )?;
     Ok(receipt)
 }
 fn prepared(f: &Fixture, name: &str, port: u16) -> ProjectIdentity {
     let project = reserved(f, name, port);
     f.change(&prepare(f, &project)).unwrap();
     project
+}
+
+#[test]
+fn one_source_deadline_covers_preparation_transfer_and_publication() {
+    let (descriptor, bytes) = bytes();
+    let f = Fixture::ready();
+    let project = prepared(&f, "deadline", 8000);
+    let request = request(&f, &project, descriptor);
+    let store = Store::open(&f.root()).unwrap();
+    let expired = std::time::Instant::now();
+    assert_eq!(
+        source::prepare(&store, &f.runtime, &request, expired, |_| panic!(
+            "expired before probe"
+        ))
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::TimedOut
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let receipt = source::prepare(&store, &f.runtime, &request, deadline, |_| Ok(())).unwrap();
+    let mut received = false;
+    let result = source::import(
+        &store,
+        &f.runtime,
+        &request,
+        &receipt,
+        &mut &bytes[..],
+        deadline,
+        &mut |at| {
+            if at == SourceBoundary::Received {
+                received = true;
+                std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
+            Ok(())
+        },
+    );
+    assert!(received);
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert!(!project_root(&f, &project).join("repository/source").exists());
+    drop(store);
+    import(&f, &request, &bytes, &mut |_| Ok(())).unwrap();
 }
 
 #[test]
@@ -233,7 +283,16 @@ fn preparation_rechecks_capabilities_before_each_upload_and_never_releases_pendi
             import(&f, &request, &bytes, &mut |_| Ok(())).unwrap();
         }
         let store = Store::open(&f.root()).unwrap();
-        assert!(source::prepare(&store, &f.runtime, &request, |_| Err(invalid())).is_err());
+        assert!(
+            source::prepare(
+                &store,
+                &f.runtime,
+                &request,
+                std::time::Instant::now() + Source::WORKER_TIMEOUT,
+                |_| Err(invalid())
+            )
+            .is_err()
+        );
     }
 }
 

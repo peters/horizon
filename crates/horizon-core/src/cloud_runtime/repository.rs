@@ -130,5 +130,146 @@ pub fn auxiliary(repository: &Path, revision: &str, root: &Path, runner: &Runner
     material::archive(repository, revision, root, runner)
 }
 
+/// Counts both retained output and disposable material against one production budget.
+#[cfg(target_os = "linux")]
+pub(super) fn bounded_source(
+    repository: &Path,
+    revision: &str,
+    retained: &Path,
+    scratch: &Path,
+    runner: &Runner<'_>,
+    limit: u64,
+) -> Result<()> {
+    let selected = material::Material::collect(repository, revision, runner)?;
+    if selected.modules.len() > 256 || selected.assets.len() > 8192 {
+        return Err(Error::Invalid("Source material exceeds its entry limit"));
+    }
+    let mut budget = ExportBudget { remaining: limit };
+    bounded_pack(repository, revision, &retained.join("pack"), runner, &mut budget)?;
+    let directory = scratch.join("material");
+    std::fs::create_dir(&directory)?;
+    let objects = directory.join("lfs");
+    std::fs::create_dir(&objects)?;
+    let mut copied = std::collections::BTreeSet::new();
+    for asset in &selected.assets {
+        if copied.insert(&asset.oid) {
+            copy_asset(asset, &objects.join(&asset.oid), runner, &mut budget)?;
+        }
+    }
+    for (index, module) in selected.modules.iter().enumerate() {
+        bounded_pack(
+            &module.repository,
+            &module.revision,
+            &directory.join(format!("module-{index}.pack")),
+            runner,
+            &mut budget,
+        )?;
+    }
+    let manifest = serde_json::to_vec(&selected).map_err(|_| Error::Json)?;
+    if manifest.len() > 1024 * 1024 {
+        return Err(Error::Invalid("Source material manifest exceeds its limit"));
+    }
+    budget.charge(manifest.len() as u64)?;
+    std::fs::File::create_new(directory.join("manifest.json"))?.write_all(&manifest)?;
+    bounded_output(
+        Command::new("tar")
+            .args(["-cf", "-", "-C"])
+            .arg(&directory)
+            .arg(".")
+            .stdin(std::process::Stdio::null()),
+        &retained.join("source-material.tar"),
+        runner,
+        &mut budget,
+    )
+}
+
+#[cfg(target_os = "linux")]
+struct ExportBudget {
+    remaining: u64,
+}
+#[cfg(target_os = "linux")]
+impl ExportBudget {
+    fn charge(&mut self, length: u64) -> Result<()> {
+        self.remaining = self
+            .remaining
+            .checked_sub(length)
+            .ok_or(Error::Invalid("Source export exceeds its aggregate byte budget"))?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bounded_pack(
+    repository: &Path,
+    revision: &str,
+    output: &Path,
+    runner: &Runner<'_>,
+    budget: &mut ExportBudget,
+) -> Result<()> {
+    let sha = resolve_with_runner(repository, revision, runner)?;
+    let mut input = tempfile::tempfile()?;
+    writeln!(input, "{sha}")?;
+    std::io::Seek::rewind(&mut input)?;
+    bounded_output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["pack-objects", "--stdout", "--revs"])
+            .stdin(input),
+        output,
+        runner,
+        budget,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn bounded_output(command: &mut Command, output: &Path, runner: &Runner<'_>, budget: &mut ExportBudget) -> Result<()> {
+    let mut file = std::fs::File::create_new(output)?;
+    let length = runner.bounded_file(command, &mut file, budget.remaining, Duration::from_secs(300))?;
+    budget.charge(length)
+}
+
+#[cfg(target_os = "linux")]
+fn copy_asset(asset: &material::Asset, path: &Path, runner: &Runner<'_>, budget: &mut ExportBudget) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    budget.charge(asset.size)?;
+    let mut source = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+        .open(&asset.source)?;
+    let metadata = source.metadata()?;
+    if !metadata.is_file() || metadata.len() != asset.size {
+        return Err(Error::Invalid("Source asset changed during export"));
+    }
+    let mut output = std::fs::File::create_new(path)?;
+    let mut hash = Sha256::new();
+    let mut copied = 0_u64;
+    let mut buffer = [0; 16384];
+    loop {
+        runner.cancel.check()?;
+        let length = source.read(&mut buffer)?;
+        if length == 0 {
+            break;
+        }
+        if length as u64 > asset.size.saturating_sub(copied) {
+            return Err(Error::Invalid("Source asset changed during export"));
+        }
+        output.write_all(&buffer[..length])?;
+        hash.update(&buffer[..length]);
+        copied += length as u64;
+    }
+    let mut digest = String::with_capacity(64);
+    for byte in hash.finalize() {
+        use std::fmt::Write as _;
+        write!(digest, "{byte:02x}").map_err(|_| Error::Invalid("Cannot encode source checksum"))?;
+    }
+    if copied != asset.size || digest != asset.oid {
+        return Err(Error::Invalid("Source asset changed during export"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

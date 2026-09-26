@@ -27,12 +27,13 @@ pub(super) fn run(upload: bool) -> io::Result<()> {
     if std::env::args().len() != 2 {
         return Err(invalid());
     }
+    let deadline = Instant::now() + Source::WORKER_TIMEOUT;
     let mut input = Input {
         file: std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
             .open("/proc/self/fd/0")?,
-        deadline: Instant::now() + Duration::from_secs(180),
+        deadline,
     };
     let request = if upload {
         let mut length = [0; 4];
@@ -49,12 +50,26 @@ pub(super) fn run(upload: bool) -> io::Result<()> {
     };
     let store = Store::open(Path::new(ROOT))?;
     let runtime = Runtime::captured()?;
-    let receipt = prepare(&store, &runtime, &request, inspection::probe)?;
+    let receipt = prepare(&store, &runtime, &request, deadline, |capabilities| {
+        inspection::probe_with_timeout(capabilities, remaining(deadline)?)
+    })?;
     if upload {
-        import(&store, &runtime, &request, &receipt, &mut input, &mut |_| Ok(()))?;
+        import(&store, &runtime, &request, &receipt, &mut input, deadline, &mut |_| {
+            Ok(())
+        })?;
     }
+    remaining(deadline)?;
     serde_json::to_writer(io::stdout().lock(), &receipt)?;
     io::stdout().lock().write_all(b"\n")
+}
+
+fn remaining(deadline: Instant) -> io::Result<Duration> {
+    let duration = deadline.saturating_duration_since(Instant::now());
+    if duration.is_zero() {
+        Err(io::Error::new(io::ErrorKind::TimedOut, "Source deadline expired"))
+    } else {
+        Ok(duration)
+    }
 }
 
 struct Input {
@@ -64,9 +79,7 @@ struct Input {
 impl Read for Input {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
-            if Instant::now() >= self.deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "Source deadline expired"));
-            }
+            remaining(self.deadline)?;
             match self.file.read(bytes) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -81,8 +94,10 @@ pub(super) fn prepare(
     store: &Store,
     runtime: &Runtime,
     request: &RecoveryRequest,
+    deadline: Instant,
     probe: impl FnOnce(&horizon_cloud::Capabilities) -> io::Result<()>,
 ) -> io::Result<Receipt> {
+    remaining(deadline)?;
     let receipt = membership::mutate(store, runtime, request, Action::ImportProjectSource, probe, &mut |_| {
         Ok(())
     })?;
@@ -91,7 +106,7 @@ pub(super) fn prepare(
         return Err(invalid());
     };
     let parent = namespaces::repository(store, &manifest, &receipt.identity)?;
-    if let Some(tree) = Tree::open(store, &parent, &receipt, &descriptor, false)? {
+    if let Some(tree) = Tree::open(store, &parent, &receipt, &descriptor, false, deadline)? {
         tree.validate(false)?;
     }
     super::store::same(&parent, &namespaces::repository(store, &manifest, &receipt.identity)?)?;
@@ -110,8 +125,10 @@ pub(super) fn import(
     request: &RecoveryRequest,
     receipt: &Receipt,
     input: &mut impl Read,
+    deadline: Instant,
     checkpoint: &mut impl FnMut(Boundary) -> io::Result<()>,
 ) -> io::Result<()> {
+    remaining(deadline)?;
     let manifest = context(store, runtime)?;
     let (next, expected) = manifest
         .next(&request.message, &request.payload)
@@ -124,12 +141,13 @@ pub(super) fn import(
     };
     let parent = namespaces::repository(store, &manifest, &receipt.identity)?;
     let verify = || {
+        remaining(deadline)?;
         if context(store, runtime)? != manifest {
             return Err(invalid());
         }
         super::store::same(&parent, &namespaces::repository(store, &manifest, &receipt.identity)?)
     };
-    let mut tree = Tree::open(store, &parent, receipt, &descriptor, true)?.ok_or_else(invalid)?;
+    let mut tree = Tree::open(store, &parent, receipt, &descriptor, true, deadline)?.ok_or_else(invalid)?;
     tree.receive(input, checkpoint, &verify)?;
     tree.publish(checkpoint, &verify)?;
     verify()?;
@@ -151,6 +169,7 @@ fn entries(manifest: &Manifest) -> io::Result<Vec<(&Receipt, Source)>> {
 }
 
 pub(super) fn validate(store: &Store, manifest: &Manifest, settled: bool) -> io::Result<()> {
+    let deadline = Instant::now() + Source::WORKER_TIMEOUT;
     for (receipt, descriptor) in entries(manifest)? {
         let parent = namespaces::repository(store, manifest, &receipt.identity)?;
         let required = settled
@@ -158,7 +177,7 @@ pub(super) fn validate(store: &Store, manifest: &Manifest, settled: bool) -> io:
                 .members
                 .iter()
                 .any(|member| member.identity == receipt.identity && member.state == State::Removed);
-        match Tree::open(store, &parent, receipt, &descriptor, false)? {
+        match Tree::open(store, &parent, receipt, &descriptor, false, deadline)? {
             Some(tree) => tree.validate(required)?,
             None if required => return Err(invalid()),
             None => {}
@@ -169,12 +188,13 @@ pub(super) fn validate(store: &Store, manifest: &Manifest, settled: bool) -> io:
 }
 
 pub(super) fn require_settled(store: &Store, manifest: &Manifest, identity: &ProjectIdentity) -> io::Result<()> {
+    let deadline = Instant::now() + Source::WORKER_TIMEOUT;
     for (receipt, descriptor) in entries(manifest)?
         .into_iter()
         .filter(|(receipt, _)| &receipt.identity == identity)
     {
         let parent = namespaces::repository(store, manifest, identity)?;
-        Tree::open(store, &parent, receipt, &descriptor, false)?
+        Tree::open(store, &parent, receipt, &descriptor, false, deadline)?
             .ok_or_else(invalid)?
             .validate(true)?;
         super::store::same(&parent, &namespaces::repository(store, manifest, identity)?)?;

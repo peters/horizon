@@ -192,7 +192,7 @@ fn fingerprint(file: &mut File, cancellation: &Cancellation, mut output: Option<
     })
 }
 #[cfg(target_os = "linux")]
-fn auxiliary(repository: &Path, revision: &str, retained: &Path, owner_root: &Path, runner: &Runner<'_>) -> Result<()> {
+fn export(repository: &Path, revision: &str, retained: &Path, owner_root: &Path, runner: &Runner<'_>) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     // Scratch must stay outside the replaceable owner tree, even with a custom TMPDIR.
     let scratch = tempfile::Builder::new()
@@ -202,10 +202,14 @@ fn auxiliary(repository: &Path, revision: &str, retained: &Path, owner_root: &Pa
     if scratch.path().starts_with(owner_root) {
         return Err(Error::Invalid);
     }
-    let archive = repository::auxiliary(repository, revision, scratch.path(), runner)?;
-    let mut output = File::create_new(retained.join("source-material.tar"))?;
-    fingerprint(&mut File::open(archive)?, runner.cancel, Some(&mut output))?;
-    output.sync_all()?;
+    repository::bounded_source(
+        repository,
+        revision,
+        retained,
+        scratch.path(),
+        runner,
+        Source::MAX_BYTES,
+    )?;
     scratch.close()?;
     Ok(())
 }
@@ -241,8 +245,7 @@ impl Artifacts {
         checkpoint(&path)?;
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
-        repository::pack(repository, &selected, &anchored.join("pack"), &runner)?;
-        auxiliary(repository, &selected, &anchored, root, &runner)?;
+        export(repository, &selected, &anchored, root, &runner)?;
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
         let payload = |name| -> Result<File> {
