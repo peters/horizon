@@ -192,7 +192,8 @@ try:
         probe(['horizon-worker-git-auth', 'check'])
         if os.readlink('/usr/local/bin/gh') != '/usr/local/bin/horizon-worker-git-auth':
             raise ValueError('Worker Git wrapper is missing')
-        print('horizon-git-auth-contract=1')
+        # Contract 2: per-repository grants for the primary and its same-worker siblings.
+        print('horizon-git-auth-contract=1\nhorizon-git-auth-contract=2')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))
         if active != selected:
