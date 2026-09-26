@@ -178,7 +178,7 @@ impl Hetzner {
                 "A server can only attach a volume from its own location",
             ));
         }
-        match volume.server {
+        match self.holder(&volume, cancel)? {
             Some(attached) if attached == server_id => return Ok(()),
             Some(_) => return Err(CloudError::Invalid("The volume is attached to another server")),
             None => {}
@@ -193,7 +193,7 @@ impl Hetzner {
     pub fn detach(&self, operation_id: &str, volume_id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
         let volume = self.inspect_volume(volume_id, cancel)?.ok_or(CloudError::WorkerLost)?;
         volume.verify(operation_id)?;
-        if volume.server.is_none() {
+        if self.holder(&volume, cancel)?.is_none() {
             return Ok(());
         }
         self.volume_action(volume_id, "detach", None, cancel)
@@ -218,7 +218,7 @@ impl Hetzner {
         progress(Progress::ConfirmingVolume);
         if let Some(volume) = self.inspect_volume(id, cancel)? {
             volume.verify(operation_id)?;
-            if volume.server.is_some() {
+            if self.holder(&volume, cancel)?.is_some() {
                 return Err(CloudError::Invalid(
                     "The volume is still attached; delete or detach its server first",
                 ));
@@ -238,6 +238,14 @@ impl Hetzner {
         persist(&next)?;
         *state = next;
         Ok(())
+    }
+
+    /// The server that really holds the volume. Hetzner keeps naming a deleted
+    /// server, which already answers 404, until it finishes the deletion; that
+    /// attachment no longer holds the volume.
+    pub(crate) fn holder(&self, volume: &Volume, cancel: &Cancellation) -> Result<Option<u64>, CloudError> {
+        let Some(server) = volume.server else { return Ok(None) };
+        Ok(self.inspect_server(server, cancel)?.map(|_| server))
     }
 
     fn volume_action(

@@ -1,6 +1,8 @@
 //! Servers. A worker is one server named and labelled after its operation; the
 //! caller durably persists `CreateState` before every create request.
-use super::{Action, Failure, Hetzner, Method, OPERATION_LABEL, resource_name, valid_name, volumes::Volume};
+use super::{
+    Action, Failure, Hetzner, Method, OPERATION_LABEL, keys::SshKey, resource_name, valid_name, volumes::Volume,
+};
 use crate::{Cancellation, CloudError, CreateState, Progress, Reason, WorkerStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,6 +30,9 @@ pub struct ServerRequest<'a> {
     pub user_data: &'a str,
     /// The operation's workspace volume, attached at creation without automount.
     pub volume: Option<&'a Volume>,
+    /// The operation's registered key. Without one, Hetzner generates a root
+    /// password and emails it.
+    pub ssh_key: Option<&'a SshKey>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -97,6 +102,10 @@ impl Server {
 struct Created {
     server: Server,
     action: Action,
+    /// Follow-up actions such as `start_server`. Deleting a server before they
+    /// finish left Hetzner's delete action stuck in a live run.
+    #[serde(default)]
+    next_actions: Vec<Action>,
 }
 #[derive(Deserialize)]
 struct Single {
@@ -153,6 +162,9 @@ impl Hetzner {
             progress(Progress::WorkerFound(server.id.to_string()));
             return placed(server, request);
         }
+        if let Some(volume) = request.volume {
+            self.volume_free(request.operation_id, volume.id, cancel)?;
+        }
         let mut refusal = Reason::default();
         for placement in request.placements {
             cancel.check()?;
@@ -167,6 +179,9 @@ impl Hetzner {
                     progress(Progress::WorkerFound(created.server.id.to_string()));
                     // The server stays bound if its creation fails later, so it can be deleted.
                     self.wait(&created.action, cancel)?;
+                    for next in &created.next_actions {
+                        self.wait(next, cancel)?;
+                    }
                     return placed(created.server, request);
                 }
                 Err(failure) if failure.name_taken() => {
@@ -265,7 +280,7 @@ impl Hetzner {
             match self.send(Method::Delete, &format!("/servers/{id}"), None, cancel) {
                 Ok(value) => {
                     let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
-                    self.wait(&acted.action, cancel)?;
+                    self.wait_until(&acted.action, cancel, || Ok(self.inspect_server(id, cancel)?.is_none()))?;
                 }
                 Err(failure) if failure.not_found() => {}
                 Err(failure) => return Err(failure.into()),
@@ -288,6 +303,25 @@ impl Hetzner {
         let value = self.send(Method::Post, &format!("/servers/{id}/actions/{action}"), None, cancel)?;
         let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
         self.wait(&acted.action, cancel)
+    }
+
+    /// The caller's volume value can be stale, so it is inspected right before a
+    /// server is created to attach it: it must still be ours, finished creating
+    /// and attached to no server.
+    fn volume_free(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
+        let volume = self.inspect_volume(id, cancel)?.ok_or(CloudError::WorkerLost)?;
+        volume.verify(operation_id)?;
+        if volume.status != "available" {
+            return Err(CloudError::Invalid(
+                "The workspace volume is still being created; check again shortly",
+            ));
+        }
+        if self.holder(&volume, cancel)?.is_some() {
+            return Err(CloudError::Invalid(
+                "The workspace volume is attached to another server",
+            ));
+        }
+        Ok(())
     }
 
     fn reconcile(
@@ -330,6 +364,9 @@ fn validate(request: &ServerRequest<'_>) -> Result<(), CloudError> {
         return Err(CloudError::Invalid(
             "Hetzner user data must be between 1 byte and 32 KiB",
         ));
+    }
+    if let Some(key) = request.ssh_key {
+        key.verify(request.operation_id)?;
     }
     if let Some(volume) = request.volume {
         volume.verify(request.operation_id)?;
@@ -382,6 +419,9 @@ fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<Val
     if let Some(volume) = request.volume {
         body["volumes"] = json!([volume.id]);
         body["automount"] = json!(false);
+    }
+    if let Some(key) = request.ssh_key {
+        body["ssh_keys"] = json!([key.id]);
     }
     Ok(body)
 }

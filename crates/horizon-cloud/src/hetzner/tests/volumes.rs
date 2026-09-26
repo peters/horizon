@@ -86,7 +86,9 @@ fn attaching_requires_both_identities_one_location_and_a_free_volume() {
         (200, json!({"server": elsewhere})),
         (200, json!({"volume": volume(9, Some(41))})),
         (200, json!({"server": servers::server(42)})),
+        (200, json!({"server": servers::server(41)})),
         (200, json!({"volume": volume(9, Some(42))})),
+        (200, json!({"server": servers::server(42)})),
         (201, json!({"action": action(5, "success")})),
     ]);
     let cancel = Cancellation::default();
@@ -104,14 +106,17 @@ fn attaching_requires_both_identities_one_location_and_a_free_volume() {
     let requests = requests.lock().unwrap();
     assert!(requests[2].starts_with("POST /volumes/9/actions/attach "));
     assert_eq!(request_body(&requests[2]), json!({"server": 42, "automount": false}));
-    assert!(requests[8].starts_with("POST /volumes/9/actions/detach "));
+    assert!(requests[10].starts_with("POST /volumes/9/actions/detach "));
 }
 
 #[test]
 fn deletion_refuses_attached_volumes_and_proves_absence() {
     let (hetzner, requests, task) = provider(vec![
         (200, json!({"volume": volume(9, Some(42))})),
-        (200, json!({"volume": volume(9, None)})),
+        (200, json!({"server": servers::server(42)})),
+        // The server is gone although the volume still names it.
+        (200, json!({"volume": volume(9, Some(42))})),
+        (404, error("not_found", "server not found")),
         (204, Value::Null),
         (404, error("not_found", "volume not found")),
     ]);
@@ -136,7 +141,7 @@ fn deletion_refuses_attached_volumes_and_proves_absence() {
         ]
     );
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[2].starts_with("DELETE /volumes/9 "));
+    assert!(requests.lock().unwrap()[4].starts_with("DELETE /volumes/9 "));
 }
 
 #[test]
