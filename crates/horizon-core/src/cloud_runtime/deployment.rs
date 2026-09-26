@@ -41,6 +41,27 @@ pub struct Request {
     pub state_root: PathBuf,
     pub settings: Settings,
 }
+
+impl Request {
+    #[must_use]
+    pub fn new(
+        cloud_id: String,
+        repository: PathBuf,
+        revision: String,
+        profile: horizon_cloud::Profile,
+        state_root: PathBuf,
+        settings: Settings,
+    ) -> Self {
+        Self {
+            cloud_id,
+            repository,
+            revision,
+            profile,
+            state_root,
+            settings,
+        }
+    }
+}
 /// # Errors
 /// Saves a retryable record for an already resolved commit before persisting deployment intent.
 /// Does not invoke Git; deployment validates the committed tree before allocation.
