@@ -23,7 +23,8 @@ pub(super) struct Fetched<T> {
 
 /// A CPU size together with the container disk that limits which flavors offer it.
 type SizeKey = (u16, u16, u16);
-type Job<T> = Receiver<Result<T, String>>;
+/// Answers are timestamped when the provider answers, not when a frame collects them.
+type Job<T> = Receiver<Result<Fetched<T>, String>>;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -90,11 +91,8 @@ impl State {
     pub fn poll(&mut self) {
         if let Some(result) = finished(&mut self.list_job) {
             match result {
-                Ok(value) => {
-                    self.list = Some(Fetched {
-                        value,
-                        at: Instant::now(),
-                    });
+                Ok(fetched) => {
+                    self.list = Some(fetched);
                     self.list_error = None;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
@@ -109,13 +107,7 @@ impl State {
             let mut job = self.size_jobs.remove(&key);
             match finished(&mut job) {
                 Some(result) => {
-                    self.sizes.insert(
-                        key,
-                        result.map(|value| Fetched {
-                            value,
-                            at: Instant::now(),
-                        }),
-                    );
+                    self.sizes.insert(key, result);
                 }
                 None => {
                     if let Some(job) = job {
@@ -171,6 +163,10 @@ fn spawn<T: Send + 'static>(
     std::thread::spawn(move || {
         let result = Settings::load(&path)
             .and_then(|settings| fetch(&settings, &Cancellation::default()))
+            .map(|value| Fetched {
+                value,
+                at: Instant::now(),
+            })
             .map_err(|error| error.to_string());
         let _ = tx.send(result);
         ctx.request_repaint();
@@ -178,7 +174,7 @@ fn spawn<T: Send + 'static>(
     rx
 }
 
-fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<T, String>> {
+fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
     let result = match job.as_ref()?.try_recv() {
         Ok(result) => result,
         Err(TryRecvError::Empty) => return None,
@@ -211,6 +207,13 @@ mod tests {
         .clone()
     }
 
+    fn now<T>(value: T) -> Fetched<T> {
+        Fetched {
+            value,
+            at: Instant::now(),
+        }
+    }
+
     const AVAILABLE: SizeAvailability = SizeAvailability {
         best: Availability::High,
         centers: 2,
@@ -224,7 +227,7 @@ mod tests {
         assert!(state.loading());
         state.poll();
         assert!(state.list.is_none() && state.loading());
-        tx.send(Ok((list(), Preferences::default()))).unwrap();
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
         state.poll();
         assert!(!state.loading());
         assert_eq!(state.list.as_ref().unwrap().value.0.provider, "RunPod");
@@ -237,7 +240,7 @@ mod tests {
         state.poll();
         assert_eq!(state.list_error.as_deref(), Some("Missing RunPod API key"));
         drop(state.list_job.take());
-        let (tx, rx) = channel::<Result<(PriceList, Preferences), String>>();
+        let (tx, rx) = channel::<Result<Fetched<(PriceList, Preferences)>, String>>();
         drop(tx);
         state.list_job = Some(rx);
         state.poll();
@@ -290,8 +293,8 @@ mod tests {
         state.size_jobs.insert(key(&profile()), rx);
         state.refresh();
         assert!(!state.loading() && state.list_error.is_none() && state.size_jobs.is_empty());
-        assert!(list_tx.send(Ok((list(), Preferences::default()))).is_err());
-        assert!(size_tx.send(Ok(AVAILABLE)).is_err());
+        assert!(list_tx.send(Ok(now((list(), Preferences::default())))).is_err());
+        assert!(size_tx.send(Ok(now(AVAILABLE))).is_err());
     }
 
     #[test]
@@ -322,5 +325,31 @@ mod tests {
         let (_tx, rx) = channel();
         state.list_job = Some(rx);
         assert_eq!(state.until_stale(&gpu), None);
+    }
+
+    #[test]
+    fn answers_collected_late_keep_the_time_the_provider_answered() {
+        let answered = Instant::now();
+        let mut state = State::default();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(Fetched {
+            value: (list(), Preferences::default()),
+            at: answered,
+        }))
+        .unwrap();
+        let (tx, rx) = channel();
+        state.size_jobs.insert(key(&profile()), rx);
+        tx.send(Ok(Fetched {
+            value: AVAILABLE,
+            at: answered,
+        }))
+        .unwrap();
+        // A closed dialog collects answers later; they must not look newer than they are.
+        std::thread::sleep(Duration::from_millis(5));
+        state.poll();
+        assert_eq!(state.list.as_ref().map(|list| list.at), Some(answered));
+        let size = state.sizes.get(&key(&profile())).unwrap().as_ref().unwrap();
+        assert_eq!(size.at, answered);
     }
 }
