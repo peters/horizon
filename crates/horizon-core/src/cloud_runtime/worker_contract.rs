@@ -5,6 +5,7 @@ use horizon_cloud::Capabilities;
 pub(super) const CAPABILITIES_ENV: &str = "HORIZON_WORKER_CAPABILITIES";
 const CAPABILITIES_MARKER: &str = "horizon-capabilities-contract=1";
 const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
+const CONTAINER_STARTED_MARKER: &str = "horizon-container-started=";
 
 /// Optional worker features the checker reports beside the required markers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -12,12 +13,20 @@ pub struct WorkerContract {
     /// `horizon-worker-session --relaunch` can replace a session process lost in a
     /// container reset, in its existing worktree. Older images report such sessions lost.
     pub session_restart: bool,
+    /// When the worker's container started, by the worker's clock. Older images do not report it.
+    pub container_started: Option<std::time::SystemTime>,
 }
 
 impl WorkerContract {
     pub(super) fn reported(output: &str) -> Self {
         Self {
             session_restart: reports(output, SESSION_RESTART_MARKER),
+            container_started: output
+                .lines()
+                .find_map(|line| line.strip_prefix(CONTAINER_STARTED_MARKER))
+                .filter(|millis| !millis.is_empty() && millis.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|millis| millis.parse().ok())
+                .map(|millis| std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis)),
         }
     }
 }

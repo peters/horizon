@@ -21,6 +21,7 @@ pub mod settings;
 pub mod setup;
 pub mod ssh;
 pub mod state;
+pub mod timeline;
 pub mod tunnel;
 mod worker_contract;
 pub use worker_contract::WorkerContract;

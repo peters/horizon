@@ -5,6 +5,7 @@ use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
 mod rebuild;
 #[cfg(test)]
 mod tests;
+mod timeline;
 impl HorizonApp {
     pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
         self.ensure_cloud_provider_logo(ctx);
@@ -616,17 +617,7 @@ fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
         rebuild::stages(runtime)
     };
     stage_rows(ui, runtime, stages);
-    if runtime.stage == Some(Stage::Ready)
-        && let Some(seconds) = runtime.state.as_ref().and_then(|state| state.ready_after_seconds)
-    {
-        ui.small(format!(
-            "Worker ready in {}",
-            horizon_core::cloud_runtime::progress::duration(std::time::Duration::from_secs(seconds))
-        ))
-        .on_hover_text(
-            "Time for the successful deployment attempt. Application startup and reconnect are measured separately.",
-        );
-    }
+    timeline::show(ui, id, runtime);
     runtime.progress.render(ui);
     rebuild::notes(ui, runtime);
     for error in runtime.error.iter().chain(&runtime.remote_release_error) {

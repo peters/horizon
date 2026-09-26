@@ -88,6 +88,7 @@ impl Records {
             browserstack_targets,
             image_replacement,
             session_restart,
+            timeline: _,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -146,6 +147,8 @@ impl Records {
             browserstack_targets: self.project.browserstack_targets.clone(),
             image_replacement: self.allocation.image_replacement.clone(),
             session_restart: self.project.session_restart,
+            // Presentation only: a split record starts without a deployment timeline.
+            timeline: None,
         }
     }
 }

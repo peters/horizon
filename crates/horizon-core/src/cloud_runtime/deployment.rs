@@ -42,6 +42,12 @@ pub fn prepare(request: &Request) -> Result<()> {
 /// Records any uncertain allocation durably and never deletes workers on disconnect.
 pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<Deployment> {
     let started = Instant::now();
+    let timeline = super::timeline::Recorder::default();
+    let recorded = |event: Event| {
+        timeline.observe(&event);
+        emit(event);
+    };
+    let emit: &dyn Fn(Event) = &recorded;
     emit(Event::stage(Stage::Validate));
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
@@ -50,6 +56,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     let provider = RunPod::new(request.settings.credential()?);
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
+    let reconnected = matches!(state.operation, CreateState::Bound { .. });
     if state.stage == Stage::Deleted {
         let public_key = current_public_key(&request.settings.ssh_identity_file)?;
         redeploy::reopen(&store, &mut state, &public_key)?;
@@ -113,6 +120,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     )));
     provision(&provider, &store, &mut state, &spec, cancel, emit)?;
     let (connection, contract) = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
+    let container_started = contract.container_started;
     if !state.source_ready {
         state.stage = Stage::Worktrees;
         store.save(&state)?;
@@ -142,6 +150,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
     replacement::relaunch_sessions(&store, &mut state, contract, emit, relaunch)?;
+    state.timeline = Some(timeline.finish(reconnected, container_started, std::time::SystemTime::now()));
     finish_ready(state, &store, started, emit)
 }
 
@@ -378,6 +387,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             browserstack_targets: std::collections::BTreeSet::new(),
             image_replacement: None,
             session_restart: None,
+            timeline: None,
         }
     };
     store.save(&state)?;

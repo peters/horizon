@@ -33,6 +33,31 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
 }
 
 #[test]
+fn the_container_start_is_read_only_from_its_exact_marker() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    assert_eq!(WorkerContract::reported(current).container_started, None);
+    let started = WorkerContract::reported(&format!("{current}horizon-container-started=1790410526700\n"));
+    assert_eq!(
+        started.container_started,
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_790_410_526_700))
+    );
+    for invalid in [
+        "horizon-container-started=",
+        "horizon-container-started=+5",
+        "horizon-container-started=1.5",
+        " horizon-container-started=5",
+    ] {
+        assert_eq!(
+            WorkerContract::reported(&format!("{current}{invalid}\n")).container_started,
+            None,
+            "{invalid}"
+        );
+    }
+    // An optional report never substitutes for a required contract marker.
+    assert!(validate("horizon-container-started=5", &Capabilities::default(), false, false).is_err());
+}
+
+#[test]
 fn idle_stop_requires_its_exact_marker_only_when_requested() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     assert!(validate(current, &Capabilities::default(), false, false).is_ok());
