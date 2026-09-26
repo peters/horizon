@@ -194,7 +194,7 @@ impl Steps for Live<'_> {
                 self.images(registry.as_ref(), false).validate_contract(
                     &digest,
                     &state.cloud_id,
-                    &state.profile.capabilities,
+                    &state.profile,
                     true,
                 )?;
             }

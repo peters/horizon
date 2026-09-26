@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn legacy_markers_accept_only_the_original_effective_capabilities() {
     let legacy = "horizon-worker-contract=1\nhorizon-source-contract=1\n";
-    assert!(validate(legacy, &Capabilities::default(), false).is_ok());
+    assert!(validate(legacy, &Capabilities::default(), false, false).is_ok());
     let minimal = serde_json::from_str("{}").unwrap();
-    assert!(validate(legacy, &minimal, false).is_err());
-    assert!(validate(legacy, &Capabilities::default(), true).is_err());
+    assert!(validate(legacy, &minimal, false, false).is_err());
+    assert!(validate(legacy, &Capabilities::default(), true, false).is_err());
     let remote = serde_json::from_str(r#"{"browserstack":{}}"#).unwrap();
-    assert!(validate(&format!("{legacy}{CAPABILITIES_MARKER}\n"), &remote, false).is_err());
+    assert!(validate(&format!("{legacy}{CAPABILITIES_MARKER}\n"), &remote, false, false).is_err());
 }
 
 #[test]
@@ -16,10 +16,10 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     assert_eq!(WorkerContract::reported(current), WorkerContract::default());
     assert!(!WorkerContract::reported(current).session_restart);
-    assert!(validate(current, &Capabilities::default(), false).is_ok());
+    assert!(validate(current, &Capabilities::default(), false, false).is_ok());
     let restartable = format!("{current}{SESSION_RESTART_MARKER}\n");
     assert!(WorkerContract::reported(&restartable).session_restart);
-    assert!(validate(&restartable, &Capabilities::default(), false).is_ok());
+    assert!(validate(&restartable, &Capabilities::default(), false, false).is_ok());
     for incidental in [
         "prefix-horizon-session-restart-contract=1",
         "horizon-session-restart-contract=1-suffix",
@@ -29,7 +29,20 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
         assert!(!WorkerContract::reported(&format!("{current}{incidental}\n")).session_restart);
     }
     // The feature marker never substitutes for a required contract marker.
-    assert!(validate(SESSION_RESTART_MARKER, &Capabilities::default(), false).is_err());
+    assert!(validate(SESSION_RESTART_MARKER, &Capabilities::default(), false, false).is_err());
+}
+
+#[test]
+fn idle_stop_requires_its_exact_marker_only_when_requested() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    assert!(validate(current, &Capabilities::default(), false, false).is_ok());
+    assert!(validate(current, &Capabilities::default(), false, true).is_err());
+    for incidental in ["horizon-idle-stop-contract=2", " horizon-idle-stop-contract=1"] {
+        let output = format!("{current}{incidental}\n");
+        assert!(validate(&output, &Capabilities::default(), false, true).is_err());
+    }
+    let supported = format!("{current}horizon-idle-stop-contract=1\n");
+    assert!(validate(&supported, &Capabilities::default(), false, true).is_ok());
 }
 
 #[cfg(unix)]
@@ -64,7 +77,7 @@ fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() 
             assert_eq!(ready.exists(), script == modern);
             let output = String::from_utf8(output.stdout).unwrap();
             assert_eq!(
-                validate(&output, &capabilities, false).is_ok(),
+                validate(&output, &capabilities, false, false).is_ok(),
                 script == modern || capabilities == Capabilities::default()
             );
             // Readiness relays the running image's report, so a legacy image never claims restart.

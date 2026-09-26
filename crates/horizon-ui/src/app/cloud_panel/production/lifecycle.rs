@@ -54,6 +54,8 @@ impl Runtime {
         self.recovery_receiver = None;
         match result {
             Ok(recovered) => {
+                // A stopped worker, including one that stopped itself when idle, only needs Resume.
+                let stopped = recovered.confirmed_stopped();
                 self.stage = Some(recovered.state.stage);
                 self.state = Some(recovered.state);
                 if self
@@ -64,12 +66,13 @@ impl Runtime {
                     self.recovery_worker_id.clear();
                 }
                 self.state_unavailable = false;
-                self.error = recovered
-                    .report
-                    .outcome
-                    .needs_attention()
+                self.error = (recovered.report.outcome.needs_attention() && !stopped)
                     .then(|| recovered.report.outcome.explanation().into());
-                self.push_log(recovered.report.outcome.explanation().into());
+                self.push_log(if stopped {
+                    "The provider confirmed this worker is stopped. Resume starts the same worker again.".into()
+                } else {
+                    recovered.report.outcome.explanation().into()
+                });
             }
             Err(error) => self.error = Some(error.to_string()),
         }

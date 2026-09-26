@@ -165,6 +165,24 @@ class SupervisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'incomplete'):
             CHECK(self.root, self.root)
 
+    def test_supervisor_declares_that_it_starts_the_idle_watcher(self):
+        declared = subprocess.run([sys.executable, str(Path(__file__).with_name('horizon-worker-supervise')),
+                                   '--idle-stop-contract'], capture_output=True, timeout=10)
+        self.assertEqual((declared.returncode, declared.stdout), (0, b'horizon-idle-stop-contract=1\n'))
+
+    def test_idle_watcher_is_owned_and_checked_only_when_started(self):
+        self.ready(False)
+        self.assertNotIn('idle', json.loads((self.root / 'services.json').read_text())['services'])
+        child = self.start('idle')
+        self.supervisor.publish(False)
+        self.assertIn('idle', json.loads((self.root / 'services.json').read_text())['services'])
+        CHECK(self.root, self.root)
+        self.stop_unreaped(child)
+        with self.assertRaisesRegex(ValueError, 'idle'):
+            self.supervisor.assert_running()
+        with self.assertRaisesRegex(ValueError, 'exited'):
+            CHECK(self.root, self.root)
+
     def test_window_manager_must_own_its_live_root_registration(self):
         good = '_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x20020b'
         for pid, properties, expected in [(42, good, True), (99, good, False),

@@ -53,6 +53,16 @@ class CapabilitiesTests(unittest.TestCase):
                 status = error.code
         return status, output.getvalue(), commands.call_args_list
 
+    def test_idle_stop_is_reported_only_when_the_supervisor_declares_it(self):
+        declared = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n'}
+        for reported, missing, expected in [(declared, (), True),
+                                            ({'horizon-worker-supervise': b''}, (), False),
+                                            ({'horizon-worker-supervise': b'horizon-idle-stop-contract=1 extra\n'}, (), False),
+                                            (declared, ('horizon-worker-idle',), False)]:
+            status, output, _ = self.run_check(missing=missing, reported=reported)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, (reported, missing))
+
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
             imported = __import__(module)
@@ -106,7 +116,8 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/workspace/capabilities.json', {})
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
-        self.assertEqual([call.args[0] for call in commands], [['git', 'lfs', 'version']])
+        self.assertEqual([call.args[0] for call in commands],
+                         [['git', 'lfs', 'version'], ['horizon-worker-supervise', '--idle-stop-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})

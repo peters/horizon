@@ -1,0 +1,125 @@
+#!/usr/bin/python3
+"""Stop this dedicated worker after its configured period without agent activity."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+import urllib.request
+
+
+CPU_STAT = Path('/sys/fs/cgroup/cpu.stat')
+# Some provider hosts still use cgroup v1, which reports nanoseconds instead.
+CPU_ACCOUNTING = (Path('/sys/fs/cgroup/cpuacct/cpuacct.usage'), Path('/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage'))
+# The pod credential is refused by the REST API but accepted by GraphQL, as runpodctl uses it.
+GRAPHQL_URL = 'https://api.runpod.io/graphql'
+STOP = 'mutation Stop($pod: String!) { podStop(input: {podId: $pod}) { id desiredStatus } }'
+POLL_SECONDS = 60
+RETRY_SECONDS = 600
+# Average cores used by the container that still count as work, such as a quiet build.
+BUSY_CORES = 0.5
+
+
+def last_output():
+    """Newest output time of any agent tmux window, or None without sessions."""
+    try:
+        listing = subprocess.run(['tmux', '-L', 'horizon-cloud', 'list-windows', '-a', '-F', '#{window_activity}'],
+                                 capture_output=True, text=True, timeout=10, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return max((int(stamp) for stamp in listing.split() if stamp.isdigit()), default=None)
+
+
+def cpu_seconds(path=CPU_STAT, accounting=CPU_ACCOUNTING):
+    """CPU time used by this container's cgroup, or None where it is not exposed."""
+    try:
+        for line in path.read_text().splitlines():
+            name, value = line.split()
+            if name == 'usage_usec':
+                return int(value) / 1e6
+    except (OSError, ValueError):
+        pass
+    for usage in accounting:
+        try:
+            return int(usage.read_text()) / 1e9
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+class Activity:
+    def __init__(self, idle_seconds, now, cpu=None):
+        self.idle_seconds = idle_seconds
+        self.last_active = now
+        # A baseline at start lets work during the first poll interval count.
+        self.last_cpu = cpu
+        self.last_sample = now
+
+    def observe(self, now, output, cpu):
+        """Records one sample and reports whether the idle period has elapsed."""
+        if output is not None:
+            self.last_active = max(self.last_active, output)
+        if cpu is not None and self.last_cpu is not None and now > self.last_sample:
+            if (cpu - self.last_cpu) / (now - self.last_sample) >= BUSY_CORES:
+                self.last_active = now
+        self.last_cpu, self.last_sample = cpu, now
+        return now - self.last_active >= self.idle_seconds
+
+
+def stop_worker(pod_id, key):
+    body = json.dumps({'query': STOP, 'variables': {'pod': pod_id}}).encode()
+    request = urllib.request.Request(GRAPHQL_URL, data=body, method='POST',
+                                     headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
+                                              # The provider's edge rejects the default Python agent.
+                                              'User-Agent': 'horizon-worker-idle/1'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        reply = json.load(response)
+    data = reply.get('data') if isinstance(reply, dict) else None
+    stopped = data.get('podStop') if isinstance(data, dict) else None
+    if (reply.get('errors') or not isinstance(stopped, dict) or stopped.get('id') != pod_id
+            or stopped.get('desiredStatus') != 'EXITED'):
+        print('Stop request refused: ' + json.dumps(reply.get('errors') or stopped)[:300], flush=True)
+        return False
+    return True
+
+
+def passive(reason):
+    # Exiting would end the supervised worker; stay passive instead.
+    print('Idle stop disabled: ' + reason, flush=True)
+    while True:
+        time.sleep(3600)
+
+
+def main():
+    minutes = os.environ.get('HORIZON_IDLE_STOP_MINUTES', '')
+    if not minutes.isdigit() or not 10 <= int(minutes) <= 1440:
+        passive('invalid idle period')
+    minutes = int(minutes)
+    pod_id, key = os.environ.get('RUNPOD_POD_ID'), os.environ.get('RUNPOD_API_KEY')
+    if not pod_id or not key:
+        passive('the provider supplied no worker credential')
+    activity = Activity(minutes * 60, time.time(), cpu_seconds())
+    next_request = 0
+    while True:
+        # Activity is sampled every poll; only the provider request waits between retries.
+        time.sleep(POLL_SECONDS)
+        now = time.time()
+        if not activity.observe(now, last_output(), cpu_seconds()) or now < next_request:
+            continue
+        print(f'No agent activity for {minutes} minutes; stopping this worker', flush=True)
+        os.sync()
+        try:
+            stopped = stop_worker(pod_id, key)
+        # Any failure of this one request is retried; an escaping error would end the worker.
+        except Exception as error:
+            print('Stop request failed: ' + type(error).__name__, flush=True)
+            stopped = False
+        # A stopped worker ends this process. Still running later means the stop did not
+        # take effect, so a later idle check requests it again.
+        print('Stop requested' if stopped else 'Retrying the stop later', flush=True)
+        next_request = now + RETRY_SECONDS
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -230,7 +230,16 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop is explicit and ends running processes; storage can remain billable. Resume
+Stop ends running processes; storage can remain billable. Idle stop is off unless
+a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops itself after that
+long without agent activity, even while this computer is offline. The worker
+counts as active while any agent terminal prints output or its container uses
+at least half a CPU core, so a quiet build keeps it running. It stops only
+itself, using the provider's credential scoped to that worker, and never deletes
+anything. Choose **Check provider** on the card afterwards: a worker confirmed
+stopped offers Resume like an explicitly stopped one, and nothing resumes it
+automatically. Profiles without the field never stop on their own, and workers
+shared across workspaces and profiles with hosted devices do not support it. Resume
 starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any

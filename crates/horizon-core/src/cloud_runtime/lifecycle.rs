@@ -12,6 +12,18 @@ pub struct ReconciledDeployment {
     pub state: Deployment,
     pub report: horizon_cloud::runpod::recovery::Reconciliation,
 }
+impl ReconciledDeployment {
+    /// The provider returned this cloud's verified worker and reports it stopped.
+    #[must_use]
+    pub fn confirmed_stopped(&self) -> bool {
+        self.state.stage == Stage::Stopped
+            && self
+                .report
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
+    }
+}
 
 /// # Errors
 /// Refuses removal while any owned worker or workspace storage may remain.
@@ -58,6 +70,7 @@ pub fn reconcile(
     let changed = report.worker.is_some() || matches!(operation, CreateState::Terminated { .. });
     if let Some(worker) = &report.worker {
         state.worker = Some(worker.clone());
+        record_stopped(&mut state);
     }
     if matches!(operation, CreateState::Terminated { .. }) {
         if super::deployment::storage::retained(&store, &state)? {
@@ -73,6 +86,21 @@ pub fn reconcile(
         store.save(&state)?;
     }
     Ok(ReconciledDeployment { state, report })
+}
+
+/// A verified worker that stopped itself or was stopped elsewhere becomes an
+/// ordinary stopped cloud, so only an explicit Resume starts it again.
+fn record_stopped(state: &mut Deployment) {
+    if matches!(state.operation, CreateState::Bound { .. })
+        && !matches!(state.stage, Stage::Replace | Stage::Deleted)
+        && state
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
+    {
+        state.stop_requested = true;
+        state.stage = Stage::Stopped;
+    }
 }
 
 /// # Errors
@@ -239,6 +267,38 @@ mod tests {
         }
         Store::lock(root).unwrap().save(&state).unwrap();
         std::fs::read(root.join("deployment.json")).unwrap()
+    }
+
+    #[test]
+    fn a_worker_found_stopped_is_recorded_as_stopped_and_stays_stopped() {
+        let worker = |status: &str| {
+            serde_json::from_value::<horizon_cloud::Worker>(serde_json::json!({
+                "id":"worker1","name":"pending","imageName":"registry.example/worker","desiredStatus":status
+            }))
+            .unwrap()
+        };
+        let temp = tempfile::tempdir().unwrap();
+        pending(temp.path(), false);
+        let mut state = Store::lock(temp.path()).unwrap().load().unwrap().unwrap();
+        for (stage, status, stopped) in [
+            (Stage::Ready, "EXITED", true),
+            (Stage::Stopping, "EXITED", true),
+            (Stage::Ready, "RUNNING", false),
+            (Stage::Replace, "EXITED", false),
+            (Stage::Deleted, "EXITED", false),
+        ] {
+            state.stage = stage;
+            state.stop_requested = false;
+            state.worker = Some(worker(status));
+            record_stopped(&mut state);
+            assert_eq!(state.stage == Stage::Stopped, stopped, "{stage:?} {status}");
+            assert_eq!(state.stop_requested, stopped);
+        }
+        state.stage = Stage::Ready;
+        state.operation = CreateState::Requested;
+        state.worker = Some(worker("EXITED"));
+        record_stopped(&mut state);
+        assert_eq!(state.stage, Stage::Ready);
     }
 
     fn refused<T>(result: &Result<T>) -> bool {

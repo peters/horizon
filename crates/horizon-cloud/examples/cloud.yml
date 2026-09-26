@@ -12,6 +12,8 @@ profiles:
     cpu: 4
     memory_gb: 8
     gpu: false
+    # Opt-in: the worker stops itself after this many minutes without agent activity.
+    # idle_stop_minutes: 30
     capabilities:
       agents: [codex, claude]
       browsers: [chromium, firefox]

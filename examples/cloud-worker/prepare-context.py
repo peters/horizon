@@ -11,6 +11,7 @@ import subprocess
 
 WORKER_SCRIPTS = (
     'horizon-worker-start', 'horizon-worker-check', 'horizon-worker-configure', 'horizon-worker-supervise',
+    'horizon-worker-idle',
     'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-source',
     'horizon-worker-import', 'horizon-worker-git-auth', 'horizon-worker-browserstack',
 )

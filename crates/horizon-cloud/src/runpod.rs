@@ -411,6 +411,9 @@ fn create_body(spec: &WorkerSpec) -> Value {
     if let Some(metadata) = &spec.startup_metadata {
         body["env"][crate::startup::ENVIRONMENT_KEY] = json!(metadata.as_str());
     }
+    if let Some(minutes) = spec.idle_stop_environment() {
+        body["env"][crate::IDLE_STOP_ENVIRONMENT_KEY] = json!(minutes);
+    }
     if profile.gpu {
         body["gpuCount"] = json!(1);
         body["gpuTypeIds"] = json!(spec.gpu_types);

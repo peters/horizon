@@ -82,6 +82,19 @@ def require(binary):
 def probe(command):
     subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def idle_stop_supported():
+    # The watcher alone is not enough: the supervisor must declare that it starts it.
+    # Older supervisors reject the unknown option, which reports no support.
+    if not shutil.which('horizon-worker-idle'):
+        return False
+    try:
+        reply = subprocess.run(['horizon-worker-supervise', '--idle-stop-contract'],
+                               capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return reply.returncode == 0 and reply.stdout == b'horizon-idle-stop-contract=1\n'
+
+
 def services_ready(selected):
     probe(['horizon-worker-supervise', '--check'])
     with socket.create_connection(('127.0.0.1', 47280), timeout=5) as connection:
@@ -158,6 +171,8 @@ try:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         pending = runtime.with_suffix('.new')
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
+    if idle_stop_supported():
+        print('horizon-idle-stop-contract=1')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1')

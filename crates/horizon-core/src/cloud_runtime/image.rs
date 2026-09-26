@@ -84,7 +84,7 @@ impl Images<'_> {
                 self.docker().args(["image", "inspect", "--format", "{{.Id}}", &image]),
                 Duration::from_secs(30),
             )?;
-            self.validate(image_id.trim(), operation_id, &profile.capabilities)?;
+            self.validate(image_id.trim(), operation_id, profile)?;
             validated_id = Some(image_id.trim().to_owned());
             (self.runner.emit)(Event::stage(Stage::Push));
             self.runner.transfer(
@@ -117,7 +117,7 @@ impl Images<'_> {
                 super::command::terminal_progress::Transfer::Pull,
                 TIMEOUT,
             )?;
-            self.validate(&digest, operation_id, &profile.capabilities)?;
+            self.validate(&digest, operation_id, profile)?;
         }
         Ok(digest)
     }
