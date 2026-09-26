@@ -238,10 +238,10 @@ missing or older than 15 minutes, and says how old they are. Without a running
 Horizon or cloud settings the tool fails rather than returning old prices. It only
 reads prices; renting stays with the person.
 
-Agents on a cloud worker with browser tools get the same answer from the prices its
-Horizon last sent. While any cloud is ready, Horizon refreshes prices every 15
-minutes and sends each fresh list to every ready worker over the SSH connection
-companions use; a worker that misses one is asked again after five minutes. Only
+Agents on a cloud worker get the same answer, through `cloud_offers` on the
+companions server or the browser server, from the prices its Horizon last sent.
+While any cloud is ready, Horizon refreshes prices every 15 minutes and sends each
+fresh list to every ready worker over the SSH connection companions use; a worker that misses one is asked again after five minutes. Only
 prices travel: the RunPod key stays on this computer. A worker without prices, or
 with prices older than 20 minutes, answers with an error instead of old prices.
 
@@ -529,6 +529,9 @@ the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. M0 has no agent tool for starting or provisioning a cloud.
+The same server also offers `cloud_offers`, so agents on workers without browser
+tools can rank cloud offers from the prices the owning Horizon last sent the
+worker.
 
 Uncheck to remove access. If either worker is offline, removal stays pending
 until that original worker can confirm cleanup. Dirty worktrees are preserved;

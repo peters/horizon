@@ -19,20 +19,25 @@ const MAX_HOURS: f64 = 24.0 * 366.0;
 /// What the work needs. Every field is optional; an empty request lists the cheapest CPU
 /// workers.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Requirements {
+    /// Minimum vCPUs, for CPU workers.
     #[serde(default)]
     pub min_vcpu: Option<u16>,
+    /// Minimum memory in GB, for CPU workers.
     #[serde(default)]
     pub min_memory_gb: Option<u16>,
     /// GPU workers instead of CPU workers.
     #[serde(default)]
     pub gpu: bool,
+    /// Minimum GPU memory in GB, with `gpu`.
     #[serde(default)]
     pub min_gpu_memory_gb: Option<u16>,
     /// A provider GPU type ID or name, such as `NVIDIA RTX A5000` or `RTX A5000`.
     #[serde(default)]
     pub gpu_type: Option<String>,
+    /// Highest acceptable hourly price in US dollars.
     #[serde(default)]
     pub max_hourly: Option<f64>,
     /// Expected running time for the estimated total, at most a year. One hour when

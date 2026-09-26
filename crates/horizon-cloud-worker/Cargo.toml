@@ -9,7 +9,7 @@ publish = false
 workspace = true
 [dependencies]
 horizon-cloud-protocol.workspace = true
-horizon-cloud = { path = "../horizon-cloud" }
+horizon-cloud = { path = "../horizon-cloud", features = ["schema"] }
 horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-control.workspace = true
 horizon-browser-protocol.workspace = true
