@@ -1,7 +1,10 @@
 //! Worker size choices with their prices, and a price card with live stock, for New cloud.
-use super::super::{
-    machine_size::{self, Choice, Size},
-    prices::{FRESH, State},
+use super::{
+    super::{
+        machine_size::{self, Choice, Size},
+        prices::{FRESH, State},
+    },
+    costs::{self, money, range},
 };
 use crate::theme;
 use egui::{
@@ -119,7 +122,7 @@ fn card(ui: &mut Ui, prices: &State, profile: &Profile) -> bool {
                 (Some(fetched), _) => {
                     let (list, preferences) = &fetched.value;
                     if profile.gpu {
-                        gpu_summary(ui, list, preferences, profile.storage.volume_gb);
+                        gpu_summary(ui, list, preferences, profile);
                     } else {
                         cpu_summary(ui, prices, list, preferences, profile);
                     }
@@ -174,16 +177,7 @@ fn cpu_summary(ui: &mut Ui, prices: &State, list: &PriceList, preferences: &Pref
         .size(12.0)
         .color(theme::FG_SOFT()),
     );
-    let volume = profile.storage.volume_gb;
-    let storage = list.storage.network_month(u32::from(volume));
-    estimates(
-        ui,
-        (low, high),
-        Some(&(
-            format!("{}/mo", money(storage)),
-            format!("{volume} GB network volume. Storage is billed while the worker is stopped too."),
-        )),
-    );
+    costs::show(ui, list, profile, Some((low, high)));
 }
 
 /// Where GPU preferences are set until New cloud offers its own GPU choice.
@@ -207,7 +201,7 @@ fn ranked<'a>(
     (preferred, chosen)
 }
 
-fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, volume_gb: u16) {
+fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, profile: &Profile) {
     let (preferred, chosen) = ranked(list, preferences);
     match chosen {
         Some(gpu) => {
@@ -256,24 +250,8 @@ fn gpu_summary(ui: &mut Ui, list: &PriceList, preferences: &Preferences, volume_
             );
         }
     }
-    if let Some(gpu) = chosen {
-        estimates(ui, (gpu.hourly, gpu.hourly), gpu_storage(list, volume_gb).as_ref());
-    }
-}
-
-/// The pod volume a GPU worker keeps its files on, billed at a higher rate while stopped.
-fn gpu_storage(list: &PriceList, volume_gb: u16) -> Option<(String, String)> {
-    let (running, stopped) = list.storage.pod_volume_month(u32::from(volume_gb));
-    (volume_gb > 0).then(|| {
-        (
-            format!("{}/mo", range(running, stopped)),
-            format!(
-                "{volume_gb} GB pod volume: {}/mo while running, {}/mo while stopped. A stopped GPU cloud keeps it.",
-                money(running),
-                money(stopped)
-            ),
-        )
-    })
+    // Storage is billed whichever GPU the cloud gets, so it shows even when none is in stock.
+    costs::show(ui, list, profile, chosen.map(|gpu| (gpu.hourly, gpu.hourly)));
 }
 
 fn gpu_rows(ui: &mut Ui, preferred: &[(&str, Option<&GpuPrice>)], chosen: Option<&GpuPrice>) {
@@ -390,36 +368,6 @@ fn in_centers(centers: usize) -> String {
     }
 }
 
-/// Totals for `hourly`, the lowest and highest price a deployment may be charged.
-fn estimates(ui: &mut Ui, hourly: (f64, f64), storage: Option<&(String, String)>) {
-    ui.add_space(10.0);
-    let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(line, 0.0, theme::BORDER_SUBTLE());
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 32.0;
-        let (low, high) = hourly;
-        stat(ui, "8 HOURS", &range(low * 8.0, high * 8.0), None);
-        stat(ui, "24 HOURS", &range(low * 24.0, high * 24.0), None);
-        if let Some((value, hover)) = storage {
-            stat(ui, "STORAGE", value, Some(hover));
-        }
-    });
-}
-
-fn stat(ui: &mut Ui, label: &str, value: &str, hover: Option<&str>) {
-    let response = ui
-        .vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(label).size(10.5).color(theme::FG_DIM()));
-            ui.label(RichText::new(value).size(16.0).color(theme::FG()));
-        })
-        .response;
-    if let Some(hover) = hover {
-        response.on_hover_text(hover);
-    }
-}
-
 /// Returns whether prices should be fetched again.
 fn footer(ui: &mut Ui, provider: &str, age: std::time::Duration, loading: bool) -> bool {
     let mut refresh = false;
@@ -444,24 +392,6 @@ fn footer(ui: &mut Ui, provider: &str, age: std::time::Duration, loading: bool) 
     refresh
 }
 
-fn money(value: f64) -> String {
-    if value >= 100.0 {
-        format!("${value:.0}")
-    } else {
-        format!("${value:.2}")
-    }
-}
-
-/// One amount when both ends read the same once rounded, otherwise a range.
-fn range(low: f64, high: f64) -> String {
-    let (low, high) = (money(low), money(high));
-    if low == high {
-        low
-    } else {
-        format!("{low}–{}", high.trim_start_matches('$'))
-    }
-}
-
 fn ago(age: std::time::Duration) -> String {
     match age.as_secs() / 60 {
         0 => "just now".to_owned(),
@@ -475,15 +405,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prices_read_naturally() {
-        assert_eq!(money(0.24), "$0.24");
-        assert_eq!(money(5.76), "$5.76");
-        assert_eq!(money(242.0), "$242");
-        assert_eq!(range(0.24, 0.24), "$0.24");
-        assert_eq!(range(0.24, 0.28), "$0.24–0.28");
-        assert_eq!(range(0.244, 0.248), "$0.24–0.25");
-        assert_eq!(range(0.241, 0.244), "$0.24");
-        assert_eq!(range(1.92, 2.24), "$1.92–2.24");
+    fn ages_read_naturally() {
         assert_eq!(ago(std::time::Duration::from_secs(20)), "just now");
         assert_eq!(ago(std::time::Duration::from_secs(150)), "2 min ago");
     }
@@ -511,12 +433,7 @@ mod tests {
                 gpu("ada", 0.28, Availability::None),
                 gpu("l4", 0.49, Availability::High),
             ],
-            storage: horizon_core::cloud_runtime::prices::StoragePrices {
-                network: 0.07,
-                network_tier_gb: 1000,
-                network_beyond: 0.05,
-                pod_volume: (0.10, 0.20),
-            },
+            storage: horizon_core::cloud_runtime::prices::RUNPOD_STORAGE,
         };
         let preferences = Preferences {
             cpu_flavors: Vec::new(),
@@ -534,24 +451,5 @@ mod tests {
         let (preferred, chosen) = ranked(&list, &retired);
         assert_eq!(preferred.len(), 1);
         assert!(chosen.is_none());
-    }
-
-    #[test]
-    fn gpu_storage_shows_the_running_and_stopped_rates() {
-        let list = PriceList {
-            provider: "RunPod",
-            cpu: Vec::new(),
-            gpus: Vec::new(),
-            storage: horizon_core::cloud_runtime::prices::StoragePrices {
-                network: 0.07,
-                network_tier_gb: 1000,
-                network_beyond: 0.05,
-                pod_volume: (0.10, 0.20),
-            },
-        };
-        let (value, hover) = gpu_storage(&list, 200).unwrap();
-        assert_eq!(value, "$20.00–40.00/mo");
-        assert!(hover.contains("$40.00/mo while stopped"));
-        assert!(gpu_storage(&list, 0).is_none());
     }
 }

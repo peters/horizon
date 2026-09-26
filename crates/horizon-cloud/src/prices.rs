@@ -47,6 +47,11 @@ pub struct StoragePrices {
     pub network_beyond: f64,
     /// Pod volume disk, where GPU workers keep their files: running, then stopped.
     pub pod_volume: (f64, f64),
+    /// Container disk, billed only while the worker runs and cleared when it stops.
+    pub container: f64,
+    /// When these list prices were last checked, since providers may not publish them
+    /// in a machine-readable form.
+    pub confirmed: &'static str,
 }
 
 impl StoragePrices {
@@ -131,12 +136,7 @@ mod tests {
                 gpu("ada", 0.28, Availability::Low),
                 gpu("l4", 0.49, Availability::High),
             ],
-            storage: StoragePrices {
-                network: 0.07,
-                network_tier_gb: 1000,
-                network_beyond: 0.05,
-                pod_volume: (0.10, 0.20),
-            },
+            storage: crate::runpod::prices::STORAGE,
         }
     }
 

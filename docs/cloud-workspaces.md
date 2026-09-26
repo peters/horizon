@@ -161,9 +161,20 @@ persisted operation identity.
 While you choose a size, New cloud shows RunPod's current prices and stock: each
 vCPU and memory choice carries its hourly price, and a price card shows the
 chosen size's price, whether it is in stock in the allowed data centers, 8 and 24
-hour estimates and the monthly storage cost: the network volume for CPU clouds
-($0.07 per GB for the first TB, $0.05 beyond it) and the pod volume for GPU
-clouds ($0.10 per GB while running, $0.20 while stopped). For GPU profiles it lists your
+hour compute estimates, and what the cloud costs per month running all month and
+stopped all month. Below that it lists every kind of storage the cloud is billed
+for, with its size and monthly price while running and while stopped:
+
+- the network volume of a CPU cloud: $0.07 per GB for the first TB and $0.05
+  beyond it, billed whether the cloud runs or not;
+- the pod volume of a GPU cloud: $0.10 per GB while running and $0.20 while
+  stopped;
+- the container disk: $0.10 per GB, billed only while running and cleared when
+  the cloud stops.
+
+RunPod does not publish storage prices in its catalog, so these are list prices
+with the date they were checked. Storage is shown for GPU profiles even when none
+of their GPUs is in stock. For GPU profiles the card also lists your
 preferred GPU types (`gpu_types` in the settings file) in the order Horizon
 requests them, marks the first one in stock, shows types the catalog does not
 list as not offered, and suggests the cheapest GPU in stock when none of them

@@ -6,6 +6,7 @@ use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, Tex
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, dir_search};
 use std::path::Path;
 
+mod costs;
 mod pricing;
 
 #[derive(Default)]
