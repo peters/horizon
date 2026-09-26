@@ -147,7 +147,7 @@ First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, 
 <td>
 
 ### Live Browser
-Open any site in Chromium, Firefox, or Safari on this machine, or on a BrowserStack browser or phone you name in config. You and an agent share the same live page — navigate, inspect, click, fill, capture network traffic, then hand control back and forth.
+Open any site in Chromium, Firefox, or Safari on this machine, or on a BrowserStack browser or phone you name in config. On this machine you and an agent share the page: navigate, inspect, click, fill, capture network traffic, and hand control back and forth. A BrowserStack panel shows the live page and takes the same navigate, click, and fill actions.
 
 </td>
 </tr>
