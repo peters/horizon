@@ -238,6 +238,7 @@ fn only_well_formed_digest_references_are_accepted() {
         format!("worker@{digest}"),
         format!("library/worker:1.2_rc-3@{digest}"),
         format!("localhost/worker@{digest}"),
+        format!("team/a.b_c__d---e@{digest}"),
     ] {
         assert!(valid_digest_reference(&valid), "{valid}");
     }
@@ -248,6 +249,10 @@ fn only_well_formed_digest_references_are_accepted() {
         format!("registry.example/Worker@{digest}"),
         format!("registry.example/-worker@{digest}"),
         format!("registry.example/wor..ker@{digest}"),
+        format!("registry.example/a.-b@{digest}"),
+        format!("registry.example/a___b@{digest}"),
+        format!("registry.example/a_.b@{digest}"),
+        format!("registry.example/worker-@{digest}"),
         format!("registry.example/worker:@{digest}"),
         format!("registry.example/worker:-tag@{digest}"),
         format!("registry.example:x/worker@{digest}"),

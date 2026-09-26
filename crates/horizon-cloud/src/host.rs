@@ -208,15 +208,29 @@ fn valid_digest_reference(image: &str) -> bool {
     digest_valid && tag_valid && paths_valid && host.is_none_or(valid_authority)
 }
 
+/// Lowercase alphanumeric runs joined by Docker's separators: one `.`, one or two
+/// `_`, or any run of `-`.
 fn valid_path_component(component: &str) -> bool {
-    let bytes = component.as_bytes();
-    !bytes.is_empty()
-        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && component
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
-        && !component.contains("..")
+    let mut rest = component;
+    loop {
+        let run = rest
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit()))
+            .unwrap_or(rest.len());
+        if run == 0 {
+            return false;
+        }
+        rest = &rest[run..];
+        if rest.is_empty() {
+            return true;
+        }
+        let separator = rest
+            .find(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if !matches!(&rest[..separator], "." | "_" | "__") && !rest[..separator].bytes().all(|b| b == b'-') {
+            return false;
+        }
+        rest = &rest[separator..];
+    }
 }
 
 /// `host[:port]`: dot-separated DNS labels and an optional port from 1 to 65535.
