@@ -459,6 +459,10 @@ pub enum CloudError {
     Rejected(Reason),
     #[error("Provider response is invalid")]
     InvalidResponse,
+    #[error(
+        "No host with the requested GPU types in the allowed data centers has capacity with CUDA {0} or newer; choose other GPU types or data centers, try again later or lower min_cuda_version"
+    )]
+    CudaUnavailable(String),
     #[error("Worker creation is unresolved; no second allocation was attempted")]
     CreationUnresolved,
     #[error("Multiple workers match the operation; reconcile manually before continuing")]

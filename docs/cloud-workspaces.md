@@ -156,6 +156,16 @@ Extended LFS pointer formats are rejected explicitly. Source repositories must u
 SHA-1 object IDs and UTF-8 paths; unsupported formats fail validation before
 compute allocation.
 
+A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
+`major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
+newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a
+worker can land on a host too old for the image. Versions compare as numbers, so
+12.11 is above 12.2, and CPU profiles reject the field. Before requesting a worker,
+Horizon asks RunPod's GPU catalog which CUDA versions hosts of the requested GPU
+types run with free capacity, in the allowed data centers when the worker is
+limited to some, and asks for those at or above the floor that the pod API accepts. When none remains, the attempt fails before any worker is
+requested; choose other GPU types, try again later or lower the floor. The GPU stock New cloud shows does not yet take the floor into account.
+
 Before each image build, Horizon looks up the release npm currently tags `latest`
 for every supported agent CLI. It passes them as the `HORIZON_CODEX_VERSION`,
 `HORIZON_CLAUDE_VERSION` and `HORIZON_GROK_VERSION` build arguments, next to

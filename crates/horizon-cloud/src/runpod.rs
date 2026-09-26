@@ -9,6 +9,7 @@ const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod billing;
+mod cuda;
 pub mod flavors;
 pub mod fresh;
 pub mod prices;
@@ -159,11 +160,15 @@ impl RunPod {
             progress(Progress::WorkerFound(worker.id.clone()));
             return Ok(worker);
         }
+        let cuda_versions = self.allowed_cuda_versions(spec, cancel)?;
         cancel.check()?;
         persist(&CreateState::Requested)?;
         *state = CreateState::Requested;
         progress(Progress::Requesting);
         let mut body = create_body(spec);
+        if !cuda_versions.is_empty() {
+            body["allowedCudaVersions"] = json!(cuda_versions);
+        }
         if let Some(volume) = volume {
             body["networkVolumeId"] = json!(volume.id);
             body["volumeInGb"] = json!(0);
