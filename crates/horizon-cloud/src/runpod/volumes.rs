@@ -221,7 +221,14 @@ impl RunPod {
         cancel: &Cancellation,
         persist: impl FnMut(&State) -> Result<()>,
     ) -> Result<Volume> {
-        self.ensure_volume_for(spec, state, cancel, persist, Purpose::Workspace)
+        let retry = *state != State::Prepared;
+        let volume = self.ensure_volume_for(spec, state, cancel, persist, Purpose::Workspace)?;
+        // Fresh allocation checks before POST; retries must recheck before
+        // permitting another attachment, without blocking identity recovery.
+        if retry {
+            self.require_no_serverless_endpoints(cancel)?;
+        }
+        Ok(volume)
     }
 
     fn ensure_volume_for(

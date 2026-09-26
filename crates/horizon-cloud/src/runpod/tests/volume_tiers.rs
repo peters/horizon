@@ -209,6 +209,7 @@ fn legacy_receipts_remain_unchanged_and_recoverable_for_both_observed_tiers() {
             let mut responses = Vec::new();
             if stage == "bound" {
                 responses.push((200, body(tier)));
+                responses.push((200, endpoints(&json!([]))));
             }
             responses.extend(cleanup_responses(tier));
             let (provider, _, task) = server(responses);

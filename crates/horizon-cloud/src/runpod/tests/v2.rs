@@ -100,13 +100,16 @@ fn only_definite_refusals_allow_the_next_configured_compute_candidate() {
     }
     for response in [
         (401, "{}".into()),
+        (402, "{}".into()),
+        (413, "{}".into()),
         (422, "{}".into()),
+        (429, "{}".into()),
         (500, "{}".into()),
         (503, "{}".into()),
         (201, "{}".into()),
         (201, "not json".into()),
     ] {
-        let definitely_rejected = matches!(response.0, 401 | 422);
+        let definitely_rejected = matches!(response.0, 401 | 402 | 413 | 422 | 429);
         let mut spec = spec();
         spec.cpu_flavors.push("cpu5g".into());
         let (provider, requests, task) = server(vec![(200, pods(&json!([]))), response]);
@@ -134,6 +137,55 @@ fn only_definite_refusals_allow_the_next_configured_compute_candidate() {
                 .count(),
             1
         );
+    }
+}
+
+#[test]
+fn definite_refusal_requires_durable_reset_before_a_later_retry() {
+    for status in [402, 413, 429] {
+        for failed_reset in [false, true] {
+            let spec = spec();
+            let mut responses = vec![(200, pods(&json!([]))), (status, "{}".into())];
+            if !failed_reset {
+                responses.extend([(200, pods(&json!([]))), (201, worker(&spec).to_string())]);
+            }
+            let (provider, requests, task) = server(responses);
+            let mut state = CreateState::Prepared;
+            let result = provider.ensure(
+                &spec,
+                &mut state,
+                &Cancellation::default(),
+                |next| {
+                    if failed_reset && *next == CreateState::Prepared {
+                        Err(CloudError::Persistence)
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| {},
+            );
+            if failed_reset {
+                assert!(matches!(result, Err(CloudError::Persistence)));
+                assert_eq!(state, CreateState::Requested);
+            } else {
+                assert!(matches!(result, Err(CloudError::Http(code, _)) if code == status));
+                assert_eq!(state, CreateState::Prepared);
+                provider
+                    .ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+                    .unwrap();
+                assert!(matches!(state, CreateState::Bound { .. }));
+            }
+            task.join().unwrap();
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r.starts_with("POST "))
+                    .count(),
+                if failed_reset { 1 } else { 2 }
+            );
+        }
     }
 }
 

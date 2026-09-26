@@ -37,6 +37,7 @@ fn direct_creation_receipt_survives_persistence_and_read_only_inspection() {
         (200, volumes(&json!([]))),
         (201, response()),
         (200, response()),
+        (200, endpoints(&json!([]))),
     ]);
     let mut state = State::Prepared;
     let mut durable = Vec::new();
@@ -74,7 +75,9 @@ fn uncertain_response_and_failed_receipt_persistence_never_promote_reconciliatio
                 (503, "uncertain".into())
             },
             (200, volumes(&json!([volume()]))),
+            (200, endpoints(&json!([]))),
             (200, response()),
+            (200, endpoints(&json!([]))),
         ]);
         let mut state = State::Prepared;
         let mut durable = Vec::new();
@@ -115,7 +118,7 @@ fn legacy_bound_and_deleting_shapes_round_trip_without_creation_authority() {
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
         assert!(state.creation_receipt(&volume_spec()).unwrap().is_none());
     }
-    let (provider, _, task) = server(vec![(200, response())]);
+    let (provider, _, task) = server(vec![(200, response()), (200, endpoints(&json!([])))]);
     let mut state = State::Bound {
         volume: legacy.clone(),
         creation: None,

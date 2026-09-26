@@ -400,6 +400,7 @@ mod volumes {
             (200, super::super::volumes(&json!([]))),
             (503, "unavailable".into()),
             (200, super::super::volumes(&json!([volume()]))),
+            (200, endpoints(&json!([]))),
         ]);
         let mut state = State::Prepared;
         assert!(

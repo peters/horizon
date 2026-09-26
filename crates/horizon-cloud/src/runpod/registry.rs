@@ -2,6 +2,8 @@
 use super::{Cancellation, CloudError, Credential, RunPod, valid_id};
 use serde::{Deserialize, Serialize};
 
+pub const MAX_USERNAME_LENGTH: usize = 191;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Binding {
     pub id: String,
@@ -235,7 +237,7 @@ fn operation_name(id: &str) -> Result<String, CloudError> {
 
 fn validate_username(username: &str) -> Result<(), CloudError> {
     if username.is_empty()
-        || username.len() > 256
+        || username.chars().count() > MAX_USERNAME_LENGTH
         || username.chars().any(char::is_whitespace)
         || username.chars().any(char::is_control)
     {

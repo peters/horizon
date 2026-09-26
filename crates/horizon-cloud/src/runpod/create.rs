@@ -37,12 +37,16 @@ impl RunPod {
                     *state = CreateState::Prepared;
                     last = error;
                 }
-                Err(error @ (CloudError::Unauthorized | CloudError::Cancelled | CloudError::Http(422, _))) => {
+                Err(
+                    error @ (CloudError::Unauthorized
+                    | CloudError::Cancelled
+                    | CloudError::Http(402 | 413 | 422 | 429, _)),
+                ) => {
                     persist(&CreateState::Prepared)?;
                     *state = CreateState::Prepared;
                     return Err(error);
                 }
-                // A lost or malformed success, rate limit, or server error never
+                // A lost or malformed success or server error never
                 // authorizes the next candidate: the first request may exist.
                 Err(error) => return Err(error),
             }

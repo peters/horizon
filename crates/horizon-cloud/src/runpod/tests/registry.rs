@@ -9,6 +9,47 @@ fn binding() -> Binding {
 }
 
 #[test]
+fn username_limit_is_checked_before_network_or_mutation() {
+    let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
+    for username in ["a".repeat(192), "é".repeat(192)] {
+        let (provider, requests, task) = server(Vec::new());
+        task.join().unwrap();
+        let input = PullBinding {
+            operation_id: "generation1",
+            username: &username,
+            credential: &credential,
+        };
+        let mut state = State::Prepared;
+        assert!(matches!(
+            provider.ensure_registry_binding(&input, &mut state, &Cancellation::default(), |_| panic!(
+                "invalid input"
+            )),
+            Err(CloudError::Invalid("Invalid registry username"))
+        ));
+        assert_eq!(state, State::Prepared);
+        assert!(requests.lock().unwrap().is_empty());
+    }
+    for username in ["a".repeat(191), "é".repeat(191)] {
+        let (provider, requests, task) = server(vec![
+            (200, registries(&json!([]))),
+            (201, serde_json::to_string(&binding()).unwrap()),
+        ]);
+        let input = PullBinding {
+            operation_id: "generation1",
+            username: &username,
+            credential: &credential,
+        };
+        let mut state = State::Prepared;
+        provider
+            .ensure_registry_binding(&input, &mut state, &Cancellation::default(), |_| Ok(()))
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(state, State::Bound(binding()));
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+}
+
+#[test]
 fn prepared_generation_cannot_adopt_an_existing_provider_binding() {
     let (provider, requests, task) = server(vec![(200, registries(&json!([binding()])))]);
     let credential = Credential::new("synthetic-pull-secret".into()).unwrap();

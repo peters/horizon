@@ -104,6 +104,7 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     let (provider, requests, task) = server(vec![
         (200, volumes(&json!([]))),
         (200, volumes(&json!([expected]))),
+        (200, endpoints(&json!([]))),
         (200, serde_json::to_string(&expected).unwrap()),
         (200, endpoints(&json!([]))),
         (200, pods(&json!([]))),
@@ -128,7 +129,7 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     assert_eq!(state, State::Deleted);
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 8);
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
     assert_eq!(
         requests.iter().filter(|request| request.starts_with("DELETE ")).count(),

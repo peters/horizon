@@ -23,6 +23,59 @@ fn volume_body() -> String {
 }
 
 #[test]
+fn persisted_volume_admission_rechecks_serverless_visibility_and_retains_cleanup_identity() {
+    for requested in [false, true] {
+        for endpoint_response in [
+            (200, endpoints(&json!([{"id":"new-endpoint"}]))),
+            (403, "{}".into()),
+            (503, "{}".into()),
+            (200, json!({"endpoints":[]}).to_string()),
+        ] {
+            let first = if requested {
+                volumes(&json!([volume()]))
+            } else {
+                volume_body()
+            };
+            let (provider, requests, task) = server(vec![
+                (200, first),
+                endpoint_response,
+                // Exact-ID absence can finish cleanup even when admission is blocked.
+                (404, String::new()),
+            ]);
+            let mut state = if requested {
+                State::Requested
+            } else {
+                State::Bound {
+                    volume: volume(),
+                    creation: None,
+                }
+            };
+            assert!(
+                provider
+                    .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                    .is_err()
+            );
+            assert_eq!(
+                state,
+                State::Bound {
+                    volume: volume(),
+                    creation: None
+                }
+            );
+            provider
+                .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+                .unwrap();
+            assert_eq!(state, State::Deleted);
+            task.join().unwrap();
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[1].starts_with("GET /serverless "));
+            assert!(requests.iter().all(|r| r.starts_with("GET ")));
+        }
+    }
+}
+
+#[test]
 fn any_serverless_endpoint_blocks_storage_admission_and_deletion() {
     // Current mounts or zero active workers cannot exclude a stale/scaled-down worker.
     for endpoint in [

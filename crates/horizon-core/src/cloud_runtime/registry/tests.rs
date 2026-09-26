@@ -46,6 +46,18 @@ fn fixture() -> (tempfile::TempDir, Settings) {
 fn binding(settings: &mut Settings) -> &mut Binding {
     &mut settings.registries.as_mut().unwrap().bindings[0]
 }
+
+#[test]
+fn new_pull_inputs_follow_provider_limit_without_restricting_publish_or_legacy_status() {
+    let (_root, mut settings) = fixture();
+    let binding = binding(&mut settings);
+    binding.publish.as_mut().unwrap().username = "p".repeat(256);
+    for length in [191, 192] {
+        binding.pull.username = "r".repeat(length);
+        assert!(binding.validate().is_ok());
+        assert_eq!(draft::Draft::from_binding(binding).validate().is_ok(), length == 191);
+    }
+}
 fn image() -> String {
     format!("registry.example/team/worker@sha256:{}", "a".repeat(64))
 }
