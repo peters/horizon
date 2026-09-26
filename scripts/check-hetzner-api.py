@@ -48,7 +48,7 @@ USED = [
     ("post", "/volumes", [], ["name", "size", "location", "format", "labels"], "201",
      prefixed("volume", VOLUME) + prefixed("action", ACTION)),
     ("get", "/volumes/{id}", [], [], "200", prefixed("volume", VOLUME)),
-    ("delete", "/volumes/{id}", [], [], None, []),
+    ("delete", "/volumes/{id}", [], [], "204", []),
     ("post", "/volumes/{id}/actions/attach", [], ["server", "automount"], "201", prefixed("action", ACTION)),
     ("post", "/volumes/{id}/actions/detach", [], [], "201", prefixed("action", ACTION)),
     ("get", "/server_types", ["page", "per_page"], [], "200",
@@ -131,8 +131,14 @@ class Spec:
             schema = operation["requestBody"]["content"]["application/json"]["schema"]
             problems += [f"{name} body {f}: {p}" for f in body for p in self.field(schema, f)]
         if status:
-            schema = operation["responses"][status]["content"]["application/json"]["schema"]
-            problems += [f"{name} {status} {f}: {p}" for f in fields for p in self.field(schema, f)]
+            response = operation.get("responses", {}).get(status)
+            if response is None:
+                problems.append(f"{name}: no documented {status} response")
+            elif fields:
+                schema = self.resolve(response)["content"]["application/json"]["schema"]
+                problems += [f"{name} {status} {f}: {p}" for f in fields for p in self.field(schema, f)]
+            elif self.resolve(response).get("content"):
+                problems.append(f"{name}: {status} response now has a body")
         failure = operation.get("responses", {}).get("4xx")
         if failure is None:
             problems.append(f"{name}: no documented 4xx error response")
