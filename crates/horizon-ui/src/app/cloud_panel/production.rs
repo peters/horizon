@@ -491,14 +491,14 @@ impl HorizonApp {
                 return;
             }
         };
-        let request = Request {
-            cloud_id: launch.id.clone(),
+        let request = Request::new(
+            launch.id.clone(),
             repository,
-            revision: launch.revision,
-            profile: launch.profile,
+            launch.revision,
+            launch.profile,
             state_root,
             settings,
-        };
+        );
         if let Err(error) = deployment::prepare(&request) {
             self.cloud_prototype.error = Some(error.to_string());
             return;

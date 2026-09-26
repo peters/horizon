@@ -20,14 +20,14 @@ fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
         }]}
     }))
     .unwrap();
-    let mut request = Request {
-        cloud_id: state.cloud_id.clone(),
-        repository: state.repository.clone(),
-        revision: state.revision.clone(),
-        profile: state.profile.clone(),
-        state_root: root.path().into(),
+    let mut request = Request::new(
+        state.cloud_id.clone(),
+        state.repository.clone(),
+        state.revision.clone(),
+        state.profile.clone(),
+        root.path().into(),
         settings,
-    };
+    );
     assert!(state.registry_generation.is_none(), "legacy state remains readable");
     assert!(prepare_registry(&request, &store, &mut state).is_err());
     state = store.load().unwrap().unwrap();
@@ -151,14 +151,14 @@ fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does
         "capabilities":{"browserstack":{"targets":["phone"]}}
     }))
     .unwrap();
-    let request = Request {
-        cloud_id: "test".into(),
-        repository: repo.workdir().unwrap().into(),
-        revision: revision.to_string(),
+    let request = Request::new(
+        "test".into(),
+        repo.workdir().unwrap().into(),
+        revision.to_string(),
         profile,
-        state_root: root.path().join("cloud"),
+        root.path().join("cloud"),
         settings,
-    };
+    );
     let store = Store::lock(&request.state_root).unwrap();
     let mut state = initial_state(&request, &store).unwrap();
     state.stage = Stage::Readiness;
@@ -179,20 +179,20 @@ fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does
 #[cfg(unix)]
 fn preparation_preserves_pinned_revision_without_reading_a_repository() {
     let root = tempfile::tempdir().unwrap();
-    let mut request = Request {
-        cloud_id: "pinned-fixture".into(),
-        repository: root.path().join("repository-is-not-mounted"),
-        revision: "a".repeat(40),
-        profile: serde_json::from_value(
+    let mut request = Request::new(
+        "pinned-fixture".into(),
+        root.path().join("repository-is-not-mounted"),
+        "a".repeat(40),
+        serde_json::from_value(
             serde_json::json!({"provider":"runpod","image":"registry.example.com/worker","cpu":4,"memory_gb":8}),
         )
         .unwrap(),
-        state_root: root.path().join("state"),
-        settings: serde_json::from_value(
+        root.path().join("state"),
+        serde_json::from_value(
             serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]}),
         )
         .unwrap(),
-    };
+    );
     prepare(&request).unwrap();
     let saved = Store::lock(&request.state_root).unwrap().load().unwrap().unwrap();
     assert_eq!(saved.revision, request.revision);
@@ -239,20 +239,20 @@ fn retry_timing_preserves_prior_ready_history_even_after_failed_reconnect() {
 #[cfg(unix)]
 fn size_changes_apply_until_a_worker_is_requested() {
     let root = tempfile::tempdir().unwrap();
-    let mut request = Request {
-        cloud_id: "resize".into(),
-        repository: root.path().join("repository-is-not-mounted"),
-        revision: "a".repeat(40),
-        profile: serde_json::from_value(
+    let mut request = Request::new(
+        "resize".into(),
+        root.path().join("repository-is-not-mounted"),
+        "a".repeat(40),
+        serde_json::from_value(
             serde_json::json!({"provider":"runpod","image":"registry.example.com/worker","cpu":8,"memory_gb":32}),
         )
         .unwrap(),
-        state_root: root.path().join("state"),
-        settings: serde_json::from_value(
+        root.path().join("state"),
+        serde_json::from_value(
             serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":["cpu3c"],"gpu_types":[]}),
         )
         .unwrap(),
-    };
+    );
     let store = Store::lock(&request.state_root).unwrap();
     let mut state = initial_state(&request, &store).unwrap();
     // A definite provider rejection keeps the built image's spec with its old size.
@@ -312,19 +312,19 @@ fn reconnect_observes_an_image_update_that_may_be_in_flight() {
     let mut identity = tempfile::NamedTempFile::new_in(root.path()).unwrap();
     std::io::Write::write_all(&mut identity, b"synthetic-identity").unwrap();
     let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8});
-    let request = Request {
-        cloud_id: "reconnect".into(),
+    let request = Request::new(
+        "reconnect".into(),
         // Unmounted, so an attempt that passes the guard stops before provider I/O.
-        repository: root.path().join("repository-is-not-mounted"),
-        revision: "a".repeat(40),
-        profile: serde_json::from_value(profile.clone()).unwrap(),
-        state_root: root.path().join("state"),
-        settings: serde_json::from_value(serde_json::json!({
+        root.path().join("repository-is-not-mounted"),
+        "a".repeat(40),
+        serde_json::from_value(profile.clone()).unwrap(),
+        root.path().join("state"),
+        serde_json::from_value(serde_json::json!({
             "runpod_key_file":key.path(),"ssh_identity_file":identity.path(),
             "docker_config":root.path().join("docker"),"registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
         }))
         .unwrap(),
-    };
+    );
     let mut state: Deployment = serde_json::from_value(serde_json::json!({
         "version":1,"cloud_id":request.cloud_id,"repository":request.repository,"revision":request.revision,
         "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
