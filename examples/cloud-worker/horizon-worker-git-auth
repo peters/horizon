@@ -21,6 +21,9 @@ GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_
 GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
                              re.IGNORECASE)
 SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
+URL_HOST = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://([^/?#]*)')
+GITHUB_HOSTS = ('github.com', 'www.github.com', 'api.github.com')
+TOKEN_VARIABLES = ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
 
 
 def validate(value):
@@ -132,13 +135,23 @@ def previous_grants():
         return None
 
 
-def forget_legacy_identity(env, previous):
-    """Version 1 wrote a global identity; drop it only while it is still the one Horizon wrote."""
-    if not previous or previous[0] != 1:
+def forget_identities(env, previous):
+    """Drop the identities the previous install wrote while they are unchanged, so no stale
+    global (version 1) or repository (version 2) identity overrides the new install's."""
+    if not previous:
         return
-    for key, field in (('user.name', 'author_name'), ('user.email', 'author_email')):
-        if git_output(env, 'config', '--global', '--get', key) == previous[1][0][field]:
-            git(env, 'config', '--global', '--unset-all', key)
+    version, entries = previous
+    for entry in entries:
+        directory = target_directory(entry['target'])
+        if version == 1:
+            scope = ['config', '--global']
+        elif present(directory, entry['target']):
+            scope = ['--git-dir=' + str(directory), 'config', '--local']
+        else:
+            continue
+        for key, field in (('user.name', 'author_name'), ('user.email', 'author_email')):
+            if git_output(env, *scope, '--get', key) == entry[field]:
+                git(env, *scope, '--unset-all', key)
 
 
 def install(value):
@@ -151,8 +164,7 @@ def install(value):
             and all(git_output(env, '--git-dir=' + str(path), 'rev-parse', '--is-bare-repository') == 'true'
                     for path in directories)):
         raise ValueError('Git grant target repository is missing')
-    if version == 2:
-        forget_legacy_identity(env, previous_grants())
+    forget_identities(env, previous_grants())
     git(env, 'config', '--global', 'credential.https://github.com.useHttpPath', 'true')
     git(env, 'config', '--global', '--replace-all', 'credential.https://github.com.helper',
         '/usr/local/bin/horizon-worker-git-auth')
@@ -199,7 +211,8 @@ def credential_reply(entries, request):
 
 def repository_requests(argv):
     """Every repository an argument could name, including after `--` and in short-flag clusters,
-    so gh can never act on a repository other than the one whose token it receives."""
+    so gh can never act on a repository other than the one whose token it receives. An argument
+    that selects another host is recorded as None, which refuses injection."""
     requests = []
     for index, argument in enumerate(argv):
         following = argv[index + 1] if index + 1 < len(argv) else ''
@@ -213,10 +226,18 @@ def repository_requests(argv):
             requests.append(short.group(1).removeprefix('=') or following)
         elif url:
             requests.append(url.group(1))
+        elif argument == '--hostname' or argument.startswith('--hostname='):
+            host = following if argument == '--hostname' else argument[len('--hostname='):]
+            if host.lower() not in GITHUB_HOSTS:
+                requests.append(None)
+        elif (other := URL_HOST.match(argument)) and other.group(1).lower() not in GITHUB_HOSTS:
+            requests.append(None)
     return requests
 
 
 def repository_name(requested):
+    if requested is None:
+        return None
     parts = requested.split('/')
     if len(parts) == 3 and parts[0].lower() == 'github.com':
         parts = parts[1:]
@@ -258,6 +279,11 @@ def gh_environment(loaded, env, argv=()):
         selected = next((entry for entry in entries if repository is not None
                          and same_repository(repository, entry['repository'])), None)
         if selected is None:
+            # A nested gh can inherit a token an outer wrapped gh injected; never pass it on.
+            tokens = {entry['token'] for entry in entries}
+            for variable in TOKEN_VARIABLES:
+                if env.get(variable) in tokens:
+                    del env[variable]
             print('horizon: no Git grant for this repository; gh runs without Horizon credentials',
                   file=sys.stderr)
             return env

@@ -293,3 +293,36 @@ fn the_payload_schema_matches_the_worker_and_never_prints_tokens() {
     let empty: GrantSet = serde_json::from_value(serde_json::json!({"version": 2, "grants": []})).unwrap();
     assert!(empty.validate().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_payload_larger_than_one_credential_file_is_transferred_whole() {
+    let fixture = Fixture::new();
+    let token = "t".repeat(2048);
+    let bindings = vec![
+        fixture.binding(fixture.primary.path(), "example/consumer", token.as_bytes()),
+        fixture.binding(fixture.library.path(), "example/library", token.as_bytes()),
+        fixture.binding(fixture.tools.path(), "example/tools", token.as_bytes()),
+    ];
+    let prepared = Prepared::for_repositories(&bindings, fixture.primary.path(), &fixture.siblings())
+        .unwrap()
+        .unwrap();
+    let sent = std::fs::read(prepared.0.path()).unwrap();
+    assert!(sent.len() > 4096);
+    let received = tempfile::NamedTempFile::new().unwrap();
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = crate::cloud_runtime::command::Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    prepared
+        .transfer(
+            std::process::Command::new("sh")
+                .args(["-c", "cat > \"$0\""])
+                .arg(received.path()),
+            &runner,
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(received.path()).unwrap(), sent);
+}

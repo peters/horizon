@@ -299,10 +299,41 @@ class GitGrantTests(unittest.TestCase):
                             ({}, ['issue', 'create', '--title', '--', '--repo', 'example/unrelated']),
                             ({}, ['issue', 'view', '1', '-cR', 'example/unrelated']),
                             ({}, ['pr', 'view', 'https://github.com/example/unrelated/pull/1']),
-                            ({}, ['pr', 'list', '-R', 'example/\u212aonsumer'])]:
+                            ({}, ['pr', 'list', '-R', 'example/\u212aonsumer']),
+                            ({}, ['api', '--hostname', 'other.invalid', 'repos/example/consumer']),
+                            ({}, ['api', '--hostname=other.invalid', 'user']),
+                            ({}, ['pr', 'view', 'https://other.invalid/example/consumer/pull/1']),
+                            ({}, ['pr', 'view', 'https://github.com@other.invalid/example/consumer/pull/1'])]:
             env, message = self.gh(extra, argv, cwd=primary)
             self.assertNotIn('GH_TOKEN', env)
             self.assertIn('no Git grant', message)
+
+    def test_gh_keeps_github_api_urls_and_drops_inherited_horizon_tokens(self):
+        primary = self.bare(auth.GIT_DIR)
+        git('config', 'remote.origin.url', 'https://github.com/example/consumer.git', cwd=primary, env=self.env)
+        env, _ = self.gh({}, ['api', 'https://api.github.com/user'], cwd=primary)
+        self.assertEqual(env['GH_TOKEN'], self.primary['token'])
+        env, _ = self.gh({}, ['api', '--hostname', 'github.com', 'user'], cwd=primary)
+        self.assertEqual(env['GH_TOKEN'], self.primary['token'])
+        inherited = {'GH_TOKEN': self.primary['token'], 'GITHUB_TOKEN': self.sibling['token'],
+                     'GH_REPO': 'example/unrelated'}
+        env, message = self.gh(inherited, cwd=primary)
+        self.assertNotIn('GH_TOKEN', env)
+        self.assertNotIn('GITHUB_TOKEN', env)
+        self.assertIn('no Git grant', message)
+        env, _ = self.gh({'GH_TOKEN': 'caller-own-token', 'GH_REPO': 'example/unrelated'}, cwd=primary)
+        self.assertEqual(env['GH_TOKEN'], 'caller-own-token')
+
+    def test_version_1_after_version_2_drops_the_repository_identity_it_wrote(self):
+        primary = self.bare(auth.GIT_DIR)
+        library = self.bare(auth.SIBLINGS / 'library/repository.git')
+        auth.install(self.value)
+        git('config', 'user.email', 'chosen@example.invalid', cwd=library, env=self.env)
+        legacy = dict({key: self.primary[key] for key in auth.FIELDS}, author_name='Current Author')
+        auth.install(legacy)
+        self.assertEqual(git('config', 'user.name', cwd=primary, env=self.env), 'Current Author')
+        self.assertEqual(git('config', 'user.name', cwd=library, env=self.env), 'Current Author')
+        self.assertEqual(git('config', 'user.email', cwd=library, env=self.env), 'chosen@example.invalid')
 
     def test_limits_unknown_keys_and_duplicates_are_rejected(self):
         many = [dict(self.primary, repository='example/r' + str(index), target='sibling:s' + str(index))

@@ -130,10 +130,13 @@ impl Prepared {
     /// # Errors
     /// Uses encrypted stdin with both output streams suppressed; no token enters argv.
     pub fn install(&self, connection: &Connection, runner: &Runner<'_>) -> Result<()> {
-        runner.private_input(
-            &mut connection.command("horizon-worker-git-auth install"),
-            self.0.path(),
-        )
+        self.transfer(&mut connection.command("horizon-worker-git-auth install"), runner)
+    }
+
+    /// Up to 16 grants exceed the 4 KiB single-credential file bound, so the payload uses the
+    /// bounded structured path, which keeps the private-mode check and suppresses both streams.
+    fn transfer(&self, command: &mut std::process::Command, runner: &Runner<'_>) -> Result<()> {
+        runner.private_payload(command, self.0.path())
     }
 }
 

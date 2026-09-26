@@ -193,8 +193,9 @@ repository's token. The `gh` wrapper chooses the repository from its arguments
 (`--repo`, `-R` including short-flag clusters, and github.com URLs), then
 `GH_REPO`, then the working directory's `origin`, and injects only that
 repository's token. If the repository cannot be determined, the arguments name
-different repositories, it is on another host or it has no grant, `gh` runs
-without Horizon credentials and prints one line on stderr. Package restores that
+different repositories, an argument or `GH_HOST` selects another host, or it has
+no grant, `gh` runs without Horizon credentials (a Horizon token inherited from an
+outer `gh` is removed too) and prints one line on stderr. Package restores that
 call `gh auth token` inside a repository therefore read that repository's own
 token. Give each token read-only package access for restores; never bind a token
 that can publish packages. Horizon sends version 2 whenever a cloud has siblings,
@@ -204,8 +205,9 @@ does not pick up the primary's token.
 This per-repository selection is routing, not isolation: every process in the
 container runs as the same user and can read the credential file, so the
 shared trust boundary described above still applies. Version 1 files keep their
-single-repository behavior. A version 2 install removes the global identity a
-version 1 install wrote, if it is unchanged. Images that support version 2 also
+single-repository behavior. Every install first removes the identities the
+previous install wrote (global for version 1, per repository for version 2) where
+they are unchanged. Images that support version 2 also
 report `horizon-git-auth-contract=2` from `horizon-worker-check --git-auth`.
 
 ## Repeatable capability image smoke
