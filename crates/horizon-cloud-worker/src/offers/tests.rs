@@ -226,6 +226,17 @@ fn hetzner_offers_come_beside_the_price_list_in_their_own_currency() {
     assert!(stale["other_providers"][0].get("offers").is_none());
     let ahead = u64::try_from(NOW).unwrap() + 6 * 60_000;
     assert!(publish_hetzner(hetzner_snapshot(ahead).as_slice(), &hetzner, NOW).is_err());
+    // A catalog stored earlier and now dated ahead of this worker's clock, as after the
+    // clock moves back, is reported rather than offered.
+    std::fs::write(&hetzner, hetzner_snapshot(ahead)).unwrap();
+    let future = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert!(
+        future["other_providers"][0]["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("dated in the future")
+    );
+    assert!(future["other_providers"][0].get("offers").is_none());
     // An unreadable catalog does not take the price list down with it.
     std::fs::write(&hetzner, b"{").unwrap();
     let broken = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
