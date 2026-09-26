@@ -1,9 +1,8 @@
 //! Ranked compute offers for given requirements, from a provider's price list, so an
 //! agent can choose the cheapest suitable worker before anything is rented. Read only:
 //! nothing here allocates compute.
-use super::prices::Preferences;
-use horizon_cloud::prices::{Availability, DataCenter, PriceList};
-use horizon_cloud::runpod::{
+use crate::prices::{Availability, DataCenter, Preferences, PriceList};
+use crate::runpod::{
     flavors::{self, Flavor, VCPU_COUNTS},
     volumes::REQUEST_SIZE_GB,
 };

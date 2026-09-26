@@ -1,8 +1,11 @@
 //! Hourly prices and availability a provider publishes, so a worker can be chosen
 //! before any compute is requested. Each deployable provider supplies its own list.
+//! Lists serialize so the owning Horizon can hand them to its workers, which hold no
+//! provider account.
+use serde::{Deserialize, Serialize};
 
 /// Best first, so the derived order ranks offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Availability {
     High,
     Medium,
@@ -10,14 +13,14 @@ pub enum Availability {
     None,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CpuFlavorPrice {
     pub id: String,
     pub name: String,
     pub per_vcpu_hour: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GpuPrice {
     pub id: String,
     pub name: String,
@@ -26,7 +29,7 @@ pub struct GpuPrice {
 }
 
 /// An allowed data center, with the GPU types it has in stock.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataCenter {
     pub id: String,
     /// The provider's region, such as `EUROPE`.
@@ -37,7 +40,7 @@ pub struct DataCenter {
     pub gpus: Vec<(String, Availability)>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PriceList {
     /// Shown to people, such as `RunPod`.
     pub provider: &'static str,
@@ -52,7 +55,7 @@ pub struct PriceList {
 }
 
 /// Storage prices per GB and month.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct StoragePrices {
     /// Network volume rate for the first `network_tier_gb` GB, billed while the
     /// worker is stopped too.
@@ -65,8 +68,74 @@ pub struct StoragePrices {
     /// Container disk, billed only while the worker runs and cleared when it stops.
     pub container: f64,
     /// When these list prices were last checked, since providers may not publish them
-    /// in a machine-readable form.
+    /// in a machine-readable form. Shown only on the computer that fetched them, so it
+    /// is not serialized.
+    #[serde(skip)]
     pub confirmed: &'static str,
+}
+
+/// The preferences a deployment would use, so prices match what would be requested.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Preferences {
+    pub cpu_flavors: Vec<String>,
+    pub gpu_types: Vec<String>,
+}
+
+/// Providers whose price lists Horizon reads back, by the name they are shown with.
+const PROVIDERS: [&str; 1] = ["RunPod"];
+
+/// A price list as it arrives, before its provider is matched to one Horizon knows.
+#[derive(Deserialize)]
+struct Received {
+    provider: String,
+    cpu: Vec<CpuFlavorPrice>,
+    gpus: Vec<GpuPrice>,
+    data_centers: Vec<DataCenter>,
+    regions: std::collections::BTreeMap<String, String>,
+    storage: ReceivedStorage,
+}
+
+#[derive(Deserialize)]
+struct ReceivedStorage {
+    network: f64,
+    network_tier_gb: u32,
+    network_beyond: f64,
+    pod_volume: (f64, f64),
+    container: f64,
+}
+
+// Written out because derived impls borrow `&'static str` fields from the input.
+impl<'de> Deserialize<'de> for PriceList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(Received::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<Received> for PriceList {
+    type Error = &'static str;
+
+    fn try_from(received: Received) -> Result<Self, Self::Error> {
+        let provider = PROVIDERS
+            .into_iter()
+            .find(|known| *known == received.provider)
+            .ok_or("unknown price list provider")?;
+        let storage = received.storage;
+        Ok(Self {
+            provider,
+            cpu: received.cpu,
+            gpus: received.gpus,
+            data_centers: received.data_centers,
+            regions: received.regions,
+            storage: StoragePrices {
+                network: storage.network,
+                network_tier_gb: storage.network_tier_gb,
+                network_beyond: storage.network_beyond,
+                pod_volume: storage.pod_volume,
+                container: storage.container,
+                confirmed: "",
+            },
+        })
+    }
 }
 
 impl StoragePrices {
@@ -166,6 +235,25 @@ impl SizeAvailability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn price_lists_survive_the_trip_to_a_worker() {
+        let list = list();
+        let json = serde_json::to_value(&list).unwrap();
+        let back: PriceList = serde_json::from_value(json.clone()).unwrap();
+        // When the list prices were checked stays on the computer that fetched them.
+        let expected = PriceList {
+            storage: StoragePrices {
+                confirmed: "",
+                ..list.storage
+            },
+            ..list
+        };
+        assert_eq!(back, expected);
+        let mut unknown = json;
+        unknown["provider"] = "Elsewhere".into();
+        assert!(serde_json::from_value::<PriceList>(unknown).is_err());
+    }
 
     fn list() -> PriceList {
         let flavor = |id: &str, per_vcpu_hour| CpuFlavorPrice {
