@@ -1,9 +1,12 @@
 #!/usr/bin/python3
 """Record the imported sibling repositories that new agent sessions check out beside the primary.
 
-  horizon-worker-siblings stage ALIAS   creates and prints the sibling's private upload directory
-  horizon-worker-siblings set           reads the manifest as JSON on stdin
-  horizon-worker-siblings show          prints the manifest, or an empty one
+  horizon-worker-siblings stage ALIAS    creates and prints the sibling's private upload directory
+  horizon-worker-siblings set            reads the manifest as JSON on stdin
+  horizon-worker-siblings show           prints the manifest, or an empty one
+  horizon-worker-siblings layout FILE    prints a session snapshot's checkouts for the session script:
+                                         the primary directory, then "ALIAS DIRECTORY REVISION" per
+                                         sibling; nothing when it lists no sibling
 """
 import fcntl
 import json
@@ -109,8 +112,15 @@ def main(arguments):
     if arguments == ['show']:
         print(json.dumps(parse(MANIFEST.read_bytes()) if MANIFEST.exists() else EMPTY, separators=(',', ':')))
         return
+    if len(arguments) == 2 and arguments[0] == 'layout':
+        value = parse(Path(arguments[1]).read_bytes())
+        if value['siblings']:
+            print(value['primary'])
+            for sibling in value['siblings']:
+                print(sibling['alias'], sibling['directory'], sibling['revision'])
+        return
     if arguments != ['set']:
-        raise ValueError('Usage: horizon-worker-siblings stage ALIAS|set|show')
+        raise ValueError('Usage: horizon-worker-siblings stage ALIAS|set|show|layout FILE')
     data = sys.stdin.buffer.read(LIMIT + 1)
     if len(data) > LIMIT:
         raise ValueError('Sibling manifest is too large')

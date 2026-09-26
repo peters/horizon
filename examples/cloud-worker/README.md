@@ -101,7 +101,8 @@ must actually contain the required GPU libraries; its name alone proves nothing.
 
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
 `horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
-([session relaunch](#session-relaunch-after-a-container-reset)). Source transfer carries verified LFS objects and
+([session relaunch](#session-relaunch-after-a-container-reset)) and `horizon-siblings-contract=1`
+([sibling repositories](#sibling-repositories)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -168,12 +169,12 @@ horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
 
 Relaunch needs ready worker services and the session's persisted agent and revision
 binding. It runs the original launch command, `horizon-worker-run SESSION AGENT`, in
-the existing `/workspace/agents/SESSION` worktree. It never creates, resets or checks
-out that worktree and never imports source again, so commits, uncommitted files and
-agent logins under `/workspace` survive. The process builds its environment from the
-worker volume and the new container's services, so Horizon sends no credentials for
-it. A session whose process had already exited starts again; its stale `exit-status`
-is removed.
+the session's existing primary worktree (see [session layout](#session-layout)). It
+never creates, resets or checks out a worktree and never imports source again, so
+commits, uncommitted files and agent logins under `/workspace` survive. The process
+builds its environment from the worker volume and the new container's services, so
+Horizon sends no credentials for it. A session whose process had already exited starts
+again; its stale `exit-status` is removed.
 
 Before starting the process, relaunch persists `relaunch-requested-OPERATION` in the
 session directory, so each operation starts at most one process per session:
@@ -248,7 +249,40 @@ place. The manifest is replaced atomically at `/workspace/siblings.json`. `show`
 prints the validated manifest, or `{"version":1,"primary":null,"siblings":[]}` when
 none was recorded. An empty `siblings` list is valid and means no siblings; with an
 empty list `primary` may be `null`, so sending back what `show` printed before any
-manifest clears the siblings.
+manifest clears the siblings. The checker reports `horizon-siblings-contract=1` when
+the image has `horizon-worker-siblings` and supports the session layout below.
+
+### Session layout
+
+A new session copies the manifest into its own state as
+`/workspace/sessions/SESSION/siblings.json` when the manifest lists at least one
+sibling. That snapshot fixes the session's layout for its lifetime: attach and
+relaunch always use it, and a later manifest change affects only new sessions. A
+session without a snapshot, including every session created before siblings existed,
+keeps the single layout.
+
+| Layout | Primary worktree (process working directory) | Sibling worktrees |
+|--------|----------------------------------------------|-------------------|
+| Single | `/workspace/agents/SESSION` | none |
+| Siblings | `/workspace/agents/SESSION/PRIMARY` | `/workspace/agents/SESSION/DIRECTORY` per sibling |
+
+Every worktree is on branch `agent/SESSION` of its own repository: the primary at the
+session's revision, each sibling at its manifest revision. Submodules and LFS content
+are prepared from each repository's own material before the launch fence, so relative
+paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch
+refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
+its own repository, and never recreates it. Attach refuses the same way when a path it
+would complete after an interrupted preparation holds another repository.
+
+### Session data directory
+
+Every session, with or without siblings, gets a private directory at
+`/workspace/session-data/SESSION` (mode 0700), created before its process starts and
+again by relaunch when missing. `horizon-worker-run` exports it to the agent as
+`HORIZON_SESSION_DIR`. Repositories point their per-session caches and test state
+there, such as a package cache that must not be shared with another session on the
+same worker. Horizon sets no ecosystem-specific variables; a repository's own scripts
+choose what to place in the directory.
 
 ## Optional Git credentials
 

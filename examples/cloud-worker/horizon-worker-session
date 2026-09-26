@@ -16,9 +16,59 @@ export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="cloud:$id"
 unset HORIZON HORIZON_BROWSER_HOST_INSTANCE
 horizon-worker-check --agent "$agent"
 session="/workspace/sessions/$id"
-worktree="/workspace/agents/$id"
+root="/workspace/agents/$id"
+worktree="$root"
+siblings=()
 bound() { [ "$(cat "$session/agent")" = "$agent" ] && [ "$(cat "$session/revision")" = "$revision" ]; }
 running() { tmux -L horizon-cloud has-session -t "=$id" 2>/dev/null; }
+# A session's own manifest snapshot fixes its layout, so a later manifest never moves it.
+# Without one, the primary worktree is the session root itself.
+load_layout() {
+    [ -f "$session/siblings.json" ] || return 0
+    local listing primary
+    listing="$(horizon-worker-siblings layout "$session/siblings.json")"
+    { read -r primary; mapfile -t siblings; } <<< "$listing"
+    [ -n "$primary" ] && [ "${#siblings[@]}" -gt 0 ] || { echo 'Invalid session layout' >&2; exit 3; }
+    worktree="$root/$primary"
+}
+# A worktree counts only when it belongs to its own repository; another clone at that path does not.
+present() {
+    local common expected
+    [ -e "$1/.git" ] || return 1
+    common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    expected="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    [ -n "$expected" ] && [ "$(cd "$common" && pwd -P)" = "$expected" ]
+}
+# Sibling entries are "ALIAS DIRECTORY REVISION".
+all_present() {
+    present "$worktree" /workspace/repository.git || return 1
+    local entry fields
+    for entry in "${siblings[@]}"; do
+        read -r -a fields <<< "$entry"
+        present "$root/${fields[1]}" "/workspace/siblings/${fields[0]}/repository.git" || return 1
+    done
+}
+prepare() {
+    local repository="$1" path="$2" base="$3" alias="${4:-}"
+    if [ ! -e "$path/.git" ]; then
+        if ! git --git-dir="$repository" show-ref --verify --quiet "refs/heads/agent/$id"; then
+            git --git-dir="$repository" branch "agent/$id" "$base"
+        fi
+        git --git-dir="$repository" worktree add "$path" "agent/$id"
+    elif ! present "$path" "$repository"; then
+        echo 'Session worktree belongs to another repository. No process was started.' >&2; exit 3
+    fi
+    [ "$(git -C "$path" rev-parse HEAD)" = "$base" ] || { echo 'Initial worktree revision mismatch' >&2; exit 3; }
+    # No process has been launched: finish a checkout interrupted after Git wrote HEAD.
+    git -C "$path" reset --hard "$base"
+    if [ -n "$alias" ]; then
+        horizon-worker-source checkout "$path" --sibling "$alias"
+    else
+        horizon-worker-source checkout "$path"
+    fi
+}
+# Per-session caches and test state that no other session on this worker shares.
+session_data() { mkdir -p "/workspace/session-data/$id"; chmod 700 "/workspace/session-data/$id"; }
 # The persisted binding fully determines the launch, so a relaunch reproduces it exactly.
 # The tmux server must not inherit the session lock (fd 9), or a crash before the unlock
 # would hold it for the server's lifetime.
@@ -31,6 +81,7 @@ if [ -n "$operation" ]; then
     exec 9>"/workspace/sessions/$id.lock"
     flock 9
     bound || { echo 'Session binding mismatch' >&2; exit 3; }
+    load_layout
     fence="$session/relaunch-requested-$operation"
     # The operation that started the current process; an older operation's fence alone proves nothing.
     current="$session/relaunch-operation"
@@ -44,9 +95,10 @@ if [ -n "$operation" ]; then
     if [ ! -f "$session/launch-requested" ] && [ -f "$session/preparing" ]; then
         echo 'Session was never launched; attaching starts it. No process was started.' >&2; exit 5
     fi
-    if [ ! -e "$worktree/.git" ] || [ "$(git -C "$worktree" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
-        echo 'Session worktree is missing. No replacement process was started.' >&2; exit 3
+    if ! all_present; then
+        echo 'Session worktree is missing or belongs to another repository. No replacement process was started.' >&2; exit 3
     fi
+    session_data
     # Persist the fence before starting: a retry of this operation never starts a second process.
     touch "$fence"
     sync -f "$fence"
@@ -77,20 +129,23 @@ else
     staging="$(mktemp -d /workspace/sessions/.preparing-XXXXXX)"
     printf '%s\n' "$agent" > "$staging/agent"
     printf '%s\n' "$revision" > "$staging/revision"
+    if [ -f /workspace/siblings.json ]; then
+        horizon-worker-siblings show > "$staging/siblings.json"
+        listing="$(horizon-worker-siblings layout "$staging/siblings.json")"
+        [ -n "$listing" ] || rm "$staging/siblings.json"
+    fi
     touch "$staging/preparing"
     mv "$staging" "$session"
 fi
+load_layout
 if ! running; then
-    if [ ! -e "$worktree/.git" ]; then
-        if ! git --git-dir=/workspace/repository.git show-ref --verify --quiet "refs/heads/agent/$id"; then
-            git --git-dir=/workspace/repository.git branch "agent/$id" "$revision"
-        fi
-        git --git-dir=/workspace/repository.git worktree add "$worktree" "agent/$id"
-    fi
-    [ "$(git -C "$worktree" rev-parse HEAD)" = "$revision" ] || { echo 'Initial worktree revision mismatch' >&2; exit 3; }
-    # No process has been launched: finish a checkout interrupted after Git wrote HEAD.
-    git -C "$worktree" reset --hard "$revision"
-    horizon-worker-source checkout "$worktree"
+    if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
+    prepare /workspace/repository.git "$worktree" "$revision"
+    for entry in "${siblings[@]}"; do
+        read -r -a fields <<< "$entry"
+        prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
+    done
+    session_data
     # Persist the launch fence before starting a process; an uncertain launch cannot be replayed.
     touch "$session/launch-requested"
     sync -f "$session/launch-requested"

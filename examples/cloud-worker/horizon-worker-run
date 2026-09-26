@@ -13,6 +13,8 @@ fi
 export HOME=/workspace/home DISPLAY=:99 HORIZON_BROWSER_ROOT=/workspace/home/.horizon
 export HORIZON_CLOUD_ACTOR="cloud:$id" HORIZON_BROWSER_ACTOR="horizon:cloud-$id"
 export HORIZON_DEVICE_ACTOR="horizon:cloud-$id"
+# Created by horizon-worker-session: this session's private caches and test state.
+export HORIZON_SESSION_DIR="/workspace/session-data/$id"
 unset HORIZON
 export HORIZON_BROWSER_HOST_INSTANCE="$(cat "$HORIZON_BROWSER_ROOT/cloud-host-instance")"
 [ "$agent" != shell ] || agent=bash

@@ -85,6 +85,15 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertNotIn('firefox', str(commands))
         self.assertIn('horizon-device', str(commands))
 
+    def test_siblings_are_reported_only_with_the_manifest_helper(self):
+        for missing, expected in [((), True), (('horizon-worker-siblings',), False)]:
+            status, output, _ = self.run_check(missing=missing)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-siblings-contract=1' in output.splitlines(), expected, missing)
+        # A session-only check reports no contract markers.
+        status, output, _ = self.run_check('--agent', 'shell')
+        self.assertEqual((status, output), (0, ''))
+
     def test_remote_only_requires_tools_and_tunnel_but_no_local_browser(self):
         selected = {'browserstack': {'targets': ['iphone'], 'local_ports': [8080]}}
         self.write('/workspace/capabilities.json', selected)
