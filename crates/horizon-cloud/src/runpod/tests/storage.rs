@@ -360,6 +360,7 @@ mod volumes {
             name: spec.name(),
             size: spec.size,
             data_center_id: spec.data_center_id,
+            tier: Some(crate::runpod::volumes::Tier::Standard),
         }
     }
     fn value() -> String {

@@ -43,8 +43,43 @@ pub struct Volume {
     pub size: u32,
     #[serde(alias = "dataCenter")]
     pub data_center_id: String,
+    /// Absent only in legacy durable records; v2 responses must include a tier.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Tier>,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Tier {
+    Standard,
+    HighPerformance,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Workspace,
+    Cleanup,
 }
 impl Volume {
+    fn response(value: serde_json::Value) -> Result<Self> {
+        let volume: Self = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
+        if volume.tier.is_none() {
+            return Err(CloudError::InvalidResponse);
+        }
+        Ok(volume)
+    }
+    fn require_standard(&self) -> Result<()> {
+        if self.tier != Some(Tier::Standard) {
+            return Err(CloudError::Invalid(
+                "New workspace storage requires the STANDARD volume tier",
+            ));
+        }
+        Ok(())
+    }
+    fn verify_recorded_tier(&self, recorded: &Self) -> Result<()> {
+        if recorded.tier.is_some() && self.tier != recorded.tier {
+            return Err(CloudError::IdentityMismatch);
+        }
+        Ok(())
+    }
     /// # Errors
     /// Refuses a different identity, name, capacity or storage location.
     pub fn verify(&self, spec: &Spec) -> Result<()> {
@@ -59,6 +94,9 @@ impl Volume {
         Ok(())
     }
     pub(crate) fn verify_worker_spec(&self, spec: &WorkerSpec) -> Result<()> {
+        if self.tier.is_some() {
+            self.require_standard()?;
+        }
         let expected = Spec {
             operation_id: spec.operation_id.clone(),
             size: u32::from(spec.profile.storage.volume_gb),
@@ -181,17 +219,34 @@ impl RunPod {
         spec: &Spec,
         state: &mut State,
         cancel: &Cancellation,
+        persist: impl FnMut(&State) -> Result<()>,
+    ) -> Result<Volume> {
+        self.ensure_volume_for(spec, state, cancel, persist, Purpose::Workspace)
+    }
+
+    fn ensure_volume_for(
+        &self,
+        spec: &Spec,
+        state: &mut State,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&State) -> Result<()>,
+        purpose: Purpose,
     ) -> Result<Volume> {
         state.verify(spec)?;
         cancel.check()?;
         match state {
             State::Bound { volume, .. } => {
                 volume.verify(spec)?;
-                let current = self.inspect_volume(&volume.id, cancel)?.ok_or(CloudError::Invalid(
+                let mut current = self.inspect_volume(&volume.id, cancel)?.ok_or(CloudError::Invalid(
                     "Workspace volume is missing; replacement is not automatic",
                 ))?;
                 current.verify(spec)?;
+                current.verify_recorded_tier(volume)?;
+                if purpose == Purpose::Workspace && volume.tier.is_some() {
+                    current.require_standard()?;
+                }
+                // Observing a legacy binding cannot rewrite its durable receipt.
+                current.tier = volume.tier;
                 return Ok(current);
             }
             State::Deleting { .. } | State::Deleted => {
@@ -226,6 +281,9 @@ impl RunPod {
                 },
                 &mut persist,
             )?;
+            if purpose == Purpose::Workspace {
+                volume.require_standard()?;
+            }
             return Ok(volume);
         }
         if *state == State::Requested {
@@ -247,21 +305,22 @@ impl RunPod {
             }
             result => result?,
         };
-        let volume: Volume = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
+        let volume = Volume::response(value).map_err(|_| CloudError::CreationUnresolved)?;
         volume.verify(spec)?;
-        let creation = CreationReceipt {
+        let creation = (volume.tier == Some(Tier::Standard)).then(|| CreationReceipt {
             version: 1,
             spec: spec.clone(),
             volume: volume.clone(),
-        };
+        });
         transition(
             state,
             State::Bound {
                 volume: volume.clone(),
-                creation: Some(creation),
+                creation,
             },
             &mut persist,
         )?;
+        volume.require_standard()?;
         Ok(volume)
     }
 
@@ -294,7 +353,7 @@ impl RunPod {
         if *state == State::Requested {
             // Reconciling a requested volume already reads the provider.
             progress(Progress::ConfirmingVolume);
-            self.ensure_volume(spec, state, cancel, &mut persist)?;
+            self.ensure_volume_for(spec, state, cancel, &mut persist, Purpose::Cleanup)?;
         }
         let (volume, creation) = match state {
             State::Prepared => return transition(state, State::Deleted, &mut persist),
@@ -308,6 +367,7 @@ impl RunPod {
         progress(Progress::ConfirmingVolume);
         if let Some(current) = self.inspect_volume(&volume.id, cancel)? {
             current.verify(spec)?;
+            current.verify_recorded_tier(&volume)?;
             if self.volume_attached(&volume.id, cancel, &mut progress)? {
                 return Err(CloudError::Invalid(
                     "Workspace volume is still attached to a worker; storage was not deleted",
@@ -459,13 +519,14 @@ impl RunPod {
     }
 
     fn list_volumes(&self, cancel: &Cancellation) -> Result<Vec<Volume>> {
-        serde_json::from_value(
-            self.request("GET", "/network-volumes", None, cancel)?
-                .get("networkVolumes")
-                .cloned()
-                .ok_or(CloudError::InvalidResponse)?,
-        )
-        .map_err(|_| CloudError::InvalidResponse)
+        self.request("GET", "/network-volumes", None, cancel)?
+            .get("networkVolumes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(CloudError::InvalidResponse)?
+            .iter()
+            .cloned()
+            .map(Volume::response)
+            .collect()
     }
     fn inspect_volume(&self, id: &str, cancel: &Cancellation) -> Result<Option<Volume>> {
         if !valid_id(id) {
@@ -474,7 +535,7 @@ impl RunPod {
         match self.request("GET", &format!("/network-volumes/{id}"), None, cancel) {
             Err(CloudError::Http(404, _)) => Ok(None),
             result => {
-                let volume: Volume = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;
+                let volume = Volume::response(result?)?;
                 if volume.id != id {
                     return Err(CloudError::IdentityMismatch);
                 }

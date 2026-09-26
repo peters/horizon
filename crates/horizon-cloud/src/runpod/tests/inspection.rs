@@ -14,6 +14,7 @@ fn volume() -> Volume {
         name: volume_spec().name(),
         size: 80,
         data_center_id: "test-region".into(),
+        tier: Some(crate::runpod::volumes::Tier::Standard),
     }
 }
 fn volume_body() -> String {

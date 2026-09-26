@@ -12,6 +12,7 @@ mod startup;
 mod storage;
 mod v2;
 mod volume_limits;
+mod volume_tiers;
 use std::{
     io::{Read, Write},
     net::TcpListener,

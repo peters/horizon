@@ -14,7 +14,7 @@ pub(super) struct Pod {
     mounts: Mounts,
     env: BTreeMap<String, String>,
     cpu: Option<Compute>,
-    gpu: Option<Compute>,
+    gpu: Option<Gpu>,
     data_center_id: Option<String>,
     ssh: Ssh,
     cost: f64,
@@ -25,7 +25,16 @@ pub(super) struct Pod {
 struct Compute {
     vcpu_count: f64,
     memory: f64,
-    count: Option<u32>,
+}
+#[derive(Deserialize)]
+struct Gpu {
+    #[serde(flatten)]
+    compute: Compute,
+    #[serde(default = "default_gpu_count")]
+    count: u32,
+}
+fn default_gpu_count() -> u32 {
+    1
 }
 #[derive(Deserialize)]
 struct Mounts {
@@ -67,11 +76,12 @@ impl Pod {
             || self.mounts.network.len() > 1
             || (self.mounts.persistent.is_some() && !self.mounts.network.is_empty())
             || (self.cpu.is_some() && self.gpu.is_some())
+            || self.gpu.as_ref().is_some_and(|gpu| gpu.count == 0)
         {
             return Err(CloudError::InvalidResponse);
         }
-        let gpu_count = self.gpu.as_ref().and_then(|gpu| gpu.count);
-        let compute = self.cpu.or(self.gpu);
+        let gpu_count = self.gpu.as_ref().map(|gpu| gpu.count);
+        let compute = self.cpu.or(self.gpu.map(|gpu| gpu.compute));
         let (vcpu_count, memory_in_gb) = match compute {
             Some(compute) => (Some(resource(compute.vcpu_count)?), Some(resource(compute.memory)?)),
             None => (None, None),

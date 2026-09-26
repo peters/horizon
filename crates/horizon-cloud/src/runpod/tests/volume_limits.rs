@@ -14,6 +14,7 @@ fn volume(spec: &Spec) -> Volume {
         name: spec.name(),
         size: spec.size,
         data_center_id: spec.data_center_id.clone(),
+        tier: Some(crate::runpod::volumes::Tier::Standard),
     }
 }
 fn server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {

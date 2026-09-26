@@ -186,6 +186,7 @@ fn v2_wire_mapping_preserves_durable_legacy_format_and_actual_status() {
     pod["startedAt"] = json!("2026-09-26T00:00:00Z");
     let observed = wire::worker(pod).unwrap();
     assert_eq!(observed.vcpu_count, Some(4));
+    assert_eq!(observed.gpu_count, None);
     assert_eq!(observed.memory_in_gb, Some(16));
     assert_eq!(observed.cost_per_hr, Some(0.16));
     assert_eq!(observed.adjusted_cost_per_hr, None);
@@ -204,6 +205,26 @@ fn v2_wire_mapping_preserves_durable_legacy_format_and_actual_status() {
     let legacy = saved_worker(&spec());
     let reopened: Worker = serde_json::from_value(legacy).unwrap();
     reopened.verify(&spec()).unwrap();
+}
+
+#[test]
+fn omitted_gpu_count_defaults_to_one_but_explicit_invalid_counts_fail() {
+    let mut spec = spec();
+    spec.profile.gpu = true;
+    let mut pod = worker(&spec);
+    pod["gpu"] = json!({"id":"GPU-A","vcpuCount":spec.profile.cpu,"memory":spec.profile.memory_gb});
+    pod["mounts"] = json!({"persistent":{"size":spec.profile.storage.volume_gb,"path":"/workspace"}});
+    let observed = wire::worker(pod.clone()).unwrap();
+    assert_eq!(observed.gpu_count, Some(1));
+    observed.verify_resources(&spec).unwrap();
+    for count in [1, 2] {
+        pod["gpu"]["count"] = json!(count);
+        assert_eq!(wire::worker(pod.clone()).unwrap().gpu_count, Some(count));
+    }
+    for count in [json!(0), Value::Null, json!(-1), json!(1.5), json!("1")] {
+        pod["gpu"]["count"] = count;
+        assert!(matches!(wire::worker(pod.clone()), Err(CloudError::InvalidResponse)));
+    }
 }
 
 #[test]

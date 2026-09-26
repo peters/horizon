@@ -413,6 +413,7 @@ mod mounted {
             name: format!("horizon-volume-{}", current.operation_id),
             size: u32::from(current.profile.storage.volume_gb),
             data_center_id: "EU-TEST-1".into(),
+            tier: Some(crate::runpod::volumes::Tier::Standard),
         }
     }
     fn current_api(current: &WorkerSpec, image: &str) -> Value {

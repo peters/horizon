@@ -15,6 +15,7 @@ fn volume() -> Volume {
         name: spec.name(),
         size: spec.size,
         data_center_id: spec.data_center_id,
+        tier: Some(crate::runpod::volumes::Tier::Standard),
     }
 }
 fn response() -> String {
@@ -106,18 +107,25 @@ fn uncertain_response_and_failed_receipt_persistence_never_promote_reconciliatio
 
 #[test]
 fn legacy_bound_and_deleting_shapes_round_trip_without_creation_authority() {
+    let mut legacy = volume();
+    legacy.tier = None;
     for stage in ["bound", "deleting"] {
-        let original = json!({"state":stage,"volume":volume()});
+        let original = json!({"state":stage,"volume":legacy});
         let state: State = serde_json::from_value(original.clone()).unwrap();
         assert_eq!(serde_json::to_value(&state).unwrap(), original);
         assert!(state.creation_receipt(&volume_spec()).unwrap().is_none());
     }
     let (provider, _, task) = server(vec![(200, response())]);
     let mut state = State::Bound {
-        volume: volume(),
+        volume: legacy.clone(),
         creation: None,
     };
-    ensure(&provider, &mut state);
+    assert_eq!(
+        provider
+            .ensure_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+            .unwrap(),
+        legacy
+    );
     assert!(state.creation_receipt(&volume_spec()).unwrap().is_none());
     task.join().unwrap();
 }
