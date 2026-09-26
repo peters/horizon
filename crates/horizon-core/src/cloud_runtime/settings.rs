@@ -165,13 +165,12 @@ impl Hetzner {
                 "Hetzner settings need server types and locations such as cx43 and hel1",
             ));
         }
-        if self
-            .registry_pull
-            .as_ref()
-            .is_some_and(|pull| !pull.password_file.is_absolute() || pull.server.is_empty() || pull.username.is_empty())
-        {
+        if self.registry_pull.as_ref().is_some_and(|pull| {
+            !pull.password_file.is_absolute()
+                || !horizon_cloud::host::RegistryLogin::valid_identity(&pull.server, &pull.username)
+        }) {
             return Err(Error::Invalid(
-                "The Hetzner registry pull needs a server, a username and an absolute password file",
+                "The Hetzner registry pull needs a registry host such as example.azurecr.io, a username without ':' and an absolute password file",
             ));
         }
         Ok(())
@@ -428,6 +427,17 @@ mod tests {
                 .registry_login()
                 .is_err()
         );
+        for (field, value) in [
+            ("server", "https://example.azurecr.io"),
+            ("server", "Example.azurecr.io"),
+            ("username", "pull:er"),
+            ("username", ""),
+        ] {
+            let mut invalid = pulling.clone();
+            invalid["hetzner"]["registry_pull"][field] = serde_json::json!(value);
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(Settings::load(&path).is_err(), "{field}={value}");
+        }
         pulling["hetzner"]["registry_pull"]["password_file"] = serde_json::json!("relative");
         std::fs::write(&path, pulling.to_string()).unwrap();
         assert!(Settings::load(&path).is_err());

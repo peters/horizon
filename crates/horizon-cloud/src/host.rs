@@ -36,6 +36,19 @@ pub struct RegistryLogin {
     pub password: Credential,
 }
 
+impl RegistryLogin {
+    /// Whether a server and username are usable for a host login, so settings
+    /// can be checked when they are loaded rather than when a host is rendered.
+    #[must_use]
+    pub fn valid_identity(server: &str, username: &str) -> bool {
+        valid_authority(server)
+            && !username.is_empty()
+            && username.len() <= 256
+            && !username.contains(':')
+            && !username.chars().any(char::is_control)
+    }
+}
+
 #[derive(Debug)]
 pub struct Plan {
     /// An immutable image reference, `name@sha256:<digest>`.
@@ -153,15 +166,10 @@ impl Plan {
         if !(1..=64).contains(&self.shm_gb) {
             return Err(CloudError::Invalid("Shared memory must be between 1 and 64 GB"));
         }
-        if let Some(registry) = &self.registry {
-            let server = valid_authority(&registry.server);
-            let username = !registry.username.is_empty()
-                && registry.username.len() <= 256
-                && !registry.username.contains(':')
-                && !registry.username.chars().any(char::is_control);
-            if !server || !username {
-                return Err(CloudError::Invalid("Invalid registry server or username"));
-            }
+        if let Some(registry) = &self.registry
+            && !RegistryLogin::valid_identity(&registry.server, &registry.username)
+        {
+            return Err(CloudError::Invalid("Invalid registry server or username"));
         }
         Ok(())
     }

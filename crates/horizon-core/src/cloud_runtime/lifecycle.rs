@@ -89,12 +89,12 @@ pub fn reconcile(
     Ok(ReconciledDeployment { state, report })
 }
 
-/// Hetzner clouds deploy, but their check, stop, resume and hosted-device
-/// actions are not wired yet; nothing here may reach `RunPod` for them.
+/// A Hetzner record, once Hetzner clouds can be deployed, has no check, stop,
+/// resume or hosted-device path yet; nothing here may reach `RunPod` for it.
 fn refuse_hetzner(state: &Deployment) -> Result<()> {
     if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
         return Err(Error::Invalid(
-            "Checking, stopping and resuming Hetzner clouds is not available yet; use the Hetzner console",
+            "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console",
         ));
     }
     Ok(())
@@ -281,7 +281,7 @@ mod tests {
         }))
         .unwrap();
         let cancel = Cancellation::default();
-        let refused = "Checking, stopping and resuming Hetzner clouds is not available yet; use the Hetzner console";
+        let refused = "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console";
         assert_eq!(
             reconcile(root.path(), &settings, None, &cancel)
                 .unwrap_err()
@@ -304,6 +304,19 @@ mod tests {
             error
                 .to_string()
                 .starts_with("Deleting Hetzner clouds is not available yet")
+        );
+        let request = super::super::deployment::Request::new(
+            state.cloud_id.clone(),
+            state.repository.clone(),
+            state.revision.clone(),
+            state.profile.clone(),
+            root.path().into(),
+            settings.clone(),
+        );
+        let error = super::super::deployment::replacement::rebuild(&request, "cpu", &cancel, &|_| {}).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Rebuilding a Hetzner cloud's image is not available yet"
         );
         let store = Store::lock(root.path()).unwrap();
         assert_eq!(
