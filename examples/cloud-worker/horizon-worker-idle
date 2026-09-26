@@ -92,9 +92,12 @@ def main():
     if not pod_id or not key:
         passive('the provider supplied no worker credential')
     activity = Activity(minutes * 60, time.time())
+    next_request = 0
     while True:
+        # Activity is sampled every poll; only the provider request waits between retries.
         time.sleep(POLL_SECONDS)
-        if not activity.observe(time.time(), last_output(), cpu_seconds()):
+        now = time.time()
+        if not activity.observe(now, last_output(), cpu_seconds()) or now < next_request:
             continue
         print(f'No agent activity for {minutes} minutes; stopping this worker', flush=True)
         os.sync()
@@ -105,9 +108,9 @@ def main():
             print('Stop request failed: ' + type(error).__name__, flush=True)
             stopped = False
         # A stopped worker ends this process. Still running later means the stop did not
-        # take effect, so the next idle check requests it again.
+        # take effect, so a later idle check requests it again.
         print('Stop requested' if stopped else 'Retrying the stop later', flush=True)
-        time.sleep(RETRY_SECONDS)
+        next_request = now + RETRY_SECONDS
 
 
 if __name__ == '__main__':

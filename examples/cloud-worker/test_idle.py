@@ -43,23 +43,25 @@ class IdleTests(unittest.TestCase):
         with mock.patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'tmux')):
             self.assertIsNone(MODULE['last_output']())
 
-    def test_an_accepted_stop_is_requested_again_while_the_worker_keeps_running(self):
+    def test_retries_wait_between_requests_while_activity_is_still_sampled(self):
         environment = {'HORIZON_IDLE_STOP_MINUTES': '10', 'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'key'}
-        sleeps = []
+        sleeps, samples = [], []
         def sleep(seconds):
             sleeps.append(seconds)
-            if len(sleeps) == 4:
+            if len(sleeps) == 13:
                 raise SystemExit
         stop = mock.Mock(side_effect=[True, OSError('reset')])
-        clock = iter(range(0, 100000, 700))
+        clock = iter(range(0, 100000, 100))
         with mock.patch.dict('os.environ', environment, clear=True), \
                 mock.patch.dict(MODULE['main'].__globals__, {'stop_worker': stop, 'last_output': lambda: None,
-                                                            'cpu_seconds': lambda: None}), \
+                                                            'cpu_seconds': lambda: samples.append(1)}), \
                 mock.patch('time.sleep', side_effect=sleep), mock.patch('time.time', side_effect=lambda: next(clock)), \
                 mock.patch('os.sync'), self.assertRaises(SystemExit):
             MODULE['main']()
+        # Idle from 600 s: the first request, then the next only after the 600 s retry gap.
         self.assertEqual(stop.call_count, 2)
-        self.assertEqual(sleeps, [60, 600, 60, 600])
+        self.assertEqual(set(sleeps), {60})
+        self.assertEqual(len(samples), 12)
 
     def test_invalid_settings_stay_passive_instead_of_ending_the_worker(self):
         for environment in [{'HORIZON_IDLE_STOP_MINUTES': '5'},
