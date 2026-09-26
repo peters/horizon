@@ -191,9 +191,9 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
     Some(result)
 }
 
-/// Prices and exact-size stock as if the provider had just answered, for UI tests that
-/// never contact it.
-#[cfg(test)]
+/// Prices and exact-size stock as if the provider had just answered, for the dialog
+/// tests, which never contact it and run on Unix only.
+#[cfg(all(test, unix))]
 impl State {
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
         self.list = Some(Fetched {

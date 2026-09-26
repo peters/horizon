@@ -9,12 +9,22 @@ use horizon_core::{
 };
 use std::collections::BTreeMap;
 
-/// A data center this cloud can use, and whether it has the chosen size or one of the
-/// preferred GPUs in stock: `None` while that is unknown.
+/// Whether a data center has the chosen size, or one of the preferred GPUs, in stock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stock {
+    Yes,
+    No,
+    /// A stock check is running.
+    Checking,
+    /// The last stock check failed; Refresh asks again.
+    Unknown,
+}
+
+/// A data center this cloud can use, and its stock.
 struct Candidate<'a> {
     center: &'a DataCenter,
     region: String,
-    stocked: Option<bool>,
+    stock: Stock,
 }
 
 /// The data centers `profile` can use: CPU clouds need workspace storage there.
@@ -44,23 +54,64 @@ fn candidates<'a>(
             } else {
                 match size {
                     Some(Ok(size)) => Some(size.count(here) > 0),
-                    None | Some(Err(_)) => None,
+                    Some(Err(_)) => None,
+                    None => {
+                        return Candidate {
+                            center,
+                            region: region_name(&center.region),
+                            stock: Stock::Checking,
+                        };
+                    }
                 }
             };
             Candidate {
                 center,
                 region: region_name(&center.region),
-                stocked,
+                stock: match stocked {
+                    Some(true) => Stock::Yes,
+                    Some(false) => Stock::No,
+                    None => Stock::Unknown,
+                },
             }
         })
         .collect()
 }
 
-/// A region's data centers and how many have stock: `None` while any is unknown.
+/// How many data centers have stock, once every one is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Count {
+    Known(usize),
+    Checking,
+    Unknown,
+}
+
+impl Count {
+    /// Unknown wins over checking, which wins over a known count.
+    fn with(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::Checking, _) | (_, Self::Checking) => Self::Checking,
+            (Self::Known(a), Self::Known(b)) => Self::Known(a + b),
+        }
+    }
+}
+
+impl From<Stock> for Count {
+    fn from(stock: Stock) -> Self {
+        match stock {
+            Stock::Yes => Self::Known(1),
+            Stock::No => Self::Known(0),
+            Stock::Checking => Self::Checking,
+            Stock::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// A region's data centers and how many have stock.
 struct Region {
     name: String,
     data_centers: Vec<String>,
-    in_stock: Option<usize>,
+    in_stock: Count,
 }
 
 fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
@@ -69,13 +120,10 @@ fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
         let region = regions.entry(&candidate.region).or_insert_with(|| Region {
             name: candidate.region.clone(),
             data_centers: Vec::new(),
-            in_stock: Some(0),
+            in_stock: Count::Known(0),
         });
         region.data_centers.push(candidate.center.id.clone());
-        region.in_stock = region
-            .in_stock
-            .zip(candidate.stocked)
-            .map(|(count, stocked)| count + usize::from(stocked));
+        region.in_stock = region.in_stock.with(candidate.stock.into());
     }
     let mut regions: Vec<Region> = regions.into_values().collect();
     for region in &mut regions {
@@ -103,11 +151,12 @@ fn region_name(region: &str) -> String {
         .join(" ")
 }
 
-fn stock_label(in_stock: Option<usize>) -> (String, Color32) {
+fn stock_label(in_stock: Count) -> (String, Color32) {
     match in_stock {
-        None => ("checking stock".to_owned(), theme::FG_DIM()),
-        Some(0) => ("none in stock".to_owned(), theme::PALETTE_RED()),
-        Some(count) => (format!("{count} in stock"), theme::PALETTE_GREEN()),
+        Count::Checking => ("checking stock".to_owned(), theme::FG_DIM()),
+        Count::Unknown => ("stock unknown".to_owned(), theme::FG_DIM()),
+        Count::Known(0) => ("none in stock".to_owned(), theme::PALETTE_RED()),
+        Count::Known(count) => (format!("{count} in stock"), theme::PALETTE_GREEN()),
     }
 }
 
@@ -126,7 +175,7 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
     ui.horizontal_wrapped(|ui| {
         let total = regions
             .iter()
-            .try_fold(0, |total, region| Some(total + region.in_stock?));
+            .fold(Count::Known(0), |total, region| total.with(region.in_stock));
         let (detail, tint) = stock_label(total);
         if option(ui, "Any region", current.is_any(), Some(&detail), Some(tint)) {
             chosen = Some(Placement::default());
@@ -134,8 +183,9 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
         for region in &regions {
             let selected = current.data_centers == region.data_centers;
             let (detail, tint) = stock_label(region.in_stock);
-            // A region known to be sold out stays visible but cannot be chosen.
-            let enabled = selected || region.in_stock != Some(0);
+            // A region known to be sold out stays visible but cannot be chosen; one whose
+            // stock is unknown can, since the provider may still place the cloud there.
+            let enabled = selected || region.in_stock != Count::Known(0);
             let clicked = ui
                 .add_enabled_ui(enabled, |ui| {
                     option(ui, &region.name, selected, Some(&detail), Some(tint))
@@ -173,20 +223,20 @@ pub(super) fn data_center_field(
 ) -> Option<Placement> {
     let (list, preferences) = &prices.list.as_ref()?.value;
     let candidates = candidates(prices, list, preferences, profile);
-    let shown: Vec<&Candidate<'_>> = candidates
-        .iter()
-        .filter(|candidate| candidate.stocked != Some(false) || current.data_centers == [candidate.center.id.clone()])
-        .collect();
-    if shown.is_empty() {
+    if candidates.is_empty() {
         return None;
     }
+    let shown: Vec<&Candidate<'_>> = candidates
+        .iter()
+        .filter(|candidate| candidate.stock != Stock::No || current.data_centers == [candidate.center.id.clone()])
+        .collect();
     ui.add_space(6.0);
     ui.label(RichText::new("Data center").size(14.0).strong().color(theme::FG()));
     let mut chosen = None;
     ui.horizontal_wrapped(|ui| {
         for candidate in &shown {
             let selected = current.data_centers == [candidate.center.id.clone()];
-            if chip(ui, &candidate.center.id, &candidate.region, candidate.stocked, selected) {
+            if chip(ui, &candidate.center.id, &candidate.region, candidate.stock, selected) {
                 chosen = Some(Placement {
                     region: Some(candidate.region.clone()),
                     data_centers: vec![candidate.center.id.clone()],
@@ -194,20 +244,30 @@ pub(super) fn data_center_field(
             }
         }
     });
-    let hidden = candidates.len() - shown.len();
-    if hidden > 0 {
-        ui.small(format!("{hidden} more without stock for this cloud right now."));
+    if let Some(note) = hidden_note(candidates.len() - shown.len(), shown.is_empty()) {
+        ui.small(note);
     }
     chosen.filter(|placement| placement != current)
 }
 
+fn hidden_note(hidden: usize, none_shown: bool) -> Option<String> {
+    match (hidden, none_shown) {
+        (0, _) => None,
+        (1, true) => Some("The one data center for this cloud is out of stock right now.".to_owned()),
+        (hidden, true) => Some(format!(
+            "All {hidden} data centers for this cloud are out of stock right now."
+        )),
+        (hidden, false) => Some(format!("{hidden} more without stock for this cloud right now.")),
+    }
+}
+
 /// A compact data center choice with a stock dot, painted at its own size.
-fn chip(ui: &mut Ui, id: &str, region: &str, stocked: Option<bool>, selected: bool) -> bool {
+fn chip(ui: &mut Ui, id: &str, region: &str, stock: Stock, selected: bool) -> bool {
     const DOT: f32 = 6.0;
-    let color = match stocked {
-        Some(true) => theme::PALETTE_GREEN(),
-        Some(false) => theme::PALETTE_RED(),
-        None => theme::FG_DIM(),
+    let color = match stock {
+        Stock::Yes => theme::PALETTE_GREEN(),
+        Stock::No => theme::PALETTE_RED(),
+        Stock::Checking | Stock::Unknown => theme::FG_DIM(),
     };
     let name = ui
         .painter()
@@ -247,10 +307,11 @@ fn chip(ui: &mut Ui, id: &str, region: &str, stocked: Option<bool>, selected: bo
         place,
         theme::FG_DIM(),
     );
-    let stock = match stocked {
-        Some(true) => "in stock",
-        Some(false) => "out of stock",
-        None => "stock unknown",
+    let stock = match stock {
+        Stock::Yes => "in stock",
+        Stock::No => "out of stock",
+        Stock::Checking => "checking stock",
+        Stock::Unknown => "stock unknown",
     };
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -276,11 +337,11 @@ mod tests {
         }
     }
 
-    fn candidate(center: &DataCenter, stocked: Option<bool>) -> Candidate<'_> {
+    fn candidate(center: &DataCenter, stock: Stock) -> Candidate<'_> {
         Candidate {
             region: region_name(&center.region),
             center,
-            stocked,
+            stock,
         }
     }
 
@@ -299,16 +360,44 @@ mod tests {
             center("US-MO-2", "NORTH_AMERICA", true),
         );
         let candidates = [
-            candidate(&eu, Some(true)),
-            candidate(&eu2, Some(false)),
-            candidate(&us, None),
+            candidate(&eu, Stock::Yes),
+            candidate(&eu2, Stock::No),
+            candidate(&us, Stock::Checking),
         ];
         let regions = regions(&candidates);
-        let summary: Vec<(&str, usize, Option<usize>)> = regions
+        let summary: Vec<(&str, usize, Count)> = regions
             .iter()
             .map(|region| (region.name.as_str(), region.data_centers.len(), region.in_stock))
             .collect();
-        assert_eq!(summary, [("Europe", 2, Some(1)), ("North America", 1, None)]);
+        assert_eq!(
+            summary,
+            [("Europe", 2, Count::Known(1)), ("North America", 1, Count::Checking)]
+        );
+        // A failed check reads as unknown rather than as a check still running.
+        let failed = [candidate(&eu, Stock::Yes), candidate(&us, Stock::Unknown)];
+        let total = super::regions(&failed)
+            .iter()
+            .fold(Count::Known(0), |total, region| total.with(region.in_stock));
+        assert_eq!(total, Count::Unknown);
+        assert_eq!(stock_label(Count::Unknown).0, "stock unknown");
+        assert_eq!(Count::Checking.with(Count::Known(2)), Count::Checking);
+    }
+
+    #[test]
+    fn a_sold_out_cloud_still_says_how_many_data_centers_it_could_use() {
+        assert_eq!(hidden_note(0, false), None);
+        assert_eq!(
+            hidden_note(13, false).as_deref(),
+            Some("13 more without stock for this cloud right now.")
+        );
+        assert_eq!(
+            hidden_note(3, true).as_deref(),
+            Some("All 3 data centers for this cloud are out of stock right now.")
+        );
+        assert_eq!(
+            hidden_note(1, true).as_deref(),
+            Some("The one data center for this cloud is out of stock right now.")
+        );
     }
 
     #[test]

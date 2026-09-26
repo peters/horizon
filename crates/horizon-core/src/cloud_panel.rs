@@ -92,7 +92,8 @@ pub struct CloudLaunch {
 /// where it is first placed, so this matters beyond the first start.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Placement {
-    /// The region shown to people, such as `Europe`; `None` for one data center or any.
+    /// A label shown to people, such as `Europe`, for a chosen region or the region of
+    /// a chosen data center; `None` when any data center will do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
     /// The data centers to choose from; empty for the machine's `data_centers` setting.
