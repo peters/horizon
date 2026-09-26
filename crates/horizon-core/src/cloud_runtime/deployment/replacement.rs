@@ -109,6 +109,11 @@ pub fn rebuild(
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
+    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid(
+            "Rebuilding a Hetzner cloud's image is not available yet",
+        ));
+    }
     let (store, mut state) = open(request)?;
     ready(&state)?;
     // Checked before credentials load, so a changed profile is refused with its reason.
