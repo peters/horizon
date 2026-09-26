@@ -1,26 +1,56 @@
 //! Keeps this Horizon's prices on its ready workers, so agents there can rank cloud
 //! offers without the provider account. While any cloud is ready, prices refresh every
 //! 15 minutes and each ready worker gets every fresh list once.
-use super::{HorizonApp, Runtime};
+use super::{HorizonApp, Runtime, prices::Fetched};
 use horizon_core::cloud_runtime::{
     Cancellation, Stage,
     offer_publication::{self, Published, Snapshot, VERSION},
+    prices::{Preferences, PriceList},
 };
 use std::{
     collections::HashMap,
-    path::PathBuf,
-    sync::mpsc::{Receiver, channel},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        mpsc::{Receiver, channel},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// A worker that did not take the prices is asked again after this long.
 const RETRY: Duration = Duration::from_mins(5);
+/// Clouds are checked for workers due prices at most this often while nothing is sent.
+const CHECK_EVERY: Duration = Duration::from_secs(5);
 
-#[derive(Default)]
+/// Sends a snapshot to the worker of a cloud.
+type Publisher = Arc<dyn Fn(&Path, &str, &Snapshot) -> Result<Published, String> + Send + Sync>;
+
 pub(super) struct State {
     /// Per cloud, the delivery its worker last had.
     delivered: HashMap<String, Delivery>,
     job: Option<Job>,
+    /// No check for due workers before this, so idle frames do no work.
+    next_check: Option<Instant>,
+    publisher: Publisher,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            delivered: HashMap::new(),
+            job: None,
+            next_check: None,
+            publisher: Arc::new(publish_over_ssh),
+        }
+    }
+}
+
+fn publish_over_ssh(root: &Path, cloud: &str, snapshot: &Snapshot) -> Result<Published, String> {
+    // UI tests resolve the developer's real Horizon home; they must never reach a worker.
+    if cfg!(test) {
+        return Ok(Published::NotReady);
+    }
+    offer_publication::publish(root, cloud, snapshot, &Cancellation::default()).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,11 +70,13 @@ struct Job {
 }
 
 impl State {
+    /// Collects a finished send; the next frame then checks for more due workers.
     fn poll(&mut self, now: Instant) {
         let Some(job) = &self.job else { return };
         let Ok(outcome) = job.receiver.try_recv() else {
             return;
         };
+        self.next_check = None;
         let delivery = match outcome {
             Ok(Published::Sent) => Delivery {
                 worker: job.worker.clone(),
@@ -68,6 +100,43 @@ impl State {
         };
         self.delivered.insert(job.cloud.clone(), delivery);
         self.job = None;
+    }
+
+    /// Starts sending `fetched` to the first ready worker that lacks it.
+    fn step(
+        &mut self,
+        root: &Path,
+        ready: &[(String, String)],
+        fetched: &Fetched<(PriceList, Preferences)>,
+        now: Instant,
+        ctx: &egui::Context,
+    ) {
+        if self.job.is_some() {
+            return;
+        }
+        let Some((cloud, worker)) = due(&self.delivered, ready, fetched.at, now).cloned() else {
+            return;
+        };
+        let (list, preferences) = &fetched.value;
+        let snapshot = Snapshot {
+            version: VERSION,
+            observed_at_millis: observed_at_millis(fetched.at),
+            list: list.clone(),
+            preferences: preferences.clone(),
+        };
+        let job = Job {
+            receiver: start(
+                Arc::clone(&self.publisher),
+                root.to_owned(),
+                cloud.clone(),
+                snapshot,
+                ctx.clone(),
+            ),
+            cloud,
+            worker,
+            observed: fetched.at,
+        };
+        self.job = Some(job);
     }
 }
 
@@ -104,6 +173,10 @@ impl HorizonApp {
         let production = &mut self.cloud_prototype.production;
         let publication = &mut production.offer_publication;
         publication.poll(now);
+        if publication.job.is_some() || publication.next_check.is_some_and(|at| now < at) {
+            return;
+        }
+        publication.next_check = Some(now + CHECK_EVERY);
         let mut ready: Vec<_> = production.runtimes.values().filter_map(ready_worker).collect();
         ready.sort();
         publication
@@ -123,20 +196,7 @@ impl HorizonApp {
             return;
         };
         ctx.request_repaint_after(super::prices::FRESH.saturating_sub(fetched.at.elapsed()).min(RETRY));
-        if publication.job.is_some() {
-            return;
-        }
-        let Some((cloud, worker)) = due(&publication.delivered, &ready, fetched.at, now).cloned() else {
-            return;
-        };
-        let (list, preferences) = &fetched.value;
-        let snapshot = Snapshot {
-            version: VERSION,
-            observed_at_millis: observed_at_millis(fetched.at),
-            list: list.clone(),
-            preferences: preferences.clone(),
-        };
-        publication.job = Some(start(root, cloud, worker, fetched.at, snapshot, ctx.clone()));
+        publication.step(&root, &ready, fetched, now, ctx);
     }
 }
 
@@ -148,31 +208,18 @@ fn observed_at_millis(at: Instant) -> u64 {
 }
 
 fn start(
+    publisher: Publisher,
     root: PathBuf,
     cloud: String,
-    worker: String,
-    observed: Instant,
     snapshot: Snapshot,
     ctx: egui::Context,
-) -> Job {
+) -> Receiver<Result<Published, String>> {
     let (sender, receiver) = channel();
-    let id = cloud.clone();
     std::thread::spawn(move || {
-        let outcome = if cfg!(test) {
-            Ok(Published::NotReady)
-        } else {
-            offer_publication::publish(&root, &id, &snapshot, &Cancellation::default())
-                .map_err(|error| error.to_string())
-        };
-        let _ = sender.send(outcome);
+        let _ = sender.send(publisher(&root, &cloud, &snapshot));
         ctx.request_repaint();
     });
-    Job {
-        cloud,
-        worker,
-        observed,
-        receiver,
-    }
+    receiver
 }
 
 #[cfg(test)]
@@ -210,6 +257,56 @@ mod tests {
         assert_eq!(due(&delivered, &ready, now, now + RETRY), Some(&ready[0]));
         let replaced = vec![("a".to_owned(), "w3".to_owned())];
         assert_eq!(due(&delivered, &replaced, now, now), Some(&replaced[0]));
+    }
+
+    #[test]
+    fn a_ready_worker_receives_the_current_prices_and_is_marked_delivered() {
+        let (sent, received) = channel();
+        let sent = std::sync::Mutex::new(sent);
+        let mut state = State {
+            publisher: Arc::new(move |_: &Path, cloud: &str, snapshot: &Snapshot| {
+                sent.lock().unwrap().send((cloud.to_owned(), snapshot.clone())).unwrap();
+                Ok(Published::Sent)
+            }),
+            ..State::default()
+        };
+        let list = PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: Vec::new(),
+            data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
+            storage: horizon_core::cloud_runtime::prices::RUNPOD_STORAGE,
+        };
+        let preferences = Preferences {
+            cpu_flavors: vec!["cpu3c".into()],
+            gpu_types: Vec::new(),
+        };
+        let fetched = Fetched {
+            value: (list.clone(), preferences.clone()),
+            at: Instant::now(),
+        };
+        let ready = vec![("a".to_owned(), "w1".to_owned())];
+        let ctx = egui::Context::default();
+        state.step(Path::new("/unused"), &ready, &fetched, Instant::now(), &ctx);
+        let (cloud, snapshot) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(cloud, "a");
+        assert_eq!(
+            (snapshot.version, snapshot.list, snapshot.preferences),
+            (VERSION, list, preferences)
+        );
+        assert!(snapshot.observed_at_millis > 0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.job.is_some() {
+            assert!(Instant::now() < deadline, "the send finishes");
+            state.poll(Instant::now());
+            std::thread::yield_now();
+        }
+        assert_eq!(state.delivered["a"].observed, Some(fetched.at));
+        assert!(state.next_check.is_none(), "the next frame checks for more due workers");
+        // The worker has this list now, so nothing more is sent.
+        state.step(Path::new("/unused"), &ready, &fetched, Instant::now(), &ctx);
+        assert!(state.job.is_none());
     }
 
     #[test]
