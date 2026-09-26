@@ -79,7 +79,7 @@ impl WorkerContract {
     }
 }
 
-fn reports(output: &str, marker: &str) -> bool {
+pub(super) fn reports(output: &str, marker: &str) -> bool {
     output.lines().any(|line| line == marker)
 }
 
