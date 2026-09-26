@@ -10,7 +10,8 @@ use std::time::Duration;
 const RIBBON_HEIGHT: f32 = 8.0;
 /// Half the ribbon height, so its ends are fully round.
 const RIBBON_RADIUS: u8 = 4;
-const BAR_WIDTH: f32 = 52.0;
+/// Sized so label, duration, share and bar fit the runtime card's width.
+const BAR_WIDTH: f32 = 30.0;
 /// Phases shorter than this are left out of the rows; the ribbon still includes them.
 const SHOWN: Duration = Duration::from_millis(100);
 
@@ -79,7 +80,12 @@ fn ribbon(ui: &mut egui::Ui, timeline: &Timeline) {
             .filter(|span| span.phase == phase)
             .map(|span| Duration::from_millis(span.millis))
             .sum();
-        response.on_hover_text_at_pointer(format!("{} · {}\n{}", phase.label(), short(spent), phase.detail()));
+        response.on_hover_text_at_pointer(format!(
+            "{} · {}\n{}",
+            timeline.label(phase),
+            short(spent),
+            timeline.detail(phase)
+        ));
     }
 }
 
@@ -88,19 +94,19 @@ fn rows(ui: &mut egui::Ui, id: u32, timeline: &Timeline) {
     let total = timeline.total().as_secs_f32().max(f32::EPSILON);
     egui::Grid::new(("cloud-timeline-rows", id))
         .num_columns(4)
-        .spacing([8.0, 4.0])
+        .spacing([6.0, 4.0])
         .show(ui, |ui| {
             for (phase, spent) in timeline.phases().into_iter().filter(|(_, spent)| *spent >= SHOWN) {
                 let share = spent.as_secs_f32() / total;
                 ui.horizontal(|ui| {
                     let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, color(phase));
-                    ui.label(RichText::new(phase.label()).size(12.0).color(theme::FG_SOFT()));
+                    ui.label(RichText::new(timeline.label(phase)).size(12.0).color(theme::FG_SOFT()));
                 })
                 .response
-                .on_hover_text(phase.detail());
+                .on_hover_text(timeline.detail(phase));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(short(spent)).size(12.0).monospace().color(theme::FG()));
+                    ui.label(RichText::new(short(spent)).size(11.5).monospace().color(theme::FG()));
                 });
                 ui.label(
                     RichText::new(percent(share))

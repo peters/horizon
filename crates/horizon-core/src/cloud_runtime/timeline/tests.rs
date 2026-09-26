@@ -46,6 +46,7 @@ fn fresh_deployment() -> Recorder {
 #[test]
 fn the_container_start_separates_the_image_download_from_boot_and_publication() {
     let timeline = fresh_deployment().finish(false, Some(at(1698)), at(2567));
+    assert_eq!(timeline.label(Phase::ProviderStart), "Image download");
     assert_eq!(timeline.total(), Duration::from_millis(256_700));
     assert_eq!(millis(&timeline, Phase::Prepare), 9_800);
     assert_eq!(millis(&timeline, Phase::ProviderStart), 147_900);
@@ -91,6 +92,8 @@ fn a_reconnection_with_a_known_endpoint_counts_boot_as_readiness() {
     stage(&recorder, Stage::Sessions, 284);
     let timeline = recorder.finish(true, Some(at(60)), at(322));
     assert!(timeline.reconnected);
+    assert_eq!(timeline.label(Phase::ProviderStart), "Worker start");
+    assert_eq!(timeline.label(Phase::Sessions), Phase::Sessions.label());
     assert_eq!(millis(&timeline, Phase::ProviderStart), 4_800);
     assert_eq!(millis(&timeline, Phase::WorkerStart), 0);
     assert_eq!(millis(&timeline, Phase::Readiness), 22_400);

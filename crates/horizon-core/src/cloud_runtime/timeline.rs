@@ -102,6 +102,25 @@ impl Timeline {
         Duration::from_millis(self.spans.iter().map(|span| span.millis).sum())
     }
 
+    /// A reconnection starts an existing worker, so its provider phase is not an image download.
+    #[must_use]
+    pub const fn label(&self, phase: Phase) -> &'static str {
+        match phase {
+            Phase::ProviderStart if self.reconnected => "Worker start",
+            _ => phase.label(),
+        }
+    }
+
+    #[must_use]
+    pub const fn detail(&self, phase: Phase) -> &'static str {
+        match phase {
+            Phase::ProviderStart if self.reconnected => {
+                "From the start request until the existing worker's container started"
+            }
+            _ => phase.detail(),
+        }
+    }
+
     /// Time per phase, largest first; repeated phases such as two imports are combined.
     #[must_use]
     pub fn phases(&self) -> Vec<(Phase, Duration)> {

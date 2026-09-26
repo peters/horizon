@@ -116,7 +116,7 @@ fn print_event(event: Event) {
             }
             if let Some(timeline) = &state.timeline {
                 for (phase, duration) in timeline.phases() {
-                    println!("  {:>7.1}s  {}", duration.as_secs_f64(), phase.label());
+                    println!("  {:>7.1}s  {}", duration.as_secs_f64(), timeline.label(phase));
                 }
             }
         }
