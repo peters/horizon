@@ -71,6 +71,16 @@ impl WorkerSpec {
     pub fn name(&self) -> String {
         format!("horizon-cloud-{}", self.operation_id)
     }
+    /// The idle period a dedicated worker carries in its environment. Workers
+    /// started through initialization never run the watcher.
+    #[must_use]
+    pub fn idle_stop_environment(&self) -> Option<String> {
+        self.startup_metadata
+            .is_none()
+            .then_some(self.profile.idle_stop_minutes)
+            .flatten()
+            .map(|minutes| minutes.to_string())
+    }
     /// # Errors
     /// Requires immutable images, supported profiles and explicit GPU selection.
     pub fn validate(&self) -> Result<(), CloudError> {
@@ -291,6 +301,10 @@ impl Worker {
             != spec.startup_metadata.as_ref().map(crate::StartupMetadata::as_str)
             || (spec.startup_metadata.is_some() && self.env.get("HORIZON_CLOUD_OPERATION") != Some(&spec.operation_id))
         {
+            return Err(CloudError::IdentityMismatch);
+        }
+        // A worker without its recorded idle period would never stop, or stop at the wrong time.
+        if self.env.get(crate::IDLE_STOP_ENVIRONMENT_KEY).cloned() != spec.idle_stop_environment() {
             return Err(CloudError::IdentityMismatch);
         }
         Ok(())

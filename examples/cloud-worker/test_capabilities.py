@@ -36,7 +36,7 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None, located=None):
+    def run_check(self, *args, missing=(), environment=None, reported=None):
         output = io.StringIO()
         def run(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout=reported.get(command[0], b''))
@@ -44,8 +44,7 @@ class CapabilitiesTests(unittest.TestCase):
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=run if reported is not None else None) as commands, \
-                mock.patch('shutil.which', side_effect=lambda name: None if name in missing
-                           else (located or {}).get(name, '/bin/' + name)), \
+                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
                 runpy.run_path(str(ROOT / 'horizon-worker-check'), run_name='__main__')
@@ -54,19 +53,15 @@ class CapabilitiesTests(unittest.TestCase):
                 status = error.code
         return status, output.getvalue(), commands.call_args_list
 
-    def test_idle_stop_is_reported_only_when_the_supervisor_starts_the_watcher(self):
-        supervisor = self.path('/workspace/horizon-worker-supervise')
-        located = {'horizon-worker-supervise': '/workspace/horizon-worker-supervise'}
-        for text, missing, expected in [("self.start('idle', ['horizon-worker-idle'])", (), True),
-                                        ("self.start('control', ['horizon-cloud-worker'])", (), False),
-                                        ("self.start('idle', ['horizon-worker-idle'])", ('horizon-worker-idle',), False)]:
-            supervisor.write_text(text)
-            status, output, _ = self.run_check(missing=missing, located=located)
+    def test_idle_stop_is_reported_only_when_the_supervisor_declares_it(self):
+        declared = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n'}
+        for reported, missing, expected in [(declared, (), True),
+                                            ({'horizon-worker-supervise': b''}, (), False),
+                                            ({'horizon-worker-supervise': b'horizon-idle-stop-contract=1 extra\n'}, (), False),
+                                            (declared, ('horizon-worker-idle',), False)]:
+            status, output, _ = self.run_check(missing=missing, reported=reported)
             self.assertEqual(status, 0, output)
-            self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, text)
-        status, output, _ = self.run_check()
-        self.assertEqual(status, 0, output)
-        self.assertNotIn('horizon-idle-stop-contract=1', output.splitlines())
+            self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, (reported, missing))
 
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
@@ -121,7 +116,8 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/workspace/capabilities.json', {})
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
-        self.assertEqual([call.args[0] for call in commands], [['git', 'lfs', 'version']])
+        self.assertEqual([call.args[0] for call in commands],
+                         [['git', 'lfs', 'version'], ['horizon-worker-supervise', '--idle-stop-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})

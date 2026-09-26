@@ -83,12 +83,16 @@ def probe(command):
     subprocess.run(command, check=True, timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def idle_stop_supported():
-    # The watcher alone is not enough: the supervisor must start it for an idle period.
-    idle, supervisor = shutil.which('horizon-worker-idle'), shutil.which('horizon-worker-supervise')
-    try:
-        return bool(idle and supervisor) and "'horizon-worker-idle'" in Path(supervisor).read_text()
-    except OSError:
+    # The watcher alone is not enough: the supervisor must declare that it starts it.
+    # Older supervisors reject the unknown option, which reports no support.
+    if not shutil.which('horizon-worker-idle'):
         return False
+    try:
+        reply = subprocess.run(['horizon-worker-supervise', '--idle-stop-contract'],
+                               capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return reply.returncode == 0 and reply.stdout == b'horizon-idle-stop-contract=1\n'
 
 
 def services_ready(selected):

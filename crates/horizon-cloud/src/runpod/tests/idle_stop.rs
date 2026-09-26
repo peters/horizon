@@ -25,3 +25,19 @@ fn initialized_workers_never_receive_an_idle_period() {
             .is_none()
     );
 }
+
+#[test]
+fn a_worker_must_report_exactly_its_recorded_idle_period() {
+    let verify = |spec: &WorkerSpec, env: Value| {
+        let mut value = worker(spec);
+        value["env"] = env;
+        serde_json::from_value::<Worker>(value).unwrap().verify(spec)
+    };
+    let mut spec = spec();
+    assert!(verify(&spec, json!({})).is_ok());
+    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "30"})).is_err());
+    spec.profile.idle_stop_minutes = Some(30);
+    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "30"})).is_ok());
+    assert!(verify(&spec, json!({})).is_err());
+    assert!(verify(&spec, json!({crate::IDLE_STOP_ENVIRONMENT_KEY: "45"})).is_err());
+}
