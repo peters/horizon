@@ -274,6 +274,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
             center("EUR-IS-1", "EUROPE"),
             center("US-MO-2", "NORTH_AMERICA"),
         ],
+        regions: std::collections::BTreeMap::new(),
         storage: RUNPOD_STORAGE,
     };
     let production = &mut app.cloud_prototype.production;

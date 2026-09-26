@@ -198,8 +198,10 @@ The choice is saved with the cloud: every attempt, retry and redeploy asks the
 provider only for the chosen data centers. A cloud's workspace stays in the data
 center it first starts in, and a stopped cloud resumes there, so the dialog says
 so under the Region row. Once a worker exists, the cloud card names its data
-center and region, also for a cloud placed in any region; Horizon looks the region
-up in RunPod's data center list, fetching it once when no New cloud dialog has.
+center and region, also for a cloud placed in any region. Horizon looks the region
+up in RunPod's data center list, which covers every data center even after the
+`data_centers` setting changes, and fetches that list once if New cloud has not
+loaded it yet.
 
 Until a worker is requested, including after a failed attempt or a definite
 provider rejection, the cloud card offers vCPU and memory drop-downs for CPU

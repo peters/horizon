@@ -17,8 +17,9 @@ impl HorizonApp {
         let mut fullscreen = None;
         let mut layout = None;
         let mut resize = None;
-        let regions = self.landed_regions(ctx);
-        let region_of = |center: &str| regions.get(center).cloned();
+        self.request_landed_regions(ctx);
+        let prices = &self.cloud_prototype.production.prices;
+        let region_of = |center: &str| prices.region_of(center).map(str::to_owned);
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
             if self

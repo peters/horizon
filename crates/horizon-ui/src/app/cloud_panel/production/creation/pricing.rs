@@ -511,6 +511,7 @@ mod tests {
                 center("EU-RO-1", &[("ada", Availability::None), ("l4", Availability::High)]),
                 center("EU-SE-1", &[("ada", Availability::Low)]),
             ],
+            regions: std::collections::BTreeMap::new(),
             storage: horizon_core::cloud_runtime::prices::RUNPOD_STORAGE,
         };
         let preferences = Preferences {

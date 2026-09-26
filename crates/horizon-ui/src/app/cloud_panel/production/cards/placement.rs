@@ -3,31 +3,21 @@
 use super::super::HorizonApp;
 use horizon_core::cloud_panel::CloudLaunch;
 use horizon_core::cloud_runtime::state::Deployment;
-use std::collections::HashMap;
 
 impl HorizonApp {
-    /// Regions of the data centers clouds landed in, by data center. Fetches the
-    /// provider's list once when a card needs a region it does not have yet.
-    pub(super) fn landed_regions(&mut self, ctx: &egui::Context) -> HashMap<String, String> {
+    /// Fetches the provider's data center list once when a card shows a data center
+    /// whose region is not known yet.
+    pub(super) fn request_landed_regions(&mut self, ctx: &egui::Context) {
         let production = &mut self.cloud_prototype.production;
         production.prices.poll();
-        let mut regions = HashMap::new();
-        let mut missing = false;
-        for runtime in production.runtimes.values() {
-            let Some(center) = landed(runtime.state.as_ref()) else {
-                continue;
-            };
-            match production.prices.region_of(center) {
-                Some(region) => {
-                    regions.insert(center.to_owned(), region);
-                }
-                None => missing = true,
-            }
-        }
+        let missing = production
+            .runtimes
+            .values()
+            .filter_map(|runtime| landed(runtime.state.as_ref()))
+            .any(|center| production.prices.region_of(center).is_none());
         if missing && let Some(root) = self.cloud_prototype.root.as_deref() {
             production.prices.request_regions(root, ctx);
         }
-        regions
     }
 }
 

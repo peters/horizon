@@ -22,7 +22,7 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
     let centers = json!({"dataCenters": [
         {"id": "EU-RO-1", "region": "EUROPE", "networkVolumeTypes": ["STANDARD"], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "LOW"}]},
         {"id": "EU-SE-1", "region": "EUROPE", "networkVolumeTypes": [], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "HIGH"}]},
-        {"id": "US-TX-3", "gpuAvailability": [{"id": "NVIDIA RTX A6000", "availability": "HIGH"}]}
+        {"id": "US-TX-3", "region": "NORTH_AMERICA", "gpuAvailability": [{"id": "NVIDIA RTX A6000", "availability": "HIGH"}]}
     ]});
     let (provider, requests, task) = catalog_server(vec![
         (200, cpus.to_string()),
@@ -55,6 +55,10 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
         .map(|center| (center.id.as_str(), center.region.as_str(), center.workspace_storage))
         .collect();
     assert_eq!(centers, [("EU-RO-1", "EUROPE", true), ("EU-SE-1", "EUROPE", false)]);
+    // Regions also name data centers outside the allowed set, where a worker may have
+    // landed before the setting changed.
+    assert_eq!(list.regions.get("US-TX-3").map(String::as_str), Some("NORTH_AMERICA"));
+    assert_eq!(list.regions.len(), 3);
     let requests = requests.lock().unwrap();
     assert!(requests[0].starts_with("GET /cpus "));
     assert!(requests[2].starts_with("GET /datacenters?include=GPU_AVAILABILITY "));

@@ -33,6 +33,9 @@ pub(super) struct State {
     list_job: Option<Job<(PriceList, Preferences)>>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
+    /// Every data center's region as people say it, kept from the latest list so cards
+    /// can name where a worker landed without work on every frame.
+    regions: HashMap<String, String>,
 }
 
 impl State {
@@ -78,13 +81,20 @@ impl State {
         }
     }
 
-    /// The region of `data_center` as people say it, once the price list is known.
-    pub fn region_of(&self, data_center: &str) -> Option<String> {
-        let (list, _) = &self.list.as_ref()?.value;
-        list.data_centers
+    /// The region of `data_center` as people say it, once a price list has been fetched.
+    pub fn region_of(&self, data_center: &str) -> Option<&str> {
+        self.regions.get(data_center).map(String::as_str)
+    }
+
+    fn accept(&mut self, fetched: Fetched<(PriceList, Preferences)>) {
+        self.regions = fetched
+            .value
+            .0
+            .regions
             .iter()
-            .find(|center| center.id == data_center && !center.region.is_empty())
-            .map(|center| region_name(&center.region))
+            .map(|(center, region)| (center.clone(), region_name(region)))
+            .collect();
+        self.list = Some(fetched);
     }
 
     fn fetch_list(&mut self, root: &Path, ctx: &egui::Context) {
@@ -117,7 +127,7 @@ impl State {
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
-                    self.list = Some(fetched);
+                    self.accept(fetched);
                     self.list_error = None;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
@@ -240,7 +250,7 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 #[cfg(all(test, unix))]
 impl State {
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
-        self.list = Some(Fetched {
+        self.accept(Fetched {
             value: (list, preferences),
             at: Instant::now(),
         });
@@ -267,6 +277,7 @@ mod tests {
             cpu: Vec::new(),
             gpus: Vec::new(),
             data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
             storage: prices::RUNPOD_STORAGE,
         }
     }
@@ -304,15 +315,21 @@ mod tests {
         let mut state = State::default();
         assert_eq!(state.region_of("EU-RO-1"), None);
         let mut listed = list();
-        listed.data_centers = vec![horizon_core::cloud_runtime::prices::DataCenter {
-            id: "EU-RO-1".into(),
-            region: "EUROPE".into(),
-            workspace_storage: true,
-            gpus: Vec::new(),
-        }];
-        state.list = Some(now((listed, Preferences::default())));
-        assert_eq!(state.region_of("EU-RO-1").as_deref(), Some("Europe"));
-        assert_eq!(state.region_of("US-MO-2"), None);
+        // Regions cover data centers the machine no longer allows, which a worker may
+        // have landed in before the setting changed.
+        listed.regions = [("EU-RO-1", "EUROPE"), ("US-MO-2", "NORTH_AMERICA")]
+            .into_iter()
+            .map(|(center, region)| (center.to_owned(), region.to_owned()))
+            .collect();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((listed, Preferences::default())))).unwrap();
+        state.poll();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"));
+        assert_eq!(state.region_of("US-MO-2"), Some("North America"));
+        assert_eq!(state.region_of("AP-JP-1"), None);
+        state.refresh();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
     }
 
     #[test]
