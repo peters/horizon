@@ -36,15 +36,7 @@ pub(super) fn run(upload: bool) -> io::Result<()> {
         deadline,
     };
     let request = if upload {
-        let mut length = [0; 4];
-        input.read_exact(&mut length)?;
-        let length = u32::from_be_bytes(length) as usize;
-        if length > 64 * 1024 {
-            return Err(invalid());
-        }
-        let mut bytes = vec![0; length];
-        input.read_exact(&mut bytes)?;
-        decode(&bytes)?
+        upload_request(&mut input)?
     } else {
         super::recovery::read_request(&mut input)?
     };
@@ -61,6 +53,34 @@ pub(super) fn run(upload: bool) -> io::Result<()> {
     remaining(deadline)?;
     serde_json::to_writer(io::stdout().lock(), &receipt)?;
     io::stdout().lock().write_all(b"\n")
+}
+
+pub(in crate::bootstrap) fn upload_request(input: &mut impl Read) -> io::Result<RecoveryRequest> {
+    let mut length = [0; 4];
+    input.read_exact(&mut length)?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length > Source::MAX_REQUEST_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = vec![0; length];
+    input.read_exact(&mut bytes)?;
+    let request: RecoveryRequest = decode(&bytes)?;
+    descriptor(&request, length)?;
+    Ok(request)
+}
+
+fn descriptor(request: &RecoveryRequest, length: usize) -> io::Result<Source> {
+    if length > Source::MAX_REQUEST_BYTES {
+        return Err(invalid());
+    }
+    let Request::ImportSource { descriptor } = serde_json::from_str(&request.payload).map_err(|_| invalid())? else {
+        return Err(invalid());
+    };
+    descriptor.validate().map_err(|_| invalid())?;
+    if descriptor.pack.length + descriptor.material.length + 4 + length as u64 > Source::MAX_BYTES {
+        return Err(invalid());
+    }
+    Ok(descriptor)
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -98,13 +118,11 @@ pub(super) fn prepare(
     probe: impl FnOnce(&horizon_cloud::Capabilities) -> io::Result<()>,
 ) -> io::Result<Receipt> {
     remaining(deadline)?;
+    let descriptor = descriptor(request, serde_json::to_vec(request)?.len())?;
     let receipt = membership::mutate(store, runtime, request, Action::ImportProjectSource, probe, &mut |_| {
         Ok(())
     })?;
     let manifest = context(store, runtime)?;
-    let Request::ImportSource { descriptor } = decode(request.payload.as_bytes())? else {
-        return Err(invalid());
-    };
     let parent = namespaces::repository(store, &manifest, &receipt.identity)?;
     if let Some(tree) = Tree::open(store, &parent, &receipt, &descriptor, false, deadline)? {
         tree.validate(false)?;

@@ -109,6 +109,57 @@ fn prepared(f: &Fixture, name: &str, port: u16) -> ProjectIdentity {
 }
 
 #[test]
+fn source_wire_limit_includes_the_length_prefix_and_exact_request_bytes() {
+    fn frame(descriptor: &Source) -> Vec<u8> {
+        let request = RecoveryRequest {
+            message: "Authentication follows bounded envelope decoding".into(),
+            payload: serde_json::to_string(&Request::ImportSource {
+                descriptor: descriptor.clone(),
+            })
+            .unwrap(),
+        };
+        let encoded = serde_json::to_vec(&request).unwrap();
+        let mut frame = u32::try_from(encoded.len()).unwrap().to_be_bytes().to_vec();
+        frame.extend(encoded);
+        frame
+    }
+    let (mut descriptor, _) = bytes();
+    descriptor.pack.length = Source::MAX_BYTES - descriptor.material.length;
+    let overhead = frame(&descriptor).len() as u64;
+    descriptor.pack.length -= overhead;
+    let exact = frame(&descriptor);
+    assert_eq!(exact.len() as u64, overhead);
+    assert_eq!(
+        descriptor.pack.length + descriptor.material.length + overhead,
+        Source::MAX_BYTES
+    );
+    source::upload_request(&mut &exact[..]).unwrap();
+    descriptor.pack.length += 1;
+    assert!(source::upload_request(&mut &frame(&descriptor)[..]).is_err());
+    let oversized = u32::try_from(Source::MAX_REQUEST_BYTES + 1).unwrap().to_be_bytes();
+    assert!(source::upload_request(&mut &oversized[..]).is_err());
+}
+
+#[test]
+fn source_preparation_rejects_unframeable_payload_before_membership_or_probing() {
+    let (mut descriptor, _) = bytes();
+    descriptor.pack.length = Source::MAX_BYTES - descriptor.material.length;
+    let f = Fixture::ready();
+    let project = prepared(&f, "wire-limit", 8000);
+    let request = request(&f, &project, descriptor);
+    let before = f.manifest();
+    let store = Store::open(&f.root()).unwrap();
+    let deadline = std::time::Instant::now() + Source::WORKER_TIMEOUT;
+    assert!(
+        source::prepare(&store, &f.runtime, &request, deadline, |_| panic!(
+            "unframeable source must not probe"
+        ))
+        .is_err()
+    );
+    assert_eq!(f.manifest(), before);
+}
+
+#[test]
 fn one_source_deadline_covers_preparation_transfer_and_publication() {
     let (descriptor, bytes) = bytes();
     let f = Fixture::ready();

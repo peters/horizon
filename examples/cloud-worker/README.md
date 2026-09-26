@@ -592,7 +592,7 @@ not completed import or permission to start sessions.
 `import-project-source` repeats preparation under the allocation lock, then reads
 a four-byte big-endian JSON request length, that exact request, the declared Git
 pack and the auxiliary tar. The descriptor binds both lengths and SHA-256 hashes;
-the aggregate wire limit is 4 GiB. Each worker request shares a 600-second deadline
+the aggregate wire limit is 4 GiB including the length prefix and exact request bytes. Each worker request shares a 600-second deadline
 across input, capability probes and validation helpers; each helper also retains
 its 120-second limit. The host permits a caller-selected timeout up to 1,260 seconds
 for source preparation plus import, including source resumes. Shorter caller
