@@ -102,6 +102,30 @@ impl Runner<'_> {
         })
     }
     /// # Errors
+    /// Streams an already verified private frame without logging source or replies.
+    pub(crate) fn private_file_exchange(
+        &self,
+        command: &mut Command,
+        mut input: std::fs::File,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        if input.metadata()?.len() > horizon_cloud_protocol::membership::Source::MAX_BYTES + 65540 {
+            return Err(Error::PrivateTransport);
+        }
+        input.rewind()?;
+        command.stdin(input).stdout(Stdio::piped()).stderr(Stdio::null());
+        Runner {
+            cancel: self.cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        }
+        .spawn_bytes("Private source transfer", command, timeout, 64 * 1024)
+        .map_err(|error| match error {
+            Error::Command(_) => Error::PrivateTransport,
+            other => other,
+        })
+    }
+    /// # Errors
     /// Runs a bounded object pack without collecting binary output into memory.
     pub fn to_file(
         &self,

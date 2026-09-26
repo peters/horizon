@@ -33,6 +33,8 @@ fn main() -> std::process::ExitCode {
         Some("prepare-project-namespace") => {
             bootstrap::membership(horizon_cloud_protocol::signed::Action::ReconcileProject)
         }
+        Some("prepare-project-source") => bootstrap::source(false),
+        Some("import-project-source") => bootstrap::source(true),
         Some("reserve-project") => bootstrap::membership(horizon_cloud_protocol::signed::Action::AttachProject),
         Some("cancel-project-reservation") => {
             bootstrap::membership(horizon_cloud_protocol::signed::Action::RemoveProject)
@@ -43,7 +45,7 @@ fn main() -> std::process::ExitCode {
         Some("abandon-bootstrap") => bootstrap::initialize(true),
         Some("prepare-allocation-ssh") => bootstrap::prepare(),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|prepare-project-namespace|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
+            "Usage: horizon-cloud-worker serve|connect|configure-agent-tools|recover-allocation|inspect-allocation|reserve-project|prepare-project-namespace|prepare-project-source|import-project-source|cancel-project-reservation|companion-control|companions|initialize-allocation|abandon-bootstrap|prepare-allocation-ssh",
         )),
     };
     match result {

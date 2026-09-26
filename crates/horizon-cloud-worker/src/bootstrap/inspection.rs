@@ -116,6 +116,12 @@ impl Drop for ProbeProcess {
 }
 
 fn execute(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
+    execute_input(command, timeout, Stdio::null())
+}
+pub(super) fn execute_leased(command: &mut Command, timeout: Duration, lease: File) -> io::Result<Vec<u8>> {
+    execute_input(command, timeout, Stdio::from(lease))
+}
+fn execute_input(command: &mut Command, timeout: Duration, input: Stdio) -> io::Result<Vec<u8>> {
     let mut output = File::from(rustix::fs::memfd_create(
         "allocation-inspection",
         rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
@@ -127,7 +133,7 @@ fn execute(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
     let mut child = ProbeProcess(
         command
             .process_group(0)
-            .stdin(Stdio::null())
+            .stdin(input)
             .stdout(output.try_clone()?)
             .stderr(Stdio::null())
             .spawn()?,

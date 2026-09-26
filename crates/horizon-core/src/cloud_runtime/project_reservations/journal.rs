@@ -13,17 +13,19 @@ const LIMIT: usize = 4 * horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Journal {
+pub(in crate::cloud_runtime) struct Journal {
     version: u32,
     pub binding: Binding,
     pub image_digest: String,
     pub manifest: Manifest,
     pub pending: Option<Pending>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<super::source::Artifacts>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Pending {
+pub(in crate::cloud_runtime) struct Pending {
     pub request: String,
     pub next: Manifest,
     pub receipt: Receipt,
@@ -37,6 +39,7 @@ impl Journal {
             binding,
             image_digest,
             pending: None,
+            sources: Vec::new(),
         }
     }
     pub fn load(owner: &Owner) -> Result<Option<Self>> {
@@ -72,6 +75,14 @@ impl Journal {
             return Err(Error::Invalid);
         }
         self.manifest.validate().map_err(|_| Error::Invalid)?;
+        let mut projects = std::collections::BTreeSet::new();
+        for source in &self.sources {
+            source.validate(owner)?;
+            if !projects.insert(source.project.project_id()) {
+                return Err(Error::Invalid);
+            }
+        }
+
         if let Some(pending) = &self.pending {
             if pending.request.len() > horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES {
                 return Err(Error::Invalid);
@@ -116,6 +127,12 @@ impl Journal {
                 },
             ),
             Change::PrepareNamespace(identity) => (identity, Request::PrepareNamespace {}),
+            Change::ImportSource(identity, descriptor) => (
+                identity,
+                Request::ImportSource {
+                    descriptor: descriptor.clone(),
+                },
+            ),
             Change::Cancel(identity) => (identity, Request::Cancel {}),
             Change::Resume => return Err(Error::Missing),
         };
@@ -166,6 +183,13 @@ impl Pending {
             Change::PrepareNamespace(identity) => {
                 self.receipt.identity == *identity && payload == (Request::PrepareNamespace {})
             }
+            Change::ImportSource(identity, descriptor) => {
+                self.receipt.identity == *identity
+                    && payload
+                        == (Request::ImportSource {
+                            descriptor: descriptor.clone(),
+                        })
+            }
             Change::Cancel(identity) => self.receipt.identity == *identity && payload == (Request::Cancel {}),
             Change::Resume => true,
         })
@@ -176,6 +200,7 @@ impl Pending {
             match serde_json::from_str::<Request>(&request.payload).map_err(|_| Error::Invalid)? {
                 Request::Reserve { .. } => "horizon-cloud-worker reserve-project",
                 Request::PrepareNamespace {} => "horizon-cloud-worker prepare-project-namespace",
+                Request::ImportSource { .. } => "horizon-cloud-worker prepare-project-source",
                 Request::Cancel {} => "horizon-cloud-worker cancel-project-reservation",
             },
         )

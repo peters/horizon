@@ -547,4 +547,63 @@ project trees, host/worker restarts after a lost preparation reply and a failed
 host completion save, exact retries and retained sibling files over real local
 SSH. Provider identity is synthetic; this does not qualify a deployed image,
 live provider execution or physical power loss. Public UI/CLI/MCP attachment,
-source/session provisioning and worker-wide lifecycle remain pending.
+session provisioning and worker-wide lifecycle remain pending.
+
+### First committed project source
+
+The initial source-export host lane requires Linux descriptor paths; other host
+platforms fail closed until their anchored subprocess export is qualified.
+`project_reservations::import_source` exports one selected committed SHA-1 Git
+revision, its reachable history, local verified LFS objects and recursively pinned
+submodules. It retains private immutable transfer files beside the anchored host
+journal before signing `ImportProjectSource`. Retries of the same local repository
+and revision selector reuse those bytes even if the selector now resolves to a
+new commit; `resume` needs no original repository. There is no refresh operation.
+Unreferenced artifacts after a failed initial save remain local and are not adopted.
+
+`prepare-project-source` verifies the signed project request, live membership,
+settled namespace and current capabilities on every attempt, including historical
+retries. The host also repeats the existing read-only provider qualification and
+immutable image check. The worker's runtime/controller binding and the pinned SSH
+connection identify the actual target; the worker does not independently attest
+its provider image digest. Membership becomes `importing`, which records intent,
+not completed import or permission to start sessions.
+
+`import-project-source` repeats preparation under the allocation lock, then reads
+a four-byte big-endian JSON request length, that exact request, the declared Git
+pack and the auxiliary tar. The descriptor binds both lengths and SHA-256 hashes;
+the aggregate source limit is 4 GiB. Input and helper execution have deadlines and
+private bounded responses. The helper and each Git child retain the allocation
+lock, fencing new mutations until the final writer exits even if its parent dies.
+Invalid archives, links, traversal, duplicate members,
+missing commits and mismatched committed submodule/LFS identities are rejected.
+Import does not check out files, fetch remotes, transfer Git config or run hooks.
+
+The completed store publishes exclusively at
+`/workspace/projects/<project-UUID>/repository/source`. It contains a bare
+`repository.git`, bare `module-N.git` repositories, verified `material/lfs` assets
+and the retained transfer files. Source ownership, parent/staging inode identities,
+descriptor and a complete file inventory digest are anchored in the allocation
+journal outside the store. Published content is validated without mutation.
+
+An exact retry checks any retained stream prefix, completes owned staging, or
+reconciles a durable import/rename whose reply was lost. A conflicting prefix,
+unknown directory, changed published store, or mkdir-to-inode-anchor interruption
+is fenced; recovery never resets or adopts it. Partial fixed metadata and uploaded file prefixes
+can be completed only when they match the expected bytes. Unknown Git locks or
+temporary object files left by an interrupted Git object publication remain
+fenced; they are not deleted or included in a published source store. Attribute
+inspection uses a disposable external index, so its interrupted lock does not
+block a later source retry. The tests inject publication boundaries and selected
+mid-helper states; they do not qualify arbitrary physical power-loss behavior.
+Startup accepts anchored pending
+imports for explicit recovery. Cancellation requires completed source publication
+and retains source and sibling data. Delayed source requests cannot revive a
+cancelled project. Source import adds no worktrees, homes, credentials, sessions,
+routes or public UI/CLI/MCP activation.
+
+The `sources` scenario in `scripts/cloud-initialization-smoke.py` exercises three
+committed repositories with history, LFS and submodules through real local SSH,
+including host/worker restarts after lost replies and failed completion saves.
+It uses synthetic provider ownership; live-provider and physical power-loss
+qualification remain separate gates under #805.

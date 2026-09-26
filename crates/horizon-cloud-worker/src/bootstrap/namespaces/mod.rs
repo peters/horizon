@@ -75,12 +75,18 @@ pub(super) fn ensure(
 ) -> io::Result<()> {
     if receipt.state != State::Preparing
         || preparation(manifest, &receipt.identity) != Some(receipt)
-        || !manifest
-            .members
-            .iter()
-            .any(|member| member.identity == receipt.identity && member.state == State::Preparing)
+        || !manifest.members.iter().any(|member| {
+            member.identity == receipt.identity && matches!(member.state, State::Preparing | State::Importing)
+        })
     {
         return Err(invalid());
+    }
+    if manifest
+        .members
+        .iter()
+        .any(|member| member.identity == receipt.identity && member.state == State::Importing)
+    {
+        return require_settled(store, manifest, &receipt.identity);
     }
     let (workspace, allocation) = store.namespace_anchors()?;
     let projects = Directories {
@@ -205,4 +211,34 @@ pub(super) fn require_settled(
     )?;
     verify(store, &workspace, &allocation)?;
     same(&projects, &directory(&workspace, "projects")?)
+}
+
+/// Open only a published project's repository parent. Callers retain this handle
+/// and re-open through this function before acknowledging filesystem effects.
+pub(super) fn repository(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &horizon_cloud_protocol::ProjectIdentity,
+) -> io::Result<File> {
+    require_settled(store, manifest, identity)?;
+    let receipt = preparation(manifest, identity).ok_or_else(invalid)?;
+    let (workspace, allocation) = store.namespace_anchors()?;
+    let projects = directory(&workspace, "projects")?;
+    let project = Directories {
+        store,
+        allocation: &allocation,
+        parent: &projects,
+    }
+    .validate(
+        &project(receipt),
+        &owner(manifest, Some(receipt.clone())),
+        CHILDREN,
+        true,
+    )?
+    .ok_or_else(invalid)?;
+    let repository = directory(&project, "repository")?;
+    require_settled(store, manifest, identity)?;
+    same(&projects, &directory(&workspace, "projects")?)?;
+    same(&project, &directory(&projects, &identity.project_id().to_string())?)?;
+    Ok(repository)
 }

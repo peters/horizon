@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod source;
 use super::*;
 
 #[test]

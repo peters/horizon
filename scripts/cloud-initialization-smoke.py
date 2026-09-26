@@ -17,12 +17,13 @@ import shutil
 import socket
 import subprocess
 import threading
+import tempfile
 
 import paramiko
 
 LIMIT = 64 * 1024
 COMMANDS = {b"horizon-cloud-worker " + name: name.decode() for name in
-            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"cancel-project-reservation", b"prepare-project-namespace"]}
+            [b"initialize-allocation", b"recover-allocation", b"inspect-allocation", b"abandon-bootstrap", b"reserve-project", b"cancel-project-reservation", b"prepare-project-namespace", b"prepare-project-source", b"import-project-source"]}
 COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 
 
@@ -98,7 +99,9 @@ def run(options):
         arguments.extend(["--ro-bind", str(root / "bin"), "/usr/local/bin",
                           "--ro-bind", str(root / "image-capabilities.json"), "/etc/horizon-worker/capabilities.json"])
         arguments.extend(["--ro-bind", str(root / "worker"), "/worker", "/worker", command])
-        return subprocess.run(arguments, input=request, capture_output=True, timeout=15)
+        if hasattr(request, "read"):
+            return subprocess.run(arguments, stdin=request, capture_output=True, timeout=180)
+        return subprocess.run(arguments, input=request, capture_output=True, timeout=180)
 
     def handle(sock):
         transport = paramiko.Transport(sock)
@@ -120,21 +123,27 @@ def run(options):
             if channel is None or not server.executing.wait(10):
                 raise RuntimeError("No allowed SSH command received")
             channel.settimeout(10)
-            request = bytearray()
-            while True:
-                chunk = channel.recv(4096)
-                if not chunk:
-                    break
-                request.extend(chunk)
-                if len(request) > LIMIT:
-                    raise RuntimeError("SSH request exceeded its bound")
-            if server.command == "runtime":
-                result = subprocess.CompletedProcess([], 0, (root / "run/horizon-allocation/runtime.json").read_bytes(), b"")
-            else:
-                result = worker(server.command, bytes(request))
+            with tempfile.TemporaryFile() as request:
+                request_hash = hashlib.sha256()
+                length = 0
+                limit = 4 * 1024**3 + 65540 if server.command == "import-project-source" else LIMIT
+                while True:
+                    chunk = channel.recv(65536)
+                    if not chunk:
+                        break
+                    length += len(chunk)
+                    if length > limit:
+                        raise RuntimeError("SSH request exceeded its bound")
+                    request.write(chunk)
+                    request_hash.update(chunk)
+                request.seek(0)
+                if server.command == "runtime":
+                    result = subprocess.CompletedProcess([], 0, (root / "run/horizon-allocation/runtime.json").read_bytes(), b"")
+                else:
+                    result = worker(server.command, request)
             if len(result.stdout) > LIMIT or len(result.stderr) > LIMIT:
                 raise RuntimeError("Worker output exceeded its bound")
-            sessions.append({"command": server.command, "request_sha256": hashlib.sha256(request).hexdigest(), "worker_sha256": worker_hash, "exit_code": result.returncode})
+            sessions.append({"command": server.command, "request_sha256": request_hash.hexdigest(), "worker_sha256": worker_hash, "exit_code": result.returncode})
             channel.sendall(result.stdout)
             channel.send_exit_status(result.returncode)
             channel.shutdown_write()
@@ -171,6 +180,7 @@ def run(options):
         test_name = {"initialization": "native_ssh_worker_initialization",
                      "reservations": "native_ssh_project_reservations",
                      "host-reservations": "native_ssh_host_reservation_recovery",
+                     "sources": "native_ssh_project_sources",
                      "namespaces": "native_ssh_project_namespaces"}[options.scenario]
         with open(root / "test.log", "w") as output:
             test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=300).returncode
@@ -190,11 +200,11 @@ def run(options):
     assert test_exit == 0 and not errors and report["threads_stopped"], "Inspect private test.log and ssh-report.json"
     expected = {"initialization": [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
                 "reservations": [0] * 7 + [1] * 4 + [0, 0, 1, 0, 1, 1, 1],
-                "host-reservations": [0] * 11, "namespaces": [0] * 13}[options.scenario]
+                "host-reservations": [0] * 11, "namespaces": [0] * 13, "sources": [0] * 20}[options.scenario]
     assert [session["exit_code"] for session in sessions] == expected
     assert report["same_host_key"]
     assert len({session["request_sha256"] for session in sessions if session["command"] == "recover-allocation"}) == 1
-    if options.scenario in ["host-reservations", "namespaces"]:
+    if options.scenario in ["host-reservations", "namespaces", "sources"]:
         assert not any(session["command"] == "abandon-bootstrap" for session in sessions)
         assert len({session["request_sha256"] for session in sessions if session["command"] == "cancel-project-reservation"}) == 1
     else:
@@ -205,7 +215,7 @@ def run(options):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces"], default="initialization")
+    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources"], default="initialization")
     parser.add_argument("--worker", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--sshd", help="Actual OpenSSH server binary; may be extracted into a task-local directory")

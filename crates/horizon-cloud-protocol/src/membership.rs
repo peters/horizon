@@ -23,6 +23,7 @@ pub struct Error;
 pub enum State {
     Attaching,
     Preparing,
+    Importing,
     Removed,
 }
 
@@ -34,6 +35,9 @@ pub enum Request {
         ports: BTreeSet<u16>,
     },
     PrepareNamespace {},
+    ImportSource {
+        descriptor: Source,
+    },
     Cancel {},
 }
 
@@ -43,8 +47,46 @@ impl Request {
         match self {
             Self::Reserve { .. } => Action::AttachProject,
             Self::PrepareNamespace {} => Action::ReconcileProject,
+            Self::ImportSource { .. } => Action::ImportProjectSource,
             Self::Cancel {} => Action::RemoveProject,
         }
+    }
+}
+
+/// Immutable byte identity of the committed-only transfer. SHA-1 repositories are
+/// the currently supported export format; SHA-256 identifies the transport bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub version: u32,
+    pub revision: String,
+    pub pack: Artifact,
+    pub material: Artifact,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Artifact {
+    pub length: u64,
+    pub sha256: [u8; 32],
+}
+impl Source {
+    pub const MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    /// # Errors
+    /// Rejects unsupported revisions, formats and transfer sizes.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.version != 1
+            || self.revision.len() != 40
+            || !self
+                .revision
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || self.pack.length < 32
+            || self.material.length < 1024
+            || self.pack.length.saturating_add(self.material.length) > Self::MAX_BYTES
+        {
+            return Err(Error);
+        }
+        Ok(())
     }
 }
 
@@ -198,6 +240,19 @@ impl Manifest {
                 }
                 member.state = State::Preparing;
                 State::Preparing
+            }
+            Request::ImportSource { descriptor } => {
+                descriptor.validate()?;
+                let member = self
+                    .members
+                    .iter_mut()
+                    .find(|member| &member.identity == identity)
+                    .ok_or(Error)?;
+                if member.state != State::Preparing {
+                    return Err(Error);
+                }
+                member.state = State::Importing;
+                State::Importing
             }
             Request::Cancel {} => {
                 let member = self

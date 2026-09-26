@@ -26,6 +26,7 @@ pub(super) struct Store {
     root: PathBuf,
     directory: File,
     lock: File,
+    leased: std::cell::Cell<bool>,
     #[cfg(test)]
     fail_sync_after: std::cell::Cell<Option<usize>>,
 }
@@ -33,11 +34,22 @@ pub(super) struct Store {
 impl Drop for Store {
     fn drop(&mut self) {
         // A concurrent fork can retain the file description until exec closes it.
-        let _ = self.lock.unlock();
+        if !self.leased.get() {
+            let _ = self.lock.unlock();
+        }
     }
 }
 
 impl Store {
+    /// The same open-file description fences surviving source helpers after an
+    /// abrupt worker exit. Once leased, closing the last holder releases the lock.
+    pub(super) fn lease(&self) -> io::Result<File> {
+        self.verify()?;
+        let lease = self.lock.try_clone()?;
+        self.leased.set(true);
+        Ok(lease)
+    }
+
     pub(super) fn require_pristine(workspace: &Path) -> io::Result<()> {
         pristine(&anchor_directory(workspace)?, None)
     }
@@ -74,6 +86,7 @@ impl Store {
             root: root.to_owned(),
             directory,
             lock,
+            leased: std::cell::Cell::new(false),
             #[cfg(test)]
             fail_sync_after: std::cell::Cell::new(None),
         };
@@ -127,6 +140,7 @@ impl Store {
             root: root.to_owned(),
             directory,
             lock,
+            leased: std::cell::Cell::new(false),
             #[cfg(test)]
             fail_sync_after: std::cell::Cell::new(None),
         };

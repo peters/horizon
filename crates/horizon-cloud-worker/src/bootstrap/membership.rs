@@ -4,6 +4,7 @@ use super::{
     inspection, namespaces,
     recovery::{BOOTSTRAP, Bootstrap, MANIFEST, Phase, ROOT, decode, read_request},
     runtime::Runtime,
+    source,
     store::{Publication, Store, invalid},
 };
 use horizon_cloud::Capabilities;
@@ -34,10 +35,11 @@ pub(super) fn startup(store: &Store, bootstrap: &Bootstrap) -> io::Result<()> {
         return bootstrap.empty(store);
     }
     let (_, manifest) = load(store, bootstrap)?;
-    namespaces::validate(store, &manifest)
+    namespaces::validate(store, &manifest)?;
+    source::validate(store, &manifest, false)
 }
 
-fn load(store: &Store, bootstrap: &Bootstrap) -> io::Result<(Vec<u8>, Manifest)> {
+pub(super) fn load(store: &Store, bootstrap: &Bootstrap) -> io::Result<(Vec<u8>, Manifest)> {
     if bootstrap.version != 2 || bootstrap.phase != Phase::Initialized || bootstrap.recovery.is_none() {
         return Err(invalid());
     }
@@ -110,6 +112,7 @@ pub(super) fn mutate_with(
     let verify = || -> io::Result<()> {
         if matches!(payload, Request::Cancel {}) {
             namespaces::require_settled(store, &manifest, &receipt.identity)?;
+            source::require_settled(store, &manifest, &receipt.identity)?;
         }
         bootstrap.validate(store, runtime)?;
         if store.read(BOOTSTRAP)?.as_deref() != Some(&encoded) {
@@ -118,12 +121,23 @@ pub(super) fn mutate_with(
         Ok(())
     };
     verify()?;
+    if matches!(payload, Request::ImportSource { .. }) {
+        namespaces::repository(store, &manifest, &receipt.identity)?;
+        let member = manifest
+            .members
+            .iter()
+            .find(|m| m.identity == receipt.identity)
+            .ok_or_else(invalid)?;
+        probe(&member.capabilities)?;
+        verify()?;
+    } else if let Request::Reserve { capabilities, .. } = &payload
+        && next.revision != manifest.revision
+    {
+        probe(capabilities)?;
+    }
     let next_bytes = if next.revision == manifest.revision {
         original.clone()
     } else {
-        if let Request::Reserve { capabilities, .. } = &payload {
-            probe(capabilities)?;
-        }
         verify()?;
         let bytes = serde_json::to_vec(&next)?;
         store.write_with(MANIFEST, Some(&original), &bytes, &mut |boundary| {
