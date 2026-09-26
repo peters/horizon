@@ -4,16 +4,27 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 
 CREDENTIAL = Path('/run/horizon-credentials/github.json')
 GIT_DIR = Path('/workspace/repository.git')
+SIBLINGS = Path('/workspace/siblings')
+HOME = '/workspace/home'
+FIELDS = {'repository', 'token', 'author_name', 'author_email'}
+MAX_GRANTS = 16
+MAX_BYTES = 65536
+ALIAS = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+GITHUB_URL = re.compile(r'https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?')
+GITHUB_ARGUMENT = re.compile(r'(?:https?://)?(?:www\.)?github\.com/([^/?#\s]+/[^/?#\s]+?)(?:\.git)?(?:[/?#]|$)',
+                             re.IGNORECASE)
+SHORT_REPOSITORY = re.compile(r'-[A-Za-z]*?R(.*)', re.DOTALL)
 
 
 def validate(value):
-    if set(value) != {'repository', 'token', 'author_name', 'author_email'}:
+    if not isinstance(value, dict) or set(value) != FIELDS:
         raise ValueError('Invalid Git binding')
     if not all(isinstance(item, str) for item in value.values()):
         raise ValueError('Invalid Git binding')
@@ -31,29 +42,131 @@ def validate(value):
     return value
 
 
-def read_binding():
-    if not CREDENTIAL.exists():
+def target_directory(target):
+    """The bare repository a grant configures; SSH-safe aliases cannot escape the siblings root."""
+    if target == 'primary':
+        return GIT_DIR
+    alias = target[len('sibling:'):] if isinstance(target, str) and target.startswith('sibling:') else ''
+    if not ALIAS.fullmatch(alias):
+        raise ValueError('Invalid Git grant target')
+    return SIBLINGS / alias / 'repository.git'
+
+
+def grants(value):
+    """Normalize version 1 (one primary binding) and version 2 (per-repository grants)."""
+    if not isinstance(value, dict):
+        raise ValueError('Invalid Git binding')
+    if 'version' not in value:
+        return 1, [dict(validate(value), target='primary')]
+    if set(value) != {'version', 'grants'} or type(value['version']) is not int or value['version'] != 2:
+        raise ValueError('Unsupported Git binding version')
+    entries = value['grants']
+    if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_GRANTS:
+        raise ValueError('Invalid Git grant list')
+    repositories, targets = set(), set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != FIELDS | {'target'}:
+            raise ValueError('Invalid Git grant')
+        validate({key: entry[key] for key in FIELDS})
+        target_directory(entry['target'])
+        repository = entry['repository'].casefold()
+        if repository in repositories or entry['target'] in targets:
+            raise ValueError('Duplicate Git grant')
+        repositories.add(repository)
+        targets.add(entry['target'])
+    return 2, entries
+
+
+def unique_keys(pairs):
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError('Duplicate Git binding field')
+    return dict(pairs)
+
+
+def parse(source):
+    return json.loads(source, object_pairs_hook=unique_keys)
+
+
+def read_grants():
+    """Return (version, grants) from the private file, or None when no binding exists."""
+    try:
+        fd = os.open(CREDENTIAL, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
         return None
-    stat = CREDENTIAL.stat()
-    if stat.st_mode & 0o077 or stat.st_size > 4096 or not CREDENTIAL.is_file():
+    with os.fdopen(fd, 'rb') as source:
+        status = os.fstat(source.fileno())
+        if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077 or status.st_size > MAX_BYTES:
+            raise ValueError('Git credential file must be private')
+        data = source.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
         raise ValueError('Git credential file must be private')
-    return validate(json.loads(CREDENTIAL.read_text()))
+    return grants(parse(data.decode()))
+
+
+def same_repository(requested, repository):
+    """ASCII-only comparison: Unicode case folding would let another path match."""
+    return requested.isascii() and requested.lower() == repository.lower()
+
+
+def present(directory, target):
+    """A real directory; a sibling's alias directory must not redirect it either."""
+    links = [directory] if target == 'primary' else [directory, directory.parent]
+    return directory.is_dir() and not any(path.is_symlink() for path in links)
+
+
+def git(env, *args):
+    subprocess.run(['git', *args], env=env, check=True, stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def git_output(env, *args):
+    result = subprocess.run(['git', *args], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True)
+    return result.stdout.rstrip('\n') if result.returncode == 0 else None
+
+
+def previous_grants():
+    try:
+        return read_grants()
+    except ValueError:
+        return None
+
+
+def forget_legacy_identity(env, previous):
+    """Version 1 wrote a global identity; drop it only while it is still the one Horizon wrote."""
+    if not previous or previous[0] != 1:
+        return
+    for key, field in (('user.name', 'author_name'), ('user.email', 'author_email')):
+        if git_output(env, 'config', '--global', '--get', key) == previous[1][0][field]:
+            git(env, 'config', '--global', '--unset-all', key)
 
 
 def install(value):
-    value = validate(value)
-    env = dict(os.environ, HOME='/workspace/home')
-    commands = [
-        ['git', 'config', '--global', 'user.name', value['author_name']],
-        ['git', 'config', '--global', 'user.email', value['author_email']],
-        ['git', 'config', '--global', 'credential.https://github.com.useHttpPath', 'true'],
-        ['git', 'config', '--global', '--replace-all', 'credential.https://github.com.helper',
-         '/usr/local/bin/horizon-worker-git-auth'],
-        ['git', '--git-dir=' + str(GIT_DIR), 'config', 'remote.origin.url',
-         'https://github.com/' + value['repository'] + '.git'],
-    ]
-    for command in commands:
-        subprocess.run(command, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    version, entries = grants(value)
+    directories = [target_directory(entry['target']) for entry in entries]
+    env = dict(os.environ, HOME=HOME)
+    # Refuse before any configuration or token write when a target is absent or not a bare repository.
+    if version == 2 and not (
+            all(present(path, entry['target']) for path, entry in zip(directories, entries))
+            and all(git_output(env, '--git-dir=' + str(path), 'rev-parse', '--is-bare-repository') == 'true'
+                    for path in directories)):
+        raise ValueError('Git grant target repository is missing')
+    if version == 2:
+        forget_legacy_identity(env, previous_grants())
+    git(env, 'config', '--global', 'credential.https://github.com.useHttpPath', 'true')
+    git(env, 'config', '--global', '--replace-all', 'credential.https://github.com.helper',
+        '/usr/local/bin/horizon-worker-git-auth')
+    for entry, directory in zip(entries, directories):
+        # Version 1 keeps its global identity; version 2 scopes identity to each repository.
+        config = ['config', '--global'] if version == 1 else ['--git-dir=' + str(directory), 'config']
+        git(env, *config, 'user.name', entry['author_name'])
+        git(env, *config, 'user.email', entry['author_email'])
+        git(env, '--git-dir=' + str(directory), 'config', 'remote.origin.url',
+            'https://github.com/' + entry['repository'] + '.git')
+    write_private(value)
+
+
+def write_private(value):
     CREDENTIAL.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if CREDENTIAL.parent.stat().st_mode & 0o077:
         raise ValueError('Git credential directory must be private')
@@ -70,38 +183,106 @@ def install(value):
         Path(temporary).unlink(missing_ok=True)
 
 
-def credential_reply(value, request):
-    """Only the bound HTTPS repository receives a Git credential response."""
+def credential_reply(entries, request):
+    """Only the exactly requested HTTPS repository receives its own Git credential."""
     fields = dict(line.split('=', 1) for line in request.splitlines() if '=' in line)
     path = fields.get('path', '')
     if path.endswith('.git'):
         path = path[:-4]
-    if (value and fields.get('protocol') == 'https' and fields.get('host') == 'github.com'
-            and path.casefold() == value['repository'].casefold()):
-        return 'username=x-access-token\npassword=' + value['token'] + '\n\n'
+    if fields.get('protocol') != 'https' or fields.get('host') != 'github.com':
+        return ''
+    for entry in entries or ():
+        if same_repository(path, entry['repository']):
+            return 'username=x-access-token\npassword=' + entry['token'] + '\n\n'
     return ''
+
+
+def repository_requests(argv):
+    """Every repository an argument could name, including after `--` and in short-flag clusters,
+    so gh can never act on a repository other than the one whose token it receives."""
+    requests = []
+    for index, argument in enumerate(argv):
+        following = argv[index + 1] if index + 1 < len(argv) else ''
+        short = None if argument.startswith('--') else SHORT_REPOSITORY.fullmatch(argument)
+        url = GITHUB_ARGUMENT.match(argument)
+        if argument == '--repo':
+            requests.append(following)
+        elif argument.startswith('--repo='):
+            requests.append(argument[len('--repo='):])
+        elif short:
+            requests.append(short.group(1).removeprefix('=') or following)
+        elif url:
+            requests.append(url.group(1))
+    return requests
+
+
+def repository_name(requested):
+    parts = requested.split('/')
+    if len(parts) == 3 and parts[0].lower() == 'github.com':
+        parts = parts[1:]
+    return '/'.join(parts) if len(parts) == 2 and requested.isascii() else None
+
+
+def gh_repository(env, argv):
+    """The repository a gh invocation targets: its arguments, GH_REPO, else the working directory's origin.
+    Conflicting or unreadable requests resolve to no repository."""
+    if env.get('GH_HOST', 'github.com').lower() != 'github.com':
+        return None
+    requests = repository_requests(argv)
+    if not requests and env.get('GH_REPO') is not None:
+        requests = [env['GH_REPO']]
+    if requests:
+        names = [repository_name(requested) for requested in requests]
+        if None in names or len({name.lower() for name in names}) != 1:
+            return None
+        return names[0]
+    try:
+        origin = subprocess.run(['git', 'remote', 'get-url', 'origin'], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = GITHUB_URL.fullmatch(origin.stdout.decode(errors='replace').strip())
+    return match.group(1) if origin.returncode == 0 and match else None
+
+
+def gh_environment(loaded, env, argv=()):
+    """Inject only the targeted repository's token; version 1 keeps its single-binding behavior."""
+    env = dict(env)
+    if not loaded:
+        return env
+    version, entries = loaded
+    if version == 1:
+        selected = entries[0]
+    else:
+        repository = gh_repository(env, list(argv))
+        selected = next((entry for entry in entries if repository is not None
+                         and same_repository(repository, entry['repository'])), None)
+        if selected is None:
+            print('horizon: no Git grant for this repository; gh runs without Horizon credentials',
+                  file=sys.stderr)
+            return env
+    env['GH_TOKEN'] = selected['token']
+    env['GH_REPO'] = selected['repository']
+    env['GH_HOST'] = 'github.com'
+    return env
 
 
 def main():
     if Path(sys.argv[0]).name == 'gh':
-        value = read_binding()
-        env = dict(os.environ)
-        if value:
-            env['GH_TOKEN'] = value['token']
-            env['GH_REPO'] = value['repository']
-            env['GH_HOST'] = 'github.com'
+        env = gh_environment(read_grants(), os.environ, sys.argv[1:])
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
         return
     operation = sys.argv[1] if len(sys.argv) > 1 else ''
     if operation == 'install':
-        source = sys.stdin.read(4097)
-        if len(source.encode()) > 4096:
+        source = sys.stdin.read(MAX_BYTES + 1)
+        if len(source.encode()) > MAX_BYTES:
             raise ValueError('Git binding is too large')
-        install(json.loads(source))
+        install(parse(source))
     elif operation == 'clear':
         CREDENTIAL.unlink(missing_ok=True)
     elif operation == 'get':
-        sys.stdout.write(credential_reply(read_binding(), sys.stdin.read(8192)))
+        loaded = read_grants()
+        sys.stdout.write(credential_reply(loaded[1] if loaded else None, sys.stdin.read(8192)))
     elif operation in ('store', 'erase'):
         pass  # Caller-managed binding: Git cannot overwrite it or remove it after a transient failure.
     elif operation == 'check':
@@ -113,6 +294,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, OSError, subprocess.SubprocessError):
+    except (ValueError, OSError, RecursionError, subprocess.SubprocessError):
         print('Worker Git authentication failed; inspect the private binding configuration.', file=sys.stderr)
         sys.exit(1)

@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod grants;
+pub use grants::{GRANTS_CONTRACT, Selected, Sibling, Target, select};
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Binding {
@@ -25,26 +28,64 @@ impl Binding {
                 "Git credential bindings require absolute machine-local paths",
             ));
         }
-        let parts: Vec<_> = self.repository.split('/').collect();
-        if parts.len() != 2
-            || parts.iter().any(|part| {
-                part.is_empty()
-                    || part.len() > 100
-                    || *part == "."
-                    || *part == ".."
-                    || !part.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-            })
-        {
-            return Err(Error::Invalid("Git credential repository must be an owner/name pair"));
-        }
-        if [&self.author_name, &self.author_email]
-            .iter()
-            .any(|s| s.is_empty() || s.len() > 200 || s.chars().any(char::is_control))
-        {
-            return Err(Error::Invalid("Invalid Git author identity"));
-        }
-        Ok(())
+        validate_repository(&self.repository)?;
+        validate_identity(&self.author_name, &self.author_email)
     }
+}
+
+fn validate_repository(repository: &str) -> Result<()> {
+    let parts: Vec<_> = repository.split('/').collect();
+    if parts.len() != 2
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || part.len() > 100
+                || *part == "."
+                || *part == ".."
+                || !part.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        })
+    {
+        return Err(Error::Invalid("Git credential repository must be an owner/name pair"));
+    }
+    Ok(())
+}
+
+fn validate_identity(name: &str, email: &str) -> Result<()> {
+    if [name, email]
+        .iter()
+        .any(|s| s.is_empty() || s.len() > 200 || s.chars().any(char::is_control))
+    {
+        return Err(Error::Invalid("Invalid Git author identity"));
+    }
+    Ok(())
+}
+
+fn validate_token(token: &str) -> Result<()> {
+    if token.is_empty() || token.len() > 2048 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Error::Invalid("Invalid Git credential value"));
+    }
+    Ok(())
+}
+
+/// Reads and checks one binding's private token file.
+fn read_token(binding: &Binding) -> Result<zeroize::Zeroizing<String>> {
+    validate_private_key_file(&binding.token_file)?;
+    let token = zeroize::Zeroizing::new(std::fs::read_to_string(&binding.token_file)?);
+    validate_token(token.trim())?;
+    Ok(zeroize::Zeroizing::new(token.trim().to_owned()))
+}
+
+/// The one binding whose checkout is `repository`; two matches are ambiguous.
+fn matching<'a>(bindings: &'a [Binding], repository: &Path) -> Result<Option<&'a Binding>> {
+    let mut matched = None;
+    for binding in bindings {
+        // An unrelated missing checkout does not block this deployment.
+        if binding.local_repository.canonicalize().ok().as_deref() == Some(repository)
+            && matched.replace(binding).is_some()
+        {
+            return Err(Error::Invalid("Multiple Git credential bindings match this repository"));
+        }
+    }
+    Ok(matched)
 }
 
 #[derive(Serialize)]
@@ -63,37 +104,25 @@ impl Prepared {
     /// Fails before image preparation/allocation for ambiguous or unsafe bindings.
     pub fn for_repository(bindings: &[Binding], repository: &Path) -> Result<Option<Self>> {
         let repository = repository.canonicalize()?;
-        let mut matched = None;
         for binding in bindings {
             binding.validate()?;
-            // An unrelated missing checkout does not block this deployment.
-            if binding.local_repository.canonicalize().ok().as_ref() == Some(&repository)
-                && matched.replace(binding).is_some()
-            {
-                return Err(Error::Invalid("Multiple Git credential bindings match this repository"));
-            }
         }
-        matched.map(Self::new).transpose()
+        matching(bindings, &repository)?.map(Self::new).transpose()
     }
 
     fn new(binding: &Binding) -> Result<Self> {
-        validate_private_key_file(&binding.token_file)?;
-        let token = std::fs::read_to_string(&binding.token_file)?;
-        let token = token.trim();
-        if token.is_empty() || token.len() > 2048 || !token.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(Error::Invalid("Invalid Git credential value"));
-        }
+        let token = read_token(binding)?;
+        Self::private(&Payload {
+            repository: &binding.repository,
+            token: &token,
+            author_name: &binding.author_name,
+            author_email: &binding.author_email,
+        })
+    }
+
+    fn private(payload: &impl Serialize) -> Result<Self> {
         let mut file = tempfile::NamedTempFile::new()?;
-        serde_json::to_writer(
-            &mut file,
-            &Payload {
-                repository: &binding.repository,
-                token,
-                author_name: &binding.author_name,
-                author_email: &binding.author_email,
-            },
-        )
-        .map_err(|_| Error::Json)?;
+        serde_json::to_writer(&mut file, payload).map_err(|_| Error::Json)?;
         file.flush()?;
         Ok(Self(file))
     }

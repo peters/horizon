@@ -174,6 +174,40 @@ Run `python3 -m unittest discover -s examples/cloud-worker -p 'test_*.py'` for
 synthetic credential matching, private storage, removal and Git/gh integration
 checks. No test credentials are included in this image.
 
+### Several repositories on one worker
+
+A worker that also hosts same-worker siblings (bare repositories under
+`/workspace/siblings/<alias>/repository.git`) receives a version 2 file instead:
+`{"version":2,"grants":[{"repository","token","author_name","author_email","target"}]}`,
+where `target` is `primary` or `sibling:<alias>`. Each repository that has its own
+local binding gets one grant; a repository without a binding gets none. At most 16
+grants are accepted, repositories and targets must be unique, and unknown or
+duplicate fields are refused. Installation refuses a grant whose target repository
+is missing or is not a bare repository before it changes any configuration or
+writes a token. It sets a clean HTTPS origin and the grant's author identity in
+each target repository's own config, so agent worktrees of that repository commit
+and push as that repository.
+
+Git's helper answers only for the repository path it is asked about, with that
+repository's token. The `gh` wrapper chooses the repository from its arguments
+(`--repo`, `-R` including short-flag clusters, and github.com URLs), then
+`GH_REPO`, then the working directory's `origin`, and injects only that
+repository's token. If the repository cannot be determined, the arguments name
+different repositories, it is on another host or it has no grant, `gh` runs
+without Horizon credentials and prints one line on stderr. Package restores that
+call `gh auth token` inside a repository therefore read that repository's own
+token. Give each token read-only package access for restores; never bind a token
+that can publish packages. Horizon sends version 2 whenever a cloud has siblings,
+even if only the primary has a binding, so ordinary `gh` use in a sibling checkout
+does not pick up the primary's token.
+
+This per-repository selection is routing, not isolation: every process in the
+container runs as the same user and can read the credential file, so the
+shared trust boundary described above still applies. Version 1 files keep their
+single-repository behavior. A version 2 install removes the global identity a
+version 1 install wrote, if it is unchanged. Images that support version 2 also
+report `horizon-git-auth-contract=2` from `horizon-worker-check --git-auth`.
+
 ## Repeatable capability image smoke
 
 Run `python3 examples/cloud-worker/smoke-image.py IMAGE@sha256:DIGEST
