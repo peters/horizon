@@ -106,6 +106,31 @@ Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
 
+## Running on a rented virtual machine
+
+Providers that rent whole servers instead of containers run the same image under
+Docker on the host. `horizon-cloud::host` renders the server's `#cloud-config` user
+data; the host needs Ubuntu with Docker already installed (for example Hetzner's
+`docker-ce` image) and an ext4 volume attached at creation. On first boot it:
+
+- mounts the volume at `/mnt/horizon-volume` (fstab `nofail`) and gives the
+  container its `workspace` subdirectory as `/workspace`, so the filesystem's
+  `lost+found` stays out of view; the service refuses to start without the mount;
+- writes the container environment, the image digest and any registry login as
+  root-only files, and pulls the image by digest with retries;
+- disables the host's own SSH service and locks the root password, so port 22
+  belongs to the container and the host has no remote login;
+- starts `horizon-worker.service`, which runs the container with `--rm`, publishes
+  port 22 and restarts it on failure and after a reboot.
+
+Before every container start the service drops container traffic to the metadata
+service at 169.254.169.254, because that service returns the user data, including
+the registry login. The login file stays on the host (root only, never mounted into
+the container) so a restarted host can pull again if its image cache is lost; use a
+read-only, short-lived pull credential. Values are written as data files and never
+interpolated into commands. Stopping the server ends every container process, as
+on any other provider; `/workspace` keeps its files.
+
 ## Session relaunch after a container reset
 
 A container reset, such as an image replacement, keeps `/workspace` but ends tmux
