@@ -23,6 +23,7 @@ pub struct Owner {
 #[derive(Clone, Debug)]
 pub struct Context {
     pub source: Target,
+    /// Separate-cloud declarations. Reconciliation ignores any same-worker sibling.
     pub declarations: BTreeMap<String, Declaration>,
     pub inventory: Vec<Target>,
 }
@@ -159,6 +160,7 @@ fn apply_action(state: &mut journal::State, context: Option<&Context>, action: &
             let declaration = context
                 .declarations
                 .get(alias)
+                .filter(|declaration| declaration.placement.is_cloud())
                 .ok_or(Error::Invalid("Unknown companion alias"))?;
             let target = context
                 .inventory

@@ -125,6 +125,26 @@ impl CloudConfig {
         }
         Ok(config)
     }
+
+    /// Companions on their own clouds, the only ones that take part in selection and SSH grants.
+    pub fn cloud_companions(&self) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions_placed(crate::companions::Placement::Cloud)
+    }
+
+    /// Sibling repositories checked out next to this one on the same worker.
+    pub fn same_worker_siblings(&self) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions_placed(crate::companions::Placement::SameWorker)
+    }
+
+    fn companions_placed(
+        &self,
+        placement: crate::companions::Placement,
+    ) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions
+            .iter()
+            .filter(move |(_, declaration)| declaration.placement == placement)
+            .map(|(alias, declaration)| (alias.as_str(), declaration))
+    }
 }
 impl Profile {
     /// # Errors

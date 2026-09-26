@@ -9,6 +9,28 @@ pub struct Declaration {
     /// GitHub repository identity, `owner/repository`, without credentials or local paths.
     pub repository: String,
     pub profile: String,
+    /// Omitted for separate-cloud companions so their persisted form stays unchanged.
+    #[serde(default, skip_serializing_if = "Placement::is_cloud")]
+    pub placement: Placement,
+}
+
+/// Where a companion repository runs relative to the declaring repository.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    /// Its own cloud, reached through an explicit selection and SSH grant.
+    #[default]
+    Cloud,
+    /// A sibling checkout on the declaring cloud's worker. It never provisions, starts or
+    /// stops a cloud and takes no part in separate-cloud selection or grants.
+    SameWorker,
+}
+
+impl Placement {
+    #[must_use]
+    pub fn is_cloud(&self) -> bool {
+        *self == Self::Cloud
+    }
 }
 
 /// Host-resolved ownership, never authority supplied by a remote caller.
@@ -54,6 +76,25 @@ pub enum SelectionError {
 }
 
 impl Declaration {
+    /// A separate-cloud declaration.
+    #[must_use]
+    pub fn new(repository: impl Into<String>, profile: impl Into<String>) -> Self {
+        Self {
+            repository: repository.into(),
+            profile: profile.into(),
+            placement: Placement::Cloud,
+        }
+    }
+
+    /// The sibling directory of a same-worker checkout: the repository name without its
+    /// owner, so relative paths such as `../<name>` in repository scripts keep working.
+    #[must_use]
+    pub fn directory_name(&self) -> &str {
+        self.repository
+            .split_once('/')
+            .map_or(self.repository.as_str(), |(_, name)| name)
+    }
+
     /// # Errors
     /// Accepts repository identities, not URLs, paths, credential bindings or shell text.
     pub fn validate(&self) -> Result<(), ProfileError> {
@@ -75,9 +116,12 @@ impl Declaration {
     }
 
     /// GitHub repository names are case-insensitive; local profile names are not.
+    /// A placement change is a declaration change.
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
-        self.repository.eq_ignore_ascii_case(&other.repository) && self.profile == other.profile
+        self.repository.eq_ignore_ascii_case(&other.repository)
+            && self.profile == other.profile
+            && self.placement == other.placement
     }
 }
 
@@ -102,16 +146,27 @@ fn valid_github_owner(owner: &str) -> bool {
 }
 
 /// # Errors
-/// Rejects invalid aliases and excessive declarations before any allocation.
+/// Rejects invalid aliases, excessive declarations and colliding same-worker directories
+/// before any allocation.
 pub fn validate_declarations(declarations: &BTreeMap<String, Declaration>) -> Result<(), ProfileError> {
     if declarations.len() > 64 {
         return Err(ProfileError::Invalid("At most 64 companion repositories are supported"));
     }
+    let mut directories = std::collections::BTreeSet::new();
     for (alias, declaration) in declarations {
         if !valid_alias(alias) {
             return Err(ProfileError::Invalid("Invalid companion alias"));
         }
         declaration.validate()?;
+        // Hidden names are reserved for tooling state beside the checkouts.
+        if declaration.placement == Placement::SameWorker
+            && (declaration.directory_name().starts_with('.')
+                || !directories.insert(declaration.directory_name().to_ascii_lowercase()))
+        {
+            return Err(ProfileError::Invalid(
+                "Same-worker companions need distinct repository names that do not start with a dot",
+            ));
+        }
     }
     Ok(())
 }
@@ -136,6 +191,7 @@ impl Selection {
             || !valid_id(&source.cloud_id)
             || !valid_id(&target.cloud_id)
             || source.cloud_id == target.cloud_id
+            || !target.declaration.placement.is_cloud()
             || target.declaration.validate().is_err()
             || !valid_id(&source.scope.session_id)
             || !valid_id(&source.scope.workspace_id)
@@ -187,12 +243,14 @@ impl Selection {
 
 /// Discover possible bindings, excluding the source and other workspaces.
 /// A caller must make an explicit selection; discovery does not authorize access.
+/// Same-worker declarations never bind to another cloud.
 #[must_use]
 pub fn candidates<'a>(source: &Target, declaration: &Declaration, inventory: &'a [Target]) -> Vec<&'a Target> {
     inventory
         .iter()
         .filter(|target| {
-            target.cloud_id != source.cloud_id
+            declaration.placement.is_cloud()
+                && target.cloud_id != source.cloud_id
                 && target.scope == source.scope
                 && target.declaration.matches(declaration)
         })

@@ -56,3 +56,14 @@ profiles:
       browserstack:
         provider: browserstack
         local_ports: [8080]
+
+# Optional companion repositories. Declarations never start a cloud or grant access.
+# companions:
+#   service:
+#     repository: example/service
+#     profile: cpu
+#   consumer:
+#     repository: example/consumer
+#     profile: gpu
+#     # Check the consumer out beside this repository on the same worker.
+#     placement: same_worker
