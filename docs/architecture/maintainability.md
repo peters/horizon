@@ -555,13 +555,6 @@ before allocation and project locks, with exclusive mutable handle access. These
 local APIs perform no provider I/O and are not called by runtime entry points yet;
 credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
-`state` defines and persists the deployment aggregate; `state::replacement` owns its
-journaled image-replacement state machine and the transition checks.
-`deployment::replacement` rebuilds a dedicated cloud's image from its latest committed
-recipe, drives the journaled switch of its bound worker, settles an interrupted switch
-on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
-SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
-tested offline.
 `horizon-cloud::runpod` uses REST v2 throughout. Its `wire` leaf translates
 provider responses into the existing durable worker representation; `pages` owns
 complete cursor traversal, and `create` owns ordered single-compute requests with
@@ -570,6 +563,13 @@ Storage attachment checks reject accounts with Serverless endpoints because v2
 cannot enumerate all historical worker mounts; this guard also runs before new
 CPU storage is allocated. Provider wire changes never rewrite saved allocation
 identities or manufacture direct-create receipts.
+`state` defines and persists the deployment aggregate; `state::replacement` owns its
+journaled image-replacement state machine and the transition checks.
+`deployment::replacement` rebuilds a dedicated cloud's image from its latest committed
+recipe, drives the journaled switch of its bound worker, settles an interrupted switch
+on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
+SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
+tested offline.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate
