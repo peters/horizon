@@ -58,7 +58,9 @@ fn priced(
     if vcpu < requirements.min_vcpu.unwrap_or(0) || memory_gb < requirements.min_memory_gb.unwrap_or(0) {
         return None;
     }
-    let ipv4_month = catalog.ipv4_month_eur.get(&offer.location).copied().unwrap_or(0.0);
+    // Every server has a primary IPv4 address; an offer that cannot price it is left out
+    // rather than shown as cheaper than it is.
+    let ipv4_month = catalog.ipv4_month_eur.get(&offer.location).copied()?;
     let running_extras = (volume_month + ipv4_month) * hours / MONTH_HOURS;
     let cpu = if offer.dedicated { "dedicated" } else { "shared" };
     Some(Offer {

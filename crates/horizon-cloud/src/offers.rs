@@ -128,8 +128,10 @@ pub struct Offer {
     /// The location the worker is created in, where the offer is for one location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
-    /// `high`, `medium`, `low`, `none`, or `checked_at_creation` for CPU sizes, whose exact
-    /// stock is confirmed when a cloud is created.
+    /// `high`, `medium`, `low` or `none` for GPU types, and `checked_at_creation` for
+    /// `RunPod` CPU sizes, whose exact stock is confirmed when a cloud is created. Hetzner
+    /// offers report `listed` or `unlisted`: Hetzner's own flag, which is advisory, so an
+    /// unlisted type can still be created and creation confirms either way.
     pub availability: &'static str,
     /// Regions with this GPU type in stock.
     #[serde(skip_serializing_if = "Vec::is_empty")]

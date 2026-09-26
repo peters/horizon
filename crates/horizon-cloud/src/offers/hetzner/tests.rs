@@ -24,6 +24,8 @@ fn catalog() -> Catalog {
             offer("cx43", "fsn1", 8, 16.0, 0.0256, 15.99),
             offer("cpx42", "ash", 8, 16.0, 0.1931, 120.49),
             offer("ccx33", "hel1", 8, 32.0, 0.2219, 138.49),
+            // Hetzner priced no IPv4 address for this location.
+            offer("cx43", "nbg1", 8, 16.0, 0.0256, 15.99),
         ],
         volume_gb_month_eur: 0.0572,
         ipv4_month_eur: BTreeMap::from([("hel1".into(), 0.5), ("fsn1".into(), 0.5), ("ash".into(), 0.5)]),
@@ -118,6 +120,12 @@ fn region_location_price_and_gpu_requirements_filter_offers() {
         hetzner(&catalog, &requirements(serde_json::json!({"limit": 2}))).len(),
         2
     );
+}
+
+#[test]
+fn an_offer_whose_address_cannot_be_priced_is_left_out() {
+    let offers = hetzner(&catalog(), &requirements(serde_json::json!({"limit": 50})));
+    assert!(offers.iter().all(|offer| offer.location.as_deref() != Some("nbg1")));
 }
 
 #[test]
