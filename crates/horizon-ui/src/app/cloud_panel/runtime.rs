@@ -259,7 +259,6 @@ pub(in crate::app::cloud_panel) fn runtime_heading(
         let (name, domain) = match group.environment.provider.as_deref() {
             Some("daytona") => ("Daytona", "daytona.io"),
             Some("fly") => ("Fly.io", "fly.io"),
-            Some("hetzner") => ("Hetzner", "hetzner.com"),
             other => (other.unwrap_or("Runtime"), ""),
         };
         ui.label(RichText::new(name).size(26.0).strong());

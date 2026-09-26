@@ -161,9 +161,9 @@ impl Profile {
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
         self.capabilities.validate()?;
-        let deployable = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
+        let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
         let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
-        if !(deployable || fixture) {
+        if !(supported || fixture) {
             return Err(ProfileError::Invalid(
                 "Supported providers are RunPod and Hetzner; Daytona and Fly.io are design fixtures",
             ));

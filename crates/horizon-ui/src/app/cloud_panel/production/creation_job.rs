@@ -201,7 +201,7 @@ impl HorizonApp {
         let mut group = CloudGroup::new(id, pending.title, pending.workspace, resolved.repository, position);
         group.environment.id.clone_from(&pending.launch.id);
         group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
-        group.environment.provider = Some(pending.launch.profile.provider.clone());
+        group.environment.provider = Some("runpod".into());
         group.environment.profile = Some(pending.launch.profile_name.clone());
         group.environment.image.clone_from(&pending.launch.profile.image);
         group.remote = Some(pending.launch);

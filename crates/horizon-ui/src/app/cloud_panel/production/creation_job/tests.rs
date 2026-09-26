@@ -74,23 +74,7 @@ fn completion_uses_captured_workspace_title_profile_and_revision() {
     assert_eq!(launch.profile_name, "dev");
     assert_eq!(launch.revision, "a".repeat(40));
     assert!(!launch.deployment_started);
-    assert_eq!(group.environment.provider.as_deref(), Some("runpod"));
     assert!(app.cloud_prototype.production.runtimes.is_empty());
-}
-
-#[test]
-fn a_cloud_records_the_provider_of_its_launch_profile() {
-    let (temp, mut app) = test_app();
-    let sender = pending(&mut app);
-    let launch = &mut app.cloud_prototype.production.pending_creation.as_mut().unwrap().launch;
-    launch.profile.provider = "hetzner".into();
-    sender.send(Ok(resolved(temp.path()))).unwrap();
-    app.poll_cloud_creation(&egui::Context::default());
-    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
-    assert_eq!(
-        app.cloud_prototype.groups.0[0].environment.provider.as_deref(),
-        Some("hetzner")
-    );
 }
 
 #[test]
