@@ -44,9 +44,10 @@ fn requirements(value: serde_json::Value) -> Requirements {
 
 #[test]
 fn offers_are_euro_priced_per_started_hour_with_running_storage_and_a_kept_volume() {
-    let offers = hetzner(
+    let offers = hetzner_at(
         &catalog(),
         &requirements(serde_json::json!({"min_vcpu": 8, "hours": 2.5, "storage_gb": 100})),
+        at(2026, time::Month::October, 5, 9, 0),
     );
     let first = &offers[0];
     assert_eq!(
@@ -87,18 +88,38 @@ fn advisory_availability_is_reported_but_never_hides_an_offer() {
     assert_eq!(hel1.availability, "listed");
 }
 
+fn at(year: i32, month: time::Month, day: u8, hour: u8, minute: u8) -> OffsetDateTime {
+    time::Date::from_calendar_date(year, month, day)
+        .unwrap()
+        .with_hms(hour, minute, 0)
+        .unwrap()
+        .assume_utc()
+}
+
 #[test]
-fn estimates_are_the_worst_case_over_calendar_months_and_never_zero() {
-    // A 730-hour run that starts mid-month is billed in two months: 365 hours each.
-    assert!((compute(0.0256, 15.99, 730.0) - 730.0 * 0.0256).abs() < 1e-9);
-    // Over a year the hourly total stays below fifteen monthly caps for cx43, while a
-    // pricier hourly rate is limited by the caps of every month the run can touch.
-    assert!((compute(0.0256, 15.99, 8784.0) - 8784.0 * 0.0256).abs() < 1e-9);
-    assert!((compute(0.1, 15.99, 8784.0) - 15.0 * 15.99).abs() < 1e-9);
-    assert!((compute(0.0256, 15.99, 0.2) - 0.0256).abs() < 1e-9);
+fn estimates_follow_the_calendar_months_after_the_start() {
+    use time::Month::{January, October, September};
+    // Started at the beginning of October, 730 hours fit in October and hit its cap.
+    assert!((compute(0.0256, 15.99, 730.0, at(2026, October, 1, 0, 0)) - 15.99).abs() < 1e-9);
+    // Started on 26 September at noon, 108 hours fall in September and 622 in October,
+    // below both caps.
+    let split = compute(0.0256, 15.99, 730.0, at(2026, September, 26, 12, 0));
+    assert!((split - 730.0 * 0.0256).abs() < 1e-9);
+    // A year from 1 January 2027 is twelve capped months and a day of January 2028.
+    let year = compute(0.0256, 15.99, 8784.0, at(2027, January, 1, 0, 0));
+    assert!((year - (12.0 * 15.99 + 24.0 * 0.0256)).abs() < 1e-9);
+    // A started hour counts in the month it starts in: 23:30 on 30 September for two
+    // hours bills one hour in each month.
+    let straddle = compute(1.0, 100.0, 2.0, at(2026, September, 30, 23, 30));
+    assert!((straddle - 2.0).abs() < 1e-9);
+    assert!((compute(0.0256, 15.99, 0.2, at(2026, October, 1, 0, 0)) - 0.0256).abs() < 1e-9);
     assert!(
-        (compute(0.0256, 15.99, 0.0) - 0.0256).abs() < 1e-9,
+        (compute(0.0256, 15.99, 0.0, at(2026, October, 1, 0, 0)) - 0.0256).abs() < 1e-9,
         "a created server bills an hour"
+    );
+    assert_eq!(
+        next_month(at(2026, time::Month::December, 31, 23, 59)),
+        Some(at(2027, January, 1, 0, 0))
     );
 }
 
