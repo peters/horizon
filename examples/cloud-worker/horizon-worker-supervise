@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import signal
 import socket
 import subprocess
@@ -20,6 +21,15 @@ SERVICES = {'control', 'sshd'}
 # Started only when the worker was created with an idle period.
 OPTIONAL = {'idle'}
 DESKTOP_UNHEALTHY_SECONDS = 10
+VNC_MAX_OPEN_FILES = 4096
+
+
+def limit_vnc_descriptors():
+    # LibVNCServer scans up to the soft descriptor limit before its RFB greeting.
+    # This single-threaded supervisor applies the cap only in the VNC child.
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    capped = VNC_MAX_OPEN_FILES if soft == resource.RLIM_INFINITY else min(soft, VNC_MAX_OPEN_FILES)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (capped, hard))
 
 
 def process_identity(pid, allow_exited=False):
@@ -148,7 +158,8 @@ class Supervisor:
 
     def start(self, name, command):
         with (self.workspace / (name + '.log')).open('ab') as log:
-            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                                     preexec_fn=limit_vnc_descriptors if name == 'vnc' else None)
         self.children[name] = child
         self.identities[name] = process_identity(child.pid, allow_exited=True)
         self.assert_running()

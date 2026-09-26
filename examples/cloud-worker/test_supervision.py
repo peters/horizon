@@ -1,6 +1,7 @@
 """Required services remain owned and healthy across every bootstrap phase."""
 import json
 import os
+import resource
 import signal
 from pathlib import Path
 import runpy
@@ -46,6 +47,40 @@ class SupervisionTests(unittest.TestCase):
         for name in ['control', 'sshd'] + (['xvfb', 'openbox', 'vnc'] if desktop else []):
             self.start(name)
         self.supervisor.publish(desktop)
+
+    def test_descriptor_cap_is_limited_to_vnc_child(self):
+        inherited = resource.getrlimit(resource.RLIMIT_NOFILE)
+        for name in ('vnc', 'control', 'sshd'):
+            output = self.root / (name + '-limits.json')
+            self.start(name, 'import json,resource,time; from pathlib import Path; Path(' + repr(str(output))
+                       + ').write_text(json.dumps(resource.getrlimit(resource.RLIMIT_NOFILE))); time.sleep(60)')
+            deadline = time.monotonic() + 3
+            while not output.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            limits = tuple(json.loads(output.read_text()))
+            soft = inherited[0]
+            expected = (4096 if soft == resource.RLIM_INFINITY else min(soft, 4096)) if name == 'vnc' else soft
+            self.assertEqual(limits, (expected, inherited[1]))
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE), inherited)
+
+    def test_vnc_cap_preserves_lower_soft_and_hard_limits(self):
+        limit = MODULE['limit_vnc_descriptors']
+        for limits, expected in [((128, 256), (128, 256)), ((4096, 8192), (4096, 8192)),
+                                 ((8192, 16384), (4096, 16384)),
+                                 ((resource.RLIM_INFINITY, resource.RLIM_INFINITY), (4096, resource.RLIM_INFINITY))]:
+            with self.subTest(limits=limits):
+                with mock.patch.object(resource, 'getrlimit', return_value=limits):
+                    with mock.patch.object(resource, 'setrlimit') as apply:
+                        limit()
+                apply.assert_called_once_with(resource.RLIMIT_NOFILE, expected)
+
+    def test_vnc_limit_failure_refuses_child_start(self):
+        def denied():
+            raise OSError('limit refused')
+        with mock.patch.dict(Supervisor.start.__globals__, limit_vnc_descriptors=denied):
+            with self.assertRaises(subprocess.SubprocessError):
+                self.start('vnc')
+        self.assertNotIn('vnc', self.supervisor.children)
 
     def test_early_desktop_exit_cannot_be_hidden_by_successful_configuration(self):
         for service in ['xvfb', 'openbox', 'vnc']:
