@@ -55,7 +55,7 @@ impl Runtime {
         match result {
             Ok(recovered) => {
                 // A stopped worker, including one that stopped itself when idle, only needs Resume.
-                let stopped = recovered.state.stage == Stage::Stopped;
+                let stopped = recovered.confirmed_stopped();
                 self.stage = Some(recovered.state.stage);
                 self.state = Some(recovered.state);
                 if self

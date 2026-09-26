@@ -271,12 +271,7 @@ fn validate_allocation_image(
             }),
             runner,
         }
-        .validate_contract(
-            &spec.image_digest,
-            &state.cloud_id,
-            &state.profile.capabilities,
-            git_auth,
-        )?;
+        .validate_contract(&spec.image_digest, &state.cloud_id, &state.profile, git_auth)?;
     }
     Ok(())
 }

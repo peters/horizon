@@ -32,7 +32,7 @@ pub(super) fn environment(capabilities: &Capabilities) -> Result<String> {
         .map_err(|_| Error::Json)
 }
 
-pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool) -> Result<()> {
+pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool, idle_stop: bool) -> Result<()> {
     let contains = |marker| reports(output, marker);
     if !contains("horizon-source-contract=1") {
         return Err(Error::Invalid(
@@ -51,6 +51,12 @@ pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool
     }
     if git_auth && !contains("horizon-git-auth-contract=1") {
         return Err(Error::Invalid("Worker image does not support Git credential transfer"));
+    }
+    // An older supervisor ignores the idle period, so the worker would never stop.
+    if idle_stop && !contains("horizon-idle-stop-contract=1") {
+        return Err(Error::Invalid(
+            "Worker image does not support idle_stop_minutes; rebuild with the current worker bootstrap",
+        ));
     }
     Ok(())
 }

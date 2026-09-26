@@ -45,27 +45,37 @@ fn release_after_failed_setup_has_its_own_completion_channel() {
 }
 
 #[test]
-fn a_worker_found_stopped_offers_resume_instead_of_an_error() {
-    for (stage, error) in [(Stage::Stopped, false), (Stage::Readiness, true)] {
+fn only_a_verified_stopped_worker_offers_resume_instead_of_an_error() {
+    // A missing worker leaves an already stopped record unchanged but still needs attention.
+    for (status, outcome, error) in [
+        (Some("EXITED"), "inactive", false),
+        (None, "missing", true),
+        (Some("RUNNING"), "found", false),
+        (Some("TERMINATED"), "inactive", true),
+    ] {
         let mut runtime = failed_setup_runtime();
         runtime.error = None;
         let mut state = runtime.state.clone().unwrap();
-        state.stage = stage;
+        state.stage = Stage::Stopped;
+        let mut report = cloud_runtime::lifecycle::ReconciledDeployment {
+            state,
+            report: serde_json::from_value(serde_json::json!({
+                "operation_id": "fixture",
+                "outcome": {"status": outcome, "worker_id": "fixture-worker"}
+            }))
+            .unwrap(),
+        };
+        report.report.worker = status.map(|status| {
+            serde_json::from_value(serde_json::json!({
+                "id": "fixture-worker", "name": "fixture", "imageName": "example/worker", "desiredStatus": status
+            }))
+            .unwrap()
+        });
         let (sender, receiver) = channel();
         runtime.recovery_receiver = Some(receiver);
-        sender
-            .send(Ok(cloud_runtime::lifecycle::ReconciledDeployment {
-                state,
-                report: serde_json::from_value(serde_json::json!({
-                    "operation_id": "fixture",
-                    "outcome": {"status": "inactive", "worker_id": "fixture-worker"}
-                }))
-                .unwrap(),
-            }))
-            .unwrap();
+        sender.send(Ok(report)).unwrap();
         runtime.poll_recovery();
-        assert_eq!(runtime.stage, Some(stage));
-        assert_eq!(runtime.error.is_some(), error, "{stage:?}");
+        assert_eq!(runtime.error.is_some(), error, "{status:?} {outcome}");
     }
 }
 

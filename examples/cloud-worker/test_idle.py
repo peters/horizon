@@ -67,7 +67,7 @@ class IdleTests(unittest.TestCase):
         self.assertEqual(request.get_header('Authorization'), 'Bearer pod-scoped')
         self.assertEqual(request.get_header('User-agent'), 'horizon-worker-idle/1')
         for refused in [{'errors': [{'message': 'denied'}]}, {'data': {'podStop': None}},
-                        {'data': {'podStop': {'id': 'other'}}}]:
+                        {'data': {'podStop': {'id': 'other'}}}, {'data': ['unexpected']}, {'data': None}]:
             with mock.patch('urllib.request.urlopen', return_value=reply(refused)):
                 self.assertFalse(MODULE['stop_worker']('pod123', 'pod-scoped'))
 

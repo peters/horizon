@@ -36,7 +36,7 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None):
+    def run_check(self, *args, missing=(), environment=None, reported=None, located=None):
         output = io.StringIO()
         def run(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout=reported.get(command[0], b''))
@@ -44,7 +44,8 @@ class CapabilitiesTests(unittest.TestCase):
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
                 mock.patch('subprocess.run', side_effect=run if reported is not None else None) as commands, \
-                mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
+                mock.patch('shutil.which', side_effect=lambda name: None if name in missing
+                           else (located or {}).get(name, '/bin/' + name)), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
                 runpy.run_path(str(ROOT / 'horizon-worker-check'), run_name='__main__')
@@ -52,6 +53,20 @@ class CapabilitiesTests(unittest.TestCase):
             except SystemExit as error:
                 status = error.code
         return status, output.getvalue(), commands.call_args_list
+
+    def test_idle_stop_is_reported_only_when_the_supervisor_starts_the_watcher(self):
+        supervisor = self.path('/workspace/horizon-worker-supervise')
+        located = {'horizon-worker-supervise': '/workspace/horizon-worker-supervise'}
+        for text, missing, expected in [("self.start('idle', ['horizon-worker-idle'])", (), True),
+                                        ("self.start('control', ['horizon-cloud-worker'])", (), False),
+                                        ("self.start('idle', ['horizon-worker-idle'])", ('horizon-worker-idle',), False)]:
+            supervisor.write_text(text)
+            status, output, _ = self.run_check(missing=missing, located=located)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, text)
+        status, output, _ = self.run_check()
+        self.assertEqual(status, 0, output)
+        self.assertNotIn('horizon-idle-stop-contract=1', output.splitlines())
 
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:

@@ -171,7 +171,7 @@ fn prepare_image(
     };
     let digest = images.prepare(&request.profile, &snapshot, &request.cloud_id)?;
     if git_auth.is_some() {
-        images.validate_contract(&digest, &request.cloud_id, &request.profile.capabilities, true)?;
+        images.validate_contract(&digest, &request.cloud_id, &request.profile, true)?;
     }
     if let Some(registry) = &mut registry {
         registry.verify_image(&digest, cancel)?;

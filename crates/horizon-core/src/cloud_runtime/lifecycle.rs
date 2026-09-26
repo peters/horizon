@@ -12,6 +12,18 @@ pub struct ReconciledDeployment {
     pub state: Deployment,
     pub report: horizon_cloud::runpod::recovery::Reconciliation,
 }
+impl ReconciledDeployment {
+    /// The provider returned this cloud's verified worker and reports it stopped.
+    #[must_use]
+    pub fn confirmed_stopped(&self) -> bool {
+        self.state.stage == Stage::Stopped
+            && self
+                .report
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
+    }
+}
 
 /// # Errors
 /// Refuses removal while any owned worker or workspace storage may remain.

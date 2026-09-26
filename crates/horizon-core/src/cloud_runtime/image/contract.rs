@@ -1,21 +1,16 @@
 use super::{Duration, Error, Images, Result, Runner};
 use crate::cloud_runtime::worker_contract;
-use horizon_cloud::{Cancellation, Capabilities};
+use horizon_cloud::{Cancellation, Capabilities, Profile};
 
 impl Images<'_> {
-    pub(super) fn validate(&self, image: &str, operation_id: &str, capabilities: &Capabilities) -> Result<()> {
-        self.validate_contract(image, operation_id, capabilities, false)
+    pub(super) fn validate(&self, image: &str, operation_id: &str, profile: &Profile) -> Result<()> {
+        self.validate_contract(image, operation_id, profile, false)
     }
 
     /// # Errors
     /// Checks the selected runtime and optional Git binding before allocating compute.
-    pub fn validate_contract(
-        &self,
-        image: &str,
-        operation_id: &str,
-        capabilities: &Capabilities,
-        git_auth: bool,
-    ) -> Result<()> {
+    pub fn validate_contract(&self, image: &str, operation_id: &str, profile: &Profile, git_auth: bool) -> Result<()> {
+        let capabilities = &profile.capabilities;
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
         }
@@ -24,7 +19,9 @@ impl Images<'_> {
         self.remove_contract(&name)?;
         let result = self
             .run_contract(image, &name, capabilities, git_auth)
-            .and_then(|output| worker_contract::validate(&output, capabilities, git_auth));
+            .and_then(|output| {
+                worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())
+            });
         // Killing a Docker client does not stop its daemon-owned container.
         finish_contract(result, self.remove_contract(&name))
     }
@@ -161,7 +158,12 @@ mod tests {
                 .success()
         );
         volumes.lock().unwrap().extend(container_volumes(&host, &name));
-        assert!(images.validate(&image, &operation, &Capabilities::default()).is_err());
+        let profile = horizon_cloud::CloudConfig::parse(horizon_cloud::EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("image-only")
+            .unwrap();
+        assert!(images.validate(&image, &operation, &profile).is_err());
         assert!(cancel.is_cancelled());
         let output = images
             .docker()

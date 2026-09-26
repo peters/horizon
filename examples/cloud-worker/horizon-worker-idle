@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 
 
@@ -68,8 +67,9 @@ def stop_worker(pod_id, key):
                                               'User-Agent': 'horizon-worker-idle/1'})
     with urllib.request.urlopen(request, timeout=30) as response:
         reply = json.load(response)
-    stopped = (reply.get('data') or {}).get('podStop') or {}
-    if reply.get('errors') or stopped.get('id') != pod_id:
+    data = reply.get('data') if isinstance(reply, dict) else None
+    stopped = data.get('podStop') if isinstance(data, dict) else None
+    if reply.get('errors') or not isinstance(stopped, dict) or stopped.get('id') != pod_id:
         print('Stop request refused: ' + json.dumps(reply.get('errors'))[:300], flush=True)
         return False
     return True
@@ -99,7 +99,8 @@ def main():
         os.sync()
         try:
             stopped = stop_worker(pod_id, key)
-        except (OSError, ValueError, urllib.error.URLError) as error:
+        # Any failure of this one request is retried; an escaping error would end the worker.
+        except Exception as error:
             print('Stop request failed: ' + type(error).__name__, flush=True)
             stopped = False
         if stopped:
