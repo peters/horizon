@@ -160,11 +160,16 @@ class GitGrantTests(unittest.TestCase):
     def test_install_configures_each_repository_and_its_worktrees(self):
         primary = self.bare(auth.GIT_DIR)
         library = self.bare(auth.SIBLINGS / 'library/repository.git')
+        for url in ('https://github.com/example/other.git', 'https://github.com/example/second.git'):
+            git('config', '--add', 'remote.origin.url', url, cwd=library, env=self.env)
+            git('config', '--add', 'remote.origin.pushurl', url, cwd=library, env=self.env)
         auth.install(self.value)
         self.assertEqual(auth.CREDENTIAL.stat().st_mode & 0o777, 0o600)
         self.assertEqual(auth.read_grants(), (2, self.value['grants']))
         for worktree, grant in [(primary, self.primary), (library, self.sibling)]:
             self.assertEqual(git('remote', 'get-url', 'origin', cwd=worktree, env=self.env),
+                             'https://github.com/' + grant['repository'] + '.git')
+            self.assertEqual(git('remote', 'get-url', '--push', '--all', 'origin', cwd=worktree, env=self.env),
                              'https://github.com/' + grant['repository'] + '.git')
             self.assertEqual(git('config', 'user.name', cwd=worktree, env=self.env), grant['author_name'])
             self.assertEqual(git('config', 'user.email', cwd=worktree, env=self.env), grant['author_email'])

@@ -184,9 +184,10 @@ local binding gets one grant; a repository without a binding gets none. At most 
 grants are accepted, repositories and targets must be unique, and unknown or
 duplicate fields are refused. Installation refuses a grant whose target repository
 is missing or is not a bare repository before it changes any configuration or
-writes a token. It sets a clean HTTPS origin and the grant's author identity in
-each target repository's own config, so agent worktrees of that repository commit
-and push as that repository.
+writes a token. In each target repository's own config it replaces `origin` with
+a clean HTTPS URL, removes any separate push URL and sets the grant's author
+identity, so agent worktrees of that repository commit and push as that
+repository.
 
 Git's helper answers only for the repository path it is asked about, with that
 repository's token. The `gh` wrapper chooses the repository from `--repo`/`-R`

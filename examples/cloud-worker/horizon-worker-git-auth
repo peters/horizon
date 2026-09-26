@@ -188,8 +188,12 @@ def install(value):
         config = ['config', '--global'] if version == 1 else ['--git-dir=' + str(directory), 'config']
         git(env, *config, 'user.name', entry['author_name'])
         git(env, *config, 'user.email', entry['author_email'])
-        git(env, '--git-dir=' + str(directory), 'config', 'remote.origin.url',
+        repository = ['--git-dir=' + str(directory), 'config']
+        git(env, *repository, '--replace-all', 'remote.origin.url',
             'https://github.com/' + entry['repository'] + '.git')
+        # A leftover push URL would take precedence and route pushes to another repository.
+        if git_output(env, *repository, '--get-all', 'remote.origin.pushurl') is not None:
+            git(env, *repository, '--unset-all', 'remote.origin.pushurl')
     write_private(value)
 
 
