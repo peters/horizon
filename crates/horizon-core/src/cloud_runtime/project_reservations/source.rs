@@ -13,7 +13,7 @@ use std::{
     fs::File,
     io::{Read, Seek, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Import the selected committed revision into a prepared project. Artifacts are
@@ -68,18 +68,72 @@ pub(in crate::cloud_runtime) fn prepare_with(
         if journal.pending.is_some() {
             return Err(Error::Pending);
         }
+        if journal.generation.is_some() {
+            return Err(Error::Pending);
+        }
         if !journal.manifest.members.iter().any(|member| {
             &member.identity == project && member.state == horizon_cloud_protocol::membership::State::Preparing
         }) {
             return Err(Error::Invalid);
         }
-        let artifacts = Artifacts::create(owner, project, &repository, revision, cancellation, checkpoint)?;
+        let generation = Generation::new(project, &repository, revision, cancellation)?;
+        journal.generation = Some(generation.clone());
+        journal.save(owner)?;
+        let artifacts = Artifacts::create(owner, &generation, cancellation, checkpoint)?;
+        journal.generation = None;
         journal.sources.push(artifacts.clone());
         journal.save(owner)?;
         artifacts
     };
-    artifacts.verify(owner.artifact_root()?, cancellation)?;
+    artifacts.verify(owner.artifact_root()?, cancellation, None)?;
     Ok(artifacts.descriptor)
+}
+
+/// An incomplete generation blocks another export; uncertain owned paths are retained.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::cloud_runtime) struct Generation {
+    pub project: ProjectIdentity,
+    repository: PathBuf,
+    selection: String,
+    revision: String,
+    directory: String,
+}
+impl Generation {
+    fn new(project: &ProjectIdentity, repository: &Path, selection: &str, cancellation: &Cancellation) -> Result<Self> {
+        if !cfg!(target_os = "linux") {
+            return Err(Error::Invalid);
+        }
+        let runner = crate::cloud_runtime::command::Runner {
+            cancel: cancellation,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let generation = Self {
+            project: project.clone(),
+            repository: repository.into(),
+            selection: selection.into(),
+            revision: crate::cloud_runtime::repository::resolve_with_runner(repository, selection, &runner)?,
+            directory: format!("source-{}", horizon_cloud_protocol::OperationId::generate()),
+        };
+        generation.validate()?;
+        Ok(generation)
+    }
+    pub(super) fn validate(&self) -> Result<()> {
+        if !self.repository.is_absolute()
+            || self.selection.len() > 4096
+            || self.revision.len() != 40
+            || !self.revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !self.directory.starts_with("source-")
+            || !self
+                .directory
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +225,7 @@ fn fingerprint(
     cancellation: &Cancellation,
     mut output: Option<&mut File>,
     limit: u64,
+    deadline: Option<Instant>,
 ) -> Result<Artifact> {
     file.rewind()?;
     let mut hash = Sha256::new();
@@ -178,6 +233,9 @@ fn fingerprint(
     let mut buffer = [0; 16384];
     loop {
         cancellation.check().map_err(crate::cloud_runtime::Error::from)?;
+        if let Some(deadline) = deadline {
+            super::remaining(deadline)?;
+        }
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
@@ -223,12 +281,11 @@ impl Artifacts {
     #[cfg(target_os = "linux")]
     fn create(
         owner: &Owner,
-        project: &ProjectIdentity,
-        repository: &Path,
-        revision: &str,
+        generation: &Generation,
         cancellation: &Cancellation,
         checkpoint: &mut impl FnMut(&Path) -> Result<()>,
     ) -> Result<Self> {
+        use rustix::fs::{Mode, OFlags, mkdirat, openat};
         use std::os::{fd::AsRawFd, unix::fs::PermissionsExt};
         let root = owner.artifact_root()?;
         let runner = Runner {
@@ -236,21 +293,25 @@ impl Artifacts {
             emit: &|_| {},
             secrets: Vec::new(),
         };
-        let selected = repository::resolve_with_runner(repository, revision, &runner)?;
-        repository::validate_tree(repository, &selected, &runner)?;
-        // Retain immediately: an uncertain path must never trigger recursive TempDir cleanup.
-        let path = tempfile::Builder::new()
-            .prefix("source-")
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir_in(root)?
-            .keep();
-        let opened = open(&path, true)?;
+        let parent = open(root, true)?;
+        owner.artifact_root()?;
+        mkdirat(&parent, &generation.directory, Mode::from_raw_mode(0o700)).map_err(std::io::Error::from)?;
+        let path = root.join(&generation.directory);
+        let opened = File::from(
+            openat(
+                &parent,
+                &generation.directory,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?,
+        );
         let identity = Identity::of(&opened)?;
         let anchored = PathBuf::from(format!("/proc/{}/fd/{}", std::process::id(), opened.as_raw_fd()));
         checkpoint(&path)?;
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
-        export(repository, &selected, &anchored, root, &runner)?;
+        export(&generation.repository, &generation.revision, &anchored, root, &runner)?;
         owner.artifact_root()?;
         identity.require(&open(&path, true)?)?;
         let payload = |name| -> Result<File> {
@@ -276,9 +337,9 @@ impl Artifacts {
         let mut material = payload("source-material.tar")?;
         let descriptor = Source {
             version: 1,
-            revision: selected,
-            pack: fingerprint(&mut pack, cancellation, None, Source::MAX_BYTES)?,
-            material: fingerprint(&mut material, cancellation, None, Source::MAX_BYTES)?,
+            revision: generation.revision.clone(),
+            pack: fingerprint(&mut pack, cancellation, None, Source::MAX_BYTES, None)?,
+            material: fingerprint(&mut material, cancellation, None, Source::MAX_BYTES, None)?,
         };
         descriptor.validate().map_err(|_| Error::Invalid)?;
         pack.sync_all()?;
@@ -286,16 +347,16 @@ impl Artifacts {
         opened.sync_all()?;
         open(root, true)?.sync_all()?;
         let artifacts = Self {
-            project: project.clone(),
-            repository: repository.into(),
-            selection: revision.into(),
-            directory: path.file_name().and_then(|n| n.to_str()).ok_or(Error::Invalid)?.into(),
+            project: generation.project.clone(),
+            repository: generation.repository.clone(),
+            selection: generation.selection.clone(),
+            directory: generation.directory.clone(),
             identity,
             pack_identity: Identity::of(&pack)?,
             material_identity: Identity::of(&material)?,
             descriptor,
         };
-        artifacts.verify(owner.artifact_root()?, cancellation)?;
+        artifacts.verify(owner.artifact_root()?, cancellation, None)?;
         // Retain even if the subsequent host journal save is uncertain. Such an
         // unreferenced artifact directory is never adopted by a later operation.
         Ok(artifacts)
@@ -303,9 +364,7 @@ impl Artifacts {
     #[cfg(not(target_os = "linux"))]
     fn create(
         _owner: &Owner,
-        _project: &ProjectIdentity,
-        _repository: &Path,
-        _revision: &str,
+        _generation: &Generation,
         _cancellation: &Cancellation,
         _checkpoint: &mut impl FnMut(&Path) -> Result<()>,
     ) -> Result<Self> {
@@ -335,18 +394,29 @@ impl Artifacts {
         self.material_identity.require(&material)?;
         Ok((pack, material))
     }
-    pub(super) fn verify(&self, root: &Path, cancellation: &Cancellation) -> Result<()> {
+    pub(in crate::cloud_runtime) fn verify(
+        &self,
+        root: &Path,
+        cancellation: &Cancellation,
+        deadline: Option<Instant>,
+    ) -> Result<()> {
         let (mut pack, mut material) = self.files(root)?;
-        if fingerprint(&mut pack, cancellation, None, Source::MAX_BYTES)? != self.descriptor.pack
-            || fingerprint(&mut material, cancellation, None, Source::MAX_BYTES)? != self.descriptor.material
+        if fingerprint(&mut pack, cancellation, None, self.descriptor.pack.length, deadline)? != self.descriptor.pack
+            || fingerprint(
+                &mut material,
+                cancellation,
+                None,
+                self.descriptor.material.length,
+                deadline,
+            )? != self.descriptor.material
         {
             return Err(Error::Invalid);
         }
         self.files(root)?;
         Ok(())
     }
-    pub fn frame(&self, root: &Path, request: &[u8], cancellation: &Cancellation) -> Result<File> {
-        self.frame_with_limit(root, request, cancellation, Source::MAX_BYTES)
+    pub fn frame(&self, root: &Path, request: &[u8], cancellation: &Cancellation, deadline: Instant) -> Result<File> {
+        self.frame_with_limit(root, request, cancellation, Source::MAX_BYTES, deadline)
     }
     pub(in crate::cloud_runtime) fn frame_with_limit(
         &self,
@@ -354,7 +424,9 @@ impl Artifacts {
         request: &[u8],
         cancellation: &Cancellation,
         limit: u64,
+        deadline: Instant,
     ) -> Result<File> {
+        super::remaining(deadline)?;
         self.descriptor.validate().map_err(|_| Error::Invalid)?;
         let retained = self.descriptor.pack.length + self.descriptor.material.length;
         if request.len() > Source::MAX_REQUEST_BYTES || retained * 2 + request.len() as u64 + 4 > limit {
@@ -364,12 +436,19 @@ impl Artifacts {
         output.write_all(&u32::try_from(request.len()).map_err(|_| Error::Invalid)?.to_be_bytes())?;
         output.write_all(request)?;
         let (mut pack, mut material) = self.files(root)?;
-        if fingerprint(&mut pack, cancellation, Some(&mut output), self.descriptor.pack.length)? != self.descriptor.pack
+        if fingerprint(
+            &mut pack,
+            cancellation,
+            Some(&mut output),
+            self.descriptor.pack.length,
+            Some(deadline),
+        )? != self.descriptor.pack
             || fingerprint(
                 &mut material,
                 cancellation,
                 Some(&mut output),
                 self.descriptor.material.length,
+                Some(deadline),
             )? != self.descriptor.material
         {
             return Err(Error::Invalid);

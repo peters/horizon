@@ -21,6 +21,8 @@ pub(in crate::cloud_runtime) struct Journal {
     pub pending: Option<Pending>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<super::source::Artifacts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<super::source::Generation>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +42,7 @@ impl Journal {
             image_digest,
             pending: None,
             sources: Vec::new(),
+            generation: None,
         }
     }
     pub fn load(owner: &Owner) -> Result<Option<Self>> {
@@ -83,6 +86,18 @@ impl Journal {
             }
         }
 
+        if let Some(generation) = &self.generation {
+            generation.validate()?;
+            if projects.contains(&generation.project.project_id())
+                || !self
+                    .manifest
+                    .members
+                    .iter()
+                    .any(|member| member.identity == generation.project)
+            {
+                return Err(Error::Invalid);
+            }
+        }
         if let Some(pending) = &self.pending {
             if pending.request.len() > horizon_cloud_protocol::membership::MAX_MANIFEST_BYTES {
                 return Err(Error::Invalid);

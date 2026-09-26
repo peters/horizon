@@ -159,12 +159,15 @@ fn execute(
         remaining(deadline)?;
         if command == "horizon-cloud-worker import-project-source" {
             let artifacts = source::for_request(saved.as_ref().ok_or(Error::Missing)?, bytes)?;
-            let input = artifacts.frame(&artifact_root, bytes, cancellation)?;
+            let input = artifacts.frame(&artifact_root, bytes, cancellation, deadline)?;
             Ok(runner.private_file_exchange(&mut connection.pinned_command(command), input, remaining(deadline)?)?)
         } else {
             if command == "horizon-cloud-worker prepare-project-source" {
-                source::for_request(saved.as_ref().ok_or(Error::Missing)?, bytes)?
-                    .verify(&artifact_root, cancellation)?;
+                source::for_request(saved.as_ref().ok_or(Error::Missing)?, bytes)?.verify(
+                    &artifact_root,
+                    cancellation,
+                    Some(deadline),
+                )?;
             }
             Ok(runner.private_exchange(&mut connection.pinned_command(command), bytes, remaining(deadline)?)?)
         }

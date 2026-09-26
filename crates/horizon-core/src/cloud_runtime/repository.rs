@@ -140,10 +140,7 @@ pub(super) fn bounded_source(
     runner: &Runner<'_>,
     limit: u64,
 ) -> Result<()> {
-    let selected = material::Material::collect(repository, revision, runner)?;
-    if selected.modules.len() > 256 || selected.assets.len() > 8192 {
-        return Err(Error::Invalid("Source material exceeds its entry limit"));
-    }
+    let selected = material::Material::collect_bounded(repository, revision, runner, limit)?;
     let mut budget = ExportBudget { remaining: limit };
     budget.charge(horizon_cloud_protocol::membership::Source::MAX_REQUEST_BYTES as u64 + 4)?;
     bounded_pack(repository, revision, &retained.join("pack"), runner, &mut budget, 2)?;

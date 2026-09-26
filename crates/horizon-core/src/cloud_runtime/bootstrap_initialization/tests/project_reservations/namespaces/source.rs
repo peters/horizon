@@ -99,7 +99,7 @@ fn retained_source_artifacts_survive_reopen_and_later_local_changes() {
                 saved = bytes.to_vec();
                 if command.ends_with("import-project-source") {
                     source::for_request(&before, bytes)?
-                        .frame(&root, bytes, &cancellation)?
+                        .frame(&root, bytes, &cancellation, startup_deadline())?
                         .read_to_end(&mut frame)?;
                     return Err(ReservationError::Invalid);
                 }
@@ -141,7 +141,7 @@ fn retained_source_artifacts_survive_reopen_and_later_local_changes() {
         if command.ends_with("import-project-source") {
             let mut repeated = Vec::new();
             source::for_request(&reopened, bytes)?
-                .frame(&root, bytes, &cancellation)?
+                .frame(&root, bytes, &cancellation, startup_deadline())?
                 .read_to_end(&mut repeated)?;
             assert_eq!(repeated, frame);
         }
@@ -212,14 +212,25 @@ fn source_frame_budget_includes_retained_files_and_rejects_growth() {
     let artifacts = &saved.sources[0];
     let root = f.owner.artifact_root().unwrap();
     let request = b"bounded frame fixture";
+    let expired = std::time::Instant::now();
+    assert!(matches!(
+        artifacts.frame(root, request, &cancellation, expired),
+        Err(ReservationError::Deadline)
+    ));
+    assert!(matches!(
+        artifacts.verify(root, &cancellation, Some(expired)),
+        Err(ReservationError::Deadline)
+    ));
     let retained = descriptor.pack.length + descriptor.material.length;
     let limit = 2 * retained + request.len() as u64 + 4;
     assert!(
         artifacts
-            .frame_with_limit(root, request, &cancellation, limit - 1)
+            .frame_with_limit(root, request, &cancellation, limit - 1, startup_deadline())
             .is_err()
     );
-    let frame = artifacts.frame_with_limit(root, request, &cancellation, limit).unwrap();
+    let frame = artifacts
+        .frame_with_limit(root, request, &cancellation, limit, startup_deadline())
+        .unwrap();
     assert_eq!(retained + frame.metadata().unwrap().len(), limit);
     drop(frame);
     let payload = journal(&f.owner);
@@ -232,7 +243,162 @@ fn source_frame_budget_includes_retained_files_and_rejects_growth() {
         .unwrap()
         .write_all(b"x")
         .unwrap();
-    assert!(artifacts.frame_with_limit(root, request, &cancellation, limit).is_err());
+    assert!(
+        artifacts
+            .frame_with_limit(root, request, &cancellation, limit, startup_deadline())
+            .is_err()
+    );
+}
+
+#[test]
+fn source_collection_rejects_existing_fifo_and_accepts_regular_storage_symlinks() {
+    use std::os::unix::process::CommandExt;
+    let Some(root) = std::env::var_os("HORIZON_SOURCE_FIFO_FIXTURE") else {
+        let temp = tempfile::tempdir().unwrap();
+        let name = concat!(
+            module_path!(),
+            "::source_collection_rejects_existing_fifo_and_accepts_regular_storage_symlinks"
+        );
+        let name = name.split_once("::").unwrap().1;
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .process_group(0)
+            .env("HORIZON_SOURCE_FIFO_FIXTURE", temp.path())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                assert!(temp.path().join("passed").is_file(), "child must execute the test");
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                let id = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+                rustix::process::kill_process_group(id, rustix::process::Signal::KILL).unwrap();
+                child.wait().unwrap();
+                panic!("source collection blocked on a FIFO");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let repo = PathBuf::from(root).join("repository");
+    let revision = repository(&repo, "initial-fifo");
+    let pointer = fs::read_to_string(repo.join("asset")).unwrap();
+    let oid = pointer.lines().nth(1).unwrap().strip_prefix("oid sha256:").unwrap();
+    let asset = repo.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]).join(oid);
+    let original = asset.with_extension("saved");
+    fs::rename(&asset, &original).unwrap();
+    assert!(Command::new("mkfifo").arg(&asset).status().unwrap().success());
+    let cancellation = Cancellation::default();
+    let runner = runner(&cancellation);
+    let retained = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let result = crate::cloud_runtime::repository::bounded_source(
+        &repo,
+        &revision,
+        retained.path(),
+        scratch.path(),
+        &runner,
+        1024 * 1024,
+    );
+    assert!(matches!(
+        result,
+        Err(crate::cloud_runtime::Error::Invalid(
+            "Local Git LFS object size mismatch"
+        ))
+    ));
+    assert_eq!(fs::read_dir(retained.path()).unwrap().count(), 0);
+    fs::remove_file(&asset).unwrap();
+    std::os::unix::fs::symlink(&original, &asset).unwrap();
+    crate::cloud_runtime::repository::bounded_source(
+        &repo,
+        &revision,
+        retained.path(),
+        scratch.path(),
+        &runner,
+        1024 * 1024,
+    )
+    .unwrap();
+    fs::write(repo.parent().unwrap().join("passed"), b"verified").unwrap();
+}
+
+fn add_index_entries(repo: &Path, prefix: &str, count: usize, blob: &str) {
+    use std::io::{Seek, Write};
+    let mut input = tempfile::tempfile().unwrap();
+    for index in 0..count {
+        writeln!(input, "100644 {blob}\t{prefix}-{index:05}").unwrap();
+    }
+    input.rewind().unwrap();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-index", "--index-info"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(input)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    git(repo, &["commit", "-qm", "Collection boundary fixture"]);
+}
+
+#[test]
+fn source_collection_limits_tree_entries_assets_and_bytes_before_excess_hashing() {
+    for (kind, expected_verifications, limit) in
+        [("bytes", 0, 1), ("assets", 8192, 1024 * 1024), ("tree", 0, 1024 * 1024)]
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repository");
+        repository(&repo, "collection");
+        if kind == "assets" {
+            fs::write(repo.join(".gitattributes"), "asset* filter=lfs\n").unwrap();
+            git(&repo, &["add", ".gitattributes"]);
+            let blob = git(&repo, &["hash-object", "-w", "asset"]);
+            add_index_entries(&repo, "asset", 8192, &blob);
+        } else if kind == "tree" {
+            let blob = git(&repo, &["hash-object", "-w", "value"]);
+            add_index_entries(&repo, "entry", 65536, &blob);
+        }
+        let revision = git(&repo, &["rev-parse", "HEAD"]);
+        let verifications = std::cell::Cell::new(0);
+        let cancellation = Cancellation::default();
+        let emit = |event| {
+            if let crate::cloud_runtime::Event::Progress(progress) = event
+                && progress.detail == "Verifying current source asset"
+                && progress.completed == 0
+            {
+                verifications.set(verifications.get() + 1);
+            }
+        };
+        let runner = crate::cloud_runtime::command::Runner {
+            cancel: &cancellation,
+            emit: &emit,
+            secrets: Vec::new(),
+        };
+        let retained = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let result = crate::cloud_runtime::repository::bounded_source(
+            &repo,
+            &revision,
+            retained.path(),
+            scratch.path(),
+            &runner,
+            limit,
+        );
+        let expected = match kind {
+            "bytes" => "Source material exceeds its verification byte limit",
+            "assets" => "Source material exceeds its asset limit",
+            _ => "Source tree exceeds its entry limit",
+        };
+        assert!(
+            matches!(result, Err(crate::cloud_runtime::Error::Invalid(message)) if message == expected),
+            "{kind}"
+        );
+        assert_eq!(verifications.get(), expected_verifications, "{kind}");
+        assert_eq!(fs::read_dir(retained.path()).unwrap().count(), 0);
+    }
 }
 
 #[test]
@@ -276,6 +442,113 @@ fn source_generation_rejects_asset_fifo_substitution_without_waiting_for_a_write
     assert!(replaced.get());
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert_eq!(fs::read(asset.with_extension("saved")).unwrap(), b"large asset fifo");
+}
+
+#[test]
+fn incomplete_generation_fences_repeated_exports_after_reopen_and_preserves_replacements() {
+    for completion_save in [None, Some(0), Some(1)] {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repository");
+        repository(&repo, "generation");
+        let mut f = ready();
+        let request = reservation(&f, "one", 8000);
+        let mut worker = remote(&f);
+        prepare_host(&mut f, &request, &mut worker);
+        let vault = f.vault.clone();
+        let mut directory = PathBuf::new();
+        assert!(
+            source::prepare_with(
+                &mut f.owner,
+                &request.project,
+                &repo,
+                "HEAD",
+                &Cancellation::default(),
+                &mut |path| {
+                    directory = path.into();
+                    if let Some(writes) = completion_save {
+                        vault.fail_after(Some(writes));
+                        Ok(())
+                    } else {
+                        Err(ReservationError::Invalid)
+                    }
+                }
+            )
+            .is_err()
+        );
+        f = f.reopen();
+        let saved = Journal::load(&f.owner).unwrap().unwrap();
+        let root = f.owner.artifact_root().unwrap().to_owned();
+        let before = fs::read_dir(&root).unwrap().count();
+        if completion_save == Some(1) {
+            assert!(saved.generation.is_none());
+            let pack = fs::read(directory.join("pack")).unwrap();
+            let material = fs::read(directory.join("source-material.tar")).unwrap();
+            assert_eq!(
+                source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &Cancellation::default()).unwrap(),
+                saved.sources[0].descriptor
+            );
+            assert_eq!(fs::read_dir(&root).unwrap().count(), before);
+            assert_eq!(fs::read(directory.join("pack")).unwrap(), pack);
+            assert_eq!(fs::read(directory.join("source-material.tar")).unwrap(), material);
+            continue;
+        }
+        assert!(saved.generation.is_some());
+        let original = directory.with_extension("original");
+        fs::rename(&directory, &original).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("sentinel"), b"preserve replacement").unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &Cancellation::default()),
+                Err(ReservationError::Pending)
+            ));
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), before + 1);
+        assert_eq!(fs::read(directory.join("sentinel")).unwrap(), b"preserve replacement");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(original).unwrap().count(),
+            if completion_save.is_some() { 2 } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn unanchored_generation_never_creates_an_artifact_directory() {
+    for writes in [0, 1] {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repository");
+        repository(&repo, "intent");
+        let mut f = ready();
+        let request = reservation(&f, "one", 8000);
+        let mut worker = remote(&f);
+        prepare_host(&mut f, &request, &mut worker);
+        let root = f.owner.artifact_root().unwrap().to_owned();
+        let before = fs::read_dir(&root).unwrap().count();
+        f.vault.fail_after(Some(writes));
+        assert!(
+            source::prepare_with(
+                &mut f.owner,
+                &request.project,
+                &repo,
+                "HEAD",
+                &Cancellation::default(),
+                &mut |_| panic!("unanchored generation")
+            )
+            .is_err()
+        );
+        f = f.reopen();
+        assert_eq!(fs::read_dir(root).unwrap().count(), before);
+        let saved = Journal::load(&f.owner).unwrap().unwrap();
+        if saved.generation.is_some() {
+            assert!(matches!(
+                source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &Cancellation::default()),
+                Err(ReservationError::Pending)
+            ));
+        } else {
+            source::prepare(&mut f.owner, &request.project, &repo, "HEAD", &Cancellation::default()).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -343,7 +616,7 @@ fn native_ssh_project_sources() {
             Ok(if command.ends_with("import-project-source") {
                 runner.private_file_exchange(
                     &mut command_line,
-                    source::for_request(&saved, bytes)?.frame(&root, bytes, &cancellation)?,
+                    source::for_request(&saved, bytes)?.frame(&root, bytes, &cancellation, startup_deadline())?,
                     Duration::from_secs(120),
                 )?
             } else {

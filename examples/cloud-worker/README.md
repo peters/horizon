@@ -559,7 +559,13 @@ submodules. It retains private immutable transfer files beside the anchored host
 journal before signing `ImportProjectSource`. Retries of the same local repository
 and revision selector reuse those bytes even if the selector now resolves to a
 new commit; `resume` needs no original repository. There is no refresh operation.
-Unreferenced artifacts after a failed initial save remain local and are not adopted.
+Before creating an export directory, the host durably records one generation
+intent with the selected project, repository, revision and directory name. Successful
+artifact publication replaces that intent atomically. An incomplete generation,
+including an uncertain save or ordinary export failure, blocks new exports on that
+owner after restart; it cannot accumulate a fresh directory on each retry. Its files
+remain retained. Automatic recovery or cleanup of incomplete generation is not
+supported; replacement paths are never adopted or recursively removed.
 Generation enforces one 4 GiB byte budget while writing the retained pack and tar
 and the disposable LFS/submodule staging files. It reserves a second copy of each
 retained byte plus the maximum request header for the temporary SSH input frame.
@@ -567,7 +573,13 @@ Framing rechecks that budget and rejects artifact growth before copying excess
 bytes. This conservative reservation keeps retained transfer data below 2 GiB;
 material staging reduces the available capacity further. Scratch is private, outside
 the owner directory, and removed on ordinary completion or error; only pack and
-tar are retained after a successful export.
+tar are retained after a successful export. Collection stops before exceeding
+65,536 tree entries, 16 MiB of accumulated project-relative path bytes (4 KiB per
+path), 256 submodules or 8,192 LFS references. Declared LFS bytes, including repeated
+references, share a verification limit equal to the production budget; excess
+references are rejected before hashing. Local LFS storage may resolve through
+symlinks, but the opened object must be a regular file with the declared size.
+FIFO or device substitution is rejected without waiting for a peer.
 
 `prepare-project-source` verifies the signed project request, live membership,
 settled namespace and current capabilities on every attempt, including historical
@@ -584,7 +596,7 @@ the aggregate wire limit is 4 GiB. Each worker request shares a 600-second deadl
 across input, capability probes and validation helpers; each helper also retains
 its 120-second limit. The host permits a caller-selected timeout up to 1,260 seconds
 for source preparation plus import, including source resumes. Shorter caller
-timeouts remain binding. Local export is cancellable and has separate command
+timeouts remain binding and are polled between host verification/framing chunks. Local export is cancellable and has separate command
 bounds; synchronous filesystem calls are not preempted. Full Git responses are
 capped at 16 MiB during execution, and pointer inspection reads at most 1,025 bytes.
 The helper and each Git child retain the allocation
