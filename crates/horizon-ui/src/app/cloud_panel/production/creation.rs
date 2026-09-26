@@ -1,10 +1,12 @@
 //! Presentation of the existing repository-backed cloud creation flow.
-use super::{HorizonApp, Production, machine_size};
+use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, dir_search};
 use std::path::Path;
+
+mod pricing;
 
 #[derive(Default)]
 struct Actions {
@@ -38,6 +40,7 @@ impl HorizonApp {
         if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
             self.read_cloud_profiles(ctx);
         }
+        self.request_cloud_prices(ctx);
         let id = Id::new("cloud-creation");
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
@@ -108,6 +111,29 @@ impl HorizonApp {
         }
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    /// Keeps prices and stock current for the size being chosen.
+    fn request_cloud_prices(&mut self, ctx: &Context) {
+        let production = &mut self.cloud_prototype.production;
+        production.prices.poll();
+        let Some(root) = self.cloud_prototype.root.as_deref() else {
+            return;
+        };
+        let Some(profile) = production
+            .profiles
+            .as_ref()
+            .and_then(|config| config.profiles.get(&production.selected_profile))
+        else {
+            return;
+        };
+        let (cpu, memory_gb) = production.size.unwrap_or((profile.cpu, profile.memory_gb));
+        let sized = horizon_core::cloud_runtime::prices::Profile {
+            cpu,
+            memory_gb,
+            ..profile.clone()
+        };
+        production.prices.request(root, &sized, ctx);
     }
 
     /// The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
@@ -251,8 +277,12 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
-            if let Some(size) = size_field(ui, profile.gpu, profile.storage.container_gb, (cpu, memory_gb)) {
+            let (size, refresh) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb));
+            if let Some(size) = size {
                 form.size = Some(size);
+            }
+            if refresh {
+                form.prices.refresh();
             }
         }
     }
@@ -346,46 +376,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
 
 /// Offered CPU worker sizes; a GPU profile's size is fixed. Buttons and inline notes rather
 /// than drop-downs and tooltips, which would draw below this Tooltip-order modal.
-fn size_field(ui: &mut Ui, gpu: bool, container_gb: u16, current: machine_size::Size) -> Option<machine_size::Size> {
-    ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
-    if gpu {
-        ui.label(
-            RichText::new(machine_size::fixed(current, true))
-                .size(13.0)
-                .color(theme::FG_SOFT()),
-        );
-        ui.small("GPU workers use the size set by their profile.");
-        return None;
-    }
-    let option = |ui: &mut Ui, label: String, selected: bool| {
-        ui.add(
-            Button::new(RichText::new(label).size(13.0))
-                .selected(selected)
-                .min_size(Vec2::new(0.0, 30.0))
-                .corner_radius(8),
-        )
-        .clicked()
-    };
-    let cpu = ui
-        .horizontal_wrapped(|ui| {
-            machine_size::vcpu(current, container_gb, |label, selected| option(ui, label, selected))
-        })
-        .inner;
-    let memory = ui
-        .horizontal_wrapped(|ui| {
-            machine_size::memory(current, container_gb, |label, selected| option(ui, label, selected))
-        })
-        .inner;
-    if let Some(warning) = machine_size::unoffered(current, container_gb) {
-        ui.colored_label(theme::PALETTE_RED(), warning);
-    } else {
-        ui.small(format!(
-            "RunPod CPU sizes offered with this profile's {container_gb} GB container disk."
-        ));
-    }
-    cpu.or(memory)
-}
-
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), 40.0),

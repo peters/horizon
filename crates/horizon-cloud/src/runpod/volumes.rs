@@ -151,7 +151,7 @@ impl RunPod {
         );
         let catalog: Catalog = serde_json::from_value(self.request_url("GET", &url, None, cancel, None)?)
             .map_err(|_| CloudError::InvalidResponse)?;
-        let candidates = candidates(catalog, worker);
+        let candidates = candidates(catalog, &worker.data_centers, &worker.cpu_flavors);
         let centers: Vec<String> = candidates.iter().map(|(_, id)| id.clone()).collect();
         let flavors: Vec<&Flavor> = worker.cpu_flavors.iter().filter_map(|id| Flavor::get(id)).collect();
         let stock = self.cpu_stock(&centers, &flavors, worker.profile.cpu, cancel)?;
@@ -470,26 +470,28 @@ fn transition(state: &mut State, next: State, persist: &mut impl FnMut(&State) -
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Catalog {
-    data_centers: Vec<Center>,
+pub(super) struct Catalog {
+    pub(super) data_centers: Vec<Center>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Center {
-    id: String,
+pub(super) struct Center {
+    pub(super) id: String,
     #[serde(default)]
     network_volume_types: Vec<String>,
     #[serde(default)]
     cpu_availability: Vec<Capacity>,
+    #[serde(default)]
+    pub(super) gpu_availability: Vec<Capacity>,
 }
 #[derive(Deserialize)]
-struct Capacity {
-    id: String,
-    availability: String,
+pub(super) struct Capacity {
+    pub(super) id: String,
+    pub(super) availability: String,
 }
 /// Configured data centers with standard storage whose flavor family reports
 /// capacity, with their preference rank. Family capacity only narrows the stock query.
-fn candidates(catalog: Catalog, worker: &WorkerSpec) -> Vec<(usize, String)> {
+pub(super) fn candidates(catalog: Catalog, data_centers: &[String], cpu_flavors: &[String]) -> Vec<(usize, String)> {
     catalog
         .data_centers
         .into_iter()
@@ -497,17 +499,16 @@ fn candidates(catalog: Catalog, worker: &WorkerSpec) -> Vec<(usize, String)> {
             if !valid_id(&center.id) || !center.network_volume_types.iter().any(|tier| tier == "STANDARD") {
                 return None;
             }
-            let preference = if worker.data_centers.is_empty() {
+            let preference = if data_centers.is_empty() {
                 0
             } else {
-                worker.data_centers.iter().position(|id| id == &center.id)?
+                data_centers.iter().position(|id| id == &center.id)?
             };
             center
                 .cpu_availability
                 .iter()
                 .any(|cpu| {
-                    worker.cpu_flavors.contains(&cpu.id)
-                        && matches!(cpu.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
+                    cpu_flavors.contains(&cpu.id) && matches!(cpu.availability.as_str(), "HIGH" | "MEDIUM" | "LOW")
                 })
                 .then_some((preference, center.id))
         })

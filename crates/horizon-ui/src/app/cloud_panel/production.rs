@@ -10,6 +10,7 @@ mod launch;
 mod lifecycle;
 mod machine_size;
 mod presentation;
+mod prices;
 mod progress;
 mod rebuild;
 mod repository_setup;
@@ -59,6 +60,8 @@ pub(super) struct Production {
     selected_profile: String,
     /// A CPU worker size chosen for the selected profile; `None` keeps the profile's size.
     size: Option<machine_size::Size>,
+    /// Provider prices and stock shown while choosing the size.
+    prices: prices::State,
     setup_agent: Option<PanelKind>,
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
     session_id: Option<String>,
