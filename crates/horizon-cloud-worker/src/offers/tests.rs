@@ -51,13 +51,15 @@ fn error(result: &UsageResult) -> &str {
 fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("cloud-offers.json");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
     let agent = request("horizon:cloud-a", HOST, &serde_json::json!({"gpu": true, "hours": 2}));
     // Before any prices arrive, the agent is told where they come from.
-    let missing = answer_from(&agent, &path, HOST, NOW);
+    let missing = answer_from(&agent, (&path, &sessions), HOST, NOW);
     assert!(error(&missing).starts_with("cloud_offers_unavailable: no prices"));
 
     publish(snapshot(u64::try_from(NOW).unwrap() - 60_000).as_slice(), &path, NOW).unwrap();
-    let answered = answer_from(&agent, &path, HOST, NOW);
+    let answered = answer_from(&agent, (&path, &sessions), HOST, NOW);
     let offers = answered.offers.unwrap();
     assert_eq!(offers["provider"], "RunPod");
     assert_eq!(offers["observed_seconds_ago"], 60);
@@ -71,14 +73,14 @@ fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
         NOW,
     )
     .unwrap();
-    let stale = answer_from(&agent, &path, HOST, NOW);
+    let stale = answer_from(&agent, (&path, &sessions), HOST, NOW);
     assert!(error(&stale).starts_with("cloud_offers_stale: the newest prices on this worker are 21 minutes old"));
     assert!(stale.offers.is_none());
     // Prices dated beyond the tolerated clock difference could never go stale.
     let ahead = u64::try_from(NOW).unwrap() + 6 * 60_000;
     assert!(publish(snapshot(ahead).as_slice(), &path, NOW).is_err());
     publish(snapshot(ahead).as_slice(), &path, NOW + 60_000).unwrap();
-    let future = answer_from(&agent, &path, HOST, NOW);
+    let future = answer_from(&agent, (&path, &sessions), HOST, NOW);
     assert!(error(&future).ends_with("dated in the future"));
     // A few minutes of difference is tolerated.
     publish(
@@ -87,7 +89,7 @@ fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
         NOW,
     )
     .unwrap();
-    let skewed = answer_from(&agent, &path, HOST, NOW);
+    let skewed = answer_from(&agent, (&path, &sessions), HOST, NOW);
     assert_eq!(skewed.offers.unwrap()["observed_seconds_ago"], 0);
 }
 
@@ -95,24 +97,40 @@ fn agents_rank_offers_from_the_prices_the_owning_horizon_sent() {
 fn only_this_workers_agents_with_valid_requirements_get_offers() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("cloud-offers.json");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
     publish(snapshot(u64::try_from(NOW).unwrap()).as_slice(), &path, NOW).unwrap();
     let valid = serde_json::json!({"min_vcpu": 4});
+    // Another host, an actor that is not a worker agent, and a session that has ended
+    // or never existed are refused.
     for refused in [
         request("horizon:agent", HOST, &valid),
         request("horizon:cloud-a", "another-host", &valid),
+        request("horizon:cloud-ended", HOST, &valid),
+        request("horizon:cloud-../a", HOST, &valid),
     ] {
         assert_eq!(
-            error(&answer_from(&refused, &path, HOST, NOW)),
+            error(&answer_from(&refused, (&path, &sessions), HOST, NOW)),
             "cloud_offers_unavailable"
         );
     }
-    let late = answer_from(&request("horizon:cloud-a", HOST, &valid), &path, HOST, NOW + 15_000);
+    let late = answer_from(
+        &request("horizon:cloud-a", HOST, &valid),
+        (&path, &sessions),
+        HOST,
+        NOW + 15_000,
+    );
     assert_eq!(error(&late), "cloud_offers_timed_out");
     for invalid in [serde_json::json!({"rent": true}), serde_json::json!({"gpu_type": "L4"})] {
-        let refused = answer_from(&request("horizon:cloud-a", HOST, &invalid), &path, HOST, NOW);
+        let refused = answer_from(
+            &request("horizon:cloud-a", HOST, &invalid),
+            (&path, &sessions),
+            HOST,
+            NOW,
+        );
         assert!(error(&refused).starts_with("cloud_offers_invalid_request"), "{invalid}");
     }
-    let cpu = answer_from(&request("horizon:cloud-a", HOST, &valid), &path, HOST, NOW);
+    let cpu = answer_from(&request("horizon:cloud-a", HOST, &valid), (&path, &sessions), HOST, NOW);
     assert_eq!(cpu.offers.unwrap()["offers"][0]["vcpu"], 4);
 }
 

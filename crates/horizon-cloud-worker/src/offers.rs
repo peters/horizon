@@ -10,11 +10,13 @@ use horizon_browser_control::manifest::{
 use horizon_cloud::offers::{Requirements, offers};
 use horizon_cloud_protocol::offers::{MAX_BYTES, Snapshot};
 use std::{
-    io::{self, Read},
+    io::{self, Read, Write},
     path::Path,
 };
 
 const SNAPSHOT: &str = "/run/sshd/cloud-offers.json";
+/// One directory per agent session this worker runs.
+const SESSIONS: &str = "/workspace/sessions";
 /// The owning Horizon sends prices at most 15 minutes old while it runs; older ones are
 /// not offered as current.
 const MAX_AGE_MILLIS: u64 = 20 * 60 * 1000;
@@ -37,7 +39,23 @@ fn publish(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
             "Cloud offer prices are dated in the future; check this computer's and the worker's clocks",
         ));
     }
-    super::companions::files::write(path, &serde_json::to_vec(&snapshot)?)
+    write_private(path, &serde_json::to_vec(&snapshot)?)
+}
+
+/// Replaces `path` atomically. Each publication writes a file of its own first, so
+/// overlapping ones never share a pending file.
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Invalid cloud offer snapshot path"))?;
+    // Created readable by its owner only.
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    file.write_all(bytes)?;
+    file.as_file().sync_all()?;
+    file.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
 }
 
 fn future(snapshot: &Snapshot, now: i64) -> bool {
@@ -56,27 +74,44 @@ fn decode(reader: impl Read) -> io::Result<Snapshot> {
     Ok(snapshot)
 }
 
+/// Whether `actor` is an agent session this worker still runs.
+fn live(actor: &str, sessions: &Path) -> bool {
+    actor.strip_prefix("horizon:cloud-").is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 100
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            && sessions.join(id).is_dir()
+    })
+}
+
 /// The answer to an agent's `cloud_offers` request on this worker.
 pub(crate) fn answer(request: &UsageRequest) -> UsageResult {
     answer_from(
         request,
-        Path::new(SNAPSHOT),
+        (Path::new(SNAPSHOT), Path::new(SESSIONS)),
         manifest::host_instance(),
         manifest::now_millis(),
     )
 }
 
-fn answer_from(request: &UsageRequest, path: &Path, host: &str, now: i64) -> UsageResult {
+fn answer_from(request: &UsageRequest, (path, sessions): (&Path, &Path), host: &str, now: i64) -> UsageResult {
     let mut result = request.result(Vec::new(), None);
-    match ranked(request, path, host, now) {
+    match ranked(request, (path, sessions), host, now) {
         Ok(offers) => result.offers = Some(offers),
         Err(error) => result.error = Some(error),
     }
     result
 }
 
-fn ranked(request: &UsageRequest, path: &Path, host: &str, now: i64) -> Result<serde_json::Value, String> {
-    if !request.actor.starts_with("horizon:cloud-") || request.host_instance != host {
+fn ranked(
+    request: &UsageRequest,
+    (path, sessions): (&Path, &Path),
+    host: &str,
+    now: i64,
+) -> Result<serde_json::Value, String> {
+    if !live(&request.actor, sessions) || request.host_instance != host {
         return Err("cloud_offers_unavailable".to_owned());
     }
     if now >= request.deadline_at_millis.saturating_sub(1_000) {
