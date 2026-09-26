@@ -2,6 +2,9 @@
 use crate::{OperationId, ProjectIdentity, bootstrap::Startup, membership::SessionId};
 use serde::{Deserialize, Serialize};
 
+/// Agent supported by the initial one-shot minimal-session runtime contract.
+pub const SUPPORTED_AGENT: horizon_cloud::Agent = horizon_cloud::Agent::Claude;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {

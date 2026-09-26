@@ -32,7 +32,7 @@ COMMANDS[b"cat /run/sshd/horizon-allocation/runtime.json"] = "runtime"
 # This service keeps one task-owned PID namespace alive across SSH commands.
 # Killing its bubblewrap parent tears down every fixture-only descendant.
 NAMESPACE_SERVICE = r'''
-import base64,json,os,signal,socket,subprocess,tempfile,uuid,threading
+import base64,contextlib,fcntl,json,os,signal,socket,subprocess,tempfile,time,uuid,threading
 import sys;sys.path.insert(0,'/control')
 from cloud_attachment_smoke import serve_terminal
 s=socket.socket(socket.AF_UNIX);s.bind('/control/service.sock');s.listen(4)
@@ -48,7 +48,16 @@ while True:
    args=['/usr/bin/strace','-D','-ff','-o','/control/race-trace','-e','inject=setsid:signal=SIGSTOP']+args
   # Regular files let a detached fault tracer retain descriptors without
   # extending communicate() beyond the actual worker request lifetime.
-  with tempfile.TemporaryFile() as out,tempfile.TemporaryFile() as err:
+  with contextlib.ExitStack() as leases,tempfile.TemporaryFile() as out,tempfile.TemporaryFile() as err:
+   if q['command']=='cancel-project-reservation' and os.path.exists('/control/refuse-cancel'):
+    lease=leases.enter_context(open('/workspace/.horizon-allocation/allocation.lock','rb'))
+    deadline=time.monotonic()+5
+    while True:
+     try:fcntl.flock(lease,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+     except BlockingIOError:
+      if time.monotonic()>=deadline:raise TimeoutError('Fixture lock refusal could not be armed')
+      time.sleep(.01)
+    os.unlink('/control/refuse-cancel')
    p=subprocess.run(args,input=base64.b64decode(q['request']),stdout=out,stderr=err,timeout=180,env=dict(os.environ,**q['environment']))
    out.seek(0);err.seek(0);p.stdout=out.read(65537);p.stderr=err.read(65537)
   if q['command']=='stop-project-session' and p.returncode==0 and os.path.exists('/control/stop-race'):
@@ -167,14 +176,14 @@ def run(options):
     shutil.copy2(sshd, root / "bin/sshd")
     os.link(root / "worker", root / "bin/horizon-cloud-worker")
     image_capabilities = {}
-    if options.scenario in ["sources", "runtime", "attachment"]:
+    if options.scenario in ["sources", "runtime", "attachment", "setup"]:
         # Version-only probes qualify reservation routing, never agent startup.
         image_capabilities["agents"] = ["codex", "claude"]
         for name in image_capabilities["agents"]:
             probe = root / "bin" / name
             probe.write_text('#!/usr/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 64\nprintf "%s\\n" "fixture agent 1.0.0"\n')
             probe.chmod(0o700)
-        if options.scenario in ["runtime", "attachment"]:
+        if options.scenario in ["runtime", "attachment", "setup"]:
             (root / "bin/claude").write_text(SYNTHETIC_AGENT)
     (root / "image-capabilities.json").write_text(json.dumps(image_capabilities))
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "recovery-fixture", "-f", str(root / "id_ed25519")], check=True)
@@ -190,7 +199,10 @@ def run(options):
     sessions = []
     errors = []
     children = []
-    namespace = RuntimeNamespace(root) if options.scenario in ["runtime", "attachment"] else None
+    namespace = RuntimeNamespace(root) if options.scenario in ["runtime", "attachment", "setup"] else None
+    if options.scenario == "setup":
+        (root / "control/refuse-cancel").touch()
+        (root / "control/delay-restart").touch()
     if namespace and options.runtime_fault == "stop-race":
         (root / "control/stop-race").touch()
 
@@ -340,6 +352,18 @@ def run(options):
                 return
         listener.listen(4)
         while not stop.is_set():
+            if options.scenario == "setup" and (root / "restart").exists():
+                with server_lock:
+                    # Setup waits for this acknowledgement before opening SSH.
+                    # One delayed restart exceeds the ordinary banner timeout.
+                    if (root / "control/delay-restart").exists():
+                        (root / "control/delay-restart").unlink()
+                        time.sleep(12)
+                    prepared = worker("prepare-allocation-ssh", startup=True)
+                    if prepared.returncode:
+                        errors.append("Setup restart preparation failed: " + prepared.stderr.decode())
+                        return
+                    (root / "restart").unlink()
             try:
                 sock, _ = listener.accept()
             except socket.timeout:
@@ -366,9 +390,10 @@ def run(options):
                      "sources": "native_ssh_project_sources",
                      "runtime": "native_ssh_project_sources",
                      "attachment": "native_ssh_project_sources",
-                     "namespaces": "native_ssh_project_namespaces"}[options.scenario]
+                     "namespaces": "native_ssh_project_namespaces",
+                     "setup": "native_ssh_project_setup"}[options.scenario]
         with open(root / "test.log", "w") as output:
-            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=600 if options.scenario in ["runtime", "attachment"] else 300).returncode
+            test_exit = subprocess.run(["cargo", "test", "-p", "horizon-core", test_name, "--lib", "--", "--ignored", "--nocapture"], env=environment, stdout=output, stderr=subprocess.STDOUT, timeout=600 if options.scenario in ["runtime", "attachment", "setup"] else 300).returncode
     except (subprocess.TimeoutExpired, OSError) as error:
         errors.append(type(error).__name__ + ": " + str(error))
     finally:
@@ -385,7 +410,12 @@ def run(options):
     report = {"worker_sha256": worker_hash, "test_exit": test_exit, "same_host_key": len(set(host_keys)) == 1, "sessions": sessions, "errors": errors, "threads_stopped": not thread.is_alive() and all(not child.is_alive() for child in children), "namespace_stopped": namespace is None or namespace.process is None or namespace.process.poll() is not None}
     (root / "ssh-report.json").write_text(json.dumps(report, indent=2))
     assert test_exit == 0 and not errors and report["threads_stopped"] and report["namespace_stopped"], "Inspect private test.log and ssh-report.json"
-    if options.scenario in ["runtime", "attachment"]:
+    if options.scenario == "setup":
+        assert not (root / "control/delay-restart").exists()
+        cancellations = [s for s in sessions if s["command"] == "cancel-project-reservation"]
+        assert cancellations[0]["exit_code"] == 1 and "Allocation is locked" in cancellations[0]["stderr"]
+        assert any(s["exit_code"] == 0 and s["request_sha256"] == cancellations[0]["request_sha256"] for s in cancellations[1:])
+    if options.scenario in ["runtime", "attachment", "setup"]:
         assert report["same_host_key"]
         expected_starts = 1 if options.runtime_fault in ["stop-race", "early-exit"] else 6
         assert len({s["request_sha256"] for s in sessions if s["command"] == "start-project-session"}) == expected_starts
@@ -416,7 +446,7 @@ def run(options):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources", "runtime", "attachment"], default="initialization")
+    parser.add_argument("--scenario", choices=["initialization", "reservations", "host-reservations", "namespaces", "sources", "runtime", "attachment", "setup"], default="initialization")
     parser.add_argument("--attachment-race", action="store_true", help="Pause attachment after connecting, then commit stop before opening its terminal gate")
     parser.add_argument("--runtime-fault", choices=["supervisor", "server", "socket", "stop-race", "early-exit"], default="supervisor")
     parser.add_argument("--worker", required=True)

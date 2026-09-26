@@ -980,3 +980,42 @@ behavior require separate qualification.
 Add `--attachment-race` to pause the attachment process after its upstream
 connection, commit a terminal stop, and verify that the final authorization gate
 rejects queued input. This isolated fault lane requires `strace`.
+
+### Incremental owning-host project setup
+
+The internal Linux API `cloud_runtime::project_setup` composes the existing signed
+operations on an already initialized, qualified allocation. `begin` saves the
+immutable project binding, canonical repository, original selection, resolved
+commit, exact capability grant and generated session IDs in the anchored owning
+journal before worker effects. Repeating identical input returns those same IDs
+and commit even after a branch moves. Existing low-level projects are not adopted.
+
+`advance` performs at most one operation: reservation, namespace preparation,
+committed-source import, session reservation/preparation, then one-shot launch.
+Every selected checkout is prepared before the first launch. Callers may release
+the allocation owner between steps and use `status` for local durable progress.
+A pending request resumes only if it matches this project's next exact step;
+unrelated pending work and changed member/session history block advancement.
+
+The initial supported policy is the existing minimal agent runtime with no ports,
+browser, desktop or credential grants. This API takes a previously qualified
+immutable image selection; it does not replace caller/workspace authorization or
+full profile/resource admission. Public UI/CLI/MCP activation remains later work.
+
+`Complete` means the saved launch intents settled, not that agents authenticated
+or applications became ready. Inspect runtime state through the existing signed
+session API and use the separate attachment transport for reconnect. Exited,
+uncertain or stopped sessions are never relaunched by setup. A terminal stop or
+project cancellation prevents further setup progress and preserves files.
+
+Cancellation of a host invocation stops further progress without stopping remote
+work. An interrupted source generation can remain retained and blocked. Setup
+never erases it or starts replacement exports. After export, the coordinator
+rechecks the original deadline before SSH; provider reads, export and synchronous
+durability retain their existing independent bounds.
+
+The `setup` scenario in `scripts/cloud-initialization-smoke.py` uses three synthetic
+projects and two sessions each, interleaved steps, host/SSH restarts, lost replies
+and failed completion saves. It verifies pinned source, one launch per session,
+retained edits/homes and sibling progress during terminal cleanup. No credentials,
+paid inference or provider resources are used by this fixture.

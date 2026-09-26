@@ -753,3 +753,12 @@ on initial launch. Existing records without that binding remain inspectable and
 stoppable but cannot be adopted for attachment. Authorization opens input and
 output forwarding before releasing the same lock that orders terminal stop;
 no allocation lock is held during interactive relay.
+
+The shared-worker owning-host `cloud_runtime/project_setup/` coordinator separates
+immutable anchored intent validation (`intent`) from signed-history sequencing
+(`progress`). Its entry points record, advance one operation, or report durable
+progress; they compose `project_reservations` rather than implement another worker
+transaction layer. Source export retains its existing uncertainty fence, and the
+coordinator checks the caller deadline again before transfer. Runtime readiness
+and terminal attachment remain separate APIs. Setup recovery and real SSH fixtures
+are colocated under the bootstrap initialization source tests' `setup/` tree.
