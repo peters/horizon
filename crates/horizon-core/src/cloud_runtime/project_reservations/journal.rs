@@ -161,6 +161,18 @@ impl Journal {
                 },
             ),
             Change::Cancel(identity) => (identity, Request::Cancel {}),
+            Change::StartSession(identity, session_id) => (
+                identity,
+                Request::StartSession {
+                    session_id: *session_id,
+                },
+            ),
+            Change::StopSession(identity, session_id) => (
+                identity,
+                Request::StopSession {
+                    session_id: *session_id,
+                },
+            ),
             Change::Resume => return Err(Error::Missing),
         };
         let action = payload.action();
@@ -172,7 +184,9 @@ impl Journal {
                     (Request::ReserveSession { session }, Request::ReserveSession { session: old }) => {
                         session.id == old.id
                     }
-                    (Request::PrepareSession { session_id }, Request::PrepareSession { session_id: old }) => {
+                    (Request::PrepareSession { session_id }, Request::PrepareSession { session_id: old })
+                    | (Request::StartSession { session_id }, Request::StartSession { session_id: old })
+                    | (Request::StopSession { session_id }, Request::StopSession { session_id: old }) => {
                         session_id == old
                     }
                     _ => saved.action() == action,
@@ -241,6 +255,20 @@ impl Pending {
                         })
             }
             Change::Cancel(identity) => self.receipt.identity == *identity && payload == (Request::Cancel {}),
+            Change::StartSession(identity, session_id) => {
+                self.receipt.identity == *identity
+                    && payload
+                        == (Request::StartSession {
+                            session_id: *session_id,
+                        })
+            }
+            Change::StopSession(identity, session_id) => {
+                self.receipt.identity == *identity
+                    && payload
+                        == (Request::StopSession {
+                            session_id: *session_id,
+                        })
+            }
             Change::Resume => true,
         })
     }
@@ -253,6 +281,8 @@ impl Pending {
                 Request::ImportSource { .. } => "horizon-cloud-worker prepare-project-source",
                 Request::ReserveSession { .. } => "horizon-cloud-worker reserve-project-session",
                 Request::PrepareSession { .. } => "horizon-cloud-worker prepare-project-session",
+                Request::StartSession { .. } => "horizon-cloud-worker start-project-session",
+                Request::StopSession { .. } => "horizon-cloud-worker stop-project-session",
                 Request::Cancel {} => "horizon-cloud-worker cancel-project-reservation",
             },
         )

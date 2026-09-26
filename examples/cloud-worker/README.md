@@ -462,7 +462,7 @@ checks, not OS resource quotas or demonstrated application readiness.
 State retains at most 32 project identities and 64 mutations without eviction.
 Every live project retains one mutation slot for cancellation; preparation also
 consumes a slot.
-The 64-KiB manifest limit can be reached earlier. Every live reservation reserves
+The 128-KiB manifest limit can be reached earlier. Every live reservation reserves
 4 KiB for its eventual cancellation mutation; cancellation's complete encoded
 mutation must fit that bound (canonical `cancel` requests do). The worker stores
 canonical signed-message encoding while preserving authenticated payload bytes.
@@ -723,5 +723,67 @@ limits. Free-space checks do not establish per-project resource quotas.
 The local `sources` SSH scenario prepares two sessions in each of three projects,
 including LFS and recursive submodules, then checks exact-request recovery and
 retained edits. These fixtures do not qualify actual agent execution, live-provider
-behavior or physical power-loss durability. Public UI/CLI/MCP admission and process
-lifecycle remain subsequent #805 work; a preparation receipt is not launch authority.
+behavior or physical power-loss durability. Public UI/CLI/MCP admission remains subsequent #805 work; a preparation receipt
+is not launch authority. The separate process lifecycle follows below.
+
+
+### One-shot persistent session runtime
+
+Linux workers accept signed `start-project-session` and `stop-project-session`
+mutations, plus fresh signed `inspect-project-session` requests. Owning-host APIs
+are `project_reservations::{start_session,stop_session,inspect_session}`. The
+project remains `importing`: this slice does not expose public UI/CLI/MCP project
+admission, interactive attachment, credentials or tool grants.
+
+A start requires a prepared session, the reserved agent permission, no application
+ports, and no desktop, browser or external-browser grants. The initial fixed
+policy supports Claude CLI 2.1.283 at `/usr/local/bin/claude` and `/usr/bin/tmux`.
+Other agents and versions fail before consuming launch authority. The worker
+rejects nonempty or symlinked `/etc/claude-code`, clears inherited environment,
+uses the anchored private home and checkout, and applies
+`--safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+--setting-sources '' --disable-slash-commands --no-chrome`.
+Managed policy can override customization suppression, so a qualified image must
+keep that directory empty. No prompt, credential transfer, permissions bypass,
+automatic installation or updater is enabled. The agent's own shell and network
+capabilities remain available; this trusted same-user contract is not a sandbox.
+
+Only first application of a signed start can create a supervisor. It records
+launch authority before spawning, then passes a private inherited socket permit
+bound to the recorded process and nonce. The single-threaded supervisor becomes a
+Linux child subreaper before launching its private tmux server. Server and pane
+identity are checked separately; an SSH disconnect or owning-host restart does
+not end the session. A historical launch receipt is never evidence that the agent
+is currently running, authenticated or ready. Inspection binds a fresh operation
+to the exact session and known manifest revision, including the base or next
+revision of a pending host mutation without replacing that journal.
+
+Stop persists terminal intent before effects. The intact supervisor signals only
+its unreaped direct children using pidfds, repeatedly adopts/reaps descendants,
+and records `stopped` only after the kernel reports no children. A normal agent
+exit retains its exit status; detached descendants must still be stopped.
+Terminal acknowledgement retries file and directory synchronization. Cancellation
+requires durable stop evidence for every launched session and retains all files.
+No automatic relaunch occurs, even after a failed handoff or missing runtime
+record. Supervisor loss, replaced anchors, or uncertain cleanup returns
+`uncertain` and fences cancellation. Recovery does not signal saved PIDs.
+Externally delegated services are outside the supervised process tree.
+
+The retained manifest is bounded to 128 KiB; individual requests, observations
+and runtime records remain bounded to 64 KiB. Each active launch reserves history
+and byte capacity for one stop, alongside project cancellation capacity. History
+is never evicted to admit another operation. Per-session tmux scrollback is 2,000
+lines; this does not establish CPU, memory, disk or process quotas.
+
+The local `runtime` SSH smoke uses synthetic agents in one persistent isolated
+PID namespace. It checks six sessions, lost replies, host and SSH restarts,
+retained edits, agent exit, descendant termination, sibling preservation and
+supervisor-loss fencing. Terminal stop must complete while intermittent allocation-lock
+contention continues, with sibling processes still advancing. Repeat it with `--runtime-fault server`, `socket` and
+`stop-race`; this mode requires `strace` and pauses the supervisor until signed
+stop has committed, then resumes it before any executable launch. Socket replacement preserves the replacement
+bytes. The `early-exit` mode retains an immediate agent exit and then stops
+its remaining descendants. Separate installed-agent policy probes use no credentials
+or inference and disable networking; offline interactive startup may exit before
+authentication. Neither those probes nor synthetic process tests qualify
+live-provider execution, authenticated inference or physical power-loss behavior.

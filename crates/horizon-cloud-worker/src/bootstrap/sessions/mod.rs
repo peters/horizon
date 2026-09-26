@@ -13,6 +13,31 @@ use std::{io, time::Instant};
 pub(super) use storage::Boundary;
 use storage::Tree;
 
+/// Only external records and fixed roots are consulted; Git and home contents
+/// remain mutable. The caller retains these descriptors throughout execution.
+pub(super) fn published(
+    store: &Store,
+    manifest: &Manifest,
+    project: &ProjectIdentity,
+    id: horizon_cloud_protocol::membership::SessionId,
+) -> io::Result<Vec<std::fs::File>> {
+    let (receipt, _) = entries(manifest)?
+        .into_iter()
+        .find(|(r, s)| &r.identity == project && *s == id)
+        .ok_or_else(invalid)?;
+    let parent = namespaces::child(store, manifest, project, "worktrees")?;
+    Tree::open(
+        store,
+        &parent,
+        receipt,
+        id,
+        false,
+        Instant::now() + Source::WORKER_TIMEOUT,
+    )?
+    .ok_or_else(invalid)?
+    .published_children()
+}
+
 pub(super) fn ensure(
     store: &Store,
     manifest: &Manifest,

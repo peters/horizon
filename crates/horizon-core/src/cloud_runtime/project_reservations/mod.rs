@@ -1,5 +1,6 @@
 //! Owning-host journals for logical project reservations, not project admission.
 pub(super) mod journal;
+pub(super) mod session_runtime;
 pub(super) mod source;
 use super::{
     Cancellation, bootstrap_initialization, bootstrap_recovery, bootstrap_recovery::connection::Snapshot,
@@ -11,6 +12,7 @@ use horizon_cloud_protocol::{
     membership::{Receipt, Session},
 };
 use journal::Journal;
+pub use session_runtime::{inspect_session, start_session, stop_session};
 pub use source::import_source;
 use std::{
     collections::BTreeSet,
@@ -56,6 +58,8 @@ pub(super) enum Change {
     ImportSource(ProjectIdentity, horizon_cloud_protocol::membership::Source),
     ReserveSession(ProjectIdentity, Session),
     PrepareSession(ProjectIdentity, uuid::Uuid),
+    StartSession(ProjectIdentity, uuid::Uuid),
+    StopSession(ProjectIdentity, uuid::Uuid),
     Cancel(ProjectIdentity),
     Resume,
 }

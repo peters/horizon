@@ -181,7 +181,12 @@ fn entries(manifest: &Manifest) -> io::Result<Vec<(&Receipt, Source)>> {
         .filter(|entry| entry.receipt.state == State::Importing)
         .filter_map(|entry| match decode::<Request>(entry.payload.as_bytes()) {
             Ok(Request::ImportSource { descriptor }) => Some(Ok((&entry.receipt, descriptor))),
-            Ok(Request::ReserveSession { .. } | Request::PrepareSession { .. }) => None,
+            Ok(
+                Request::ReserveSession { .. }
+                | Request::PrepareSession { .. }
+                | Request::StartSession { .. }
+                | Request::StopSession { .. },
+            ) => None,
             _ => Some(Err(invalid())),
         })
         .collect()
