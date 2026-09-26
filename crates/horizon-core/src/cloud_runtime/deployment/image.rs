@@ -40,7 +40,7 @@ pub(super) fn validate_allocation_image(
 
 /// A cloud with siblings receives version 2 Git grants when any repository of the set
 /// has a binding.
-fn sibling_grants(request: &Request, state: &Deployment, set: &siblings::Set) -> Result<bool> {
+pub(super) fn sibling_grants(request: &Request, state: &Deployment, set: &siblings::Set) -> Result<bool> {
     if request.settings.git_credentials.is_empty() {
         return Ok(false);
     }
@@ -48,30 +48,63 @@ fn sibling_grants(request: &Request, state: &Deployment, set: &siblings::Set) ->
     Ok(!git_auth::select(&request.settings.git_credentials, &state.repository, &siblings)?.is_empty())
 }
 
-/// Each sibling's committed snapshot and recipe, in layering order.
-fn sibling_sources(
+/// Builds the primary snapshot `source` with each of the deployment's siblings' committed
+/// snapshot and recipe at `revisions`, in layering order, layered on it under `tag`,
+/// extracting the snapshots below `root`.
+pub(super) fn build_layered(
+    request: &Request,
+    images: &Images<'_>,
     state: &Deployment,
-    set: &siblings::Set,
+    revisions: &[String],
+    source: &Path,
     root: &Path,
-    runner: &Runner<'_>,
-) -> Result<Vec<(Build, PathBuf)>> {
+    tag: &str,
+) -> Result<String> {
+    let set = state.siblings.as_ref().ok_or(crate::cloud_runtime::Error::Invalid(
+        "This cloud has no same-worker siblings",
+    ))?;
     let primary = state
         .profile
         .build
         .as_ref()
         .ok_or(siblings::SiblingError::PrimaryImageOnly)?;
-    set.members
+    if revisions.len() != set.members.len() {
+        return Err(crate::cloud_runtime::Error::Invalid(
+            "The image needs one revision per same-worker sibling",
+        ));
+    }
+    let sources = set
+        .members
         .iter()
+        .zip(revisions)
         .enumerate()
-        .map(|(index, sibling)| {
+        .map(|(index, (sibling, revision))| {
             let checkout = sibling.checkout()?;
-            let recipe = sibling.recipe(primary, runner)?;
+            let recipe = sibling.recipe(revision, primary, images.runner)?;
             let root = root.join(format!("sibling-{index}"));
             std::fs::create_dir(&root)?;
-            let source = repository::snapshot(checkout, &sibling.revision, &root, runner)?;
+            let source = repository::snapshot(checkout, revision, &root, images.runner)?;
             Ok((recipe, source))
         })
-        .collect()
+        .collect::<Result<Vec<(Build, PathBuf)>>>()?;
+    let layers: Vec<_> = set
+        .members
+        .iter()
+        .zip(&sources)
+        .map(|(sibling, (build, source))| Layer {
+            alias: &sibling.alias,
+            build,
+            source,
+        })
+        .collect();
+    images.prepare_layered(
+        &state.profile,
+        source,
+        &layers,
+        &state.cloud_id,
+        tag,
+        sibling_grants(request, state, set)?,
+    )
 }
 
 pub(super) fn prepare_image(
@@ -98,24 +131,15 @@ pub(super) fn prepare_image(
     let digest = if let Some(set) = &state.siblings {
         let root = build_root.path().join("siblings");
         std::fs::create_dir(&root)?;
-        let sources = sibling_sources(state, set, &root, runner)?;
-        let layers: Vec<_> = set
-            .members
-            .iter()
-            .zip(&sources)
-            .map(|(sibling, (build, source))| Layer {
-                alias: &sibling.alias,
-                build,
-                source,
-            })
-            .collect();
-        images.prepare_layered(
-            &state.profile,
+        let revisions: Vec<_> = set.members.iter().map(|sibling| sibling.revision.clone()).collect();
+        build_layered(
+            request,
+            &images,
+            state,
+            &revisions,
             &source,
-            &layers,
-            &state.cloud_id,
+            &root,
             &default_tag(&state.cloud_id),
-            sibling_grants(request, state, set)?,
         )?
     } else {
         images.prepare(&state.profile, &source, &state.cloud_id)?

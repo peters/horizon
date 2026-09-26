@@ -108,13 +108,19 @@ fn resolution_pins_each_chosen_sibling_to_its_committed_head_and_recipe() {
                 repository: "example/native-lib".into(),
                 directory: "native-lib".into(),
                 revision: committed,
+                image_revision: None,
                 local_repository: fixture.path("native-lib").canonicalize().unwrap(),
                 profile: "dev".into(),
             }],
         }
     );
     let primary = primary_config(NATIVE).profiles["dev"].build.clone().unwrap();
-    assert_eq!(set.members[0].recipe(&primary, &fixture.runner()).unwrap(), primary);
+    assert_eq!(
+        set.members[0]
+            .recipe(&set.members[0].revision, &primary, &fixture.runner())
+            .unwrap(),
+        primary
+    );
 }
 
 #[test]
@@ -483,12 +489,7 @@ fn a_deployment_keeps_the_siblings_chosen_before_its_image_was_built() {
         bind(&moved, &mut state, &runner),
         Err(Error::Sibling(SiblingError::Rebound))
     ));
-    assert!(matches!(
-        refuse_rebuild(&state),
-        Err(Error::Sibling(SiblingError::Rebuild))
-    ));
     state.siblings = None;
-    assert!(refuse_rebuild(&state).is_ok());
     state.spec = Some(serde_json::from_value(serde_json::json!({
         "operation_id":"siblings","image_digest":format!("example.invalid/worker@sha256:{}", "a".repeat(64)),
         "profile":profile,"public_key":"unused","registry_auth_id":null,"gpu_types":[],"cpu_flavors":[],"data_centers":[]
@@ -583,5 +584,86 @@ fn project_migration_checks_a_sibling_record_neighbor_for_the_same_worker() {
         }
         Err(other) => panic!("expected the duplicate worker refusal, got {other:?}"),
         Ok(_) => panic!("a shared worker must not migrate"),
+    }
+}
+
+#[test]
+fn a_rebuild_moves_only_the_revisions_of_the_recorded_siblings() {
+    let fixture = Fixture::new();
+    let config = primary_config(NATIVE);
+    let set = fixture.resolve(&config, "dev", &[("native", "native-lib")]).unwrap();
+    let profile = &config.profiles["dev"];
+    let latest_of =
+        |config: &CloudConfig, set: &Set| latest(set, &fixture.path("app"), config, profile, &fixture.runner());
+    assert_eq!(latest_of(&config, &set).unwrap(), [set.members[0].revision.clone()]);
+    let lib = fixture.path("native-lib");
+    git(&lib, &["commit", "--quiet", "--allow-empty", "-m", "Move on"]);
+    assert_eq!(latest_of(&config, &set).unwrap(), [git(&lib, &["rev-parse", "HEAD"])]);
+    let moved = primary_config(
+        "  native:\n    repository: example/native-lib\n    profile: prebuilt\n    placement: same_worker\n",
+    );
+    assert!(matches!(
+        latest_of(&moved, &set),
+        Err(Error::Sibling(SiblingError::ImageOnly { .. }))
+    ));
+    let mut renamed = set.clone();
+    renamed.primary_directory = "other".into();
+    assert!(matches!(
+        latest_of(&config, &renamed),
+        Err(Error::Sibling(SiblingError::Changed))
+    ));
+    let mut elsewhere = set.clone();
+    elsewhere.members[0].profile = "gpu".into();
+    assert!(matches!(
+        latest_of(&config, &elsewhere),
+        Err(Error::Sibling(SiblingError::Changed))
+    ));
+    let mut gone = set;
+    gone.members[0].local_repository = fixture.path("gone");
+    assert!(matches!(
+        latest_of(&config, &gone),
+        Err(Error::Sibling(SiblingError::Moved(_)))
+    ));
+}
+
+#[test]
+fn a_rebuild_reports_a_changed_declaration_as_a_changed_cloud() {
+    let fixture = Fixture::new();
+    let config = primary_config(NATIVE);
+    let set = fixture.resolve(&config, "dev", &[("native", "native-lib")]).unwrap();
+    let profile = &config.profiles["dev"];
+    for companions in [
+        "  other:\n    repository: example/native-lib\n    profile: dev\n    placement: same_worker\n",
+        "  native:\n    repository: example/native-lib\n    profile: dev\n",
+        "  native:\n    repository: Example/Native-Lib\n    profile: dev\n    placement: same_worker\n",
+    ] {
+        let changed = primary_config(companions);
+        assert!(
+            matches!(
+                latest(&set, &fixture.path("app"), &changed, profile, &fixture.runner()),
+                Err(Error::Sibling(SiblingError::Changed))
+            ),
+            "{companions}"
+        );
+    }
+}
+
+#[test]
+fn a_recorded_set_holds_commit_ids_and_names_only_moved_recipes() {
+    let fixture = Fixture::new();
+    let mut set = fixture
+        .resolve(&primary_config(NATIVE), "dev", &[("native", "native-lib")])
+        .unwrap();
+    let revision = set.members[0].revision.clone();
+    assert!(set.fits());
+    assert!(set.moved(std::slice::from_ref(&revision)).is_empty());
+    assert_eq!(set.moved(&["f".repeat(40)]).len(), 1);
+    set.members[0].image_revision = Some("f".repeat(40));
+    assert!(set.fits());
+    assert!(set.moved(&["f".repeat(40)]).is_empty());
+    assert_eq!(set.moved(std::slice::from_ref(&revision)).len(), 1);
+    for image_revision in [revision, "not-a-commit".into()] {
+        set.members[0].image_revision = Some(image_revision);
+        assert!(!set.fits());
     }
 }
