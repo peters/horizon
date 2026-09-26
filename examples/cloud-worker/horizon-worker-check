@@ -215,6 +215,9 @@ try:
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
     if idle_stop_supported():
         print('horizon-idle-stop-contract=1')
+    # Sibling repositories need the manifest helper beside the session script.
+    if shutil.which('horizon-worker-siblings'):
+        print('horizon-siblings-contract=1')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1')

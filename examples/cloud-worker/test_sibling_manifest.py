@@ -156,6 +156,18 @@ class SiblingManifestTests(unittest.TestCase):
         (self.workspace / 'siblings' / 'linked').symlink_to(self.root)
         self.assertNotEqual(self.siblings('stage', 'linked').returncode, 0)
 
+    def test_layout_lists_a_snapshot_for_the_session_script(self):
+        snapshot = self.root / 'snapshot.json'
+        snapshot.write_text(json.dumps(self.manifest()))
+        listed = self.siblings('layout', str(snapshot))
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual(listed.stdout.decode().splitlines(),
+                         ['App'] + [f'{alias} {alias.capitalize()} {revision}' for alias, revision in self.revisions.items()])
+        snapshot.write_text(json.dumps(self.manifest(siblings=[])))
+        self.assertEqual(self.siblings('layout', str(snapshot)).stdout, b'')
+        snapshot.write_text(json.dumps(self.manifest(primary='../escape')))
+        self.assertNotEqual(self.siblings('layout', str(snapshot)).returncode, 0)
+
     def test_usage_errors_write_nothing(self):
         for args in [(), ('list',), ('set', 'extra'), ('show', 'extra')]:
             self.assertNotEqual(self.siblings(*args, stdin=json.dumps(self.manifest()).encode()).returncode, 0, args)

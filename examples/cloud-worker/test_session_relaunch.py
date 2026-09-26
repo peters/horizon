@@ -1,4 +1,5 @@
 """Session relaunch after a container reset, against real Git and a recording tmux stub."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,9 +67,11 @@ class SessionRelaunchTests(unittest.TestCase):
         self.state.mkdir()
         tools = self.root / 'bin'
         tools.mkdir()
+        self.tools = tools
         for name, body in [('tmux', TMUX), ('horizon-worker-check', CHECK), ('horizon-worker-source', SOURCE)]:
             (tools / name).write_text('#!' + sys.executable + '\n' + body)
             (tools / name).chmod(0o700)
+        self.install('horizon-worker-siblings')
         self.script = self.root / 'horizon-worker-session'
         self.script.write_text((SCRIPTS / 'horizon-worker-session').read_text().replace('/workspace', str(self.workspace)))
         self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
@@ -86,9 +89,14 @@ class SessionRelaunchTests(unittest.TestCase):
         self.worktree = self.workspace / 'agents' / SESSION
         self.session = self.workspace / 'sessions' / SESSION
 
-    def git(self, *args):
+    def install(self, name):
+        tool = self.tools / name
+        tool.write_text('#!' + sys.executable + '\n' + (SCRIPTS / name).read_text().replace('/workspace', str(self.workspace)))
+        tool.chmod(0o700)
+
+    def git(self, *args, env=None):
         return subprocess.run(['git', *map(str, args)], check=True, capture_output=True, text=True,
-                              env=dict(os.environ, GIT_CONFIG_NOSYSTEM='1')).stdout.strip()
+                              env=env or dict(os.environ, GIT_CONFIG_NOSYSTEM='1')).stdout.strip()
 
     def commit(self, repository, message):
         self.git('-C', repository, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
@@ -247,6 +255,183 @@ class SessionRelaunchTests(unittest.TestCase):
         self.assertEqual((self.root / 'check.log').read_text(), checks)
         self.assertEqual(len(self.launches()), 1)
         self.assertEqual([path.name for path in self.session.iterdir() if path.name.startswith('relaunch')], [])
+
+
+    def add_sibling(self, alias, files):
+        local = self.root / ('local-' + alias)
+        self.git('init', '--quiet', local)
+        for name, content in files.items():
+            (local / name).write_text(content)
+        self.git('-C', local, 'add', '.')
+        self.commit(local, 'Sibling base')
+        revision = self.git('-C', local, 'rev-parse', 'HEAD')
+        root = self.workspace / 'siblings' / alias
+        (root / 'source').mkdir(parents=True)
+        (root / 'source' / 'manifest.json').write_text('{"modules":[],"assets":[]}')
+        pack = self.root / 'transfer.pack'
+        pack.write_bytes(subprocess.run(['git', '-C', local, 'pack-objects', '--stdout', '--revs'], input=(revision + '\n').encode(),
+                                        check=True, capture_output=True).stdout)
+        importer = self.root / 'horizon-worker-import'
+        importer.write_text((SCRIPTS / 'horizon-worker-import').read_text().replace('/workspace', str(self.workspace)))
+        shutil.copyfile(pack, root / 'horizon-transfer.pack')
+        subprocess.run(['bash', importer, revision, '--sibling', alias], check=True, capture_output=True, env=self.env)
+        return revision
+
+    def set_siblings(self, siblings, primary='app'):
+        manifest = {'version': 1, 'primary': primary,
+                    'siblings': [{'alias': alias, 'directory': directory, 'revision': revision}
+                                 for alias, directory, revision in siblings]}
+        result = subprocess.run([self.tools / 'horizon-worker-siblings', 'set'], input=json.dumps(manifest),
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def launch_beside_sibling(self):
+        library = self.add_sibling('lib', {'library.txt': 'library base\n'})
+        self.set_siblings([('lib', 'native-lib', library)])
+        root = self.worktree
+        self.worktree = root / 'app'
+        head = self.launch_with_agent_work()
+        sibling = root / 'native-lib'
+        (sibling / 'library.txt').write_text('uncommitted library edit\n')
+        return library, head, sibling
+
+    def test_sibling_layout_checks_out_each_repository_beside_the_primary(self):
+        library, _, sibling = self.launch_beside_sibling()
+        [launch] = self.launches()
+        self.assertEqual(launch['cwd'], str(self.worktree))
+        self.assertEqual(self.git('-C', self.worktree, 'branch', '--show-current'), 'agent/' + SESSION)
+        self.assertEqual(self.git('-C', sibling, 'branch', '--show-current'), 'agent/' + SESSION)
+        self.assertEqual(self.git('-C', sibling, 'rev-parse', 'HEAD'), library)
+        self.assertEqual(self.git('-C', sibling, 'rev-parse', '--git-common-dir'),
+                         str(self.workspace / 'siblings/lib/repository.git'))
+        self.assertEqual(sorted(path.name for path in self.worktree.parent.iterdir()), ['app', 'native-lib'])
+        self.assertEqual((self.root / 'source.log').read_text().splitlines(),
+                         ['checkout ' + str(self.worktree), 'checkout ' + str(sibling) + ' --sibling lib'])
+        self.assertEqual(json.loads((self.session / 'siblings.json').read_text())['siblings'][0]['directory'], 'native-lib')
+        data = self.workspace / 'session-data' / SESSION
+        self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(data.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_relaunch_keeps_the_sibling_layout_after_the_manifest_changes(self):
+        _, head, sibling = self.launch_beside_sibling()
+        self.set_siblings([], primary='elsewhere')
+        self.reset_container()
+        relaunched = self.relaunch()
+        self.assertEqual(relaunched.returncode, 0, relaunched.stderr)
+        self.assertEqual([launch['cwd'] for launch in self.launches()], [str(self.worktree)] * 2)
+        self.assert_worktree_intact(head)
+        self.assertEqual((sibling / 'library.txt').read_text(), 'uncommitted library edit\n')
+        self.assertEqual(len((self.root / 'source.log').read_text().splitlines()), 2)
+        self.assertEqual(self.run_session().returncode, 0)
+        self.assertEqual(len(self.launches()), 2)
+
+    def test_single_layout_session_never_gains_siblings(self):
+        head = self.launch_with_agent_work()
+        self.assertFalse((self.session / 'siblings.json').exists())
+        self.set_siblings([('lib', 'native-lib', self.add_sibling('lib', {'library.txt': 'library\n'}))])
+        self.reset_container()
+        relaunched = self.relaunch()
+        self.assertEqual(relaunched.returncode, 0, relaunched.stderr)
+        self.assertEqual([launch['cwd'] for launch in self.launches()], [str(self.worktree)] * 2)
+        self.assert_worktree_intact(head)
+        self.assertFalse((self.worktree / 'native-lib').exists())
+
+    def test_manifest_without_siblings_keeps_the_single_layout(self):
+        self.set_siblings([])
+        self.assertEqual(self.run_session().returncode, 0)
+        self.assertEqual([launch['cwd'] for launch in self.launches()], [str(self.worktree)])
+        self.assertEqual(self.git('-C', self.worktree, 'rev-parse', '--show-toplevel'), str(self.worktree))
+        self.assertFalse((self.session / 'siblings.json').exists())
+
+    def test_missing_sibling_worktree_is_refused_without_recreating_it(self):
+        _, _, sibling = self.launch_beside_sibling()
+        self.reset_container()
+        shutil.rmtree(sibling)
+        refused = self.relaunch()
+        self.assertEqual(refused.returncode, 3)
+        self.assertIn('worktree is missing', refused.stderr)
+        self.assertFalse(sibling.exists())
+        self.assertEqual(len(self.launches()), 1)
+        self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
+
+    def test_interrupted_preparation_completes_the_sibling_on_the_next_attach(self):
+        library = self.add_sibling('lib', {'library.txt': 'library base\n'})
+        self.set_siblings([('lib', 'native-lib', library)])
+        # The first attach fails after the primary worktree, before the sibling's.
+        (self.tools / 'horizon-worker-source').write_text('#!/bin/sh\nexit 1\n')
+        self.assertNotEqual(self.run_session().returncode, 0)
+        self.assertTrue((self.worktree / 'app' / '.git').exists())
+        self.assertFalse((self.worktree / 'native-lib').exists())
+        self.assertEqual(self.launches(), [])
+        (self.tools / 'horizon-worker-source').write_text('#!' + sys.executable + '\n' + SOURCE)
+        attached = self.run_session()
+        self.assertEqual(attached.returncode, 0, attached.stderr)
+        self.assertEqual(self.git('-C', self.worktree / 'native-lib', 'rev-parse', 'HEAD'), library)
+        self.assertEqual([launch['cwd'] for launch in self.launches()], [str(self.worktree / 'app')])
+
+    def test_corrupt_session_snapshot_refuses_attach_and_relaunch(self):
+        self.launch_beside_sibling()
+        self.reset_container()
+        (self.session / 'siblings.json').write_text('{"version":1,"primary":"../escape","siblings":[]}')
+        self.assertNotEqual(self.relaunch().returncode, 0)
+        (self.session / 'siblings.json').write_text('{"version":1,')
+        self.assertNotEqual(self.relaunch().returncode, 0)
+        self.assertEqual(len(self.launches()), 1)
+        self.assertFalse((self.session / ('relaunch-requested-' + OPERATION)).exists())
+
+    def test_relaunch_creates_the_session_data_directory_of_an_older_session(self):
+        self.launch_with_agent_work()
+        data = self.workspace / 'session-data' / SESSION
+        shutil.rmtree(self.workspace / 'session-data')
+        self.reset_container()
+        self.assertEqual(self.relaunch().returncode, 0)
+        self.assertEqual(data.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(list(data.iterdir()), [])
+
+    @unittest.skipUnless(shutil.which('git-lfs'), 'sibling LFS hydration needs git-lfs')
+    def test_sibling_session_hydrates_submodule_and_lfs_from_the_sibling_material(self):
+        content = b'native library binary\n'
+        oid = hashlib.sha256(content).hexdigest()
+        pointer = f'version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {len(content)}\n'
+        clean = self.root / 'clean.gitconfig'
+        clean.touch()
+        plain = dict(os.environ, GIT_CONFIG_GLOBAL=str(clean), GIT_CONFIG_NOSYSTEM='1')
+        module = self.root / 'module'
+        self.git('init', '--quiet', module, env=plain)
+        (module / '.gitattributes').write_text('blob.bin filter=lfs -text\n')
+        (module / 'blob.bin').write_text(pointer)
+        self.git('-C', module, 'add', '.', env=plain)
+        self.git('-C', module, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'Module', env=plain)
+        module_revision = self.git('-C', module, 'rev-parse', 'HEAD', env=plain)
+        # The worker's global configuration names the primary's store, which holds nothing.
+        config = self.root / 'worker.gitconfig'
+        config.write_text('[filter "lfs"]\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n'
+                          f'\trequired = true\n[lfs]\n\tstorage = {self.workspace}/source/lfs\n')
+        self.env.update(GIT_CONFIG_GLOBAL=str(config))
+        self.install('horizon-worker-source')
+        (self.workspace / 'source').mkdir()
+        (self.workspace / 'source' / 'manifest.json').write_text('{"modules":[],"assets":[]}')
+        library = self.add_sibling('lib', {'.gitattributes': 'blob.bin filter=lfs -text\n', 'blob.bin': pointer})
+        archive = self.root / 'material'
+        (archive / 'lfs').mkdir(parents=True)
+        (archive / 'lfs' / oid).write_bytes(content)
+        (archive / 'module-0.pack').write_bytes(subprocess.run(
+            ['git', '-C', module, 'pack-objects', '--stdout', '--revs'], input=(module_revision + '\n').encode(),
+            check=True, capture_output=True, env=plain).stdout)
+        (archive / 'manifest.json').write_text(json.dumps({
+            'modules': [{'path': 'vendor/module', 'revision': module_revision}],
+            'assets': [{'path': 'blob.bin', 'oid': oid, 'size': len(content)}]}))
+        shutil.rmtree(self.workspace / 'siblings/lib/source')
+        subprocess.run(['tar', '-cf', self.workspace / 'siblings/lib/horizon-source.tar', '-C', archive, '.'], check=True)
+        subprocess.run([self.tools / 'horizon-worker-source', 'import', '--sibling', 'lib'], check=True, capture_output=True, env=self.env)
+        self.set_siblings([('lib', 'native-lib', library)])
+        attached = self.run_session()
+        self.assertEqual(attached.returncode, 0, attached.stderr)
+        sibling = self.worktree / 'native-lib'
+        self.assertEqual((sibling / 'blob.bin').read_bytes(), content)
+        self.assertEqual((sibling / 'vendor/module/blob.bin').read_bytes(), content)
+        self.assertEqual([launch['cwd'] for launch in self.launches()], [str(self.worktree / 'app')])
+        self.assertFalse((self.workspace / 'source' / 'lfs').exists())
 
 
 if __name__ == '__main__':

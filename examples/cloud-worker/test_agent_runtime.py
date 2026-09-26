@@ -27,7 +27,7 @@ class AgentRuntimeTests(unittest.TestCase):
 from pathlib import Path
 keys = ['DISABLE_AUTOUPDATER', 'HOME', 'HORIZON', 'HORIZON_BROWSER_ACTOR',
         'HORIZON_BROWSER_HOST_INSTANCE', 'ANTHROPIC_API_KEY',
-        'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS']
+        'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS', 'HORIZON_SESSION_DIR']
 Path(os.environ['CHILD_RECEIPT']).write_text(json.dumps({
     'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in keys}}))
 sys.exit(23)
@@ -58,7 +58,8 @@ sys.exit(23)
             'HORIZON': None, 'HORIZON_BROWSER_ACTOR': 'horizon:cloud-test-panel',
             'HORIZON_BROWSER_HOST_INSTANCE': 'test-host', 'ANTHROPIC_API_KEY': 'synthetic-key',
             'ANTHROPIC_WORKSPACE_ID': 'synthetic-workspace',
-            'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace'})
+            'ANTHROPIC_CUSTOM_HEADERS': 'anthropic-workspace-id: synthetic-workspace',
+            'HORIZON_SESSION_DIR': str(self.workspace / 'session-data/test-panel')})
 
     def test_inherited_environment_cannot_enable_background_updates(self):
         self.assertEqual(self.launch(DISABLE_AUTOUPDATER='0')['env']['DISABLE_AUTOUPDATER'], '1')
@@ -68,6 +69,11 @@ sys.exit(23)
         self.assertIsNone(child['env']['DISABLE_AUTOUPDATER'])
         self.assertIsNone(child['env']['ANTHROPIC_API_KEY'])
         self.assertEqual(child['args'], ['--no-leader'])
+        self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/test-panel'))
+
+    def test_inherited_session_directory_is_replaced(self):
+        child = self.launch(HORIZON_SESSION_DIR='/elsewhere')
+        self.assertEqual(child['env']['HORIZON_SESSION_DIR'], str(self.workspace / 'session-data/test-panel'))
 
 
 if __name__ == '__main__':
