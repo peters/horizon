@@ -244,10 +244,14 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     let settings = Settings::load(settings)?;
     let cancel = Cancellation::default();
     let (list, preferences) = cloud_runtime::prices::price_list(&settings, &cancel)?;
-    let other_providers: Vec<serde_json::Value> = cloud_runtime::prices::hetzner_catalog(&settings, &cancel)?
-        .map(|catalog| hetzner_section(&catalog, &requirements))
-        .into_iter()
-        .collect();
+    // A Hetzner failure is reported beside RunPod's offers, as agents' answers do.
+    let other_providers: Vec<serde_json::Value> = match cloud_runtime::prices::hetzner_catalog(&settings, &cancel) {
+        Ok(catalog) => catalog
+            .map(|catalog| hetzner_section(&catalog, &requirements))
+            .into_iter()
+            .collect(),
+        Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
+    };
     let answer = serde_json::json!({
         "provider": list.provider,
         "offers": offers(&list, &preferences, &requirements),

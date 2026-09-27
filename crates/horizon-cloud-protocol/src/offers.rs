@@ -69,6 +69,20 @@ impl HetznerSnapshot {
         {
             return Err("Hetzner offer snapshot is too large");
         }
+        let amount = |value: f64| value.is_finite() && value >= 0.0;
+        let offers_valid = catalog
+            .offers
+            .iter()
+            .all(|offer| amount(offer.hourly_eur) && amount(offer.monthly_eur) && amount(offer.memory_gb));
+        let rates_valid = amount(catalog.volume_gb_month_eur)
+            && catalog
+                .ipv4_month_eur
+                .values()
+                .chain(catalog.ipv4_hour_eur.values())
+                .all(|value| amount(*value));
+        if !offers_valid || !rates_valid {
+            return Err("Hetzner offer snapshot has an invalid amount");
+        }
         Ok(())
     }
 }
@@ -101,6 +115,12 @@ mod tests {
             .validate()
             .is_err()
         );
+        let mut negative = snapshot.clone();
+        negative.catalog.volume_gb_month_eur = -0.01;
+        assert!(negative.validate().is_err());
+        let mut unpriced = snapshot.clone();
+        unpriced.catalog.ipv4_hour_eur.insert("hel1".into(), f64::NAN);
+        assert!(unpriced.validate().is_err());
         let mut crowded = snapshot;
         crowded.catalog.regions = (0..65)
             .map(|index| (format!("l{index}"), "EUROPE".to_owned()))
