@@ -126,6 +126,9 @@ impl Binding {
         if self.retired.contains(&self.generation) {
             return Err(Error::Invalid("Current registry generation cannot be retired"));
         }
+        if let Some(publish) = &self.publish {
+            validate_publish_username(&publish.username)?;
+        }
         for auth in std::iter::once(&self.pull).chain(self.publish.as_ref()) {
             auth.validate()?;
         }
@@ -147,7 +150,8 @@ impl Auth {
     fn validate(&self) -> Result<()> {
         if !self.secret_file.is_absolute()
             || self.username.is_empty()
-            || self.username.len() > 256
+            || (self.username.len() > LEGACY_USERNAME_MAX_BYTES
+                && self.username.chars().count() > horizon_cloud::runpod::registry::MAX_USERNAME_LENGTH)
             || self
                 .username
                 .chars()
@@ -162,6 +166,17 @@ impl Auth {
         }
         Ok(())
     }
+}
+
+const LEGACY_USERNAME_MAX_BYTES: usize = 256;
+
+fn validate_publish_username(username: &str) -> Result<()> {
+    if username.len() > LEGACY_USERNAME_MAX_BYTES {
+        return Err(Error::Invalid(
+            "Registry publishing username exceeds the supported limit",
+        ));
+    }
+    Ok(())
 }
 
 /// Retains the generation lock through allocation, excluding simultaneous revocation.

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 pub enum Observed {
     Previous,
     Next,
-    /// The legacy and current APIs report different images of the pair; observe again.
+    /// Two consecutive provider observations report different images; observe again.
     Unsettled,
 }
 impl From<ImageSide> for Observed {
@@ -69,7 +69,7 @@ impl RunPod {
 
     /// Reports which image of the replacement the provider records for the worker.
     /// A worker with a CPU workspace `volume` is also read through the current API,
-    /// and the replacement settles only when both APIs report the same image.
+    /// and the replacement settles only when both observations report the same image.
     /// `timeout` bounds the whole observation.
     /// # Errors
     /// `WorkerLost` when the provider no longer returns the worker; `IdentityMismatch`
@@ -133,7 +133,7 @@ fn identify(worker: &Worker, current: &WorkerSpec, next: &WorkerSpec) -> Result<
 /// Sends only the fields that change, relying on the update to keep omitted ones.
 fn update_body(current: &WorkerSpec, next: &WorkerSpec) -> Result<Value, CloudError> {
     current.verify_replacement(next)?;
-    let mut body = json!({"imageName": next.image_digest});
+    let mut body = json!({"image": next.image_digest});
     match (&current.registry_auth_id, &next.registry_auth_id) {
         // How the update clears a credential is unverified; refuse rather than guess.
         (Some(_), None) => {
@@ -141,7 +141,7 @@ fn update_body(current: &WorkerSpec, next: &WorkerSpec) -> Result<Value, CloudEr
                 "An image replacement cannot remove the registry credential",
             ));
         }
-        (previous, Some(id)) if previous.as_ref() != Some(id) => body["containerRegistryAuthId"] = json!(id),
+        (previous, Some(id)) if previous.as_ref() != Some(id) => body["registry"] = json!(id),
         _ => {}
     }
     Ok(body)

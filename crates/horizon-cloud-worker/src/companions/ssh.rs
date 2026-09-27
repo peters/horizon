@@ -4,7 +4,6 @@ use horizon_cloud_protocol::companion::Response;
 use std::{
     fmt::Write as _,
     io::{self, Read},
-    net::IpAddr,
     process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
@@ -94,7 +93,7 @@ impl Runtime {
         &self,
         grant: &str,
         alias: &str,
-        host: IpAddr,
+        host: &horizon_cloud::SshHost,
         port: u16,
         host_key: &str,
     ) -> io::Result<Response> {

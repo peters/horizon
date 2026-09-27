@@ -465,6 +465,8 @@ and credential logic must not be copied into either transport or UI rendering.
 
 ## Cloud workspaces
 
+The shared `horizon-cloud::SshHost` and `SshEndpoint` types validate provider SSH destinations without DNS lookups. Controller and companion SSH transports resolve validated names inside their bounded subprocesses, while worker journals retain legacy numeric fields.
+
 `horizon-cloud::companions` owns passive repository declarations and pure,
 scope-checked target selection. It has no provider, filesystem, SSH or UI side
 effects. Callers supply the owning host's trusted inventory; the serialized
@@ -585,6 +587,14 @@ before allocation and project locks, with exclusive mutable handle access. These
 local APIs perform no provider I/O and are not called by runtime entry points yet;
 credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
+`horizon-cloud::runpod` uses REST v2 throughout. Its `wire` leaf translates
+provider responses into the existing durable worker representation; `pages` owns
+complete cursor traversal, and `create` owns ordered single-compute requests with
+persisted uncertainty fences. `stock` asks the catalog for the exact CPU size.
+Storage attachment checks reject accounts with Serverless endpoints because v2
+cannot enumerate all historical worker mounts; this guard also runs before new
+CPU storage is allocated. Provider wire changes never rewrite saved allocation
+identities or manufacture direct-create receipts.
 `state` defines and persists the deployment aggregate; `state::replacement` owns its
 journaled image-replacement state machine and the transition checks.
 `deployment::replacement` rebuilds a dedicated cloud's image from its latest committed

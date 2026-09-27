@@ -133,6 +133,42 @@ Optional repository Git authentication uses explicit `git_credentials` bindings.
 See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
 for private file permissions, repository matching, removal and token-scope limits.
 
+## Provider API and storage requirements
+
+Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.
+Provider inspection and cleanup never resolve hostnames; the bounded OpenSSH
+transport performs resolution when connecting. Proxy command strings and
+non-root endpoints are not executed. Older worker records retain their numeric
+address format; hostname destinations require the updated worker for companion
+connections.
+
+The shared UI, CLI and MCP adapter uses the [RunPod REST v2 API](https://docs.runpod.io/api-reference-v2/overview)
+for workers, capacity, registry credentials, storage and billing. Existing saved
+worker identities and volume journals remain readable. Upgrading does not replay
+an unresolved creation request or turn an observed resource into a fresh allocation.
+CPU availability is queried for the requested vCPU count and Pod product; a positive
+catalog answer is not a reservation. Configured compute preferences are tried in
+order only after a definite rejection. Ambiguous creation responses remain fenced.
+
+The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
+It uses the provider-injected Pod-scoped credential, which the live qualification
+for #966 found was refused by REST and accepted by GraphQL. This migration changes
+the shared account-credential adapter; it does not put account credentials inside
+workers or remove that independently qualified idle-stop path.
+
+CPU workspaces require standard network storage and an account with no Serverless
+endpoints. The v2 API does not expose complete mounts for stale or scaled-down
+Serverless workers. Horizon therefore refuses new CPU storage allocations, initial
+attachment and storage deletion while any Serverless endpoint exists. This includes
+unrelated endpoints with no currently configured volumes. Use a separate account
+for these CPU workspaces; Horizon never removes unrelated endpoints to pass this
+check. The API credential must permit reading Serverless endpoints as well as Pod,
+volume and registry operations. Failed or incomplete listings block mutation.
+
+GPU workspaces use their Pod's persistent mount and retain the requested CPU/RAM
+minimums. `PROVISIONING` and `STARTING` keep the same bound identity while readiness
+is checked; they do not mean a worker is missing or authorize a replacement.
+
 ## Repository setup and deployment
 
 If the repository has no `.horizon/cloud.yml`, enter its directory in
@@ -160,11 +196,12 @@ A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
 `major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
 newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a
 worker can land on a host too old for the image. Versions compare as numbers, so
-12.11 is above 12.2, and CPU profiles reject the field. Before requesting a worker,
-Horizon asks RunPod's GPU catalog which CUDA versions hosts of the requested GPU
-types run with free capacity, in the allowed data centers when the worker is
-limited to some, and asks for those at or above the floor that the pod API accepts. When none remains, the attempt fails before any worker is
-requested; choose other GPU types, try again later or lower the floor. The GPU stock New cloud shows does not yet take the floor into account.
+12.11 is above 12.2, and CPU profiles reject the field. Horizon sends the floor
+as `gpu.minCudaVersion` in each v2 worker creation request, alongside the chosen
+GPU type and allowed data centers. RunPod enforces it during placement; a definite
+capacity refusal may try the next configured GPU type with the same floor. An
+uncertain response never permits another create. The GPU stock New cloud shows
+does not yet take the floor into account.
 
 Before each image build, Horizon looks up the release npm currently tags `latest`
 for every supported agent CLI. It passes them as the `HORIZON_CODEX_VERSION`,

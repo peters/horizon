@@ -236,6 +236,9 @@ pub struct Worker {
     pub desired_status: String,
     #[serde(default, deserialize_with = "optional_address")]
     pub public_ip: Option<IpAddr>,
+    /// Optional DNS destination; absent on legacy and numeric-only records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host: Option<crate::SshHost>,
     #[serde(default)]
     pub port_mappings: Option<BTreeMap<String, u16>>,
     #[serde(default)]
@@ -281,6 +284,12 @@ impl Worker {
     }
 
     #[must_use]
+    pub fn ssh_endpoint(&self) -> Option<crate::SshEndpoint> {
+        let host = self.ssh_host.clone().or_else(|| self.public_ip.map(Into::into))?;
+        crate::SshEndpoint::new(host, *self.port_mappings.as_ref()?.get("22")?)
+    }
+
+    #[must_use]
     pub fn ssh_address(&self) -> Option<SocketAddr> {
         Some(SocketAddr::new(
             self.public_ip?,
@@ -290,12 +299,18 @@ impl Worker {
     #[must_use]
     pub fn status(&self) -> WorkerStatus {
         match self.desired_status.as_str() {
-            "RUNNING" if self.ssh_address().is_some() => WorkerStatus::Running,
-            "RUNNING" => WorkerStatus::Starting,
+            "RUNNING" if self.ssh_endpoint().is_some() => WorkerStatus::Running,
+            "RUNNING" | "PROVISIONING" | "STARTING" => WorkerStatus::Starting,
             "EXITED" => WorkerStatus::Stopped,
             _ => WorkerStatus::Lost,
         }
     }
+    /// Provisioning and starting workers retain their identity while readiness is polled.
+    #[must_use]
+    pub fn is_starting_or_running(&self) -> bool {
+        matches!(self.desired_status.as_str(), "PROVISIONING" | "STARTING" | "RUNNING")
+    }
+
     /// # Errors
     /// Prevents adopting or deleting resources with mismatching identities.
     pub fn verify(&self, spec: &WorkerSpec) -> Result<(), CloudError> {

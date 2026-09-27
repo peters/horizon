@@ -14,13 +14,13 @@ fn volume(spec: &Spec) -> Volume {
         name: spec.name(),
         size: spec.size,
         data_center_id: spec.data_center_id.clone(),
+        tier: Some(crate::runpod::volumes::Tier::Standard),
     }
 }
 fn server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
     let (mut provider, requests, task) = super::server(responses);
     provider.api_endpoint.clone_from(&provider.endpoint);
     provider.catalog_endpoint.clone_from(&provider.endpoint);
-    provider.graphql_endpoint.clone_from(&provider.endpoint);
     (provider, requests, task)
 }
 fn assert_size_error<T: std::fmt::Debug>(result: Result<T, CloudError>) {
@@ -78,7 +78,8 @@ fn boundary_sizes_can_allocate_and_bind() {
         let spec = volume_spec(size);
         let expected = volume(&spec);
         let (provider, requests, task) = server(vec![
-            (200, "[]".into()),
+            (200, endpoints(&json!([]))),
+            (200, volumes(&json!([]))),
             (201, serde_json::to_string(&expected).unwrap()),
         ]);
         let mut state = State::Prepared;
@@ -91,8 +92,8 @@ fn boundary_sizes_can_allocate_and_bind() {
         assert!(matches!(&state, State::Bound { volume, creation: Some(_) } if volume == &expected));
         state.verify(&spec).unwrap();
         task.join().unwrap();
-        assert_eq!(requests.lock().unwrap().len(), 2);
-        assert!(requests.lock().unwrap()[1].starts_with("POST /networkvolumes "));
+        assert_eq!(requests.lock().unwrap().len(), 3);
+        assert!(requests.lock().unwrap()[2].starts_with("POST /network-volumes "));
     }
 }
 
@@ -101,10 +102,12 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     let spec = volume_spec(1);
     let expected = volume(&spec);
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
-        (200, json!([expected]).to_string()),
+        (200, volumes(&json!([]))),
+        (200, volumes(&json!([expected]))),
+        (200, endpoints(&json!([]))),
         (200, serde_json::to_string(&expected).unwrap()),
-        (200, "[]".into()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([]))),
         (204, String::new()),
         (404, "{}".into()),
     ]);
@@ -126,10 +129,108 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
     assert_eq!(state, State::Deleted);
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 8);
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
     assert_eq!(
         requests.iter().filter(|request| request.starts_with("DELETE ")).count(),
         1
     );
+}
+
+#[test]
+fn definite_volume_refusal_requires_durable_reset_before_a_later_retry() {
+    for status in [403, 422, 429] {
+        for failed_reset in [false, true] {
+            let spec = volume_spec(10);
+            let expected = volume(&spec);
+            let mut responses = vec![
+                (200, endpoints(&json!([]))),
+                (200, volumes(&json!([]))),
+                (status, "{}".into()),
+            ];
+            if !failed_reset {
+                responses.extend([
+                    (200, endpoints(&json!([]))),
+                    (200, volumes(&json!([]))),
+                    (201, serde_json::to_string(&expected).unwrap()),
+                ]);
+            }
+            let (provider, requests, task) = server(responses);
+            let mut state = State::Prepared;
+            let mut durable = state.clone();
+            let result = provider.ensure_volume(&spec, &mut state, &Cancellation::default(), |next| {
+                if failed_reset && *next == State::Prepared {
+                    return Err(CloudError::Persistence);
+                }
+                durable = next.clone();
+                Ok(())
+            });
+            assert_eq!(state, durable);
+            if failed_reset {
+                assert!(matches!(result, Err(CloudError::Persistence)));
+                assert_eq!(state, State::Requested);
+            } else {
+                match status {
+                    403 => assert!(matches!(result, Err(CloudError::Unauthorized))),
+                    422 => assert!(matches!(result, Err(CloudError::Rejected(_)))),
+                    429 => assert!(matches!(result, Err(CloudError::Http(429, _)))),
+                    _ => unreachable!(),
+                }
+                assert_eq!(state, State::Prepared);
+                assert_eq!(
+                    provider
+                        .ensure_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+                        .unwrap(),
+                    expected
+                );
+            }
+            task.join().unwrap();
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r.starts_with("POST "))
+                    .count(),
+                if failed_reset { 1 } else { 2 }
+            );
+        }
+    }
+}
+
+#[test]
+fn uncertain_volume_response_stays_fenced_on_empty_reconciliation() {
+    for status in [404, 408, 500, 503] {
+        let (provider, requests, task) = server(vec![
+            (200, endpoints(&json!([]))),
+            (200, volumes(&json!([]))),
+            (status, "{}".into()),
+            (200, volumes(&json!([]))),
+        ]);
+        let mut state = State::Prepared;
+        assert!(
+            provider
+                .ensure_volume(&volume_spec(10), &mut state, &Cancellation::default(), |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(state, State::Requested);
+        assert!(
+            provider
+                .ensure_volume(&volume_spec(10), &mut state, &Cancellation::default(), |_| panic!(
+                    "uncertain request must stay fenced"
+                ))
+                .is_err()
+        );
+        assert_eq!(state, State::Requested);
+        task.join().unwrap();
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            1
+        );
+    }
 }

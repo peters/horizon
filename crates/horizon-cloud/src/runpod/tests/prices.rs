@@ -3,7 +3,6 @@ use super::*;
 fn catalog_server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
     let (mut provider, requests, task) = server(responses);
     provider.catalog_endpoint.clone_from(&provider.endpoint);
-    provider.graphql_endpoint.clone_from(&provider.endpoint);
     (provider, requests, task)
 }
 
@@ -107,10 +106,14 @@ fn a_cpu_size_reports_its_best_stock_and_how_many_data_centers_have_it() {
         {"id": "EU-SE-1", "networkVolumeTypes": ["STANDARD"], "cpuAvailability": [{"id": "cpu3c", "availability": "LOW"}]},
         {"id": "US-TX-3", "networkVolumeTypes": [], "cpuAvailability": [{"id": "cpu3c", "availability": "HIGH"}]}
     ]});
-    let stock = json!({"data": {
-        "s0": [{"id": "cpu3c", "specifics": {"stockStatus": "Low"}}],
-        "s1": [{"id": "cpu3c", "specifics": {"stockStatus": "Medium"}}]
-    }});
+    let stock = json!({"cpus": [{
+        "id": "cpu3c", "ramGbPerVcpu": 2, "vcpu": {"min": 1, "max": 32},
+        "dataCenters": [
+            {"id": "EU-RO-1", "availability": "LOW"},
+            {"id": "EU-SE-1", "availability": "MEDIUM"},
+            {"id": "US-TX-3", "availability": "HIGH"}
+        ]
+    }]});
     let (provider, requests, task) = catalog_server(vec![(200, centers.to_string()), (200, stock.to_string())]);
     let size = provider
         .cpu_size_availability(&profile, &["cpu3c".into()], &[], &Cancellation::default())
@@ -120,7 +123,7 @@ fn a_cpu_size_reports_its_best_stock_and_how_many_data_centers_have_it() {
     assert_eq!(size.count(&[]), 2);
     assert_eq!(size.best(&["EU-SE-1".into()]), crate::prices::Availability::Medium);
     let requests = requests.lock().unwrap();
-    assert!(requests[1].contains("cpu3c-8-16"), "{}", requests[1]);
-    // Data centers without standard network storage are never asked.
-    assert!(!requests[1].contains("US-TX-3"));
+    assert!(requests[1].starts_with("GET /cpus?include=AVAILABILITY&product=POD&vcpuCount=8 "));
+    // The higher stock in a data center without standard storage is excluded.
+    assert_eq!(requests.len(), 2);
 }

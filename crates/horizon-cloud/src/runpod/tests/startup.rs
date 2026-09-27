@@ -19,7 +19,7 @@ fn observed(spec: &WorkerSpec) -> Value {
 #[test]
 fn creation_persists_intent_before_transmitting_the_saved_metadata() {
     let spec = configured();
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, observed(&spec).to_string())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (200, observed(&spec).to_string())]);
     let mut state = CreateState::Prepared;
     let mut transitions = Vec::new();
     provider
@@ -53,7 +53,7 @@ fn creation_persists_intent_before_transmitting_the_saved_metadata() {
 #[test]
 fn creation_without_confirmed_metadata_keeps_the_requested_fence() {
     let spec = configured();
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, worker(&spec).to_string())]);
+    let (provider, requests, task) = server(vec![(200, pods(&json!([]))), (200, worker(&spec).to_string())]);
     let mut state = CreateState::Prepared;
     assert!(matches!(
         provider.ensure(&spec, &mut state, &Cancellation::default(), |_| Ok(()), |_| {}),
@@ -69,9 +69,9 @@ fn changed_metadata_after_a_lost_response_cannot_adopt_or_create_again() {
     let mut spec = configured();
     let original = observed(&spec);
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
+        (200, pods(&json!([]))),
         (500, "{}".into()),
-        (200, json!([original]).to_string()),
+        (200, pods(&json!([original]))),
     ]);
     let mut state = CreateState::Prepared;
     assert!(
@@ -119,7 +119,11 @@ fn absent_or_different_metadata_blocks_reconnect_and_provider_mutations() {
                 value["env"][ENVIRONMENT_KEY] = json!("different-binding");
             }
             let listed = matches!(action, "adopt" | "reconcile");
-            let response = if listed { json!([value]) } else { value };
+            let response = if listed {
+                serde_json::from_str(&pods(&json!([value]))).unwrap()
+            } else {
+                value
+            };
             let (provider, requests, task) = server(vec![(200, response.to_string())]);
             let mut state = match action {
                 "adopt" => CreateState::Prepared,
@@ -188,9 +192,9 @@ fn metadata_enabled_workers_require_the_creation_operation_echo() {
     let spec = configured();
     let mut value = observed(&spec);
     value["env"].as_object_mut().unwrap().remove("HORIZON_CLOUD_OPERATION");
-    let worker: Worker = serde_json::from_value(value).unwrap();
+    let worker: Worker = wire::worker(value).unwrap();
     assert!(matches!(worker.verify(&spec), Err(CloudError::IdentityMismatch)));
-    let original: Worker = serde_json::from_value(observed(&spec)).unwrap();
+    let original: Worker = wire::worker(observed(&spec)).unwrap();
     assert!(original.verify(&spec).is_ok());
     let mut without_metadata = spec;
     without_metadata.startup_metadata = None;
@@ -208,6 +212,6 @@ fn old_specs_preserve_the_original_request_and_legacy_identity_checks() {
     let restored: WorkerSpec = serde_json::from_value(encoded).unwrap();
     assert_eq!(restored, spec);
     assert!(create_body(&restored)["env"].get(ENVIRONMENT_KEY).is_none());
-    let legacy: Worker = serde_json::from_value(worker(&spec)).unwrap();
+    let legacy: Worker = wire::worker(worker(&spec)).unwrap();
     assert!(legacy.verify(&restored).is_ok());
 }

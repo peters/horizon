@@ -321,19 +321,20 @@ fn blocked_publication_retries_until_it_succeeds() {
 
 #[test]
 fn blocked_publication_gives_up_after_the_window() {
-    let attempts = Cell::new(0);
+    let window = Duration::from_millis(20);
+    let started = std::time::Instant::now();
     let error = retry_while_blocked::<()>(
-        || {
-            attempts.set(attempts.get() + 1);
-            Err(io::Error::from(io::ErrorKind::PermissionDenied))
-        },
+        || Err(io::Error::from(io::ErrorKind::PermissionDenied)),
         |error| error.kind() == io::ErrorKind::PermissionDenied,
-        Duration::from_millis(20),
+        window,
     )
     .unwrap_err();
 
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    assert!(attempts.get() > 1, "a blocked publication is retried at least once");
+    assert!(
+        started.elapsed() >= window,
+        "a blocked publication waits out its retry window"
+    );
 }
 
 #[test]

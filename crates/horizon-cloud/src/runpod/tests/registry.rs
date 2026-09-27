@@ -9,8 +9,49 @@ fn binding() -> Binding {
 }
 
 #[test]
+fn username_limit_is_checked_before_network_or_mutation() {
+    let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
+    for username in ["a".repeat(192), "é".repeat(192)] {
+        let (provider, requests, task) = server(Vec::new());
+        task.join().unwrap();
+        let input = PullBinding {
+            operation_id: "generation1",
+            username: &username,
+            credential: &credential,
+        };
+        let mut state = State::Prepared;
+        assert!(matches!(
+            provider.ensure_registry_binding(&input, &mut state, &Cancellation::default(), |_| panic!(
+                "invalid input"
+            )),
+            Err(CloudError::Invalid("Invalid registry username"))
+        ));
+        assert_eq!(state, State::Prepared);
+        assert!(requests.lock().unwrap().is_empty());
+    }
+    for username in ["a".repeat(191), "é".repeat(191)] {
+        let (provider, requests, task) = server(vec![
+            (200, registries(&json!([]))),
+            (201, serde_json::to_string(&binding()).unwrap()),
+        ]);
+        let input = PullBinding {
+            operation_id: "generation1",
+            username: &username,
+            credential: &credential,
+        };
+        let mut state = State::Prepared;
+        provider
+            .ensure_registry_binding(&input, &mut state, &Cancellation::default(), |_| Ok(()))
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(state, State::Bound(binding()));
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+}
+
+#[test]
 fn prepared_generation_cannot_adopt_an_existing_provider_binding() {
-    let (provider, requests, task) = server(vec![(200, serde_json::to_string(&vec![binding()]).unwrap())]);
+    let (provider, requests, task) = server(vec![(200, registries(&json!([binding()])))]);
     let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
     let input = PullBinding {
         operation_id: "generation1",
@@ -28,17 +69,17 @@ fn prepared_generation_cannot_adopt_an_existing_provider_binding() {
     task.join().unwrap();
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].starts_with("GET /containerregistryauth "));
+    assert!(requests[0].starts_with("GET /registries "));
 }
 
 #[test]
 fn prepared_revocation_requires_absence_and_never_deletes_an_unowned_binding() {
     for response in [
-        (200, "[]".into()),
-        (200, serde_json::to_string(&vec![binding()]).unwrap()),
+        (200, registries(&json!([]))),
+        (200, registries(&json!([binding()]))),
         (503, "{}".into()),
     ] {
-        let absent = response.1 == "[]";
+        let absent = response.1 == registries(&json!([]));
         let (provider, requests, task) = server(vec![response]);
         let mut state = State::Prepared;
         let mut transitions = Vec::new();
@@ -58,18 +99,18 @@ fn prepared_revocation_requires_absence_and_never_deletes_an_unowned_binding() {
         task.join().unwrap();
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("GET /containerregistryauth "));
+        assert!(requests[0].starts_with("GET /registries "));
     }
 }
 
 #[test]
 fn missing_delete_response_remains_fenced_until_absence_is_observed() {
     let result = binding();
-    let listed = serde_json::to_string(&vec![&result]).unwrap();
+    let listed = registries(&json!([&result]));
     let (provider, requests, task) = server(vec![
         (200, listed),
         (404, r#"{"error":"synthetic-pull-secret"}"#.into()),
-        (200, "[]".into()),
+        (200, registries(&json!([]))),
     ]);
     let mut state = State::Bound(result.clone());
     let error = provider
@@ -88,7 +129,10 @@ fn missing_delete_response_remains_fenced_until_absence_is_observed() {
 #[test]
 fn creation_persists_intent_before_sending_only_the_explicit_pull_credential() {
     let result = binding();
-    let (provider, requests, task) = server(vec![(200, "[]".into()), (200, serde_json::to_string(&result).unwrap())]);
+    let (provider, requests, task) = server(vec![
+        (200, registries(&json!([]))),
+        (200, serde_json::to_string(&result).unwrap()),
+    ]);
     let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
     let input = PullBinding {
         operation_id: "generation1",
@@ -120,7 +164,7 @@ fn creation_persists_intent_before_sending_only_the_explicit_pull_credential() {
         ]
     );
     let requests = requests.lock().unwrap();
-    assert!(requests[1].starts_with("POST /containerregistryauth "));
+    assert!(requests[1].starts_with("POST /registries "));
     assert!(requests[1].contains("synthetic-pull-secret"));
     assert!(requests[1].contains("pull-user"));
 }
@@ -129,10 +173,10 @@ fn creation_persists_intent_before_sending_only_the_explicit_pull_credential() {
 fn uncertain_creation_reconciles_without_reposting_even_after_empty_observation() {
     let result = binding();
     let (provider, requests, task) = server(vec![
-        (200, "[]".into()),
+        (200, registries(&json!([]))),
         (500, r#"{"error":"synthetic-pull-secret"}"#.into()),
-        (200, "[]".into()),
-        (200, serde_json::to_string(&vec![&result]).unwrap()),
+        (200, registries(&json!([]))),
+        (200, registries(&json!([&result]))),
     ]);
     let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
     let input = PullBinding {
@@ -180,7 +224,7 @@ fn uncertain_creation_reconciles_without_reposting_even_after_empty_observation(
 
 #[test]
 fn failed_intent_persistence_prevents_create() {
-    let (provider, requests, task) = server(vec![(200, "[]".into())]);
+    let (provider, requests, task) = server(vec![(200, registries(&json!([])))]);
     let credential = Credential::new("synthetic-pull-secret".into()).unwrap();
     let input = PullBinding {
         operation_id: "generation1",
@@ -202,8 +246,8 @@ fn failed_intent_persistence_prevents_create() {
 #[test]
 fn revocation_fences_uncertain_delete_and_confirms_absence_on_reconcile() {
     let result = binding();
-    let listed = serde_json::to_string(&vec![&result]).unwrap();
-    let (provider, requests, task) = server(vec![(200, listed), (500, "{}".into()), (200, "[]".into())]);
+    let listed = registries(&json!([&result]));
+    let (provider, requests, task) = server(vec![(200, listed), (500, "{}".into()), (200, registries(&json!([])))]);
     let mut state = State::Bound(result.clone());
     assert!(
         provider
@@ -231,12 +275,11 @@ fn revocation_fences_uncertain_delete_and_confirms_absence_on_reconcile() {
 fn duplicate_or_replaced_bindings_cannot_be_selected_or_deleted() {
     let result = binding();
     for listed in [
-        serde_json::to_string(&vec![&result, &result]).unwrap(),
-        serde_json::to_string(&vec![Binding {
+        registries(&json!([&result, &result])),
+        registries(&json!([Binding {
             id: "unrelated".into(),
             ..result.clone()
-        }])
-        .unwrap(),
+        }])),
     ] {
         let (provider, requests, task) = server(vec![(200, listed)]);
         let mut state = State::Bound(result.clone());
@@ -278,7 +321,7 @@ fn cancellation_and_revoked_generations_never_create_again() {
 
 #[test]
 fn missing_uncertain_create_cannot_be_declared_revoked() {
-    let (provider, requests, task) = server(vec![(200, "[]".into())]);
+    let (provider, requests, task) = server(vec![(200, registries(&json!([])))]);
     let mut state = State::Requested {
         name: "horizon-pull-generation1".into(),
     };
@@ -330,7 +373,7 @@ fn a_renamed_live_binding_cannot_be_reported_as_revoked() {
         ..binding()
     };
     for mut state in [State::Bound(binding()), State::Revoking(binding())] {
-        let (provider, requests, task) = server(vec![(200, serde_json::to_string(&vec![&renamed]).unwrap())]);
+        let (provider, requests, task) = server(vec![(200, registries(&json!([&renamed])))]);
         let original = state.clone();
         assert!(matches!(
             provider.revoke_registry_binding("generation1", &mut state, &Cancellation::default(), |_| Ok(())),
