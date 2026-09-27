@@ -230,15 +230,19 @@ impl State {
     }
 
     fn load(&mut self, ctx: &egui::Context, repository: &str, revision: &str, config: &CloudConfig) {
-        // A reread of the same checkout keeps choices whose declaration did not change.
+        // A reread of the same checkout keeps only choices whose declaration, repository and
+        // profile alike, did not change; anything else must be authorized again.
         let same_primary = self.source.as_ref().is_some_and(|(primary, _)| primary == repository);
         let previous = std::mem::take(&mut self.rows);
         self.rows = config
             .same_worker_siblings()
             .map(|(alias, declaration)| {
-                let kept = previous
-                    .iter()
-                    .find(|row| same_primary && row.alias == alias && row.repository == declaration.repository);
+                let kept = previous.iter().find(|row| {
+                    same_primary
+                        && row.alias == alias
+                        && row.repository == declaration.repository
+                        && row.profile == declaration.profile
+                });
                 Row {
                     alias: alias.to_owned(),
                     repository: declaration.repository.clone(),
@@ -279,6 +283,7 @@ impl State {
             .map(|row| Binding {
                 alias: row.alias.clone(),
                 local_repository: horizon_core::Config::expand_tilde(row.path.trim()),
+                revision: None,
             })
             .collect();
         (!bindings.is_empty()).then(|| Key {
@@ -530,6 +535,7 @@ mod tests {
                     .map(|sibling| Binding {
                         alias: sibling.alias,
                         local_repository: sibling.local_repository,
+                        revision: Some(sibling.revision),
                     })
                     .collect()
             })
@@ -594,6 +600,7 @@ mod tests {
         let expected = vec![Binding {
             alias: "consumer".into(),
             local_repository: fixture.path("consumer").into(),
+            revision: Some(head.clone()),
         }];
         assert_eq!(fixture.bound(&primary, Some(&revision), "dev"), Ok(expected));
         assert_eq!(
@@ -716,6 +723,29 @@ mod tests {
     }
 
     #[test]
+    fn a_changed_sibling_profile_must_be_checked_again() {
+        let mut fixture = Fixture::new();
+        fixture.settle();
+        fixture.row("consumer").chosen = true;
+        fixture.row("tool").chosen = true;
+        let app = fixture.root.path().join("app");
+        let yaml = format!("{PROFILES}{COMPANIONS}").replacen(
+            "consumer\n    profile: dev",
+            "consumer\n    profile: release",
+            1,
+        );
+        assert_ne!(yaml, format!("{PROFILES}{COMPANIONS}"));
+        std::fs::write(app.join(".horizon/cloud.yml"), &yaml).unwrap();
+        git(&app, &["commit", "--quiet", "-am", "Use another consumer profile"]);
+        fixture.revision = git(&app, &["rev-parse", "HEAD"]);
+        fixture.config = CloudConfig::parse(&yaml).unwrap();
+        fixture.sync_primary("app");
+        assert!(!fixture.row("consumer").chosen, "a new profile is not authorized yet");
+        assert_eq!(fixture.row("consumer").profile, "release");
+        assert!(fixture.row("tool").chosen, "an unchanged declaration keeps its choice");
+    }
+
+    #[test]
     fn browsing_fills_the_checkout_of_the_sibling_being_browsed() {
         let mut fixture = Fixture::new();
         fixture.settle();
@@ -830,6 +860,8 @@ mod tests {
             [Binding {
                 alias: "consumer".into(),
                 local_repository: fixture.path("consumer").into(),
+                // The cloud records the commit that was reviewed, so deployment pins it.
+                revision: Some(head),
             }]
         );
     }

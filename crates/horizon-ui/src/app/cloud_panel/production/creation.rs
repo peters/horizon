@@ -295,7 +295,8 @@ fn repository_field(ui: &mut Ui, repository: &str) -> egui::Response {
     .inner
 }
 
-fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_repository: bool) -> RepositoryAction {
+/// The cloud title, focused when the form opens; Enter submits a complete form.
+fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
     if form.focus_title_on_open
         && !ui.is_sizing_pass()
         && ui.is_enabled()
@@ -315,6 +316,10 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
     }
+}
+
+fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_repository: bool) -> RepositoryAction {
+    title_field(ui, form, submit);
     if form.launch.loading() {
         ui.horizontal(|ui| {
             ui.spinner();

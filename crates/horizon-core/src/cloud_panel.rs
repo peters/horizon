@@ -787,9 +787,12 @@ mod tests {
         group.siblings = vec![crate::cloud_runtime::siblings::Binding {
             alias: "consumer".into(),
             local_repository: "/synthetic/consumer".into(),
+            revision: Some("c".repeat(40)),
         }];
         let saved = serde_json::to_value(&group).unwrap();
         assert_eq!(saved["siblings"][0]["local_repository"], "/synthetic/consumer");
+        // The reviewed commit persists, so a retry deploys exactly what was checked.
+        assert_eq!(saved["siblings"][0]["revision"], "c".repeat(40));
         assert_eq!(
             serde_json::from_value::<CloudGroup>(saved).unwrap().siblings,
             group.siblings

@@ -219,6 +219,9 @@ impl HorizonApp {
             .map(|sibling| cloud_runtime::siblings::Binding {
                 alias: sibling.alias,
                 local_repository: sibling.local_repository,
+                // Deployment pins exactly the reviewed commit and refuses a checkout that
+                // moved on, including on a retry.
+                revision: Some(sibling.revision),
             })
             .collect();
         group.reconcile(&mut self.board);

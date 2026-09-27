@@ -771,10 +771,12 @@ fn review_refuses_each_chosen_sibling_on_its_own_row() {
         Binding {
             alias: "native".into(),
             local_repository: fixture.path("native-lib"),
+            revision: None,
         },
         Binding {
             alias: "tool".into(),
             local_repository: fixture.path("tool"),
+            revision: None,
         },
     ];
     let reviewed = review(
@@ -803,6 +805,7 @@ fn review_refuses_each_chosen_sibling_on_its_own_row() {
     let relative = [Binding {
         alias: "native".into(),
         local_repository: "native-lib".into(),
+        revision: None,
     }];
     let reviewed = review(
         &fixture.path("app"),
@@ -825,6 +828,7 @@ fn review_reports_a_primary_refusal_once_for_the_whole_choice() {
     let bindings = [Binding {
         alias: "native".into(),
         local_repository: fixture.path("native-lib"),
+        revision: None,
     }];
     let reviewed = review(
         &fixture.path("app"),
