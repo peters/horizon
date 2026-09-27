@@ -76,6 +76,16 @@ pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec
     }
 }
 
+/// The provider a cloud of `request` deploys on, with its client.
+/// # Errors
+/// Refuses missing credentials and settings the provider needs.
+pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn super::deployment::Compute>> {
+    Ok(match kind(&request.profile) {
+        Kind::Hetzner => Box::new(super::deployment::hetzner::Compute::new(&request.settings)?),
+        Kind::RunPod => Box::new(horizon_cloud::runpod::RunPod::new(request.settings.credential()?)),
+    })
+}
+
 /// Whether anything the cloud created on its provider may still exist, read from
 /// local records only, so it needs no provider credential.
 pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
