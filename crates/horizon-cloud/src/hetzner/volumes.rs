@@ -134,7 +134,19 @@ impl Hetzner {
     /// # Errors
     /// Returns transport, authentication or response errors. HTTP 404 is a missing volume.
     pub fn inspect_volume(&self, id: u64, cancel: &Cancellation) -> Result<Option<Volume>, CloudError> {
-        match self.send(Method::Get, &format!("/volumes/{id}"), None, cancel) {
+        self.inspect_volume_within(id, cancel, None)
+    }
+
+    /// As `inspect_volume`, bounded by `budget` for the whole response.
+    /// # Errors
+    /// As `inspect_volume`; an exhausted budget is a transport failure.
+    pub fn inspect_volume_within(
+        &self,
+        id: u64,
+        cancel: &Cancellation,
+        budget: Option<std::time::Duration>,
+    ) -> Result<Option<Volume>, CloudError> {
+        match self.send_within(Method::Get, &format!("/volumes/{id}"), None, cancel, budget) {
             Err(failure) if failure.not_found() => Ok(None),
             result => {
                 let single: Single = serde_json::from_value(result?).map_err(|_| CloudError::InvalidResponse)?;

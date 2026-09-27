@@ -60,11 +60,11 @@ impl Hetzner {
                 single.ssh_key.verify(operation_id)?;
                 same_material(single.ssh_key, public_key)
             }
-            // Either our earlier request succeeded or the key exists under another name.
+            // Our earlier request succeeded, or the name or the key material is taken.
             Err(failure) if failure.name_taken() => match self.owned_ssh_key(operation_id, cancel)? {
                 Some(key) => same_material(key, public_key),
                 None => Err(CloudError::Invalid(
-                    "This public key is already registered in the Hetzner project under another name",
+                    "The Hetzner project already has an SSH key with this cloud's name or this public key that this cloud does not own",
                 )),
             },
             Err(failure) => Err(failure.into()),

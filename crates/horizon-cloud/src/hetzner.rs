@@ -27,8 +27,7 @@ const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
 const RESPONSE_LIMIT: u64 = 4 * 1024 * 1024;
 /// The per-request budget.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// The profile `provider` value that selects Hetzner. Profiles may name it; the
-/// deployment coordinator refuses it until the Hetzner deployment path exists.
+/// The profile `provider` value that selects Hetzner.
 pub const PROVIDER: &str = "hetzner";
 /// Label on every resource this adapter creates, naming the operation that owns it.
 pub const OPERATION_LABEL: &str = "horizon-operation";
@@ -235,7 +234,23 @@ impl Hetzner {
         body: Option<Value>,
         cancel: &Cancellation,
     ) -> Result<Value, Failure> {
+        self.send_within(method, path, body, cancel, None)
+    }
+
+    /// As `send`, with a caller budget for a read that covers the response headers
+    /// and body. A budget is capped at `REQUEST_TIMEOUT`.
+    pub(crate) fn send_within(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        cancel: &Cancellation,
+        budget: Option<Duration>,
+    ) -> Result<Value, Failure> {
         cancel.check().map_err(Failure::Local)?;
+        if budget.is_some_and(|budget| budget.is_zero()) {
+            return Err(Failure::Local(CloudError::Transport));
+        }
         let url = format!("{}{path}", self.endpoint);
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
         let response = match method {
@@ -245,7 +260,17 @@ impl Hetzner {
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or_else(|| Value::Object(serde_json::Map::new()))),
             Method::Delete => self.agent.delete(&url).header("Authorization", auth.as_str()).call(),
-            Method::Get => self.agent.get(&url).header("Authorization", auth.as_str()).call(),
+            Method::Get => {
+                let request = self.agent.get(&url).header("Authorization", auth.as_str());
+                match budget {
+                    Some(budget) => request
+                        .config()
+                        .timeout_global(Some(budget.min(REQUEST_TIMEOUT)))
+                        .build()
+                        .call(),
+                    None => request.call(),
+                }
+            }
         };
         let mut response = response.map_err(|_| Failure::Local(CloudError::Transport))?;
         let status = response.status().as_u16();
@@ -260,7 +285,13 @@ impl Hetzner {
             .with_config()
             .limit(RESPONSE_LIMIT)
             .read_json()
-            .map_err(|_| invalid())
+            .map_err(|error| {
+                if ureq_timed_out(&error) {
+                    Failure::Local(CloudError::Transport)
+                } else {
+                    invalid()
+                }
+            })
     }
 
     /// A failed or oversized read yields no reason rather than masking the status.
@@ -282,6 +313,11 @@ impl Hetzner {
             .as_reader()
             .take(FAILURE_BODY_LIMIT + 1)
             .read_to_end(&mut body);
+        // A body cut off by the request budget is a transport failure, not a
+        // provider answer: the status alone says nothing about what happened.
+        if read.as_ref().is_err_and(io_timed_out) {
+            return Failure::Local(CloudError::Transport);
+        }
         let detail = (read.is_ok() && body.len() as u64 <= FAILURE_BODY_LIMIT)
             .then(|| serde_json::from_slice::<Body>(&body).ok())
             .flatten()
@@ -296,6 +332,25 @@ impl Hetzner {
 
 fn invalid() -> Failure {
     Failure::Local(CloudError::InvalidResponse)
+}
+
+fn ureq_timed_out(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::Timeout(_) => true,
+        ureq::Error::Io(error) => io_timed_out(error),
+        _ => false,
+    }
+}
+
+/// Body reads surface a ureq timeout as an I/O error that wraps it.
+fn io_timed_out(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) || error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ureq::Error>())
+        .is_some_and(ureq_timed_out)
 }
 
 /// The name and label value of the resources an operation owns. Hetzner names
