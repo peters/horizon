@@ -72,7 +72,7 @@ impl Binding {
     /// A declaration edit, owner move or sibling placement cannot reuse authorization.
     pub fn validate(&self, owner: &Owner, alias: &str, declaration: &Declaration) -> Result<()> {
         let expected = Self::new(owner, alias, self.target.clone(), self.checkout.clone(), self.origin)?;
-        if expected.selection != self.selection || declaration != &self.target.declaration {
+        if expected.selection != self.selection || !declaration.matches(&self.target.declaration) {
             return Err(Error::Invalid("Companion binding changed; select the target again"));
         }
         Ok(())

@@ -63,6 +63,9 @@ fn binding_is_passive_local_and_pins_identity_before_inventory_exists() {
     bound
         .validate(&owner(), "consumer", &Declaration::new("example/consumer", "cpu"))
         .unwrap();
+    bound
+        .validate(&owner(), "consumer", &Declaration::new("EXAMPLE/Consumer", "cpu"))
+        .unwrap();
     for declaration in [
         Declaration::new("example/other", "cpu"),
         Declaration::new("example/consumer", "gpu"),
