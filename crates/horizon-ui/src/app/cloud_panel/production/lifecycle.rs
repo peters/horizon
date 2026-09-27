@@ -214,6 +214,9 @@ impl HorizonApp {
                 return;
             }
         };
+        // A stop the idle watch reports late must not apply to this or any later
+        // operation, a provider check included.
+        runtime.idle_reports = None;
         if action == Action::Reconcile {
             runtime.start_reconciliation(state_root, settings, ctx);
             return;
@@ -225,8 +228,6 @@ impl HorizonApp {
         if let Some(cancel) = runtime.cancel.take() {
             cancel.cancel();
         }
-        // A stop the idle watch reports late must not apply to this operation.
-        runtime.idle_reports = None;
         runtime.desktop = None;
         runtime.confirmation = Confirmation::None;
         runtime.rebuild = None;
