@@ -1,6 +1,7 @@
 //! What stopping and deleting a cloud costs, said as its provider does it: `RunPod`
-//! keeps the stopped worker, while Hetzner deletes the server and keeps only the
-//! workspace volume (see `provider::StoppedCost`).
+//! keeps the stopped worker, while Hetzner deletes the server and keeps the
+//! workspace volume and the cloud's SSH key, which costs nothing (see
+//! `provider::StoppedCost`).
 use super::super::Runtime;
 use horizon_core::cloud_runtime::provider::{self, StoppedCost};
 
@@ -17,7 +18,7 @@ pub(super) fn stop_confirmation(runtime: &Runtime) -> &'static str {
     match stopped(runtime) {
         StoppedCost::WorkerKept => "Stop this worker? Running processes will end. Storage remains billable.",
         StoppedCost::ServerDeleted => {
-            "Stop this cloud? Running processes will end and its server is deleted. Only the workspace volume is kept, and it stays billable."
+            "Stop this cloud? Running processes will end and its server is deleted. The workspace volume is kept and stays billable."
         }
     }
 }
@@ -26,7 +27,7 @@ pub(super) fn stopped_note(runtime: &Runtime) -> &'static str {
     match stopped(runtime) {
         StoppedCost::WorkerKept => "Stopped. Storage can remain billable; previous processes may be lost.",
         StoppedCost::ServerDeleted => {
-            "Stopped. The server was deleted; only the workspace volume is kept, and it stays billable. Resume creates a new server on the same volume."
+            "Stopped. The server was deleted; the workspace volume is kept and stays billable. Resume creates a new server on the same volume."
         }
     }
 }
@@ -62,18 +63,14 @@ mod tests {
     }
 
     #[test]
-    fn a_hetzner_cloud_says_its_server_is_deleted_and_only_the_volume_kept() {
+    fn a_hetzner_cloud_says_its_server_is_deleted_and_its_volume_kept() {
         let hetzner = on("hetzner");
         for text in [stop_confirmation(&hetzner), stopped_note(&hetzner)] {
             assert!(
                 text.contains("server is deleted") || text.contains("server was deleted"),
                 "{text}"
             );
-            assert!(
-                text.contains("only the workspace volume is kept")
-                    || text.contains("Only the workspace volume is kept"),
-                "{text}"
-            );
+            assert!(text.contains("workspace volume is kept and stays billable"), "{text}");
         }
         assert!(!delete_confirmation(&hetzner).contains("network volumes"));
         let runpod = on("runpod");
