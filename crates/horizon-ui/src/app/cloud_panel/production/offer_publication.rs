@@ -380,10 +380,7 @@ impl HorizonApp {
         // Wake for the next refresh or the earliest recorded retry, whichever comes first.
         // Hetzner's catalog is refreshed on its own schedule, so wake for whichever
         // goes stale first; workers must never be left with an old catalog.
-        let catalog_refresh = prices
-            .hetzner
-            .fresh()
-            .map(|catalog| super::prices::FRESH.saturating_sub(catalog.at.elapsed()));
+        let catalog_refresh = prices.hetzner.refresh_in();
         let refresh = fetched
             .map_or(Duration::MAX, |fetched| {
                 super::prices::FRESH.saturating_sub(fetched.at.elapsed())
