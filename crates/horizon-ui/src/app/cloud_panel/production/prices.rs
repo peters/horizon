@@ -44,6 +44,10 @@ pub(super) struct State {
     regions: HashMap<String, String>,
     /// Hetzner's catalog, fetched beside the list when this machine has a binding.
     pub hetzner: hetzner::State,
+    /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
+    /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
+    /// on a machine set up for Hetzner alone.
+    runpod_missing: bool,
 }
 
 impl State {
@@ -53,6 +57,7 @@ impl State {
         if cfg!(test) {
             return;
         }
+        self.recheck_runpod();
         if self.list.as_ref().is_none_or(|list| stale(list.at)) {
             self.fetch_list(root, ctx);
         }
@@ -145,6 +150,16 @@ impl State {
         }
     }
 
+    /// A `RunPod` key added in Cloud settings since the fetch found none is found by
+    /// asking again after a failed fetch's usual pause; without a key that fetch
+    /// reads only the settings.
+    fn recheck_runpod(&mut self) {
+        if self.runpod_missing && self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
+            self.list_error = None;
+            self.list_failed_at = None;
+        }
+    }
+
     /// Time until the prices or stock shown for `profile` go stale, unless a fetch is running.
     fn until_stale(&self, profile: &Profile) -> Option<Duration> {
         let list = self
@@ -159,6 +174,12 @@ impl State {
         list.into_iter()
             .chain(size)
             .map(|at| FRESH.saturating_sub(at.elapsed()))
+            // A missing RunPod key is asked about again after the retry pause.
+            .chain(
+                self.list_failed_at
+                    .filter(|_| self.runpod_missing && self.list_job.is_none())
+                    .map(|at| RETRY_FAILED.saturating_sub(at.elapsed())),
+            )
             .min()
     }
 
@@ -171,9 +192,11 @@ impl State {
                     self.accept(fetched);
                     self.list_error = None;
                     self.list_failed_at = None;
+                    self.runpod_missing = false;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
                 Err(error) => {
+                    self.runpod_missing |= error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
                     self.list = None;
                     self.list_error = Some(error);
                     self.list_failed_at = Some(Instant::now());
@@ -205,6 +228,19 @@ impl State {
         self.sizes.clear();
         self.size_jobs.clear();
         self.hetzner.refresh();
+    }
+
+    /// Whether this machine can use `RunPod`: false once a fetch found no API key, as on
+    /// a machine set up for Hetzner alone, until `RunPod` answers a later fetch.
+    pub fn runpod_bound(&self) -> bool {
+        !self.runpod_missing
+    }
+
+    /// Whether it is not known yet if this machine has a `RunPod` key: `RunPod` has not
+    /// answered, and a fetch is running or failed for another reason, such as settings
+    /// saved only since.
+    pub fn runpod_unknown(&self) -> bool {
+        !self.runpod_missing && self.list.is_none() && (self.list_job.is_some() || self.list_error.is_some())
     }
 
     pub fn loading(&self) -> bool {
@@ -294,6 +330,19 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 /// tests, which never contact it and run on Unix only.
 #[cfg(all(test, unix))]
 impl State {
+    /// As the dialog is while its first `RunPod` fetch runs.
+    pub fn runpod_checking(&mut self) {
+        let (sender, receiver) = channel();
+        std::mem::forget(sender);
+        self.list_job = Some(receiver);
+    }
+
+    /// As a fetch finds it on a machine set up for Hetzner alone.
+    pub fn runpod_key_missing(&mut self) {
+        self.runpod_missing = true;
+        self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
+    }
+
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
         self.accept(Fetched {
             value: (list, preferences),
@@ -375,6 +424,65 @@ mod tests {
         assert_eq!(state.region_of("AP-JP-1"), None);
         state.refresh();
         assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
+    }
+
+    #[test]
+    fn runpod_is_unknown_until_it_answers_or_is_found_missing() {
+        let mut state = State::default();
+        assert!(!state.runpod_unknown(), "nothing asked yet, as in the dialog tests");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(state.runpod_unknown(), "asked, no answer");
+        // A failure for another reason, such as settings not saved yet, proves nothing.
+        tx.send(Err("Cloud state I/O failed".into())).unwrap();
+        state.poll();
+        assert!(state.runpod_unknown() && state.runpod_bound());
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(!state.runpod_unknown() && state.runpod_bound());
+    }
+
+    #[test]
+    fn a_missing_runpod_key_is_remembered_until_runpod_answers() {
+        let mut state = State::default();
+        assert!(state.runpod_bound(), "until a fetch says otherwise");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(!state.runpod_bound());
+        // Neither a refresh nor an expired error offers RunPod again.
+        state.refresh();
+        assert!(!state.runpod_bound());
+        // The dialog wakes to ask again, and asks once the pause has passed.
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(state.until_stale(&profile()).is_some_and(|wait| wait <= RETRY_FAILED));
+        state.recheck_runpod();
+        assert!(state.list_error.is_some(), "not before the pause");
+        state.list_failed_at = Instant::now().checked_sub(RETRY_FAILED);
+        state.recheck_runpod();
+        assert!(
+            state.list_error.is_none() && !state.runpod_bound(),
+            "asked again, still unknown to be bound"
+        );
+        // Another failure says nothing about the key.
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err("The provider is unavailable".into())).unwrap();
+        state.poll();
+        assert!(!state.runpod_bound());
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(state.runpod_bound(), "a key added since is used");
     }
 
     #[test]

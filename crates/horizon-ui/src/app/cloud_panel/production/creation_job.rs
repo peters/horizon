@@ -82,6 +82,7 @@ impl HorizonApp {
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
+        runpod_usable(form, profile)?;
         let profile = launch_profile(profile, form.provider, form.size)?;
         let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);
@@ -211,6 +212,29 @@ impl HorizonApp {
         }
         Ok(())
     }
+}
+
+/// Refuses a `RunPod` cloud before anything is recorded when this machine has no
+/// `RunPod` key, or while the first fetch has not said yet; the deployment would
+/// fail the same way.
+fn runpod_usable(
+    form: &super::Production,
+    profile: &horizon_core::cloud_runtime::prices::Profile,
+) -> cloud_runtime::Result<()> {
+    if super::creation::provider::current(form.provider, profile) != &cloud_runtime::provider::RUNPOD {
+        return Ok(());
+    }
+    if form.prices.runpod_unknown() {
+        return Err(cloud_runtime::Error::Invalid(
+            "Horizon has not confirmed this machine's RunPod key yet; wait a moment or choose Try again on the prices",
+        ));
+    }
+    if !form.prices.runpod_bound() {
+        return Err(cloud_runtime::Error::Invalid(
+            cloud_runtime::settings::RUNPOD_KEY_MISSING,
+        ));
+    }
+    Ok(())
 }
 
 /// `profile` on the chosen provider at the chosen size, as the new cloud records it.

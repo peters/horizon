@@ -21,11 +21,14 @@ use horizon_core::{
     },
 };
 
-/// The providers this machine can use: `RunPod`, whose settings New cloud requires, and
-/// each other provider once a fetch finds its binding, including while its catalog is
-/// refreshed or could not be fetched.
+/// The providers this machine can use: `RunPod` unless a fetch found no API key for it,
+/// and each other provider once a fetch finds its binding, including while its catalog
+/// is refreshed or could not be fetched.
 fn configured(prices: &State) -> Vec<&'static Description> {
-    let mut configured = vec![&provider::RUNPOD];
+    let mut configured = Vec::new();
+    if prices.runpod_bound() {
+        configured.push(&provider::RUNPOD);
+    }
     if prices.hetzner.bound() {
         configured.push(&provider::HETZNER);
     }

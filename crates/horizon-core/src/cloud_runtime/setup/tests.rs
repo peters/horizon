@@ -246,3 +246,32 @@ fn editing_hetzner_keeps_its_registry_pull_binding() {
     *rekeyed.hetzner.token = "another-synthetic-token".into();
     assert_eq!(rekeyed.save().unwrap().hetzner.unwrap().registry_pull, Some(pull));
 }
+
+#[test]
+fn a_machine_can_be_set_up_for_hetzner_alone() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.runpod_key.clear();
+    // Neither provider: one is required.
+    let refused = draft.validate().unwrap_err().to_string();
+    assert!(
+        refused.contains("RunPod API key") && refused.contains("Hetzner"),
+        "{refused}"
+    );
+    draft.hetzner.enabled = true;
+    *draft.hetzner.token = "synthetic-hetzner-token".into();
+    let saved = draft.save().unwrap();
+    assert!(!saved.runpod_configured() && saved.hetzner.is_some());
+    // RunPod requests say what is missing instead of failing on a missing file.
+    assert_eq!(
+        saved.credential().unwrap_err().to_string(),
+        crate::cloud_runtime::settings::RUNPOD_KEY_MISSING
+    );
+    // Reopened, the settings stay valid, and turning Hetzner off needs a RunPod key again.
+    let mut reopened = Draft::load(root.path()).unwrap();
+    reopened.validate().unwrap();
+    reopened.hetzner.enabled = false;
+    assert!(reopened.validate().is_err());
+    *reopened.runpod_key = "synthetic-compute-key".into();
+    assert!(reopened.save().unwrap().runpod_configured());
+}

@@ -88,20 +88,26 @@ impl Draft {
     }
 
     /// # Errors
-    /// Requires compute access and credentials only for selected API-authenticated agents.
+    /// Requires one compute provider, `RunPod` or Hetzner, and credentials only for
+    /// selected API-authenticated agents.
     pub fn validate(&self) -> Result<()> {
         self.settings.validate()?;
         for registry in &self.registries {
             registry.validate()?;
         }
-        if self.runpod_key.is_empty() && !self.settings.runpod_key_file.is_file() {
-            return Err(Error::Invalid("Enter your RunPod API key"));
+        let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
+        if !runpod && !self.hetzner.enabled {
+            return Err(Error::Invalid(
+                "Enter your RunPod API key, or turn on Hetzner and enter its token",
+            ));
         }
-        validate_input(&self.runpod_key, Some(&self.settings.runpod_key_file))?;
-        if self.runpod_key.is_empty() {
-            self.settings.credential()?;
-        } else {
-            horizon_cloud::Credential::new(self.runpod_key.trim().to_owned())?;
+        if runpod {
+            validate_input(&self.runpod_key, Some(&self.settings.runpod_key_file))?;
+            if self.runpod_key.is_empty() {
+                self.settings.credential()?;
+            } else {
+                horizon_cloud::Credential::new(self.runpod_key.trim().to_owned())?;
+            }
         }
         self.hetzner
             .validate(self.settings.hetzner.as_ref(), &self.root.join("credentials/hetzner"))?;
