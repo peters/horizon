@@ -160,6 +160,9 @@ impl HorizonApp {
                     .at_position(&self.board, workspace, canvas_pos)
             })
             .map(|index| &self.cloud_prototype.groups.0[index]);
+        let heading = preset_picker_heading(target_workspace);
+        #[cfg(feature = "cloud-workspaces")]
+        let heading = if cloud.is_some() { "Add panel" } else { heading };
         let unavailable_reason = |kind| {
             #[cfg(feature = "cloud-workspaces")]
             {
@@ -185,15 +188,12 @@ impl HorizonApp {
                     .show(ui, |ui| {
                         ui.set_min_width(160.0);
                         ui.set_max_width(320.0);
-                        ui.label(
-                            egui::RichText::new(preset_picker_heading(target_workspace))
-                                .size(11.0)
-                                .color(theme::FG_DIM())
-                                .strong(),
-                        );
+                        ui.label(egui::RichText::new(heading).size(11.0).color(theme::FG_DIM()).strong());
                         ui.add_space(4.0);
                         #[cfg(feature = "cloud-workspaces")]
-                        if let Some(workspace_id) = target_workspace {
+                        if let Some(workspace_id) = target_workspace
+                            && cloud.is_none()
+                        {
                             if ui
                                 .add_enabled(self.cloud_launch_ready(), egui::Button::new("Cloud").frame(false))
                                 .clicked()
