@@ -291,6 +291,27 @@ impl Hetzner {
                 }
             }
         };
+        self.answer(response)
+    }
+
+    /// Posts a JSON body that carries a secret, such as server user data with a
+    /// registry login. The caller keeps the body in a wiped buffer and it is sent
+    /// as those bytes, so no unwiped copy of it is made here.
+    pub(crate) fn post_secret(&self, path: &str, body: &[u8], cancel: &Cancellation) -> Result<Value, Failure> {
+        cancel.check().map_err(Failure::Local)?;
+        let url = format!("{}{path}", self.endpoint);
+        let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
+        let response = self
+            .agent
+            .post(&url)
+            .header("Authorization", auth.as_str())
+            .header("Content-Type", "application/json")
+            .send(body);
+        self.answer(response)
+    }
+
+    /// The status and body of a response, as `send` reports them.
+    fn answer(&self, response: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, Failure> {
         let mut response = response.map_err(|_| Failure::Local(CloudError::Transport))?;
         let status = response.status().as_u16();
         if !(200..=299).contains(&status) {

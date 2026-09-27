@@ -5,7 +5,6 @@ use super::{
 };
 use crate::{Cancellation, CloudError, CreateState, Progress, Reason, WorkerStatus};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -171,7 +170,8 @@ impl Hetzner {
             persist(&CreateState::Requested)?;
             *state = CreateState::Requested;
             progress(Progress::Requesting);
-            match self.send(Method::Post, "/servers", Some(create_body(request, placement)?), cancel) {
+            let body = create_body(request, placement)?;
+            match self.post_secret("/servers", &body, cancel) {
                 Ok(value) => {
                     let created: Created = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
                     created.server.verify(request.operation_id)?;
@@ -417,23 +417,44 @@ fn placed(server: Server, request: &ServerRequest<'_>) -> Result<Server, CloudEr
     Ok(server)
 }
 
-fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<Value, CloudError> {
-    let mut body = json!({
-        "name": resource_name(request.operation_id)?,
-        "server_type": placement.server_type,
-        "location": placement.location,
-        "image": request.image,
-        "user_data": request.user_data,
-        "labels": {OPERATION_LABEL: request.operation_id},
-    });
-    if let Some(volume) = request.volume {
-        body["volumes"] = json!([volume.id]);
-        body["automount"] = json!(false);
+/// The create request. Its user data can hold a registry login, so the body is
+/// serialized straight into a wiped buffer sized up front: the buffer never
+/// grows, so no unwiped copy is left behind by a reallocation.
+fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<zeroize::Zeroizing<Vec<u8>>, CloudError> {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        name: String,
+        server_type: &'a str,
+        location: &'a str,
+        image: &'a str,
+        user_data: &'a str,
+        labels: BTreeMap<&'a str, &'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volumes: Option<[u64; 1]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        automount: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ssh_keys: Option<[u64; 1]>,
     }
-    if let Some(key) = request.ssh_key {
-        body["ssh_keys"] = json!([key.id]);
-    }
-    Ok(body)
+    let body = Body {
+        name: resource_name(request.operation_id)?,
+        server_type: &placement.server_type,
+        location: &placement.location,
+        image: request.image,
+        user_data: request.user_data,
+        labels: BTreeMap::from([(OPERATION_LABEL, request.operation_id)]),
+        volumes: request.volume.map(|volume| [volume.id]),
+        automount: request.volume.map(|_| false),
+        ssh_keys: request.ssh_key.map(|key| [key.id]),
+    };
+    // JSON escaping at most multiplies a character by six (`\u0000`).
+    let capacity = request
+        .user_data
+        .len()
+        .checked_mul(6)
+        .and_then(|size| size.checked_add(1024))
+        .ok_or(CloudError::Invalid("Server user data is too large"))?;
+    crate::host::json_in_wiped(&body, capacity)
 }
 
 fn bind(

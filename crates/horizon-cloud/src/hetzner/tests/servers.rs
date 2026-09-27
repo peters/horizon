@@ -92,6 +92,17 @@ fn create_persists_the_fence_before_posting_and_binds_the_server() {
     );
     assert_eq!(body["image"], "docker-ce");
     assert_eq!(body["user_data"], "#cloud-config\n");
+    let create = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| request.starts_with("POST /servers "))
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(
+        create.contains("\r\ncontent-type: application/json\r\n"),
+        "sent as JSON bytes"
+    );
     assert!(body.get("volumes").is_none() && body.get("automount").is_none());
 }
 
