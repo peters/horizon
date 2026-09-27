@@ -275,3 +275,23 @@ fn a_machine_can_be_set_up_for_hetzner_alone() {
     *reopened.runpod_key = "synthetic-compute-key".into();
     assert!(reopened.save().unwrap().runpod_configured());
 }
+
+#[test]
+fn saved_credential_hints_require_available_files_when_reopened() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.openai_auth = Authentication::ApiKey;
+    *draft.openai_key = "synthetic-agent-key".into();
+    let saved = draft.save().unwrap();
+    let agent = saved.openai_api_key_file.as_ref().unwrap();
+    let loaded = Draft::load(root.path()).unwrap();
+    assert!(loaded.saved_credentials.contains(&saved.runpod_key_file));
+    assert!(loaded.saved_credentials.contains(agent));
+    std::fs::remove_file(agent).unwrap();
+    std::fs::write(&saved.runpod_key_file, "").unwrap();
+    let reopened = Draft::load(root.path()).unwrap();
+    assert!(!reopened.saved_credentials.contains(agent));
+    assert!(!reopened.saved_credentials.contains(&saved.runpod_key_file));
+    assert!(reopened.settings.openai_api_key_file.is_some());
+    assert!(reopened.validate().is_err());
+}

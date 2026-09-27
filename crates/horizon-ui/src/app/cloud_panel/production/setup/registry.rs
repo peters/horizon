@@ -6,6 +6,7 @@ use horizon_core::cloud_runtime::{
 
 pub(super) fn render(ui: &mut Ui, accounts: &mut setup::Draft) -> Option<Action> {
     let mut action = None;
+    let credentials = &accounts.saved_credentials;
     let compute_saved = accounts.runpod_key.is_empty();
     ui.collapsing("Private container images", |ui| {
         ui.label("Bind each image repository to separate publishing and read-only worker credentials.");
@@ -21,12 +22,12 @@ pub(super) fn render(ui: &mut Ui, accounts: &mut setup::Draft) -> Option<Action>
                 ui.label("Publishing username (optional for existing images)");
                 ui.text_edit_singleline(&mut draft.publish_username);
                 ui.label("Publishing credential");
-                secret(ui, &mut draft.publish_secret, draft.original.as_ref().is_some_and(|binding| binding.publish.is_some()));
+                secret(ui, &mut draft.publish_secret, draft.original.as_ref().and_then(|binding| binding.publish.as_ref()).is_some_and(|auth| credentials.contains(&auth.secret_file)));
                 expiry(ui, "Publishing expiry", &mut draft.publish_expiry);
                 ui.label("Worker pull username");
                 ui.text_edit_singleline(&mut draft.pull_username);
                 ui.label("Read-only pull credential");
-                secret(ui, &mut draft.pull_secret, draft.original.is_some());
+                secret(ui, &mut draft.pull_secret, draft.original.as_ref().is_some_and(|binding| credentials.contains(&binding.pull.secret_file)));
                 expiry(ui, "Pull expiry", &mut draft.pull_expiry);
                 ui.checkbox(&mut draft.read_only_confirmed, "This dedicated pull grant is read-only and limited to the intended repository");
                 ui.small("For ghcr.io, only read:packages is accepted. Other registries require you to confirm the issuer's grant. Unknown expiry is shown as unknown.");

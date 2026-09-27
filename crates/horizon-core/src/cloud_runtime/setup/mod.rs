@@ -1,4 +1,5 @@
 //! First-use machine settings. Secret values never enter repository configuration.
+mod credentials;
 mod hetzner;
 mod storage;
 #[cfg(test)]
@@ -8,6 +9,7 @@ use super::{
     Error, Result,
     settings::{self, Settings},
 };
+pub use credentials::SavedCredentials;
 pub use hetzner::Draft as HetznerDraft;
 pub use horizon_cloud::Agent;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,7 @@ pub struct Draft {
     original: Option<Vec<u8>>,
     profile_agents: Option<Vec<Agent>>,
     pub settings: Settings,
+    pub saved_credentials: SavedCredentials,
     pub runpod_key: Zeroizing<String>,
     pub openai_key: Zeroizing<String>,
     pub anthropic_key: Zeroizing<String>,
@@ -70,6 +73,7 @@ impl Draft {
                     .collect()
             }),
             hetzner: HetznerDraft::from_settings(settings.hetzner.as_ref()),
+            saved_credentials: SavedCredentials::load(&settings),
             settings,
             runpod_key: Zeroizing::new(String::new()),
             openai_key: Zeroizing::new(String::new()),
