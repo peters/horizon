@@ -502,6 +502,10 @@ provider reports; it keeps no journal, so callers record intent first.
 pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
 `host` renders provider-neutral `#cloud-config` user data that runs the unchanged
 worker image under Docker on a rented virtual machine; it performs no provider I/O.
+`provider` describes each provider a new cloud can use: its id, label, billing
+currency, GPU support, placement kind (data centers or locations), what happens to
+the worker on stop, and the choices it supports. Interfaces read this description
+to show exactly the fields that apply instead of branching on provider names.
 `hetzner` is the Hetzner Cloud REST adapter that `cloud_runtime::deployment::hetzner`
 calls to deploy Hetzner clouds. It uses
 the same `CreateState` fence for servers and volumes, reconciles a lost create
