@@ -189,6 +189,10 @@ pub(super) struct Journal {
     /// cloud is stopped rather than lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) released: Option<String>,
+    /// Set when a delete starts. Provisioning refuses until the delete has
+    /// finished, then starts the redeployed cloud afresh.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) deleting: bool,
 }
 
 fn prepared() -> CreateState {
@@ -204,6 +208,7 @@ impl Journal {
                 volume: CreateState::Prepared,
                 key: None,
                 released: None,
+                deleting: false,
             }),
             Err(error) => Err(error.into()),
         }

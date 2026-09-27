@@ -150,9 +150,9 @@ pub(in crate::cloud_runtime::deployment) fn provision(
 }
 
 /// The journal provisioning goes on from. A server a stop released is never
-/// reconnected to. A deleted volume is forgotten: only a delete terminates the
-/// volume, so a redeployed cloud starts a new one wherever the settings allow now;
-/// a delete that has not finished (its key or server remains) is refused.
+/// reconnected to. A cloud whose delete started is refused until the delete has
+/// finished (no key, volume or server left), and then starts afresh wherever the
+/// settings allow now.
 fn journal_for(root: &std::path::Path, operation: &CreateState) -> Result<Journal> {
     let mut journal = Journal::load(root)?;
     if matches!(operation, CreateState::Bound { worker_id } if journal.released.as_ref() == Some(worker_id)) {
@@ -160,14 +160,22 @@ fn journal_for(root: &std::path::Path, operation: &CreateState) -> Result<Journa
             "This Hetzner cloud is stopping; stop it again to finish, then resume it",
         ));
     }
-    if matches!(journal.volume, CreateState::Terminated { .. }) {
-        if journal.key.is_some() || *operation != CreateState::Prepared {
+    if journal.deleting || matches!(journal.volume, CreateState::Terminated { .. }) {
+        if journal.key.is_some()
+            || matches!(journal.volume, CreateState::Requested | CreateState::Bound { .. })
+            || *operation != CreateState::Prepared
+        {
             return Err(Error::Invalid(
                 "Finish deleting this Hetzner cloud before deploying it again",
             ));
         }
-        journal.volume = CreateState::Prepared;
-        journal.location = None;
+        journal = Journal {
+            location: None,
+            volume: CreateState::Prepared,
+            key: None,
+            released: None,
+            deleting: false,
+        };
         journal.save(root)?;
     }
     Ok(journal)

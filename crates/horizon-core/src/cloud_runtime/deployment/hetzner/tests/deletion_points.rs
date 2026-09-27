@@ -88,6 +88,7 @@ fn journal(volume: CreateState) -> Journal {
         volume,
         key: Some("ssh-ed25519 AAAA".into()),
         released: None,
+        deleting: false,
     }
 }
 
@@ -99,6 +100,7 @@ fn a_registered_key_alone_is_deleted() {
         &CreateState::Prepared,
         &only_key,
         vec![
+            (200, listing("ssh_keys", &json!([key()]))),
             (200, listing("ssh_keys", &json!([key()]))),
             (204, String::new()),
             (200, listing("ssh_keys", &json!([]))),
@@ -117,6 +119,7 @@ fn an_uncertain_volume_is_found_by_label_and_deleted() {
             (200, json!({"volume": free_volume()}).to_string()),
             (204, String::new()),
             gone(),
+            (200, listing("ssh_keys", &json!([key()]))),
             (200, listing("ssh_keys", &json!([key()]))),
             (204, String::new()),
             (200, listing("ssh_keys", &json!([]))),
@@ -215,6 +218,7 @@ fn a_volume_request_that_created_nothing_is_settled_after_a_second_look() {
             (200, listing("volumes", &json!([]))),
             (200, listing("volumes", &json!([]))),
             (200, listing("ssh_keys", &json!([key()]))),
+            (200, listing("ssh_keys", &json!([key()]))),
             (204, String::new()),
             (200, listing("ssh_keys", &json!([]))),
         ],
@@ -233,6 +237,7 @@ fn a_server_request_that_created_nothing_is_settled_and_its_volume_deleted() {
             (200, json!({"volume": free_volume()}).to_string()),
             (204, String::new()),
             gone(),
+            (200, listing("ssh_keys", &json!([key()]))),
             (200, listing("ssh_keys", &json!([key()]))),
             (204, String::new()),
             (200, listing("ssh_keys", &json!([]))),

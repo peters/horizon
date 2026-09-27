@@ -212,6 +212,11 @@ pub(super) fn delete_with(
 ) -> Result<()> {
     let mut journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
+    // Recorded first, so nothing provisions this cloud again until the delete finishes.
+    if !journal.deleting {
+        journal.deleting = true;
+        journal.save(store.root())?;
+    }
     if state.operation == CreateState::Requested {
         let mut found = unresolved(cancel, || Ok(compute.client.find_servers(&operation, cancel)?))?;
         match found.len() {
@@ -277,7 +282,13 @@ pub(super) fn delete_with(
     journal.volume = fence;
     journal.released = None;
     journal.save(store.root())?;
-    compute.client.delete_ssh_key(&operation, cancel)?;
+    // The key is recorded before it is registered, so without a record there is
+    // none; with one, a registration whose response was lost is looked for twice.
+    if journal.key.is_some()
+        && !unresolved(cancel, || Ok(compute.client.find_ssh_keys(&operation, cancel)?))?.is_empty()
+    {
+        compute.client.delete_ssh_key(&operation, cancel)?;
+    }
     // The key is gone and proven absent, so the cloud no longer keeps anything.
     journal.key = None;
     journal.save(store.root())

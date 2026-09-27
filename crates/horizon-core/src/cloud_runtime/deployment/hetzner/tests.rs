@@ -72,6 +72,7 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         volume: CreateState::Bound { worker_id: "9".into() },
         key: Some(throwaway_public_key().unwrap()),
         released: Some("42".into()),
+        deleting: true,
     };
     saved.save(root.path()).unwrap();
     assert_eq!(Journal::load(root.path()).unwrap(), saved);
@@ -580,19 +581,21 @@ mod failure_points {
 
     #[test]
     fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
-        // An unfinished delete, with its key or server left, is refused before any request.
-        for (key, operation) in [
-            (Some("ssh-ed25519 AAAA"), CreateState::Prepared),
-            (None, CreateState::Requested),
+        // An unfinished delete, with its key, volume or server left, is refused before any request.
+        let terminated = CreateState::Terminated { worker_id: "8".into() };
+        for (key, volume, operation) in [
+            (Some("ssh-ed25519 AAAA"), terminated.clone(), CreateState::Prepared),
+            (None, terminated, CreateState::Requested),
+            (Some("ssh-ed25519 AAAA"), CreateState::Prepared, CreateState::Prepared),
         ] {
             let (_, journal, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
-                let volume = CreateState::Terminated { worker_id: "8".into() };
                 let key = key.map(String::from);
                 Journal {
                     location: None,
                     volume,
                     key,
                     released: None,
+                    deleting: true,
                 }
                 .save(root)
                 .unwrap();
@@ -609,6 +612,7 @@ mod failure_points {
                     volume: CreateState::Terminated { worker_id: "8".into() },
                     key: None,
                     released: None,
+                    deleting: false,
                 };
                 deleted.save(root).unwrap();
             },
