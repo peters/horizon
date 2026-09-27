@@ -54,6 +54,7 @@ impl HorizonApp {
         form.selected_profile.clear();
         form.size = None;
         form.placement = Placement::default();
+        form.provider = None;
         form.creating = true;
         form.focus_title_on_open = true;
         self.read_cloud_profiles(ctx);
@@ -128,6 +129,7 @@ impl HorizonApp {
                         form.selected_profile.clone_from(&prepared.config.default);
                         form.size = None;
                         form.placement = Placement::default();
+                        form.provider = None;
                     }
                     // A reread profile keeps a chosen size only while it still offers it.
                     let profile = prepared.config.profiles.get(&form.selected_profile);

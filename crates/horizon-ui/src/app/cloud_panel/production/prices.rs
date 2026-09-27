@@ -56,6 +56,10 @@ impl State {
         if self.list.as_ref().is_none_or(|list| stale(list.at)) {
             self.fetch_list(root, ctx);
         }
+        // Hetzner is offered beside RunPod for CPU profiles when this machine has a binding.
+        if !profile.gpu {
+            self.hetzner.request(root, ctx);
+        }
         let key = key(profile);
         let current = self
             .sizes

@@ -584,3 +584,103 @@ fn finish_creation(ctx: &egui::Context, app: &mut HorizonApp) {
     }
     assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
 }
+
+#[test]
+fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(
+        !has_label(&output, "Provider"),
+        "no provider choice without a Hetzner binding"
+    );
+    let catalog = serde_json::from_value(serde_json::json!({
+        "offers": [
+            {"server_type": "cx33", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
+             "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": false, "recommended": false},
+            {"server_type": "cpx32", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 160,
+             "dedicated": false, "hourly_eur": 0.0569, "monthly_eur": 35.49, "available": true, "recommended": true},
+            {"server_type": "cx33", "location": "nbg1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
+             "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": true, "recommended": false},
+            {"server_type": "cx23", "location": "nbg1", "cores": 2, "memory_gb": 4.0, "disk_gb": 40,
+             "dedicated": false, "hourly_eur": 0.0088, "monthly_eur": 5.49, "available": true, "recommended": false}
+        ],
+        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5, "nbg1": 0.5},
+        "ipv4_hour_eur": {"hel1": 0.0008, "nbg1": 0.0008}, "regions": {"hel1": "EUROPE", "nbg1": "EUROPE"},
+    }))
+    .unwrap();
+    app.cloud_prototype
+        .production
+        .prices
+        .hetzner
+        .answered_with_types(Some(catalog), &["cx23", "cx33", "cpx32"]);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Provider"));
+    assert!(has_label(&output, "RunPod"), "the heading names the provider");
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    assert_eq!(app.cloud_prototype.production.provider, Some("hetzner"));
+    // The dialog grows to its new content on the next frame.
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Hetzner"), "the heading names the provider");
+    assert!(
+        has_label(&output, "8 GB"),
+        "RunPod flavor families are not shown for Hetzner"
+    );
+    // cx23 is too small for 4 vCPU / 8 GB, so cx33 is the first configured type that fits.
+    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"));
+    assert!(has_label(&output, "If it is sold out: cpx32."));
+    // 20 GB workspace volume by default: €1.14 kept while stopped.
+    assert!(has_label(
+        &output,
+        "At most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
+    ));
+    assert!(has_label(
+        &output,
+        "Hetzner lists this type as unavailable here; creation confirms whether it can be rented."
+    ));
+    assert!(
+        !has_label(&output, "Region"),
+        "RunPod regions are not shown for Hetzner"
+    );
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "nbg1 · Europe\ncx33 · €0.0136/h").center(),
+    );
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["nbg1"]);
+    // Until Horizon can create clouds on Hetzner, creation is refused before anything is recorded.
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.cloud_prototype.production.pending_creation.is_some() {
+        assert!(Instant::now() < deadline, "repository validation did not complete");
+        tall_frame(&ctx, &mut app);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.cloud_prototype.groups.0.iter().all(|group| group.remote.is_none()),
+        "no cloud is created"
+    );
+    assert!(
+        app.cloud_prototype
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("Hetzner"))
+    );
+    // Switching back to RunPod clears the Hetzner location.
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "RunPod\nUS dollars · CPU and GPU").center(),
+    );
+    assert_eq!(app.cloud_prototype.production.provider, Some("runpod"));
+    assert!(app.cloud_prototype.production.placement.is_any());
+}

@@ -64,6 +64,8 @@ pub(super) struct Production {
     size: Option<machine_size::Size>,
     /// Where the new cloud may be placed; any allowed data center by default.
     placement: horizon_core::cloud_panel::Placement,
+    /// The provider chosen for the selected profile; `None` keeps the profile's own.
+    provider: Option<&'static str>,
     /// Provider prices and stock shown while choosing the size.
     prices: prices::State,
     setup_agent: Option<PanelKind>,

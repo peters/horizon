@@ -17,9 +17,11 @@ const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 pub(in crate::app) struct State {
     /// The latest catalog; `None` inside when this machine has no Hetzner binding.
     fetched: Option<Fetched<Option<HetznerCatalog>>>,
+    /// The server types this machine's settings try, in order, from the same fetch.
+    server_types: Vec<String>,
     error: Option<String>,
     failed_at: Option<Instant>,
-    job: Option<Job<Option<HetznerCatalog>>>,
+    job: Option<Job<(Option<HetznerCatalog>, Vec<String>)>>,
     /// When the running fetch started.
     started: Option<Instant>,
 }
@@ -37,7 +39,14 @@ impl State {
             self.failed_at = None;
         }
         if self.job.is_none() && self.error.is_none() && self.fetched.as_ref().is_none_or(|fetched| stale(fetched.at)) {
-            self.job = Some(spawn(root, ctx, prices::hetzner_catalog));
+            self.job = Some(spawn(root, ctx, |settings, cancel| {
+                let server_types = settings
+                    .hetzner
+                    .as_ref()
+                    .map(|hetzner| hetzner.server_types.clone())
+                    .unwrap_or_default();
+                Ok((prices::hetzner_catalog(settings, cancel)?, server_types))
+            }));
             self.started = Some(Instant::now());
         }
     }
@@ -48,8 +57,12 @@ impl State {
             self.started = None;
         }
         match finished {
-            Some(Ok(fetched)) => {
-                self.fetched = Some(fetched);
+            Some(Ok(Fetched {
+                value: (catalog, server_types),
+                at,
+            })) => {
+                self.fetched = Some(Fetched { value: catalog, at });
+                self.server_types = server_types;
                 self.error = None;
                 self.failed_at = None;
             }
@@ -76,6 +89,16 @@ impl State {
     /// Until a failed fetch may be asked again, for waking an idle app.
     pub fn retry_in(&self) -> Option<Duration> {
         self.failed_at.map(|at| RETRY_FAILED.saturating_sub(at.elapsed()))
+    }
+
+    /// The server types this machine's settings try, in order.
+    pub fn server_types(&self) -> &[String] {
+        &self.server_types
+    }
+
+    /// The reason the last fetch failed, while it is reported.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// The current catalog, when this machine has a Hetzner binding.
@@ -128,6 +151,11 @@ impl State {
 /// A catalog as if Hetzner had just answered, for tests, which never contact it.
 #[cfg(test)]
 impl State {
+    pub fn answered_with_types(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str]) {
+        self.answered(catalog);
+        self.server_types = server_types.iter().map(|&name| name.to_owned()).collect();
+    }
+
     pub fn answered(&mut self, catalog: Option<HetznerCatalog>) {
         self.fetched = Some(Fetched {
             value: catalog,
