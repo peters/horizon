@@ -49,7 +49,25 @@ if [ "$agent" = claude ]; then
         export ANTHROPIC_WORKSPACE_ID
         export ANTHROPIC_CUSTOM_HEADERS="anthropic-workspace-id: $ANTHROPIC_WORKSPACE_ID"
     fi
-    env -- "${session_env_assignments[@]}" claude --mcp-config /workspace/agent-mcp.json
+    # The first launch assigns an id. Resume only after Claude has written that
+    # session's transcript; an id with no transcript must be started again.
+    session_file="/workspace/sessions/$id/agent-session"
+    if [ -s "$session_file" ]; then
+        session_id="$(tr -d '[:space:]' < "$session_file")"
+    else
+        session_id="$(tr -d '[:space:]' < /proc/sys/kernel/random/uuid)"
+        printf '%s\n' "$session_id" > "$session_file"
+    fi
+    claude_args=(--session-id "$session_id")
+    if [ -n "$session_id" ]; then
+        for transcript in /workspace/home/.claude/projects/*/"$session_id".jsonl; do
+            if [ -f "$transcript" ]; then
+                claude_args=(--resume "$session_id")
+                break
+            fi
+        done
+    fi
+    env -- "${session_env_assignments[@]}" claude "${claude_args[@]}" --mcp-config /workspace/agent-mcp.json
 elif [ "$agent" = grok ]; then
     env -- "${session_env_assignments[@]}" grok --no-leader
 else
