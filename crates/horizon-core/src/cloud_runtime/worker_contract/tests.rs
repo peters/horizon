@@ -72,6 +72,18 @@ fn idle_stop_requires_its_exact_marker_only_when_requested() {
     assert!(validate(&supported, &Capabilities::default(), false, true).is_ok());
 }
 
+#[test]
+fn a_horizon_stopped_idle_period_requires_the_exact_idle_record_marker() {
+    let current = "horizon-worker-contract=1\nhorizon-idle-stop-contract=1\n";
+    assert!(super::validate_idle_report(current, false).is_ok());
+    assert!(super::validate_idle_report(current, true).is_err());
+    for incidental in ["horizon-idle-report-contract=2", " horizon-idle-report-contract=1"] {
+        assert!(super::validate_idle_report(&format!("{current}{incidental}\n"), true).is_err());
+    }
+    let supported = format!("{current}horizon-idle-report-contract=1\n");
+    assert!(super::validate_idle_report(&supported, true).is_ok());
+}
+
 #[cfg(unix)]
 #[test]
 fn readiness_preserves_strict_legacy_arguments_and_runs_modern_service_checks() {

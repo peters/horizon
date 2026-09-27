@@ -452,3 +452,6 @@ fn resuming_clears_only_a_released_servers_fence() {
 /// Deletion cleans up the record each provisioning failure point leaves.
 #[cfg(unix)]
 mod deletion_points;
+/// Idle stop reads the worker's idle record and stops the cloud as Stop does.
+#[cfg(unix)]
+mod idle;

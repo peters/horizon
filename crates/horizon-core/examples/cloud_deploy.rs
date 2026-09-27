@@ -34,7 +34,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -72,6 +72,9 @@ fn run() -> cloud_runtime::Result<()> {
     if args[0] == "stop" && args.len() == 3 {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
         return Ok(());
+    }
+    if args[0] == "idle-check" && args.len() == 3 {
+        return idle_check(&PathBuf::from(&args[2]), &settings, &cancel);
     }
     if args[0] == "revoke-browserstack" && args.len() == 3 {
         cloud_runtime::lifecycle::revoke_browserstack(&PathBuf::from(&args[2]), &settings, &cancel)?;
@@ -273,6 +276,23 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     println!(
         "{}",
         serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?
+    );
+    Ok(())
+}
+
+/// Checks a Hetzner cloud's idle record once, stopping it after its whole idle period.
+fn idle_check(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    use cloud_runtime::lifecycle::IdleCheck;
+    println!(
+        "{}",
+        match cloud_runtime::lifecycle::idle_check(root, settings, cancel)? {
+            IdleCheck::NotWatched => "Not watched: no idle period, or not a running Hetzner cloud".to_owned(),
+            IdleCheck::Active { idle, limit } => format!("Active: idle {}s of {}s", idle.as_secs(), limit.as_secs()),
+            IdleCheck::Stopped { idle } => format!(
+                "Stopped after {}s idle. Resume creates a new server that attaches the same workspace volume.",
+                idle.as_secs()
+            ),
+        }
     );
     Ok(())
 }

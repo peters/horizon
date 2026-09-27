@@ -45,6 +45,7 @@ impl Images<'_> {
             .run_contract(image, &name, capabilities, git_auth)
             .and_then(|output| {
                 worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())?;
+                worker_contract::validate_idle_report(&output, stopped_by_horizon(profile))?;
                 sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))
             });
         // Killing a Docker client does not stop its daemon-owned container.
@@ -144,6 +145,13 @@ fn finish_contract<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
         (Err(error), _) | (_, Err(error)) => Err(error),
         (Ok(value), Ok(())) => Ok(value),
     }
+}
+
+/// Whether Horizon, not the worker, stops this profile's cloud when it is idle.
+fn stopped_by_horizon(profile: &Profile) -> bool {
+    profile.idle_stop_minutes.is_some()
+        && horizon_cloud::provider::by_id(&profile.provider)
+            .is_some_and(|provider| provider.idle_stop == horizon_cloud::provider::IdleStop::Horizon)
 }
 
 #[cfg(test)]

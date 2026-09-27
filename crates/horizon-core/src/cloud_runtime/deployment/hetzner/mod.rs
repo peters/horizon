@@ -3,6 +3,7 @@
 //! fenced by the deployment's `operation`; the volume, the chosen location and
 //! the SSH key live in this cloud's `hetzner.json` journal, so `RunPod` clouds and
 //! their records are untouched.
+pub(in crate::cloud_runtime) mod idle;
 pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
 mod readiness;

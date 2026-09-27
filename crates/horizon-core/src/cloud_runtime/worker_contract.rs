@@ -118,6 +118,18 @@ pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool
     Ok(())
 }
 
+/// Where Horizon stops an idle worker (see `provider::IdleStop::Horizon`), it reads
+/// the idle record, which older watchers do not keep. `required` says whether the
+/// profile sets an idle period on such a provider.
+pub(super) fn validate_idle_report(output: &str, required: bool) -> Result<()> {
+    if required && !reports(output, "horizon-idle-report-contract=1") {
+        return Err(Error::Invalid(
+            "Worker image does not record idle time for Horizon to stop it; rebuild with the current worker bootstrap",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn readiness_command(capabilities: &Capabilities) -> Result<String> {
     let environment = environment(capabilities)?.replace('\'', "'\\''");
     // Modern checkers must still verify active services; legacy full checkers have
