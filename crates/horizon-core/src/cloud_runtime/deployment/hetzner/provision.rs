@@ -151,8 +151,8 @@ pub(in crate::cloud_runtime::deployment) fn provision(
 
 /// The journal provisioning goes on from. A server a stop released is never
 /// reconnected to. A cloud whose delete started is refused until the delete has
-/// finished (no key, volume or server left) and the cloud was reopened for a
-/// redeploy, which also forgets the old workspace's source; it then starts afresh
+/// finished (no key, volume or server left) and the deployment no longer claims
+/// the old workspace's source, which a redeploy resets; it then starts afresh
 /// wherever the settings allow now.
 fn journal_for(root: &std::path::Path, state: &Deployment) -> Result<Journal> {
     let operation = &state.operation;
