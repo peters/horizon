@@ -78,7 +78,17 @@ pub(in crate::cloud_runtime) fn reconcile(
     server.verify(&operation)?;
     let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker was requested"))?;
     let volume = volume(&compute, &journal, &operation, cancel)?;
+    // A found server is recorded as the worker only as readiness would accept it.
+    if !super::readiness::holds(&server, &volume)
+        || !super::readiness::admitted(&server, &compute.allowed, journal.location.as_deref())
+    {
+        return Err(Error::Invalid(
+            "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",
+        ));
+    }
     let described = worker(&server, spec, &volume)?;
+    described.verify(spec)?;
+    described.verify_resources(spec)?;
     report.outcome = if server.status() == WorkerStatus::Stopped {
         Outcome::Inactive { worker_id: bound }
     } else {
@@ -162,7 +172,16 @@ pub(in crate::cloud_runtime) fn delete(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<()> {
-    let compute = Compute::new(settings)?;
+    delete_with(&Compute::new(settings)?, store, state, cancel)
+}
+
+/// As `delete`, with the Hetzner client given.
+pub(super) fn delete_with(
+    compute: &Compute,
+    store: &Store,
+    state: &mut Deployment,
+    cancel: &Cancellation,
+) -> Result<()> {
     let mut journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
     if state.operation == CreateState::Requested {

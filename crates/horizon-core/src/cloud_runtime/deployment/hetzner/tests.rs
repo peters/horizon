@@ -685,3 +685,7 @@ fn resuming_clears_only_a_released_servers_fence() {
     assert!(!saved.stop_requested && saved.worker.is_none());
     assert!(Journal::load(root.path()).unwrap().released.is_none());
 }
+
+/// Deletion cleans up the record each provisioning failure point leaves.
+#[cfg(unix)]
+mod deletion_points;
