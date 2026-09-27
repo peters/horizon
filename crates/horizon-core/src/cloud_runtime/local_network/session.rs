@@ -70,8 +70,8 @@ pub(super) fn supervise(
 ) {
     let mut retry = FIRST_RETRY;
     while !cancel.is_cancelled() {
-        let started = Instant::now();
-        let error = match attempt(transport, subnet, proxy_port, shared, cancel) {
+        let mut active_since = None;
+        let error = match attempt(transport, subnet, proxy_port, shared, cancel, &mut active_since) {
             Ended::Cancelled => return,
             Ended::Unsupported => {
                 shared.set(State::Failed {
@@ -83,7 +83,7 @@ pub(super) fn supervise(
         };
         tracing::info!(%error, "local network bridge session ended");
         shared.set(State::Reconnecting { error });
-        if started.elapsed() >= STABLE {
+        if active_since.is_some_and(|since: Instant| since.elapsed() >= STABLE) {
             retry = FIRST_RETRY;
         }
         let resume = Instant::now() + retry;
@@ -103,6 +103,7 @@ fn attempt(
     proxy_port: u16,
     shared: &Shared,
     cancel: &Cancellation,
+    active_since: &mut Option<Instant>,
 ) -> Ended {
     let runner = Runner {
         cancel,
@@ -145,6 +146,7 @@ fn attempt(
         }
     };
     shared.set(State::Active { proxy: ready.proxy });
+    *active_since = Some(Instant::now());
     let mut beat = Instant::now() + transport.heartbeat();
     loop {
         if cancel.is_cancelled() {
@@ -169,7 +171,10 @@ fn preparation(output: &str) -> Option<Ended> {
         return None;
     }
     // An image built before the bridge lacks the subcommand, or the whole helper.
-    if output.contains("Usage: horizon-cloud-worker") || output.contains("not found") {
+    let missing_helper = output
+        .lines()
+        .any(|line| line.contains("horizon-cloud-worker") && line.contains("not found"));
+    if output.contains("Usage: horizon-cloud-worker") || missing_helper {
         return Some(Ended::Unsupported);
     }
     let reason = output

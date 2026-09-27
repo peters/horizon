@@ -217,7 +217,7 @@ impl Reply {
         match self {
             Self::Succeeded => "Connected",
             Self::GeneralFailure => {
-                "The bridge refused the connection: its connection or data limit is reached, or it is stopping"
+                "The bridge refused the connection: its connection or data limit is reached, it is stopping, or it hit an internal error"
             }
             Self::NotAllowed => {
                 "Outside the bridged local network: only devices on the shared subnet are reachable, never the Horizon computer itself"

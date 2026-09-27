@@ -296,16 +296,26 @@ mod supervision {
 
     #[test]
     fn an_image_without_the_helper_fails_without_retrying() {
-        let old = "printf '%s\\n' 'Cloud worker service: Usage: horizon-cloud-worker serve|connect'";
-        let (bridge, root) = start(old, HOLD);
-        assert_eq!(
-            wait_for_state(&bridge, |state| matches!(state, State::Failed { .. })),
-            State::Failed {
-                error: session::UNSUPPORTED.into()
-            }
-        );
-        std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(log(&root), "");
+        for old in [
+            "printf '%s\\n' 'Cloud worker service: Usage: horizon-cloud-worker serve|connect'",
+            "printf '%s\\n' 'bash: line 1: horizon-cloud-worker: command not found'",
+        ] {
+            let (bridge, root) = start(old, HOLD);
+            assert_eq!(
+                wait_for_state(&bridge, |state| matches!(state, State::Failed { .. })),
+                State::Failed {
+                    error: session::UNSUPPORTED.into()
+                }
+            );
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(log(&root), "");
+        }
+        // A supported helper reporting something else missing is retried.
+        let (bridge, _root) = start("printf '%s\\n' 'Directory not found'", HOLD);
+        assert!(matches!(
+            wait_for_state(&bridge, |state| !matches!(state, State::Starting)),
+            State::Reconnecting { .. }
+        ));
     }
 
     #[test]
