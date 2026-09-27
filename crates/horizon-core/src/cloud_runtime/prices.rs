@@ -11,6 +11,8 @@ pub use horizon_cloud::{
 };
 use horizon_cloud::{hetzner::Hetzner, runpod::RunPod};
 
+pub mod watch;
+
 /// Current prices and the preferences they apply to.
 /// # Errors
 /// Fails without a provider credential and on provider errors.
