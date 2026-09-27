@@ -203,7 +203,9 @@ fn profile_details(
     resize
 }
 
-/// CPU and memory can change until a worker is requested; `RunPod` cannot resize an existing pod.
+/// CPU and memory can change until a worker is requested; `RunPod` cannot resize an
+/// existing pod. Sizes here are `RunPod`'s CPU flavors, so a provider priced by server
+/// type shows its fixed size; its size is chosen when the cloud is created.
 fn machine_size(
     ui: &mut egui::Ui,
     id: u32,
@@ -213,7 +215,10 @@ fn machine_size(
     use super::machine_size;
     let profile = &launch.profile;
     let idle = runtime.receiver.is_none() && runtime.recovery_receiver.is_none() && !runtime.state_unavailable;
+    let flavors = cloud_runtime::provider::by_id(&profile.provider)
+        .is_some_and(|provider| provider.pricing == cloud_runtime::provider::Pricing::Flavors);
     if profile.gpu
+        || !flavors
         || !idle
         || !runtime
             .state
@@ -224,7 +229,7 @@ fn machine_size(
         let fixed = runtime.state.as_ref().filter(|state| !state.accepts_next_size());
         let shown = fixed.map_or(profile, |state| &state.profile);
         let label = ui.label(machine_size::fixed((shown.cpu, shown.memory_gb), profile.gpu));
-        if fixed.is_some() {
+        if fixed.is_some() && flavors {
             label.on_hover_text("RunPod cannot resize a requested worker. Create a new cloud for a different size.");
         }
         return None;

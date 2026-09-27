@@ -5,9 +5,9 @@ use super::{DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_HOURS, MAX_LIMIT, MONTH_HOURS
 use crate::hetzner::catalog::{self, Catalog};
 use time::{Date, Month, OffsetDateTime};
 
-/// Whether Horizon can create clouds on Hetzner yet. The deployment wiring for #972
-/// turns this on; until then offers are informational only.
-pub const DEPLOYABLE: bool = false;
+/// Whether Horizon can create clouds on Hetzner: deploy, stop, resume, check and
+/// delete are wired (#972), so its offers are rentable.
+pub const DEPLOYABLE: bool = true;
 const EUR: &str = crate::provider::HETZNER.currency;
 
 /// Hetzner offers in `catalog` meeting `requirements`, cheapest estimated total first,

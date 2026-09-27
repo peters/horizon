@@ -163,10 +163,13 @@ impl BillingMonitor {
         fetch: Fetch,
         notify: &N,
     ) {
-        let pod = deployment.and_then(|deployment| match &deployment.operation {
-            CreateState::Bound { worker_id } => Some(worker_id.as_str()),
-            _ => None,
-        });
+        // Only RunPod's billing is read; another provider's worker has no RunPod pod.
+        let pod = deployment
+            .filter(|deployment| deployment.profile.provider == horizon_cloud::provider::RUNPOD.id)
+            .and_then(|deployment| match &deployment.operation {
+                CreateState::Bound { worker_id } => Some(worker_id.as_str()),
+                _ => None,
+            });
         let (Some(pod), Some(root)) = (pod, cloud_root) else {
             self.stop();
             return;
@@ -533,6 +536,10 @@ mod tests {
             assert!(!monitor.refreshing());
         }
         let bound = deployment(&json!({"state":"bound","worker_id":"worker1"}));
+        let mut hetzner = bound.clone();
+        hetzner.profile.provider = "hetzner".into();
+        monitor.follow(Some(&hetzner), Some(root), fetch, &notify);
+        assert!(!monitor.refreshing(), "a Hetzner server has no RunPod billing");
         monitor.follow(Some(&bound), None, fetch, &notify);
         assert!(!monitor.refreshing(), "no settings, no refresh");
         monitor.follow(Some(&bound), Some(root), fetch, &notify);

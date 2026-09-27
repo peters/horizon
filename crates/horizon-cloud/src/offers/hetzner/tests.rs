@@ -63,7 +63,7 @@ fn offers_are_euro_priced_per_started_hour_with_running_storage_and_a_kept_volum
         (first.stopped_monthly - 5.72).abs() < 1e-9,
         "a stopped cloud keeps only its volume"
     );
-    assert!(!first.rentable, "not deployable until the wiring lands");
+    assert!(first.rentable, "Horizon creates Hetzner clouds");
     let encoded = serde_json::to_value(first).unwrap();
     assert_eq!(encoded["currency"], "EUR");
     assert_eq!(encoded["location"], first.location.as_deref().unwrap());
@@ -189,7 +189,7 @@ fn the_answer_section_names_its_provider_and_currency() {
     let section = hetzner_section(&catalog(), &requirements(serde_json::json!({"min_vcpu": 8})));
     assert_eq!(section["provider"], "Hetzner");
     assert_eq!(section["currency"], "EUR");
-    assert_eq!(section["deployable"], false);
+    assert_eq!(section["deployable"], true);
     assert_eq!(section["offers"][0]["id"], "cx43");
 }
 

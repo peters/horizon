@@ -3,9 +3,10 @@
 Hetzner is a second provider for CPU clouds (#972). A cloud whose profile names
 `hetzner` deploys on a Hetzner Cloud server: the server runs the unchanged
 worker image under Docker, and the workspace lives on a Hetzner volume in the
-same location. The New cloud dialog does not offer Hetzner profiles yet; deploy
-them with the deployment coordinator (`cloud_deploy`), which also stops, resumes,
-checks and deletes them. Rebuilding a Hetzner cloud's image is refused for now.
+same location. Create one with **New cloud** (a `provider: hetzner` profile, or
+Hetzner chosen for a CPU profile) or with the deployment coordinator
+(`cloud_deploy`); both stop, resume, check and delete it. Rebuilding a Hetzner
+cloud's image is refused for now.
 Horizon checks the cloud ID, `idle_stop_minutes`, the token, the locations
 and the registry pull credential before it records or builds anything.
 
@@ -144,8 +145,7 @@ Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPo
   server and address;
 - only the locations in `locations` are listed, with every server type, and
   `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
-- offers stay informational (`rentable: false`) until the New cloud dialog can price and
-  create Hetzner clouds; the deployment coordinator already deploys them.
+- offers are `rentable`: Horizon creates Hetzner clouds.
 
 Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
 beside the price list, so older worker images keep taking RunPod prices unchanged.
@@ -156,15 +156,20 @@ With a Hetzner binding, **New cloud** shows a Provider choice for CPU profiles.
 Choosing Hetzner replaces RunPod's regions and prices with Hetzner's offers for
 the chosen size:
 
-- one entry per allowed location, showing the first server type from
-  `server_types` that has the size, which is the one Horizon requests first;
+- one entry per allowed location, in the order of `locations`, showing the first
+  server type from `server_types` that has the size, which is the one Horizon
+  requests first;
 - its hourly price, the most a month of running costs with the workspace volume
   and IPv4 address, and what a stopped cloud keeps paying (the volume only);
-- the types tried next if it is sold out, and Hetzner's advisory availability.
+- the types tried next if it is sold out, each at its own hourly price, and
+  Hetzner's advisory availability.
 
-Choosing a location places the cloud there. **Any allowed location** keeps
-every location in `locations`. The new cloud records `provider: hetzner` even
-when the repository profile names RunPod. Until Horizon can create clouds on
-Hetzner, Start cloud is refused before anything is recorded, and the dialog
-says so.
+Choosing a location places the cloud there. **Any allowed location** places it
+in the first location in `locations` where a configured type has the size, and
+shows that offer. Horizon does not move a new cloud to another location when
+those types are sold out: the sold-out types fall back only within that
+location, and then creation stops with a capacity error. The new cloud records `provider: hetzner` even when the
+repository profile names RunPod, and Start cloud deploys it on Hetzner. A
+repository profile that names `provider: hetzner` is offered too. The cloud's
+card shows its fixed size, and RunPod billing is not read for it.
 
