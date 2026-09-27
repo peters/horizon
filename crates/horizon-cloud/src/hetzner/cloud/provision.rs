@@ -84,6 +84,13 @@ pub fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     reopen(journal, operation, fresh, records)?;
+    // A server is about to be created, and a host that cannot pull its image never
+    // becomes ready: an expired or revoked pull login is refused before it is paid for.
+    if *operation == CreateState::Prepared
+        && let Some(login) = &host.registry
+    {
+        crate::host::pull::verify_pull(login, &spec.image_digest, cancel)?;
+    }
     // A volume fixes the location. Until one exists, every allowed location with a
     // fitting server type is a candidate, in the policy's order. A requested or
     // bound server was placed already, so reconnecting to it depends on the policy

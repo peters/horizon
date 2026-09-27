@@ -91,6 +91,13 @@ Hetzner off removes the binding.
   server can still be created; a retry that reconnects to a server already
   requested does not need it, so an expired token never blocks recovering one.
 
+  Before each server is created, including on resume, Horizon asks the registry
+  whether the token can read the image, as `docker pull` would. An expired or
+  revoked token, or an image the registry does not have, is refused then with a
+  clear error, before the server is paid for, instead of as a host that never
+  becomes ready. A registry that cannot be reached or answers otherwise leaves
+  the decision to the host's own pull.
+
 ## Stop, resume, check and delete
 
 - **Stop** releases the server: the worker shuts down gracefully (power is cut
