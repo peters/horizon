@@ -88,15 +88,16 @@ pub fn provision(
     // fitting server type is a candidate, in the policy's order. A requested or
     // bound server was placed already, so reconnecting to it depends on the policy
     // allowing its type, not on the catalog still offering it.
-    // An empty volume an earlier attempt left, sold out or interrupted, is deleted
-    // first, so the cloud is placed afresh. One whose create response was lost is
-    // reconciled by label where it was requested first, and released if sold out.
+    // An empty volume an earlier attempt created (Hetzner answered that it did)
+    // and no server held, left sold out or interrupted, is deleted first, so the
+    // cloud is placed afresh. One whose create answer was lost is reconciled by
+    // label and kept: it may be an older workspace, so the cloud stays in its
+    // location rather than risk deleting it.
     if journal.unused && *operation == CreateState::Prepared && matches!(journal.volume, CreateState::Bound { .. }) {
         release_empty_volume(client, operation_id, journal, records, cancel)?;
     }
-    // Only a volume requested for the cloud's first server is known to be empty,
-    // so the cloud may move only while it has no volume, neither recorded nor
-    // found by label; a found one is adopted and holds whatever the workspace held.
+    // The cloud may move only while it has no volume, neither recorded nor found
+    // by label; a found one is adopted and holds whatever the workspace held.
     let found = if journal.volume == CreateState::Prepared {
         client.find_volumes(operation_id, cancel)?
     } else {
