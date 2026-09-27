@@ -119,8 +119,8 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
-    // Horizon cannot stop an idle Hetzner cloud yet.
-    idle_stop: IdleStop::Unsupported,
+    // The project token must never reach a worker, so Horizon stops it.
+    idle_stop: IdleStop::Horizon,
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),
         *crate::hetzner::volumes::SIZE_GB.end(),
@@ -244,15 +244,23 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_that_stops_itself_when_idle_is_not_offered_where_workers_cannot() {
+    fn a_profile_with_an_idle_period_is_offered_only_where_someone_stops_the_worker() {
         let mut profile: Profile = serde_json::from_value(serde_json::json!({
             "provider": "runpod", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8,
             "storage": {"container_gb": 20, "volume_gb": 50}
         }))
         .unwrap();
-        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
+        let unsupported = Description {
+            idle_stop: IdleStop::Unsupported,
+            ..HETZNER
+        };
+        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile) && unsupported.supports(&profile));
         profile.idle_stop_minutes = Some(30);
-        assert!(RUNPOD.supports(&profile));
-        assert!(!HETZNER.supports(&profile), "Hetzner deployment refuses idle stop");
+        assert_eq!(
+            (RUNPOD.idle_stop, HETZNER.idle_stop),
+            (IdleStop::Worker, IdleStop::Horizon)
+        );
+        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
+        assert!(!unsupported.supports(&profile));
     }
 }

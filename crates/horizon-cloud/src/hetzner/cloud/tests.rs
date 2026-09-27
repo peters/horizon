@@ -79,6 +79,17 @@ fn a_running_server_is_described_as_a_verified_worker() {
 }
 
 #[test]
+fn a_worker_with_an_idle_period_is_described_with_it() {
+    let mut spec = spec();
+    spec.profile.idle_stop_minutes = Some(30);
+    let described = worker(&server("running", Some("192.0.2.10")), &spec, &volume()).unwrap();
+    // The host plan passes the period, so the worker verifies against its own spec only.
+    described.verify(&spec).unwrap();
+    spec.profile.idle_stop_minutes = Some(40);
+    assert!(described.verify(&spec).is_err());
+}
+
+#[test]
 fn the_throwaway_key_is_a_valid_distinct_ed25519_key() {
     let first = throwaway_public_key().unwrap();
     assert!(crate::valid_public_key(&first), "{first}");
@@ -115,8 +126,8 @@ fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() 
 }
 
 #[test]
-fn the_host_plan_carries_the_worker_contract_and_no_idle_stop() {
-    let spec = spec();
+fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
+    let mut spec = spec();
     let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
         .unwrap()
         .cloud_config()
@@ -132,6 +143,12 @@ fn the_host_plan_carries_the_worker_contract_and_no_idle_stop() {
         assert!(rendered.contains(expected), "{expected}");
     }
     assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
+    spec.profile.idle_stop_minutes = Some(30);
+    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+        .unwrap()
+        .cloud_config()
+        .unwrap();
+    assert!(rendered.contains("HORIZON_IDLE_STOP_MINUTES=30"));
 }
 
 fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {

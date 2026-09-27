@@ -23,11 +23,6 @@ pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settin
     horizon_cloud::hetzner::resource_name(cloud_id).map_err(|_| {
         Error::Invalid("A Hetzner cloud needs an ID of lowercase letters, digits and hyphens, at most 48 characters")
     })?;
-    if profile.idle_stop_minutes.is_some() {
-        return Err(Error::Invalid(
-            "idle_stop_minutes is not available on Hetzner yet; a Hetzner worker cannot stop its own billing",
-        ));
-    }
     let hetzner = super::sizing::hetzner(settings)?;
     hetzner.credential()?;
     hetzner.locations_for(settings.placement.as_ref())?;

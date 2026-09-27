@@ -7,8 +7,8 @@ same location. Create one with **New cloud** (a `provider: hetzner` profile, or
 Hetzner chosen for a CPU profile) or with the deployment coordinator
 (`cloud_deploy`); both stop, resume, check and delete it. Rebuilding a Hetzner
 cloud's image is refused for now.
-Horizon checks the cloud ID, `idle_stop_minutes`, the token, the locations
-and the registry pull credential before it records or builds anything.
+Horizon checks the cloud ID, the token, the locations and the registry pull
+credential before it records or builds anything.
 
 ## How a deployment runs
 
@@ -120,10 +120,29 @@ until Hetzner is picked. Turning Hetzner off requires a RunPod key again.
   deleted cloud creates a new volume. Stop and delete work even after the settings stop
   allowing the cloud's location.
 
+## Idle stop
+
+A Hetzner worker cannot stop its own billing: a powered-off server is still
+billed, and deleting it needs the project-wide token, which never leaves this
+computer. So with `idle_stop_minutes` (10 to 1440) set, Horizon stops the cloud
+instead. The worker's idle watcher counts activity as it does on RunPod (agent
+terminal output, or the container averaging half a CPU core) and records how
+long the worker has been idle; while the cloud is ready, Horizon reads that
+record over SSH every two minutes and, once the worker has been idle for the
+whole period, stops the cloud exactly as **Stop** does: the server is released
+and the volume kept. The card then shows the cloud stopped, and **Resume**
+creates a new server on the same volume; nothing resumes it automatically.
+
+This works only while Horizon is running and the cloud's card is connected. A
+cloud left running while this computer is off or asleep keeps its server and is
+billed until Horizon runs again or someone stops it. `cloud_deploy idle-check
+SETTINGS STATE_ROOT` runs one check from a script. Agents on a Hetzner worker
+cannot stop it with `horizon-worker-stop`. The worker image must report
+`horizon-idle-report-contract=1`; rebuild older images from the current worker
+bootstrap.
+
 ## Not available on Hetzner yet
 
-- `idle_stop_minutes`: a Hetzner worker cannot stop its own billing, because a
-  powered-off server is still billed and deleting it needs a project-wide token.
 - Shared workers, hosted devices and image rebuilds.
 - Cloud IDs must be lowercase letters, digits and hyphens, at most 48
   characters, and cannot start or end with a hyphen. Clouds created in the app
