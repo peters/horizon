@@ -84,6 +84,10 @@ impl Connection {
         command.args(self.arguments("yes")).arg(remote);
         command
     }
+    /// The connection options with only a previously pinned host key, ending with the destination.
+    pub(super) fn pinned_args(&self) -> Vec<String> {
+        self.arguments("yes")
+    }
     pub(super) fn pinned_attachment(&self, encoded: &str) -> Vec<String> {
         let mut arguments = self.arguments("yes");
         arguments.insert(0, "-tt".into());

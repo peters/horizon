@@ -1,13 +1,71 @@
 //! The Local Network Bridge contract between the Horizon client and its worker.
 //!
-//! The client owns every policy decision: the worker only reaches the client's
-//! scope-checking SOCKS5 proxy, and reads its refusals through [`Reply`].
-use std::{fmt, net::Ipv4Addr, str::FromStr};
+//! The client owns every policy decision: the worker receives only a Unix socket
+//! whose connections reach the client's scope-checking SOCKS5 proxy.
+use std::{
+    fmt,
+    net::{Ipv4Addr, SocketAddrV4},
+    str::FromStr,
+    time::Duration,
+};
+
+/// Worker directory for the bridge socket, the helper's control socket and its status.
+pub const DIRECTORY: &str = "/run/horizon-local-network";
+/// Printed by `horizon-cloud-worker local-network prepare` on an image that supports the bridge.
+pub const PREPARED: &str = "horizon-local-network=1";
+/// Creates [`DIRECTORY`]. An image without the helper prints a different marker instead
+/// of failing, so the client can tell "rebuild the image" apart from a lost connection.
+pub const PREPARE_COMMAND: &str =
+    "horizon-cloud-worker local-network prepare || printf '%s\\n' horizon-local-network=0";
+/// How often the client writes one byte to the helper's input while the bridge is on.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+/// The helper stops, and removes its sockets and forwards, after this long without input.
+pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The narrowest scope that still has more than one other host.
 const MAX_PREFIX: u8 = 30;
 /// Wider networks are refused rather than shared whole.
 pub const MIN_PREFIX: u8 = 16;
+
+/// One bridge session: 32 lowercase hexadecimal characters, fresh for every SSH connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Nonce(String);
+
+impl Nonce {
+    #[must_use]
+    pub fn random() -> Self {
+        Self(uuid::Uuid::new_v4().simple().to_string())
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        (value.len() == 32 && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+            .then(|| Self(value.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The worker path where sshd listens for this session's bridge connections.
+    #[must_use]
+    pub fn bridge_socket(&self) -> String {
+        format!("{DIRECTORY}/{}.sock", self.0)
+    }
+
+    /// The helper that holds this session open on the worker.
+    #[must_use]
+    pub fn hold_command(&self, subnet: Subnet) -> String {
+        format!("horizon-cloud-worker local-network hold {} {subnet}", self.0)
+    }
+}
+
+impl fmt::Display for Nonce {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
 
 /// An IPv4 network in CIDR notation, `/16` to `/30`, with its host bits cleared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -100,7 +158,15 @@ pub enum SubnetError {
     TooNarrow,
 }
 
-/// The SOCKS5 reply codes the client proxy answers with.
+/// The line the helper prints once the bridge is usable on the worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ready {
+    /// The worker loopback SOCKS5 endpoint for tools and browsers.
+    pub proxy: SocketAddrV4,
+}
+
+/// The SOCKS5 reply codes the client proxy answers with, and the refusal agents see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reply {
     Succeeded,
@@ -128,6 +194,42 @@ impl Reply {
             Self::ConnectionRefused => 5,
             Self::CommandNotSupported => 7,
             Self::AddressTypeNotSupported => 8,
+        }
+    }
+
+    /// Codes outside the subset read as a general failure.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Self {
+        match code {
+            0 => Self::Succeeded,
+            2 => Self::NotAllowed,
+            3 => Self::NetworkUnreachable,
+            4 | 6 => Self::HostUnreachable,
+            5 => Self::ConnectionRefused,
+            7 => Self::CommandNotSupported,
+            8 => Self::AddressTypeNotSupported,
+            _ => Self::GeneralFailure,
+        }
+    }
+
+    /// The refusal agents see.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::Succeeded => "Connected",
+            Self::GeneralFailure => {
+                "The bridge refused the connection: its connection or data limit is reached, or it is stopping"
+            }
+            Self::NotAllowed => {
+                "Outside the bridged local network: only devices on the shared subnet are reachable, never the Horizon computer itself"
+            }
+            Self::NetworkUnreachable => {
+                "The Horizon computer is no longer on the bridged network; the owner must switch the bridge off and on"
+            }
+            Self::HostUnreachable => "Device not reachable from the Horizon computer",
+            Self::ConnectionRefused => "The device refused the connection on that port",
+            Self::CommandNotSupported => "Only TCP connections are bridged",
+            Self::AddressTypeNotSupported => "Unsupported destination address",
         }
     }
 }
@@ -172,5 +274,50 @@ mod tests {
         assert!(!subnet.contains_host(Ipv4Addr::new(192, 168, 1, 3)));
         assert!(!subnet.contains_host(Ipv4Addr::new(192, 168, 1, 4)));
         assert!(!subnet.contains_host(Ipv4Addr::new(192, 168, 0, 255)));
+    }
+
+    #[test]
+    fn nonces_are_fresh_lowercase_hex_and_build_the_worker_commands() {
+        let nonce = Nonce::random();
+        assert!(Nonce::parse(nonce.as_str()).is_some());
+        assert_ne!(nonce, Nonce::random());
+        for invalid in [
+            "",
+            "A".repeat(32).as_str(),
+            "a".repeat(31).as_str(),
+            "../../etc/passwd0000000000000000",
+        ] {
+            assert!(Nonce::parse(invalid).is_none(), "{invalid}");
+        }
+        let nonce = Nonce::parse(&"a".repeat(32)).unwrap();
+        assert_eq!(
+            nonce.bridge_socket(),
+            format!("/run/horizon-local-network/{}.sock", "a".repeat(32))
+        );
+        assert_eq!(
+            nonce.hold_command("192.168.1.0/24".parse().unwrap()),
+            format!(
+                "horizon-cloud-worker local-network hold {} 192.168.1.0/24",
+                "a".repeat(32)
+            )
+        );
+    }
+
+    #[test]
+    fn the_ready_line_is_strict_json() {
+        let ready: Ready = serde_json::from_str(r#"{"proxy":"127.0.0.1:41234"}"#).unwrap();
+        assert_eq!(ready.proxy, SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41234));
+        assert!(serde_json::from_str::<Ready>(r#"{"proxy":"127.0.0.1:1","extra":1}"#).is_err());
+        assert!(serde_json::from_str::<Ready>(r#"{"proxy":"[::1]:1"}"#).is_err());
+    }
+
+    #[test]
+    fn reply_codes_round_trip_and_unknown_codes_are_general_failures() {
+        for code in [0, 1, 2, 3, 4, 5, 7, 8] {
+            assert_eq!(Reply::from_code(code).code(), code);
+        }
+        assert_eq!(Reply::from_code(6), Reply::HostUnreachable);
+        assert_eq!(Reply::from_code(9), Reply::GeneralFailure);
+        assert_eq!(Reply::from_code(255), Reply::GeneralFailure);
     }
 }

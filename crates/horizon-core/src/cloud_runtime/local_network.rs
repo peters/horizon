@@ -2,22 +2,25 @@
 //! network this computer is on, through a scope-checking proxy that runs here.
 //!
 //! [`Scope`] is the whole policy and the [`Proxy`] applies it: the worker only ever reaches
-//! the proxy's loopback port, and dropping the proxy closes every relayed connection.
+//! the proxy's loopback port. Only the owner starts a [`Bridge`], from the cloud card, and
+//! nothing persists it; dropping it stops its SSH session and closes every relayed connection.
 mod scope;
+mod session;
 mod socks;
 
+use super::{Cancellation, ssh::Connection};
 use horizon_cloud_protocol::local_network::{Reply, Subnet};
 pub use scope::ScopeError;
 pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS};
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
-    thread,
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -81,6 +84,99 @@ impl Proxy {
     #[must_use]
     pub fn counters(&self) -> Counters {
         self.inner.counters()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum State {
+    Starting,
+    /// The worker helper confirmed the bridge and serves `proxy` on the worker's loopback.
+    Active {
+        proxy: SocketAddrV4,
+    },
+    /// The session ended; it is retried with backoff while the bridge is on.
+    Reconnecting {
+        error: String,
+    },
+    /// Retrying cannot help, for example on a worker image without the helper.
+    Failed {
+        error: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Status {
+    pub subnet: Subnet,
+    pub state: State,
+    pub counters: Counters,
+}
+
+struct Shared {
+    state: Mutex<State>,
+}
+
+impl Shared {
+    fn set(&self, state: State) {
+        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = state;
+    }
+}
+
+/// One cloud's bridge: the local [`Proxy`] and the supervised SSH session that forwards the
+/// worker's bridge socket to it.
+pub struct Bridge {
+    shared: Arc<Shared>,
+    cancel: Cancellation,
+    supervisor: Option<JoinHandle<()>>,
+    proxy: Proxy,
+}
+
+impl Bridge {
+    /// Shares the current network with the worker behind `connection`.
+    ///
+    /// # Errors
+    /// Fails when there is no shareable network or the local proxy cannot start.
+    pub fn start(connection: &Connection) -> Result<Self, StartError> {
+        Ok(Self::with_parts(Proxy::start()?, session::Ssh(connection.clone()))?)
+    }
+
+    fn with_parts(proxy: Proxy, transport: impl session::Transport) -> io::Result<Self> {
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State::Starting),
+        });
+        let cancel = Cancellation::default();
+        let supervisor = {
+            let shared = Arc::clone(&shared);
+            let cancel = cancel.clone();
+            let (subnet, port) = (proxy.subnet(), proxy.port());
+            thread::Builder::new()
+                .name("local-network-bridge".into())
+                .spawn(move || session::supervise(&transport, subnet, port, &shared, &cancel))?
+        };
+        Ok(Self {
+            shared,
+            cancel,
+            supervisor: Some(supervisor),
+            proxy,
+        })
+    }
+
+    #[must_use]
+    pub fn status(&self) -> Status {
+        Status {
+            subnet: self.proxy.subnet(),
+            state: self.shared.state.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            counters: self.proxy.counters(),
+        }
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        if let Some(supervisor) = self.supervisor.take() {
+            let _ = supervisor.join();
+        }
+        // The proxy then stops accepting and closes every relayed connection.
     }
 }
 
