@@ -198,6 +198,20 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
         .unwrap_or(0)
         .saturating_sub(snapshot.observed_at_millis);
     if age > MAX_AGE_MILLIS {
+        // Current offers from other providers are not held back by stale RunPod
+        // prices, as when the owning Horizon stopped using RunPod.
+        let other_providers = other_providers(requirements, &hetzner_path(path), now);
+        if other_providers.iter().any(|section| section.get("offers").is_some()) {
+            return Ok(serde_json::json!({
+                "provider": snapshot.list.provider,
+                "unavailable": format!(
+                    "The RunPod prices on this worker are {} minutes old; they refresh while the Horizon that owns this cloud runs",
+                    age / 60_000
+                ),
+                "offers": [],
+                "other_providers": other_providers,
+            }));
+        }
         return Err(format!(
             "cloud_offers_stale: the newest prices on this worker are {} minutes old; they refresh while the Horizon that owns this cloud runs",
             age / 60_000

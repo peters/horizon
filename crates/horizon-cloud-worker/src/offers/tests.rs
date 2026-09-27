@@ -289,3 +289,25 @@ fn a_horizon_without_runpod_prices_still_offers_its_other_providers() {
     assert!(answered["unavailable"].as_str().unwrap().contains("no RunPod prices"));
     assert_eq!(answered["other_providers"][0]["provider"], "Hetzner");
 }
+
+#[test]
+fn stale_runpod_prices_do_not_hold_back_current_hetzner_offers() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
+    let agent = request("horizon:cloud-a", HOST, &serde_json::json!({"min_vcpu": 8}));
+    let hour_ago = u64::try_from(NOW).unwrap() - 3_600_000;
+    let minute_ago = u64::try_from(NOW).unwrap() - 60_000;
+    // RunPod prices from before the owning Horizon stopped using RunPod.
+    publish(snapshot(hour_ago).as_slice(), &path, hour_ago.try_into().unwrap()).unwrap();
+    // Alone they are stale, as before.
+    let stale = answer_from(&agent, (&path, &sessions), HOST, NOW);
+    assert!(error(&stale).starts_with("cloud_offers_stale"));
+    // With a current Hetzner catalog, its offers come with RunPod marked unavailable.
+    publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner_path(&path), NOW).unwrap();
+    let answered = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert_eq!(answered["offers"], serde_json::json!([]));
+    assert!(answered["unavailable"].as_str().unwrap().contains("60 minutes old"));
+    assert_eq!(answered["other_providers"][0]["offers"][0]["id"], "cx43");
+}

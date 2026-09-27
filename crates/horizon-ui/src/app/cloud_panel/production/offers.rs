@@ -29,6 +29,8 @@ impl HorizonApp {
         // A machine set up for Hetzner alone answers with its other providers, and says
         // why RunPod has no offers.
         if !prices.runpod_bound() {
+            // A key added since is found once the failed fetch's pause has passed.
+            prices.recheck_runpod();
             prices.request_fresh_list(&root, ctx);
             let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
             return Some(Ok(serde_json::json!({

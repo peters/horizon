@@ -345,6 +345,8 @@ impl HorizonApp {
         }
         let prices = &mut production.prices;
         prices.poll();
+        // A RunPod key added since is found once the failed fetch's pause has passed.
+        prices.recheck_runpod();
         // A failed fetch is asked again once agents' requests stop reporting it.
         if prices.recent_list_error().is_none() {
             prices.request_fresh_list(&root, ctx);
