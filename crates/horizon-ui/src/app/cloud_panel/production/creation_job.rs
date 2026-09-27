@@ -12,6 +12,7 @@ pub(super) struct Pending {
     workspace: String,
     title: String,
     launch: CloudLaunch,
+    siblings: Vec<cloud_runtime::siblings::Binding>,
     cancel: CancelOnDrop,
 }
 
@@ -41,6 +42,21 @@ impl super::Production {
             .as_ref()
             .is_some_and(|pending| pending.workspace == workspace)
             || ((self.creating || self.setup.resumes_creation()) && self.launch.workspace.as_deref() == Some(workspace))
+    }
+}
+
+impl super::Production {
+    /// The same-worker siblings checked for this launch, once reviewed for exactly the
+    /// prepared repository, revision and profile.
+    fn chosen_siblings(&self) -> cloud_runtime::Result<Vec<cloud_runtime::siblings::Binding>> {
+        self.launch
+            .siblings
+            .launch_bindings(
+                &self.repository,
+                self.launch.revision.as_deref(),
+                &self.selected_profile,
+            )
+            .map_err(cloud_runtime::Error::Invalid)
     }
 }
 
@@ -93,6 +109,7 @@ impl HorizonApp {
         } else {
             form.revision.clone()
         };
+        let siblings = form.chosen_siblings()?;
         let busy = form.creation_busy.clone();
         if busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -119,6 +136,7 @@ impl HorizonApp {
                 profile,
                 placement,
             },
+            siblings,
         });
         self.cloud_prototype.error = None;
         let ctx = ctx.clone();
@@ -201,9 +219,12 @@ impl HorizonApp {
         group.environment.profile = Some(pending.launch.profile_name.clone());
         group.environment.image.clone_from(&pending.launch.profile.image);
         group.remote = Some(pending.launch);
+        group.siblings = pending.siblings;
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.production.creating = false;
+        // The next cloud authorizes its own siblings; a reopened form starts unchecked.
+        self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
         self.cloud_prototype.error = None;
         self.save_cloud_prototype();
         self.cloud_overview(ctx);

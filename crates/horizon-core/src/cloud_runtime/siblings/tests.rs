@@ -759,3 +759,124 @@ fn a_binding_without_an_expected_revision_keeps_its_encoding() {
     let round_trip: Binding = serde_json::from_value(serde_json::to_value(&expected).unwrap()).unwrap();
     assert_eq!(round_trip, expected);
 }
+
+#[test]
+fn review_refuses_each_chosen_sibling_on_its_own_row() {
+    let fixture = Fixture::new();
+    let config = primary_config(&format!(
+        "{NATIVE}  tool:\n    repository: example/tool\n    profile: dev\n    placement: same_worker\n"
+    ));
+    checkout(&fixture.path("tool"), "https://github.com/someone/tool", PROFILES);
+    let bindings = [
+        Binding {
+            alias: "native".into(),
+            local_repository: fixture.path("native-lib"),
+        },
+        Binding {
+            alias: "tool".into(),
+            local_repository: fixture.path("tool"),
+        },
+    ];
+    let reviewed = review(
+        &fixture.path("app"),
+        &config,
+        &config.profiles["dev"],
+        &bindings,
+        &fixture.runner(),
+    )
+    .unwrap();
+    assert!(!reviewed.passed());
+    assert_eq!(reviewed.choice, None);
+    let native = reviewed.siblings["native"].as_ref().unwrap();
+    assert_eq!(
+        native.revision,
+        git(&fixture.path("native-lib"), &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        reviewed.siblings["tool"],
+        Err(SiblingError::OriginMismatch {
+            alias: "tool".into(),
+            declared: "example/tool".into(),
+            found: "someone/tool".into(),
+        })
+    );
+    let relative = [Binding {
+        alias: "native".into(),
+        local_repository: "native-lib".into(),
+    }];
+    let reviewed = review(
+        &fixture.path("app"),
+        &config,
+        &config.profiles["dev"],
+        &relative,
+        &fixture.runner(),
+    )
+    .unwrap();
+    assert_eq!(
+        reviewed.siblings["native"],
+        Err(SiblingError::Relative("native".into()))
+    );
+}
+
+#[test]
+fn review_reports_a_primary_refusal_once_for_the_whole_choice() {
+    let fixture = Fixture::new();
+    let config = primary_config(NATIVE);
+    let bindings = [Binding {
+        alias: "native".into(),
+        local_repository: fixture.path("native-lib"),
+    }];
+    let reviewed = review(
+        &fixture.path("app"),
+        &config,
+        &config.profiles["prebuilt"],
+        &bindings,
+        &fixture.runner(),
+    )
+    .unwrap();
+    assert_eq!(reviewed.choice, Some(SiblingError::PrimaryImageOnly));
+    assert!(reviewed.siblings.is_empty() && !reviewed.passed());
+    let passed = review(
+        &fixture.path("app"),
+        &config,
+        &config.profiles["dev"],
+        &bindings,
+        &fixture.runner(),
+    )
+    .unwrap();
+    assert!(passed.passed());
+    let many: Vec<_> = (0..=MAX_SIBLINGS).map(|_| bindings[0].clone()).collect();
+    let crowded = review(
+        &fixture.path("app"),
+        &config,
+        &config.profiles["dev"],
+        &many,
+        &fixture.runner(),
+    )
+    .unwrap();
+    assert_eq!(crowded.choice, Some(SiblingError::TooMany));
+    fixture.cancel.cancel();
+    assert!(matches!(
+        review(
+            &fixture.path("app"),
+            &config,
+            &config.profiles["dev"],
+            &bindings,
+            &fixture.runner(),
+        ),
+        Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+    ));
+}
+
+#[test]
+fn every_refusal_that_names_a_sibling_reports_its_alias() {
+    let named = SiblingError::OriginMismatch {
+        alias: "native".into(),
+        declared: "example/native-lib".into(),
+        found: "someone/native-lib".into(),
+    };
+    assert_eq!(named.alias(), Some("native"));
+    assert_eq!(SiblingError::Relative("tool".into()).alias(), Some("tool"));
+    assert_eq!(SiblingError::DirectoryName("-lib".into()).alias(), None);
+    assert_eq!(SiblingError::PrimaryImageOnly.alias(), None);
+}

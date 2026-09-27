@@ -16,6 +16,7 @@ mod gpu_choice;
 mod placement;
 mod pricing;
 pub(super) mod provider;
+pub(super) mod siblings;
 
 #[derive(Default)]
 struct Actions {
@@ -31,6 +32,8 @@ enum RepositoryAction {
     Choose,
     Load,
     Setup,
+    /// The checkout of the named same-worker sibling.
+    ChooseSibling(String),
 }
 
 impl HorizonApp {
@@ -51,10 +54,21 @@ impl HorizonApp {
         let picking = self.dir_picker.is_some();
         // Focus returns to the field when its picker closes, whether or not a directory was chosen.
         let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
+        if !picking {
+            self.cloud_prototype.production.launch.siblings.stop_browsing();
+        }
         if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
             self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
+        let form = &mut self.cloud_prototype.production;
+        form.launch.siblings.sync(
+            ctx,
+            &form.repository,
+            form.launch.revision.as_deref(),
+            form.profiles.as_ref(),
+            &form.selected_profile,
+        );
         let id = Id::new("cloud-creation");
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
@@ -118,6 +132,7 @@ impl HorizonApp {
             RepositoryAction::Choose => self.choose_cloud_repository(ctx),
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
+            RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::None => {}
         }
         if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
@@ -181,19 +196,35 @@ impl HorizonApp {
     }
 
     fn choose_cloud_repository(&mut self, ctx: &Context) {
-        // Keyboard activation (Enter with any modifiers) must neither confirm the picker drawn later this
-        // frame nor, held, confirm it on a repeat.
-        if ctx.input(|input| input.key_pressed(Key::Enter)) {
-            self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Enter));
-        }
+        self.consume_picker_activation(ctx);
         let form = &mut self.cloud_prototype.production;
         form.choosing_repository = true;
         let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
         self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
     }
 
+    /// The repository picker also chooses a sibling's checkout, which it then returns.
+    fn choose_cloud_sibling(&mut self, ctx: &Context, alias: String) {
+        self.consume_picker_activation(ctx);
+        let siblings = &mut self.cloud_prototype.production.launch.siblings;
+        let seed = siblings.seed(&alias);
+        siblings.browse(alias);
+        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, seed.as_deref()));
+    }
+
+    fn consume_picker_activation(&mut self, ctx: &Context) {
+        // Keyboard activation (Enter with any modifiers) must neither confirm the picker drawn later this
+        // frame nor, held, confirm it on a repeat.
+        if ctx.input(|input| input.key_pressed(Key::Enter)) {
+            self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Enter));
+        }
+    }
+
     pub(in crate::app) fn set_cloud_repository(&mut self, path: &Path) {
         let form = &mut self.cloud_prototype.production;
+        if form.launch.siblings.choose_checkout(path) {
+            return;
+        }
         let repository = path.to_string_lossy();
         if form.repository != repository {
             form.repository = repository.into_owned();
@@ -363,12 +394,19 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             }
         }
     }
-    ui.small("Only committed files are transferred. Local changes stay on this computer.");
     let mut action = RepositoryAction::None;
+    if form.profiles.is_some()
+        && !form.launch.loading()
+        && let Some(alias) = siblings::section(ui, &mut form.launch.siblings)
+    {
+        action = RepositoryAction::ChooseSibling(alias);
+    }
+    ui.small("Only committed files are transferred. Local changes stay on this computer.");
     egui::CollapsingHeader::new("Advanced")
         .default_open(form.profiles.is_none() && !form.launch.loading())
-        .show(ui, |ui| {
-            action = advanced_fields(ui, form, refocus_repository);
+        .show(ui, |ui| match advanced_fields(ui, form, refocus_repository) {
+            RepositoryAction::None => {}
+            chosen => action = chosen,
         });
     action
 }
@@ -538,4 +576,5 @@ fn can_submit(form: &Production) -> bool {
         && (form.profiles.is_some() || form.launch.loading())
         && form.pending_creation.is_none()
         && !form.launch.submitted
+        && !form.launch.siblings.blocks_launch()
 }

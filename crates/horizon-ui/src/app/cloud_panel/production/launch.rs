@@ -19,6 +19,8 @@ pub(super) struct State {
     pub submitted: bool,
     pub accounts_checked: bool,
     ready_profiles: Vec<String>,
+    /// Same-worker siblings chosen for this launch.
+    pub siblings: super::creation::siblings::State,
 }
 impl State {
     pub fn loading(&self) -> bool {
