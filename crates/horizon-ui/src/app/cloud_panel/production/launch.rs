@@ -131,10 +131,14 @@ impl HorizonApp {
                         form.placement = Placement::default();
                         form.provider = None;
                     }
-                    // A reread profile keeps a chosen size only while it still offers it.
+                    // A reread profile keeps a chosen size only while the chosen provider
+                    // still offers it.
                     let profile = prepared.config.profiles.get(&form.selected_profile);
                     form.size = form.size.filter(|&size| {
-                        profile.is_some_and(|profile| cloud_runtime::flavors::sized(profile, size).is_ok())
+                        profile.is_some_and(|profile| {
+                            let provider = super::creation::provider::current(form.provider, profile);
+                            super::creation::provider::sized(provider, profile, Some(size)).is_ok()
+                        })
                     });
                     form.profiles = Some(prepared.config);
                     form.launch.revision = Some(prepared.revision);

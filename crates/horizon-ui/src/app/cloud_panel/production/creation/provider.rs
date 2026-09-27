@@ -15,6 +15,7 @@ use egui::{Frame, Margin, RichText, Stroke, Ui};
 use horizon_core::{
     cloud_panel::Placement,
     cloud_runtime::{
+        flavors,
         prices::Profile,
         provider::{self, Description},
     },
@@ -46,6 +47,38 @@ pub(in crate::app::cloud_panel) fn current(
     chosen
         .or_else(|| provider::by_id(&profile.provider))
         .unwrap_or(&provider::RUNPOD)
+}
+
+/// `profile` on `provider` at `size`, or at its own size, by that provider's rules:
+/// providers that price flavors need a flavor with the size, and others only the
+/// profile's own rules, since server types are checked when the cloud is placed.
+pub(in crate::app::cloud_panel) fn sized(
+    provider: &Description,
+    profile: &Profile,
+    size: Option<Size>,
+) -> horizon_core::cloud_runtime::Result<Profile> {
+    let profile = Profile {
+        provider: provider.id.to_owned(),
+        ..profile.clone()
+    };
+    if provider.pricing == provider::Pricing::Flavors {
+        return Ok(match size {
+            Some(size) => flavors::sized(&profile, size)?,
+            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
+            None if profile.gpu => profile,
+            None => flavors::sized(&profile, (profile.cpu, profile.memory_gb))?,
+        });
+    }
+    let (cpu, memory_gb) = size.unwrap_or((profile.cpu, profile.memory_gb));
+    let sized = Profile {
+        cpu,
+        memory_gb,
+        ..profile
+    };
+    sized
+        .validate(false)
+        .map_err(|_| horizon_core::cloud_runtime::Error::Invalid("This profile cannot run on the chosen provider"))?;
+    Ok(sized)
 }
 
 /// The provider's name for the dialog heading.

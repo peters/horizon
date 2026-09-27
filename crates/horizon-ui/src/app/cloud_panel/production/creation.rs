@@ -425,10 +425,16 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 memory_gb,
                 ..profile.clone()
             };
-            if let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement) {
+            // Data centers and GPU types are chosen only where the provider has them.
+            let provider = provider::current(form.provider, profile);
+            if provider.placement == ProviderPlacement::DataCenters
+                && let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement)
+            {
                 form.placement = placement;
             }
-            if let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement) {
+            if provider.offers(Choice::GpuType)
+                && let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement)
+            {
                 form.placement = placement;
             }
         }

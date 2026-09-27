@@ -232,30 +232,7 @@ pub(super) fn launch_profile(
             "This profile cannot run on the chosen provider",
         ));
     }
-    let profile = horizon_core::cloud_runtime::prices::Profile {
-        provider: provider.id.to_owned(),
-        ..profile.clone()
-    };
-    if provider.pricing == cloud_runtime::provider::Pricing::Flavors {
-        return Ok(match size {
-            Some(size) => cloud_runtime::flavors::sized(&profile, size)?,
-            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
-            None if profile.gpu => profile,
-            None => cloud_runtime::flavors::sized(&profile, (profile.cpu, profile.memory_gb))?,
-        });
-    }
-    // Server types are checked when the cloud is placed; only the profile's own rules
-    // apply here.
-    let (cpu, memory_gb) = size.unwrap_or((profile.cpu, profile.memory_gb));
-    let sized = horizon_core::cloud_runtime::prices::Profile {
-        cpu,
-        memory_gb,
-        ..profile
-    };
-    sized
-        .validate(false)
-        .map_err(|_| cloud_runtime::Error::Invalid("This profile cannot run on the chosen provider"))?;
-    Ok(sized)
+    super::creation::provider::sized(provider, profile, size)
 }
 
 #[cfg(all(test, unix))]

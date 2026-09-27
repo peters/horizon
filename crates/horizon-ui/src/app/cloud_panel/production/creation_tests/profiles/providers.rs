@@ -335,6 +335,47 @@ fn runpod_shows_only_its_own_fields_and_hetzner_terms_never_appear() {
         &["Location", "€", "server type", "If it is sold out"],
         "euros, net of VAT",
     );
+    // Advanced offers RunPod's data centers only while RunPod is chosen.
+    // The expanded section is reached by scrolling the dialog, as a person would.
+    scroll(&ctx, &mut app, -2000.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
+    scroll(&ctx, &mut app, -2000.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "Data center"), "{}", painted(&output));
+    scroll(&ctx, &mut app, 4000.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    assert_eq!(
+        app.cloud_prototype.production.provider.map(|provider| provider.id),
+        Some("hetzner")
+    );
+    scroll(&ctx, &mut app, -2000.0);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "Advanced"), "{}", painted(&output));
+    assert!(!has_label(&output, "Data center") && !has_label(&output, "EU-RO-1"));
+}
+
+#[test]
+fn a_size_is_kept_by_the_chosen_providers_rules() {
+    use crate::app::cloud_panel::production::creation::provider::sized;
+    use horizon_core::cloud_runtime::provider::{HETZNER, RUNPOD};
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let profile = app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["development"].clone();
+    // 48 vCPU / 192 GB is a Hetzner server size but no RunPod flavor.
+    let hetzner = sized(&HETZNER, &profile, Some((48, 192))).unwrap();
+    assert_eq!(
+        (hetzner.provider.as_str(), hetzner.cpu, hetzner.memory_gb),
+        ("hetzner", 48, 192)
+    );
+    assert!(sized(&RUNPOD, &profile, Some((48, 192))).is_err());
 }
 
 #[test]
