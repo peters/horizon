@@ -86,3 +86,25 @@ fn a_server_is_reached_only_through_its_one_address_on_horizons_network() {
     assert_eq!(horizon_address(&[net(7, [10, 72, 200, 3])]), None);
     assert_eq!(horizon_address(&[net(7, [10, 72, 0, 3]), net(8, [10, 72, 0, 4])]), None);
 }
+
+#[test]
+fn a_labelled_network_with_other_address_ranges_is_refused_rather_than_joined() {
+    let mut wider = network("eu-central", "eu-central");
+    wider["ip_range"] = json!("10.0.0.0/8");
+    let mut elsewhere = network("eu-central", "eu-central");
+    elsewhere["subnets"][0]["ip_range"] = json!("10.72.128.0/17");
+    let (hetzner, _, task) = provider(vec![
+        (200, listing("networks", json!([wider]))),
+        (200, listing("networks", json!([elsewhere]))),
+    ]);
+    let cancel = Cancellation::default();
+    for _ in 0..2 {
+        // Servers on it would publish no private address Horizon recognizes.
+        let refused = hetzner.ensure_network("eu-central", &cancel);
+        assert!(
+            matches!(refused, Err(CloudError::Invalid(message)) if message.contains("address range")),
+            "{refused:?}"
+        );
+    }
+    task.join().unwrap();
+}

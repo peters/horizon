@@ -33,15 +33,16 @@ pub struct Subnet {
 }
 
 impl Network {
-    /// Whether this is Horizon's network for `zone`: labelled for it, with a cloud
-    /// subnet there.
+    /// Whether this is Horizon's network for `zone`: labelled for it, with Horizon's
+    /// address range and its cloud subnet there, the one `horizon_address` recognizes.
     #[must_use]
     pub fn serves(&self, zone: &str) -> bool {
         self.labels.get(NETWORK_LABEL).map(String::as_str) == Some(zone)
+            && self.ip_range == IP_RANGE
             && self
                 .subnets
                 .iter()
-                .any(|subnet| subnet.kind == "cloud" && subnet.network_zone == zone)
+                .any(|subnet| subnet.kind == "cloud" && subnet.network_zone == zone && subnet.ip_range == SUBNET_RANGE)
     }
 }
 
@@ -100,7 +101,7 @@ impl Hetzner {
         let Some(network) = found.pop() else { return Ok(None) };
         if !network.serves(zone) {
             return Err(CloudError::Invalid(
-                "Horizon's Hetzner network for this zone has no subnet there",
+                "Horizon's Hetzner network for this zone lacks Horizon's address range or its subnet there; delete it so Horizon recreates it",
             ));
         }
         Ok(Some(network))
