@@ -110,5 +110,9 @@ fn secret(ui: &mut Ui, id: &str, value: &mut String, saved: bool) {
                 "Paste API key"
             }),
     )
-    .on_hover_text("Enter a replacement, or leave empty to keep the saved credential.");
+    .on_hover_text(if saved {
+        "Enter a replacement, or leave empty to keep the saved credential."
+    } else {
+        "Enter a credential to save on this computer."
+    });
 }

@@ -68,7 +68,11 @@ fn secret(ui: &mut Ui, value: &mut String, saved: bool) {
     } else {
         "Paste dedicated credential"
     }))
-    .on_hover_text("Enter a replacement, or leave empty to keep the saved credential.");
+    .on_hover_text(if saved {
+        "Enter a replacement, or leave empty to keep the saved credential."
+    } else {
+        "Enter a credential to save on this computer."
+    });
 }
 
 fn expiry(ui: &mut Ui, label: &str, value: &mut String) {
