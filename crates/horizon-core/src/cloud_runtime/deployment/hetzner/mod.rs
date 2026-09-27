@@ -79,7 +79,7 @@ use std::{io::Write as _, path::Path};
 const JOURNAL: &str = "hetzner.json";
 
 /// The Hetzner client and the machine's Hetzner settings for one deployment.
-pub(super) struct Compute {
+pub(in crate::cloud_runtime) struct Compute {
     pub(super) client: Hetzner,
     pub(super) settings: crate::cloud_runtime::settings::Hetzner,
     /// Where and on what this cloud may run under the current settings and its
@@ -91,7 +91,7 @@ pub(super) struct Compute {
 }
 
 impl Compute {
-    pub(super) fn new(settings: &Settings) -> Result<Self> {
+    pub(in crate::cloud_runtime) fn new(settings: &Settings) -> Result<Self> {
         let hetzner = super::sizing::hetzner(settings)?.clone();
         let allowed = Allowed {
             locations: hetzner.locations_for(settings.placement.as_ref())?,

@@ -103,7 +103,7 @@ pub fn deploy_with_siblings(
     }
     super::providers::preflight(&request.cloud_id, &request.profile, &request.settings)?;
     let store = Store::lock(&request.state_root)?;
-    let provider = Compute::new(request)?;
+    let provider = super::providers::compute(request)?;
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
     let reconnected = super::timeline::reconnects(&state);
@@ -114,9 +114,7 @@ pub fn deploy_with_siblings(
     if assign_requested_size(request, &mut state)? {
         store.save(&state)?;
     }
-    if let Compute::RunPod(runpod) = &provider {
-        replacement::settle(runpod, &store, &mut state, cancel)?;
-    }
+    provider.settle(&store, &mut state, cancel)?;
     let started = attempt_started(&state, started);
     let mut registry = prepare_registry(request, &store, &mut state)?;
     let runner = Runner {
@@ -149,7 +147,7 @@ pub fn deploy_with_siblings(
     if state.spec.is_none() {
         prepare_image(request, &store, &runner, &mut state, registry.as_ref())?;
     }
-    verify_registry(&provider, &store, &mut state, registry.as_mut(), cancel)?;
+    verify_registry(provider.as_ref(), &store, &mut state, registry.as_mut(), cancel)?;
     let spec = state
         .spec
         .clone()
@@ -163,16 +161,7 @@ pub fn deploy_with_siblings(
     emit(Event::Progress(super::progress::Progress::activity(
         "Requesting or reconciling worker capacity",
     )));
-    let (connection, contract) = match &provider {
-        Compute::RunPod(runpod) => {
-            provision(runpod, &store, &mut state, &spec, cancel, emit)?;
-            readiness::wait(request, runpod, &store, &runner, &mut state, &spec)?
-        }
-        Compute::Hetzner(compute) => {
-            hetzner::provision(compute, &store, &mut state, &spec, cancel, emit)?;
-            hetzner::wait(request, compute, &store, &runner, &mut state, &spec)?
-        }
-    };
+    let (connection, contract) = provider.provision_ready(request, &store, &runner, &mut state, &spec)?;
     source::transfer(&connection, &store, &mut state, packed, &runner, emit)?;
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
@@ -226,24 +215,77 @@ fn prepare_registry(
     )
 }
 
-/// The provider a cloud deploys on, chosen by its profile.
-enum Compute {
-    RunPod(RunPod),
-    Hetzner(Box<hetzner::Compute>),
+/// What a provider does to deploy a cloud's worker; `providers::compute` picks it
+/// from the cloud's provider description.
+pub(in crate::cloud_runtime) trait Compute {
+    /// Settles what an earlier attempt left with the provider, before this one.
+    /// # Errors
+    /// Reports provider and persistence failures.
+    fn settle(&self, _store: &Store, _state: &mut Deployment, _cancel: &Cancellation) -> Result<()> {
+        Ok(())
+    }
+    /// The registry auth the provider pulls the image with, when it stores one; a
+    /// provider whose host logs in to the registry itself stores none.
+    /// # Errors
+    /// Reports provider failures.
+    fn registry_auth(
+        &self,
+        _registry: &mut super::registry::Prepared,
+        _cancel: &Cancellation,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Provisions the worker, or reconnects to the one it has, and waits until it is ready.
+    /// # Errors
+    /// Reports provider, persistence and readiness failures.
+    fn provision_ready(
+        &self,
+        request: &Request,
+        store: &Store,
+        runner: &Runner<'_>,
+        state: &mut Deployment,
+        spec: &WorkerSpec,
+    ) -> Result<(Connection, WorkerContract)>;
 }
 
-impl Compute {
-    fn new(request: &Request) -> Result<Self> {
-        if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-            Ok(Self::Hetzner(Box::new(hetzner::Compute::new(&request.settings)?)))
-        } else {
-            Ok(Self::RunPod(RunPod::new(request.settings.credential()?)))
-        }
+impl Compute for RunPod {
+    fn settle(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
+        replacement::settle(self, store, state, cancel)
+    }
+
+    fn registry_auth(&self, registry: &mut super::registry::Prepared, cancel: &Cancellation) -> Result<Option<String>> {
+        Ok(Some(registry.ensure_provider(self, cancel)?))
+    }
+
+    fn provision_ready(
+        &self,
+        request: &Request,
+        store: &Store,
+        runner: &Runner<'_>,
+        state: &mut Deployment,
+        spec: &WorkerSpec,
+    ) -> Result<(Connection, WorkerContract)> {
+        provision(self, store, state, spec, runner.cancel, runner.emit)?;
+        readiness::wait(request, self, store, runner, state, spec)
+    }
+}
+
+impl Compute for hetzner::Compute {
+    fn provision_ready(
+        &self,
+        request: &Request,
+        store: &Store,
+        runner: &Runner<'_>,
+        state: &mut Deployment,
+        spec: &WorkerSpec,
+    ) -> Result<(Connection, WorkerContract)> {
+        hetzner::provision(self, store, state, spec, runner.cancel, runner.emit)?;
+        hetzner::wait(request, self, store, runner, state, spec)
     }
 }
 
 fn verify_registry(
-    provider: &Compute,
+    provider: &dyn Compute,
     store: &Store,
     state: &mut Deployment,
     registry: Option<&mut super::registry::Prepared>,
@@ -255,9 +297,9 @@ fn verify_registry(
             .as_mut()
             .ok_or(Error::Invalid("Deployment has no image to validate"))?;
         registry.verify_image(&spec.image_digest, cancel)?;
-        // A Hetzner host logs in with the machine's Hetzner pull credential instead.
-        if let Compute::RunPod(runpod) = provider {
-            spec.registry_auth_id = Some(registry.ensure_provider(runpod, cancel)?);
+        // A provider whose host logs in with its own pull credential stores none.
+        if let Some(auth) = provider.registry_auth(registry, cancel)? {
+            spec.registry_auth_id = Some(auth);
         }
         store.save(state)?;
     }
