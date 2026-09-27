@@ -1,13 +1,13 @@
 //! The helper at the worker end of one bridge session. It lives exactly as long as the owner's
 //! SSH session keeps writing heartbeats, and takes its sockets and forwards with it.
 use super::{Answer, Forward, MAX_MESSAGE, Paths, Request, Status, forward};
-use horizon_cloud_protocol::local_network::{HEARTBEAT_TIMEOUT, Nonce, Ready, Subnet};
+use horizon_cloud_protocol::local_network::{HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, Nonce, Ready, Subnet};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddrV4},
     os::unix::{
-        fs::MetadataExt,
+        fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -23,7 +23,11 @@ const SOCKET_WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(50);
 const MAX_FORWARDS: usize = 16;
 const MAX_REQUESTS: usize = 8;
-const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
+/// A helper whose owner has written nothing for this long has lost its session and makes way
+/// for a newer one; a helper heard from more recently refuses to.
+const RETIRE_AFTER: Duration = Duration::from_secs(2 * HEARTBEAT_INTERVAL.as_secs());
+const BUSY: &str = "The bridge is busy; try again";
+const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker, including web pages open in its browsers, can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
 
 struct Pinned {
     forward: Forward,
@@ -36,6 +40,9 @@ struct Helper {
     proxy: SocketAddrV4,
     relays: Arc<AtomicUsize>,
     forwards: Mutex<Vec<Pinned>>,
+    heartbeat: Heartbeat,
+    /// Set when a newer session took over; the helper then ends.
+    retired: AtomicBool,
 }
 
 impl Helper {
@@ -56,6 +63,15 @@ impl Helper {
     fn answer(&self, request: Request) -> Answer {
         match request {
             Request::Status => Answer::Status(self.status()),
+            Request::Retire => {
+                if self.heartbeat.silent_for() < RETIRE_AFTER {
+                    return Answer::Error(
+                        "Another Horizon is already sharing its local network with this worker".into(),
+                    );
+                }
+                self.retired.store(true, Ordering::Release);
+                Answer::Retired
+            }
             Request::Forward { host, port } => match self.forward(host, port) {
                 Ok(forward) => Answer::Forward(forward),
                 Err(error) => Answer::Error(error.to_string()),
@@ -108,6 +124,13 @@ impl Helper {
         };
         let forward = pinned.forward.clone();
         let mut forwards = self.forwards();
+        // A concurrent identical request may have finished first.
+        if let Some(existing) = forwards
+            .iter()
+            .find(|existing| existing.forward.host == forward.host && existing.forward.port == port)
+        {
+            return Ok(existing.forward.clone());
+        }
         if forwards.len() >= MAX_FORWARDS {
             return Err(io::Error::other(format!(
                 "At most {MAX_FORWARDS} forwards; remove one first"
@@ -127,9 +150,13 @@ struct Control {
 }
 
 impl Control {
-    /// A newer session takes the control socket over; the older helper keeps serving its own
-    /// forwards until its heartbeat stops.
+    /// A newer session takes the control socket over from a helper whose session was lost,
+    /// which then ends; it refuses while that helper's owner is still heard from.
     fn bind(paths: &Paths) -> io::Result<Self> {
+        // Otherwise the helper there retired, is absent or does not answer: the socket is free.
+        if let Ok(Answer::Error(error)) = super::exchange(paths, &Request::Retire) {
+            return Err(io::Error::other(error));
+        }
         let path = paths.control();
         let lock = paths.lock();
         let _guard = Locked::new(&lock)?;
@@ -167,7 +194,12 @@ struct Locked(File);
 
 impl Locked {
     fn new(path: &Path) -> io::Result<Self> {
-        let file = File::options().create(true).truncate(false).write(true).open(path)?;
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
         file.lock()?;
         Ok(Self(file))
     }
@@ -197,8 +229,8 @@ pub(super) fn run(
 ) -> io::Result<()> {
     let nonce = Nonce::parse(nonce).ok_or_else(|| io::Error::other("Invalid bridge session"))?;
     let subnet: Subnet = subnet.parse().map_err(io::Error::other)?;
-    super::prepare(paths)?;
     let bridge = Bridge(paths.bridge(&nonce));
+    super::prepare(paths)?;
     wait_for_socket(&bridge.0)?;
     let relays = Arc::new(AtomicUsize::new(0));
     let endpoint = {
@@ -211,13 +243,14 @@ pub(super) fn run(
         proxy: SocketAddrV4::new(Ipv4Addr::LOCALHOST, endpoint.port()),
         relays,
         forwards: Mutex::new(Vec::new()),
+        heartbeat: Heartbeat::watch(input)?,
+        retired: AtomicBool::new(false),
     });
     let control = Control::bind(paths)?;
-    let heartbeat = Heartbeat::watch(input)?;
     serde_json::to_writer(&mut output, &Ready { proxy: helper.proxy })?;
     output.write_all(b"\n")?;
     output.flush()?;
-    serve(&helper, &control, &heartbeat);
+    serve(&helper, &control);
     helper.forwards().clear();
     drop(endpoint);
     Ok(())
@@ -225,7 +258,7 @@ pub(super) fn run(
 
 fn wait_for_socket(path: &Path) -> io::Result<()> {
     let deadline = Instant::now() + SOCKET_WAIT;
-    while !path.exists() {
+    while !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket()) {
         if Instant::now() >= deadline {
             return Err(io::Error::other("The bridge socket did not appear"));
         }
@@ -264,41 +297,53 @@ impl Heartbeat {
         Ok(Self { last, ended })
     }
 
+    fn silent_for(&self) -> Duration {
+        self.last.lock().unwrap_or_else(PoisonError::into_inner).elapsed()
+    }
+
     fn alive(&self) -> bool {
-        !self.ended.load(Ordering::Acquire)
-            && self.last.lock().unwrap_or_else(PoisonError::into_inner).elapsed() < HEARTBEAT_TIMEOUT
+        !self.ended.load(Ordering::Acquire) && self.silent_for() < HEARTBEAT_TIMEOUT
     }
 }
 
-fn serve(helper: &Arc<Helper>, control: &Control, heartbeat: &Heartbeat) {
+/// One control request's share of [`MAX_REQUESTS`], returned however its handler ends.
+struct Pending(Arc<AtomicUsize>);
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn serve(helper: &Arc<Helper>, control: &Control) {
     let requests = Arc::new(AtomicUsize::new(0));
-    while heartbeat.alive() {
+    while helper.heartbeat.alive() && !helper.retired.load(Ordering::Acquire) {
         match control.listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
                 if requests
                     .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                         (count < MAX_REQUESTS).then_some(count + 1)
                     })
                     .is_err()
                 {
+                    // Accepted sockets may inherit nonblocking mode; a busy answer never waits.
+                    let _ = serde_json::to_writer(&mut stream, &Answer::Error(BUSY.into()));
+                    let _ = stream.write_all(b"\n");
                     continue;
                 }
-                let spawned = {
-                    let (helper, requests) = (Arc::clone(helper), Arc::clone(&requests));
-                    thread::Builder::new()
-                        .name("local-network-control".into())
-                        .spawn(move || {
-                            let _ = handle(&helper, stream);
-                            requests.fetch_sub(1, Ordering::AcqRel);
-                        })
-                };
-                if spawned.is_err() {
-                    requests.fetch_sub(1, Ordering::AcqRel);
-                }
+                let share = Pending(Arc::clone(&requests));
+                let helper = Arc::clone(helper);
+                let _ = thread::Builder::new()
+                    .name("local-network-control".into())
+                    .spawn(move || {
+                        let _share = share;
+                        let _ = handle(&helper, stream);
+                    });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            // A peer that went away before it was accepted, or a brief lack of descriptors,
+            // must not end the session.
+            Err(_) => thread::sleep(POLL),
         }
     }
 }
@@ -318,4 +363,37 @@ fn handle(helper: &Helper, mut stream: UnixStream) -> io::Result<()> {
     };
     serde_json::to_writer(&mut stream, &answer)?;
     stream.write_all(b"\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn helper(silent: Duration) -> Helper {
+        let last = Instant::now().checked_sub(silent).unwrap_or_else(Instant::now);
+        Helper {
+            bridge: PathBuf::from("/nonexistent"),
+            subnet: "192.168.1.0/24".parse().unwrap(),
+            proxy: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1),
+            relays: Arc::new(AtomicUsize::new(0)),
+            forwards: Mutex::new(Vec::new()),
+            heartbeat: Heartbeat {
+                last: Arc::new(Mutex::new(last)),
+                ended: Arc::new(AtomicBool::new(false)),
+            },
+            retired: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn only_a_helper_whose_owner_went_silent_makes_way() {
+        let live = helper(Duration::ZERO);
+        assert!(matches!(live.answer(Request::Retire), Answer::Error(error) if error.contains("Another Horizon")));
+        assert!(!live.retired.load(Ordering::Acquire));
+        let lost = helper(RETIRE_AFTER + Duration::from_secs(1));
+        if lost.heartbeat.silent_for() >= RETIRE_AFTER {
+            assert_eq!(lost.answer(Request::Retire), Answer::Retired);
+            assert!(lost.retired.load(Ordering::Acquire));
+        }
+    }
 }

@@ -19,8 +19,8 @@ use std::{
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(40);
 const POLL: Duration = Duration::from_millis(25);
 const BUFFER_BYTES: usize = 16 * 1024;
-/// Relayed connections per bridge session on this worker.
-pub(super) const MAX_RELAYS: usize = 128;
+/// Relayed connections per bridge session on this worker, as many as the owner's proxy allows.
+pub(super) const MAX_RELAYS: usize = 64;
 
 /// Opens `host:port` through the owner's proxy, which admits or refuses it.
 ///
@@ -33,19 +33,23 @@ pub(super) fn connect(bridge: &Path, host: &str, port: u16) -> io::Result<UnixSt
     stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
     let closed =
         |_| io::Error::other("The bridge closed the connection; it may be at its connection limit or stopping");
+    let unexpected = || io::Error::other("The bridge answered with an unexpected protocol");
     stream.write_all(&[5, 1, 0]).map_err(closed)?;
     let mut choice = [0; 2];
     stream.read_exact(&mut choice).map_err(closed)?;
+    if choice != [5, 0] {
+        return Err(unexpected());
+    }
     stream.write_all(&request).map_err(closed)?;
     let mut head = [0; 4];
     stream.read_exact(&mut head).map_err(closed)?;
-    if choice != [5, 0] || head[0] != 5 {
-        return Err(io::Error::other("The bridge answered with an unexpected protocol"));
+    if head[0] != 5 {
+        return Err(unexpected());
     }
     let bound = match head[3] {
         1 => 4,
         4 => 16,
-        _ => return Err(io::Error::other("The bridge answered with an unexpected protocol")),
+        _ => return Err(unexpected()),
     };
     let mut rest = vec![0; bound + 2];
     stream.read_exact(&mut rest).map_err(closed)?;
@@ -189,8 +193,9 @@ fn accept(listener: &TcpListener, streams: &Arc<Mutex<Streams>>, relays: &Arc<At
                     .spawn(move || serve(local, &streams, &dial, slot));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            // A peer that went away before it was accepted, or a brief lack of descriptors,
+            // must not close the listener.
+            Err(_) => thread::sleep(POLL),
         }
     }
 }

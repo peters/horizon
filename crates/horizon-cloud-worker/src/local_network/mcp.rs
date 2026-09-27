@@ -50,7 +50,7 @@ impl Server {
     )]
     async fn status(&self) -> CallToolResult {
         let paths = self.paths.clone();
-        blocking(move || Ok(super::status(&paths))).await
+        blocking(move || super::status(&paths)).await
     }
 
     #[tool(

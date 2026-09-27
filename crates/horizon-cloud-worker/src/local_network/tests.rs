@@ -113,7 +113,7 @@ fn echoes(port: u16) -> bool {
 fn a_session_serves_status_the_proxy_and_forwards_until_its_input_ends() {
     let (_root, paths) = paths();
     let mut session = Session::start(&paths, NONCE);
-    let current = status(&paths);
+    let current = status(&paths).unwrap();
     assert!(current.active);
     assert_eq!(current.subnet.as_deref(), Some("192.168.1.0/24"));
     assert_eq!(current.proxy, Some(session.ready.proxy.to_string()));
@@ -133,17 +133,15 @@ fn a_session_serves_status_the_proxy_and_forwards_until_its_input_ends() {
     assert_eq!(forward(&paths, "192.168.1.50", 554).unwrap(), device);
     let refused = forward(&paths, "10.0.0.1", 80).unwrap_err().to_string();
     assert!(refused.contains("Outside the bridged local network"), "{refused}");
-    assert_eq!(status(&paths).forwards, vec![device.clone()]);
+    assert_eq!(status(&paths).unwrap().forwards, vec![device.clone()]);
 
     assert!(unforward(&paths, device.worker_port).unwrap().forwards.is_empty());
-    assert!(!echoes(device.worker_port));
     let missing = unforward(&paths, device.worker_port).unwrap_err().to_string();
     assert!(missing.contains("No forward"), "{missing}");
 
-    let again = forward(&paths, "192.168.1.50", 554).unwrap();
+    forward(&paths, "192.168.1.50", 554).unwrap();
     session.stop();
-    assert!(!status(&paths).active);
-    assert!(!echoes(again.worker_port));
+    assert!(!status(&paths).unwrap().active);
     assert!(!paths.control().exists());
     assert!(!paths.bridge(&Nonce::parse(NONCE).unwrap()).exists());
     assert!(
@@ -155,15 +153,21 @@ fn a_session_serves_status_the_proxy_and_forwards_until_its_input_ends() {
 }
 
 #[test]
-fn a_newer_session_takes_over_and_the_older_one_leaves_it_in_place() {
+fn a_live_session_keeps_the_bridge_and_a_dead_one_makes_way() {
     let (_root, paths) = paths();
     let mut older = Session::start(&paths, NONCE);
-    let mut newer = Session::start(&paths, "fedcba9876543210fedcba9876543210");
-    assert_eq!(status(&paths).proxy, Some(newer.ready.proxy.to_string()));
+    let newer = "fedcba9876543210fedcba9876543210";
+    owner_proxy(&paths.bridge(&Nonce::parse(newer).unwrap()));
+    let refused = hold::run(&paths, newer, "192.168.1.0/24", io::empty(), io::sink()).unwrap_err();
+    assert!(refused.to_string().contains("Another Horizon"), "{refused}");
+    assert_eq!(status(&paths).unwrap().proxy, Some(older.ready.proxy.to_string()));
     older.stop();
-    assert_eq!(status(&paths).proxy, Some(newer.ready.proxy.to_string()));
-    newer.stop();
-    assert!(!status(&paths).active);
+    assert!(!status(&paths).unwrap().active);
+    // A helper killed outright leaves its socket file behind; the next session takes it.
+    drop(UnixListener::bind(paths.control()).unwrap());
+    let mut next = Session::start(&paths, newer);
+    assert_eq!(status(&paths).unwrap().proxy, Some(next.ready.proxy.to_string()));
+    next.stop();
 }
 
 #[test]

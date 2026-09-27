@@ -12,7 +12,10 @@ mod tests;
 use horizon_cloud_protocol::local_network::{DIRECTORY, Nonce, PREPARED};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixStream},
+    os::unix::{
+        fs::{DirBuilderExt, PermissionsExt},
+        net::UnixStream,
+    },
     path::PathBuf,
     time::Duration,
 };
@@ -51,8 +54,15 @@ impl Paths {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Status,
-    Forward { host: String, port: u16 },
-    Unforward { worker_port: u16 },
+    Forward {
+        host: String,
+        port: u16,
+    },
+    Unforward {
+        worker_port: u16,
+    },
+    /// From a newer session's helper, asking this one to make way if its session was lost.
+    Retire,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -96,6 +106,7 @@ pub(crate) struct Forward {
 enum Answer {
     Status(Status),
     Forward(Forward),
+    Retired,
     Error(String),
 }
 
@@ -110,7 +121,7 @@ pub(crate) fn run() -> io::Result<()> {
             Ok(())
         }
         ["hold", nonce, subnet] => hold::run(&paths, nonce, subnet, io::stdin(), io::stdout()),
-        ["status"] => print(&status(&paths)),
+        ["status"] => print(&status(&paths)?),
         ["forward", host, port] => {
             let port = port.parse().map_err(|_| io::Error::other("Invalid port"))?;
             print(&forward(&paths, host, port)?)
@@ -135,7 +146,7 @@ fn print(value: &impl serde::Serialize) -> io::Result<()> {
 
 /// Creates the private socket directory before sshd binds the session's bridge socket there.
 fn prepare(paths: &Paths) -> io::Result<()> {
-    match std::fs::create_dir(&paths.directory) {
+    match std::fs::DirBuilder::new().mode(0o700).create(&paths.directory) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
@@ -147,6 +158,7 @@ fn prepare(paths: &Paths) -> io::Result<()> {
     std::fs::set_permissions(&paths.directory, std::fs::Permissions::from_mode(0o700))
 }
 
+/// Asks the running helper; with no helper listening, the bridge is off.
 fn exchange(paths: &Paths, request: &Request) -> io::Result<Answer> {
     let Ok(mut stream) = UnixStream::connect(paths.control()) else {
         return Ok(Answer::Status(Status::off()));
@@ -168,10 +180,11 @@ fn read_line(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     Ok((count > 0).then_some(line))
 }
 
-pub(crate) fn status(paths: &Paths) -> Status {
-    match exchange(paths, &Request::Status) {
-        Ok(Answer::Status(status)) => status,
-        _ => Status::off(),
+pub(crate) fn status(paths: &Paths) -> io::Result<Status> {
+    match exchange(paths, &Request::Status)? {
+        Answer::Status(status) => Ok(status),
+        Answer::Error(error) => Err(io::Error::other(error)),
+        Answer::Forward(_) | Answer::Retired => Err(io::Error::other("Invalid local network answer")),
     }
 }
 
@@ -185,7 +198,7 @@ pub(crate) fn forward(paths: &Paths, host: &str, port: u16) -> io::Result<Forwar
     )? {
         Answer::Forward(forward) => Ok(forward),
         Answer::Error(error) => Err(io::Error::other(error)),
-        Answer::Status(_) => Err(io::Error::other(OFF)),
+        Answer::Status(_) | Answer::Retired => Err(io::Error::other(OFF)),
     }
 }
 
