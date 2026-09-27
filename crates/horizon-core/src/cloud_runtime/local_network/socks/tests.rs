@@ -236,7 +236,8 @@ fn unsupported_requests_get_their_own_reply_codes() {
 #[test]
 fn only_socks5_without_authentication_is_spoken() {
     let (proxy, _) = proxy(FixtureGate::default());
-    for greeting in [&[5, 1, 2][..], &[5, 0]] {
+    // A client that already sent its request still reads the refusal.
+    for greeting in [&[5, 1, 2][..], &[5, 0], &[5, 1, 2, 5, 1, 0, 1, 127, 0, 0, 1, 0, 80]] {
         let mut socket = client(&proxy);
         socket.write_all(greeting).unwrap();
         let mut choice = [0; 2];

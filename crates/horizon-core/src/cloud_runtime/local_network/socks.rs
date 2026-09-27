@@ -349,7 +349,9 @@ fn negotiate(socket: &mut TcpStream, deadline: Instant) -> Result<Destination, R
     let mut methods = vec![0; usize::from(greeting[1])];
     read_by(socket, &mut methods, deadline)?;
     if !methods.contains(&NO_AUTHENTICATION) {
-        let _ = socket.write_all(&[VERSION, NO_ACCEPTABLE_METHOD]);
+        if socket.write_all(&[VERSION, NO_ACCEPTABLE_METHOD]).is_ok() {
+            linger(socket);
+        }
         return Err(Refusal::Silent);
     }
     socket
