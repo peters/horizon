@@ -3,6 +3,7 @@
 //! fenced by the deployment's `operation`; the volume, the chosen location and
 //! the SSH key live in this cloud's `hetzner.json` journal, so `RunPod` clouds and
 //! their records are untouched.
+pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
 mod readiness;
 #[cfg(test)]
@@ -152,6 +153,21 @@ impl Compute {
             registries: settings.registries.clone(),
         })
     }
+
+    /// For stopping and deleting, which place nothing: resources are checked by
+    /// ownership alone, so a changed placement policy never blocks their cleanup.
+    pub(super) fn cleanup(settings: &Settings) -> Result<Self> {
+        let hetzner = super::sizing::hetzner(settings)?.clone();
+        Ok(Self {
+            client: Hetzner::new(hetzner.credential()?),
+            settings: hetzner,
+            allowed: Allowed {
+                locations: Vec::new(),
+                server_types: Vec::new(),
+            },
+            registries: None,
+        })
+    }
 }
 
 /// What this cloud owns on Hetzner besides its server. Every change is durable
@@ -169,6 +185,14 @@ pub(super) struct Journal {
     /// private half is never kept, and the host's sshd is masked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) key: Option<String>,
+    /// The server a stop deleted. While the deployment is still bound to it, the
+    /// cloud is stopped rather than lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) released: Option<String>,
+    /// Set when a delete starts. Provisioning refuses until the delete has
+    /// finished, then starts the redeployed cloud afresh.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) deleting: bool,
 }
 
 fn prepared() -> CreateState {
@@ -183,6 +207,8 @@ impl Journal {
                 location: None,
                 volume: CreateState::Prepared,
                 key: None,
+                released: None,
+                deleting: false,
             }),
             Err(error) => Err(error.into()),
         }

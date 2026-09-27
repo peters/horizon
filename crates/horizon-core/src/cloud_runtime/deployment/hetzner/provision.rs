@@ -58,7 +58,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     let root = store.root().to_path_buf();
-    let mut journal = Journal::load(&root)?;
+    let mut journal = journal_for(&root, state)?;
     // Every read-only check comes before the first request that creates anything.
     // A volume fixes the location; until one exists, the first allowed location
     // with a fitting server type is chosen. A requested or bound server was placed
@@ -147,6 +147,41 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     described.verify_resources(spec)?;
     state.worker = Some(described);
     store.save(state)
+}
+
+/// The journal provisioning goes on from. A server a stop released is never
+/// reconnected to. A cloud whose delete started is refused until the delete has
+/// finished (no key, volume or server left) and the deployment no longer claims
+/// the old workspace's source, which a redeploy resets; it then starts afresh
+/// wherever the settings allow now.
+fn journal_for(root: &std::path::Path, state: &Deployment) -> Result<Journal> {
+    let operation = &state.operation;
+    let mut journal = Journal::load(root)?;
+    if matches!(operation, CreateState::Bound { worker_id } if journal.released.as_ref() == Some(worker_id)) {
+        return Err(Error::Invalid(
+            "This Hetzner cloud is stopping; stop it again to finish, then resume it",
+        ));
+    }
+    if journal.deleting || matches!(journal.volume, CreateState::Terminated { .. }) {
+        if journal.key.is_some()
+            || matches!(journal.volume, CreateState::Requested | CreateState::Bound { .. })
+            || *operation != CreateState::Prepared
+            || state.source_ready
+        {
+            return Err(Error::Invalid(
+                "Finish deleting this Hetzner cloud before deploying it again",
+            ));
+        }
+        journal = Journal {
+            location: None,
+            volume: CreateState::Prepared,
+            key: None,
+            released: None,
+            deleting: false,
+        };
+        journal.save(root)?;
+    }
+    Ok(journal)
 }
 
 /// The location of an existing workspace volume. Settings can change while a

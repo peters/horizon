@@ -71,6 +71,8 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
         key: Some(throwaway_public_key().unwrap()),
+        released: Some("42".into()),
+        deleting: true,
     };
     saved.save(root.path()).unwrap();
     assert_eq!(Journal::load(root.path()).unwrap(), saved);
@@ -135,6 +137,11 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     .unwrap();
     let mut spec = spec();
     preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
+    // A cloud placed where the settings no longer allow can still be stopped and deleted.
+    let mut elsewhere = settings.clone();
+    elsewhere.placement = serde_json::from_value(serde_json::json!({"data_centers": ["nbg1"]})).unwrap();
+    assert!(super::Compute::new(&elsewhere).is_err());
+    super::Compute::cleanup(&elsewhere).unwrap();
     // Not a Hetzner resource name.
     assert!(preflight("Cloud_1", &spec.profile, &settings).is_err());
     spec.profile.idle_stop_minutes = Some(30);
@@ -490,14 +497,14 @@ mod failure_points {
         spec: &horizon_cloud::WorkerSpec,
         responses: Vec<(u16, String)>,
     ) -> (Deployment, Journal, bool, usize) {
-        provision_adjusted(spec, responses, |_, _| {})
+        provision_adjusted(spec, responses, |_, _, _| {})
     }
 
     /// As `provision_spec`, after `adjust` changes the settings or the saved state.
     fn provision_adjusted(
         spec: &horizon_cloud::WorkerSpec,
         responses: Vec<(u16, String)>,
-        adjust: impl FnOnce(&mut Compute, &mut Deployment),
+        adjust: impl FnOnce(&mut Compute, &mut Deployment, &std::path::Path),
     ) -> (Deployment, Journal, bool, usize) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
@@ -521,7 +528,7 @@ mod failure_points {
             },
             registries: None,
         };
-        adjust(&mut compute, &mut state);
+        adjust(&mut compute, &mut state, root.path());
         store.save(&state).unwrap();
         let result = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {});
         task.join().unwrap();
@@ -552,12 +559,82 @@ mod failure_points {
             (CreateState::Prepared, Vec::new(), 0),
             (CreateState::Requested, and(catalog(), [error(503, "unavailable")]), 4),
         ] {
-            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state| {
+            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state, _| {
                 compute.settings.registry_pull = serde_json::from_value(pull.clone()).unwrap();
                 state.operation = operation.clone();
             });
             assert_eq!((state.operation, served), (operation, expected));
         }
+    }
+
+    #[test]
+    fn a_cloud_whose_stop_is_unfinished_is_never_reconnected() {
+        let bound = CreateState::Bound { worker_id: "42".into() };
+        let (state, _, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
+            state.operation = bound.clone();
+            let mut journal = Journal::load(root).unwrap();
+            journal.released = Some("42".into());
+            journal.save(root).unwrap();
+        });
+        assert_eq!((state.operation, served), (bound, 0));
+    }
+
+    #[test]
+    fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
+        // An unfinished delete, with its key, volume or server left, is refused before any request.
+        let terminated = CreateState::Terminated { worker_id: "8".into() };
+        // A delete that finished but was never followed by a redeploy still holds
+        // the old workspace's source state, so it is refused too.
+        for (key, volume, operation, source_ready) in [
+            (
+                Some("ssh-ed25519 AAAA"),
+                terminated.clone(),
+                CreateState::Prepared,
+                false,
+            ),
+            (None, terminated.clone(), CreateState::Requested, false),
+            (
+                Some("ssh-ed25519 AAAA"),
+                CreateState::Prepared,
+                CreateState::Prepared,
+                false,
+            ),
+            (None, terminated, CreateState::Prepared, true),
+        ] {
+            let (_, journal, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
+                let key = key.map(String::from);
+                Journal {
+                    location: None,
+                    volume,
+                    key,
+                    released: None,
+                    deleting: true,
+                }
+                .save(root)
+                .unwrap();
+                state.operation = operation.clone();
+                state.source_ready = source_ready;
+            });
+            assert_eq!((served, journal.location), (0, None));
+        }
+        let (_, journal, _, _) = provision_adjusted(
+            &spec(),
+            and(until_volume(), [error(503, "unavailable")]),
+            |_, _, root| {
+                let deleted = Journal {
+                    location: Some("nbg1".into()),
+                    volume: CreateState::Terminated { worker_id: "8".into() },
+                    key: None,
+                    released: None,
+                    deleting: false,
+                };
+                deleted.save(root).unwrap();
+            },
+        );
+        assert_eq!(
+            (journal.volume, journal.location.as_deref()),
+            (CreateState::Requested, Some("hel1"))
+        );
     }
 
     #[test]
@@ -638,3 +715,59 @@ mod failure_points {
         assert_eq!(state.worker.unwrap().id, "42");
     }
 }
+
+#[cfg(unix)]
+fn stored(
+    root: &std::path::Path,
+    operation: &CreateState,
+) -> (
+    crate::cloud_runtime::state::Store,
+    crate::cloud_runtime::state::Deployment,
+) {
+    let store = crate::cloud_runtime::state::Store::lock(root).unwrap();
+    let state: crate::cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+        "profile": spec().profile, "stage": "Stopped", "operation": operation, "spec": spec(),
+        "worker": worker(&server("running", Some("192.0.2.10")), &spec(), &volume()).unwrap(),
+        "sessions": [], "stop_requested": true
+    }))
+    .unwrap();
+    store.save(&state).unwrap();
+    (store, state)
+}
+
+#[test]
+#[cfg(unix)]
+fn resuming_clears_only_a_released_servers_fence() {
+    use super::lifecycle::resume;
+    let root = tempfile::tempdir().unwrap();
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let (store, mut state) = stored(root.path(), &bound);
+    assert!(
+        resume(&store, &mut state).is_err(),
+        "a server that was not released is resumed by starting it"
+    );
+    let mut journal = Journal::load(root.path()).unwrap();
+    journal.released = Some("42".into());
+    journal.save(root.path()).unwrap();
+    state.stage = crate::cloud_runtime::Stage::Stopping;
+    assert!(
+        resume(&store, &mut state).is_err(),
+        "an unfinished stop has not proven the server gone"
+    );
+    state.stage = crate::cloud_runtime::Stage::Stopped;
+    resume(&store, &mut state).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(
+        saved.operation,
+        CreateState::Prepared,
+        "the next reconnect requests a new server"
+    );
+    assert_eq!(saved.stage, crate::cloud_runtime::Stage::Readiness);
+    assert!(!saved.stop_requested && saved.worker.is_none());
+    assert!(Journal::load(root.path()).unwrap().released.is_none());
+}
+
+/// Deletion cleans up the record each provisioning failure point leaves.
+#[cfg(unix)]
+mod deletion_points;

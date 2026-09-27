@@ -56,6 +56,12 @@ impl Runtime {
             Ok(recovered) => {
                 // A stopped worker, including one that stopped itself when idle, only needs Resume.
                 let stopped = recovered.confirmed_stopped();
+                let resume = match recovered.stopped() {
+                    cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
+                    cloud_runtime::provider::StoppedCost::ServerDeleted => {
+                        "Resume creates a new server that attaches the same workspace volume."
+                    }
+                };
                 self.stage = Some(recovered.state.stage);
                 self.state = Some(recovered.state);
                 if self
@@ -69,7 +75,7 @@ impl Runtime {
                 self.error = (recovered.report.outcome.needs_attention() && !stopped)
                     .then(|| recovered.report.outcome.explanation().into());
                 self.push_log(if stopped {
-                    "The provider confirmed this worker is stopped. Resume starts the same worker again.".into()
+                    format!("The provider confirmed this worker is stopped. {resume}")
                 } else {
                     recovered.report.outcome.explanation().into()
                 });

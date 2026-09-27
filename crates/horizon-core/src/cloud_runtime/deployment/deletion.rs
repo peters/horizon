@@ -16,9 +16,15 @@ pub fn terminate(
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let replacement = state.replacement_worker()?;
     if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid(
-            "Deleting Hetzner clouds is not available yet; delete the server, volume and SSH key in the Hetzner console",
-        ));
+        deletion_step(
+            emit,
+            Stage::DeleteWorker,
+            "Deleting the Hetzner server, workspace volume and SSH key and confirming their removal",
+        );
+        // Once deletion starts it runs to the end; each step is recorded so it can resume.
+        cancel.check()?;
+        super::hetzner::lifecycle::delete(&store, &mut state, settings, &committed())?;
+        return finish_deletion(state, &store);
     }
     let provider = RunPod::new(settings.credential()?);
     if state.operation != CreateState::Prepared {

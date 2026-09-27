@@ -17,11 +17,30 @@ impl ReconciledDeployment {
     #[must_use]
     pub fn confirmed_stopped(&self) -> bool {
         self.state.stage == Stage::Stopped
-            && self
-                .report
-                .worker
-                .as_ref()
-                .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
+            && match self.stopped() {
+                // Stopping deleted the server, which check proved gone; there may be
+                // no recorded worker to report.
+                horizon_cloud::provider::StoppedCost::ServerDeleted => {
+                    matches!(
+                        self.report.outcome,
+                        horizon_cloud::runpod::recovery::Outcome::Inactive { .. }
+                    )
+                }
+                horizon_cloud::provider::StoppedCost::WorkerKept => self
+                    .report
+                    .worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.status() == WorkerStatus::Stopped),
+            }
+    }
+
+    /// What a stop kept of this cloud's worker, and so what Resume does.
+    #[must_use]
+    pub fn stopped(&self) -> horizon_cloud::provider::StoppedCost {
+        horizon_cloud::provider::by_id(&self.state.profile.provider)
+            .map_or(horizon_cloud::provider::StoppedCost::WorkerKept, |provider| {
+                provider.stopped
+            })
     }
 }
 
@@ -56,28 +75,38 @@ pub fn reconcile(
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
-    refuse_hetzner(&state)?;
-    let provider = RunPod::new(settings.credential()?);
-    // Settling commits only a new image and pull credential for the same worker.
-    super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
-    let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
-    let mut operation = state.operation.clone();
-    let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
-        if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
-            return Err(horizon_cloud::CloudError::Invalid(
-                "Worker terminated; verify hosted-device release before recording cleanup",
-            ));
-        }
-        state.operation = next.clone();
-        store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
-    })?;
+    let (report, operation) = if hetzner(&state) {
+        let report = super::deployment::hetzner::lifecycle::reconcile(&store, &mut state, settings, cancel)?;
+        (report, state.operation.clone())
+    } else {
+        let provider = RunPod::new(settings.credential()?);
+        // Settling commits only a new image and pull credential for the same worker.
+        super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
+        let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
+        let mut operation = state.operation.clone();
+        let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
+            if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
+                return Err(horizon_cloud::CloudError::Invalid(
+                    "Worker terminated; verify hosted-device release before recording cleanup",
+                ));
+            }
+            state.operation = next.clone();
+            store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
+        })?;
+        (report, operation)
+    };
     let changed = report.worker.is_some() || matches!(operation, CreateState::Terminated { .. });
     if let Some(worker) = &report.worker {
         state.worker = Some(worker.clone());
         record_stopped(&mut state);
     }
     if matches!(operation, CreateState::Terminated { .. }) {
-        if super::deployment::storage::retained(&store, &state)? {
+        let retained = if hetzner(&state) {
+            super::deployment::hetzner::retained(store.root())?
+        } else {
+            super::deployment::storage::retained(&store, &state)?
+        };
+        if retained {
             return Err(Error::Invalid(
                 "Worker termination is confirmed, but workspace storage remains; explicitly delete the cloud to finish cleanup",
             ));
@@ -92,13 +121,16 @@ pub fn reconcile(
     Ok(ReconciledDeployment { state, report })
 }
 
-/// A deployed Hetzner cloud has no check, stop, resume or hosted-device path yet;
-/// nothing here may reach `RunPod` for it.
+/// Hetzner clouds release their server on stop; see `deployment::hetzner::lifecycle`.
+fn hetzner(state: &Deployment) -> bool {
+    state.profile.provider == horizon_cloud::hetzner::PROVIDER
+}
+
+/// Hetzner profiles cannot request hosted devices, so a Hetzner cloud has none to
+/// release; nothing here may reach `RunPod` for it.
 fn refuse_hetzner(state: &Deployment) -> Result<()> {
     if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid(
-            "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console",
-        ));
+        return Err(Error::Invalid("Hetzner clouds hold no hosted devices to release"));
     }
     Ok(())
 }
@@ -124,6 +156,10 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
+    if hetzner(&state) {
+        super::deployment::hetzner::lifecycle::stop(&store, &mut state, settings, cancel)?;
+        return Ok(state);
+    }
     let CreateState::Bound { worker_id } = &state.operation else {
         return Err(Error::Invalid("Reconcile a bound worker before stopping it"));
     };
@@ -132,7 +168,6 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
         .spec
         .as_ref()
         .ok_or(Error::Invalid("Missing worker specification"))?;
-    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     let worker = provider
         .inspect(&id, cancel)?
@@ -193,13 +228,22 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
 }
 
 /// # Errors
-/// Resumes the existing worker only. Missing workers and sessions remain explicit losses.
+/// Resumes a stopped cloud as its provider stops it (see `provider::StoppedCost`):
+/// `RunPod` resumes the existing worker only, while a Hetzner stop released its
+/// server, so the next reconnect creates a new one on the same workspace volume.
+/// Missing workers and sessions remain explicit losses.
 pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
+    }
+    if hetzner(&state) {
+        // No provider call follows here, so a cancelled Resume must stop before the
+        // fence is cleared: the reconnect it leads to creates a billed server.
+        cancel.check()?;
+        return super::deployment::hetzner::lifecycle::resume(&store, &mut state);
     }
     let CreateState::Bound { worker_id } = &state.operation else {
         return Err(Error::Invalid("No existing worker to resume"));
@@ -208,7 +252,6 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
         .spec
         .as_ref()
         .ok_or(Error::Invalid("Missing worker specification"))?;
-    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     let worker = provider
         .inspect(worker_id, cancel)?
@@ -260,7 +303,34 @@ mod tests {
     use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
 
     #[test]
-    fn hetzner_clouds_are_refused_before_any_runpod_request() {
+    fn a_hetzner_stop_is_confirmed_by_its_released_server_being_gone_without_a_worker() {
+        use horizon_cloud::{
+            provider::StoppedCost,
+            runpod::recovery::{Outcome, Reconciliation},
+        };
+        let profile = serde_json::json!({"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"hetzner-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":"Stopped","operation":{"state":"bound","worker_id":"42"},
+            "spec":null,"worker":null,"sessions":[],"stop_requested":true
+        }))
+        .unwrap();
+        let report = Reconciliation {
+            operation_id: "hetzner-cloud".into(),
+            outcome: Outcome::Inactive { worker_id: "42".into() },
+            worker: None,
+        };
+        let reconciled = ReconciledDeployment { state, report };
+        assert_eq!(
+            reconciled.stopped(),
+            StoppedCost::ServerDeleted,
+            "resume creates a new server"
+        );
+        assert!(reconciled.confirmed_stopped());
+    }
+
+    #[test]
+    fn hetzner_clouds_never_reach_runpod_lifecycle_code() {
         let root = tempfile::tempdir().unwrap();
         let profile = serde_json::json!({"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8});
         let state: Deployment = serde_json::from_value(serde_json::json!({
@@ -284,30 +354,36 @@ mod tests {
         }))
         .unwrap();
         let cancel = Cancellation::default();
-        let refused = "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console";
+        // Every Hetzner action goes to the Hetzner path, which needs Hetzner settings.
+        let no_hetzner = "Add a hetzner section to the cloud settings before deploying a Hetzner cloud";
         assert_eq!(
             reconcile(root.path(), &settings, None, &cancel)
                 .unwrap_err()
                 .to_string(),
-            refused
+            no_hetzner
         );
-        assert_eq!(stop(root.path(), &settings, &cancel).unwrap_err().to_string(), refused);
+        assert_eq!(
+            stop(root.path(), &settings, &cancel).unwrap_err().to_string(),
+            no_hetzner
+        );
         assert_eq!(
             resume(root.path(), &settings, &cancel).unwrap_err().to_string(),
-            refused
+            "Stop the Hetzner cloud before resuming it"
         );
+        let cancelled = Cancellation::default();
+        cancelled.cancel();
+        assert!(matches!(
+            resume(root.path(), &settings, &cancelled).unwrap_err(),
+            Error::Provider(horizon_cloud::CloudError::Cancelled)
+        ));
         assert_eq!(
             revoke_browserstack(root.path(), &settings, &cancel)
                 .unwrap_err()
                 .to_string(),
-            refused
+            "Hetzner clouds hold no hosted devices to release"
         );
         let error = super::super::deployment::terminate(root.path(), &settings, &cancel, &|_| {}).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("Deleting Hetzner clouds is not available yet")
-        );
+        assert_eq!(error.to_string(), no_hetzner);
         let request = super::super::deployment::Request::new(
             state.cloud_id.clone(),
             state.repository.clone(),

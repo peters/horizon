@@ -516,8 +516,9 @@ Hetzner's OpenAPI spec; `scripts/check-hetzner-api.py` checks every operation an
 field it uses against that spec. In `horizon-core`, `deployment::hetzner` owns the
 Hetzner path: a preflight before any record, provisioning behind the deployment's
 fence and its own `hetzner.json` journal (volume, location, SSH key), and bounded
-readiness. `deploy` dispatches to it by the profile's provider; RunPod code is
-unchanged.
+readiness. `deploy` dispatches to it by the profile's provider, and so do check,
+stop, resume and delete through `deployment::hetzner::lifecycle`, where stopping
+deletes the server and keeps the volume; RunPod code is unchanged.
 The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 `startup::StartupMetadata` is bounded opaque, non-secret creation data saved in
 `WorkerSpec`. The RunPod request passes it through one environment value, and the

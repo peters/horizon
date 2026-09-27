@@ -4,10 +4,9 @@ Hetzner is a second provider for CPU clouds (#972). A cloud whose profile names
 `hetzner` deploys on a Hetzner Cloud server: the server runs the unchanged
 worker image under Docker, and the workspace lives on a Hetzner volume in the
 same location. The New cloud dialog does not offer Hetzner profiles yet; deploy
-them with the deployment coordinator (`cloud_deploy`). Stop, resume, check,
-delete and rebuild are not wired yet and are refused before any provider
-request; delete a test cloud's server, volume and SSH key in the Hetzner console.
-Horizon also checks the cloud ID, `idle_stop_minutes`, the token, the locations
+them with the deployment coordinator (`cloud_deploy`), which also stops, resumes,
+checks and deletes them. Rebuilding a Hetzner cloud's image is refused for now.
+Horizon checks the cloud ID, `idle_stop_minutes`, the token, the locations
 and the registry pull credential before it records or builds anything.
 
 ## How a deployment runs
@@ -90,6 +89,29 @@ Hetzner off removes the binding.
   to the image repository, with a short expiry. Horizon reads it only while a
   server can still be created; a retry that reconnects to a server already
   requested does not need it, so an expired token never blocks recovering one.
+
+## Stop, resume, check and delete
+
+- **Stop** releases the server: the worker shuts down gracefully (power is cut
+  after a minute), then the server is deleted. A powered-off Hetzner server is
+  still billed, so only the volume keeps costing money while a cloud is stopped.
+- **Resume** clears the released server, so the next reconnect creates a new
+  server in the volume's location that attaches the same volume. The new server
+  has a new host key, pinned after its worker contract passes. Processes from
+  before the stop are gone; `/workspace` is kept.
+- **Check** reports a released server as stopped once it is gone, and a missing
+  one as lost. A server powered off any other way is still billed, so check
+  reports that and leaves the cloud as it is; stop it to release the server.
+  Check never creates, starts or deletes anything. If a stop was
+  interrupted before its server was gone, the cloud stays stopping and cannot be
+  resumed; stopping again finishes it.
+- **Delete** removes the server, the workspace volume and the SSH key, and
+  confirms each is gone. Only then can the cloud be removed from Horizon. A
+  create request whose response was lost counts as having created nothing only
+  if a second look 30 seconds later still finds nothing. A cloud whose
+  delete has not finished cannot be deployed until it does; redeploying a
+  deleted cloud creates a new volume. Stop and delete work even after the settings stop
+  allowing the cloud's location.
 
 ## Not available on Hetzner yet
 
