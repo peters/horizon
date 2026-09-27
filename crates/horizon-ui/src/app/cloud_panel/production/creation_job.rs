@@ -12,6 +12,8 @@ pub(super) struct Pending {
     workspace: String,
     title: String,
     launch: CloudLaunch,
+    /// As reviewed, each at the commit the launch must pin.
+    siblings: Vec<cloud_runtime::siblings::Sibling>,
     cancel: CancelOnDrop,
 }
 
@@ -41,6 +43,21 @@ impl super::Production {
             .as_ref()
             .is_some_and(|pending| pending.workspace == workspace)
             || ((self.creating || self.setup.resumes_creation()) && self.launch.workspace.as_deref() == Some(workspace))
+    }
+}
+
+impl super::Production {
+    /// The same-worker siblings checked for this launch, once reviewed for exactly the
+    /// prepared repository, revision and profile.
+    fn chosen_siblings(&self) -> cloud_runtime::Result<Vec<cloud_runtime::siblings::Sibling>> {
+        self.launch
+            .siblings
+            .launch_siblings(
+                &self.repository,
+                self.launch.revision.as_deref(),
+                &self.selected_profile,
+            )
+            .map_err(cloud_runtime::Error::Invalid)
     }
 }
 
@@ -93,6 +110,8 @@ impl HorizonApp {
         } else {
             form.revision.clone()
         };
+        let siblings = form.chosen_siblings()?;
+        let reviewed = siblings.clone();
         let busy = form.creation_busy.clone();
         if busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -119,21 +138,12 @@ impl HorizonApp {
                 profile,
                 placement,
             },
+            siblings,
         });
         self.cloud_prototype.error = None;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = (|| {
-                cancel.check()?;
-                let repository = repository.canonicalize()?;
-                let runner = cloud_runtime::command::Runner {
-                    cancel: &cancel,
-                    emit: &|_| {},
-                    secrets: Vec::new(),
-                };
-                let revision = cloud_runtime::repository::resolve_with_runner(&repository, &revision, &runner)?;
-                Ok(Resolved { repository, revision })
-            })();
+            let result = resolve(&repository, &revision, &reviewed, &cancel);
             drop(permit);
             let _ = sender.send(result);
             ctx.request_repaint();
@@ -162,6 +172,8 @@ impl HorizonApp {
             return;
         };
         if let Err(error) = result.and_then(|resolved| self.finish_cloud_creation(ctx, pending, resolved)) {
+            // A sibling checkout may have moved since it was checked; read the choice again.
+            self.cloud_prototype.production.launch.siblings.forget_review();
             self.cloud_prototype.error = Some(error.to_string());
         }
     }
@@ -201,9 +213,22 @@ impl HorizonApp {
         group.environment.profile = Some(pending.launch.profile_name.clone());
         group.environment.image.clone_from(&pending.launch.profile.image);
         group.remote = Some(pending.launch);
+        group.siblings = pending
+            .siblings
+            .into_iter()
+            .map(|sibling| cloud_runtime::siblings::Binding {
+                alias: sibling.alias,
+                local_repository: sibling.local_repository,
+                // Deployment pins exactly the reviewed commit and refuses a checkout that
+                // moved on, including on a retry.
+                revision: Some(sibling.revision),
+            })
+            .collect();
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
         self.cloud_prototype.production.creating = false;
+        // The next cloud authorizes its own siblings; a reopened form starts unchecked.
+        self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
         self.cloud_prototype.error = None;
         self.save_cloud_prototype();
         self.cloud_overview(ctx);
@@ -257,6 +282,28 @@ pub(super) fn launch_profile(
         ));
     }
     super::creation::provider::sized(provider, profile, size)
+}
+
+/// The committed primary revision to launch, once every reviewed sibling checkout is still
+/// at the commit it was reviewed at.
+fn resolve(
+    repository: &std::path::Path,
+    revision: &str,
+    siblings: &[cloud_runtime::siblings::Sibling],
+    cancel: &cloud_runtime::Cancellation,
+) -> cloud_runtime::Result<Resolved> {
+    cancel.check()?;
+    let repository = repository.canonicalize()?;
+    let runner = cloud_runtime::command::Runner {
+        cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let revision = cloud_runtime::repository::resolve_with_runner(&repository, revision, &runner)?;
+    for sibling in siblings {
+        sibling.unmoved(&runner)?;
+    }
+    Ok(Resolved { repository, revision })
 }
 
 #[cfg(all(test, unix))]

@@ -22,6 +22,7 @@ fn pending(app: &mut HorizonApp) -> std::sync::mpsc::Sender<cloud_runtime::Resul
             profile: config.profiles["dev"].clone(),
             placement: horizon_core::cloud_panel::Placement::default(),
         },
+        siblings: Vec::new(),
     });
     sender
 }

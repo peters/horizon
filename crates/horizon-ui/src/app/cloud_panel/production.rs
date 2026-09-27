@@ -180,7 +180,13 @@ impl Runtime {
             && !Self::needs_provider_check(state)
     }
 
-    fn start_deployment(&mut self, request: Request, ctx: &egui::Context) {
+    /// `siblings` are pinned before the image is built; a record that pinned them already keeps its own.
+    fn start_deployment(
+        &mut self,
+        request: Request,
+        siblings: Vec<cloud_runtime::siblings::Binding>,
+        ctx: &egui::Context,
+    ) {
         if self.receiver.is_some() && self.stage != Some(Stage::Ready) {
             return;
         }
@@ -199,7 +205,7 @@ impl Runtime {
         self.error = None;
         self.state_unavailable = false;
         let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment(&request, &cancel, &tx, idle, &ctx));
+        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, idle, &ctx));
     }
 
     /// Only a Ready cloud shows its current run; other stages report their own progress.
@@ -457,6 +463,7 @@ impl HorizonApp {
         };
         let Some(launch) = group.remote.clone() else { return };
         let repository = group.cwd.clone();
+        let siblings = group.siblings.clone();
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
@@ -476,12 +483,15 @@ impl HorizonApp {
             }
         };
         let loaded = Store::lock(&state_root).and_then(|store| store.load());
-        let existing = match loaded {
-            Ok(Some(state)) => matches!(
-                state.operation,
-                cloud_runtime::CreateState::Bound { .. } | cloud_runtime::CreateState::Requested
+        let (existing, pinned) = match loaded {
+            Ok(Some(state)) => (
+                matches!(
+                    state.operation,
+                    cloud_runtime::CreateState::Bound { .. } | cloud_runtime::CreateState::Requested
+                ),
+                state.siblings.is_some(),
             ),
-            Ok(None) if !launch.deployment_started => false,
+            Ok(None) if !launch.deployment_started => (false, false),
             other => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.state_unavailable = true;
@@ -531,7 +541,8 @@ impl HorizonApp {
             .runtimes
             .entry(id)
             .or_default()
-            .start_deployment(request, ctx);
+            // A reconnect keeps the pinned siblings even when a checkout has since moved.
+            .start_deployment(request, if pinned { Vec::new() } else { siblings }, ctx);
     }
 
     fn persist_cloud_before_allocation(&mut self, id: u32) -> bool {
@@ -660,13 +671,24 @@ fn run_deployment(
     idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
+    run_deployment_with_siblings(request, &[], cancel, tx, idle, ctx);
+}
+
+fn run_deployment_with_siblings(
+    request: &Request,
+    siblings: &[cloud_runtime::siblings::Binding],
+    cancel: &cloud_runtime::Cancellation,
+    tx: &std::sync::mpsc::Sender<Event>,
+    idle: std::sync::mpsc::Sender<idle::Report>,
+    ctx: &egui::Context,
+) {
     let emit = |event| {
         let _ = tx.send(event);
         ctx.request_repaint();
     };
     let settings = request.settings.clone();
     let root = request.state_root.clone();
-    match deployment::deploy(request, cancel, &emit) {
+    match deployment::deploy_with_siblings(request, siblings, cancel, &emit) {
         Ok(state) => {
             idle::watch(&state, &settings, &root, cancel, idle, ctx);
             presentation::watch(&state, &settings, &root, cancel, tx, ctx);

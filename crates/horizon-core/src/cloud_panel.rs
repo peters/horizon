@@ -33,6 +33,11 @@ pub const CLOUDS: [(u32, &str); 5] = [
 pub struct CloudGroup {
     #[serde(default)]
     pub remote: Option<CloudLaunch>,
+    /// Same-worker siblings chosen in New cloud for `remote`, in layering order. Their
+    /// checkout paths stay in this machine-local record, never in committed configuration.
+    /// Omitted when none, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub siblings: Vec<crate::cloud_runtime::siblings::Binding>,
     pub issue: u32,
     pub title: String,
     pub workspace: String,
@@ -147,6 +152,7 @@ impl CloudGroup {
     pub fn new(issue: u32, title: String, workspace: String, cwd: PathBuf, position: [f32; 2]) -> Self {
         Self {
             remote: None,
+            siblings: Vec::new(),
             issue,
             title,
             workspace,
@@ -770,6 +776,27 @@ mod tests {
         let saved = serde_json::to_value(&launch).unwrap();
         assert_eq!(saved["placement"]["gpu_types"][0], "NVIDIA RTX A5000");
         assert_eq!(serde_json::from_value::<CloudLaunch>(saved).unwrap().placement, a5000);
+    }
+
+    #[test]
+    fn chosen_siblings_persist_with_their_cloud_and_are_omitted_when_none() {
+        let mut group = CloudGroup::new(101, "Siblings".into(), "desk".into(), "/synthetic/app".into(), [0.0; 2]);
+        let saved = serde_json::to_value(&group).unwrap();
+        assert!(saved.get("siblings").is_none(), "earlier records keep their encoding");
+        assert!(serde_json::from_value::<CloudGroup>(saved).unwrap().siblings.is_empty());
+        group.siblings = vec![crate::cloud_runtime::siblings::Binding {
+            alias: "consumer".into(),
+            local_repository: "/synthetic/consumer".into(),
+            revision: Some("c".repeat(40)),
+        }];
+        let saved = serde_json::to_value(&group).unwrap();
+        assert_eq!(saved["siblings"][0]["local_repository"], "/synthetic/consumer");
+        // The reviewed commit persists, so a retry deploys exactly what was checked.
+        assert_eq!(saved["siblings"][0]["revision"], "c".repeat(40));
+        assert_eq!(
+            serde_json::from_value::<CloudGroup>(saved).unwrap().siblings,
+            group.siblings
+        );
     }
 
     #[test]

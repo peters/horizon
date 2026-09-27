@@ -13,7 +13,7 @@ use super::{
 use horizon_cloud::{Build, CloudConfig, Profile, companions::Placement};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -88,6 +88,24 @@ pub struct Candidate {
     pub suggested: Option<PathBuf>,
 }
 
+/// Each chosen sibling pinned or refused on its own, and any refusal of the choice as a
+/// whole, for New cloud to show beside its rows before anything is deployed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Review {
+    /// By alias.
+    pub siblings: BTreeMap<String, std::result::Result<Sibling, SiblingError>>,
+    /// Such as a primary without a recipe to layer onto, which refuses every sibling alike.
+    pub choice: Option<SiblingError>,
+}
+
+impl Review {
+    /// Whether a launch would pin these siblings as reviewed.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.choice.is_none() && self.siblings.values().all(std::result::Result::is_ok)
+    }
+}
+
 /// Why chosen siblings cannot be deployed. Each names what to change.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SiblingError {
@@ -103,6 +121,8 @@ pub enum SiblingError {
     PrimaryOrigin,
     #[error("Same-worker siblings layer onto the primary recipe; add a build section to the primary profile")]
     PrimaryImageOnly,
+    #[error("Sibling `{0}` needs the absolute path of its local checkout")]
+    Relative(String),
     #[error("Sibling `{0}` needs a Git checkout with a GitHub origin")]
     Origin(String),
     #[error("Sibling `{alias}` checkout comes from {found}, but its declaration names {declared}")]
@@ -159,7 +179,56 @@ pub enum SiblingError {
     Changed,
 }
 
+impl SiblingError {
+    /// The chosen sibling this refusal names, if it names one.
+    #[must_use]
+    pub fn alias(&self) -> Option<&str> {
+        match self {
+            Self::Duplicate(alias)
+            | Self::Undeclared(alias)
+            | Self::SeparateCloud(alias)
+            | Self::Relative(alias)
+            | Self::Origin(alias)
+            | Self::Primary(alias)
+            | Self::Directory(alias)
+            | Self::NoCommit(alias)
+            | Self::RevisionUnavailable(alias)
+            | Self::MissingConfig(alias)
+            | Self::InvalidConfig(alias)
+            | Self::Base(alias)
+            | Self::Moved(alias)
+            | Self::Advanced(alias)
+            | Self::OriginMismatch { alias, .. }
+            | Self::MissingProfile { alias, .. }
+            | Self::ImageOnly { alias, .. }
+            | Self::Platform { alias, .. } => Some(alias),
+            Self::TooMany
+            | Self::PrimaryOrigin
+            | Self::PrimaryImageOnly
+            | Self::DirectoryName(_)
+            | Self::Rebound
+            | Self::Late
+            | Self::Changed => None,
+        }
+    }
+}
+
 impl Sibling {
+    /// Refuses a checkout whose `HEAD` moved since this sibling was resolved, so a launch
+    /// pins only the commit that was reviewed.
+    /// # Errors
+    /// [`SiblingError::Advanced`] for a moved `HEAD`, a refusal naming the checkout when Git
+    /// cannot resolve it, and Git that could not run, timed out or was cancelled.
+    pub fn unmoved(&self, runner: &Runner<'_>) -> Result<()> {
+        let head = repository::resolve_with_runner(&self.local_repository, "HEAD", runner)
+            .map_err(|error| refused(error, SiblingError::NoCommit(self.alias.clone())))?;
+        if head == self.revision {
+            Ok(())
+        } else {
+            Err(SiblingError::Advanced(self.alias.clone()).into())
+        }
+    }
+
     /// The pinned checkout, which must still be where it was chosen.
     /// # Errors
     /// The checkout was moved or removed.
@@ -396,6 +465,9 @@ pub fn resolve(
         if declaration.repository.eq_ignore_ascii_case(&primary_repository) {
             return Err(SiblingError::Primary(alias.clone()).into());
         }
+        if !binding.local_repository.is_absolute() {
+            return Err(SiblingError::Relative(alias.clone()).into());
+        }
         let checkout = top_level(&binding.local_repository, runner)
             .map_err(|error| refused(error, SiblingError::Origin(alias.clone())))?;
         if checkout == primary_checkout {
@@ -465,6 +537,50 @@ pub fn candidates(primary: &Path, config: &CloudConfig, runner: &Runner<'_>) -> 
             })
         })
         .collect()
+}
+
+/// Resolves each binding on its own, so every chosen sibling gets its own refusal, then the
+/// whole choice as [`resolve`] would at launch. Resolving pins nothing.
+/// # Errors
+/// Git that could not run, timed out or was cancelled.
+pub fn review(
+    primary: &Path,
+    config: &CloudConfig,
+    profile: &Profile,
+    bindings: &[Binding],
+    runner: &Runner<'_>,
+) -> Result<Review> {
+    let mut review = Review::default();
+    for binding in bindings {
+        let outcome = match resolve(primary, config, profile, std::slice::from_ref(binding), runner) {
+            Ok(set) => set
+                .and_then(|set| set.members.into_iter().next())
+                .ok_or(Error::Invalid("A chosen sibling resolved to nothing"))?,
+            Err(Error::Sibling(refusal @ (SiblingError::PrimaryOrigin | SiblingError::PrimaryImageOnly))) => {
+                review.choice = Some(refusal);
+                return Ok(review);
+            }
+            Err(Error::Sibling(refusal)) => {
+                review.siblings.insert(binding.alias.clone(), Err(refusal));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        review.siblings.insert(binding.alias.clone(), Ok(outcome));
+    }
+    if review.passed() && bindings.len() > 1 {
+        match resolve(primary, config, profile, bindings, runner) {
+            Ok(_) => {}
+            Err(Error::Sibling(refusal)) => match refusal.alias() {
+                Some(alias) => {
+                    review.siblings.insert(alias.to_owned(), Err(refusal));
+                }
+                None => review.choice = Some(refusal),
+            },
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(review)
 }
 
 fn recipe(

@@ -1,5 +1,6 @@
 //! Where a cloud lives, named on its card: the data center its worker landed in with
-//! its region, or the placement chosen for it until a worker exists.
+//! its region, or the placement chosen for it until a worker exists, and the same-worker
+//! siblings pinned to live beside it.
 use super::super::HorizonApp;
 use horizon_core::cloud_panel::CloudLaunch;
 use horizon_core::cloud_runtime::state::Deployment;
@@ -38,6 +39,24 @@ pub(super) fn where_it_lives(
     }
     if let Some(text) = gpu_choice(launch) {
         ui.small(text);
+    }
+    for sibling in state
+        .and_then(|state| state.siblings.as_ref())
+        .into_iter()
+        .flat_map(|set| &set.members)
+    {
+        ui.small(sibling_line(sibling));
+    }
+}
+
+/// A pinned sibling, read-only: its repository, the commit checked out on the worker and,
+/// after a rebuild moved past it, the commit its image layer was built from.
+fn sibling_line(sibling: &horizon_core::cloud_runtime::siblings::Sibling) -> String {
+    let short = |revision: &str| revision.get(..12).unwrap_or(revision).to_owned();
+    let checkout = short(&sibling.revision);
+    match &sibling.image_revision {
+        Some(image) => format!("Sibling: {} @ {checkout} · image {}", sibling.repository, short(image)),
+        None => format!("Sibling: {} @ {checkout}", sibling.repository),
     }
 }
 
@@ -150,6 +169,33 @@ mod tests {
         assert_eq!(
             describe(&launch(one), None, &unknown).as_deref(),
             Some("Data center: EU-RO-1 · Europe")
+        );
+    }
+
+    #[test]
+    fn the_card_names_each_pinned_sibling_with_its_commit() {
+        let sibling = horizon_core::cloud_runtime::siblings::Sibling {
+            alias: "consumer".into(),
+            repository: "example/consumer".into(),
+            directory: "consumer".into(),
+            revision: "0123456789abcdef".repeat(2),
+            image_revision: None,
+            local_repository: "/synthetic/consumer".into(),
+            profile: "gpu".into(),
+        };
+        assert_eq!(sibling_line(&sibling), "Sibling: example/consumer @ 0123456789ab");
+        let short = horizon_core::cloud_runtime::siblings::Sibling {
+            revision: "abc".into(),
+            ..sibling
+        };
+        assert_eq!(sibling_line(&short), "Sibling: example/consumer @ abc");
+        let rebuilt = horizon_core::cloud_runtime::siblings::Sibling {
+            image_revision: Some("fedcba9876543210".repeat(2)),
+            ..short
+        };
+        assert_eq!(
+            sibling_line(&rebuilt),
+            "Sibling: example/consumer @ abc · image fedcba987654"
         );
     }
 

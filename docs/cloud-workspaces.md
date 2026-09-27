@@ -43,16 +43,36 @@ stay distinct.
 
 `placement: same_worker` declares a sibling for repositories coupled at build
 time, such as a native library and the application that consumes its binaries.
-Today the declaration is validated and otherwise inactive: it does not create a
-checkout, build an image or start anything. A same-worker sibling never
+A declaration only offers the sibling: it is built into a cloud's image only when
+chosen in **New cloud**, as described below. A same-worker sibling never
 provisions, starts or stops a cloud, and it is not listed among the
 separate-cloud companions, their grants or the worker's companion catalog.
 
-Planned for #910: selecting siblings when creating a cloud, building the layered
-image, and checking each sibling out beside the declaring repository on the same
-worker. The checkout directory will be named after the sibling's repository name
-without the owner, so relative paths such as `../consumer` in repository scripts
-keep working. Validation already enforces what that layout needs: same-worker
+When the loaded configuration declares same-worker siblings, **New cloud** shows
+**Siblings on this worker**: one row per sibling with a checkbox, its repository,
+alias and profile, and the path of its local checkout. Every row starts
+unchecked, because checking a row is what authorizes the sibling. When the
+directory beside the primary checkout named after the sibling's repository has
+the declared GitHub origin, its path is filled in; type another path or choose
+**Browse…**. A checked sibling is checked in the background against the committed
+revision being launched, and its row shows either the commit that will be built
+in or what to change, such as a checkout of another repository, a checkout
+without a commit, a missing profile or build section, or a directory name that
+collides with the primary's. **Start cloud** stays disabled while any checked
+sibling is being checked or was refused. The chosen checkouts are saved with the
+cloud in this machine's session state, never in committed configuration. The
+first deployment pins each sibling's committed `HEAD` before the image is built,
+and the cloud card lists the pinned siblings with their commits. Pinned siblings
+cannot change later; create a new cloud to choose others. **Rebuild image &
+restart** layers each sibling's latest committed recipe while its checkout on the
+worker stays at the pinned commit; the card then also names the commit the image
+layer was built from. Cloud creation has no CLI or MCP operation, so siblings are
+chosen only in New cloud.
+
+On the worker, each sibling is checked out beside the declaring repository in a
+directory named after the sibling's repository name without the owner, so
+relative paths such as `../consumer` in repository scripts keep working.
+Validation enforces what that layout needs: same-worker
 siblings in one configuration have distinct repository names, compared
 case-insensitively, that do not start with a dot. A clash with the declaring
 repository's own name can only be detected when a cloud is created.
