@@ -326,10 +326,12 @@ impl HorizonApp {
             ctx.request_repaint_after(Duration::from_secs(1));
             return;
         }
+        // Without a Hetzner binding an empty catalog is sent, so a worker that had one
+        // stops offering it rather than keeping it until it goes stale.
         let hetzner = prices
             .hetzner
             .fresh()
-            .and_then(|fetched| Some((fetched.value.clone()?, fetched.at)))
+            .map(|fetched| (fetched.value.clone().unwrap_or_else(empty_catalog), fetched.at))
             .map(|(catalog, at)| {
                 let snapshot = HetznerSnapshot {
                     version: VERSION,
@@ -349,6 +351,17 @@ impl HorizonApp {
             .map(|at| at.saturating_duration_since(now));
         ctx.request_repaint_after(retry.map_or(refresh, |retry| retry.min(refresh)));
         publication.step(&root, &ready, fetched, hetzner, now, ctx);
+    }
+}
+
+/// A catalog with no offers, sent when this machine has no Hetzner binding.
+fn empty_catalog() -> horizon_core::cloud_runtime::prices::HetznerCatalog {
+    horizon_core::cloud_runtime::prices::HetznerCatalog {
+        offers: Vec::new(),
+        volume_gb_month_eur: 0.0,
+        ipv4_month_eur: std::collections::BTreeMap::new(),
+        ipv4_hour_eur: std::collections::BTreeMap::new(),
+        regions: std::collections::BTreeMap::new(),
     }
 }
 
@@ -687,5 +700,20 @@ mod tests {
                 hetzner_retry_at: None,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod clearing {
+    #[test]
+    fn a_removed_binding_sends_an_empty_catalog_that_workers_accept() {
+        let empty = super::empty_catalog();
+        assert!(empty.offers.is_empty());
+        let snapshot = super::HetznerSnapshot {
+            version: super::VERSION,
+            observed_at_millis: 1,
+            catalog: empty,
+        };
+        assert!(snapshot.validate().is_ok(), "workers accept the empty catalog");
     }
 }
