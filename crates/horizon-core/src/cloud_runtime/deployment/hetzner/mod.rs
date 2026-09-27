@@ -72,7 +72,7 @@ pub(in crate::cloud_runtime) fn retained(root: &Path) -> Result<bool> {
 pub(super) use readiness::wait;
 
 use super::{Error, Result, Settings};
-pub(super) use horizon_cloud::hetzner::cloud::{Journal, Policy as Allowed, throwaway_public_key, worker};
+pub(super) use horizon_cloud::hetzner::cloud::{Journal, Policy as Allowed, worker};
 use horizon_cloud::{CreateState, hetzner::Hetzner};
 use std::{io::Write as _, path::Path};
 

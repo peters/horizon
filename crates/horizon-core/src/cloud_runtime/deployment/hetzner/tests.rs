@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use super::worker;
-use super::{Journal, JournalFile as _, throwaway_public_key};
+use super::{Journal, JournalFile as _};
+use horizon_cloud::hetzner::cloud::throwaway_public_key;
 #[cfg(unix)]
 use horizon_cloud::hetzner::{servers::Server, volumes::Volume};
 use horizon_cloud::{CreateState, WorkerSpec};
@@ -234,115 +235,112 @@ mod provider {
     }
 }
 
+/// The provisioning sequence itself is tested in `horizon_cloud::hetzner::cloud`;
+/// these check what Horizon decides before it.
 #[cfg(unix)]
 mod failure_points {
-    use super::{provider, spec, volume};
+    use super::spec;
     use crate::cloud_runtime::{
-        deployment::hetzner::{Allowed, Compute, Journal, JournalFile as _, provision, retained},
+        deployment::hetzner::{Allowed, Compute, provision, retained},
         state::{Deployment, Store},
     };
     use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
-    use serde_json::{Value, json};
+    use serde_json::json;
 
-    fn listing(key: &str, items: &Value) -> String {
-        let mut page = json!({"meta": {"pagination": {"next_page": null}}});
-        page[key] = items.clone();
-        page.to_string()
-    }
-    fn error(status: u16, code: &str) -> (u16, String) {
-        (status, json!({"error": {"code": code, "message": code}}).to_string())
-    }
-    fn server_types(cores: u32) -> String {
-        let price = json!({"location": "hel1", "price_hourly": {"net": "0.01"}, "price_monthly": {"net": "5"}});
-        let kind = json!({"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80, "cpu_type": "shared",
-            "architecture": "x86", "prices": [price],
-            "locations": [{"name": "hel1", "available": true, "recommended": true, "deprecation": null}]});
-        listing("server_types", &json!([kind]))
-    }
-    fn locations() -> String {
-        listing("locations", &json!([{"name": "hel1", "network_zone": "eu-central"}]))
-    }
-    fn pricing() -> String {
-        json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}})
-            .to_string()
-    }
-    fn key() -> String {
-        json!({"ssh_key": {"id": 5, "name": format!("horizon-cloud-{}", spec().operation_id), "public_key": "@PUBLIC_KEY@",
-            "labels": {"horizon-operation": spec().operation_id}}})
-        .to_string()
-    }
-    fn created_volume() -> String {
-        let mut value = serde_json::to_value(volume()).unwrap();
-        value["server"] = Value::Null;
-        json!({"volume": value, "action": {"id": 1, "status": "success"}}).to_string()
-    }
-    fn free_volume() -> String {
-        let mut value = serde_json::to_value(volume()).unwrap();
-        value["server"] = Value::Null;
-        json!({"volume": value}).to_string()
-    }
-    fn held_volume() -> String {
-        json!({"volume": serde_json::to_value(volume()).unwrap()}).to_string()
-    }
-    /// The catalog reads that start every fresh request.
-    fn catalog() -> Vec<(u16, String)> {
-        vec![(200, server_types(4)), (200, locations()), (200, pricing())]
-    }
-    fn and(mut responses: Vec<(u16, String)>, more: impl IntoIterator<Item = (u16, String)>) -> Vec<(u16, String)> {
-        responses.extend(more);
-        responses
-    }
-    /// A fresh request up to its server request: the key, the volume and the checks between.
-    fn until_server() -> Vec<(u16, String)> {
-        let volume = [(201, created_volume()), (200, free_volume())];
-        and(
-            and(until_volume(), volume),
-            [(200, listing("servers", &json!([]))), (200, free_volume())],
-        )
-    }
-    /// A fresh request up to its volume request.
-    fn until_volume() -> Vec<(u16, String)> {
-        let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
-        and(and(catalog(), key), [(200, listing("volumes", &json!([])))])
-    }
-    fn created_server(cores: u32) -> String {
-        json!({"server": {"id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": "initializing",
-            "public_net": {"ipv4": null}, "server_type": {"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80},
-            "location": {"name": "hel1"}, "labels": {"horizon-operation": spec().operation_id}, "volumes": [9]},
-            "action": {"id": 2, "status": "success"}, "next_actions": []})
-        .to_string()
-    }
-
-    /// Runs provisioning for a fresh cloud against `responses` and returns the
-    /// saved deployment, the journal and the number of requests served.
-    fn provision_with(responses: Vec<(u16, String)>) -> (Deployment, Journal, bool, usize) {
-        provision_spec(&spec(), responses)
-    }
-
-    fn provision_spec(
+    /// Provisions a cloud recorded at `operation` whose Hetzner endpoint takes no
+    /// connections, with `pull` as its pull login; returns the error, the saved
+    /// deployment and whether anything is retained.
+    fn provision_at(
         spec: &horizon_cloud::WorkerSpec,
-        responses: Vec<(u16, String)>,
-    ) -> (Deployment, Journal, bool, usize) {
-        provision_adjusted(spec, responses, |_, _, _| {})
-    }
-
-    /// As `provision_spec`, after `adjust` changes the settings or the saved state.
-    fn provision_adjusted(
-        spec: &horizon_cloud::WorkerSpec,
-        responses: Vec<(u16, String)>,
-        adjust: impl FnOnce(&mut Compute, &mut Deployment, &std::path::Path),
-    ) -> (Deployment, Journal, bool, usize) {
+        operation: &CreateState,
+        pull: Option<&serde_json::Value>,
+    ) -> (String, Deployment, bool) {
         let root = tempfile::tempdir().unwrap();
-        let store = Store::lock(root.path()).unwrap();
+        provision_in(root.path(), spec, operation, pull, false)
+    }
+
+    /// As `provision_at`, in `root` and with the deployment's `source_ready`.
+    fn provision_in(
+        root: &std::path::Path,
+        spec: &horizon_cloud::WorkerSpec,
+        operation: &CreateState,
+        pull: Option<&serde_json::Value>,
+        source_ready: bool,
+    ) -> (String, Deployment, bool) {
+        let store = Store::lock(root).unwrap();
         let mut state: Deployment = serde_json::from_value(json!({
             // The deployment keeps the canonical cloud ID; `spec` may name another.
             "version": 1, "cloud_id": super::spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
-            "profile": spec.profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec,
+            "profile": spec.profile, "stage": "Provision", "operation": operation, "spec": spec,
+            "worker": null, "sessions": [], "source_ready": source_ready
+        }))
+        .unwrap();
+        store.save(&state).unwrap();
+        // A port nothing listens on: any request fails as a transport error.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let compute = Compute {
+            client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), closed).unwrap(),
+            settings: serde_json::from_value(
+                json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"], "registry_pull": pull}),
+            )
+            .unwrap(),
+            allowed: Allowed {
+                locations: vec!["hel1".into()],
+                server_types: vec!["cx33".into()],
+            },
+            registries: None,
+        };
+        let error = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {})
+            .unwrap_err()
+            .to_string();
+        (error, store.load().unwrap().unwrap(), retained(root).unwrap())
+    }
+
+    #[test]
+    fn a_verified_worker_is_saved_with_the_deployment() {
+        let listing = |key: &str, items: serde_json::Value| {
+            let mut page = json!({"meta": {"pagination": {"next_page": null}}});
+            page[key] = items;
+            page.to_string()
+        };
+        let name = format!("horizon-cloud-{}", spec().operation_id);
+        let labels = json!({"horizon-operation": spec().operation_id});
+        let mut free = serde_json::to_value(super::volume()).unwrap();
+        free["server"] = serde_json::Value::Null;
+        let price = json!({"location": "hel1", "price_hourly": {"net": "0.01"}, "price_monthly": {"net": "5"}});
+        let kind = json!({"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80, "cpu_type": "shared",
+            "architecture": "x86", "prices": [price], "locations": [{"name": "hel1", "available": true}]});
+        let server = json!({"id": 42, "name": name, "status": "initializing", "public_net": {"ipv4": null},
+            "server_type": {"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80},
+            "location": {"name": "hel1"}, "labels": labels, "volumes": [9]});
+        let responses = vec![
+            (200, listing("server_types", json!([kind]))),
+            (200, listing("locations", json!([{"name": "hel1", "network_zone": "eu-central"}]))),
+            (200, json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}).to_string()),
+            (200, listing("ssh_keys", json!([]))),
+            (201, json!({"ssh_key": {"id": 5, "name": name, "public_key": "@PUBLIC_KEY@", "labels": labels}}).to_string()),
+            (200, listing("volumes", json!([]))),
+            (201, json!({"volume": free, "action": {"id": 1, "status": "success"}}).to_string()),
+            (200, json!({"volume": free}).to_string()),
+            (200, listing("servers", json!([]))),
+            (200, json!({"volume": free}).to_string()),
+            (201, json!({"server": server, "action": {"id": 2, "status": "success"}, "next_actions": []}).to_string()),
+            (200, json!({"volume": super::volume()}).to_string()),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_value(json!({
+            "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+            "profile": spec().profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec(),
             "worker": null, "sessions": []
         }))
         .unwrap();
-        let (address, requests, task) = provider::serve(responses);
-        let mut compute = Compute {
+        store.save(&state).unwrap();
+        let (address, _, task) = super::provider::serve(responses);
+        let compute = Compute {
             client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
             settings: serde_json::from_value(
                 json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
@@ -354,26 +352,33 @@ mod failure_points {
             },
             registries: None,
         };
-        adjust(&mut compute, &mut state, root.path());
-        store.save(&state).unwrap();
-        let result = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {});
+        provision(&compute, &store, &mut state, &spec(), &Cancellation::default(), &|_| {}).unwrap();
         task.join().unwrap();
-        let served = requests.lock().unwrap().len();
-        assert!(result.is_err() || served > 0);
         let saved = store.load().unwrap().unwrap();
-        let journal = Journal::load(root.path()).unwrap();
-        let kept = retained(root.path()).unwrap();
-        (saved, journal, kept, served)
+        assert_eq!(saved.operation, CreateState::Bound { worker_id: "42".into() });
+        assert_eq!(saved.worker.unwrap().id, "42");
     }
 
     #[test]
-    fn a_volume_size_hetzner_refuses_is_refused_before_any_request() {
-        let mut small = spec();
-        small.profile.storage.volume_gb = 5;
-        let (state, journal, kept, served) = provision_spec(&small, Vec::new());
-        assert_eq!(served, 0);
-        assert!(journal.key.is_none() && !kept);
-        assert_eq!(state.operation, CreateState::Prepared);
+    fn a_deleted_cloud_that_still_claims_its_old_source_is_not_provisioned_afresh() {
+        let root = tempfile::tempdir().unwrap();
+        let deleted = crate::cloud_runtime::deployment::hetzner::Journal {
+            volume: CreateState::Terminated { worker_id: "8".into() },
+            deleting: true,
+            ..Default::default()
+        };
+        crate::cloud_runtime::deployment::hetzner::JournalFile::save(&deleted, root.path()).unwrap();
+        let (error, _, _) = provision_in(root.path(), &spec(), &CreateState::Prepared, None, true);
+        assert_eq!(error, "Finish deleting this Hetzner cloud before deploying it again");
+    }
+
+    #[test]
+    fn a_spec_for_another_cloud_is_refused_before_any_request() {
+        let mut other = spec();
+        other.operation_id = "another-cloud".into();
+        let (error, state, kept) = provision_at(&other, &CreateState::Prepared, None);
+        assert_eq!(error, "Deployment and worker identities differ");
+        assert!(!kept && state.operation == CreateState::Prepared);
     }
 
     #[test]
@@ -381,164 +386,14 @@ mod failure_points {
         let pull = json!({"server": "registry.example", "username": "pull", "password_file": "/missing/pull"});
         // A fresh request needs the login; a requested server is only reconciled,
         // so the login is never read and provisioning goes on to the provider.
-        for (operation, responses, expected) in [
-            (CreateState::Prepared, Vec::new(), 0),
-            (CreateState::Requested, and(catalog(), [error(503, "unavailable")]), 4),
-        ] {
-            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state, _| {
-                compute.settings.registry_pull = serde_json::from_value(pull.clone()).unwrap();
-                state.operation = operation.clone();
-            });
-            assert_eq!((state.operation, served), (operation, expected));
-        }
-    }
-
-    #[test]
-    fn a_cloud_whose_stop_is_unfinished_is_never_reconnected() {
-        let bound = CreateState::Bound { worker_id: "42".into() };
-        let (state, _, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
-            state.operation = bound.clone();
-            let mut journal = Journal::load(root).unwrap();
-            journal.released = Some("42".into());
-            journal.save(root).unwrap();
-        });
-        assert_eq!((state.operation, served), (bound, 0));
-    }
-
-    #[test]
-    fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
-        // An unfinished delete, with its key, volume or server left, is refused before any request.
-        let terminated = CreateState::Terminated { worker_id: "8".into() };
-        // A delete that finished but was never followed by a redeploy still holds
-        // the old workspace's source state, so it is refused too.
-        for (key, volume, operation, source_ready) in [
-            (
-                Some("ssh-ed25519 AAAA"),
-                terminated.clone(),
-                CreateState::Prepared,
-                false,
-            ),
-            (None, terminated.clone(), CreateState::Requested, false),
-            (
-                Some("ssh-ed25519 AAAA"),
-                CreateState::Prepared,
-                CreateState::Prepared,
-                false,
-            ),
-            (None, terminated, CreateState::Prepared, true),
-        ] {
-            let (_, journal, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
-                let key = key.map(String::from);
-                Journal {
-                    location: None,
-                    volume,
-                    key,
-                    released: None,
-                    deleting: true,
-                }
-                .save(root)
-                .unwrap();
-                state.operation = operation.clone();
-                state.source_ready = source_ready;
-            });
-            assert_eq!((served, journal.location), (0, None));
-        }
-        let (_, journal, _, _) = provision_adjusted(
-            &spec(),
-            and(until_volume(), [error(503, "unavailable")]),
-            |_, _, root| {
-                let deleted = Journal {
-                    location: Some("nbg1".into()),
-                    volume: CreateState::Terminated { worker_id: "8".into() },
-                    key: None,
-                    released: None,
-                    deleting: false,
-                };
-                deleted.save(root).unwrap();
-            },
+        let transport = horizon_cloud::CloudError::Transport.to_string();
+        let (fresh, _, kept) = provision_at(&spec(), &CreateState::Prepared, Some(&pull));
+        assert!(
+            !kept && fresh != transport,
+            "the unreadable login is refused first: {fresh}"
         );
-        assert_eq!(
-            (journal.volume, journal.location.as_deref()),
-            (CreateState::Requested, Some("hel1"))
-        );
-    }
-
-    #[test]
-    fn a_spec_for_another_cloud_is_refused_before_any_request() {
-        let mut other = spec();
-        other.operation_id = "another-cloud".into();
-        let (state, journal, kept, served) = provision_spec(&other, Vec::new());
-        assert_eq!(served, 0);
-        assert!(journal.key.is_none() && !kept);
-        assert_eq!(state.operation, CreateState::Prepared);
-    }
-
-    #[test]
-    fn nothing_is_created_when_no_type_fits() {
-        let (state, journal, kept, served) =
-            provision_with(vec![(200, server_types(2)), (200, locations()), (200, pricing())]);
-        assert_eq!(served, 3, "only the catalog was read");
-        assert!(journal.key.is_none() && journal.location.is_none() && !kept);
-        assert_eq!(state.operation, CreateState::Prepared);
-    }
-
-    #[test]
-    fn a_failed_key_registration_leaves_the_key_recorded_for_deletion() {
-        let (state, journal, kept, _) = provision_with(and(
-            catalog(),
-            [(200, listing("ssh_keys", &json!([]))), error(503, "unavailable")],
-        ));
-        // A key may exist on Hetzner, so the cloud keeps it; no volume was
-        // requested, so no location is fixed.
-        assert!(journal.key.is_some() && kept && journal.location.is_none());
-        assert_eq!(
-            (journal.volume, state.operation),
-            (CreateState::Prepared, CreateState::Prepared)
-        );
-    }
-
-    #[test]
-    fn an_uncertain_volume_request_stays_fenced_for_reconciliation() {
-        let (state, journal, kept, _) = provision_with(and(until_volume(), [error(503, "unavailable")]));
-        assert_eq!(journal.volume, CreateState::Requested);
-        // The location is recorded before the request it fixes.
-        assert!(kept && journal.location.as_deref() == Some("hel1"));
-        assert_eq!(state.operation, CreateState::Prepared);
-    }
-
-    #[test]
-    fn an_uncertain_server_request_stays_fenced_with_its_volume_bound() {
-        let (state, journal, kept, _) = provision_with(and(until_server(), [error(503, "unavailable")]));
-        assert_eq!(journal.volume, CreateState::Bound { worker_id: "9".into() });
-        assert_eq!(state.operation, CreateState::Requested);
-        assert!(kept && state.worker.is_none());
-    }
-
-    #[test]
-    fn a_server_below_the_profile_is_bound_but_never_recorded_as_the_worker() {
-        let (state, journal, kept, _) =
-            provision_with(and(until_server(), [(201, created_server(2)), (200, held_volume())]));
-        assert_eq!(
-            state.operation,
-            CreateState::Bound { worker_id: "42".into() },
-            "bound so it can be deleted"
-        );
-        // An unverified server is never recorded as the worker.
-        assert!(state.worker.is_none());
-        assert!(kept && matches!(journal.volume, CreateState::Bound { .. }));
-    }
-
-    #[test]
-    fn a_server_whose_volume_does_not_name_it_is_never_recorded_as_the_worker() {
-        let (state, _, kept, _) = provision_with(and(until_server(), [(201, created_server(4)), (200, free_volume())]));
-        assert_eq!(state.operation, CreateState::Bound { worker_id: "42".into() });
-        assert!(state.worker.is_none() && kept);
-    }
-
-    #[test]
-    fn a_verified_server_becomes_the_worker() {
-        let (state, _, _, _) = provision_with(and(until_server(), [(201, created_server(4)), (200, held_volume())]));
-        assert_eq!(state.worker.unwrap().id, "42");
+        let (requested, state, _) = provision_at(&spec(), &CreateState::Requested, Some(&pull));
+        assert_eq!((requested, state.operation), (transport, CreateState::Requested));
     }
 }
 
