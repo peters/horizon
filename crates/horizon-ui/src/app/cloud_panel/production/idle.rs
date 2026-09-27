@@ -16,8 +16,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(120);
 
 /// What the idle watch tells the cloud's card.
 pub(super) enum Report {
-    /// Horizon stopped the cloud; the saved record and the line to log.
-    Stopped(Box<Deployment>, String),
+    /// Horizon stopped the cloud; the saved record, when it could be read back as
+    /// stopped, and the line to log.
+    Stopped(Option<Box<Deployment>>, String),
     /// A check failed; logged once until the failure changes.
     Failed(String),
     /// A check is about to run. Sent only to learn whether the card still listens,
@@ -100,15 +101,25 @@ fn run(
                      Resume creates a new server that attaches the same workspace volume.",
                     idle.as_secs() / 60
                 );
-                // The stop just released the lock; only another operation can hold it now.
-                if let Some(state) = (0..30).find_map(|_| {
-                    load().ok().flatten().or_else(|| {
-                        std::thread::sleep(Duration::from_secs(1));
-                        None
-                    })
-                }) {
-                    report(Report::Stopped(Box::new(state), line));
-                }
+                // The stop just released the lock; only another operation can hold it
+                // now. Only the stopped record is this stop's; the stop is reported
+                // either way, so the card never stays ready over a released server.
+                let state = (0..30).find_map(|_| {
+                    load()
+                        .ok()
+                        .flatten()
+                        .filter(|state| state.stage == Stage::Stopped)
+                        .or_else(|| {
+                            std::thread::sleep(interval.min(Duration::from_secs(1)));
+                            None
+                        })
+                });
+                let line = if state.is_some() {
+                    line
+                } else {
+                    format!("{line} Its record could not be read back; choose Check provider to show it.")
+                };
+                report(Report::Stopped(state.map(Box::new), line));
                 return;
             }
             Err(error) => {
@@ -173,8 +184,10 @@ impl Runtime {
             Report::Stopped(state, line) => {
                 self.cancel = None;
                 self.progress.stage(Stage::Stopped, std::time::Instant::now());
-                self.stage = Some(state.stage);
-                self.state = Some(*state);
+                self.stage = Some(Stage::Stopped);
+                if let Some(state) = state {
+                    self.state = Some(*state);
+                }
                 self.desktop = None;
                 self.error = None;
                 self.receiver = None;
@@ -219,7 +232,7 @@ mod tests {
             &|report| {
                 reports.borrow_mut().push(match report {
                     Report::Failed(message) => message,
-                    Report::Stopped(state, line) => format!("{:?}: {line}", state.stage),
+                    Report::Stopped(state, line) => format!("{:?}: {line}", state.map(|state| state.stage)),
                     Report::Checked => return true,
                 });
                 true
@@ -254,7 +267,7 @@ mod tests {
             cancel.is_cancelled(),
             "the watch ends its own presentation of the released server"
         );
-        assert!(reports[0].starts_with("Stopped: No agent activity for 11 minutes"));
+        assert!(reports[0].starts_with("Some(Stopped): No agent activity for 11 minutes"));
     }
 
     #[test]
@@ -326,7 +339,7 @@ mod tests {
         runtime.poll_idle();
         assert_eq!(runtime.stage, Some(Stage::Ready));
         reports
-            .send(Report::Stopped(Box::new(stopped()), "stopped when idle".into()))
+            .send(Report::Stopped(Some(Box::new(stopped())), "stopped when idle".into()))
             .unwrap();
         runtime.poll_idle();
         assert_eq!(runtime.stage, Some(Stage::Stopped));
@@ -337,6 +350,52 @@ mod tests {
             runtime.logs.iter().rev().take(2).collect::<Vec<_>>(),
             ["stopped when idle", "Idle check failed: busy"]
         );
+    }
+
+    #[test]
+    fn a_stop_whose_record_cannot_be_read_back_is_still_reported() {
+        for load in [
+            (|| Err(Error::Busy)) as fn() -> cloud_runtime::Result<Option<Deployment>>,
+            // Another controller already moved the cloud on: not this stop's record.
+            || {
+                let mut resumed = stopped();
+                resumed.stage = Stage::Readiness;
+                Ok(Some(resumed))
+            },
+        ] {
+            let reports = RefCell::new(Vec::new());
+            run(
+                &Cancellation::default(),
+                Duration::ZERO,
+                |_| {
+                    Ok(IdleCheck::Stopped {
+                        idle: Duration::from_mins(10),
+                    })
+                },
+                load,
+                &|report| {
+                    if let Report::Stopped(state, line) = report {
+                        reports.borrow_mut().push((state.is_some(), line));
+                    }
+                    true
+                },
+            );
+            let reports = reports.into_inner();
+            assert_eq!(reports.len(), 1);
+            assert!(!reports[0].0 && reports[0].1.ends_with("choose Check provider to show it."));
+        }
+        // The card shows it stopped, keeping the record it had.
+        let (sender, received) = channel();
+        let mut runtime = Runtime {
+            idle_reports: Some(received),
+            state: Some(stopped()),
+            stage: Some(Stage::Ready),
+            ..Runtime::default()
+        };
+        sender.send(Report::Stopped(None, "stopped".into())).unwrap();
+        runtime.poll_idle();
+        assert_eq!(runtime.stage, Some(Stage::Stopped));
+        assert!(runtime.state.is_some());
     }
 
     #[test]
@@ -353,7 +412,7 @@ mod tests {
         runtime.idle_reports = None;
         assert!(
             reports
-                .send(Report::Stopped(Box::new(stopped()), "late".into()))
+                .send(Report::Stopped(Some(Box::new(stopped())), "late".into()))
                 .is_err(),
             "the late watch finds nobody listening"
         );
