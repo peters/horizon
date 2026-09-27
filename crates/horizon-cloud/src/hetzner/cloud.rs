@@ -188,7 +188,7 @@ pub fn supported(spec: &WorkerSpec) -> Result<(), CloudError> {
 /// # Errors
 /// Fails only if the capabilities cannot be serialized.
 pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan, CloudError> {
-    let environment = BTreeMap::from([
+    let mut environment = BTreeMap::from([
         ("PUBLIC_KEY".to_owned(), spec.public_key.clone()),
         ("HORIZON_CLOUD_OPERATION".to_owned(), spec.operation_id.clone()),
         (
@@ -197,6 +197,10 @@ pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogi
                 .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
         ),
     ]);
+    // The watcher only records idle time here; Horizon stops the server from that record.
+    if let Some(minutes) = spec.idle_stop_environment() {
+        environment.insert(crate::IDLE_STOP_ENVIRONMENT_KEY.to_owned(), minutes);
+    }
     Ok(host::Plan {
         image: spec.image_digest.clone(),
         environment,
@@ -266,6 +270,11 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         WorkerStatus::Lost => "UNKNOWN",
         _ => "RUNNING",
     };
+    // The host plan gave the container exactly this environment from the same spec.
+    let mut env = serde_json::json!({"HORIZON_CLOUD_OPERATION": spec.operation_id});
+    if let Some(minutes) = spec.idle_stop_environment() {
+        env[crate::IDLE_STOP_ENVIRONMENT_KEY] = serde_json::json!(minutes);
+    }
     serde_json::from_value(serde_json::json!({
         "id": server.id.to_string(),
         "name": server.name,
@@ -279,7 +288,7 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         "volumeInGb": volume.size,
         "volumeMountPath": "/workspace",
         "dataCenterId": server.location.name,
-        "env": {"HORIZON_CLOUD_OPERATION": spec.operation_id},
+        "env": env,
     }))
     .map_err(|_| CloudError::Invalid("Hetzner server could not be described as a worker"))
 }

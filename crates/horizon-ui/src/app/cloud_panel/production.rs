@@ -6,6 +6,7 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+mod idle;
 mod launch;
 mod lifecycle;
 mod machine_size;
@@ -120,6 +121,7 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
+    idle_reports: Option<idle::Reports>,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
@@ -193,10 +195,11 @@ impl Runtime {
         self.cancel = Some(cancel.clone());
         self.receiver = Some(rx);
         self.sender = Some(tx.clone());
+        let idle = self.listen_idle();
         self.error = None;
         self.state_unavailable = false;
         let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment(&request, &cancel, &tx, &ctx));
+        std::thread::spawn(move || run_deployment(&request, &cancel, &tx, idle, &ctx));
     }
 
     /// Only a Ready cloud shows its current run; other stages report their own progress.
@@ -213,6 +216,7 @@ impl Runtime {
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
         self.poll_recovery();
+        self.poll_idle();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         } else if self.current_run_cost(std::time::SystemTime::now()).is_some() {
@@ -653,6 +657,7 @@ fn run_deployment(
     request: &Request,
     cancel: &cloud_runtime::Cancellation,
     tx: &std::sync::mpsc::Sender<Event>,
+    idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
     let emit = |event| {
@@ -662,7 +667,10 @@ fn run_deployment(
     let settings = request.settings.clone();
     let root = request.state_root.clone();
     match deployment::deploy(request, cancel, &emit) {
-        Ok(state) => presentation::watch(&state, &settings, &root, cancel, tx, ctx),
+        Ok(state) => {
+            idle::watch(&state, &settings, &root, cancel, idle, ctx);
+            presentation::watch(&state, &settings, &root, cancel, tx, ctx);
+        }
         Err(error) => report_failure(&root, &error, &emit),
     }
 }

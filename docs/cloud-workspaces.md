@@ -379,7 +379,8 @@ long without agent activity, even while this computer is offline. The worker
 counts as active while any agent terminal prints output or its container uses
 at least half a CPU core, so a quiet build keeps it running. It stops only
 itself, using the provider's credential scoped to that worker, and never deletes
-anything. Choose **Check provider** on the card afterwards: a worker confirmed
+anything. On Hetzner, where a worker holds no credential that could stop it,
+Horizon makes the stop while it is running; see [Hetzner idle stop](cloud-hetzner.md#idle-stop). Choose **Check provider** on the card afterwards: a worker confirmed
 stopped offers Resume like an explicitly stopped one, and nothing resumes it
 automatically. Profiles without the field never stop on their own, and workers
 shared across workspaces and profiles with hosted devices do not support it.

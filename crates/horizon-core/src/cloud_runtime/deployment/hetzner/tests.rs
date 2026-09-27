@@ -102,8 +102,9 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     super::Compute::cleanup(&elsewhere).unwrap();
     // Not a Hetzner resource name.
     assert!(preflight("Cloud_1", &spec.profile, &settings).is_err());
+    // Horizon stops an idle Hetzner cloud from the record its worker keeps.
     spec.profile.idle_stop_minutes = Some(30);
-    assert!(preflight(&spec.operation_id, &spec.profile, &settings).is_err());
+    preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
     spec.profile.idle_stop_minutes = None;
     // The pull login is checked where provisioning loads it, before any request.
     let pull = |settings: &crate::cloud_runtime::settings::Settings, image: &str| {

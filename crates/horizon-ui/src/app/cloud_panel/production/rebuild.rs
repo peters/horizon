@@ -112,7 +112,8 @@ impl Runtime {
         self.receiver = Some(rx);
         self.sender = Some(tx.clone());
         let ctx = ctx.clone();
-        std::thread::spawn(move || run(&request, kind, &profile_name, &cancel, &tx, &ctx));
+        let idle = self.listen_idle();
+        std::thread::spawn(move || run(&request, kind, &profile_name, &cancel, &tx, idle, &ctx));
     }
 }
 
@@ -161,6 +162,7 @@ fn run(
     profile_name: &str,
     cancel: &cloud_runtime::Cancellation,
     tx: &Sender<Event>,
+    idle: Sender<super::idle::Report>,
     ctx: &egui::Context,
 ) {
     let ready = Cell::new(false);
@@ -176,17 +178,18 @@ fn run(
     };
     match result {
         Ok(state) if ready.get() => {
+            super::idle::watch(&state, &request.settings, &request.state_root, cancel, idle, ctx);
             presentation::watch(&state, &request.settings, &request.state_root, cancel, tx, ctx);
         }
         // Dropping an unsent replacement leaves the worker as it was without
         // reconnecting; reconnect to restore the presentation stopped for it.
-        Ok(_) => super::run_deployment(request, cancel, tx, ctx),
+        Ok(_) => super::run_deployment(request, cancel, tx, idle, ctx),
         // Refused before anything was journaled, so the worker runs as recorded: reconnect
         // to restore the presentation stopped for the rebuild, and keep the reason. An
         // explicit cancel ends here instead; the card then offers Reconnect.
         Err(error) if !cancel.is_cancelled() && untouched(&request.state_root) => {
             emit(Event::Output(format!("{REFUSED} {error}")));
-            super::run_deployment(request, cancel, tx, ctx);
+            super::run_deployment(request, cancel, tx, idle, ctx);
         }
         Err(error) => super::report_failure(&request.state_root, &error, &emit),
     }
