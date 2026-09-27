@@ -23,6 +23,21 @@ impl HorizonApp {
         };
         let prices = &mut self.cloud_prototype.production.prices;
         prices.poll();
+        let deadline_in = request
+            .deadline_at_millis
+            .saturating_sub(horizon_core::browser::manifest::now_millis());
+        // A machine set up for Hetzner alone answers with its other providers, and says
+        // why RunPod has no offers.
+        if !prices.runpod_bound() {
+            prices.request_fresh_list(&root, ctx);
+            let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
+            return Some(Ok(serde_json::json!({
+                "provider": "RunPod",
+                "unavailable": horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING,
+                "offers": [],
+                "other_providers": other_providers,
+            })));
+        }
         // Every request waiting on a failed fetch gets its error; a later one asks again.
         if let Some(error) = prices.recent_list_error() {
             return Some(Err(format!("cloud_offers_unavailable: {error}")));
@@ -30,9 +45,6 @@ impl HorizonApp {
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
-        let deadline_in = request
-            .deadline_at_millis
-            .saturating_sub(horizon_core::browser::manifest::now_millis());
         let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
         let fetched = prices.fresh_list()?;
         let (list, preferences) = &fetched.value;
@@ -181,5 +193,24 @@ mod tests {
             degraded["other_providers"][0]["error"],
             "cloud_offers_unavailable: Missing Hetzner token"
         );
+    }
+    #[test]
+    fn a_machine_without_a_runpod_key_offers_its_other_providers() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.runpod_key_missing();
+        prices.hetzner.answered(Some(hetzner_catalog()));
+        let answer = app
+            .cloud_offers_answer(&request(&serde_json::json!({"min_vcpu": 8})), &ctx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer["offers"], serde_json::json!([]));
+        assert_eq!(
+            answer["unavailable"],
+            horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING
+        );
+        assert_eq!(answer["other_providers"][0]["offers"][0]["id"], "cx43");
     }
 }

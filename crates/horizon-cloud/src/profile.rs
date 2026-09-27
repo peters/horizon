@@ -33,7 +33,9 @@ pub struct Profile {
     pub bootstrap: Bootstrap,
     #[serde(default)]
     pub capabilities: crate::Capabilities,
-    /// Minutes without agent activity before a dedicated worker stops itself.
+    /// Minutes without agent activity before a dedicated worker is stopped: by the
+    /// worker itself where the provider gives it a credential for that (`RunPod`), by
+    /// Horizon while it runs where not (Hetzner); see `provider::IdleStop`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop_minutes: Option<u16>,
     /// Lowest CUDA version, as `major.minor`, a GPU host must offer to run the image.

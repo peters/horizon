@@ -99,6 +99,10 @@ impl Journal {
         if generation != binding.generation && !binding.retired.iter().any(|value| value == generation) {
             return Err(Error::Invalid("Unknown registry generation"));
         }
+        // RunPod registry bindings are per RunPod account; a Hetzner-only machine has none.
+        if !settings.runpod_configured() {
+            return Err(Error::Invalid(super::super::settings::RUNPOD_KEY_MISSING));
+        }
         crate::session_store::require_directory_durability()?;
         ensure_private_root(&config.root)?;
         let lock = OpenOptions::new()
