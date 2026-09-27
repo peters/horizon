@@ -58,7 +58,13 @@ fn catalog_of(cores: u32) -> Vec<(u16, Value)> {
     let locations = listing("locations", &json!([{"name": "hel1", "network_zone": "eu-central"}]));
     let pricing =
         json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}});
-    vec![(200, server_types(cores)), (200, locations), (200, pricing)]
+    // A fresh request first checks that no volume of the operation exists.
+    vec![
+        (200, listing("volumes", &json!([]))),
+        (200, server_types(cores)),
+        (200, locations),
+        (200, pricing),
+    ]
 }
 /// The catalog reads that start every fresh request.
 fn catalog() -> Vec<(u16, Value)> {
@@ -214,7 +220,7 @@ fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
 #[test]
 fn nothing_is_created_when_no_type_fits() {
     let outcome = fresh(catalog_of(2));
-    assert_eq!(outcome.served, 3, "only the catalog was read");
+    assert_eq!(outcome.served, 4, "only the volume listing and the catalog were read");
     assert!(outcome.journal.key.is_none() && outcome.journal.location.is_none() && !outcome.kept);
 }
 
@@ -460,6 +466,7 @@ fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
     let kind = json!({"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80, "cpu_type": "shared", "architecture": "x86",
         "prices": [price("hel1"), price("nbg1")], "locations": [standing("hel1"), standing("nbg1")]});
     let catalog = vec![
+        (200, listing("volumes", &json!([]))),
         (200, listing("server_types", &json!([kind]))),
         (
             200,
@@ -533,4 +540,52 @@ fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
     assert_eq!(journal.volume, CreateState::Bound { worker_id: "10".into() });
     let requests = requests.lock().unwrap();
     assert!(requests.iter().any(|request| request.starts_with("DELETE /volumes/9 ")));
+}
+
+#[test]
+fn an_unfinished_vacate_is_completed_before_the_cloud_moves() {
+    // The earlier attempt recorded the cleanup, then stopped before the volume was gone.
+    let journal = Journal {
+        location: Some("hel1".into()),
+        volume: CreateState::Bound { worker_id: "9".into() },
+        key: Some("ssh-ed25519 AAAA".into()),
+        vacating: true,
+        ..Journal::default()
+    };
+    let outcome = run(
+        CreateState::Prepared,
+        journal,
+        false,
+        and(released(free()).to_vec(), catalog_of(2)),
+    );
+    assert!(!outcome.journal.vacating, "the cleanup finished");
+    assert_eq!(outcome.journal.volume, CreateState::Prepared);
+    assert_eq!(outcome.journal.location, None);
+}
+
+#[test]
+fn a_volume_found_by_label_is_adopted_and_never_deleted_when_sold_out() {
+    // No volume recorded, but one exists: it may hold work, so it is never vacated.
+    let found = [(200, listing("volumes", &json!([free()])))];
+    let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
+    let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
+    let adopted = [
+        (200, listing("volumes", &json!([free()]))),
+        (200, json!({"volume": free()})),
+    ];
+    let responses = and(
+        and(and(and(found.to_vec(), rest), key), adopted),
+        vec![
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free()})),
+            error(412, "resource_unavailable"),
+        ],
+    );
+    let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
+    assert!(outcome.worker.is_none());
+    assert_eq!(
+        outcome.journal.volume,
+        CreateState::Bound { worker_id: "9".into() },
+        "the found volume stays"
+    );
 }

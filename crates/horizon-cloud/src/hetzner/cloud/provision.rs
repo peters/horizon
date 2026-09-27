@@ -88,7 +88,19 @@ pub fn provision(
     // fitting server type is a candidate, in the policy's order. A requested or
     // bound server was placed already, so reconnecting to it depends on the policy
     // allowing its type, not on the catalog still offering it.
-    let movable = journal.volume == CreateState::Prepared;
+    // A cleanup a sold-out location left unfinished is completed first.
+    if journal.vacating {
+        release_empty_volume(client, operation_id, journal, records, cancel)?;
+    }
+    // Only a volume this request creates is known to be empty, so the cloud may
+    // move only while it has no volume, neither recorded nor found by label; a
+    // found one is adopted and holds whatever the workspace held.
+    let found = if journal.volume == CreateState::Prepared {
+        client.find_volumes(operation_id, cancel)?
+    } else {
+        Vec::new()
+    };
+    let movable = journal.volume == CreateState::Prepared && found.is_empty();
     let candidates = if movable {
         let offers = client.catalog(cancel)?.offers;
         let fitting: Vec<(String, Vec<Placement>)> = policy
@@ -106,7 +118,12 @@ pub fn provision(
         }
         fitting
     } else {
-        let location = location(journal.location.as_deref(), policy)?;
+        // A volume found by label fixes the location when the journal lost it.
+        let recorded = journal
+            .location
+            .clone()
+            .or_else(|| found.first().map(|volume| volume.location.name.clone()));
+        let location = location(recorded.as_deref(), policy)?;
         let placements = if *operation == CreateState::Prepared {
             fit(&client.catalog(cancel)?.offers, spec, &policy.server_types, &location)?
         } else {
@@ -238,6 +255,14 @@ fn release_empty_volume(
     records: &mut impl Records,
     cancel: &Cancellation,
 ) -> Result<(), CloudError> {
+    if !journal.vacating {
+        let next = Journal {
+            vacating: true,
+            ..journal.clone()
+        };
+        records.journal(&next)?;
+        *journal = next;
+    }
     let mut fence = journal.volume.clone();
     let snapshot = journal.clone();
     client.delete_volume(
@@ -250,6 +275,7 @@ fn release_empty_volume(
                 CreateState::Terminated { .. } => Journal {
                     volume: CreateState::Prepared,
                     location: None,
+                    vacating: false,
                     ..snapshot.clone()
                 },
                 other => Journal {
@@ -264,6 +290,7 @@ fn release_empty_volume(
     *journal = Journal {
         volume: CreateState::Prepared,
         location: None,
+        vacating: false,
         ..journal.clone()
     };
     Ok(())
