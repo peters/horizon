@@ -13,10 +13,9 @@ use std::{
 pub const DIRECTORY: &str = "/run/horizon-local-network";
 /// Printed by `horizon-cloud-worker local-network prepare` on an image that supports the bridge.
 pub const PREPARED: &str = "horizon-local-network=1";
-/// Creates [`DIRECTORY`]. An image without the helper prints a different marker instead
-/// of failing, so the client can tell "rebuild the image" apart from a lost connection.
-pub const PREPARE_COMMAND: &str =
-    "horizon-cloud-worker local-network prepare || printf '%s\\n' horizon-local-network=0";
+/// Creates [`DIRECTORY`]. Its errors are folded into the output, so the client can tell an
+/// image without the helper (the command or subcommand is unknown) from a real failure.
+pub const PREPARE_COMMAND: &str = "horizon-cloud-worker local-network prepare 2>&1 || true";
 /// How often the client writes one byte to the helper's input while the bridge is on.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 /// The helper stops, and removes its sockets and forwards, after this long without input.

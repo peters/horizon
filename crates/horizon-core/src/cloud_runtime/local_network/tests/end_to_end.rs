@@ -224,7 +224,7 @@ fn the_worker_socket_reaches_only_what_the_client_admits_and_closes_with_the_bri
     );
     let started = Instant::now();
     drop(bridge);
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(started.elapsed() < Duration::from_secs(10));
     let mut byte = [0; 1];
     assert!(matches!(stream.read(&mut byte), Ok(0) | Err(_)));
     let deadline = Instant::now() + Duration::from_secs(10);

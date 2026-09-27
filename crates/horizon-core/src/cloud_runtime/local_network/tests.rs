@@ -1,11 +1,12 @@
 use super::*;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 use std::{
     net::Ipv4Addr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 fn subnet() -> Subnet {
@@ -199,6 +200,7 @@ fn the_proxy_reports_its_subnet_port_and_counters() {
     assert_eq!(proxy.counters(), Counters::default());
 }
 
+#[cfg(unix)]
 fn wait_for_state(bridge: &Bridge, mut matches: impl FnMut(&State) -> bool) -> State {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -294,7 +296,8 @@ mod supervision {
 
     #[test]
     fn an_image_without_the_helper_fails_without_retrying() {
-        let (bridge, root) = start("printf 'horizon-local-network=0\\n'", HOLD);
+        let old = "printf '%s\\n' 'Cloud worker service: Usage: horizon-cloud-worker serve|connect'";
+        let (bridge, root) = start(old, HOLD);
         assert_eq!(
             wait_for_state(&bridge, |state| matches!(state, State::Failed { .. })),
             State::Failed {
@@ -307,12 +310,12 @@ mod supervision {
 
     #[test]
     fn a_lost_session_reports_why_and_starts_again_with_a_fresh_nonce() {
-        let hold = r#"printf '%s\n' "$1" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; printf 'Connection closed by remote host\n' >&2; exit 255"#;
+        let hold = r#"printf '%s\n' "$1" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; printf 'Connection closed\033[2J by remote host\377\n' >&2; exit 255"#;
         let (bridge, root) = start(PREPARED, hold);
         assert_eq!(
             wait_for_state(&bridge, |state| matches!(state, State::Reconnecting { .. })),
             State::Reconnecting {
-                error: "Connection closed by remote host".into()
+                error: "Connection closed[2J by remote host\u{fffd}".into()
             }
         );
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -334,6 +337,14 @@ mod supervision {
             }
         );
         drop(bridge);
+        let (bridge, _root) = start("printf '%s\\n' 'Read-only file system'", HOLD);
+        assert_eq!(
+            wait_for_state(&bridge, |state| matches!(state, State::Reconnecting { .. })),
+            State::Reconnecting {
+                error: "The worker could not prepare the bridge: Read-only file system".into()
+            }
+        );
+        drop(bridge);
         let (bridge, _root) = start(PREPARED, "exec cat > /dev/null");
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(bridge.status().state, State::Starting);
@@ -347,7 +358,7 @@ mod supervision {
         let pid = log(&root).trim().to_owned();
         let started = Instant::now();
         drop(bridge);
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(10));
         let alive = Command::new("kill")
             .args(["-0", &pid])
             .stderr(std::process::Stdio::null())

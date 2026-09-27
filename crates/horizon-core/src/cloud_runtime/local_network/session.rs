@@ -113,9 +113,9 @@ fn attempt(
     if cancel.is_cancelled() {
         return Ended::Cancelled;
     }
-    match prepared {
-        Ok(output) if output.lines().any(|line| line.trim() == PREPARED) => {}
-        Ok(_) => return Ended::Unsupported,
+    match prepared.map(|output| preparation(&output)) {
+        Ok(None) => {}
+        Ok(Some(ended)) => return ended,
         Err(_) => return Ended::Lost("Cannot reach the worker over SSH".into()),
     }
     let nonce = Nonce::random();
@@ -163,7 +163,35 @@ fn attempt(
     }
 }
 
-/// The running SSH process, killed and reaped with its reader threads on drop.
+/// What the worker's preparation output means: `None` when the bridge can start.
+fn preparation(output: &str) -> Option<Ended> {
+    if output.lines().any(|line| line.trim() == PREPARED) {
+        return None;
+    }
+    // An image built before the bridge lacks the subcommand, or the whole helper.
+    if output.contains("Usage: horizon-cloud-worker") || output.contains("not found") {
+        return Some(Ended::Unsupported);
+    }
+    let reason = output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(printable);
+    Some(Ended::Lost(format!(
+        "The worker could not prepare the bridge: {}",
+        reason.unwrap_or_else(|| "no output".into())
+    )))
+}
+
+/// Remote output reaches the card, so it is bounded and stripped of control characters.
+fn printable(line: &str) -> String {
+    line.chars()
+        .filter(|character| !character.is_control())
+        .take(300)
+        .collect()
+}
+
+/// The running SSH process, killed and reaped on drop.
 struct Hold {
     child: Child,
     input: Option<ChildStdin>,
@@ -175,40 +203,43 @@ struct Hold {
 impl Hold {
     fn spawn(mut command: Command) -> std::io::Result<Self> {
         let mut child = command.spawn()?;
-        let input = child.stdin.take();
         let (sender, ready) = mpsc::channel();
-        let last_error = Arc::new(Mutex::new(String::new()));
-        let mut readers = Vec::with_capacity(2);
-        if let Some(output) = child.stdout.take() {
-            readers.push(spawn_reader("local-network-ready", output, move |line| {
-                if let Ok(ready) = serde_json::from_str::<Ready>(line) {
-                    let _ = sender.send(ready);
-                }
-            })?);
-        }
-        if let Some(errors) = child.stderr.take() {
-            let last = Arc::clone(&last_error);
-            readers.push(spawn_reader("local-network-errors", errors, move |line| {
-                let line = line.trim();
-                if !line.is_empty() {
-                    *last.lock().unwrap_or_else(PoisonError::into_inner) = line.chars().take(300).collect();
-                }
-            })?);
-        }
-        Ok(Self {
-            child,
-            input,
+        let mut hold = Self {
+            input: child.stdin.take(),
             ready,
-            last_error,
-            readers,
-        })
+            last_error: Arc::new(Mutex::new(String::new())),
+            readers: Vec::with_capacity(2),
+            child,
+        };
+        // From here on, a failure drops `hold`, which stops the process.
+        if let Some(output) = hold.child.stdout.take() {
+            hold.readers
+                .push(spawn_reader("local-network-ready", output, move |line| {
+                    if let Ok(ready) = serde_json::from_str::<Ready>(line) {
+                        let _ = sender.send(ready);
+                    }
+                })?);
+        }
+        if let Some(errors) = hold.child.stderr.take() {
+            let last = Arc::clone(&hold.last_error);
+            hold.readers
+                .push(spawn_reader("local-network-errors", errors, move |line| {
+                    let line = printable(line.trim());
+                    if !line.is_empty() {
+                        *last.lock().unwrap_or_else(PoisonError::into_inner) = line;
+                    }
+                })?);
+        }
+        Ok(hold)
     }
 
     fn exited(&mut self) -> Option<Ended> {
         self.child.try_wait().ok()??;
-        // Let the reader keep the process's final words before reporting them.
-        for reader in self.readers.drain(..) {
-            let _ = reader.join();
+        // Let the readers take the process's final words, but never wait on a descendant
+        // that keeps the pipes open.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while self.readers.iter().any(|reader| !reader.is_finished()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
         }
         let error = self.last_error.lock().unwrap_or_else(PoisonError::into_inner).clone();
         Some(Ended::Lost(if error.is_empty() { CLOSED.into() } else { error }))
@@ -237,13 +268,12 @@ impl Hold {
 }
 
 impl Drop for Hold {
+    /// The readers end on their own when the pipes close; they are not joined here, so a
+    /// descendant holding a pipe open cannot block the caller.
     fn drop(&mut self) {
         drop(self.input.take());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        for reader in self.readers.drain(..) {
-            let _ = reader.join();
-        }
     }
 }
 
@@ -254,12 +284,13 @@ fn spawn_reader(
 ) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new().name(name.into()).spawn(move || {
         let mut reader = BufReader::new(stream);
-        let mut line = String::new();
+        let mut line = Vec::new();
+        // Undecodable bytes never stop the draining, or a full pipe would stall the process.
         loop {
             line.clear();
-            match (&mut reader).take(MAX_LINE).read_line(&mut line) {
+            match (&mut reader).take(MAX_LINE).read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => return,
-                Ok(_) => each(&line),
+                Ok(_) => each(&String::from_utf8_lossy(&line)),
             }
         }
     })
