@@ -1,7 +1,7 @@
 //! Keeps this Horizon's prices on its ready workers, so agents there can rank cloud
-//! offers without the provider account. While any cloud is ready, prices refresh every
-//! 15 minutes and each ready worker gets every fresh list once, with Hetzner's catalog
-//! when this machine has a Hetzner binding.
+//! offers without the provider account. While any cloud is ready, `RunPod` refreshes every
+//! 15 seconds and Hetzner every 15 minutes. Each ready worker gets every fresh list once,
+//! with Hetzner's catalog when this machine has a Hetzner binding.
 use super::{HorizonApp, Runtime, prices::Fetched};
 use horizon_core::cloud_runtime::{
     Cancellation, Stage,
