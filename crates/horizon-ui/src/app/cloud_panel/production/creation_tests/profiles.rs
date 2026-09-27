@@ -229,7 +229,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
 }
 
 #[test]
-fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() {
+fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable() {
     use horizon_core::cloud_runtime::prices::{
         Availability, CpuFlavorPrice, DataCenter, PriceList, RUNPOD_STORAGE, SizeAvailability,
     };
@@ -281,9 +281,14 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
         &mut app,
         label_rect(&output, "North America\nnone in stock").center(),
     );
-    assert!(
-        app.cloud_prototype.production.placement.is_any(),
-        "a sold-out region cannot be chosen"
+    assert_eq!(
+        app.cloud_prototype.production.placement,
+        horizon_core::cloud_panel::Placement {
+            region: Some("North America".into()),
+            data_centers: vec!["US-MO-2".into()],
+            gpu_types: Vec::new(),
+        },
+        "a sold-out region remains selectable"
     );
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Europe\n1 in stock").center());
