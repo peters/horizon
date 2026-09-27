@@ -11,8 +11,11 @@ use crate::{CloudError, CreateState, Worker, WorkerSpec, WorkerStatus, host};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod provision;
 #[cfg(test)]
 mod tests;
+
+pub use provision::{Records, Request, provision};
 
 /// The Hetzner app image with Docker preinstalled that the host plan expects.
 pub const HOST_IMAGE: &str = "docker-ce";

@@ -12,17 +12,34 @@ mod volumes;
 
 const OPERATION: &str = "op-1";
 
-type Requests = Arc<Mutex<Vec<String>>>;
+pub(super) type Requests = Arc<Mutex<Vec<String>>>;
 
-/// A provider answering each connection with the next scripted response.
-fn provider(responses: Vec<(u16, Value)>) -> (Hetzner, Requests, thread::JoinHandle<()>) {
+/// A provider answering each connection with the next scripted response. A
+/// response containing `@PUBLIC_KEY@` echoes the public key of the request it
+/// answers, as Hetzner does for a new SSH key. A response the caller never asks
+/// for ends the script after a few seconds.
+pub(super) fn provider(responses: Vec<(u16, Value)>) -> (Hetzner, Requests, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let observed = requests.clone();
     let task = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
         for (status, body) in responses {
-            let (mut stream, _) = listener.accept().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > deadline {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fake accept failed: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut input = Vec::new();
             let mut buffer = [0; 4096];
@@ -43,12 +60,17 @@ fn provider(responses: Vec<(u16, Value)>) -> (Hetzner, Requests, thread::JoinHan
                     }
                 }
             }
-            observed.lock().unwrap().push(String::from_utf8(input).unwrap());
+            let request = String::from_utf8(input).unwrap();
             let body = if body.is_null() {
                 String::new()
+            } else if body.to_string().contains("@PUBLIC_KEY@") {
+                let sent: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+                body.to_string()
+                    .replace("@PUBLIC_KEY@", sent["public_key"].as_str().unwrap())
             } else {
                 body.to_string()
             };
+            observed.lock().unwrap().push(request);
             write!(
                 stream,
                 "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

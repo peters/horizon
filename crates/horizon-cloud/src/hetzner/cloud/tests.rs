@@ -1,4 +1,6 @@
 use super::*;
+
+mod sequence;
 use crate::hetzner::{catalog::Offer, servers::Server, volumes::Volume};
 
 fn spec() -> WorkerSpec {
