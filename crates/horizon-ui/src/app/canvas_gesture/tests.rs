@@ -494,3 +494,23 @@ fn repeated_native_modifier_snapshots_do_not_release_reserved_clicks() {
     assert_eq!(gesture.take_completed(), Some(pos));
     assert!(gesture.pending.is_none());
 }
+
+#[test]
+fn focus_loss_after_a_forwarded_drag_allows_the_next_modified_double_click() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    feed(&mut gesture, 0.0, vec![button(pos, true)]);
+    feed(
+        &mut gesture,
+        0.05,
+        vec![Event::PointerMoved(pos + egui::vec2(20.0, 0.0))],
+    );
+    assert!(gesture.forwarded_down);
+    feed(&mut gesture, 0.1, vec![Event::WindowFocused(false)]);
+    assert!(!gesture.forwarded_down);
+    feed(&mut gesture, 0.2, vec![Event::WindowFocused(true), button(pos, false)]);
+    for (time, pressed) in [(1.0, true), (1.05, false), (1.15, true), (1.20, false)] {
+        assert!(feed(&mut gesture, time, vec![button(pos, pressed)]).events.is_empty());
+    }
+    assert_eq!(gesture.take_completed(), Some(pos));
+}

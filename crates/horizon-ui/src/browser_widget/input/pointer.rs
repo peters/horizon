@@ -239,7 +239,7 @@ fn replay_button_event(
     };
     let p = transform(event.global_position);
     replay_pointer_button(
-        browser,
+        |input| browser.send(BrowserCommand::Input(input)),
         state,
         event_buttons,
         PointerButtonReplay {
@@ -303,7 +303,7 @@ struct PointerButtonReplay {
 }
 
 fn replay_pointer_button(
-    browser: &BrowserPanelState,
+    mut send: impl FnMut(BrowserInput),
     state: &mut BrowserUiState,
     event_buttons: &mut u32,
     event: PointerButtonReplay,
@@ -329,14 +329,14 @@ fn replay_pointer_button(
         });
         state.last_mouse = Some(event.local_position);
         *event_buttons |= button_mask(event.button);
-        browser.send(BrowserCommand::Input(BrowserInput::MousePress {
+        send(BrowserInput::MousePress {
             x,
             y,
             button: event.button,
             click_count,
             buttons: *event_buttons,
             modifiers: event.modifiers,
-        }));
+        });
         return;
     }
 
@@ -345,14 +345,14 @@ fn replay_pointer_button(
     };
     state.last_mouse = Some(event.local_position);
     *event_buttons &= !button_mask(event.button);
-    browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+    send(BrowserInput::MouseRelease {
         x,
         y,
         button: event.button,
         click_count: click.count,
         buttons: *event_buttons,
         modifiers: event.modifiers,
-    }));
+    });
     if event.global_position.distance(click.position) <= event.max_click_dist
         && event.event_time - click.time <= event.max_click_duration
     {
@@ -542,6 +542,50 @@ fn button_mask(button: BrowserButton) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_boundary_separates_page_clicks_without_breaking_later_double_clicks() {
+        let mut state = BrowserUiState::default();
+        let mut buttons = 0;
+        let mut commands = Vec::new();
+        for (time, boundary) in [(1.0, false), (1.02, true), (1.10, false)] {
+            if boundary {
+                state.clear_click_history();
+            }
+            for pressed in [true, false] {
+                replay_pointer_button(
+                    |input| commands.push(input),
+                    &mut state,
+                    &mut buttons,
+                    PointerButtonReplay {
+                        global_position: egui::pos2(20.0, 20.0),
+                        local_position: egui::pos2(20.0, 20.0),
+                        button: BrowserButton::Left,
+                        pressed,
+                        pointer_target: true,
+                        event_time: time,
+                        max_click_dist: 6.0,
+                        max_click_duration: 0.5,
+                        max_double_click_delay: 0.3,
+                        modifiers: BrowserModifiers::default(),
+                        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0)),
+                        frame_size: [100.0, 100.0],
+                    },
+                );
+            }
+        }
+        let counts: Vec<_> = commands
+            .iter()
+            .filter_map(|input| match input {
+                BrowserInput::MousePress { click_count, .. } | BrowserInput::MouseRelease { click_count, .. } => {
+                    Some(*click_count)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, [1, 1, 1, 1, 2, 2]);
+        assert_eq!(buttons, 0);
+    }
 
     #[test]
     fn covered_panel_ignores_pointer_until_it_owns_capture() {

@@ -93,6 +93,11 @@ pub struct BrowserUiState {
 }
 
 impl BrowserUiState {
+    /// Deferred canvas clicks occupy their own frame and must not form a page multi-click.
+    pub(crate) fn clear_click_history(&mut self) {
+        self.last_click = None;
+    }
+
     pub(crate) fn show_file_chooser(
         &mut self,
         ctx: &egui::Context,

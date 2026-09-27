@@ -67,6 +67,7 @@ impl CanvasGesture {
     }
 
     fn cancel(&mut self) {
+        self.forwarded_down = false;
         if let Some(pending) = self.pending.take() {
             self.cancelled_down = pending.released_at.is_none();
         }
@@ -318,6 +319,7 @@ impl HorizonApp {
         // A completed deferred click gets a frame of its own. Clear only its
         // synthetic click history while idle, before delivering later input.
         let mut restore_pos = None;
+        let ending_replay = self.canvas_gesture.replayed_origin.is_some();
         if let Some(origin) = self.canvas_gesture.replayed_origin.take() {
             if !enabled || !canvas.contains(origin) || exclusions.contains(origin) {
                 self.canvas_gesture.cancel();
@@ -335,6 +337,11 @@ impl HorizonApp {
             enabled && canvas.contains(pos) && !exclusions.contains(pos)
         }) {
             ctx.request_repaint_after(delay);
+        }
+        if ending_replay || self.canvas_gesture.replayed_origin.is_some() {
+            for state in self.panel_render_caches.browser_ui_state.values_mut() {
+                state.clear_click_history();
+            }
         }
         if let Some(pos) = restore_pos {
             raw.events.insert(0, Event::PointerMoved(pos));
