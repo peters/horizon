@@ -661,3 +661,23 @@ fn a_lost_volume_create_is_reconciled_where_it_was_requested_and_released_if_sol
     );
     assert!(!outcome.journal.unused && outcome.journal.location.is_none());
 }
+
+#[test]
+fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold_out() {
+    // The first listing misses a volume that exists; the one before creating finds it.
+    let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
+    let adopted = [(200, listing("volumes", &json!([free()])))];
+    let responses = and(
+        and(and(catalog(), key), adopted),
+        vec![
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free()})),
+            error(412, "resource_unavailable"),
+        ],
+    );
+    let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
+    assert!(outcome.worker.is_none());
+    assert_eq!(outcome.served, 10, "sold out, with no delete");
+    assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
+    assert!(!outcome.journal.unused, "an adopted volume may hold a workspace");
+}

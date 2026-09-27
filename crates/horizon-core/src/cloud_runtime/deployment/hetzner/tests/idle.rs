@@ -29,8 +29,7 @@ fn running(root: &Path, adjust: impl FnOnce(&mut Deployment)) {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
         key: Some("ssh-ed25519 AAAA".into()),
-        released: None,
-        deleting: false,
+        ..Journal::default()
     }
     .save(root)
     .unwrap();

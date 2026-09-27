@@ -215,6 +215,11 @@ fn place(
         *journal = next;
     }
     let mut fence = journal.volume.clone();
+    // A volume this attempt did not request, such as one a lagging listing hid
+    // earlier and that is now found and adopted, may hold a workspace: it is saved
+    // as used in the same record that binds it.
+    let requested = std::cell::Cell::new(fence == CreateState::Requested);
+    let unused = std::cell::Cell::new(journal.unused);
     let ensured = client.ensure_volume(
         operation_id,
         at.location,
@@ -224,12 +229,20 @@ fn place(
         |next| {
             let mut saved = journal.clone();
             saved.volume = next.clone();
-            records.journal(&saved)
+            match next {
+                CreateState::Requested => requested.set(true),
+                CreateState::Bound { .. } if !requested.get() => saved.unused = false,
+                _ => {}
+            }
+            records.journal(&saved)?;
+            unused.set(saved.unused);
+            Ok(())
         },
     );
     // The fence moves only after each save succeeds, so it matches the saved
     // journal even when the request failed.
     journal.volume = fence;
+    journal.unused = unused.get();
     let volume = ensured?;
     at.host.workspace_device.clone_from(&volume.linux_device);
     let user_data = at.host.cloud_config()?;
