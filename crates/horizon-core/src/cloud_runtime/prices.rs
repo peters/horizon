@@ -1,5 +1,5 @@
-//! Prices for choosing a worker in New cloud. `RunPod` is asked always, and Hetzner
-//! when this machine has a Hetzner binding.
+//! Prices for choosing a worker. [`price_list`] asks `RunPod`, and [`hetzner_catalog`]
+//! asks Hetzner when this machine has a Hetzner binding.
 use super::{Cancellation, Result, settings::Settings};
 pub use horizon_cloud::hetzner::catalog::Catalog as HetznerCatalog;
 pub use horizon_cloud::runpod::prices::STORAGE as RUNPOD_STORAGE;
