@@ -304,8 +304,9 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 && let Some(chosen) = provider::choice(ui, &choices, provider)
             {
                 form.provider = Some(chosen);
-                // Each provider names places its own way.
+                // Each provider names places and sizes its own way.
                 form.placement = Placement::default();
+                form.size = None;
             }
             // Providers that price flavors offer their flavor sizes with prices; others
             // offer the sizes of their configured server types.

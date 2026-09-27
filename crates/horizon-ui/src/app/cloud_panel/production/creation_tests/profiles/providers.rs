@@ -55,12 +55,14 @@ fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
     );
     // cx23 is too small for 4 vCPU / 8 GB, so cx33 is the first configured type that fits.
     assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"));
-    assert!(has_label(&output, "If it is sold out: cpx32."));
-    // 20 GB workspace volume by default: €1.14 kept while stopped.
+    assert!(has_label(&output, "If it is sold out: cpx32, at its own price."));
+    // 20 GB workspace volume by default: €1.14 kept while stopped. The cap is the shown
+    // type's in the shown location, and "any" says another location can cost more.
     assert!(has_label(
         &output,
-        "At most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
+        "On cx33 in hel1: at most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
     ));
+    assert!(painted(&output).contains("This is the cheapest allowed location"));
     assert!(has_label(
         &output,
         "Hetzner lists this type as unavailable here; creation confirms whether it can be rented."

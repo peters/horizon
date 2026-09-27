@@ -89,16 +89,22 @@ pub(super) fn label(form: &Production) -> &'static str {
         .map_or(provider::RUNPOD.label, |profile| current(form.provider, profile).label)
 }
 
-/// How a provider bills, for the provider choice.
-fn billing(provider: &Description) -> String {
-    let currency = match provider.currency {
+/// The currency a provider's prices are in, and whether they exclude VAT, such as
+/// "euros, net of VAT".
+fn currency(provider: &Description) -> String {
+    let name = match provider.currency {
         "USD" => "US dollars",
         "EUR" => "euros",
         other => other,
     };
     let vat = if provider.net_of_vat { ", net of VAT" } else { "" };
+    format!("{name}{vat}")
+}
+
+/// How a provider bills, for the provider choice.
+fn billing(provider: &Description) -> String {
     let kinds = if provider.gpu { "CPU and GPU" } else { "CPU" };
-    format!("{currency}{vat} · {kinds}")
+    format!("{} · {kinds}", currency(provider))
 }
 
 /// One button per provider in `choices`. Returns a newly chosen provider.
@@ -358,9 +364,12 @@ pub(super) fn card(
                 .find(|offer| placement.data_centers == [offer.location.clone()])
                 .or_else(|| offers.iter().min_by(|a, b| a.hourly.total_cmp(&b.hourly)));
             if let Some(offer) = shown {
-                offer_details(ui, provider, offer);
+                offer_details(ui, provider, offer, placement.data_centers.is_empty());
             }
-            ui.small("Billed per started hour, capped per calendar month. Prices are euros, net of VAT.");
+            ui.small(format!(
+                "Billed per started hour, capped per calendar month. Prices are {}.",
+                currency(provider)
+            ));
             if !provider.creatable {
                 ui.colored_label(
                     theme::PALETTE_YELLOW(),
@@ -376,7 +385,9 @@ pub(super) fn card(
 
 /// The offer shown for the chosen location, or the cheapest for any: its price, what a
 /// month costs running and stopped, the fallback types and the advisory availability.
-fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer) {
+/// The monthly cap is that server type's in that location; `any` says another location
+/// or type can cost more.
+fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer, any: bool) {
     ui.add_space(6.0);
     ui.label(
         RichText::new(format!(
@@ -391,12 +402,20 @@ fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer) {
         .color(theme::FG()),
     );
     ui.label(format!(
-        "At most {} a month running, with the workspace volume and IPv4 address. {} a month stopped: only the volume is kept.",
+        "On {} in {}: at most {} a month running, with the workspace volume and IPv4 address. {} a month stopped: only the volume is kept.",
+        offer.server_type,
+        offer.location,
         euros(offer.running_month),
         euros(offer.stopped_month)
     ));
     if !offer.fallbacks.is_empty() {
-        ui.small(format!("If it is sold out: {}.", offer.fallbacks.join(", ")));
+        ui.small(format!(
+            "If it is sold out: {}, at its own price.",
+            offer.fallbacks.join(", ")
+        ));
+    }
+    if any {
+        ui.small("This is the cheapest allowed location; the cloud can be placed in another, which can cost more. Choose a location for its exact price.");
     }
     if !offer.listed {
         ui.small(format!(

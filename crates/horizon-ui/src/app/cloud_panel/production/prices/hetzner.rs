@@ -4,7 +4,7 @@ use super::{Fetched, Job, RETRY_FAILED, finished, spawn, stale};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
 use std::{
     path::Path,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Longest wait for a running Hetzner fetch before prices go to workers without it.
@@ -32,6 +32,8 @@ pub(in crate::app) struct State {
     job: Option<Job<Fetch>>,
     /// When the running fetch started.
     started: Option<Instant>,
+    /// When the settings the last fetch read were saved.
+    settings_saved: Option<SystemTime>,
 }
 
 impl State {
@@ -42,6 +44,10 @@ impl State {
         if cfg!(test) {
             return;
         }
+        let saved = std::fs::metadata(root.join("settings.json"))
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        self.forget_if_settings_changed(saved);
         if self.failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
             self.error = None;
             self.failed_at = None;
@@ -60,6 +66,17 @@ impl State {
                 }
             }));
             self.started = Some(Instant::now());
+            self.settings_saved = saved;
+        }
+    }
+
+    /// Saved settings can add, change or remove the binding, so a catalog or failure from
+    /// earlier settings is fetched again. The binding found is kept until then.
+    fn forget_if_settings_changed(&mut self, saved: Option<SystemTime>) {
+        if self.job.is_none() && saved != self.settings_saved {
+            self.fetched = None;
+            self.error = None;
+            self.failed_at = None;
         }
     }
 
@@ -258,5 +275,19 @@ mod tests {
         );
         state.refresh();
         assert!(state.job.is_none() && state.fresh().is_none());
+    }
+
+    #[test]
+    fn saving_settings_fetches_the_catalog_again() {
+        let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let mut state = State::default();
+        state.answered(Some(catalog()));
+        state.settings_saved = Some(saved);
+        state.forget_if_settings_changed(Some(saved));
+        assert!(state.fresh().is_some(), "unchanged settings keep the catalog");
+        state.failed("Hetzner answered 503");
+        state.forget_if_settings_changed(Some(saved + Duration::from_secs(1)));
+        assert!(state.fresh().is_none() && state.error().is_none() && state.retry_in().is_none());
+        assert!(state.bound(), "the binding found is kept until the next fetch");
     }
 }
