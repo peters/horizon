@@ -13,19 +13,46 @@ pub fn terminate(
 ) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    if state.spec.is_none() {
+        return Err(Error::Invalid("No worker was requested"));
+    }
+    crate::cloud_runtime::providers::lifecycle(&state, settings).delete(&store, &mut state, cancel, emit)?;
+    finish_deletion(state, &store)
+}
+
+/// Deletes a Hetzner cloud's server, workspace volume and SSH key, each proven absent.
+/// # Errors
+/// Reports provider and persistence failures, leaving records a retry resumes from.
+pub(in crate::cloud_runtime) fn delete_hetzner(
+    store: &Store,
+    state: &mut Deployment,
+    settings: &Settings,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
+    deletion_step(
+        emit,
+        Stage::DeleteWorker,
+        "Deleting the Hetzner server, workspace volume and SSH key and confirming their removal",
+    );
+    // Once deletion starts it runs to the end; each step is recorded so it can resume.
+    cancel.check()?;
+    super::hetzner::lifecycle::delete(store, state, settings, &committed())
+}
+
+/// Terminates a `RunPod` cloud's identity-checked worker, releasing its hosted devices
+/// first, then deletes its managed workspace storage.
+/// # Errors
+/// Reports provider and persistence failures, leaving records a retry resumes from.
+pub(in crate::cloud_runtime) fn delete_runpod(
+    store: &Store,
+    state: &mut Deployment,
+    settings: &Settings,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let replacement = state.replacement_worker()?;
-    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        deletion_step(
-            emit,
-            Stage::DeleteWorker,
-            "Deleting the Hetzner server, workspace volume and SSH key and confirming their removal",
-        );
-        // Once deletion starts it runs to the end; each step is recorded so it can resume.
-        cancel.check()?;
-        super::hetzner::lifecycle::delete(&store, &mut state, settings, &committed())?;
-        return finish_deletion(state, &store);
-    }
     let provider = RunPod::new(settings.credential()?);
     if state.operation != CreateState::Prepared {
         let runner = Runner {
@@ -33,15 +60,14 @@ pub fn terminate(
             emit,
             secrets: Vec::new(),
         };
-        terminate_worker(&provider, &store, &mut state, (spec, replacement), settings, &runner)?;
+        terminate_worker(&provider, store, state, (spec, replacement), settings, &runner)?;
     }
     deletion_step(
         emit,
         Stage::DeleteStorage,
         "Deleting managed workspace storage and confirming its removal",
     );
-    storage::terminate(&provider, &store, &state, &committed(), emit)?;
-    finish_deletion(state, &store)
+    storage::terminate(&provider, store, state, &committed(), emit)
 }
 
 /// `specs` holds the recorded worker and, while a replacement is journaled, the

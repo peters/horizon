@@ -39,27 +39,14 @@ pub(super) fn refresh_allocation(request: &Request, store: &Store, state: &mut D
     }
     Ok(())
 }
-/// The machine types a worker may run on. A Hetzner cloud keeps its server types
-/// in the spec's CPU flavor list, in the order Horizon tries them.
+/// The machine types a worker may run on, as its provider tries them.
 pub(super) fn cpu_flavors(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<Vec<String>> {
-    if profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Ok(hetzner(settings)?.server_types.clone());
-    }
-    if profile.gpu {
-        return Ok(settings.cpu_flavors.clone());
-    }
-    Ok(horizon_cloud::runpod::flavors::for_profile(
-        profile,
-        &settings.cpu_flavors,
-    )?)
+    crate::cloud_runtime::providers::cpu_flavors(profile, settings)
 }
 
-/// Where a worker may run: `RunPod` data centers, or a Hetzner cloud's locations.
+/// Where a worker may run, as its provider names places.
 pub(super) fn data_centers(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<Vec<String>> {
-    if profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return hetzner(settings)?.locations_for(settings.placement.as_ref());
-    }
-    Ok(settings.data_centers.clone())
+    crate::cloud_runtime::providers::data_centers(profile, settings)
 }
 
 pub(super) fn hetzner(settings: &Settings) -> Result<&crate::cloud_runtime::settings::Hetzner> {

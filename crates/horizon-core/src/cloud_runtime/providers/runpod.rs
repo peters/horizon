@@ -2,9 +2,21 @@
 //! hosted devices and image replacements are settled around it.
 use super::{
     super::{Error, Stage, command::Runner, deployment, ssh::Connection},
-    Cancellation, CreateState, Deployment, Lifecycle, Result, Settings, Store,
+    Cancellation, CreateState, Deployment, Event, Lifecycle, Result, Settings, Store,
 };
 use horizon_cloud::{CloudError, WorkerStatus, runpod::recovery::Reconciliation};
+
+/// The CPU flavors a worker of `profile` may use: those whose size fits it, or every
+/// configured one for a GPU profile, whose CPU comes with its GPU.
+pub(super) fn cpu_flavors(profile: &horizon_cloud::Profile, settings: &Settings) -> Result<Vec<String>> {
+    if profile.gpu {
+        return Ok(settings.cpu_flavors.clone());
+    }
+    Ok(horizon_cloud::runpod::flavors::for_profile(
+        profile,
+        &settings.cpu_flavors,
+    )?)
+}
 
 /// The worker's workspace storage, or a volume request recorded before any worker.
 pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
@@ -138,6 +150,10 @@ impl Lifecycle for RunPod<'_> {
         state.stop_requested = false;
         state.stage = Stage::Readiness;
         store.save(state)
+    }
+
+    fn delete(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<()> {
+        deployment::deletion::delete_runpod(store, state, self.settings, cancel, emit)
     }
 
     fn release_devices(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
