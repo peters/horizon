@@ -1,4 +1,5 @@
 //! Local companion authorization and SSH reconciliation. No provider lifecycle operations.
+pub mod intent;
 pub mod inventory;
 mod journal;
 mod reconcile;
@@ -129,13 +130,17 @@ fn execute(
     journal.save(&state)?;
     let mut snapshot = reconcile::run(journal, &mut state, if moved { None } else { context }, transport)?;
     if moved {
-        if state.grants.is_empty() {
+        let pending = state.grants.is_empty() && !state.intents.retire(&state.owner)?;
+        if state.grants.is_empty() && !pending {
             state.owner = owner.clone();
             journal.save(&state)?;
         }
-        snapshot.notice = Some(
-            "Cloud ownership changed; previous grants are being revoked. Select companions again after cleanup.".into(),
-        );
+        snapshot.notice = Some(if pending {
+            "Cloud ownership changed; reconcile pending companion operations under the previous owner before migrating."
+                .into()
+        } else {
+            "Cloud ownership changed; previous grants are being revoked. Select companions again after cleanup.".into()
+        });
     }
     Ok(snapshot)
 }

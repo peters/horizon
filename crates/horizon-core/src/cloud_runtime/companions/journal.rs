@@ -13,6 +13,8 @@ pub(super) struct State {
     version: u32,
     pub owner: Owner,
     pub grants: BTreeMap<String, Grant>,
+    #[serde(default, skip_serializing_if = "super::intent::Journal::is_empty")]
+    pub intents: super::intent::Journal,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -71,6 +73,7 @@ impl Store {
                     version: 1,
                     owner: self.owner.clone(),
                     grants: BTreeMap::new(),
+                    intents: super::intent::Journal::default(),
                 });
             }
             Err(error) => return Err(error.into()),
@@ -123,12 +126,18 @@ impl Store {
                 return Err(Error::Invalid("Invalid persisted companion grant"));
             }
         }
+        state.intents.validate(&state.owner)?;
         Ok(state)
     }
 
     pub fn save(&self, state: &State) -> Result<()> {
+        state.intents.validate(&state.owner)?;
+        let bytes = serde_json::to_vec(state).map_err(|_| Error::Json)?;
+        if bytes.len() > 256 * 1024 {
+            return Err(Error::Invalid("Companion journal is too large"));
+        }
         let mut pending = tempfile::NamedTempFile::new_in(&self.root)?;
-        serde_json::to_writer(&mut pending, state).map_err(|_| Error::Json)?;
+        pending.write_all(&bytes)?;
         pending.flush()?;
         pending.as_file().sync_all()?;
         pending
