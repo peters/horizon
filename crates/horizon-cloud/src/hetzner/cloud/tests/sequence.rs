@@ -274,3 +274,111 @@ fn a_verified_server_becomes_the_worker() {
     let outcome = fresh(and(until_server(), [(201, created_server(4)), (200, held_volume())]));
     assert_eq!(outcome.worker.unwrap().id, "42");
 }
+
+/// Records whose journal save fails on call `fail_at`, counted from one.
+struct Flaky {
+    saves: usize,
+    fail_at: usize,
+    kept: Kept,
+}
+
+impl Records for Flaky {
+    fn journal(&mut self, journal: &Journal) -> Result<(), CloudError> {
+        self.saves += 1;
+        if self.saves == self.fail_at {
+            return Err(CloudError::Persistence);
+        }
+        self.kept.journal(journal)
+    }
+
+    fn operation(&mut self, operation: &CreateState) -> Result<(), CloudError> {
+        self.kept.operation(operation)
+    }
+}
+
+/// A fresh run whose journal save `fail_at` fails: the caller's journal afterwards
+/// and the requests served.
+fn failing_save(fail_at: usize, responses: Vec<(u16, Value)>) -> (Journal, usize) {
+    let expected = responses.len();
+    let (client, requests, task) = provider(responses);
+    let policy = Policy {
+        locations: vec!["hel1".into()],
+        server_types: vec!["cx33".into()],
+    };
+    let spec = spec();
+    let request = Request {
+        spec: &spec,
+        policy: &policy,
+        login: None,
+        fresh: true,
+    };
+    let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
+    let mut records = Flaky {
+        saves: 0,
+        fail_at,
+        kept: Kept::default(),
+    };
+    let result = provision(
+        &client,
+        request,
+        &mut operation,
+        &mut journal,
+        &mut records,
+        &Cancellation::default(),
+        |_| {},
+    );
+    assert!(matches!(result, Err(CloudError::Persistence)));
+    task.join().unwrap();
+    let served = requests.lock().unwrap().len();
+    assert_eq!(served, expected);
+    (journal, served)
+}
+
+#[test]
+fn a_failed_key_save_leaves_the_callers_journal_as_saved() {
+    let (journal, _) = failing_save(1, catalog());
+    // A retry with this journal saves the key again before registering it.
+    assert_eq!(journal, Journal::default());
+}
+
+#[test]
+fn a_failed_volume_fence_save_sends_no_volume_request() {
+    // Saves: the key, the location, then the volume fence, which fails.
+    let (journal, _) = failing_save(3, until_volume());
+    assert_eq!(journal.volume, CreateState::Prepared);
+    assert!(journal.key.is_some() && journal.location.as_deref() == Some("hel1"));
+}
+
+#[test]
+fn an_uncertain_volume_request_moves_the_callers_fence_too() {
+    let responses = and(until_volume(), [error(503, "unavailable")]);
+    let expected = responses.len();
+    let (client, requests, task) = provider(responses);
+    let policy = Policy {
+        locations: vec!["hel1".into()],
+        server_types: vec!["cx33".into()],
+    };
+    let spec = spec();
+    let request = Request {
+        spec: &spec,
+        policy: &policy,
+        login: None,
+        fresh: true,
+    };
+    let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
+    let result = provision(
+        &client,
+        request,
+        &mut operation,
+        &mut journal,
+        &mut Kept::default(),
+        &Cancellation::default(),
+        |_| {},
+    );
+    assert!(result.is_err());
+    task.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), expected);
+    // Saved as requested, so a retry with this journal reconciles instead of
+    // sending a second billed volume request.
+    assert_eq!(journal.volume, CreateState::Requested);
+}

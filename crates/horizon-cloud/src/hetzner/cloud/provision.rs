@@ -91,9 +91,15 @@ pub fn provision(
         };
         (location, placements)
     };
+    // Each journal change is saved before the caller's journal takes it, so a
+    // failed save leaves the journal as it is on disk and a retry saves it again.
     if journal.key.is_none() {
-        journal.key = Some(throwaway_public_key()?);
-        records.journal(journal)?;
+        let next = Journal {
+            key: Some(throwaway_public_key()?),
+            ..journal.clone()
+        };
+        records.journal(&next)?;
+        *journal = next;
     }
     let public_key = journal
         .key
@@ -103,11 +109,15 @@ pub fn provision(
     // Recorded before the volume request it fixes; a location chosen earlier but
     // never used by a volume is replaced.
     if journal.location.as_deref() != Some(location.as_str()) {
-        journal.location = Some(location.clone());
-        records.journal(journal)?;
+        let next = Journal {
+            location: Some(location.clone()),
+            ..journal.clone()
+        };
+        records.journal(&next)?;
+        *journal = next;
     }
     let mut fence = journal.volume.clone();
-    let volume = client.ensure_volume(
+    let ensured = client.ensure_volume(
         operation_id,
         &location,
         u32::from(spec.profile.storage.volume_gb),
@@ -118,8 +128,11 @@ pub fn provision(
             saved.volume = next.clone();
             records.journal(&saved)
         },
-    )?;
+    );
+    // The fence moves only after each save succeeds, so it matches the saved
+    // journal even when the request failed.
     journal.volume = fence;
+    let volume = ensured?;
     host.workspace_device.clone_from(&volume.linux_device);
     let user_data = host.cloud_config()?;
     let server_request = ServerRequest {
@@ -178,8 +191,9 @@ fn reopen(
                 "Finish deleting this Hetzner cloud before deploying it again",
             ));
         }
-        *journal = Journal::default();
-        records.journal(journal)?;
+        let next = Journal::default();
+        records.journal(&next)?;
+        *journal = next;
     }
     Ok(())
 }
