@@ -68,6 +68,8 @@ pub struct Description {
     /// Whether Horizon can create clouds there yet; otherwise its prices are for
     /// comparison only.
     pub creatable: bool,
+    /// The workspace volume sizes a CPU cloud can have there, in GB, inclusive.
+    pub cpu_volume_gb: (u32, u32),
 }
 
 pub const RUNPOD: Description = Description {
@@ -86,6 +88,10 @@ pub const RUNPOD: Description = Description {
         Choice::Region,
     ],
     creatable: true,
+    cpu_volume_gb: (
+        *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
+        *crate::runpod::volumes::REQUEST_SIZE_GB.end(),
+    ),
 };
 
 pub const HETZNER: Description = Description {
@@ -99,6 +105,10 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::VolumeOnly,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
+    cpu_volume_gb: (
+        *crate::hetzner::volumes::SIZE_GB.start(),
+        *crate::hetzner::volumes::SIZE_GB.end(),
+    ),
 };
 
 /// Every provider a cloud can run on, in the order they are offered.
@@ -117,10 +127,18 @@ impl Description {
         self.choices.contains(&choice)
     }
 
-    /// Whether a cloud of `profile` can run on this provider.
+    /// Whether a cloud of `profile` can run on this provider: the profile is valid as
+    /// one of this provider's, with every provider rule, such as GPU support, hosted
+    /// devices and the workspace volume size, applied.
     #[must_use]
     pub fn supports(&self, profile: &Profile) -> bool {
-        !profile.gpu || self.gpu
+        let candidate = Profile {
+            provider: self.id.to_owned(),
+            ..profile.clone()
+        };
+        let (smallest, largest) = self.cpu_volume_gb;
+        let volume = u32::from(profile.storage.volume_gb);
+        candidate.validate(false).is_ok() && (profile.gpu || (smallest..=largest).contains(&volume))
     }
 
     /// The providers among `configured` a cloud of `profile` can choose from, in the
@@ -181,6 +199,22 @@ mod tests {
         );
         assert!(Description::choices(&gpu, &[&HETZNER]).is_empty());
         assert!(HETZNER.supports(&cpu) && !HETZNER.supports(&gpu));
+    }
+
+    #[test]
+    fn a_provider_is_offered_only_for_profiles_it_accepts() {
+        // Hosted devices are not available on Hetzner yet.
+        let mut devices = profile(false);
+        devices.capabilities.browserstack = Some(crate::BrowserStack::default());
+        assert!(devices.validate(false).is_ok());
+        assert_eq!(Description::choices(&devices, &[&RUNPOD, &HETZNER]), [&RUNPOD]);
+        // A workspace volume above RunPod's limit fits only on Hetzner.
+        let mut large = profile(false);
+        large.provider = HETZNER.id.to_owned();
+        large.storage.volume_gb = 5000;
+        assert_eq!(Description::choices(&large, &[&RUNPOD, &HETZNER]), [&HETZNER]);
+        large.storage.volume_gb = 4000;
+        assert_eq!(Description::choices(&large, &[&RUNPOD, &HETZNER]), [&RUNPOD, &HETZNER]);
     }
 
     #[test]
