@@ -638,6 +638,9 @@ Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
 UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.
+Creation's `profiles` leaf groups CPU and GPU profiles; `gpu_choice` presents
+available GPU types. Shared flavor validation distinguishes exact CPU sizes
+from GPU host CPU and memory minimums before either interface requests a worker.
 
 `horizon-cloud-worker` hosts the existing browser runtime and public MCP queues
 inside one container. The device CLI owns serialized native input and attribution.

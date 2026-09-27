@@ -89,15 +89,15 @@ pub fn resize_vcpu((current_cpu, memory_gb): (u16, u16), container_gb: u16, cpu:
         .or(options.last())
         .map(|&(memory, _)| (cpu, memory))
 }
-/// The profile at a CPU worker size chosen before its worker is requested.
+/// The profile at a chosen CPU size or GPU host minimum before its worker is requested.
 /// # Errors
-/// Rejects GPU profiles, whose size is fixed, and sizes that no flavor offers with the
-/// profile's container disk.
+/// Rejects zero GPU host minimums and CPU sizes that no flavor offers with the container disk.
 pub fn sized(profile: &Profile, (cpu, memory_gb): (u16, u16)) -> Result<Profile, CloudError> {
     if profile.gpu {
-        return Err(CloudError::Invalid("A GPU profile's worker size is fixed"));
-    }
-    if !offered((cpu, memory_gb), profile.storage.container_gb) {
+        if cpu == 0 || memory_gb == 0 {
+            return Err(CloudError::Invalid("GPU host CPU and memory minimums must be positive"));
+        }
+    } else if !offered((cpu, memory_gb), profile.storage.container_gb) {
         return Err(CloudError::Invalid(
             "RunPod offers no CPU worker with this size and container disk",
         ));
@@ -215,7 +215,12 @@ mod tests {
             "container disk limits small workers"
         );
         let gpu = Profile { gpu: true, ..base };
-        assert!(sized(&gpu, (4, 8)).is_err(), "GPU sizes are fixed");
+        let resized = sized(&gpu, (3, 17)).unwrap();
+        assert_eq!((resized.cpu, resized.memory_gb), (3, 17));
+        assert_eq!(resized.storage, gpu.storage);
+        assert!(resized.gpu);
+        assert!(sized(&gpu, (0, 8)).is_err());
+        assert!(sized(&gpu, (4, 0)).is_err());
     }
     #[test]
     fn instance_ids_name_the_memory_the_flavor_assigns() {

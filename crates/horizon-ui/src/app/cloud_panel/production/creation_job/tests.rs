@@ -120,7 +120,7 @@ fn creation_captures_only_an_offered_size_for_a_cpu_profile() {
     for (profile, size) in [
         ("dev", Some((3, 8))),
         ("dev", Some((4, 64))),
-        ("accelerated", Some((8, 32))),
+        ("accelerated", Some((0, 32))),
         ("unoffered", None),
     ] {
         app.cloud_prototype.production.selected_profile = profile.into();
@@ -137,6 +137,22 @@ fn creation_captures_only_an_offered_size_for_a_cpu_profile() {
     let pending = app.cloud_prototype.production.pending_creation.as_ref().unwrap();
     assert_eq!((pending.launch.profile.cpu, pending.launch.profile.memory_gb), (16, 64));
     assert_eq!(pending.launch.profile_name, "dev");
+}
+
+#[test]
+fn creation_captures_changed_gpu_host_minimums() {
+    let (_temp, mut app) = test_app();
+    let form = &mut app.cloud_prototype.production;
+    form.title = "GPU minimums".into();
+    form.profiles = Some(CloudConfig::parse("version: 1\ndefault: gpu\nprofiles:\n  gpu:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n").unwrap());
+    form.selected_profile = "gpu".into();
+    form.size = Some((3, 17));
+    form.placement.gpu_types = vec!["fixture-gpu".into()];
+    app.create_production_cloud(&egui::Context::default()).unwrap();
+    let pending = app.cloud_prototype.production.pending_creation.as_ref().unwrap();
+    assert_eq!((pending.launch.profile.cpu, pending.launch.profile.memory_gb), (3, 17));
+    assert!(pending.launch.profile.gpu);
+    assert_eq!(pending.launch.placement.gpu_types, ["fixture-gpu"]);
 }
 
 #[test]

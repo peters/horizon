@@ -18,16 +18,27 @@ use horizon_core::{
 
 /// Size buttons for a CPU profile, each with its hourly price. Returns a newly chosen size.
 pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current: Size) -> Option<Size> {
-    ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
     let mut chosen = None;
     if profile.gpu {
         ui.label(
-            RichText::new(machine_size::fixed(current, true))
-                .size(13.0)
-                .color(theme::FG_SOFT()),
+            RichText::new("Minimum resources per GPU")
+                .size(14.0)
+                .strong()
+                .color(theme::FG()),
         );
-        ui.small("GPU workers use the size set by their profile.");
+        let (mut cpu, mut memory_gb) = current;
+        ui.horizontal(|ui| {
+            let cpu_label = ui.label("vCPU");
+            ui.add(egui::DragValue::new(&mut cpu).range(1..=u16::MAX))
+                .labelled_by(cpu_label.id);
+            let memory_label = ui.label("Memory (GB)");
+            ui.add(egui::DragValue::new(&mut memory_gb).range(1..=u16::MAX))
+                .labelled_by(memory_label.id);
+        });
+        ui.small("The GPU host must meet these minimums; its actual CPU and memory may be higher.");
+        chosen = Some((cpu, memory_gb));
     } else {
+        ui.label(RichText::new("CPU size").size(14.0).strong().color(theme::FG()));
         let disk = profile.storage.container_gb;
         let list = prices.list.as_ref().map(|list| &list.value);
         ui.horizontal_wrapped(|ui| {
@@ -331,7 +342,7 @@ fn gpu_summary(
         }
         ui.label(
             RichText::new(format!(
-                "Only this cloud changes. Other GPU types are under Advanced; the defaults are {GPU_SETTING}."
+                "Only this cloud changes. Choose another GPU above; the defaults are {GPU_SETTING}."
             ))
             .size(11.0)
             .color(theme::FG_DIM()),

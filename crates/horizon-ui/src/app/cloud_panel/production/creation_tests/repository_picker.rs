@@ -29,6 +29,7 @@ fn keyboard_chooses_a_typed_repository_and_returns_focus_to_the_field() {
     );
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     assert!(
         app.dir_picker.is_some(),
