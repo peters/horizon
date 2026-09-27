@@ -211,3 +211,38 @@ fn hetzner_is_optional_and_its_token_stays_a_private_secret() {
     reopened.hetzner.enabled = false;
     assert!(reopened.save().unwrap().hetzner.is_none());
 }
+
+#[test]
+fn editing_hetzner_keeps_its_registry_pull_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.hetzner.enabled = true;
+    *draft.hetzner.token = "synthetic-hetzner-token".into();
+    let mut saved = draft.save().unwrap();
+    let password = root.path().join("registry-password");
+    std::fs::write(&password, "synthetic-registry-password").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let pull = crate::cloud_runtime::settings::RegistryPull {
+        server: "registry.example.com".into(),
+        username: "puller".into(),
+        password_file: password,
+    };
+    saved.hetzner.as_mut().unwrap().registry_pull = Some(pull.clone());
+    std::fs::write(root.path().join("settings.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    // Editing the lists and leaving the token blank keeps the pull binding.
+    let mut edited = Draft::load(root.path()).unwrap();
+    edited.hetzner.server_types = "cpx42".into();
+    let resaved = edited.save().unwrap();
+    let hetzner = resaved.hetzner.unwrap();
+    assert_eq!(hetzner.server_types, ["cpx42"]);
+    assert_eq!(hetzner.registry_pull, Some(pull.clone()));
+    // A new token keeps it too.
+    let mut rekeyed = Draft::load(root.path()).unwrap();
+    *rekeyed.hetzner.token = "another-synthetic-token".into();
+    assert_eq!(rekeyed.save().unwrap().hetzner.unwrap().registry_pull, Some(pull));
+}
