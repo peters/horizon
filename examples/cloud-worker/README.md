@@ -46,7 +46,7 @@ prints that record, refusing one older than three minutes. Images whose watcher 
 this record also report `horizon-idle-report-contract=1`.
 The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
-`stop_this_worker` tool on opted-in workers, asks it to stop the worker when a task is
+`stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner, where Horizon stops the worker), asks it to stop the worker when a task is
 done. The watcher is the only process that uses the provider credential, but agent
 sessions run as root today, so this is not an isolation boundary (per-agent credential
 isolation is tracked separately). It identifies the requesting session from the

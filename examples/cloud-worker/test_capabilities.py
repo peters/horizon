@@ -16,6 +16,10 @@ RUN = subprocess.run
 WORKER = os.environ.get("HORIZON_TEST_CLOUD_WORKER")
 
 
+# The credential a provider gives a worker to stop itself with, as RunPod does.
+STOPS_ITSELF = {'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'pod-scoped'}
+
+
 class CapabilitiesTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -269,12 +273,14 @@ class CapabilitiesTests(unittest.TestCase):
 
     def test_agents_get_the_stop_tool_only_where_the_profile_opts_in(self):
         self.write('/workspace/capabilities.json', {'agents': ['claude']})
-        for environment, expected in [({'HORIZON_IDLE_STOP_MINUTES': '30'}, True), ({}, False)]:
+        for environment, expected in [(dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), True), ({}, False),
+                                      # Horizon stops a worker without a credential, as on Hetzner.
+                                      ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False)]:
             with mock.patch.dict(os.environ, environment, clear=True):
                 self.configure()
             servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
             self.assertEqual('horizon-worker' in servers, expected, environment)
-        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+        with mock.patch.dict(os.environ, dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), clear=True):
             self.configure()
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
@@ -282,7 +288,7 @@ class CapabilitiesTests(unittest.TestCase):
     @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
     def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):
         self.write('/workspace/capabilities.json', {'agents': ['codex', 'grok']})
-        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+        with mock.patch.dict(os.environ, dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), clear=True):
             self.configure()
         for agent in ['codex', 'grok']:
             servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
