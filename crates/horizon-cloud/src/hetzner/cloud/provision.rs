@@ -84,7 +84,6 @@ pub fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     reopen(journal, operation, fresh, records)?;
-    check_pull_login(client, &host, operation, spec, cancel)?;
     // A volume fixes the location. Until one exists, every allowed location with a
     // fitting server type is a candidate, in the policy's order. A requested or
     // bound server was placed already, so reconnecting to it depends on the policy
@@ -97,6 +96,8 @@ pub fn provision(
     if journal.unused && *operation == CreateState::Prepared && matches!(journal.volume, CreateState::Bound { .. }) {
         release_empty_volume(client, operation_id, journal, records, cancel)?;
     }
+    // Checked after that cleanup, so a refused login never keeps an empty volume billed.
+    check_pull_login(client, &host, operation, spec, cancel)?;
     // The cloud may move only while it has no volume, neither recorded nor found
     // by label; a found one is adopted and holds whatever the workspace held.
     let found = if journal.volume == CreateState::Prepared {
