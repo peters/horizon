@@ -57,6 +57,7 @@ impl State {
         if cfg!(test) {
             return;
         }
+        self.recheck_runpod();
         if self.list.as_ref().is_none_or(|list| stale(list.at)) {
             self.fetch_list(root, ctx);
         }
@@ -149,6 +150,16 @@ impl State {
         }
     }
 
+    /// A `RunPod` key added in Cloud settings since the fetch found none is found by
+    /// asking again after a failed fetch's usual pause; without a key that fetch
+    /// reads only the settings.
+    fn recheck_runpod(&mut self) {
+        if self.runpod_missing && self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
+            self.list_error = None;
+            self.list_failed_at = None;
+        }
+    }
+
     /// Time until the prices or stock shown for `profile` go stale, unless a fetch is running.
     fn until_stale(&self, profile: &Profile) -> Option<Duration> {
         let list = self
@@ -163,6 +174,12 @@ impl State {
         list.into_iter()
             .chain(size)
             .map(|at| FRESH.saturating_sub(at.elapsed()))
+            // A missing RunPod key is asked about again after the retry pause.
+            .chain(
+                self.list_failed_at
+                    .filter(|_| self.runpod_missing && self.list_job.is_none())
+                    .map(|at| RETRY_FAILED.saturating_sub(at.elapsed())),
+            )
             .min()
     }
 
@@ -421,6 +438,21 @@ mod tests {
         // Neither a refresh nor an expired error offers RunPod again.
         state.refresh();
         assert!(!state.runpod_bound());
+        // The dialog wakes to ask again, and asks once the pause has passed.
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(state.until_stale(&profile()).is_some_and(|wait| wait <= RETRY_FAILED));
+        state.recheck_runpod();
+        assert!(state.list_error.is_some(), "not before the pause");
+        state.list_failed_at = Instant::now().checked_sub(RETRY_FAILED);
+        state.recheck_runpod();
+        assert!(
+            state.list_error.is_none() && !state.runpod_bound(),
+            "asked again, still unknown to be bound"
+        );
         // Another failure says nothing about the key.
         let (tx, rx) = channel();
         state.list_job = Some(rx);
