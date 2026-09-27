@@ -10,6 +10,8 @@ use egui::{Context, Id, RichText};
 use horizon_core::cloud_runtime::setup::Draft;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+const SAVED_SECRET_HINT: &str = "••••••••  Saved credential";
+
 enum Completion {
     Loaded(Box<Draft>, bool),
     Saved(Vec<horizon_core::cloud_runtime::setup::Agent>),

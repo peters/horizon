@@ -105,9 +105,10 @@ fn secret(ui: &mut Ui, id: &str, value: &mut String, saved: bool) {
             .password(true)
             .margin(egui::vec2(12.0, 10.0))
             .hint_text(if saved {
-                "Enter a key, or leave blank to keep the saved binding"
+                super::SAVED_SECRET_HINT
             } else {
                 "Paste API key"
             }),
-    );
+    )
+    .on_hover_text("Enter a replacement, or leave empty to keep the saved credential.");
 }

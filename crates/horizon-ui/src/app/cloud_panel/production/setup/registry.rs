@@ -64,10 +64,11 @@ pub(super) fn render(ui: &mut Ui, accounts: &mut setup::Draft) -> Option<Action>
 
 fn secret(ui: &mut Ui, value: &mut String, saved: bool) {
     ui.add(egui::TextEdit::singleline(value).password(true).hint_text(if saved {
-        "Leave blank to keep saved credential"
+        super::SAVED_SECRET_HINT
     } else {
         "Paste dedicated credential"
-    }));
+    }))
+    .on_hover_text("Enter a replacement, or leave empty to keep the saved credential.");
 }
 
 fn expiry(ui: &mut Ui, label: &str, value: &mut String) {
