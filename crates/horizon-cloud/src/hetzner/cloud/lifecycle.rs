@@ -100,6 +100,14 @@ pub fn check(
                 1 => {
                     let server = found.remove(0);
                     server.verify(operation_id)?;
+                    // The server may hold the workspace from now on, so its volume is
+                    // no longer known empty; saved before the server is bound.
+                    if journal.unused {
+                        records.journal(&Journal {
+                            unused: false,
+                            ..journal.clone()
+                        })?;
+                    }
                     let next = CreateState::Bound {
                         worker_id: server.id.to_string(),
                     };

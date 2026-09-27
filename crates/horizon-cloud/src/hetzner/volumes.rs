@@ -65,6 +65,23 @@ impl Hetzner {
         cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
     ) -> Result<Volume, CloudError> {
+        self.ensure_volume_traced(operation_id, location, size_gb, state, cancel, |next, _| persist(next))
+    }
+
+    /// As [`Self::ensure_volume`], telling `persist` with each record whether it binds
+    /// a volume Hetzner just answered that this call created. Only such a volume is
+    /// known to be new; one found by label, adopted or reconciled may be older.
+    /// # Errors
+    /// As [`Self::ensure_volume`].
+    pub fn ensure_volume_traced(
+        &self,
+        operation_id: &str,
+        location: &str,
+        size_gb: u32,
+        state: &mut CreateState,
+        cancel: &Cancellation,
+        mut persist: impl FnMut(&CreateState, bool) -> Result<(), CloudError>,
+    ) -> Result<Volume, CloudError> {
         let name = resource_name(operation_id)?;
         if !valid_name(location) || !SIZE_GB.contains(&size_gb) {
             return Err(CloudError::Invalid(
@@ -84,7 +101,7 @@ impl Hetzner {
             CreateState::Terminated { .. } => return Err(CloudError::WorkerLost),
             CreateState::Requested => {
                 return usable(
-                    self.reconcile_volume(operation_id, state, cancel, &mut persist)?,
+                    self.reconcile_volume(operation_id, state, cancel, &mut |next| persist(next, false))?,
                     location,
                     size_gb,
                 );
@@ -97,10 +114,10 @@ impl Hetzner {
         }
         if let Some(volume) = found.pop() {
             volume.verify(operation_id)?;
-            bind(state, &volume, &mut persist)?;
+            bind(state, &volume, &mut |next| persist(next, false))?;
             return usable(volume, location, size_gb);
         }
-        persist(&CreateState::Requested)?;
+        persist(&CreateState::Requested, false)?;
         *state = CreateState::Requested;
         let body = json!({
             "name": name, "size": size_gb, "location": location, "format": "ext4",
@@ -110,20 +127,20 @@ impl Hetzner {
             Ok(value) => serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?,
             Err(failure) if failure.name_taken() => {
                 return usable(
-                    self.reconcile_volume(operation_id, state, cancel, &mut persist)?,
+                    self.reconcile_volume(operation_id, state, cancel, &mut |next| persist(next, false))?,
                     location,
                     size_gb,
                 );
             }
             Err(failure) if failure.definite() || failure.capacity() => {
-                persist(&CreateState::Prepared)?;
+                persist(&CreateState::Prepared, false)?;
                 *state = CreateState::Prepared;
                 return Err(failure.into());
             }
             Err(failure) => return Err(failure.into()),
         };
         created.volume.verify(operation_id)?;
-        bind(state, &created.volume, &mut persist)?;
+        bind(state, &created.volume, &mut |next| persist(next, true))?;
         self.wait(&created.action, cancel)?;
         let volume = self
             .inspect_volume(created.volume.id, cancel)?

@@ -60,6 +60,7 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         key: Some(throwaway_public_key().unwrap()),
         released: Some("42".into()),
         deleting: true,
+        unused: false,
     };
     saved.save(root.path()).unwrap();
     assert_eq!(Journal::load(root.path()).unwrap(), saved);
@@ -317,6 +318,8 @@ mod failure_points {
             "server_type": {"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80},
             "location": {"name": "hel1"}, "labels": labels, "volumes": [9]});
         let responses = vec![
+            // No volume from an earlier attempt, so the cloud may move if sold out.
+            (200, listing("volumes", json!([]))),
             (200, listing("server_types", json!([kind]))),
             (200, listing("locations", json!([{"name": "hel1", "network_zone": "eu-central"}]))),
             (200, json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}).to_string()),
@@ -430,6 +433,8 @@ fn resuming_clears_only_a_released_servers_fence() {
     );
     let mut journal = Journal::load(root.path()).unwrap();
     journal.released = Some("42".into());
+    // Even a volume wrongly left marked empty is never deleted once a server held it.
+    journal.unused = true;
     journal.save(root.path()).unwrap();
     state.stage = crate::cloud_runtime::Stage::Stopping;
     assert!(
@@ -446,7 +451,8 @@ fn resuming_clears_only_a_released_servers_fence() {
     );
     assert_eq!(saved.stage, crate::cloud_runtime::Stage::Readiness);
     assert!(!saved.stop_requested && saved.worker.is_none());
-    assert!(Journal::load(root.path()).unwrap().released.is_none());
+    let journal = Journal::load(root.path()).unwrap();
+    assert!(journal.released.is_none() && !journal.unused);
 }
 
 /// Deletion cleans up the record each provisioning failure point leaves.

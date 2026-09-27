@@ -472,6 +472,9 @@ pub enum CloudError {
     Unauthorized,
     #[error("Provider rejected the request or capacity is unavailable{reason}", reason = .0.suffix())]
     Rejected(Reason),
+    /// Every requested size and place was sold out; nothing was created.
+    #[error("Provider rejected the request or capacity is unavailable{reason}", reason = .0.suffix())]
+    Capacity(Reason),
     #[error("Provider response is invalid")]
     InvalidResponse,
     #[error(
