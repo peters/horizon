@@ -93,12 +93,19 @@ fn a_labelled_network_with_other_address_ranges_is_refused_rather_than_joined() 
     wider["ip_range"] = json!("10.0.0.0/8");
     let mut elsewhere = network("eu-central", "eu-central");
     elsewhere["subnets"][0]["ip_range"] = json!("10.72.128.0/17");
+    // A second subnet in another zone would let servers outside the zone join.
+    let mut spread = network("eu-central", "eu-central");
+    spread["subnets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "cloud", "ip_range": "10.72.128.0/17", "network_zone": "us-east"}));
     let (hetzner, _, task) = provider(vec![
         (200, listing("networks", json!([wider]))),
         (200, listing("networks", json!([elsewhere]))),
+        (200, listing("networks", json!([spread]))),
     ]);
     let cancel = Cancellation::default();
-    for _ in 0..2 {
+    for _ in 0..3 {
         // Servers on it would publish no private address Horizon recognizes.
         let refused = hetzner.ensure_network("eu-central", &cancel);
         assert!(

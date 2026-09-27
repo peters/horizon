@@ -34,15 +34,14 @@ pub struct Subnet {
 
 impl Network {
     /// Whether this is Horizon's network for `zone`: labelled for it, with Horizon's
-    /// address range and its cloud subnet there, the one `horizon_address` recognizes.
+    /// address range and exactly its one cloud subnet there, the one `horizon_address`
+    /// recognizes. A subnet in another zone would let servers outside the zone join.
     #[must_use]
     pub fn serves(&self, zone: &str) -> bool {
         self.labels.get(NETWORK_LABEL).map(String::as_str) == Some(zone)
             && self.ip_range == IP_RANGE
-            && self
-                .subnets
-                .iter()
-                .any(|subnet| subnet.kind == "cloud" && subnet.network_zone == zone && subnet.ip_range == SUBNET_RANGE)
+            && matches!(self.subnets.as_slice(), [subnet]
+                if subnet.kind == "cloud" && subnet.network_zone == zone && subnet.ip_range == SUBNET_RANGE)
     }
 }
 
