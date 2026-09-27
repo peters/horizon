@@ -48,11 +48,16 @@ Creation returns immediately. Use `operation: "inspect"` and the returned id to
 check `connection: "connected"`. For a visible, on-screen viewer, also verify
 `image_received`, `image_displayed` and an advancing `frame_sequence` while target
 output changes. `visible` is only a presentation setting; an image can be off
-canvas or clipped. For hidden or off-canvas viewers, use an advancing
-`received_frame_sequence` while target output changes to verify reception;
-uploads and display may remain absent or unchanged. This counter tracks received
-image updates independently of the uploaded-image `frame_sequence`. Background
-reception does not satisfy the live-view requirement for interactive testing.
+canvas or clipped. Current hosts keep uploading about once a second while a
+viewer is not drawn, so `frame_sequence` keeps advancing off canvas; older hosts
+pause uploads there, so also accept an advancing `received_frame_sequence` while
+target output changes as reception evidence. That counter tracks received image
+updates independently of the uploaded-image `frame_sequence`. Establish live
+presentation once per connection (`image_displayed` with advancing frames). If
+the viewer later reports `not_rendered` with `outside_canvas` while
+`last_displayed_age_millis` is present, the person navigated away: keep testing
+and recording, do not pause the lane, and do not reveal again just to advance
+counters.
 Both counters reset on reconnect and neither is a heartbeat: a stationary desktop
 is not a connection failure. Older hosts may omit reception progress; do not
 interpret a missing/default-zero counter as a failure. Set
@@ -79,8 +84,8 @@ reason and host exclusion that kept it off screen (a host running no UI frames
 cannot draw it and answers when that bound expires). In the reveal answer,
 `image_displayed` is true only for a draw after the reveal applied. A drawn image is not live-motion proof. When diagnostics are present, record connection
 generation, decoded-frame sequence and age, sampling pause, last displayed age
-and presentation reason. Current hosts keep reception active while hidden or off
-canvas; older hosts may pause it. Neither `not_rendered` nor a legacy sampling
+and presentation reason. Current hosts keep reception and bounded uploads active while hidden or
+off canvas; older hosts may pause them. Neither `not_rendered` nor a legacy sampling
 pause proves a transport failure; `awaiting_frame` differs from `clipped`. Decoded pixels alone do not
 prove display. Older hosts may lack reveal or diagnostics: record
 `presentation_unverified` and the missing capability instead of asking the user

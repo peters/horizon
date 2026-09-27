@@ -9,12 +9,21 @@ mod input;
 mod observation;
 mod session;
 
-use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
+use std::time::Duration;
+
+use egui::{ColorImage, Context, TextureHandle, TextureOptions, Ui};
 use horizon_core::{DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
 
 use frame::present_image;
 use input::InputState;
 use session::{DeviceRoute, Session, Status};
+
+/// How often a connected viewer that is not drawn (off canvas, hidden, behind
+/// a fullscreen panel) still uploads the latest received frame. Uploads keep
+/// `frame_sequence` and the retained texture current for a person who comes
+/// back and for agents reading evidence, without moving anyone's camera and
+/// without repainting at the stream rate.
+pub(super) const BACKGROUND_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
@@ -80,12 +89,13 @@ impl DeviceUiState {
         self.rendered = false;
     }
 
-    pub(crate) fn finish_frame(&mut self) {
+    pub(crate) fn finish_frame(&mut self, ctx: &Context) {
         // A viewer that was not drawn this frame (hidden, collapsed, closed
         // workspace, another panel fullscreen) cannot see a release, so let go
         // of everything now rather than leave a key or button held remotely.
         if !self.rendered {
             self.release_input();
+            self.upload_in_background(ctx);
         }
         if let Some(session) = &self.session {
             session.set_visible(self.rendered);
@@ -93,6 +103,55 @@ impl DeviceUiState {
         // Observations between passes (request pump, held reveals) describe
         // this completed pass rather than the one before it.
         self.commit_pass();
+    }
+
+    /// An undrawn viewer stays live: its evidence and texture follow the
+    /// stream at a bounded cadence, independent of how often the host paints.
+    fn upload_in_background(&mut self, ctx: &Context) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        if !session.pending_in_background(ctx.viewport_id()) {
+            return;
+        }
+        let since_upload = self.image.last_uploaded.map(|uploaded| uploaded.elapsed());
+        match since_upload {
+            // A frame that arrived just after the last upload must not wait
+            // for an unrelated repaint, or a stream that then goes static
+            // would leave it unconsumed.
+            Some(elapsed) if elapsed < BACKGROUND_UPLOAD_INTERVAL => {
+                ctx.request_repaint_after(BACKGROUND_UPLOAD_INTERVAL.saturating_sub(elapsed));
+            }
+            _ => self.absorb_updates(ctx),
+        }
+    }
+
+    fn absorb_updates(&mut self, ctx: &Context) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let updates = session.take_updates(ctx.viewport_id());
+        let disconnected = matches!(updates.status, Some(Status::Disconnected(_) | Status::Stopped));
+        let full = disconnected.then(|| session.latest_full()).flatten();
+        self.image.received_sequence = updates.received_frame_sequence;
+        if let Some(desktop) = updates.desktop {
+            self.desktop = Some(desktop);
+            self.server.desktop_size = Some(desktop);
+        }
+        if let Some(name) = updates.server_name {
+            self.server.name = Some(name);
+        }
+        if let Some(status) = updates.status {
+            self.status = status;
+        }
+        if let Some(image) = updates.image {
+            self.apply_worker_image(ctx, image, updates.produced_with);
+        }
+        if let Some(full) = full {
+            self.desktop = Some(full.size);
+            self.source = Some(full);
+            self.presented_options = None;
+        }
     }
 
     /// A pass its viewport discarded was never presented, so it cannot be
@@ -110,33 +169,7 @@ impl DeviceUiState {
                 self.reconnect(ui.ctx(), device);
             }
         }
-        let incoming = self.session.as_ref().map(|session| {
-            let updates = session.take_updates(ui.ctx().viewport_id());
-            let disconnected = matches!(updates.status, Some(Status::Disconnected(_) | Status::Stopped));
-            let full = disconnected.then(|| session.latest_full()).flatten();
-            (updates, full)
-        });
-        if let Some((updates, full)) = incoming {
-            self.image.received_sequence = updates.received_frame_sequence;
-            if let Some(desktop) = updates.desktop {
-                self.desktop = Some(desktop);
-                self.server.desktop_size = Some(desktop);
-            }
-            if let Some(name) = updates.server_name {
-                self.server.name = Some(name);
-            }
-            if let Some(status) = updates.status {
-                self.status = status;
-            }
-            if let Some(image) = updates.image {
-                self.apply_worker_image(ui, image, updates.produced_with);
-            }
-            if let Some(full) = full {
-                self.desktop = Some(full.size);
-                self.source = Some(full);
-                self.presented_options = None;
-            }
-        }
+        self.absorb_updates(ui.ctx());
         if self.desktop.is_none()
             && let Some(source) = &self.source
         {
@@ -159,7 +192,7 @@ impl DeviceUiState {
             ui.ctx().request_repaint();
         }
         ui.add_enabled_ui(interactive, |ui| self.interact_toggle(ui));
-        self.refresh_presentation(ui);
+        self.refresh_presentation(ui.ctx());
         ui.separator();
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
@@ -191,19 +224,19 @@ impl DeviceUiState {
     }
 
     #[cfg(test)]
-    fn set_source(&mut self, ui: &Ui, image: ColorImage) {
+    fn set_source(&mut self, ctx: &Context, image: ColorImage) {
         self.desktop = Some(image.size);
         self.source = Some(image);
         self.presented_options = None;
-        if self.refresh_presentation(ui) {
+        if self.refresh_presentation(ctx) {
             self.record_received_frame();
         }
     }
 
-    fn apply_worker_image(&mut self, ui: &Ui, image: ColorImage, produced_with: Option<DeviceViewOptions>) {
+    fn apply_worker_image(&mut self, ctx: &Context, image: ColorImage, produced_with: Option<DeviceViewOptions>) {
         let current = self.controls.options.for_desktop(self.desktop.unwrap_or(image.size));
         if produced_with.is_none_or(|produced| produced.same_presentation(current)) {
-            let uploaded = self.upload_displayed(ui, image);
+            let uploaded = self.upload_displayed(ctx, image);
             self.presented_options = produced_with.or(Some(current));
             if uploaded {
                 self.record_received_frame();
@@ -218,7 +251,7 @@ impl DeviceUiState {
         self.desktop = Some(full.size);
         self.source = Some(full);
         self.presented_options = None;
-        if self.refresh_presentation(ui) {
+        if self.refresh_presentation(ctx) {
             self.record_received_frame();
         }
     }
@@ -243,7 +276,7 @@ impl DeviceUiState {
         self.image.last_uploaded = Some(std::time::Instant::now());
     }
 
-    fn refresh_presentation(&mut self, ui: &Ui) -> bool {
+    fn refresh_presentation(&mut self, ctx: &Context) -> bool {
         let Some(source) = self.source.as_ref() else {
             return false;
         };
@@ -257,7 +290,7 @@ impl DeviceUiState {
         match present_image(source, options) {
             Ok(displayed) => {
                 self.presented_options = Some(options);
-                self.upload_displayed(ui, displayed)
+                self.upload_displayed(ctx, displayed)
             }
             Err(error) => {
                 self.presented_options = Some(options);
@@ -267,8 +300,8 @@ impl DeviceUiState {
         }
     }
 
-    fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) -> bool {
-        let limit = ui.ctx().input(|input| input.max_texture_side);
+    fn upload_displayed(&mut self, ctx: &Context, image: ColorImage) -> bool {
+        let limit = ctx.input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
                 self.source = Some(full);
@@ -281,7 +314,7 @@ impl DeviceUiState {
             texture.set(image, TextureOptions::LINEAR);
             true
         } else {
-            self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
+            self.texture = Some(ctx.load_texture("device-view", image, TextureOptions::LINEAR));
             true
         }
     }
@@ -304,8 +337,8 @@ impl DeviceUiState {
     }
 
     #[cfg(test)]
-    fn update_texture(&mut self, ui: &Ui, image: ColorImage) {
-        self.set_source(ui, image);
+    fn update_texture(&mut self, ctx: &Context, image: ColorImage) {
+        self.set_source(ctx, image);
     }
 
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {

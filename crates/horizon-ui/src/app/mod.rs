@@ -436,7 +436,7 @@ impl eframe::App for HorizonApp {
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.
         for state in self.panel_render_caches.device_ui_state.values_mut() {
-            state.finish_frame();
+            state.finish_frame(ui.ctx());
         }
         self.complete_settled_device_reveals(ui.ctx());
     }

@@ -65,7 +65,7 @@ fn show_viewer(ctx: &egui::Context, state: &mut DeviceUiState, device: &DevicePa
             },
             |ui| {
                 if state.source.is_none() {
-                    state.update_texture(ui, patterned_desktop());
+                    state.update_texture(ui.ctx(), patterned_desktop());
                 }
                 state.show(ui, device, true);
             },
@@ -94,7 +94,8 @@ fn presented_size(state: &DeviceUiState) -> Option<[usize; 2]> {
 }
 
 #[test]
-fn hidden_observation_preserves_pending_image_until_first_display() {
+fn undrawn_viewer_uploads_in_the_background_without_claiming_display() {
+    use horizon_core::browser::manifest::device::Presentation;
     let ctx = egui::Context::default();
     let device = fixture_device();
     let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
@@ -107,26 +108,67 @@ fn hidden_observation_preserves_pending_image_until_first_display() {
         )),
         ..Default::default()
     };
+    // A pass that never drew the viewer (off canvas, hidden) still uploads the
+    // received frame: evidence advances without any presentation claim.
     state.begin_frame();
-    state.finish_frame();
-    for _ in 0..2 {
-        let observation = state.observation("panel".into(), &device, false, "agent");
-        assert_eq!(observation.connection, Connection::Connected);
-        assert_eq!(observation.image.received_frame_sequence, 1);
-        assert_eq!(observation.image.frame_sequence, 0);
-        assert!(!observation.image.image_received);
-        assert!(!observation.image.image_displayed);
-        assert!(state.texture.is_none());
-    }
-    // The server is now static: show must consume the retained image immediately.
+    state.finish_frame(&ctx);
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observation.connection, Connection::Connected);
+    assert_eq!(observation.image.received_frame_sequence, 1);
+    assert_eq!(observation.image.frame_sequence, 1);
+    assert!(observation.image.image_received);
+    assert!(!observation.image.image_displayed);
+    let diagnostics = observation.diagnostics.unwrap();
+    assert_eq!(diagnostics.presentation, Presentation::NotRendered);
+    assert!(diagnostics.last_uploaded_age_millis.is_some());
+    assert!(diagnostics.last_displayed_age_millis.is_none());
+    assert!(state.texture.is_some());
+    // A newer frame inside the upload interval waits; the host frame rate
+    // never turns an undrawn stream into per-frame uploads. It schedules its
+    // own wake, so a stream that goes static cannot strand it.
+    let newer = ColorImage::filled([2, 2], egui::Color32::RED);
+    state.session = Some(Session::pending_frame(
+        newer.clone(),
+        newer,
+        DeviceViewOptions::default(),
+    ));
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&delays);
+    ctx.set_request_repaint_callback(move |info| recorded.lock().unwrap().push(info.delay));
+    state.begin_frame();
+    state.finish_frame(&ctx);
+    assert_eq!(
+        state
+            .observation("panel".into(), &device, true, "agent")
+            .image
+            .frame_sequence,
+        1
+    );
+    let scheduled = delays.lock().unwrap().clone();
+    assert!(
+        scheduled
+            .iter()
+            .any(|delay| !delay.is_zero() && *delay <= BACKGROUND_UPLOAD_INTERVAL),
+        "a waiting frame must schedule the background upload: {scheduled:?}"
+    );
+    state.image.last_uploaded = std::time::Instant::now().checked_sub(BACKGROUND_UPLOAD_INTERVAL);
+    state.begin_frame();
+    state.finish_frame(&ctx);
+    assert_eq!(
+        state
+            .observation("panel".into(), &device, true, "agent")
+            .image
+            .frame_sequence,
+        2
+    );
+    // Drawing the viewer presents what was already uploaded.
     let _ = ctx
         .run_ui(egui::RawInput::default(), |ui| state.show(ui, &device, true))
         .discard_textures();
     assert_eq!(presented_size(&state), Some([2, 2]));
     state.begin_frame();
     let observation = state.observation("panel".into(), &device, true, "agent");
-    assert_eq!(observation.image.received_frame_sequence, 1);
-    assert_eq!(observation.image.frame_sequence, 1);
+    assert_eq!(observation.image.frame_sequence, 2);
     assert!(observation.image.image_received);
     assert!(observation.image.image_displayed);
 }
@@ -143,7 +185,7 @@ fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
             ..Default::default()
         },
         |ui| {
-            state.update_texture(ui, egui::ColorImage::filled([2049, 1], egui::Color32::BLACK));
+            state.update_texture(ui.ctx(), egui::ColorImage::filled([2049, 1], egui::Color32::BLACK));
         },
     );
     let _ = output.discard_textures();
@@ -203,7 +245,7 @@ fn desktop_shrink_lets_controls_clear_the_stale_viewport_draft() {
                 ..Default::default()
             },
             |ui| {
-                state.update_texture(ui, ColorImage::filled([4, 2], egui::Color32::WHITE));
+                state.update_texture(ui.ctx(), ColorImage::filled([4, 2], egui::Color32::WHITE));
                 state.show(ui, &device, true);
             },
         )
@@ -399,7 +441,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
                     ..Default::default()
                 },
                 |ui| {
-                    state.update_texture(ui, egui::ColorImage::filled([100, 100], egui::Color32::WHITE));
+                    state.update_texture(ui.ctx(), egui::ColorImage::filled([100, 100], egui::Color32::WHITE));
                     ui.set_clip_rect(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
                         egui::vec2(800.0, clip_height),
