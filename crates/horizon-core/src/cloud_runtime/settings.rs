@@ -207,7 +207,9 @@ impl Hetzner {
             return Ok(None);
         };
         validate_private_key_file(&pull.password_file)?;
-        let password = Credential::new(std::fs::read_to_string(&pull.password_file)?.trim().to_owned())?;
+        // Every buffer that held the password is wiped when dropped.
+        let read = zeroize::Zeroizing::new(std::fs::read_to_string(&pull.password_file)?);
+        let password = Credential::new(read.trim().to_owned())?;
         Ok(Some(horizon_cloud::host::RegistryLogin {
             server: pull.server.clone(),
             username: pull.username.clone(),

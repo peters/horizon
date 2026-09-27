@@ -1,5 +1,8 @@
 //! Worker image preparation and the image contract checked before allocation.
-use super::{Deployment, Request, Result, Runner, Store, repository, sizing::cpu_flavors};
+use super::{
+    Deployment, Request, Result, Runner, Store, repository,
+    sizing::{cpu_flavors, data_centers},
+};
 use crate::cloud_runtime::{
     git_auth,
     image::{Images, Layer, default_tag},
@@ -155,10 +158,12 @@ pub(super) fn prepare_image(
         image_digest: digest,
         profile: state.profile.clone(),
         public_key,
-        registry_auth_id: request.settings.registry_pull_auth_id.clone(),
+        registry_auth_id: (state.profile.provider != horizon_cloud::hetzner::PROVIDER)
+            .then(|| request.settings.registry_pull_auth_id.clone())
+            .flatten(),
         gpu_types: request.settings.gpu_types.clone(),
         cpu_flavors: cpu_flavors(&state.profile, &request.settings)?,
-        data_centers: request.settings.data_centers.clone(),
+        data_centers: data_centers(&state.profile, &request.settings)?,
         startup_metadata: None,
     });
     store.save(state)

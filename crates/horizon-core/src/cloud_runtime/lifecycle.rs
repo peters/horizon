@@ -31,6 +31,9 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     if !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. }) {
         return Ok(false);
     }
+    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Ok(!super::deployment::hetzner::retained(store.root())?);
+    }
     match &state.spec {
         Some(_) => Ok(!super::deployment::storage::retained(store, state)?),
         None => Ok(!store.root().join("workspace-volume.json").try_exists()?
@@ -89,8 +92,8 @@ pub fn reconcile(
     Ok(ReconciledDeployment { state, report })
 }
 
-/// A Hetzner record, once Hetzner clouds can be deployed, has no check, stop,
-/// resume or hosted-device path yet; nothing here may reach `RunPod` for it.
+/// A deployed Hetzner cloud has no check, stop, resume or hosted-device path yet;
+/// nothing here may reach `RunPod` for it.
 fn refuse_hetzner(state: &Deployment) -> Result<()> {
     if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
         return Err(Error::Invalid(
@@ -323,6 +326,30 @@ mod tests {
             store.load().unwrap().unwrap().stage,
             Stage::Ready,
             "nothing was recorded"
+        );
+        let mut deleted = state;
+        deleted.operation = CreateState::Terminated { worker_id: "42".into() };
+        assert!(
+            can_remove(&store, &deleted).unwrap(),
+            "nothing on Hetzner was ever recorded"
+        );
+        std::fs::write(
+            root.path().join("hetzner.json"),
+            br#"{"volume":{"state":"bound","worker_id":"9"}}"#,
+        )
+        .unwrap();
+        assert!(
+            !can_remove(&store, &deleted).unwrap(),
+            "the workspace volume may still exist"
+        );
+        std::fs::write(
+            root.path().join("hetzner.json"),
+            br#"{"volume":{"state":"prepared"},"key":"ssh-ed25519 AAAA"}"#,
+        )
+        .unwrap();
+        assert!(
+            !can_remove(&store, &deleted).unwrap(),
+            "the registered SSH key may still exist"
         );
     }
 

@@ -2,6 +2,7 @@
 mod agent_credentials;
 mod deletion;
 mod git_credentials;
+pub(super) mod hetzner;
 mod image;
 mod readiness;
 mod redeploy;
@@ -63,15 +64,6 @@ impl Request {
         }
     }
 }
-/// Hetzner profiles are validated and recorded, but only `RunPod` can deploy until
-/// the Hetzner deployment path lands. Checked before any state or provider access,
-/// in both preparation and deployment, so nothing reaches `RunPod` for them.
-fn deployable(profile: &horizon_cloud::Profile) -> Result<()> {
-    if profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid("Hetzner clouds cannot be deployed yet"));
-    }
-    Ok(())
-}
 /// # Errors
 /// Saves a retryable record for an already resolved commit before persisting deployment intent.
 /// Does not invoke Git; deployment validates the committed tree before allocation.
@@ -79,7 +71,9 @@ pub fn prepare(request: &Request) -> Result<()> {
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
-    deployable(&request.profile)?;
+    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        hetzner::preflight(&request.cloud_id, &request.profile, &request.settings)?;
+    }
     let store = Store::lock(&request.state_root)?;
     initial_state(request, &store).map(|_| ())
 }
@@ -109,9 +103,11 @@ pub fn deploy_with_siblings(
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
-    deployable(&request.profile)?;
+    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        hetzner::preflight(&request.cloud_id, &request.profile, &request.settings)?;
+    }
     let store = Store::lock(&request.state_root)?;
-    let provider = RunPod::new(request.settings.credential()?);
+    let provider = Compute::new(request)?;
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
     let reconnected = super::timeline::reconnects(&state);
@@ -122,7 +118,9 @@ pub fn deploy_with_siblings(
     if assign_requested_size(request, &mut state)? {
         store.save(&state)?;
     }
-    replacement::settle(&provider, &store, &mut state, cancel)?;
+    if let Compute::RunPod(runpod) = &provider {
+        replacement::settle(runpod, &store, &mut state, cancel)?;
+    }
     let started = attempt_started(&state, started);
     let mut registry = prepare_registry(request, &store, &mut state)?;
     let runner = Runner {
@@ -169,8 +167,16 @@ pub fn deploy_with_siblings(
     emit(Event::Progress(super::progress::Progress::activity(
         "Requesting or reconciling worker capacity",
     )));
-    provision(&provider, &store, &mut state, &spec, cancel, emit)?;
-    let (connection, contract) = readiness::wait(request, &provider, &store, &runner, &mut state, &spec)?;
+    let (connection, contract) = match &provider {
+        Compute::RunPod(runpod) => {
+            provision(runpod, &store, &mut state, &spec, cancel, emit)?;
+            readiness::wait(request, runpod, &store, &runner, &mut state, &spec)?
+        }
+        Compute::Hetzner(compute) => {
+            hetzner::provision(compute, &store, &mut state, &spec, cancel, emit)?;
+            hetzner::wait(request, compute, &store, &runner, &mut state, &spec)?
+        }
+    };
     source::transfer(&connection, &store, &mut state, packed, &runner, emit)?;
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
@@ -219,8 +225,24 @@ fn prepare_registry(
     )
 }
 
+/// The provider a cloud deploys on, chosen by its profile.
+enum Compute {
+    RunPod(RunPod),
+    Hetzner(hetzner::Compute),
+}
+
+impl Compute {
+    fn new(request: &Request) -> Result<Self> {
+        if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+            Ok(Self::Hetzner(hetzner::Compute::new(&request.settings)?))
+        } else {
+            Ok(Self::RunPod(RunPod::new(request.settings.credential()?)))
+        }
+    }
+}
+
 fn verify_registry(
-    provider: &RunPod,
+    provider: &Compute,
     store: &Store,
     state: &mut Deployment,
     registry: Option<&mut super::registry::Prepared>,
@@ -232,7 +254,10 @@ fn verify_registry(
             .as_mut()
             .ok_or(Error::Invalid("Deployment has no image to validate"))?;
         registry.verify_image(&spec.image_digest, cancel)?;
-        spec.registry_auth_id = Some(registry.ensure_provider(provider, cancel)?);
+        // A Hetzner host logs in with the machine's Hetzner pull credential instead.
+        if let Compute::RunPod(runpod) = provider {
+            spec.registry_auth_id = Some(registry.ensure_provider(runpod, cancel)?);
+        }
         store.save(state)?;
     }
     Ok(())
