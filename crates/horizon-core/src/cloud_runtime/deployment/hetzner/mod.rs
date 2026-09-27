@@ -14,7 +14,11 @@ pub(super) use provision::provision;
 
 /// Checks what a Hetzner cloud needs before any record, build or provider
 /// request, so an unsupported request fails at once and leaves nothing behind.
-pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settings: &Settings) -> Result<()> {
+pub(in crate::cloud_runtime) fn preflight(
+    cloud_id: &str,
+    profile: &horizon_cloud::Profile,
+    settings: &Settings,
+) -> Result<()> {
     if !horizon_cloud::hetzner::volumes::SIZE_GB.contains(&u32::from(profile.storage.volume_gb)) {
         return Err(Error::Invalid(
             "A Hetzner workspace volume must be between 10 and 10,240 GB",
@@ -31,7 +35,7 @@ pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settin
 
 /// Checks the pull login before the deployment is recorded or its image built,
 /// unless the server is already requested or bound and so only reconciled.
-pub(super) fn admit(settings: &Settings, image: &str, operation: &CreateState) -> Result<()> {
+pub(in crate::cloud_runtime) fn admit(settings: &Settings, image: &str, operation: &CreateState) -> Result<()> {
     if matches!(operation, CreateState::Requested | CreateState::Bound { .. }) {
         return Ok(());
     }

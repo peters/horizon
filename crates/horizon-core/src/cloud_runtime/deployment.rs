@@ -1,6 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod agent_credentials;
-mod deletion;
+pub(in crate::cloud_runtime) mod deletion;
 mod git_credentials;
 pub(super) mod hetzner;
 mod image;
@@ -71,9 +71,7 @@ pub fn prepare(request: &Request) -> Result<()> {
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
-    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        hetzner::preflight(&request.cloud_id, &request.profile, &request.settings)?;
-    }
+    super::providers::preflight(&request.cloud_id, &request.profile, &request.settings)?;
     let store = Store::lock(&request.state_root)?;
     initial_state(request, &store).map(|_| ())
 }
@@ -103,9 +101,7 @@ pub fn deploy_with_siblings(
     if !horizon_cloud::valid_id(&request.cloud_id) {
         return Err(Error::Invalid("Invalid cloud identity"));
     }
-    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        hetzner::preflight(&request.cloud_id, &request.profile, &request.settings)?;
-    }
+    super::providers::preflight(&request.cloud_id, &request.profile, &request.settings)?;
     let store = Store::lock(&request.state_root)?;
     let provider = Compute::new(request)?;
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
@@ -387,9 +383,12 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             siblings: None,
         }
     };
-    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        hetzner::admit(&request.settings, &request.profile.image, &state.operation)?;
-    }
+    super::providers::admit(
+        &request.settings,
+        &state.profile,
+        &request.profile.image,
+        &state.operation,
+    )?;
     store.save(&state)?;
     Ok(state)
 }

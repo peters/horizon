@@ -53,6 +53,7 @@ pub enum Choice {
 /// One provider as a new cloud sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Description {
+    pub kind: Kind,
     /// The profile's `provider` value, such as `runpod`.
     pub id: &'static str,
     /// Shown to people, such as `RunPod`.
@@ -96,6 +97,7 @@ pub enum IdleStop {
 }
 
 pub const RUNPOD: Description = Description {
+    kind: Kind::RunPod,
     id: "runpod",
     label: "RunPod",
     currency: "USD",
@@ -116,6 +118,7 @@ pub const RUNPOD: Description = Description {
 };
 
 pub const HETZNER: Description = Description {
+    kind: Kind::Hetzner,
     id: crate::hetzner::PROVIDER,
     label: "Hetzner",
     currency: "EUR",
@@ -135,6 +138,15 @@ pub const HETZNER: Description = Description {
         *crate::hetzner::volumes::SIZE_GB.end(),
     ),
 };
+
+/// Which provider a description is, for code that must handle every provider: a
+/// match on it is exhaustive, so adding a provider fails to compile until each such
+/// place handles it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    RunPod,
+    Hetzner,
+}
 
 /// Every provider a cloud can run on, in the order they are offered.
 pub const ALL: [&Description; 2] = [&RUNPOD, &HETZNER];
