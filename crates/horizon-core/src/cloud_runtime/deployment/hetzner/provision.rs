@@ -45,10 +45,17 @@ pub(in crate::cloud_runtime::deployment) fn provision(
             "A Hetzner workspace volume must be between 10 and 10,240 GB",
         ));
     }
-    // The whole host configuration, registry login included, is loaded once and
-    // rendered before the first provider request, so an invalid one leaves
-    // nothing behind. The volume's real device path is only known after it exists.
-    let mut host = plan(spec, PROBE_DEVICE, compute.settings.registry_login()?)?;
+    // The whole host configuration is loaded once and rendered before the first
+    // provider request, so an invalid one leaves nothing behind. The registry
+    // login is part of it only while a server can still be created: a requested
+    // or bound server is only reconciled, so a rotated pull credential never
+    // blocks recovering it. The volume's real device path is only known after it exists.
+    let login = if state.operation == CreateState::Prepared {
+        super::pull_login(compute, &spec.profile.image)?
+    } else {
+        None
+    };
+    let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     let root = store.root().to_path_buf();
     let mut journal = Journal::load(&root)?;

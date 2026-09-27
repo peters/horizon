@@ -29,36 +29,6 @@ pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settin
     let hetzner = super::sizing::hetzner(settings)?;
     hetzner.credential()?;
     hetzner.locations_for(settings.placement.as_ref())?;
-    // A private image the machine has a registry binding for needs a pull login
-    // on the host; without one the host's pull would fail after allocation.
-    let private = settings
-        .registries
-        .as_ref()
-        .map(|config| config.select(&profile.image))
-        .transpose()?
-        .flatten()
-        .is_some();
-    match hetzner.registry_login()? {
-        None if private => {
-            return Err(Error::Invalid(
-                "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner",
-            ));
-        }
-        // Docker keeps this spelling in the image reference and looks its login up
-        // under that host, while the host configuration stores Docker Hub logins
-        // under Docker Hub's key, so the pull would find no credentials.
-        Some(_) if profile.image.to_ascii_lowercase().starts_with("registry-1.docker.io/") => {
-            return Err(Error::Invalid(
-                "Name a private Docker Hub image docker.io/... rather than registry-1.docker.io/... for Hetzner",
-            ));
-        }
-        Some(login) if registry_host(&login.server) != image_registry(&profile.image) => {
-            return Err(Error::Invalid(
-                "hetzner.registry_pull names a different registry than the profile's image",
-            ));
-        }
-        _ => {}
-    }
     Ok(())
 }
 
@@ -79,6 +49,46 @@ fn registry_host(host: &str) -> String {
         "index.docker.io" | "registry-1.docker.io" => "docker.io".into(),
         _ => host,
     }
+}
+
+/// The pull login a host needs for `image`, which provisioning loads only while
+/// a server can still be created.
+/// # Errors
+/// Refuses a private image without a login, a login for another registry and
+/// a spelling Docker would look up under a key the host does not write.
+pub(super) fn pull_login(compute: &Compute, image: &str) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
+    // A private image the machine has a registry binding for needs a pull login
+    // on the host; without one the host's pull would fail after allocation.
+    let private = compute
+        .registries
+        .as_ref()
+        .map(|config| config.select(image))
+        .transpose()?
+        .flatten()
+        .is_some();
+    let login = compute.settings.registry_login()?;
+    match &login {
+        None if private => {
+            return Err(Error::Invalid(
+                "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner",
+            ));
+        }
+        // Docker keeps this spelling in the image reference and looks its login up
+        // under that host, while the host configuration stores Docker Hub logins
+        // under Docker Hub's key, so the pull would find no credentials.
+        Some(_) if image.to_ascii_lowercase().starts_with("registry-1.docker.io/") => {
+            return Err(Error::Invalid(
+                "Name a private Docker Hub image docker.io/... rather than registry-1.docker.io/... for Hetzner",
+            ));
+        }
+        Some(login) if registry_host(&login.server) != image_registry(image) => {
+            return Err(Error::Invalid(
+                "hetzner.registry_pull names a different registry than the profile's image",
+            ));
+        }
+        _ => {}
+    }
+    Ok(login)
 }
 
 /// Whether anything this cloud created on Hetzner may still exist: the
@@ -107,6 +117,8 @@ pub(super) struct Compute {
     /// placement. Every attempt, retry and reconnect is checked against these,
     /// not against the policy recorded when the cloud was first provisioned.
     pub(super) allowed: Allowed,
+    /// The machine's private registry bindings, to tell whether an image needs a pull login.
+    pub(super) registries: Option<crate::cloud_runtime::registry::Config>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +138,7 @@ impl Compute {
             client: Hetzner::new(hetzner.credential()?),
             settings: hetzner,
             allowed,
+            registries: settings.registries.clone(),
         })
     }
 }

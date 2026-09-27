@@ -113,17 +113,22 @@ fn the_throwaway_key_is_a_valid_distinct_ed25519_key() {
     assert_ne!(first, throwaway_public_key().unwrap());
 }
 
-#[test]
-fn unsupported_requests_fail_the_preflight_before_any_state() {
-    use super::preflight;
-    let root = tempfile::tempdir().unwrap();
-    let token = root.path().join("token");
-    std::fs::write(&token, "secret-token").unwrap();
+/// Writes `contents` to `path` readable only by its owner, as secret files must be.
+fn private_file(path: &std::path::Path, contents: &str) -> std::path::PathBuf {
+    std::fs::write(path, contents).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
+    path.to_path_buf()
+}
+
+#[test]
+fn unsupported_requests_fail_the_preflight_before_any_state() {
+    use super::{Compute, preflight, pull_login};
+    let root = tempfile::tempdir().unwrap();
+    let token = private_file(&root.path().join("token"), "secret-token");
     let mut settings: crate::cloud_runtime::settings::Settings = serde_json::from_value(serde_json::json!({
         "runpod_key_file": "/unused", "ssh_identity_file": "/unused", "docker_config": "/unused",
         "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": [],
@@ -139,6 +144,10 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     spec.profile.idle_stop_minutes = Some(30);
     assert!(preflight(&spec.operation_id, &spec.profile, &settings).is_err());
     spec.profile.idle_stop_minutes = None;
+    // The pull login is checked where provisioning loads it, before any request.
+    let pull = |settings: &crate::cloud_runtime::settings::Settings, image: &str| {
+        pull_login(&Compute::new(settings).unwrap(), image).map(|login| login.is_some())
+    };
     let mut private = settings.clone();
     private.registries = serde_json::from_value(serde_json::json!({"root": root.path(), "bindings": [{
         "repository": "registry.example/worker", "generation": "generation1", "read_only_confirmed": true,
@@ -146,45 +155,35 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     }]}))
     .unwrap();
     assert_eq!(
-        preflight(&spec.operation_id, &spec.profile, &private)
-            .unwrap_err()
-            .to_string(),
+        pull(&private, &spec.profile.image).unwrap_err().to_string(),
         "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner"
     );
-    let password = root.path().join("pull");
-    std::fs::write(&password, "pull-secret").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    let password = private_file(&root.path().join("pull"), "pull-secret");
     let login = |server: &str| crate::cloud_runtime::settings::RegistryPull {
         server: server.into(),
         username: "pull".into(),
         password_file: password.clone(),
     };
     private.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.example"));
-    preflight(&spec.operation_id, &spec.profile, &private).unwrap();
+    assert!(pull(&private, &spec.profile.image).unwrap());
     private.hetzner.as_mut().unwrap().registry_pull = Some(login("other.example"));
     assert_eq!(
-        preflight(&spec.operation_id, &spec.profile, &private)
-            .unwrap_err()
-            .to_string(),
+        pull(&private, &spec.profile.image).unwrap_err().to_string(),
         "hetzner.registry_pull names a different registry than the profile's image"
     );
     let mut hub = spec.profile.clone();
     hub.image = "team/worker".into();
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("index.docker.io"));
-    preflight(&spec.operation_id, &hub, &settings).unwrap();
+    assert!(pull(&settings, &hub.image).unwrap());
     let mut explicit = hub.clone();
     explicit.image = "registry-1.docker.io/team/worker".into();
     assert!(
-        preflight(&spec.operation_id, &explicit, &settings).is_err(),
+        pull(&settings, &explicit.image).is_err(),
         "Docker would look this login up under registry-1.docker.io"
     );
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.hub.docker.com"));
     assert!(
-        preflight(&spec.operation_id, &hub, &settings).is_err(),
+        pull(&settings, &hub.image).is_err(),
         "an alias Docker stores under its own key would leave the pull without credentials"
     );
     settings.hetzner.as_mut().unwrap().registry_pull = Some(crate::cloud_runtime::settings::RegistryPull {
@@ -193,9 +192,10 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
         password_file: root.path().join("missing"),
     });
     assert!(
-        preflight(&spec.operation_id, &spec.profile, &settings).is_err(),
+        pull(&settings, &spec.profile.image).is_err(),
         "an unreadable pull credential"
     );
+    preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
     settings.hetzner = None;
     assert!(
         preflight(&spec.operation_id, &spec.profile, &settings).is_err(),
@@ -474,6 +474,27 @@ mod failure_points {
     fn held_volume() -> String {
         json!({"volume": serde_json::to_value(volume()).unwrap()}).to_string()
     }
+    /// The catalog reads that start every fresh request.
+    fn catalog() -> Vec<(u16, String)> {
+        vec![(200, server_types(4)), (200, locations()), (200, pricing())]
+    }
+    fn and(mut responses: Vec<(u16, String)>, more: impl IntoIterator<Item = (u16, String)>) -> Vec<(u16, String)> {
+        responses.extend(more);
+        responses
+    }
+    /// A fresh request up to its server request: the key, the volume and the checks between.
+    fn until_server() -> Vec<(u16, String)> {
+        let volume = [(201, created_volume()), (200, free_volume())];
+        and(
+            and(until_volume(), volume),
+            [(200, listing("servers", &json!([]))), (200, free_volume())],
+        )
+    }
+    /// A fresh request up to its volume request.
+    fn until_volume() -> Vec<(u16, String)> {
+        let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
+        and(and(catalog(), key), [(200, listing("volumes", &json!([])))])
+    }
     fn created_server(cores: u32) -> String {
         json!({"server": {"id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": "initializing",
             "public_net": {"ipv4": null}, "server_type": {"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80},
@@ -492,6 +513,15 @@ mod failure_points {
         spec: &horizon_cloud::WorkerSpec,
         responses: Vec<(u16, String)>,
     ) -> (Deployment, Journal, bool, usize) {
+        provision_adjusted(spec, responses, |_, _| {})
+    }
+
+    /// As `provision_spec`, after `adjust` changes the settings or the saved state.
+    fn provision_adjusted(
+        spec: &horizon_cloud::WorkerSpec,
+        responses: Vec<(u16, String)>,
+        adjust: impl FnOnce(&mut Compute, &mut Deployment),
+    ) -> (Deployment, Journal, bool, usize) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
         let mut state: Deployment = serde_json::from_value(json!({
@@ -501,9 +531,8 @@ mod failure_points {
             "worker": null, "sessions": []
         }))
         .unwrap();
-        store.save(&state).unwrap();
         let (address, requests, task) = provider::serve(responses);
-        let compute = Compute {
+        let mut compute = Compute {
             client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
             settings: serde_json::from_value(
                 json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
@@ -513,7 +542,10 @@ mod failure_points {
                 locations: vec!["hel1".into()],
                 server_types: vec!["cx33".into()],
             },
+            registries: None,
         };
+        adjust(&mut compute, &mut state);
+        store.save(&state).unwrap();
         let result = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {});
         task.join().unwrap();
         let served = requests.lock().unwrap().len();
@@ -532,6 +564,23 @@ mod failure_points {
         assert_eq!(served, 0);
         assert!(journal.key.is_none() && !kept);
         assert_eq!(state.operation, CreateState::Prepared);
+    }
+
+    #[test]
+    fn only_a_request_that_can_still_create_a_server_loads_the_pull_login() {
+        let pull = json!({"server": "registry.example", "username": "pull", "password_file": "/missing/pull"});
+        // A fresh request needs the login; a requested server is only reconciled,
+        // so the login is never read and provisioning goes on to the provider.
+        for (operation, responses, expected) in [
+            (CreateState::Prepared, Vec::new(), 0),
+            (CreateState::Requested, and(catalog(), [error(503, "unavailable")]), 4),
+        ] {
+            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state| {
+                compute.settings.registry_pull = serde_json::from_value(pull.clone()).unwrap();
+                state.operation = operation.clone();
+            });
+            assert_eq!((state.operation, served), (operation, expected));
+        }
     }
 
     #[test]
@@ -555,21 +604,13 @@ mod failure_points {
 
     #[test]
     fn a_failed_key_registration_leaves_the_key_recorded_for_deletion() {
-        let (state, journal, kept, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            error(503, "unavailable"),
-        ]);
-        assert!(
-            journal.key.is_some() && kept,
-            "a key may exist on Hetzner, so the cloud keeps it"
-        );
-        assert!(
-            journal.location.is_none(),
-            "no volume was requested, so no location is fixed"
-        );
+        let (state, journal, kept, _) = provision_with(and(
+            catalog(),
+            [(200, listing("ssh_keys", &json!([]))), error(503, "unavailable")],
+        ));
+        // A key may exist on Hetzner, so the cloud keeps it; no volume was
+        // requested, so no location is fixed.
+        assert!(journal.key.is_some() && kept && journal.location.is_none());
         assert_eq!(
             (journal.volume, state.operation),
             (CreateState::Prepared, CreateState::Prepared)
@@ -578,40 +619,16 @@ mod failure_points {
 
     #[test]
     fn an_uncertain_volume_request_stays_fenced_for_reconciliation() {
-        let (state, journal, kept, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            (201, key()),
-            (200, listing("volumes", &json!([]))),
-            error(503, "unavailable"),
-        ]);
+        let (state, journal, kept, _) = provision_with(and(until_volume(), [error(503, "unavailable")]));
         assert_eq!(journal.volume, CreateState::Requested);
-        assert_eq!(
-            journal.location.as_deref(),
-            Some("hel1"),
-            "recorded before the request it fixes"
-        );
-        assert!(kept);
+        // The location is recorded before the request it fixes.
+        assert!(kept && journal.location.as_deref() == Some("hel1"));
         assert_eq!(state.operation, CreateState::Prepared);
     }
 
     #[test]
     fn an_uncertain_server_request_stays_fenced_with_its_volume_bound() {
-        let (state, journal, kept, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            (201, key()),
-            (200, listing("volumes", &json!([]))),
-            (201, created_volume()),
-            (200, free_volume()),
-            (200, listing("servers", &json!([]))),
-            (200, free_volume()),
-            error(503, "unavailable"),
-        ]);
+        let (state, journal, kept, _) = provision_with(and(until_server(), [error(503, "unavailable")]));
         assert_eq!(journal.volume, CreateState::Bound { worker_id: "9".into() });
         assert_eq!(state.operation, CreateState::Requested);
         assert!(kept && state.worker.is_none());
@@ -619,20 +636,8 @@ mod failure_points {
 
     #[test]
     fn a_server_below_the_profile_is_bound_but_never_recorded_as_the_worker() {
-        let (state, journal, kept, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            (201, key()),
-            (200, listing("volumes", &json!([]))),
-            (201, created_volume()),
-            (200, free_volume()),
-            (200, listing("servers", &json!([]))),
-            (200, free_volume()),
-            (201, created_server(2)),
-            (200, held_volume()),
-        ]);
+        let (state, journal, kept, _) =
+            provision_with(and(until_server(), [(201, created_server(2)), (200, held_volume())]));
         assert_eq!(
             state.operation,
             CreateState::Bound { worker_id: "42".into() },
@@ -647,40 +652,14 @@ mod failure_points {
 
     #[test]
     fn a_server_whose_volume_does_not_name_it_is_never_recorded_as_the_worker() {
-        let (state, _, kept, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            (201, key()),
-            (200, listing("volumes", &json!([]))),
-            (201, created_volume()),
-            (200, free_volume()),
-            (200, listing("servers", &json!([]))),
-            (200, free_volume()),
-            (201, created_server(4)),
-            (200, free_volume()),
-        ]);
+        let (state, _, kept, _) = provision_with(and(until_server(), [(201, created_server(4)), (200, free_volume())]));
         assert_eq!(state.operation, CreateState::Bound { worker_id: "42".into() });
         assert!(state.worker.is_none() && kept);
     }
 
     #[test]
     fn a_verified_server_becomes_the_worker() {
-        let (state, _, _, _) = provision_with(vec![
-            (200, server_types(4)),
-            (200, locations()),
-            (200, pricing()),
-            (200, listing("ssh_keys", &json!([]))),
-            (201, key()),
-            (200, listing("volumes", &json!([]))),
-            (201, created_volume()),
-            (200, free_volume()),
-            (200, listing("servers", &json!([]))),
-            (200, free_volume()),
-            (201, created_server(4)),
-            (200, held_volume()),
-        ]);
+        let (state, _, _, _) = provision_with(and(until_server(), [(201, created_server(4)), (200, held_volume())]));
         assert_eq!(state.worker.unwrap().id, "42");
     }
 }
