@@ -17,11 +17,30 @@ impl ReconciledDeployment {
     #[must_use]
     pub fn confirmed_stopped(&self) -> bool {
         self.state.stage == Stage::Stopped
-            && self
-                .report
-                .worker
-                .as_ref()
-                .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
+            && match self.stopped() {
+                // Stopping deleted the server, which check proved gone; there may be
+                // no recorded worker to report.
+                horizon_cloud::provider::StoppedCost::ServerDeleted => {
+                    matches!(
+                        self.report.outcome,
+                        horizon_cloud::runpod::recovery::Outcome::Inactive { .. }
+                    )
+                }
+                horizon_cloud::provider::StoppedCost::WorkerKept => self
+                    .report
+                    .worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.status() == WorkerStatus::Stopped),
+            }
+    }
+
+    /// What a stop kept of this cloud's worker, and so what Resume does.
+    #[must_use]
+    pub fn stopped(&self) -> horizon_cloud::provider::StoppedCost {
+        horizon_cloud::provider::by_id(&self.state.profile.provider)
+            .map_or(horizon_cloud::provider::StoppedCost::WorkerKept, |provider| {
+                provider.stopped
+            })
     }
 }
 
@@ -276,6 +295,33 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
 mod tests {
     use super::*;
     use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
+
+    #[test]
+    fn a_hetzner_stop_is_confirmed_by_its_released_server_being_gone_without_a_worker() {
+        use horizon_cloud::{
+            provider::StoppedCost,
+            runpod::recovery::{Outcome, Reconciliation},
+        };
+        let profile = serde_json::json!({"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"hetzner-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":"Stopped","operation":{"state":"bound","worker_id":"42"},
+            "spec":null,"worker":null,"sessions":[],"stop_requested":true
+        }))
+        .unwrap();
+        let report = Reconciliation {
+            operation_id: "hetzner-cloud".into(),
+            outcome: Outcome::Inactive { worker_id: "42".into() },
+            worker: None,
+        };
+        let reconciled = ReconciledDeployment { state, report };
+        assert_eq!(
+            reconciled.stopped(),
+            StoppedCost::ServerDeleted,
+            "resume creates a new server"
+        );
+        assert!(reconciled.confirmed_stopped());
+    }
 
     #[test]
     fn hetzner_clouds_never_reach_runpod_lifecycle_code() {
