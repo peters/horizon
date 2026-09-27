@@ -105,14 +105,18 @@ impl Shared {
         }
     }
 
-    /// Takes up to `count` bytes from the budget and returns how many may be relayed.
-    fn reserve(&self, count: u64) -> u64 {
+    /// Takes up to `count` bytes from the budget: how many may be relayed, and whether that
+    /// spends the budget.
+    fn reserve(&self, count: u64) -> (u64, bool) {
         let mut allowed = 0;
-        let _ = self.bytes.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-            allowed = count.min(BYTE_BUDGET.saturating_sub(used));
-            Some(used + allowed)
-        });
-        allowed
+        let used = self
+            .bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                allowed = count.min(BYTE_BUDGET.saturating_sub(used));
+                Some(used + allowed)
+            })
+            .unwrap_or(BYTE_BUDGET);
+        (allowed, used + allowed >= BYTE_BUDGET)
     }
 
     fn stopped(&self) -> bool {
@@ -260,6 +264,7 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
     let shared = Arc::clone(&slot.shared);
     let upstream = match negotiate(&mut client, Instant::now() + HANDSHAKE_TIMEOUT)
         .and_then(|destination| open(&shared, &destination))
+        .and_then(|upstream| adopt(&mut slot, upstream))
     {
         Ok(upstream) => upstream,
         Err(refusal) => {
@@ -271,14 +276,21 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
             return;
         }
     };
-    if slot.register(&upstream).is_err()
-        || client.set_read_timeout(None).is_err()
-        || client.write_all(&reply_bytes(Reply::Succeeded)).is_err()
-    {
+    if client.set_read_timeout(None).is_err() || client.write_all(&reply_bytes(Reply::Succeeded)).is_err() {
         return;
     }
     let _ = upstream.set_nodelay(true);
     relay(&shared, client, upstream);
+}
+
+/// Registers a new upstream connection so stopping or spending the budget closes it, and
+/// refuses it if either already happened while it was being opened. Registering first means
+/// a later stop or budget close sees it, and checking afterwards covers one that came before.
+fn adopt(slot: &mut Slot, upstream: TcpStream) -> Result<TcpStream, Refusal> {
+    if slot.register(&upstream).is_err() || slot.shared.over_budget() {
+        return Err(Refusal::Reply(Reply::GeneralFailure));
+    }
+    Ok(upstream)
 }
 
 fn open(shared: &Shared, destination: &Destination) -> Result<TcpStream, Refusal> {
@@ -448,11 +460,12 @@ fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
                 return;
             }
             Ok(count) => {
-                let allowed = usize::try_from(shared.reserve(count as u64)).unwrap_or(count);
+                let (allowed, spent) = shared.reserve(count as u64);
+                let allowed = usize::try_from(allowed).unwrap_or(count);
                 if to.write_all(&buffer[..allowed]).is_err() {
                     break;
                 }
-                if allowed < count {
+                if spent {
                     shared.close_all();
                     break;
                 }

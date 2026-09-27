@@ -350,8 +350,8 @@ fn the_byte_budget_refuses_new_connections_and_ends_every_open_one() {
     greet(&mut idle);
     idle.write_all(&ipv4_request(other)).unwrap();
     assert_eq!(reply(&mut idle), 0);
-    proxy.shared.bytes.store(BYTE_BUDGET - 2, Ordering::Release);
-    // Two bytes remain: they are relayed, then every relay ends.
+    proxy.shared.bytes.store(BYTE_BUDGET - 4, Ordering::Release);
+    // Exactly the rest of the budget is relayed, then every relay ends.
     open.write_all(b"more").unwrap();
     assert!(closed(&mut open));
     assert!(closed(&mut idle));
