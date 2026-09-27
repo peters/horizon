@@ -44,7 +44,12 @@ pub struct Hetzner {
     credential: Credential,
     endpoint: String,
     poll: Duration,
+    /// Checks a registry login before a server is created; see [`crate::host::pull`].
+    pull_check: PullCheck,
 }
+
+/// Whether a registry login can read an image, as [`crate::host::pull::verify_pull`].
+pub(crate) type PullCheck = fn(&crate::host::RegistryLogin, &str, &Cancellation) -> Result<(), CloudError>;
 
 /// A request that failed, keeping Hetzner's error code so callers can tell
 /// capacity refusals and name conflicts apart before it becomes a `CloudError`.
@@ -145,6 +150,7 @@ impl Hetzner {
             credential,
             endpoint: "https://api.hetzner.cloud/v1".into(),
             poll: Duration::from_secs(2),
+            pull_check: crate::host::pull::verify_pull,
         }
     }
 
@@ -165,6 +171,26 @@ impl Hetzner {
         client.endpoint = format!("http://{address}");
         client.poll = Duration::from_millis(1);
         Ok(client)
+    }
+
+    /// As this client, with `check` in place of the registry check, so provisioning
+    /// tests never reach a registry.
+    #[cfg(test)]
+    pub(crate) fn with_pull_check(mut self, check: PullCheck) -> Self {
+        self.pull_check = check;
+        self
+    }
+
+    /// Checks that `login` can read `image` before a server is created.
+    /// # Errors
+    /// As [`crate::host::pull::verify_pull`].
+    pub(crate) fn verify_pull(
+        &self,
+        login: &crate::host::RegistryLogin,
+        image: &str,
+        cancel: &Cancellation,
+    ) -> Result<(), CloudError> {
+        (self.pull_check)(login, image, cancel)
     }
 
     /// Every item of a paginated collection. `query` holds the filters, without paging.

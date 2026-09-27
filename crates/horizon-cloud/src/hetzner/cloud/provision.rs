@@ -96,6 +96,8 @@ pub fn provision(
     if journal.unused && *operation == CreateState::Prepared && matches!(journal.volume, CreateState::Bound { .. }) {
         release_empty_volume(client, operation_id, journal, records, cancel)?;
     }
+    // Checked after that cleanup, so a refused login never keeps an empty volume billed.
+    check_pull_login(client, &host, operation, spec, cancel)?;
     // The cloud may move only while it has no volume, neither recorded nor found
     // by label; a found one is adopted and holds whatever the workspace held.
     let found = if journal.volume == CreateState::Prepared {
@@ -179,6 +181,22 @@ pub fn provision(
         }
     }
     Err(CloudError::Capacity(sold_out.unwrap_or_default()))
+}
+
+/// A server is about to be created, and a host that cannot pull its image never
+/// becomes ready: an expired or revoked pull login is refused before it is paid
+/// for. A requested or bound server is only reconciled, so it is never checked.
+fn check_pull_login(
+    client: &Hetzner,
+    host: &host::Plan,
+    operation: &CreateState,
+    spec: &WorkerSpec,
+    cancel: &Cancellation,
+) -> Result<(), CloudError> {
+    match &host.registry {
+        Some(login) if *operation == CreateState::Prepared => client.verify_pull(login, &spec.image_digest, cancel),
+        _ => Ok(()),
+    }
 }
 
 /// Where one placement attempt goes.

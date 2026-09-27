@@ -5,6 +5,8 @@
 //! YAML serialization into files that scripts only read, so none is interpolated
 //! into a shell command. The one number the start script embeds, the shared
 //! memory size, is range-checked first.
+pub mod pull;
+
 use crate::{CloudError, Credential, valid_image};
 use base64::Engine as _;
 use serde::Serialize;
