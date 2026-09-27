@@ -66,6 +66,7 @@ fn journal(volume: CreateState) -> Journal {
         key: Some("ssh-ed25519 AAAA".into()),
         released: None,
         deleting: false,
+        vacating: false,
     }
 }
 

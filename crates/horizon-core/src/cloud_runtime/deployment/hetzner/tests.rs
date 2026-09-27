@@ -60,6 +60,7 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         key: Some(throwaway_public_key().unwrap()),
         released: Some("42".into()),
         deleting: true,
+        vacating: false,
     };
     saved.save(root.path()).unwrap();
     assert_eq!(Journal::load(root.path()).unwrap(), saved);
