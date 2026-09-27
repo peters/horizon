@@ -360,7 +360,7 @@ fn a_runpod_cloud_waits_for_the_first_check_of_the_runpod_key() {
         app.cloud_prototype
             .error
             .as_deref()
-            .is_some_and(|error| error.contains("still checking this machine's RunPod key")),
+            .is_some_and(|error| error.contains("has not confirmed this machine's RunPod key")),
         "{:?}",
         app.cloud_prototype.error
     );

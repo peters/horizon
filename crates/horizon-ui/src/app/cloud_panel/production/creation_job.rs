@@ -226,7 +226,7 @@ fn runpod_usable(
     }
     if form.prices.runpod_unknown() {
         return Err(cloud_runtime::Error::Invalid(
-            "Horizon is still checking this machine's RunPod key; try again in a moment",
+            "Horizon has not confirmed this machine's RunPod key yet; wait a moment or choose Try again on the prices",
         ));
     }
     if !form.prices.runpod_bound() {

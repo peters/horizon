@@ -236,10 +236,11 @@ impl State {
         !self.runpod_missing
     }
 
-    /// Whether the first `RunPod` fetch is still running, so whether this machine has a
-    /// `RunPod` key is not known yet.
+    /// Whether it is not known yet if this machine has a `RunPod` key: `RunPod` has not
+    /// answered, and a fetch is running or failed for another reason, such as settings
+    /// saved only since.
     pub fn runpod_unknown(&self) -> bool {
-        self.list_job.is_some() && self.list.is_none() && self.list_error.is_none() && !self.runpod_missing
+        !self.runpod_missing && self.list.is_none() && (self.list_job.is_some() || self.list_error.is_some())
     }
 
     pub fn loading(&self) -> bool {
@@ -423,6 +424,24 @@ mod tests {
         assert_eq!(state.region_of("AP-JP-1"), None);
         state.refresh();
         assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
+    }
+
+    #[test]
+    fn runpod_is_unknown_until_it_answers_or_is_found_missing() {
+        let mut state = State::default();
+        assert!(!state.runpod_unknown(), "nothing asked yet, as in the dialog tests");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        assert!(state.runpod_unknown(), "asked, no answer");
+        // A failure for another reason, such as settings not saved yet, proves nothing.
+        tx.send(Err("Cloud state I/O failed".into())).unwrap();
+        state.poll();
+        assert!(state.runpod_unknown() && state.runpod_bound());
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(!state.runpod_unknown() && state.runpod_bound());
     }
 
     #[test]
