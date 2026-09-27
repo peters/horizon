@@ -490,26 +490,25 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
         Vec2::new(ui.available_width(), 40.0),
         Layout::right_to_left(Align::Center),
         |ui| {
-            let mut start = ui.add_enabled(
-                can_submit(form),
-                Button::new(
-                    RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
-                        "Starting cloud…"
-                    } else {
-                        "Start cloud"
-                    })
-                    .size(14.0)
-                    .strong(),
+            // A tooltip draws under this modal, so the reason is painted above the button.
+            actions.create |= ui
+                .add_enabled(
+                    can_submit(form),
+                    Button::new(
+                        RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
+                            "Starting cloud…"
+                        } else {
+                            "Start cloud"
+                        })
+                        .size(14.0)
+                        .strong(),
+                    )
+                    .min_size(Vec2::new(136.0, 40.0))
+                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
+                    .stroke(Stroke::new(1.0, theme::ACCENT()))
+                    .corner_radius(10),
                 )
-                .min_size(Vec2::new(136.0, 40.0))
-                .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
-                .stroke(Stroke::new(1.0, theme::ACCENT()))
-                .corner_radius(10),
-            );
-            if let Some(reason) = submit_reason(form) {
-                start = start.on_disabled_hover_text(reason);
-            }
-            actions.create |= start.clicked();
+                .clicked();
             actions.cancel = ui
                 .add(
                     Button::new(RichText::new("Cancel").size(14.0))

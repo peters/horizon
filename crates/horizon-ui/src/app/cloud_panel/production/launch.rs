@@ -25,7 +25,7 @@ impl State {
         self.receiver.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn hold_loading_for_test(&mut self) {
         let (sender, receiver) = channel();
         self.receiver = Some(receiver);
