@@ -16,7 +16,9 @@ import urllib.request
 SPEC_URL = "https://docs.hetzner.cloud/cloud.spec.json"
 
 SERVER = ["id", "name", "status", "public_net.ipv4.ip", "server_type.name", "server_type.cores",
-          "server_type.memory", "server_type.disk", "location.name", "labels", "volumes"]
+          "server_type.memory", "server_type.disk", "location.name", "location.network_zone", "labels", "volumes",
+          "private_net.[].network", "private_net.[].ip"]
+NETWORK = ["id", "name", "ip_range", "subnets.[].type", "subnets.[].ip_range", "subnets.[].network_zone", "labels"]
 VOLUME = ["id", "name", "size", "location.name", "server", "linux_device", "status", "labels"]
 ACTION = ["id", "status", "error.message"]
 SSH_KEY = ["id", "name", "public_key", "labels"]
@@ -37,7 +39,7 @@ USED = [
     ("get", "/servers", ["label_selector", "page", "per_page"], [], "200",
      prefixed("servers.[]", SERVER) + ["meta.pagination.next_page"]),
     ("post", "/servers", [], ["name", "server_type", "location", "image", "user_data", "labels",
-                              "volumes", "automount", "ssh_keys"], "201",
+                              "volumes", "automount", "ssh_keys", "networks"], "201",
      prefixed("server", SERVER) + prefixed("action", ACTION) + prefixed("next_actions.[]", ACTION)),
     ("get", "/servers/{id}", [], [], "200", prefixed("server", SERVER)),
     ("delete", "/servers/{id}", [], [], "200", prefixed("action", ACTION)),
@@ -60,6 +62,12 @@ USED = [
      prefixed("ssh_keys.[]", SSH_KEY) + ["meta.pagination.next_page"]),
     ("post", "/ssh_keys", [], ["name", "public_key", "labels"], "201", prefixed("ssh_key", SSH_KEY)),
     ("delete", "/ssh_keys/{id}", [], [], "204", []),
+    ("get", "/networks", ["label_selector", "page", "per_page"], [], "200",
+     prefixed("networks.[]", NETWORK) + ["meta.pagination.next_page"]),
+    ("post", "/networks", [], ["name", "ip_range", "subnets.[].type", "subnets.[].ip_range",
+                               "subnets.[].network_zone", "labels"], "201", prefixed("network", NETWORK)),
+    ("get", "/locations", ["name", "page", "per_page"], [], "200",
+     ["locations.[].name", "locations.[].network_zone", "meta.pagination.next_page"]),
     ("get", "/locations", ["page", "per_page"], [], "200",
      ["locations.[].name", "locations.[].network_zone", "meta.pagination.next_page"]),
 ]

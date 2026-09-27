@@ -296,6 +296,8 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         "volumeInGb": volume.size,
         "volumeMountPath": "/workspace",
         "dataCenterId": server.location.name,
+        "privateIp": crate::hetzner::networks::horizon_address(&server.private_net).map(|ip| ip.to_string()),
+        "networkZone": server.location.network_zone,
         "env": env,
     }))
     .map_err(|_| CloudError::Invalid("Hetzner server could not be described as a worker"))
@@ -310,7 +312,7 @@ fn memory_gb(memory: f64) -> u32 {
 /// Whether the server and the volume hold each other in one location.
 #[must_use]
 pub fn holds(server: &Server, volume: &Volume) -> bool {
-    server.volumes == [volume.id] && volume.server == Some(server.id) && server.location == volume.location
+    server.volumes == [volume.id] && volume.server == Some(server.id) && server.location.name == volume.location.name
 }
 
 /// Whether the server's type and location are allowed now, and its location is

@@ -329,6 +329,11 @@ mod failure_points {
             (200, listing("volumes", json!([]))),
             (201, json!({"volume": free, "action": {"id": 1, "status": "success"}}).to_string()),
             (200, json!({"volume": free}).to_string()),
+            // The new server's network: its location's zone, then Horizon's network there.
+            (200, listing("locations", json!([{"name": "hel1", "network_zone": "eu-central"}]))),
+            (200, listing("networks", json!([{"id": 7, "name": "horizon-eu-central", "ip_range": "10.72.0.0/16",
+                "subnets": [{"type": "cloud", "ip_range": "10.72.0.0/17", "network_zone": "eu-central"}],
+                "labels": {"horizon-network": "eu-central"}}]))),
             (200, listing("servers", json!([]))),
             (200, json!({"volume": free}).to_string()),
             (201, json!({"server": server, "action": {"id": 2, "status": "success"}, "next_actions": []}).to_string()),

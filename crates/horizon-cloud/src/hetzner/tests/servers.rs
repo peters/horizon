@@ -31,6 +31,7 @@ fn request(placements: &[Placement]) -> ServerRequest<'_> {
         user_data: "#cloud-config\n",
         volume: None,
         ssh_key: None,
+        network: None,
     }
 }
 
@@ -46,6 +47,24 @@ fn posts(requests: &Requests) -> Vec<Value> {
         .filter(|request| request.starts_with("POST /servers "))
         .map(|request| request_body(request))
         .collect()
+}
+
+#[test]
+fn a_server_joins_the_network_it_is_requested_on() {
+    let placements = placements();
+    for (network, sent) in [(Some(7), json!([7])), (None, Value::Null)] {
+        let (hetzner, requests, task) = provider(vec![(200, listing("servers", json!([]))), (201, created(42))]);
+        let mut state = CreateState::Prepared;
+        let on_network = ServerRequest {
+            network,
+            ..request(&placements)
+        };
+        hetzner
+            .ensure_server(&on_network, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(posts(&requests)[0]["networks"], sent, "{network:?}");
+    }
 }
 
 #[test]

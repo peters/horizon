@@ -97,12 +97,21 @@ fn until_volume() -> Vec<(u16, Value)> {
     let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
     and(and(catalog(), key), [(200, listing("volumes", &json!([])))])
 }
+/// The zone and network lookups before a new server is requested in `location`.
+fn networked(location: &str) -> [(u16, Value); 2] {
+    let zone = listing("locations", &json!([{"name": location, "network_zone": "eu-central"}]));
+    let network = json!({"id": 7, "name": "horizon-eu-central", "ip_range": "10.72.0.0/16",
+        "subnets": [{"type": "cloud", "ip_range": "10.72.0.0/17", "network_zone": "eu-central"}],
+        "labels": {"horizon-network": "eu-central"}});
+    [(200, zone), (200, listing("networks", &json!([network])))]
+}
 /// A fresh request up to its server request: the key, the volume and the checks between.
 fn until_server() -> Vec<(u16, Value)> {
     let volume = [
         (201, json!({"volume": free(), "action": {"id": 1, "status": "success"}})),
         (200, json!({"volume": free()})),
     ];
+    let volume = and(volume.to_vec(), networked("hel1"));
     and(
         and(until_volume(), volume),
         [(200, listing("servers", &json!([]))), (200, json!({"volume": free()}))],
@@ -111,7 +120,8 @@ fn until_server() -> Vec<(u16, Value)> {
 fn created_server(cores: u32) -> Value {
     json!({"server": {"id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": "initializing",
         "public_net": {"ipv4": null}, "server_type": {"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80},
-        "location": {"name": "hel1"}, "labels": {"horizon-operation": spec().operation_id}, "volumes": [9]},
+        "location": {"name": "hel1", "network_zone": "eu-central"}, "labels": {"horizon-operation": spec().operation_id}, "volumes": [9],
+        "private_net": [{"network": 7, "ip": "10.72.0.2", "alias_ips": [], "mac_address": "86:00:00:00:00:01"}]},
         "action": {"id": 2, "status": "success"}, "next_actions": []})
 }
 
@@ -284,7 +294,18 @@ fn a_server_whose_volume_does_not_name_it_is_never_a_worker() {
 #[test]
 fn a_verified_server_becomes_the_worker() {
     let outcome = fresh(and(until_server(), [(201, created_server(4)), (200, held_volume())]));
-    assert_eq!(outcome.worker.unwrap().id, "42");
+    let worker = outcome.worker.unwrap();
+    assert_eq!(worker.id, "42");
+    // Joined Horizon's network for its zone, so peers there reach it privately.
+    let private = worker.private_ssh_endpoint().unwrap();
+    assert_eq!(
+        (format!("{:?}", private.host()), private.port()),
+        (
+            format!("{:?}", crate::SshHost::from(std::net::IpAddr::from([10, 72, 0, 2]))),
+            22
+        )
+    );
+    assert_eq!(worker.network_zone.as_deref(), Some("eu-central"));
 }
 
 /// Records whose journal save fails on call `fail_at`, counted from one.
@@ -495,9 +516,14 @@ fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
                 json!({"volume": volume.clone(), "action": {"id": 1, "status": "success"}}),
             ),
             (200, json!({ "volume": volume.clone() })),
+        ]
+        .into_iter()
+        .chain(networked(volume["location"]["name"].as_str().unwrap()))
+        .chain([
             (200, listing("servers", &json!([]))),
             (200, json!({ "volume": volume })),
-        ]
+        ])
+        .collect::<Vec<_>>()
     };
     let mut created = created_server(4);
     created["server"]["location"]["name"] = json!("nbg1");
@@ -612,6 +638,9 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
         and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
         vec![
             (200, json!({"volume": free()})),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -619,7 +648,7 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
     );
     let outcome = run(CreateState::Prepared, journal, false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 9, "the sold-out answer ends it, with no delete");
+    assert_eq!(outcome.served, 11, "the sold-out answer ends it, with no delete");
     assert_eq!(
         outcome.journal.volume,
         CreateState::Bound { worker_id: "9".into() },
@@ -643,6 +672,9 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
         and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
         vec![
             (200, listing("volumes", &json!([free()]))),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -650,7 +682,7 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
     );
     let outcome = run(CreateState::Prepared, journal, false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 9, "reconciled and refused, with no delete");
+    assert_eq!(outcome.served, 11, "reconciled and refused, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused);
 }
@@ -665,6 +697,9 @@ fn a_volume_whose_name_is_taken_is_adopted_as_used_and_never_deleted_when_sold_o
             (200, listing("volumes", &json!([]))),
             error(409, "uniqueness_error"),
             (200, listing("volumes", &json!([free()]))),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -672,7 +707,7 @@ fn a_volume_whose_name_is_taken_is_adopted_as_used_and_never_deleted_when_sold_o
     );
     let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 12, "sold out, with no delete");
+    assert_eq!(outcome.served, 14, "sold out, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused);
 }
@@ -685,6 +720,9 @@ fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold
     let responses = and(
         and(and(catalog(), key), adopted),
         vec![
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -692,7 +730,7 @@ fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold
     );
     let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 10, "sold out, with no delete");
+    assert_eq!(outcome.served, 12, "sold out, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused, "an adopted volume may hold a workspace");
 }

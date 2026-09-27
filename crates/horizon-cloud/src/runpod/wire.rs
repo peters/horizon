@@ -137,6 +137,8 @@ impl Pod {
             volume_mount_path,
             network_volume,
             data_center_id: self.data_center_id,
+            private_ip: None,
+            network_zone: None,
             env: self.env,
         })
     }

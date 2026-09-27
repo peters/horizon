@@ -271,6 +271,17 @@ pub struct Worker {
     /// records saved before this field existed re-encode byte for byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_center_id: Option<String>,
+    /// An address reachable only inside the provider's private network in
+    /// `network_zone`, such as a Hetzner private network. Omitted when absent, so
+    /// records saved before these fields existed re-encode byte for byte.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_address"
+    )]
+    pub private_ip: Option<IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_zone: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
@@ -287,6 +298,12 @@ impl Worker {
     pub fn ssh_endpoint(&self) -> Option<crate::SshEndpoint> {
         let host = self.ssh_host.clone().or_else(|| self.public_ip.map(Into::into))?;
         crate::SshEndpoint::new(host, *self.port_mappings.as_ref()?.get("22")?)
+    }
+
+    /// The worker's sshd on its private address, for a peer in the same network zone.
+    #[must_use]
+    pub fn private_ssh_endpoint(&self) -> Option<crate::SshEndpoint> {
+        crate::SshEndpoint::new(self.private_ip?.into(), 22)
     }
 
     #[must_use]

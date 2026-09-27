@@ -202,7 +202,7 @@ impl Hetzner {
         volume.verify(operation_id)?;
         let server = self.inspect_server(server_id, cancel)?.ok_or(CloudError::WorkerLost)?;
         server.verify(operation_id)?;
-        if server.location != volume.location {
+        if server.location.name != volume.location.name {
             return Err(CloudError::Invalid(
                 "A server can only attach a volume from its own location",
             ));
