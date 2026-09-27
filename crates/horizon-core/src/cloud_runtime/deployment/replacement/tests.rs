@@ -1,5 +1,5 @@
 use super::*;
-use crate::cloud_runtime::state::REPLACEMENT_PENDING;
+use crate::cloud_runtime::{siblings::SiblingError, state::REPLACEMENT_PENDING};
 use horizon_cloud::Reason;
 use serde_json::json;
 use std::{
@@ -72,6 +72,20 @@ impl Fixture {
         self.store().load().unwrap().unwrap()
     }
 
+    /// Adds a same-worker sibling imported at `e…`, as a deploy records it.
+    fn with_sibling(&self) {
+        self.edit(|state| {
+            state.version = 3;
+            state.siblings = Some(
+                serde_json::from_value(json!({"primary_directory":"app","members":[{
+                    "alias":"native","repository":"example/native-lib","directory":"native-lib",
+                    "revision":"e".repeat(40),"local_repository":"/synthetic/native-lib","profile":"dev"
+                }]}))
+                .unwrap(),
+            );
+        });
+    }
+
     fn edit(&self, change: impl FnOnce(&mut Deployment)) {
         let store = self.store();
         let mut state = store.load().unwrap().unwrap();
@@ -95,6 +109,10 @@ struct Script {
     /// Outcome of each update: whether it applies, and the error it returns.
     updates: RefCell<VecDeque<(bool, Option<CloudError>)>>,
     head: Head,
+    /// Each sibling's latest committed revision, or a resolution refusal when `None`.
+    sibling_heads: Option<Vec<String>>,
+    /// The sibling revisions each build layered.
+    built_siblings: RefCell<Vec<Vec<String>>>,
     built: String,
     fail_at: Cell<Option<Boundary>>,
     calls: RefCell<Vec<String>>,
@@ -111,6 +129,8 @@ impl Script {
                 revision: "c".repeat(40),
                 config: Some(config(&fixture.state().profile)),
             },
+            sibling_heads: Some(Vec::new()),
+            built_siblings: RefCell::default(),
             built: digest('b'),
             fail_at: Cell::new(None),
             calls: RefCell::default(),
@@ -170,11 +190,22 @@ impl Recipe for Script {
         self.log("head");
         Ok(self.head.clone())
     }
+
+    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>> {
+        assert!(state.siblings.is_some());
+        assert_eq!(
+            Some(&config.profiles),
+            self.head.config.as_ref().map(|head| &head.profiles)
+        );
+        self.log("siblings");
+        self.sibling_heads.clone().ok_or_else(|| SiblingError::Changed.into())
+    }
 }
 
 impl Steps for Script {
-    fn build(&self, _state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage> {
+    fn build(&self, _state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage> {
         assert_eq!(revision, self.head.revision);
+        self.built_siblings.borrow_mut().push(siblings.to_vec());
         assert!(tag.starts_with("horizon-rebuilt-"));
         self.log("build");
         Ok(ReplacementImage {
@@ -202,8 +233,8 @@ fn rebuild_with(fixture: &Fixture, script: &Script) -> Result<Driven> {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     ready(&state)?;
-    let revision = committed_revision(script, &state, "dev", &|_| {})?;
-    begin(script, &store, &mut state, revision)?;
+    let recipes = committed_recipes(script, &state, "dev", &|_| {})?;
+    begin(script, &store, &mut state, recipes)?;
     drive(script, &store, &mut state, &|_| {})
 }
 
@@ -249,8 +280,8 @@ fn rebuild_switches_the_worker_once_and_asks_its_sessions_to_relaunch() {
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
     let events = RefCell::new(Vec::new());
-    let revision = committed_revision(&script, &state, "dev", &stages(&events)).unwrap();
-    begin(&script, &store, &mut state, revision).unwrap();
+    let recipes = committed_recipes(&script, &state, "dev", &stages(&events)).unwrap();
+    begin(&script, &store, &mut state, recipes).unwrap();
     let journal = state.image_replacement.clone().unwrap();
     assert_eq!(journal.recipe_revision, "c".repeat(40));
     assert_eq!(
@@ -616,10 +647,10 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
         ..WorkerContract::default()
     };
     for (contract, statuses, lost) in [
-        (restart, vec!["0", "5", "3"], Some(vec!["agent3"])),
-        (restart, vec!["4", "0", "0"], Some(vec!["agent1"])),
-        (restart, vec!["0", "1"], None),
-        (restart, vec!["0", ""], None),
+        (restart.clone(), vec!["0", "5", "3"], Some(vec!["agent3"])),
+        (restart.clone(), vec!["4", "0", "0"], Some(vec!["agent1"])),
+        (restart.clone(), vec!["0", "1"], None),
+        (restart.clone(), vec!["0", ""], None),
         (
             WorkerContract::default(),
             vec![],
@@ -634,7 +665,7 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
         let result = relaunch_sessions(
             &store,
             &mut state,
-            contract,
+            &contract,
             &|event| {
                 if let Event::Output(line) = event {
                     reported.borrow_mut().push(line.split(' ').nth(1).unwrap().to_owned());
@@ -670,10 +701,10 @@ fn sessions_relaunch_in_place_and_lost_ones_are_reported() {
     // Nothing runs without a request, and an invalid identity never reaches the shell.
     let store = fixture.store();
     let mut state = store.load().unwrap().unwrap();
-    relaunch_sessions(&store, &mut state, restart, &|_| {}, |_| panic!("no request")).unwrap();
+    relaunch_sessions(&store, &mut state, &restart, &|_| {}, |_| panic!("no request")).unwrap();
     state.session_restart = Some(operation);
     state.sessions[0].panel_id = "agent1; reboot".into();
-    assert!(relaunch_sessions(&store, &mut state, restart, &|_| {}, |_| panic!("invalid")).is_err());
+    assert!(relaunch_sessions(&store, &mut state, &restart, &|_| {}, |_| panic!("invalid")).is_err());
 }
 
 #[test]
@@ -685,4 +716,178 @@ fn provider_reads_never_wait_past_the_deadline() {
     let soon = now + Duration::from_secs(10);
     assert_eq!(live::observe_timeout(Some(soon), now), Some(Duration::from_secs(10)));
     assert_eq!(live::observe_timeout(Some(now), now), None);
+}
+
+#[test]
+fn a_cloud_with_siblings_rebuilds_every_recipe_and_records_what_its_image_layers() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let mut script = Script::new(&fixture);
+    script.sibling_heads = Some(vec!["f".repeat(40)]);
+    let output = RefCell::new(Vec::new());
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    let recipes = committed_recipes(&script, &state, "dev", &|event| {
+        if let Event::Output(line) = event {
+            output.borrow_mut().push(line);
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        *output.borrow(),
+        [
+            "Sibling native has a newer recipe at ffffffffffff: a changed image layers it, and its checkout on the worker stays at eeeeeeeeeeee"
+        ]
+    );
+    begin(&script, &store, &mut state, recipes).unwrap();
+    assert_eq!(
+        state.image_replacement.as_ref().unwrap().sibling_revisions,
+        ["f".repeat(40)]
+    );
+    assert_eq!(drive(&script, &store, &mut state, &|_| {}).unwrap(), Driven::Committed);
+    assert_eq!(
+        *script.calls.borrow(),
+        ["head", "siblings", "build", "replace Next", "observe"]
+    );
+    assert_eq!(*script.built_siblings.borrow(), [vec!["f".repeat(40)]]);
+    let saved = store.load().unwrap().unwrap();
+    let sibling = &saved.siblings.as_ref().unwrap().members[0];
+    assert_eq!(
+        (sibling.revision.as_str(), sibling.image_revision.as_deref()),
+        ("e".repeat(40).as_str(), Some("f".repeat(40).as_str())),
+        "the image moves on; the checkout on the worker stays as imported"
+    );
+    assert_eq!(saved.spec.unwrap().image_digest, digest('b'));
+}
+
+#[test]
+fn an_unchanged_layered_image_keeps_the_recorded_sibling_revisions() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let before = fixture.state();
+    let mut script = Script::new(&fixture);
+    script.sibling_heads = Some(vec!["f".repeat(40)]);
+    script.built = digest('a');
+    assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Unchanged);
+    let after = fixture.state();
+    assert!(after.image_replacement.is_none());
+    assert_eq!(after.siblings, before.siblings);
+}
+
+#[test]
+fn a_sibling_that_no_longer_resolves_refuses_before_anything_is_journaled() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let mut script = Script::new(&fixture);
+    script.sibling_heads = None;
+    assert!(matches!(
+        rebuild_with(&fixture, &script),
+        Err(Error::Sibling(SiblingError::Changed))
+    ));
+    assert_eq!(*script.calls.borrow(), ["head", "siblings"]);
+    assert!(fixture.state().image_replacement.is_none());
+}
+
+#[test]
+fn a_journal_must_name_one_revision_per_recorded_sibling() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let mut state = fixture.state();
+    assert!(
+        state
+            .begin_replacement(OperationId::generate(), "c".repeat(40))
+            .is_err()
+    );
+    assert!(
+        state
+            .begin_layered_replacement(OperationId::generate(), "c".repeat(40), vec!["g".repeat(40)])
+            .is_err(),
+        "a sibling revision is a commit ID"
+    );
+    state
+        .begin_layered_replacement(OperationId::generate(), "c".repeat(40), vec!["f".repeat(40)])
+        .unwrap();
+    let mut single = Fixture::new().state();
+    assert!(
+        single
+            .begin_layered_replacement(OperationId::generate(), "c".repeat(40), vec!["f".repeat(40)])
+            .is_err()
+    );
+}
+
+#[test]
+fn a_continued_rebuild_layers_the_journaled_sibling_revisions() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let mut script = Script::new(&fixture);
+    script.sibling_heads = Some(vec!["f".repeat(40)]);
+    script.fail_at.set(Some(Boundary::Begun));
+    assert!(rebuild_with(&fixture, &script).is_err());
+    script.fail_at.set(None);
+    // The sibling moves on after the crash; the journal keeps what the rebuild chose.
+    script.sibling_heads = Some(vec!["d".repeat(40)]);
+    recover(&fixture, &script, Recovery::Continue).unwrap();
+    assert_eq!(*script.built_siblings.borrow(), [vec!["f".repeat(40)]]);
+    let sibling = fixture.state().siblings.unwrap().members.remove(0);
+    assert_eq!(sibling.image_revision, Some("f".repeat(40)));
+}
+
+#[test]
+fn an_image_back_at_the_imported_revision_records_no_separate_image_revision() {
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    fixture.edit(|state| {
+        state.siblings.as_mut().unwrap().members[0].image_revision = Some("f".repeat(40));
+    });
+    let mut script = Script::new(&fixture);
+    script.sibling_heads = Some(vec!["e".repeat(40)]);
+    let output = RefCell::new(Vec::new());
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    let recipes = committed_recipes(&script, &state, "dev", &|event| {
+        if let Event::Output(line) = event {
+            output.borrow_mut().push(line);
+        }
+    })
+    .unwrap();
+    assert_eq!(output.borrow().len(), 1, "the image layers f, so e is news");
+    begin(&script, &store, &mut state, recipes).unwrap();
+    drive(&script, &store, &mut state, &|_| {}).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(saved.siblings.as_ref().unwrap().members[0].image_revision, None);
+    let unmoved = committed_recipes(&script, &saved, "dev", &|event| {
+        assert!(!matches!(event, Event::Output(_)), "nothing moved: {event:?}");
+    })
+    .unwrap();
+    assert_eq!(unmoved.siblings, ["e".repeat(40)]);
+}
+
+#[test]
+fn single_repository_journals_keep_their_encoding_and_loaded_ones_must_match_the_siblings() {
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    state
+        .begin_replacement(OperationId::generate(), "c".repeat(40))
+        .unwrap();
+    let encoded = serde_json::to_value(&state).unwrap();
+    assert!(encoded["image_replacement"].get("sibling_revisions").is_none());
+    let decoded: Deployment = serde_json::from_value(encoded).unwrap();
+    assert!(decoded.replacement_worker().is_ok());
+
+    let fixture = Fixture::new();
+    fixture.with_sibling();
+    let mut state = fixture.state();
+    state
+        .begin_layered_replacement(OperationId::generate(), "c".repeat(40), vec!["f".repeat(40)])
+        .unwrap();
+    let mut encoded = serde_json::to_value(&state).unwrap();
+    for revisions in [
+        json!([]),
+        json!(["f".repeat(40), "f".repeat(40)]),
+        json!(["not-a-commit"]),
+    ] {
+        encoded["image_replacement"]["sibling_revisions"] = revisions;
+        let decoded: Deployment = serde_json::from_value(encoded.clone()).unwrap();
+        assert!(decoded.replacement_worker().is_err());
+    }
 }

@@ -2,7 +2,12 @@
 use std::io::{self, Read, Write};
 use toml_edit::{DocumentMut, Item, Table};
 
-const MANAGED: [&str; 3] = ["horizon-browser", "horizon-device", "horizon-cloud-companions"];
+const MANAGED: [&str; 4] = [
+    "horizon-browser",
+    "horizon-device",
+    "horizon-cloud-companions",
+    "horizon-worker",
+];
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -101,5 +106,15 @@ this is a literal string
                 .contains("private-value")
         );
         assert!(reconcile("", "[mcp_servers.unrelated]\ncommand='other'").is_err());
+    }
+
+    #[test]
+    fn the_stop_tool_is_managed_so_opting_out_removes_it() {
+        let selected = "[mcp_servers.horizon-worker]\ncommand = '/usr/local/bin/horizon-worker-stop'\nargs = ['mcp']\n";
+        let enabled = reconcile("model = 'selected'", selected).unwrap();
+        assert!(enabled.contains("horizon-worker-stop"));
+        let disabled = reconcile(&enabled, "").unwrap();
+        assert!(!disabled.contains("horizon-worker"));
+        assert!(disabled.contains("model = 'selected'"));
     }
 }

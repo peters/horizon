@@ -29,6 +29,7 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     let config = committed_config(&repository, &revision, runner)?.ok_or(Error::Invalid(
         "The selected commit has no readable .horizon/cloud.yml. Commit the cloud configuration or choose another revision in Advanced.",
     ))?;
+    let config = creatable(config)?;
     Ok(Prepared {
         repository,
         revision,
@@ -36,10 +37,29 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     })
 }
 
-/// The `.horizon/cloud.yml` committed at `revision`, or `None` when that commit has no
-/// readable file.
+/// The profiles the New cloud dialog can create. Its prices, credential checks and
+/// sizing are `RunPod`'s, so Hetzner profiles stay out of it until the dialog knows
+/// Hetzner.
+fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
+    config
+        .profiles
+        .retain(|_, profile| profile.provider != horizon_cloud::hetzner::PROVIDER);
+    if !config.profiles.contains_key(&config.default) {
+        config.default = config.profiles.keys().next().cloned().ok_or(Error::Invalid(
+            "This repository's cloud profiles are all for Hetzner, which the New cloud dialog cannot create yet.",
+        ))?;
+    }
+    Ok(config)
+}
+
+/// The refusal of a committed `.horizon/cloud.yml` that does not parse.
+pub(crate) const INVALID_CONFIG: &str =
+    "Invalid .horizon/cloud.yml. Check its syntax, default profile and supported fields.";
+
+/// The `.horizon/cloud.yml` committed at `revision`, or `None` when Git finds no such file
+/// at that commit.
 /// # Errors
-/// Reports cancellation and an invalid configuration.
+/// Reports cancellation, Git that could not run or timed out, and an invalid configuration.
 pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) -> super::Result<Option<CloudConfig>> {
     // Configuration may contain invalid secret-bearing fields; never stream its blob to progress logs.
     let yaml = Runner {
@@ -57,12 +77,15 @@ pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) 
         Duration::from_secs(30),
     );
     runner.cancel.check()?;
-    let Ok(yaml) = yaml else {
-        return Ok(None);
+    let yaml = match yaml {
+        Ok(yaml) => yaml,
+        // Only a failed lookup means the file is missing; anything else is operational.
+        Err(Error::Command(_)) => return Ok(None),
+        Err(error) => return Err(error),
     };
-    CloudConfig::parse(&yaml).map(Some).map_err(|_| {
-        Error::Invalid("Invalid .horizon/cloud.yml. Check its syntax, default profile and supported fields.")
-    })
+    CloudConfig::parse(&yaml)
+        .map(Some)
+        .map_err(|_| Error::Invalid(INVALID_CONFIG))
 }
 
 /// Read each machine binding once for a configuration, independent of its profile count.
@@ -196,6 +219,19 @@ mod tests {
         )
     }
     #[test]
+    fn the_new_cloud_dialog_offers_only_profiles_it_can_create() {
+        let yaml = "version: 1\ndefault: cheap\nprofiles:\n  cheap:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
+        let config = creatable(CloudConfig::parse(yaml).unwrap()).unwrap();
+        assert_eq!(config.profiles.keys().collect::<Vec<_>>(), ["dev"]);
+        assert_eq!(
+            config.default, "dev",
+            "a Hetzner default gives way to a profile the dialog can create"
+        );
+        let only = yaml.replace("provider: runpod", "provider: hetzner");
+        assert!(creatable(CloudConfig::parse(&only).unwrap()).is_err());
+    }
+
+    #[test]
     fn ssh_readiness_requires_a_matching_public_companion() {
         let temp = tempfile::tempdir().unwrap();
         let key = temp.path().join("worker.identity");
@@ -297,6 +333,12 @@ mod tests {
         let error = read(temp.path()).err().unwrap().to_string();
         assert!(error.contains("Invalid .horizon/cloud.yml"));
         assert!(!error.contains("private-invalid-marker"));
+        // A read that fails for another reason is not reported as a missing file.
+        std::fs::write(temp.path().join(".horizon/cloud.yml"), "#".repeat(5 * 1024 * 1024)).unwrap();
+        git(temp.path(), &["add", "."]);
+        commit(temp.path());
+        let error = read(temp.path()).err().unwrap().to_string();
+        assert!(error.contains("exceeded its bound"), "{error}");
     }
     fn commit(path: &Path) {
         git(

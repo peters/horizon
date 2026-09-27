@@ -72,6 +72,9 @@ pub(super) fn create_body(spec: &WorkerSpec) -> Value {
     if profile.gpu {
         body["gpu"] = json!({"id":spec.gpu_types.first(), "count":1,
                             "minVcpuCountPerGpu":profile.cpu, "minRamPerGpu":profile.memory_gb});
+        if let Some(floor) = &profile.min_cuda_version {
+            body["gpu"]["minCudaVersion"] = json!(floor);
+        }
         body["mounts"] = json!({"persistent":{"size":profile.storage.volume_gb,"path":"/workspace"}});
     } else {
         body["cpu"] = json!({"id":spec.cpu_flavors.first(),"vcpuCount":profile.cpu});

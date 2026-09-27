@@ -9,12 +9,17 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# JSON schemas for requirements that MCP tools accept.
+schema = ["dep:schemars"]
+
 [dependencies]
 base64.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+schemars = { workspace = true, optional = true }
 ureq.workspace = true
 time.workspace = true
 zeroize.workspace = true

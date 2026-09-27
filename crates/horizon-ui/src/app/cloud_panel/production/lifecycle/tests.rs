@@ -195,6 +195,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.path().into());
@@ -235,6 +236,8 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         image_replacement: None,
         session_restart: None,
         timeline: None,
+        last_self_stop: None,
+        siblings: None,
     };
     store.save(&state).unwrap();
     app.remove_deleted_cloud(1, &ctx);
@@ -281,6 +284,7 @@ fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles["dev"].clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.board.cloud_groups.0.push(group);
     app.cloud_prototype.initialized = false;
@@ -325,6 +329,7 @@ fn add_unallocated_cloud(app: &mut HorizonApp, issue: u32, workspace: WorkspaceI
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles["dev"].clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
 }
@@ -488,6 +493,7 @@ fn seed_unallocated_cloud(
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(root.into());

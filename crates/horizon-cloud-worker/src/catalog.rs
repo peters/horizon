@@ -53,14 +53,20 @@ impl Host {
     pub fn poll(&mut self, capabilities: &horizon_cloud::Capabilities) {
         let requests = std::mem::take(&mut self.pending);
         for request in requests {
-            if request.catalog.is_none() {
+            let result = if request.cloud_offers.is_some() {
+                Some(super::offers::answer(&request))
+            } else if request.catalog.is_some() {
+                self.result(&request, capabilities)
+            } else {
                 continue;
-            }
-            let Some(result) = self.result(&request, capabilities) else {
+            };
+            let Some(result) = result else {
                 self.pending.push(request);
                 continue;
             };
-            if manifest::provider_usage::complete_provider_usage(&result).is_err() {
+            if manifest::provider_usage::complete_provider_usage(&result).is_err()
+                && retried(&request, manifest::now_millis())
+            {
                 self.pending.push(request);
             }
         }
@@ -85,9 +91,34 @@ impl Host {
     }
 }
 
+/// Whether an answer that could not be published is tried again: cloud offers only while
+/// the agent still waits for them.
+fn retried(request: &UsageRequest, now: i64) -> bool {
+    request.cloud_offers.is_none() || now < request.deadline_at_millis
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unpublished_answers_are_retried_while_the_agent_waits() {
+        let request = |query: serde_json::Value| -> UsageRequest {
+            let mut request = serde_json::json!({
+                "request_id":"retry", "actor":"horizon:cloud-fixture", "host_instance":manifest::host_instance(),
+                "deadline_at_millis":1_000, "claimed":true
+            });
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(query.as_object().unwrap().clone());
+            serde_json::from_value(request).unwrap()
+        };
+        let offers = request(serde_json::json!({"cloud_offers": {}}));
+        assert!(retried(&offers, 999));
+        assert!(!retried(&offers, 1_000), "nobody waits for it after its deadline");
+        let catalog = request(serde_json::json!({"catalog": {"provider": "account"}}));
+        assert!(retried(&catalog, 1_000));
+    }
     #[test]
     fn revocation_discards_pending_catalog_without_dropping_request_results() {
         let root = tempfile::tempdir().unwrap();

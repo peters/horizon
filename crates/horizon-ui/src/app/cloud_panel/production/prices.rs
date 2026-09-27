@@ -15,6 +15,8 @@ use std::{
 
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_mins(15);
+/// How long agents' requests get the same failed price fetch before one asks again.
+const RETRY_FAILED: Duration = Duration::from_secs(30);
 
 pub(super) struct Fetched<T> {
     pub value: T,
@@ -30,9 +32,14 @@ type Job<T> = Receiver<Result<Fetched<T>, String>>;
 pub(super) struct State {
     pub list: Option<Fetched<(PriceList, Preferences)>>,
     pub list_error: Option<String>,
+    /// When the price fetch behind `list_error` failed.
+    pub list_failed_at: Option<Instant>,
     list_job: Option<Job<(PriceList, Preferences)>>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
+    /// Every data center's region as people say it, kept from the latest list so cards
+    /// can name where a worker landed without work on every frame.
+    regions: HashMap<String, String>,
 }
 
 impl State {
@@ -42,11 +49,8 @@ impl State {
         if cfg!(test) {
             return;
         }
-        if self.list_job.is_none() && self.list.as_ref().is_none_or(|list| stale(list.at)) && self.list_error.is_none()
-        {
-            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
-                prices::price_list(settings, cancel)
-            }));
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
         }
         let key = key(profile);
         let current = self
@@ -67,6 +71,68 @@ impl State {
         // Fetches repaint when they finish; an idle dialog still has to wake when its prices go stale.
         if let Some(wait) = self.until_stale(profile) {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// Fetches the price list once when there is none, for naming the region of the data
+    /// center a cloud landed in on its card. The New cloud dialog keeps it fresh.
+    pub fn request_regions(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.is_none() {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// Fetches the price list when there is none or it is older than [`FRESH`], for
+    /// answering agents' offer requests with current prices.
+    pub fn request_fresh_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if cfg!(test) {
+            return;
+        }
+        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+            self.fetch_list(root, ctx);
+        }
+    }
+
+    /// The failed price fetch agents' requests report, the same one for every request
+    /// that waited on it. Once it is older than [`RETRY_FAILED`] it is forgotten, so the
+    /// next request asks the provider again.
+    pub fn recent_list_error(&mut self) -> Option<&str> {
+        if self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
+            self.list_error = None;
+            self.list_failed_at = None;
+        }
+        self.list_error.as_deref()
+    }
+
+    /// The price list while it is current, never an older one.
+    pub fn fresh_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
+        self.list.as_ref().filter(|list| !stale(list.at))
+    }
+
+    /// The region of `data_center` as people say it, once a price list has been fetched.
+    pub fn region_of(&self, data_center: &str) -> Option<&str> {
+        self.regions.get(data_center).map(String::as_str)
+    }
+
+    fn accept(&mut self, fetched: Fetched<(PriceList, Preferences)>) {
+        self.regions = fetched
+            .value
+            .0
+            .regions
+            .iter()
+            .map(|(center, region)| (center.clone(), region_name(region)))
+            .collect();
+        self.list = Some(fetched);
+    }
+
+    fn fetch_list(&mut self, root: &Path, ctx: &egui::Context) {
+        if self.list_job.is_none() && self.list_error.is_none() {
+            self.list_job = Some(spawn(root, ctx, |settings, cancel| {
+                prices::price_list(settings, cancel)
+            }));
         }
     }
 
@@ -92,13 +158,15 @@ impl State {
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
-                    self.list = Some(fetched);
+                    self.accept(fetched);
                     self.list_error = None;
+                    self.list_failed_at = None;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
                 Err(error) => {
                     self.list = None;
                     self.list_error = Some(error);
+                    self.list_failed_at = Some(Instant::now());
                 }
             }
         }
@@ -122,6 +190,7 @@ impl State {
     pub fn refresh(&mut self) {
         self.list = None;
         self.list_error = None;
+        self.list_failed_at = None;
         self.list_job = None;
         self.sizes.clear();
         self.size_jobs.clear();
@@ -133,7 +202,7 @@ impl State {
 
     /// Stock of `size` for `profile`: `None` while it is being checked, including when
     /// its last answer has expired, so old stock is never shown as current.
-    pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<SizeAvailability, &str>> {
+    pub fn size(&self, profile: &Profile, size: Size) -> Option<Result<&SizeAvailability, &str>> {
         let sized = Profile {
             cpu: size.0,
             memory_gb: size.1,
@@ -145,10 +214,29 @@ impl State {
         }
         match self.sizes.get(&key)? {
             Ok(fetched) if stale(fetched.at) => None,
-            Ok(fetched) => Some(Ok(fetched.value)),
+            Ok(fetched) => Some(Ok(&fetched.value)),
             Err(error) => Some(Err(error.as_str())),
         }
     }
+}
+
+/// The provider's region as people say it, such as `NORTH_AMERICA` as North America.
+pub(super) fn region_name(region: &str) -> String {
+    if region.is_empty() {
+        return "Other".to_owned();
+    }
+    region
+        .split('_')
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            let mut letters = lower.chars();
+            letters
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + letters.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn stale(at: Instant) -> bool {
@@ -191,6 +279,27 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
     Some(result)
 }
 
+/// Prices and exact-size stock as if the provider had just answered, for the dialog
+/// tests, which never contact it and run on Unix only.
+#[cfg(all(test, unix))]
+impl State {
+    pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
+        self.accept(Fetched {
+            value: (list, preferences),
+            at: Instant::now(),
+        });
+        for (profile, size) in sizes {
+            self.sizes.insert(
+                key(&profile),
+                Ok(Fetched {
+                    value: size,
+                    at: Instant::now(),
+                }),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,12 +310,9 @@ mod tests {
             provider: "RunPod",
             cpu: Vec::new(),
             gpus: Vec::new(),
-            storage: prices::StoragePrices {
-                network: 0.07,
-                network_tier_gb: 1000,
-                network_beyond: 0.05,
-                pod_volume: (0.10, 0.20),
-            },
+            data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
+            storage: prices::RUNPOD_STORAGE,
         }
     }
 
@@ -226,10 +332,39 @@ mod tests {
         }
     }
 
-    const AVAILABLE: SizeAvailability = SizeAvailability {
-        best: Availability::High,
-        centers: 2,
-    };
+    fn available() -> SizeAvailability {
+        SizeAvailability {
+            centers: vec![
+                ("EU-RO-1".into(), Availability::High),
+                ("US-MO-2".into(), Availability::Low),
+            ],
+        }
+    }
+
+    #[test]
+    fn regions_read_as_people_say_them_and_are_found_by_data_center() {
+        assert_eq!(region_name("NORTH_AMERICA"), "North America");
+        assert_eq!(region_name("EUROPE"), "Europe");
+        assert_eq!(region_name(""), "Other");
+        let mut state = State::default();
+        assert_eq!(state.region_of("EU-RO-1"), None);
+        let mut listed = list();
+        // Regions cover data centers the machine no longer allows, which a worker may
+        // have landed in before the setting changed.
+        listed.regions = [("EU-RO-1", "EUROPE"), ("US-MO-2", "NORTH_AMERICA")]
+            .into_iter()
+            .map(|(center, region)| (center.to_owned(), region.to_owned()))
+            .collect();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((listed, Preferences::default())))).unwrap();
+        state.poll();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"));
+        assert_eq!(state.region_of("US-MO-2"), Some("North America"));
+        assert_eq!(state.region_of("AP-JP-1"), None);
+        state.refresh();
+        assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
+    }
 
     #[test]
     fn finished_fetches_are_kept_until_a_refresh_and_failures_wait_for_one() {
@@ -263,7 +398,7 @@ mod tests {
     fn size_stock_is_looked_up_for_the_chosen_size() {
         let profile = profile();
         let mut state = State::default();
-        let available = AVAILABLE;
+        let available = available();
         let small = Profile {
             memory_gb: 16,
             ..profile.clone()
@@ -271,12 +406,12 @@ mod tests {
         state.sizes.insert(
             key(&small),
             Ok(Fetched {
-                value: available,
+                value: available.clone(),
                 at: Instant::now(),
             }),
         );
         state.sizes.insert(key(&profile), Err("No stock data".into()));
-        assert_eq!(state.size(&profile, (8, 16)), Some(Ok(available)));
+        assert_eq!(state.size(&profile, (8, 16)), Some(Ok(&available)));
         assert_eq!(state.size(&profile, (8, 32)), Some(Err("No stock data")));
         assert_eq!(state.size(&profile, (4, 8)), None);
         state.refresh();
@@ -306,7 +441,7 @@ mod tests {
         state.refresh();
         assert!(!state.loading() && state.list_error.is_none() && state.size_jobs.is_empty());
         assert!(list_tx.send(Ok(now((list(), Preferences::default())))).is_err());
-        assert!(size_tx.send(Ok(now(AVAILABLE))).is_err());
+        assert!(size_tx.send(Ok(now(available()))).is_err());
     }
 
     #[test]
@@ -321,7 +456,7 @@ mod tests {
         state.sizes.insert(
             key(&cpu),
             Ok(Fetched {
-                value: AVAILABLE,
+                value: available(),
                 at: Instant::now(),
             }),
         );
@@ -353,7 +488,7 @@ mod tests {
         let (tx, rx) = channel();
         state.size_jobs.insert(key(&profile()), rx);
         tx.send(Ok(Fetched {
-            value: AVAILABLE,
+            value: available(),
             at: answered,
         }))
         .unwrap();
@@ -369,8 +504,8 @@ mod tests {
     fn expired_or_rechecking_stock_reads_as_checking() {
         let profile = profile();
         let mut state = State::default();
-        state.sizes.insert(key(&profile), Ok(now(AVAILABLE)));
-        assert_eq!(state.size(&profile, (8, 32)), Some(Ok(AVAILABLE)));
+        state.sizes.insert(key(&profile), Ok(now(available())));
+        assert_eq!(state.size(&profile, (8, 32)), Some(Ok(&available())));
         let (_tx, rx) = channel();
         state.size_jobs.insert(key(&profile), rx);
         assert_eq!(state.size(&profile, (8, 32)), None);
@@ -380,7 +515,7 @@ mod tests {
             state.sizes.insert(
                 key(&profile),
                 Ok(Fetched {
-                    value: AVAILABLE,
+                    value: available(),
                     at: expired,
                 }),
             );

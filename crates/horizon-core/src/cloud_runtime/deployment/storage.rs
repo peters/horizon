@@ -120,7 +120,7 @@ pub(super) fn terminate(
             record.state = next.clone();
             save(store, &record).map_err(|_| horizon_cloud::CloudError::Persistence)
         },
-        super::request_detail(emit),
+        super::deletion::request_detail(emit),
     )?;
     Ok(())
 }

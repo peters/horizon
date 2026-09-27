@@ -9,7 +9,7 @@ publish = false
 workspace = true
 [dependencies]
 horizon-cloud-protocol.workspace = true
-horizon-cloud = { path = "../horizon-cloud" }
+horizon-cloud = { path = "../horizon-cloud", features = ["schema"] }
 horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-control.workspace = true
 horizon-browser-protocol.workspace = true
@@ -29,4 +29,4 @@ ring.workspace = true
 horizon-browser = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix.workspace = true
+rustix = { workspace = true, features = ["net", "pty", "termios", "event"] }

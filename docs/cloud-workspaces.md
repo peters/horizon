@@ -12,15 +12,19 @@ sessions and preserved cloud metadata remain available. The standalone provider
 crate remains portable. Windows cloud durability is tracked in #823; native Device
 platform qualification remains separately tracked in #741.
 
-## Companion declarations (preparatory support)
+## Companion declarations
 
 Version 1 configuration accepts optional companion repository metadata:
 
 ```yaml
 companions:
-  app:
-    repository: example/application
+  service:
+    repository: example/service
     profile: cpu
+  consumer:
+    repository: example/consumer
+    profile: gpu
+    placement: same_worker
 ```
 
 Repository identities currently use GitHub `owner/repository` notation. Aliases
@@ -28,12 +32,33 @@ start with a lowercase letter and contain lowercase letters, digits, `_` or `-`.
 Profiles refer to the companion's configuration, not the declaring repository's
 profiles. Local checkout paths and target cloud IDs belong in machine-local state.
 
-This parser and selection contract is a prerequisite for #910. It does not yet
-add the companion UI, CLI/MCP discovery, SSH grants, or remote execution. A
-declaration never starts a cloud or authorizes access. The selection contract pins
-the source session/workspace, source cloud, alias, declaration, and target cloud.
-A changed declaration or missing target requires a new explicit selection rather
-than rebinding to another matching repository. Multiple matches stay distinct.
+`placement` defaults to `cloud`: the companion runs on its own cloud and is
+selected in the cloud panel as described under
+[companion access](#companion-access-in-cloud-panels). A declaration never starts
+a cloud or authorizes access. The selection pins the source session/workspace,
+source cloud, alias, declaration, and target cloud. A changed declaration,
+including a changed placement, or a missing target requires a new explicit
+selection rather than rebinding to another matching repository. Multiple matches
+stay distinct.
+
+`placement: same_worker` declares a sibling for repositories coupled at build
+time, such as a native library and the application that consumes its binaries.
+Today the declaration is validated and otherwise inactive: it does not create a
+checkout, build an image or start anything. A same-worker sibling never
+provisions, starts or stops a cloud, and it is not listed among the
+separate-cloud companions, their grants or the worker's companion catalog.
+
+Planned for #910: selecting siblings when creating a cloud, building the layered
+image, and checking each sibling out beside the declaring repository on the same
+worker. The checkout directory will be named after the sibling's repository name
+without the owner, so relative paths such as `../consumer` in repository scripts
+keep working. Validation already enforces what that layout needs: same-worker
+siblings in one configuration have distinct repository names, compared
+case-insensitively, that do not start with a dot. A clash with the declaring
+repository's own name can only be detected when a cloud is created.
+
+Horizon versions that predate `placement` reject a configuration that uses it,
+including for launching the declaring repository's own cloud.
 
 ## One-time machine setup
 
@@ -160,6 +185,17 @@ Extended LFS pointer formats are rejected explicitly. Source repositories must u
 SHA-1 object IDs and UTF-8 paths; unsupported formats fail validation before
 compute allocation.
 
+A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
+`major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
+newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a
+worker can land on a host too old for the image. Versions compare as numbers, so
+12.11 is above 12.2, and CPU profiles reject the field. Horizon sends the floor
+as `gpu.minCudaVersion` in each v2 worker creation request, alongside the chosen
+GPU type and allowed data centers. RunPod enforces it during placement; a definite
+capacity refusal may try the next configured GPU type with the same floor. An
+uncertain response never permits another create. The GPU stock New cloud shows
+does not yet take the floor into account.
+
 Before each image build, Horizon looks up the release npm currently tags `latest`
 for every supported agent CLI. It passes them as the `HORIZON_CODEX_VERSION`,
 `HORIZON_CLAUDE_VERSION` and `HORIZON_GROK_VERSION` build arguments, next to
@@ -190,17 +226,73 @@ persisted operation identity.
 While you choose a size, New cloud shows RunPod's current prices and stock: each
 vCPU and memory choice carries its hourly price, and a price card shows the
 chosen size's price, whether it is in stock in the allowed data centers, 8 and 24
-hour estimates and the monthly storage cost: the network volume for CPU clouds
-($0.07 per GB for the first TB, $0.05 beyond it) and the pod volume for GPU
-clouds ($0.10 per GB while running, $0.20 while stopped). For GPU profiles it lists your
+hour compute estimates, and what the cloud costs per month running all month and
+stopped all month. Below that it lists every kind of storage the cloud is billed
+for, with its size and monthly price while running and while stopped:
+
+- the network volume of a CPU cloud: $0.07 per GB for the first TB and $0.05
+  beyond it, billed whether the cloud runs or not;
+- the pod volume of a GPU cloud: $0.10 per GB while running and $0.20 while
+  stopped;
+- the container disk: $0.10 per GB, billed only while running and cleared when
+  the cloud stops.
+
+RunPod does not publish storage prices in its catalog, so these are list prices
+with the date they were checked. Storage is shown for GPU profiles even when none
+of their GPUs is in stock. For GPU profiles the card also lists your
 preferred GPU types (`gpu_types` in the settings file) in the order Horizon
 requests them, marks the first one in stock, shows types the catalog does not
-list as not offered, and suggests the cheapest GPU in stock when none of them
-is. The 8 and 24 hour estimates are ranges when the size may land on flavors
+list as not offered, and offers the cheapest GPU in stock when none of them is,
+or when no preferences are set: its **Use** button (for example **Use RTX A5000
+instead**) requests that GPU type for this cloud only. **Advanced**
+also lists every GPU type in stock where the cloud may go, cheapest first with
+its memory and hourly price, next to **Your preferences**. A GPU type chosen
+this way is saved with the cloud like its region, replaces the `gpu_types`
+setting for every attempt, retry and redeploy of that cloud, and is named on its
+card. The 8 and 24 hour estimates are ranges when the size may land on flavors
 with different prices. Prices come
 from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
 is open; Refresh fetches them at once. Only providers Horizon can deploy to show
-prices.
+prices. Details such as how many data centers have stock are written in the card
+rather than in tooltips, which would draw below the dialog.
+
+Agents in Horizon panels can ask for the same prices through the `cloud_offers`
+tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
+Europe for 10 hours". It returns up to 50 offers, cheapest estimated total first:
+each with its hourly price, an estimate for the expected hours including 20 GB (or
+the requested size) of workspace storage, for a CPU size the flavors a cloud of that
+size requests (from Cloud settings) priced at the dearest, since RunPod picks one, availability (CPU sizes are confirmed
+when a cloud is created), the regions with that GPU in stock, and that it runs on
+provider-operated hosts. The running Horizon answers, fetching prices when they are
+missing or older than 15 minutes, and says how old they are. Without a running
+Horizon or cloud settings the tool fails rather than returning old prices. It only
+reads prices; renting stays with the person.
+
+Agents on a cloud worker get the same answer, through `cloud_offers` on the
+companions server or the browser server, from the prices its Horizon last sent.
+While any cloud is ready, Horizon refreshes prices every 15 minutes and sends each
+fresh list to every ready worker over the SSH connection companions use; a worker that misses one is asked again after five minutes. Only
+prices travel: the RunPod key stays on this computer. A worker without prices, or
+with prices older than 20 minutes, answers with an error instead of old prices.
+
+When the allowed data centers span more than one region, New cloud also shows a
+**Region** row: **Any region** (the default, where Horizon picks a data center
+with stock) and each region with how many of its data centers have the chosen
+size, or one of the GPU types the cloud requests (a type chosen for it, or else
+the preferred ones), in stock. A region known to be sold
+out stays visible but cannot be chosen. CPU clouds only count data centers with
+standard network volumes, since their workspace lives on one. **Advanced** lists
+the individual data centers with stock for choosing exactly one. The machine's
+`data_centers` setting still limits what is offered.
+
+The choice is saved with the cloud: every attempt, retry and redeploy asks the
+provider only for the chosen data centers. A cloud's workspace stays in the data
+center it first starts in, and a stopped cloud resumes there, so the dialog says
+so under the Region row. Once a worker exists, the cloud card names its data
+center and region, also for a cloud placed in any region. Horizon looks the region
+up in RunPod's data center list, which covers every data center even after the
+`data_centers` setting changes, and fetches that list once if New cloud has not
+loaded it yet.
 
 Until a worker is requested, including after a failed attempt or a definite
 provider rejection, the cloud card offers vCPU and memory drop-downs for CPU
@@ -283,7 +375,19 @@ itself, using the provider's credential scoped to that worker, and never deletes
 anything. Choose **Check provider** on the card afterwards: a worker confirmed
 stopped offers Resume like an explicitly stopped one, and nothing resumes it
 automatically. Profiles without the field never stop on their own, and workers
-shared across workspaces and profiles with hosted devices do not support it. Resume
+shared across workspaces and profiles with hosted devices do not support it.
+
+The same opt-in lets an agent stop its worker when its task is done, such as when
+its pull request is merged, without this computer. Agents get a
+`stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
+one-line reason. The worker identifies the requesting agent session itself,
+refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
+refuses while another agent session printed output in the last two minutes, while
+the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
+output does not count. The reason and the requesting agent are kept on the
+workspace volume, and after a resume the cloud card shows them, for example
+"Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
+previous worker's reason. Resume
 starts the same worker when provider capacity permits, but lost processes are
 reported rather than silently recreated. Delete permanently destroys the worker
 and its Pod-local files. Uncertain creation responses are reconciled before any
@@ -433,8 +537,8 @@ choice; existing clouds continue to use dedicated workers.
 
 ### Companion access in cloud panels
 
-In a saved session, each cloud panel lists the companions declared in its
-committed `.horizon/cloud.yml`. Check a repository to allow access to an existing
+In a saved session, each cloud panel lists the separate-cloud companions declared
+in its committed `.horizon/cloud.yml`; same-worker siblings are not listed. Check a repository to allow access to an existing
 cloud with that repository and profile in the same workspace. When more than
 one cloud matches, choose its stable cloud ID first. A missing cloud cannot be
 selected. The selection does not create, start, resume, or keep a worker running.
@@ -455,6 +559,9 @@ the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
 independently. M0 has no agent tool for starting or provisioning a cloud.
+The same server also offers `cloud_offers`, so agents on workers without browser
+tools can rank cloud offers from the prices the owning Horizon last sent the
+worker.
 
 Uncheck to remove access. If either worker is offline, removal stays pending
 until that original worker can confirm cleanup. Dirty worktrees are preserved;

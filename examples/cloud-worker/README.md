@@ -38,7 +38,21 @@ provider after that period without agent terminal output and without the contain
 averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1
 hosts); lighter background work does not keep it running.
 `horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
-this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other images. Device control/ownership works without a browser executable or
+this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other images.
+The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
+`horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
+`stop_this_worker` tool on opted-in workers, asks it to stop the worker when a task is
+done. The watcher is the only process that uses the provider credential, but agent
+sessions run as root today, so this is not an isolation boundary (per-agent credential
+isolation is tracked separately). It identifies the requesting session from the
+connecting process through the kernel's peer credentials and its tmux pane, never from
+the request, and refuses callers outside a Claude, Codex or Grok session (a shell
+session or an ad-hoc tmux session is not one). It refuses while another
+agent window printed output in the last two minutes, checked after its CPU sample and
+right before the stop, while the container averages half a core, or when tmux or the
+container's CPU accounting cannot be read. Accepted stops are recorded with the requesting session and agent in
+`/workspace/.horizon/self-stops.jsonl`; `--ready` reports `horizon-self-stop-contract=1`
+and the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.
 Disabled agent requests are rejected before writing session or worktree state.
 
@@ -87,7 +101,10 @@ must actually contain the required GPU libraries; its name alone proves nothing.
 
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
 `horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
-([session relaunch](#session-relaunch-after-a-container-reset)). Source transfer carries verified LFS objects and
+([session relaunch](#session-relaunch-after-a-container-reset)), `horizon-siblings-contract=1`
+([sibling repositories](#sibling-repositories)), `horizon-session-env-contract=1`
+([session environment](#session-environment-from-image-layers)) and `horizon-gpu-lock-contract=1`
+([GPU lock](#gpu-lock)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -106,6 +123,42 @@ Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
 
+## Running on a rented virtual machine
+
+Providers that rent whole servers instead of containers run the same image under
+Docker on the host. `horizon-cloud::host` renders the server's `#cloud-config` user
+data; the host needs Ubuntu with Docker already installed (for example Hetzner's
+`docker-ce` image) and an ext4 volume attached at creation. On first boot it:
+
+- mounts the volume at `/mnt/horizon-volume` (fstab `nofail`) and gives the
+  container its `workspace` subdirectory as `/workspace`, so the filesystem's
+  `lost+found` stays out of view; the service refuses to start without the mount;
+- writes the container environment, the image digest and any registry login as
+  root-only files, and pulls the image by digest with retries;
+- masks the host's own SSH service and locks the root password (cloud-init also
+  disables root and password login), so port 22 belongs to the container and the
+  host has no remote login; if either step fails, the worker is never started;
+- starts `horizon-worker.service`, which runs the container with `--rm`, publishes
+  port 22, keeps at most 50 MB of container logs (Docker's rotating `local` driver)
+  and restarts it on failure and after a reboot.
+
+Before every container start the service drops container traffic to the
+link-local range 169.254.0.0/16, which holds the metadata service, because that
+service returns the user data, including the registry login. The container does
+not start if the rule cannot be applied.
+
+The login file stays on the host (root only, never mounted into the container) so a
+restarted host can pull again if its image cache is lost. The credential also stays
+readable in the server's user data for the server's whole life, so callers must pass
+a short-lived, read-only token scoped to the one repository. Because host SSH is
+masked and root is locked, host recovery uses the provider's rescue system rather
+than a login.
+
+String values are written as data files and never interpolated into commands; only
+the range-checked shared memory size appears in the start script. Stopping the
+server ends every container process, as on any other provider; `/workspace` keeps
+its files.
+
 ## Session relaunch after a container reset
 
 A container reset, such as an image replacement, keeps `/workspace` but ends tmux
@@ -118,12 +171,12 @@ horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
 
 Relaunch needs ready worker services and the session's persisted agent and revision
 binding. It runs the original launch command, `horizon-worker-run SESSION AGENT`, in
-the existing `/workspace/agents/SESSION` worktree. It never creates, resets or checks
-out that worktree and never imports source again, so commits, uncommitted files and
-agent logins under `/workspace` survive. The process builds its environment from the
-worker volume and the new container's services, so Horizon sends no credentials for
-it. A session whose process had already exited starts again; its stale `exit-status`
-is removed.
+the session's existing primary worktree (see [session layout](#session-layout)). It
+never creates, resets or checks out a worktree and never imports source again, so
+commits, uncommitted files and agent logins under `/workspace` survive. The process
+builds its environment from the worker volume and the new container's services, so
+Horizon sends no credentials for it. A session whose process had already exited starts
+again; its stale `exit-status` is removed.
 
 Before starting the process, relaunch persists `relaunch-requested-OPERATION` in the
 session directory, so each operation starts at most one process per session:
@@ -139,6 +192,177 @@ Any other failure, such as services that are not ready, starts nothing. A launch
 that fails after the fence is persisted is not replayed. A later operation with a new
 identifier can relaunch the session again. Images without the marker keep reporting
 such sessions lost.
+
+## Sibling repositories
+
+A repository coupled to the primary at build time, such as a native library and the
+application that consumes its binaries, can live on the same worker as a sibling.
+Each sibling has an alias: a lowercase letter followed by at most 63 lowercase
+letters, digits, `_` or `-`. Its committed source is kept apart from the primary's:
+
+| Content | Primary | Sibling |
+|---------|---------|---------|
+| Committed objects, `refs/heads/base` | `/workspace/repository.git` | `/workspace/siblings/ALIAS/repository.git` |
+| Submodules, LFS objects, `manifest.json` | `/workspace/source` | `/workspace/siblings/ALIAS/source` |
+| Uploaded pack | `/workspace/horizon-transfer.pack` | `/workspace/siblings/ALIAS/horizon-transfer.pack` |
+| Uploaded source archive | `/workspace/horizon-source.tar` | `/workspace/siblings/ALIAS/horizon-source.tar` |
+
+Each sibling has its own upload paths, so an upload or retry for one repository never
+replaces or deletes another's. Create the sibling's private upload directory (mode
+0700) before the first upload; the command prints its path and may be repeated:
+
+```
+horizon-worker-siblings stage ALIAS
+```
+
+Then upload the pack and archive there and import them:
+
+```
+horizon-worker-import REVISION --sibling ALIAS
+horizon-worker-source import --sibling ALIAS
+```
+
+Both validate and replay exactly like the primary import: a second import of the same
+revision succeeds, and a different revision for an existing sibling fails with
+`Cloud base revision mismatch`. The global `lfs.storage` names the primary's store,
+so a sibling repository and the submodule checkouts that
+`horizon-worker-source checkout WORKTREE --sibling ALIAS` prepares each set
+`lfs.storage` to the sibling's own store. LFS content never hydrates from another
+repository's objects. A checkout inside a session root is accepted only for a
+worktree of the repository whose material it names.
+
+After importing every sibling, record the set with its checkout directories:
+
+```
+horizon-worker-siblings set < manifest.json
+horizon-worker-siblings show
+```
+
+```json
+{"version":1,"primary":"app","siblings":[{"alias":"native-lib","directory":"native-lib","revision":"<40 or 64 hex>"}]}
+```
+
+`primary` and each `directory` name the checkout directories inside a session root:
+one path component of letters, digits, `.`, `_` or `-` that does not start with `.`
+or `-` (so never `.`, `..` or `.git`), and unique ignoring case. `set` refuses unknown keys, more than 16 siblings, input over 64 KiB,
+and a sibling whose `revision` differs from its imported `refs/heads/base` or whose
+source material has not been imported; a refused manifest leaves the previous one in
+place. The manifest is replaced atomically at `/workspace/siblings.json`. `show`
+prints the validated manifest, or `{"version":1,"primary":null,"siblings":[]}` when
+none was recorded. An empty `siblings` list is valid and means no siblings; with an
+empty list `primary` may be `null`, so sending back what `show` printed before any
+manifest clears the siblings. The checker reports `horizon-siblings-contract=1` when
+the image has `horizon-worker-siblings` and supports the session layout below.
+
+### Session layout
+
+A new session copies the manifest into its own state as
+`/workspace/sessions/SESSION/siblings.json` when the manifest lists at least one
+sibling. That snapshot fixes the session's layout for its lifetime: attach and
+relaunch always use it, and a later manifest change affects only new sessions. A
+session without a snapshot, including every session created before siblings existed,
+keeps the single layout.
+
+| Layout | Primary worktree (process working directory) | Sibling worktrees |
+|--------|----------------------------------------------|-------------------|
+| Single | `/workspace/agents/SESSION` | none |
+| Siblings | `/workspace/agents/SESSION/PRIMARY` | `/workspace/agents/SESSION/DIRECTORY` per sibling |
+
+Every worktree is on branch `agent/SESSION` of its own repository: the primary at the
+session's revision, each sibling at its manifest revision. Submodules and LFS content
+are prepared from each repository's own material before the launch fence, so relative
+paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch
+refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
+its own repository, and never recreates it. Attach refuses the same way when a path it
+would complete after an interrupted preparation holds another repository.
+
+### Session data directory
+
+Every session, with or without siblings, gets a private directory at
+`/workspace/session-data/SESSION` (mode 0700), created before its process starts and
+again by relaunch when missing. `horizon-worker-run` exports it to the agent as
+`HORIZON_SESSION_DIR`. Repositories point their per-session caches and test state
+there, such as a package cache that must not be shared with another session on the
+same worker. Horizon sets no ecosystem-specific variables; a repository's own scripts
+choose what to place in the directory.
+
+## Session environment from image layers
+
+Sessions start over SSH, so they do not inherit a recipe's `ENV` instructions: a toolkit
+directory such as `/usr/local/cuda/bin` that only `ENV PATH` adds is missing in every
+session. A recipe adds session environment by writing a file to
+`/etc/horizon-worker/session-env.d/`, and each layer, the primary's and every sibling's,
+adds its own file, so layers compose instead of replacing each other:
+
+```dockerfile
+RUN mkdir -p /etc/horizon-worker/session-env.d \
+    && printf 'PATH_PREPEND=/usr/local/cuda/bin\nCUDA_CACHE_MAXSIZE=4294967296\n' \
+        > /etc/horizon-worker/session-env.d/20-gpu-library.env
+```
+
+Name each file `NN-REPOSITORY.env`, with two digits that place it among the layers (for
+example 20 for the primary and 30 for its siblings). Files are read in lexical order of
+their names, so `100-x.env` sorts before `20-y.env`. A name is at most 100 letters,
+digits, `.`, `_` or `-`, starts with a letter or digit and ends in `.env`. Each file is
+data, never shell, with one entry per line:
+
+| Line | Effect |
+|------|--------|
+| `KEY=VALUE` | Sets `KEY` to everything after the first `=`, taken literally. A later line or file replaces an earlier value |
+| `PATH_PREPEND=DIR` | Puts the absolute directory `DIR` first on `PATH`, so a later file's directory is searched before an earlier file's |
+| `PATH_APPEND=DIR` | Adds `DIR` to the end of `PATH`, in file order |
+| empty, or starting with `#` | Ignored |
+
+`PATH` starts from the one SSH gives the session, empty components included. A directory
+already on it, from that base or an earlier line, stays where it is. `KEY` is a letter or
+`_` followed by letters, digits or `_`, at most 128 characters. The variables the worker
+sets or clears for every session are refused: `PATH`, `HOME`, `DISPLAY`, `HORIZON`, every
+`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
+and `ANTHROPIC_CUSTOM_HEADERS`. The directory holds at most 64 regular files
+of at most 16 KiB each, and a value is at most 4096 characters. A line that is not one of
+the entries above, contains a control character (including tab, on any line) or breaks a
+limit is refused with its file and line; invalid UTF-8, an oversized or misnamed file, another kind of
+entry, too many files or a path that is not a directory is refused with its path.
+
+`horizon-worker-check` validates the files, so a malformed file fails the image check,
+worker readiness and every session attach or relaunch before anything is started.
+`horizon-worker-run` passes them to the agent process of every session, with or without
+siblings, through `env` at launch, so each accepted value arrives exactly as written and
+the launcher's own shell never interprets it. If they are refused at that point, it starts
+no process, records exit status 3 and appends the reason to `/workspace/session-env.log`.
+Without the directory nothing changes. Companion shells from other clouds do not apply
+the files. The checker reports `horizon-session-env-contract=1` when the image has
+`horizon-worker-session-env`.
+
+## GPU lock
+
+Sessions on one worker share its GPU. Run GPU builds and tests under the worker's GPU
+lock so they never overlap:
+
+```
+horizon-worker-gpu-lock [--wait SECONDS] -- COMMAND [ARGUMENT...]
+```
+
+It runs `COMMAND` while holding an exclusive `flock` on `/workspace/locks/gpu.lock`,
+waiting as long as another holder has it unless `--wait` bounds the wait (`--wait 0`
+tries once). Only the lock command holds the lock, so a background process that
+`COMMAND` leaves behind does not keep it. Every agent session gets the same file as
+`HORIZON_GPU_LOCK`, so a repository script can also call `flock "$HORIZON_GPU_LOCK" ...`
+directly.
+
+| Exit | Meaning |
+|------|---------|
+| `COMMAND`'s status | The lock was acquired and `COMMAND` ran |
+| 2 | Invalid usage |
+| 75 | The lock was not acquired within `--wait` seconds; `COMMAND` did not run |
+| 126 | `COMMAND` names a path that is not executable |
+| 127 | `COMMAND` is not an executable on `PATH`; shell builtins and functions cannot be run |
+| other | `flock` could not use the lock file, for example 66 when it cannot be opened |
+
+The lock is advisory: GPU work started without it is not serialized. It belongs to the
+`horizon-worker-gpu-lock` process: stopping the whole command, as Ctrl-C in a terminal does,
+releases it, but killing only that process leaves `COMMAND` running without the lock. The checker reports
+`horizon-gpu-lock-contract=1` when the image has `horizon-worker-gpu-lock`.
 
 ## Optional Git credentials
 
@@ -173,6 +397,49 @@ the still-enabled local binding again before reporting Ready.
 Run `python3 -m unittest discover -s examples/cloud-worker -p 'test_*.py'` for
 synthetic credential matching, private storage, removal and Git/gh integration
 checks. No test credentials are included in this image.
+
+### Several repositories on one worker
+
+A worker that also hosts same-worker siblings (bare repositories under
+`/workspace/siblings/<alias>/repository.git`) receives a version 2 file instead:
+`{"version":2,"grants":[{"repository","token","author_name","author_email","target"}]}`,
+where `target` is `primary` or `sibling:<alias>`. Each repository that has its own
+local binding gets one grant; a repository without a binding gets none. At most 16
+grants are accepted, repositories and targets must be unique, and unknown or
+duplicate fields are refused. Installation refuses a grant whose target repository
+is missing or is not a bare repository before it changes any configuration or
+writes a token. In each target repository's own config it replaces `origin` with
+a clean HTTPS URL, removes any separate push URL and sets the grant's author
+identity, so agent worktrees of that repository commit and push as that
+repository.
+
+Git's helper answers only for the repository path it is asked about, with that
+repository's token. The `gh` wrapper chooses the repository from `--repo`/`-R`
+(including short-flag clusters), then `GH_REPO`, then the working directory's
+`origin`, and injects only that repository's token. Repositories that other
+arguments imply (github.com URLs, `gh repo <command> OWNER/REPO`, and
+`gh api repos/OWNER/REPO/...`, also as an api.github.com URL) must agree with that
+choice; they select the repository only when nothing else does. A `--repo`/`-R`
+right after a flag without an inline value, or after `--`, might be that flag's
+value, so it is treated the same way: put `--repo` before value-less flags to
+select another repository. If the repository cannot be determined, the arguments
+disagree, an argument or `GH_HOST` selects another host, or it has
+no grant, `gh` runs without Horizon credentials (a Horizon token inherited from an
+outer `gh` is removed too) and prints one line on stderr. Package restores that
+call `gh auth token` inside a repository therefore read that repository's own
+token. Give each token read-only package access for restores; never bind a token
+that can publish packages. Horizon sends version 2 whenever a cloud has siblings,
+even if only the primary has a binding, so ordinary `gh` use in a sibling checkout
+does not pick up the primary's token.
+
+Free-form input such as GraphQL queries is not inspected. This per-repository
+selection is routing, not isolation: every process in the
+container runs as the same user and can read the credential file, so the
+shared trust boundary described above still applies. Version 1 files keep their
+single-repository behavior. Every install first removes the identities the
+previous install wrote (global for version 1, per repository for version 2) where
+they are unchanged. Images that support version 2 also
+report `horizon-git-auth-contract=2` from `horizon-worker-check --git-auth`.
 
 ## Repeatable capability image smoke
 
@@ -462,7 +729,7 @@ checks, not OS resource quotas or demonstrated application readiness.
 State retains at most 32 project identities and 64 mutations without eviction.
 Every live project retains one mutation slot for cancellation; preparation also
 consumes a slot.
-The 64-KiB manifest limit can be reached earlier. Every live reservation reserves
+The 128-KiB manifest limit can be reached earlier. Every live reservation reserves
 4 KiB for its eventual cancellation mutation; cancellation's complete encoded
 mutation must fit that bound (canonical `cancel` requests do). The worker stores
 canonical signed-message encoding while preserving authenticated payload bytes.
@@ -723,5 +990,107 @@ limits. Free-space checks do not establish per-project resource quotas.
 The local `sources` SSH scenario prepares two sessions in each of three projects,
 including LFS and recursive submodules, then checks exact-request recovery and
 retained edits. These fixtures do not qualify actual agent execution, live-provider
-behavior or physical power-loss durability. Public UI/CLI/MCP admission and process
-lifecycle remain subsequent #805 work; a preparation receipt is not launch authority.
+behavior or physical power-loss durability. Public UI/CLI/MCP admission remains subsequent #805 work; a preparation receipt
+is not launch authority. The separate process lifecycle follows below.
+
+
+### One-shot persistent session runtime
+
+Linux workers accept signed `start-project-session` and `stop-project-session`
+mutations, plus fresh signed `inspect-project-session` requests. Owning-host APIs
+are `project_reservations::{start_session,stop_session,inspect_session}`. The
+project remains `importing`. The separate signed attachment transport is described
+below; public UI/CLI/MCP project admission, credentials and tool grants remain
+subsequent work.
+
+A start requires a prepared session, the reserved agent permission, no application
+ports, and no desktop, browser or external-browser grants. The initial fixed
+policy supports Claude CLI 2.1.283 at `/usr/local/bin/claude` and `/usr/bin/tmux`.
+Other agents and versions fail before consuming launch authority. The worker
+rejects nonempty or symlinked `/etc/claude-code`, clears inherited environment,
+uses the anchored private home and checkout, and applies
+`--safe-mode --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+--setting-sources '' --disable-slash-commands --no-chrome`.
+Managed policy can override customization suppression, so a qualified image must
+keep that directory empty. No prompt, credential transfer, permissions bypass,
+automatic installation or updater is enabled. The agent's own shell and network
+capabilities remain available; this trusted same-user contract is not a sandbox.
+
+Only first application of a signed start can create a supervisor. It records
+launch authority before spawning, then passes a private inherited socket permit
+bound to the recorded process and nonce. The single-threaded supervisor becomes a
+Linux child subreaper before launching its private tmux server. Server and pane
+identity are checked separately; an SSH disconnect or owning-host restart does
+not end the session. A historical launch receipt is never evidence that the agent
+is currently running, authenticated or ready. Inspection binds a fresh operation
+to the exact session and known manifest revision, including the base or next
+revision of a pending host mutation without replacing that journal.
+
+Stop persists terminal intent before effects. The intact supervisor signals only
+its unreaped direct children using pidfds, repeatedly adopts/reaps descendants,
+and records `stopped` only after the kernel reports no children. A normal agent
+exit retains its exit status; detached descendants must still be stopped.
+Terminal acknowledgement retries file and directory synchronization. Cancellation
+requires durable stop evidence for every launched session and retains all files.
+No automatic relaunch occurs, even after a failed handoff or missing runtime
+record. Supervisor loss, replaced anchors, or uncertain cleanup returns
+`uncertain` and fences cancellation. Recovery does not signal saved PIDs.
+Externally delegated services are outside the supervised process tree.
+
+The retained manifest is bounded to 128 KiB; individual requests, observations
+and runtime records remain bounded to 64 KiB. Each active launch reserves history
+and byte capacity for one stop, alongside project cancellation capacity. History
+is never evicted to admit another operation. Per-session tmux scrollback is 2,000
+lines; this does not establish CPU, memory, disk or process quotas.
+
+The local `runtime` SSH smoke uses synthetic agents in one persistent isolated
+PID namespace. It checks six sessions, lost replies, host and SSH restarts,
+retained edits, agent exit, descendant termination, sibling preservation and
+supervisor-loss fencing. Terminal stop must complete while intermittent allocation-lock
+contention continues, with sibling processes still advancing. Repeat it with `--runtime-fault server`, `socket` and
+`stop-race`; this mode requires `strace` and pauses the supervisor until signed
+stop has committed, then resumes it before any executable launch. Socket replacement preserves the replacement
+bytes. The `early-exit` mode retains an immediate agent exit and then stops
+its remaining descendants. Separate installed-agent policy probes use no credentials
+or inference and disable networking; offline interactive startup may exit before
+authentication. Neither those probes nor synthetic process tests qualify
+live-provider execution, authenticated inference or physical power-loss behavior.
+
+### Signed attachment to an existing session
+
+`attach-project-session <authorization>` is an internal Linux worker transport.
+The owning host selects a session with `project_reservations::prepare_attachment`
+and calls its `transport` method immediately before an SSH PTY launcher. Retain
+the returned `SessionTransport` until SSH exits: it owns private copies of the
+verified key and known-host pin. Release the host `Owner` before waiting on the
+interactive process so another operation can inspect or stop it. Never log or
+persist transport arguments in panels or ordinary diagnostics. Authorization is
+bounded lowercase hex, separate from terminal input, and binds the controller,
+allocation startup, worker, project, session, exact launch and current revision.
+Pending host mutations block new attachment until resolved.
+
+The worker requires the supervisor-published server process, socket, directory
+and unique pane identities. Older runtime records without an endpoint binding
+remain inspectable/stoppable but cannot attach. Only running or retained exited
+sessions with an intact supervisor qualify. The verified upstream Unix connection
+is retained across the handoff; it is never reconnected by pathname. A fixed
+`tmux -N` child connects through an authenticated private proxy and receives only
+an intermediary PTY. Both directions to the real SSH terminal remain gated until
+peer authentication and a final signed state check ordered with stop. The relay
+holds no allocation lock and bounds each direction to 64 KiB and 16 ancillary
+descriptors. Managed terminal bindings cannot create, split or respawn panes.
+
+Disconnect detaches without stopping the agent. Reconnect preserves processes,
+checkout edits and private home data. Multiple clients may attach concurrently;
+tmux selects the smallest client terminal size. Explicit stop closes attachments
+and never relaunches. This internal transport does not expose public UI/CLI/MCP
+project admission, grant credentials, or complete shared-worker delivery.
+
+The `attachment` scenario in `scripts/cloud-initialization-smoke.py` exercises real
+SSH with private PTYs and synthetic interactive agents, alongside the runtime
+baseline. Live-provider execution, authenticated inference and physical power-loss
+behavior require separate qualification.
+
+Add `--attachment-race` to pause the attachment process after its upstream
+connection, commit a terminal stop, and verify that the final authorization gate
+rejects queued input. This isolated fault lane requires `strace`.

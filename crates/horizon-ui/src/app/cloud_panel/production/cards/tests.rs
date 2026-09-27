@@ -14,6 +14,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
         revision: "a".repeat(40),
         profile_name: "Long development profile ".repeat(8),
         profile: config.profiles.remove("dev").unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     };
     let ctx = egui::Context::default();
     for _ in 0..3 {
@@ -58,6 +59,8 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                                 image_replacement: None,
                                 session_restart: None,
                                 timeline: None,
+                                last_self_stop: None,
+                                siblings: None,
                             }),
                             ..Default::default()
                         };
@@ -78,7 +81,7 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                         });
                         let id = u32::try_from(id).unwrap();
                         let response = runtime_frame(ui, id, |ui| {
-                            assert!(profile_details(ui, id, &launch, &runtime).is_none());
+                            assert!(profile_details(ui, id, &launch, &runtime, &|_| None).is_none());
                             runtime_actions(ui, id, &mut runtime);
                         });
                         assert!((response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1);
@@ -116,6 +119,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.path().into());
@@ -148,6 +152,8 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         image_replacement: None,
         session_restart: None,
         timeline: None,
+        last_self_stop: None,
+        siblings: None,
     };
     store.save(&state).unwrap();
     app.resize_production_cloud(1, (16, 64));
@@ -181,6 +187,7 @@ fn size_launch() -> CloudLaunch {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles.remove("dev").unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     }
 }
 
@@ -201,7 +208,7 @@ fn size_frame(
                 events,
                 ..Default::default()
             },
-            |ui| size = profile_details(ui, 1, launch, runtime),
+            |ui| size = profile_details(ui, 1, launch, runtime, &|_| None),
         )
         .discard_textures();
     let texts = output
@@ -853,7 +860,7 @@ fn deleted_cloud_can_redeploy_without_removing_the_card() {
                     ..Default::default()
                 },
                 |ui| {
-                    assert!(profile_details(ui, 1, &launch, runtime).is_none());
+                    assert!(profile_details(ui, 1, &launch, runtime, &|_| None).is_none());
                     action = runtime_actions(ui, 1, runtime);
                 },
             )
@@ -936,7 +943,7 @@ fn an_active_redeploy_keeps_the_selected_size_and_status() {
     };
     let output = ctx
         .run_ui(egui::RawInput::default(), |ui| {
-            assert!(profile_details(ui, 1, &launch, &runtime).is_none());
+            assert!(profile_details(ui, 1, &launch, &runtime, &|_| None).is_none());
             assert!(runtime_actions(ui, 1, &mut runtime).is_none());
         })
         .discard_textures();

@@ -1,6 +1,6 @@
-use super::{Duration, Error, Images, Result, Runner};
-use crate::cloud_runtime::worker_contract;
-use horizon_cloud::{Cancellation, Capabilities, Profile};
+use super::{Duration, Error, Event, Images, Result, Runner};
+use crate::cloud_runtime::{git_auth, siblings, worker_contract};
+use horizon_cloud::{Cancellation, Capabilities, CloudError, Profile};
 
 impl Images<'_> {
     pub(super) fn validate(&self, image: &str, operation_id: &str, profile: &Profile) -> Result<()> {
@@ -10,6 +10,30 @@ impl Images<'_> {
     /// # Errors
     /// Checks the selected runtime and optional Git binding before allocating compute.
     pub fn validate_contract(&self, image: &str, operation_id: &str, profile: &Profile, git_auth: bool) -> Result<()> {
+        self.check(image, operation_id, profile, git_auth, None)
+    }
+
+    /// # Errors
+    /// As [`Self::validate_contract`] for an image with same-worker siblings, which must also
+    /// lay out sibling checkouts and, with `grants`, accept version 2 Git grants.
+    pub fn validate_siblings_contract(
+        &self,
+        image: &str,
+        operation_id: &str,
+        profile: &Profile,
+        grants: bool,
+    ) -> Result<()> {
+        self.check(image, operation_id, profile, grants, Some(grants))
+    }
+
+    fn check(
+        &self,
+        image: &str,
+        operation_id: &str,
+        profile: &Profile,
+        git_auth: bool,
+        sibling_grants: Option<bool>,
+    ) -> Result<()> {
         let capabilities = &profile.capabilities;
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
@@ -20,10 +44,11 @@ impl Images<'_> {
         let result = self
             .run_contract(image, &name, capabilities, git_auth)
             .and_then(|output| {
-                worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())
+                worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())?;
+                sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))
             });
         // Killing a Docker client does not stop its daemon-owned container.
-        finish_contract(result, self.remove_contract(&name))
+        finish_cleanup(result, self.remove_contract(&name), self.runner.emit)
     }
 
     fn run_contract(&self, image: &str, name: &str, capabilities: &Capabilities, git_auth: bool) -> Result<String> {
@@ -83,14 +108,41 @@ impl Images<'_> {
     }
 }
 
-fn finish_contract(result: Result<()>, cleanup: Result<()>) -> Result<()> {
+fn validate_siblings(output: &str, grants: bool) -> Result<()> {
+    let reports = |marker| worker_contract::reports(output, marker);
+    if !reports(siblings::CONTRACT) {
+        return Err(Error::Invalid(
+            "Worker image does not support same-worker siblings; rebuild with the current worker bootstrap",
+        ));
+    }
+    if grants && !reports(git_auth::GRANTS_CONTRACT) {
+        return Err(Error::Invalid(
+            "Worker image does not support per-repository Git credentials; rebuild with the current worker bootstrap",
+        ));
+    }
+    Ok(())
+}
+
+/// The outcome of `result` after its cleanup. A cancellation stays the reported outcome, as
+/// callers recognize it, and a cleanup failure beside it is only emitted; otherwise as
+/// [`finish_contract`].
+pub(super) fn finish_cleanup<T>(result: Result<T>, cleanup: Result<()>, emit: &dyn Fn(Event)) -> Result<T> {
+    if let (Err(Error::Provider(CloudError::Cancelled)), Err(failed)) = (&result, &cleanup) {
+        emit(Event::Output(failed.to_string()));
+        return result;
+    }
+    finish_contract(result, cleanup)
+}
+
+/// The outcome of `result`, keeping a cleanup failure visible beside it.
+fn finish_contract<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
     match (result, cleanup) {
         (Err(primary), Err(cleanup)) => Err(Error::Cleanup {
             primary: Box::new(primary),
             cleanup: Box::new(cleanup),
         }),
         (Err(error), _) | (_, Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(value), Ok(())) => Ok(value),
     }
 }
 
@@ -101,7 +153,7 @@ mod tests {
 
     #[test]
     fn contract_rejection_and_cleanup_failure_remain_distinct() {
-        let error = finish_contract(
+        let error = finish_contract::<()>(
             Err(Error::Invalid("missing agent")),
             Err(Error::Invalid("cleanup pending")),
         )
@@ -109,8 +161,54 @@ mod tests {
         assert!(matches!(error, Error::Cleanup { .. }));
         assert_eq!(error.to_string(), "missing agent; cleanup also failed: cleanup pending");
         assert!(finish_contract(Ok(()), Err(Error::Invalid("cleanup pending"))).is_err());
-        assert!(finish_contract(Err(Error::Invalid("missing agent")), Ok(())).is_err());
+        assert!(finish_contract::<()>(Err(Error::Invalid("missing agent")), Ok(())).is_err());
         assert!(finish_contract(Ok(()), Ok(())).is_ok());
+    }
+
+    #[test]
+    fn cancellation_stays_the_outcome_when_cleanup_also_fails() {
+        let output = std::cell::RefCell::new(Vec::new());
+        let emit = |event| {
+            if let Event::Output(line) = event {
+                output.borrow_mut().push(line);
+            }
+        };
+        let cancelled = finish_cleanup::<()>(
+            Err(CloudError::Cancelled.into()),
+            Err(Error::Invalid("cleanup pending")),
+            &emit,
+        );
+        assert!(matches!(cancelled, Err(Error::Provider(CloudError::Cancelled))));
+        assert_eq!(*output.borrow(), ["cleanup pending"]);
+        let failed = finish_cleanup::<()>(
+            Err(Error::Invalid("missing agent")),
+            Err(Error::Invalid("cleanup pending")),
+            &emit,
+        );
+        assert!(matches!(failed, Err(Error::Cleanup { .. })));
+        assert!(finish_cleanup::<()>(Err(CloudError::Cancelled.into()), Ok(()), &emit).is_err());
+        assert_eq!(output.borrow().len(), 1);
+    }
+
+    #[test]
+    fn sibling_images_must_report_sibling_checkouts_and_version_2_grants_when_sent() {
+        let rejected = |output: &str, grants| match validate_siblings(output, grants) {
+            Err(Error::Invalid(message)) => message,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert!(rejected("horizon-source-contract=1", false).contains("same-worker siblings"));
+        assert!(
+            rejected("horizon-siblings-contract=1\nhorizon-git-auth-contract=1", true).contains("per-repository Git")
+        );
+        assert!(rejected("prefix horizon-siblings-contract=1", false).contains("siblings"));
+        assert!(validate_siblings("horizon-siblings-contract=1", false).is_ok());
+        assert!(
+            validate_siblings(
+                "horizon-siblings-contract=1\nhorizon-git-auth-contract=1\nhorizon-git-auth-contract=2",
+                true
+            )
+            .is_ok()
+        );
     }
 
     #[test]

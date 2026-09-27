@@ -4,7 +4,7 @@ use super::{
     inspection, namespaces,
     recovery::{BOOTSTRAP, Bootstrap, MANIFEST, Phase, ROOT, decode, read_request},
     runtime::Runtime,
-    sessions, source,
+    session_runtime, sessions, source,
     store::{Publication, Store, invalid},
 };
 use horizon_cloud::Capabilities;
@@ -23,7 +23,11 @@ pub(super) fn run(action: Action) -> io::Result<()> {
         return Err(invalid());
     }
     let request = read_request(io::stdin().lock())?;
-    let store = Store::open(Path::new(ROOT))?;
+    let store = if matches!(action, Action::StartProjectSession | Action::StopProjectSession) {
+        session_runtime::open()?
+    } else {
+        Store::open(Path::new(ROOT))?
+    };
     let runtime = Runtime::captured()?;
     let receipt = mutate(&store, &runtime, &request, action, inspection::probe, &mut |_| Ok(()))?;
     serde_json::to_writer(io::stdout().lock(), &receipt)?;
@@ -37,7 +41,8 @@ pub(super) fn startup(store: &Store, bootstrap: &Bootstrap) -> io::Result<()> {
     let (_, manifest) = load(store, bootstrap)?;
     namespaces::validate(store, &manifest)?;
     source::validate(store, &manifest, false)?;
-    sessions::validate(store, &manifest, None)
+    sessions::validate(store, &manifest, None)?;
+    session_runtime::validate(store, &manifest, None)
 }
 
 pub(super) fn load(store: &Store, bootstrap: &Bootstrap) -> io::Result<(Vec<u8>, Manifest)> {
@@ -111,17 +116,14 @@ pub(super) fn mutate_with(
     if reserved_operation(&bootstrap, receipt.operation) {
         return Err(invalid());
     }
+    session_runtime::preflight(store, &manifest, &receipt, &payload)?;
     let prepared_source = if matches!(payload, Request::PrepareSession { .. }) {
         Some(source::published(store, &manifest, &receipt.identity, source_deadline)?)
     } else {
         None
     };
     let verify = || -> io::Result<()> {
-        if matches!(payload, Request::Cancel {}) {
-            namespaces::require_settled(store, &manifest, &receipt.identity)?;
-            source::require_settled(store, &manifest, &receipt.identity)?;
-            sessions::validate(store, &manifest, Some(&receipt.identity))?;
-        }
+        validate_cancellation(store, &manifest, &receipt.identity, &payload)?;
         if matches!(payload, Request::ReserveSession { .. }) {
             source::require_settled_until(store, &manifest, &receipt.identity, source_deadline)?;
         }
@@ -197,5 +199,21 @@ pub(super) fn mutate_with(
     if store.read(MANIFEST)?.as_deref() != Some(&next_bytes) {
         return Err(invalid());
     }
+    session_runtime::commit(store, &next, &receipt, &payload, next.revision != manifest.revision)?;
     Ok(receipt)
+}
+
+fn validate_cancellation(
+    store: &Store,
+    manifest: &Manifest,
+    identity: &horizon_cloud_protocol::ProjectIdentity,
+    payload: &Request,
+) -> io::Result<()> {
+    if matches!(payload, Request::Cancel {}) {
+        namespaces::require_settled(store, manifest, identity)?;
+        source::require_settled(store, manifest, identity)?;
+        sessions::validate(store, manifest, Some(identity))?;
+        session_runtime::validate(store, manifest, Some(identity))?;
+    }
+    Ok(())
 }

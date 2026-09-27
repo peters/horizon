@@ -247,6 +247,169 @@ fn chosen_size_starts_the_cloud_at_that_size() {
 }
 
 #[test]
+fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() {
+    use horizon_core::cloud_runtime::prices::{
+        Availability, CpuFlavorPrice, DataCenter, PriceList, RUNPOD_STORAGE, SizeAvailability,
+    };
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let center = |id: &str, region: &str| DataCenter {
+        id: id.into(),
+        region: region.into(),
+        workspace_storage: true,
+        gpus: Vec::new(),
+    };
+    let list = PriceList {
+        provider: "RunPod",
+        cpu: vec![CpuFlavorPrice {
+            id: "cpu3c".into(),
+            name: "Compute-Optimized".into(),
+            per_vcpu_hour: 0.03,
+        }],
+        gpus: Vec::new(),
+        data_centers: vec![
+            center("EU-RO-1", "EUROPE"),
+            center("EUR-IS-1", "EUROPE"),
+            center("US-MO-2", "NORTH_AMERICA"),
+        ],
+        regions: std::collections::BTreeMap::new(),
+        storage: RUNPOD_STORAGE,
+    };
+    let production = &mut app.cloud_prototype.production;
+    let profile = production.profiles.as_ref().unwrap().profiles["development"].clone();
+    let preferences = horizon_core::cloud_runtime::prices::Preferences {
+        cpu_flavors: vec!["cpu3c".into()],
+        gpu_types: Vec::new(),
+    };
+    let stock = SizeAvailability {
+        centers: vec![("EU-RO-1".into(), Availability::High)],
+    };
+    production.prices.answered(list, preferences, vec![(profile, stock)]);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(&output, "Region"));
+    assert!(has_label(&output, "Any region\n1 in stock"));
+    assert!(has_label(
+        &output,
+        "Horizon picks a data center with stock. The workspace stays there, and a stopped cloud resumes there."
+    ));
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "North America\nnone in stock").center(),
+    );
+    assert!(
+        app.cloud_prototype.production.placement.is_any(),
+        "a sold-out region cannot be chosen"
+    );
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    click(&ctx, &mut app, label_rect(&output, "Europe\n1 in stock").center());
+    let europe = horizon_core::cloud_panel::Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-RO-1".into(), "EUR-IS-1".into()],
+        gpu_types: Vec::new(),
+    };
+    assert_eq!(app.cloud_prototype.production.placement, europe);
+    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    assert!(has_label(
+        &output,
+        "The workspace stays in Europe, and a stopped cloud resumes there."
+    ));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.placement, europe, "the cloud keeps where it may be placed");
+}
+
+/// A GPU profile whose price list has only the RTX A5000 in stock, with `preferred`
+/// as the machine's GPU preferences.
+fn gpu_dialog(preferred: &[&str]) -> (tempfile::TempDir, egui::Context, HorizonApp) {
+    use horizon_core::cloud_runtime::prices::{
+        Availability, DataCenter, GpuPrice, Preferences, PriceList, RUNPOD_STORAGE,
+    };
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let production = &mut app.cloud_prototype.production;
+    let config = production.profiles.as_mut().unwrap();
+    config.profiles.get_mut("development").unwrap().gpu = true;
+    let gpu = |id: &str, name: &str, hourly| GpuPrice {
+        id: id.into(),
+        name: name.into(),
+        memory_gb: 24,
+        hourly,
+    };
+    let list = PriceList {
+        provider: "RunPod",
+        cpu: Vec::new(),
+        gpus: vec![
+            gpu("NVIDIA RTX A6000", "RTX A6000", 0.53),
+            gpu("NVIDIA RTX A5000", "RTX A5000", 0.27),
+        ],
+        data_centers: vec![DataCenter {
+            id: "EU-RO-1".into(),
+            region: "EUROPE".into(),
+            workspace_storage: true,
+            gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
+        }],
+        regions: std::collections::BTreeMap::new(),
+        storage: RUNPOD_STORAGE,
+    };
+    let preferences = Preferences {
+        cpu_flavors: Vec::new(),
+        gpu_types: preferred.iter().map(|&gpu| gpu.to_owned()).collect(),
+    };
+    production.prices.answered(list, preferences, Vec::new());
+    (temp, ctx, app)
+}
+
+/// A tall window keeps the price card inside the dialog's scroll area.
+fn tall_frame(ctx: &egui::Context, app: &mut HorizonApp) -> egui::FullOutput {
+    let input = raw_input([1000.0, 1600.0], None);
+    ctx.run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
+        .discard_textures()
+}
+
+#[test]
+fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
+    let (_temp, ctx, mut app) = gpu_dialog(&["NVIDIA RTX A6000"]);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "None of your preferred GPUs is in stock"));
+    click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
+    assert_eq!(
+        app.cloud_prototype.production.placement.gpu_types,
+        ["NVIDIA RTX A5000"],
+        "only this cloud changes"
+    );
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(
+        &output,
+        "RTX A5000 · 24 GB · chosen for this cloud · Secure Cloud"
+    ));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.placement.gpu_types, ["NVIDIA RTX A5000"]);
+}
+
+#[test]
+fn a_gpu_in_stock_is_offered_without_preferences_and_dropped_for_a_cpu_profile() {
+    let (_temp, ctx, mut app) = gpu_dialog(&[]);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
+    assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
+    // Reread as a CPU profile, the GPU choice no longer applies.
+    let config = app.cloud_prototype.production.profiles.as_mut().unwrap();
+    config.profiles.get_mut("development").unwrap().gpu = false;
+    tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.placement.gpu_types.is_empty());
+}
+
+#[test]
 fn size_choice_resets_with_the_profile_or_repository_and_gpu_size_is_fixed() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

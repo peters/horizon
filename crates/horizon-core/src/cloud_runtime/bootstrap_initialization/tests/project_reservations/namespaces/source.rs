@@ -718,6 +718,9 @@ fn native_ssh_project_sources() {
     for (index, name) in ["one", "two", "three"].iter().enumerate() {
         let mut request = reservation(&f, name, 8000 + u16::try_from(index).unwrap());
         request.capabilities.agents = [Agent::Codex, Agent::Claude].into();
+        if std::env::var_os("HORIZON_RUNTIME_SMOKE").is_some() {
+            request.ports.clear();
+        }
         f = native_prepare(f, &target, &runner, &directory, &request, 1);
         let repo = directory.join(format!("repo-{name}"));
         repository(&repo, name);
@@ -780,6 +783,18 @@ fn native_ssh_project_sources() {
         f = sessions::native_prepared(f, &target, &runner, &directory, &request, index);
         projects.push((request, source_root));
     }
+    if std::env::var_os("HORIZON_RUNTIME_SMOKE").is_some() {
+        f = sessions::runtime_smoke(f, &target, &runner, &directory, &projects);
+    }
+    native_cancel_sources(f, &target, &runner, &projects);
+}
+
+fn native_cancel_sources(
+    mut f: CoordinatorFixture,
+    target: &crate::cloud_runtime::bootstrap_recovery::Target,
+    runner: &Runner<'_>,
+    projects: &[(Reservation, PathBuf)],
+) {
     let before: Vec<_> = projects
         .iter()
         .map(|(_, root)| fs::read(root.join("repository.git/HEAD")).unwrap())
@@ -787,7 +802,7 @@ fn native_ssh_project_sources() {
     let sessions = Journal::load(&f.owner).unwrap().unwrap().manifest.members;
     reservations::coordinate(
         &mut f.owner,
-        &target,
+        target,
         &projects[0].0.image_digest,
         &Change::Cancel(projects[0].0.project.clone()),
         &mut |connection, command, bytes| {
@@ -802,6 +817,9 @@ fn native_ssh_project_sources() {
     assert_eq!(after.members[0].sessions, sessions[0].sessions);
     assert_eq!(&after.members[1..], &sessions[1..]);
     assert_bootstrap_fenced(&mut f);
+    if std::env::var_os("HORIZON_RUNTIME_SMOKE").is_some() {
+        sessions::runtime_cancel_uncertain(&mut f, target, runner, &projects[2].0);
+    }
 }
 
 fn native_sessions(
@@ -814,7 +832,12 @@ fn native_sessions(
     index: usize,
 ) -> CoordinatorFixture {
     let mut saved = None;
-    for (agent_index, agent) in [Agent::Codex, Agent::Claude].into_iter().enumerate() {
+    let selected = if std::env::var_os("HORIZON_RUNTIME_SMOKE").is_some() {
+        [Agent::Claude, Agent::Claude]
+    } else {
+        [Agent::Codex, Agent::Claude]
+    };
+    for (agent_index, agent) in selected.into_iter().enumerate() {
         let change = Change::ReserveSession(request.project.clone(), Session::new(agent, revision.into()));
         let vault = f.vault.clone();
         let mut wire = Vec::new();

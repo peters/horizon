@@ -211,6 +211,10 @@ impl<'a> Tree<'a> {
         }
         Ok(())
     }
+    pub fn published_children(&self) -> io::Result<Vec<File>> {
+        self.validate(true)?;
+        CHILDREN.iter().map(|name| directory(&self.file, name)).collect()
+    }
     fn helper(&self, source: &File, revision: &str, build: bool) -> io::Result<String> {
         let destination = format!("/proc/{}/fd/{}", std::process::id(), self.file.as_raw_fd());
         let output = inspection::execute_leased(

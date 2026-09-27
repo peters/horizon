@@ -12,6 +12,8 @@ pub mod deployment;
 pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
+pub use horizon_cloud::offers;
+pub mod offer_publication;
 pub mod owner;
 pub mod prices;
 pub mod progress;
@@ -20,12 +22,13 @@ pub mod registry;
 pub mod repository;
 pub mod settings;
 pub mod setup;
+pub mod siblings;
 pub mod ssh;
 pub mod state;
 pub mod timeline;
 pub mod tunnel;
 mod worker_contract;
-pub use worker_contract::WorkerContract;
+pub use worker_contract::{SelfStop, WorkerContract};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -45,6 +48,8 @@ pub enum Error {
     Busy,
     #[error("{primary}; cleanup also failed: {cleanup}")]
     Cleanup { primary: Box<Self>, cleanup: Box<Self> },
+    #[error(transparent)]
+    Sibling(#[from] siblings::SiblingError),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]

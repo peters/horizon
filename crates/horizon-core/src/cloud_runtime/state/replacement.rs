@@ -25,6 +25,11 @@ pub struct ImageReplacement {
     pub previous_registry_generation: Option<String>,
     /// Commit whose `.horizon` recipe builds the replacement image.
     pub recipe_revision: String,
+    /// For a cloud with same-worker siblings, the commit of each sibling, in layering
+    /// order, whose recipe the replacement image layers. Omitted without siblings, so
+    /// single-repository journals keep their encoding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sibling_revisions: Vec<String>,
     /// The replacement image's unique registry tag, `horizon-<cloud>-<operation>`.
     pub tag: String,
     pub phase: ReplacementPhase,
@@ -102,6 +107,11 @@ impl Deployment {
             || replacement.previous_registry_generation != self.registry_generation
             || replacement.requested() != (self.stage == Stage::Replace)
             || !repository::is_commit_id(&replacement.recipe_revision)
+            || replacement.sibling_revisions.len() != self.siblings.as_ref().map_or(0, |set| set.members.len())
+            || !replacement
+                .sibling_revisions
+                .iter()
+                .all(|revision| repository::is_commit_id(revision))
             || replacement_tag(&self.cloud_id, replacement.operation).as_ref() != Some(&replacement.tag)
         {
             return Err(Error::Invalid(REPLACEMENT_MISMATCH));
@@ -144,6 +154,19 @@ impl Deployment {
     /// Refuses unless the cloud is ready on its bound worker with nothing pending, and
     /// a cloud identity too long for an image tag.
     pub fn begin_replacement(&mut self, operation: OperationId, recipe_revision: String) -> Result<()> {
+        self.begin_layered_replacement(operation, recipe_revision, Vec::new())
+    }
+
+    /// As [`Self::begin_replacement`] for a cloud with same-worker siblings, whose image
+    /// also layers each sibling's recipe at `sibling_revisions`, in layering order.
+    /// # Errors
+    /// As [`Self::begin_replacement`], and revisions that do not match the siblings.
+    pub fn begin_layered_replacement(
+        &mut self,
+        operation: OperationId,
+        recipe_revision: String,
+        sibling_revisions: Vec<String>,
+    ) -> Result<()> {
         let CreateState::Bound { worker_id } = &self.operation else {
             return Err(Error::Invalid(REPLACEMENT_UNBOUND));
         };
@@ -169,6 +192,7 @@ impl Deployment {
             previous_registry_auth_id: spec.registry_auth_id.clone(),
             previous_registry_generation: self.registry_generation.clone(),
             recipe_revision,
+            sibling_revisions,
             tag,
             phase: ReplacementPhase::Prepared {},
         };
@@ -243,6 +267,12 @@ impl Deployment {
             return Err(Error::Invalid("No image replacement was requested"));
         };
         let operation = replacement.operation;
+        // The image now layers these recipes; the checkouts on the worker stay as imported.
+        if let Some(set) = &mut self.siblings {
+            for (sibling, revision) in set.members.iter_mut().zip(&replacement.sibling_revisions) {
+                sibling.image_revision = (*revision != sibling.revision).then(|| revision.clone());
+            }
+        }
         self.registry_generation.clone_from(&image.registry_generation);
         self.spec = Some(next);
         self.image_replacement = None;

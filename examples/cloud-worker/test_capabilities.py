@@ -36,14 +36,16 @@ class CapabilitiesTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def run_check(self, *args, missing=(), environment=None, reported=None):
+    def run_check(self, *args, missing=(), environment=None, reported=None, run=None):
         output = io.StringIO()
-        def run(command, **kwargs):
+        def reply(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout=reported.get(command[0], b''))
+        if run is None and reported is not None:
+            run = reply
         with mock.patch('pathlib.Path', side_effect=self.path), \
                 mock.patch('sys.argv', ['horizon-worker-check', *args]), \
                 mock.patch.dict(os.environ, environment or {}, clear=True), \
-                mock.patch('subprocess.run', side_effect=run if reported is not None else None) as commands, \
+                mock.patch('subprocess.run', side_effect=run) as commands, \
                 mock.patch('shutil.which', side_effect=lambda name: None if name in missing else '/bin/' + name), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
@@ -85,6 +87,36 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertNotIn('firefox', str(commands))
         self.assertIn('horizon-device', str(commands))
 
+    def test_siblings_are_reported_only_with_the_manifest_helper(self):
+        for missing, expected in [((), True), (('horizon-worker-siblings',), False)]:
+            status, output, _ = self.run_check(missing=missing)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-siblings-contract=1' in output.splitlines(), expected, missing)
+        # A session-only check reports no contract markers.
+        status, output, _ = self.run_check('--agent', 'shell')
+        self.assertEqual((status, output), (0, ''))
+
+    def test_session_environment_and_gpu_lock_are_reported_only_with_their_helpers(self):
+        for marker, helper in [('horizon-session-env-contract=1', 'horizon-worker-session-env'),
+                               ('horizon-gpu-lock-contract=1', 'horizon-worker-gpu-lock')]:
+            for missing, expected in [((), True), ((helper,), False)]:
+                status, output, _ = self.run_check(missing=missing)
+                self.assertEqual(status, 0, output)
+                self.assertEqual(marker in output.splitlines(), expected, missing)
+
+    def test_refused_session_environment_fails_the_image_and_every_session_start(self):
+        def run(command, **kwargs):
+            if command[0] == 'horizon-worker-session-env':
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, stdout=b'')
+        for args in [(), ('--agent', 'shell'), ('--ready',)]:
+            status, output, _ = self.run_check(*args, run=run)
+            self.assertEqual(status, 1, args)
+            self.assertNotIn('contract=1', output)
+        # Without the helper there is nothing to validate.
+        status, output, _ = self.run_check('--agent', 'shell', missing=('horizon-worker-session-env',))
+        self.assertEqual((status, output), (0, ''))
+
     def test_remote_only_requires_tools_and_tunnel_but_no_local_browser(self):
         selected = {'browserstack': {'targets': ['iphone'], 'local_ports': [8080]}}
         self.write('/workspace/capabilities.json', selected)
@@ -117,7 +149,8 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
         self.assertEqual([call.args[0] for call in commands],
-                         [['git', 'lfs', 'version'], ['horizon-worker-supervise', '--idle-stop-contract']])
+                         [['horizon-worker-session-env', 'check'], ['git', 'lfs', 'version'],
+                          ['horizon-worker-supervise', '--idle-stop-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})
@@ -200,6 +233,54 @@ class CapabilitiesTests(unittest.TestCase):
             with mock.patch('socket.create_connection', return_value=connection):
                 status, _, _ = self.run_check('--ready')
             self.assertEqual(status, 1)
+
+    def test_readiness_reports_the_newest_stop_an_agent_asked_for(self):
+        self.write('/workspace/capabilities.json', {})
+        connection = mock.MagicMock()
+        stream = connection.__enter__.return_value.makefile.return_value.__enter__.return_value
+        stream.readline.return_value = b'{"browsers":[],"error":null}\n'
+        reported = {'horizon-worker-stop': b'{"at": 1790000000000, "reason": "PR 12 merged"}\n'}
+        with mock.patch('socket.create_connection', return_value=connection):
+            status, output, _ = self.run_check('--ready', reported=reported)
+        self.assertEqual(status, 0, output)
+        self.assertIn('horizon-last-self-stop={"at":1790000000000,"reason":"PR 12 merged"}', output.splitlines())
+        self.assertIn('horizon-self-stop-contract=1', output.splitlines())
+        # Without a record the image still says it supports them; an older image says neither.
+        # A failed read reports neither, so Horizon keeps the reason it showed.
+        for reported, missing, supported in [({'horizon-worker-stop': b'null\n'}, (), True),
+                                             ({'horizon-worker-stop': b'not json\n'}, (), False),
+                                             ({}, ('horizon-worker-stop',), False)]:
+            with mock.patch('socket.create_connection', return_value=connection):
+                status, output, _ = self.run_check('--ready', reported=reported, missing=missing)
+            self.assertEqual(status, 0, output)
+            self.assertNotIn('horizon-last-self-stop=', output)
+            self.assertEqual('horizon-self-stop-contract=1' in output.splitlines(), supported)
+
+    def test_agents_get_the_stop_tool_only_where_the_profile_opts_in(self):
+        self.write('/workspace/capabilities.json', {'agents': ['claude']})
+        for environment, expected in [({'HORIZON_IDLE_STOP_MINUTES': '30'}, True), ({}, False)]:
+            with mock.patch.dict(os.environ, environment, clear=True):
+                self.configure()
+            servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
+            self.assertEqual('horizon-worker' in servers, expected, environment)
+        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+            self.configure()
+        self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
+                         {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+
+    @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
+    def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):
+        self.write('/workspace/capabilities.json', {'agents': ['codex', 'grok']})
+        with mock.patch.dict(os.environ, {'HORIZON_IDLE_STOP_MINUTES': '30'}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertEqual(servers['horizon-worker']['command'], '/usr/local/bin/horizon-worker-stop')
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.configure()
+        for agent in ['codex', 'grok']:
+            servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
+            self.assertNotIn('horizon-worker', servers)
 
     def configure(self):
         def run(command, **kwargs):

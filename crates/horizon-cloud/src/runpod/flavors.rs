@@ -114,8 +114,24 @@ pub fn sized(profile: &Profile, (cpu, memory_gb): (u16, u16)) -> Result<Profile,
 /// # Errors
 /// Rejects sizes that no flavor offers.
 pub fn for_profile(profile: &Profile, preferred: &[String]) -> Result<Vec<String>, CloudError> {
-    let fits = |flavor: &Flavor| flavor.fits(profile.cpu, profile.memory_gb, profile.storage.container_gb);
-    if !VCPU_COUNTS.contains(&profile.cpu) {
+    for_size(
+        (profile.cpu, profile.memory_gb),
+        profile.storage.container_gb,
+        preferred,
+    )
+}
+
+/// The flavors a worker of `(cpu, memory_gb)` with this container disk requests, as
+/// [`for_profile`] chooses them; the provider allocates one of them.
+/// # Errors
+/// Rejects sizes that no flavor offers.
+pub fn for_size(
+    (cpu, memory_gb): (u16, u16),
+    container_gb: u16,
+    preferred: &[String],
+) -> Result<Vec<String>, CloudError> {
+    let fits = |flavor: &Flavor| flavor.fits(cpu, memory_gb, container_gb);
+    if !VCPU_COUNTS.contains(&cpu) {
         return Err(CloudError::Invalid("RunPod CPU workers need 2, 4, 8, 16 or 32 vCPU"));
     }
     let selected: Vec<String> = preferred

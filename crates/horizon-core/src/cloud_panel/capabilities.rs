@@ -46,6 +46,7 @@ mod tests {
             revision: "a".repeat(40),
             profile_name: "test".into(),
             profile,
+            placement: crate::cloud_panel::Placement::default(),
         });
         for kind in [
             PanelKind::Codex,

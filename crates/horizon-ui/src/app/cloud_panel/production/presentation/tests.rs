@@ -124,6 +124,7 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: profile.clone(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     group.panels = vec!["firefox".into(), "chromium".into()];
     let mut saved = RuntimeState {

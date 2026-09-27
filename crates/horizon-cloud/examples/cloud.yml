@@ -28,6 +28,9 @@ profiles:
     cpu: 8
     memory_gb: 32
     gpu: true
+    # Optional: only place the worker on hosts whose driver supports this CUDA version
+    # or newer (major.minor, GPU profiles only), for images built against a recent CUDA.
+    # min_cuda_version: "12.8"
     capabilities:
       agents: [codex, claude]
       desktop: true
@@ -56,3 +59,14 @@ profiles:
       browserstack:
         provider: browserstack
         local_ports: [8080]
+
+# Optional companion repositories. Declarations never start a cloud or grant access.
+# companions:
+#   service:
+#     repository: example/service
+#     profile: cpu
+#   consumer:
+#     repository: example/consumer
+#     profile: gpu
+#     # Check the consumer out beside this repository on the same worker.
+#     placement: same_worker

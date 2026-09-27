@@ -34,6 +34,10 @@ impl HorizonApp {
             }
         };
         for request in requests {
+            if request.cloud_offers.is_some() {
+                self.browser_create_host.cloud_offers.push(request);
+                continue;
+            }
             if request.catalog.is_some() {
                 self.browser_create_host.catalog.pending.push(request);
                 continue;

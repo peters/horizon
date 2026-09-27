@@ -98,7 +98,11 @@ pub(super) fn run(
 fn declaration_rows(context: Option<&Context>) -> BTreeMap<String, Row> {
     let mut rows = BTreeMap::new();
     if let Some(context) = context {
-        for (alias, declaration) in &context.declarations {
+        for (alias, declaration) in context
+            .declarations
+            .iter()
+            .filter(|(_, declaration)| declaration.placement.is_cloud())
+        {
             let targets = candidates(&context.source, declaration, &context.inventory)
                 .into_iter()
                 .cloned()

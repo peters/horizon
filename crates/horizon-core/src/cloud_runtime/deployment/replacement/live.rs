@@ -4,15 +4,14 @@ use super::{Head, Provider, Recipe, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
-    deployment::{Request, storage},
-    git_auth,
+    deployment::{Request, image, storage},
     image::Images,
-    registry, repository,
+    registry, repository, siblings,
     ssh::Connection,
     state::{Deployment, ReplacementImage, Store},
 };
 use horizon_cloud::{
-    Cancellation, CloudError, CreateState, WorkerSpec,
+    Cancellation, CloudConfig, CloudError, CreateState, WorkerSpec,
     runpod::{RunPod, replacement::Observed},
 };
 use std::{
@@ -124,7 +123,7 @@ impl<'a> Live<'a> {
             },
             registry: RefCell::new(registry),
             generation: binding.map(|binding| binding.generation.clone()),
-            git_auth: git_auth::Prepared::for_repository(&settings.git_credentials, &state.repository)?.is_some(),
+            git_auth: siblings::git_grants(&settings.git_credentials, state)?.is_some(),
         })
     }
 
@@ -141,6 +140,24 @@ impl<'a> Live<'a> {
             }),
             runner: &self.runner,
         }
+    }
+
+    /// A single-repository image from `source`, checked for Git grants when they are sent.
+    fn single(
+        &self,
+        registry: Option<&registry::Prepared>,
+        state: &Deployment,
+        source: &Path,
+        tag: &str,
+    ) -> Result<String> {
+        let digest = self
+            .images(registry, true)
+            .prepare_tagged(&state.profile, source, &state.cloud_id, tag)?;
+        if self.git_auth {
+            self.images(registry, false)
+                .validate_contract(&digest, &state.cloud_id, &state.profile, true)?;
+        }
+        Ok(digest)
     }
 
     /// The image with the pull binding the worker will use, verified to read it.
@@ -182,23 +199,20 @@ impl Provider for Live<'_> {
 }
 
 impl Steps for Live<'_> {
-    fn build(&self, state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage> {
+    fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage> {
         let root = tempfile::tempdir_in(self.store.root())?;
         let source = repository::snapshot(&state.repository, revision, root.path(), &self.runner)?;
         let digest = {
             let registry = self.registry.borrow();
-            let digest =
-                self.images(registry.as_ref(), true)
-                    .prepare_tagged(&state.profile, &source, &state.cloud_id, tag)?;
-            if self.git_auth {
-                self.images(registry.as_ref(), false).validate_contract(
-                    &digest,
-                    &state.cloud_id,
-                    &state.profile,
-                    true,
-                )?;
+            if state.siblings.is_some() {
+                // Only the final image is checked, for the sibling contract and grants too.
+                let layers = root.path().join("siblings");
+                std::fs::create_dir(&layers)?;
+                let images = self.images(registry.as_ref(), true);
+                image::build_layered(self.request, &images, state, siblings, &source, &layers, tag)?
+            } else {
+                self.single(registry.as_ref(), state, &source, tag)?
             }
-            digest
         };
         self.register(state, digest)
     }
@@ -231,5 +245,13 @@ impl Recipe for Runner<'_> {
         let revision = repository::resolve_with_runner(repository, "HEAD", self)?;
         let config = repository::launch::committed_config(repository, &revision, self)?;
         Ok(Head { revision, config })
+    }
+
+    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>> {
+        let set = state
+            .siblings
+            .as_ref()
+            .ok_or(Error::Invalid("This cloud has no same-worker siblings"))?;
+        siblings::latest(set, &state.repository, config, &state.profile, self)
     }
 }

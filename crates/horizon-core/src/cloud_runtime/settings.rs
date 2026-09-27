@@ -34,6 +34,40 @@ pub struct Settings {
     pub git_credentials: Vec<super::git_auth::Binding>,
     #[serde(default)]
     pub browserstack_credentials: Vec<super::browser_auth::Binding>,
+    /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hetzner: Option<Hetzner>,
+    /// The cloud's own placement, kept by [`Settings::for_cloud`] for providers
+    /// that read it themselves. Never stored.
+    #[serde(skip)]
+    pub placement: Option<crate::cloud_panel::Placement>,
+}
+
+/// A Hetzner Cloud project this machine may deploy CPU clouds into. The token
+/// is project-wide, so it stays on this machine and never reaches a worker.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Hetzner {
+    pub token_file: PathBuf,
+    /// Server types to try, in order, such as `cx43`.
+    pub server_types: Vec<String>,
+    /// Locations to try, in order, such as `hel1`.
+    pub locations: Vec<String>,
+    /// A read-only pull credential for a private worker image. It reaches the
+    /// server's user data, which stays readable to the host for the server's
+    /// life, so use a short-lived token scoped to the image repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_pull: Option<RegistryPull>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryPull {
+    /// The registry host, such as `example.azurecr.io`.
+    pub server: String,
+    pub username: String,
+    /// A private file holding the token or password.
+    pub password_file: PathBuf,
 }
 #[must_use]
 pub fn default_agents() -> Vec<horizon_cloud::Agent> {
@@ -46,6 +80,18 @@ impl Settings {
         let value: Self = serde_json::from_slice(&std::fs::read(path)?).map_err(|_| Error::Json)?;
         value.validate()?;
         Ok(value)
+    }
+
+    /// The machine settings narrowed to one cloud's placement, so every attempt,
+    /// retry and redeploy of that cloud asks for the data centers and GPU types
+    /// chosen for it.
+    /// # Errors
+    /// As [`Settings::load`].
+    pub fn for_cloud(path: &Path, placement: &crate::cloud_panel::Placement) -> Result<Self> {
+        let mut settings = Self::load(path)?;
+        placement.apply(&mut settings.data_centers, &mut settings.gpu_types);
+        settings.placement = Some(placement.clone());
+        Ok(settings)
     }
     /// # Errors
     /// Validates bindings supplied through either the file or Rust interface.
@@ -81,6 +127,9 @@ impl Settings {
         for binding in &self.git_credentials {
             binding.validate()?;
         }
+        if let Some(hetzner) = &self.hetzner {
+            hetzner.validate()?;
+        }
         Ok(())
     }
     /// # Errors
@@ -89,6 +138,89 @@ impl Settings {
         self.validate()?;
         validate_private_key_file(&self.runpod_key_file)?;
         Credential::new(std::fs::read_to_string(&self.runpod_key_file)?.trim().to_owned()).map_err(Error::from)
+    }
+}
+
+impl Hetzner {
+    /// # Errors
+    /// Requires an absolute token path and at least one valid server type and location.
+    pub fn validate(&self) -> Result<()> {
+        if !self.token_file.is_absolute() {
+            return Err(Error::Invalid(
+                "Credential bindings must use absolute machine-local paths",
+            ));
+        }
+        let names = |values: &[String]| {
+            !values.is_empty()
+                && values.iter().all(|value| {
+                    !value.is_empty()
+                        && value.len() <= 64
+                        && value
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                })
+        };
+        if !names(&self.server_types) || !names(&self.locations) {
+            return Err(Error::Invalid(
+                "Hetzner settings need server types and locations such as cx43 and hel1",
+            ));
+        }
+        if self.registry_pull.as_ref().is_some_and(|pull| {
+            !pull.password_file.is_absolute()
+                || !horizon_cloud::host::RegistryLogin::valid_identity(&pull.server, &pull.username)
+        }) {
+            return Err(Error::Invalid(
+                "The Hetzner registry pull needs a registry host such as example.azurecr.io, a username without ':' and an absolute password file",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The locations a Hetzner cloud may use: those its placement chose, in that
+    /// order, or every allowed location when it chose none.
+    /// # Errors
+    /// Refuses a placement whose locations this machine does not allow, rather
+    /// than moving the cloud somewhere it was not placed.
+    pub fn locations_for(&self, placement: Option<&crate::cloud_panel::Placement>) -> Result<Vec<String>> {
+        let Some(placement) = placement.filter(|placement| !placement.data_centers.is_empty()) else {
+            return Ok(self.locations.clone());
+        };
+        let chosen: Vec<String> = placement
+            .data_centers
+            .iter()
+            .filter(|location| self.locations.contains(location))
+            .cloned()
+            .collect();
+        if chosen.is_empty() {
+            return Err(Error::Invalid(
+                "None of this cloud's chosen locations is allowed in the Hetzner settings",
+            ));
+        }
+        Ok(chosen)
+    }
+
+    /// The pull login for the worker host, when a private image needs one.
+    /// # Errors
+    /// Requires a private, readable password file.
+    pub fn registry_login(&self) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
+        let Some(pull) = &self.registry_pull else {
+            return Ok(None);
+        };
+        validate_private_key_file(&pull.password_file)?;
+        let password = Credential::new(std::fs::read_to_string(&pull.password_file)?.trim().to_owned())?;
+        Ok(Some(horizon_cloud::host::RegistryLogin {
+            server: pull.server.clone(),
+            username: pull.username.clone(),
+            password,
+        }))
+    }
+
+    /// # Errors
+    /// Requires a private, readable token file.
+    pub fn credential(&self) -> Result<Credential> {
+        self.validate()?;
+        validate_private_key_file(&self.token_file)?;
+        Credential::new(std::fs::read_to_string(&self.token_file)?.trim().to_owned()).map_err(Error::from)
     }
 }
 
@@ -132,6 +264,184 @@ pub(super) fn validate_private_key_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cloud_asks_only_for_the_data_centers_and_gpu_types_chosen_for_it() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+                "docker_config": absolute("docker"), "registry_pull_auth_id": null,
+                "cpu_flavors": ["cpu3c"], "gpu_types": [], "data_centers": ["US-MO-2"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let any = crate::cloud_panel::Placement::default();
+        assert_eq!(Settings::for_cloud(&path, &any).unwrap().data_centers, ["US-MO-2"]);
+        let europe = crate::cloud_panel::Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into()],
+            gpu_types: vec!["NVIDIA RTX A5000".into()],
+        };
+        let settings = Settings::for_cloud(&path, &europe).unwrap();
+        assert_eq!(settings.data_centers, ["EU-RO-1"]);
+        assert_eq!(settings.gpu_types, ["NVIDIA RTX A5000"]);
+    }
+
+    #[test]
+    fn hetzner_settings_are_optional_validated_and_narrowed_by_a_clouds_locations() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        let base = serde_json::json!({
+            "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+            "docker_config": absolute("docker"), "registry_pull_auth_id": null,
+            "cpu_flavors": ["cpu3c"], "gpu_types": [], "data_centers": ["US-MO-2"],
+        });
+        std::fs::write(&path, base.to_string()).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert!(loaded.hetzner.is_none());
+        assert!(
+            serde_json::to_value(&loaded).unwrap().get("hetzner").is_none(),
+            "settings without Hetzner keep their encoding"
+        );
+        let mut with_hetzner = base.clone();
+        with_hetzner["hetzner"] = serde_json::json!({
+            "token_file": absolute("hetzner-token"), "server_types": ["cx43", "cpx42"], "locations": ["hel1", "nbg1"],
+        });
+        std::fs::write(&path, with_hetzner.to_string()).unwrap();
+        let any = crate::cloud_panel::Placement::default();
+        let settings = Settings::for_cloud(&path, &any).unwrap();
+        let hetzner = settings.hetzner.as_ref().unwrap();
+        assert_eq!(
+            hetzner.locations_for(settings.placement.as_ref()).unwrap(),
+            ["hel1", "nbg1"]
+        );
+        assert_eq!(hetzner.locations_for(None).unwrap(), ["hel1", "nbg1"]);
+        let placed = |locations: &[&str]| crate::cloud_panel::Placement {
+            data_centers: locations.iter().map(|&location| location.into()).collect(),
+            ..Default::default()
+        };
+        let settings = Settings::for_cloud(&path, &placed(&["nbg1", "fsn1"])).unwrap();
+        assert_eq!(
+            settings
+                .hetzner
+                .as_ref()
+                .unwrap()
+                .locations_for(settings.placement.as_ref())
+                .unwrap(),
+            ["nbg1"],
+            "a placement narrows the allowed locations and cannot add one"
+        );
+        let settings = Settings::for_cloud(&path, &placed(&["fsn1"])).unwrap();
+        assert!(
+            settings
+                .hetzner
+                .as_ref()
+                .unwrap()
+                .locations_for(settings.placement.as_ref())
+                .is_err(),
+            "a cloud placed only outside the allowed locations is refused, not moved"
+        );
+        assert!(
+            serde_json::to_value(&settings).unwrap().get("placement").is_none(),
+            "the placement is never stored"
+        );
+        let runpod = Settings::for_cloud(&path, &placed(&["EU-RO-1"])).unwrap();
+        assert_eq!(runpod.data_centers, ["EU-RO-1"]);
+        assert!(
+            runpod.validate().is_ok(),
+            "a RunPod placement never invalidates Hetzner settings"
+        );
+        for (field, value) in [
+            ("token_file", serde_json::json!("relative-token")),
+            ("server_types", serde_json::json!([])),
+            ("locations", serde_json::json!(["Hel 1"])),
+            ("unknown", serde_json::json!(true)),
+        ] {
+            let mut invalid = with_hetzner.clone();
+            invalid["hetzner"][field] = value;
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(Settings::load(&path).is_err(), "{field}");
+        }
+        let token = absolute("hetzner-token");
+        std::fs::write(&token, "secret-token\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let hetzner = serde_json::from_value::<Hetzner>(with_hetzner["hetzner"].clone()).unwrap();
+            assert!(hetzner.credential().is_err(), "a readable token file is refused");
+            std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(hetzner.credential().is_ok());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hetzner_registry_pull_is_optional_private_and_redacted() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        let mut pulling = serde_json::json!({
+            "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+            "docker_config": absolute("docker"), "registry_pull_auth_id": null,
+            "cpu_flavors": ["cpu3c"], "gpu_types": [],
+            "hetzner": {"token_file": absolute("hetzner-token"), "server_types": ["cx43"], "locations": ["hel1"]},
+        });
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        let hetzner = Settings::load(&path).unwrap().hetzner.unwrap();
+        assert!(
+            hetzner.registry_login().unwrap().is_none(),
+            "public images need no login"
+        );
+        let password = absolute("pull-token");
+        std::fs::write(&password, "pull-secret\n").unwrap();
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+        pulling["hetzner"]["registry_pull"] =
+            serde_json::json!({"server": "example.azurecr.io", "username": "pull", "password_file": password});
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        let login = Settings::load(&path)
+            .unwrap()
+            .hetzner
+            .unwrap()
+            .registry_login()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (login.server.as_str(), login.username.as_str()),
+            ("example.azurecr.io", "pull")
+        );
+        assert!(!format!("{login:?}").contains("pull-secret"));
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            Settings::load(&path)
+                .unwrap()
+                .hetzner
+                .unwrap()
+                .registry_login()
+                .is_err()
+        );
+        for (field, value) in [
+            ("server", "https://example.azurecr.io"),
+            ("server", "Example.azurecr.io"),
+            ("username", "pull:er"),
+            ("username", ""),
+        ] {
+            let mut invalid = pulling.clone();
+            invalid["hetzner"]["registry_pull"][field] = serde_json::json!(value);
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(Settings::load(&path).is_err(), "{field}={value}");
+        }
+        pulling["hetzner"]["registry_pull"]["password_file"] = serde_json::json!("relative");
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        assert!(Settings::load(&path).is_err());
+    }
 
     #[test]
     fn ssh_identity_requires_a_readable_nonempty_private_file() {

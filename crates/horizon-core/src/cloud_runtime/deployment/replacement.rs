@@ -77,12 +77,23 @@ trait Provider {
 /// Reads the repository's committed recipe; needs no credentials.
 trait Recipe {
     fn head(&self, repository: &Path) -> Result<Head>;
+    /// The latest committed revision of each of the deployment's siblings, whose
+    /// declarations `config`, the primary's latest committed configuration, holds.
+    fn siblings(&self, state: &Deployment, config: &CloudConfig) -> Result<Vec<String>>;
+}
+
+/// The latest committed recipes a rebuild layers: the primary's and each sibling's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Recipes {
+    revision: String,
+    siblings: Vec<String>,
 }
 
 trait Steps: Provider {
-    /// Builds `revision`'s recipe under `tag`, validates the worker contract, pushes the
-    /// image and verifies that the worker's pull binding can read it.
-    fn build(&self, state: &Deployment, revision: &str, tag: &str) -> Result<ReplacementImage>;
+    /// Builds `revision`'s recipe, with each sibling's recipe at `siblings` layered on it,
+    /// under `tag`, validates the worker contract, pushes the image and verifies that the
+    /// worker's pull binding can read it.
+    fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage>;
     /// Verifies again that a built image and its pull binding are unchanged.
     fn verify(&self, state: &Deployment, image: &ReplacementImage) -> Result<()>;
     /// Releases hosted devices before the container reset ends the worker's copies.
@@ -109,6 +120,11 @@ pub fn rebuild(
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
+    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid(
+            "Rebuilding a Hetzner cloud's image is not available yet",
+        ));
+    }
     let (store, mut state) = open(request)?;
     ready(&state)?;
     // Checked before credentials load, so a changed profile is refused with its reason.
@@ -117,9 +133,9 @@ pub fn rebuild(
         emit,
         secrets: Vec::new(),
     };
-    let revision = committed_revision(&checkout, &state, profile_name, emit)?;
+    let recipes = committed_recipes(&checkout, &state, profile_name, emit)?;
     let steps = live::Live::new(request, &store, &state, true, cancel, emit)?;
-    begin(&steps, &store, &mut state, revision)?;
+    begin(&steps, &store, &mut state, recipes)?;
     let driven = drive(&steps, &store, &mut state, emit)?;
     drop(steps);
     drop(store);
@@ -216,7 +232,7 @@ fn settle_with(steps: &impl Provider, store: &Store, state: &mut Deployment) -> 
 pub(super) fn relaunch_sessions(
     store: &Store,
     state: &mut Deployment,
-    contract: WorkerContract,
+    contract: &WorkerContract,
     emit: &dyn Fn(Event),
     mut run: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
@@ -308,21 +324,36 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// The committed revision to rebuild, once its profile named `profile_name` equals the bound one.
-fn committed_revision(
+/// The committed recipes to rebuild, once the profile named `profile_name` equals the
+/// bound one: the primary's latest commit and each sibling's.
+fn committed_recipes(
     recipe: &impl Recipe,
     state: &Deployment,
     profile_name: &str,
     emit: &dyn Fn(Event),
-) -> Result<String> {
+) -> Result<Recipes> {
     emit(activity("Reading the latest committed recipe"));
     let head = recipe.head(&state.repository)?;
     unchanged_profile(&state.profile, head.config.as_ref(), profile_name)?;
-    Ok(head.revision)
+    let (Some(set), Some(config)) = (&state.siblings, &head.config) else {
+        return Ok(Recipes {
+            revision: head.revision,
+            siblings: Vec::new(),
+        });
+    };
+    emit(activity("Reading each same-worker sibling's latest committed recipe"));
+    let siblings = recipe.siblings(state, config)?;
+    for note in set.moved(&siblings) {
+        emit(Event::Output(note));
+    }
+    Ok(Recipes {
+        revision: head.revision,
+        siblings,
+    })
 }
 
-fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, revision: String) -> Result<()> {
-    state.begin_replacement(OperationId::generate(), revision)?;
+fn begin(steps: &impl Steps, store: &Store, state: &mut Deployment, recipes: Recipes) -> Result<()> {
+    state.begin_layered_replacement(OperationId::generate(), recipes.revision, recipes.siblings)?;
     store.save(state)?;
     steps.checkpoint(Boundary::Begun)
 }
@@ -367,7 +398,12 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
     let journal = state.image_replacement.clone().ok_or(Error::Invalid(NOTHING_PENDING))?;
     match journal.phase {
         ReplacementPhase::Prepared {} => {
-            let image = steps.build(state, &journal.recipe_revision, &journal.tag)?;
+            let image = steps.build(
+                state,
+                &journal.recipe_revision,
+                &journal.sibling_revisions,
+                &journal.tag,
+            )?;
             let adds_credential = journal.previous_registry_auth_id.is_none() && image.registry_auth_id.is_some();
             if image.digest == journal.previous_digest || adds_credential {
                 state.discard_replacement()?;

@@ -271,6 +271,22 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked -p horizon-ui --features speech
+      # The worker image scripts need util-linux flock and bash 4, so the
+      # suite runs on Linux only. The workspace pass above already built the
+      # helper's dependencies, which keeps this off a separate cache entry.
+      # A skipped test fails the step: the helper-gated contract tests and
+      # the git-lfs hydration tests skip silently when a prerequisite is gone.
+      - name: Cloud worker scripts
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          cargo build --locked -p horizon-cloud-worker
+          HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
+            python3 -B -m unittest discover -s examples/cloud-worker -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/cloud-worker-tests.log"
+          if grep -q 'skipped=' "$RUNNER_TEMP/cloud-worker-tests.log"; then
+            echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
+            exit 1
+          fi
 
   # Kept out of the rust-test matrix because its speech step only builds (see
   # below). The job id and cache key predate the test run; renaming either

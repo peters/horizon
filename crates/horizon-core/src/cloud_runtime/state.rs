@@ -68,9 +68,43 @@ pub struct Deployment {
     /// Where the last successful deployment or reconnection spent its time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<super::timeline::Timeline>,
+    /// The newest stop an agent asked for on this cloud's worker, as its checker last
+    /// reported. Omitted when none, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_self_stop: Option<super::worker_contract::SelfStop>,
+    /// Same-worker siblings pinned before the image was built. Omitted when none, so
+    /// single-repository records keep their encoding; a set without members is none.
+    #[serde(
+        default,
+        deserialize_with = "super::siblings::Set::decode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub siblings: Option<super::siblings::Set>,
 }
 
 impl Deployment {
+    /// Whether the bound worker is ready for work over SSH: running, reachable, with its
+    /// source in place and no stop requested.
+    #[must_use]
+    pub fn worker_ready(&self) -> bool {
+        self.worker.as_ref().is_some_and(|worker| {
+            matches!(&self.operation, CreateState::Bound { worker_id } if worker_id == &worker.id)
+                && self.stage == Stage::Ready
+                && self.source_ready
+                && !self.stop_requested
+                && worker.desired_status == "RUNNING"
+                && worker.ssh_address().is_some()
+        })
+    }
+
+    /// Version 1 records have no siblings; only the sibling record version carries them.
+    fn supported_version(&self) -> bool {
+        match &self.siblings {
+            None => self.version == 1,
+            Some(set) => self.version == super::siblings::RECORD_VERSION && set.fits(),
+        }
+    }
+
     pub(super) fn normalize_readiness_history(&mut self) {
         if self.stage == Stage::Ready {
             self.ready_history = ReadyHistory::Observed;
@@ -141,7 +175,7 @@ impl Store {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let mut state: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;
-                if state.version != 1 {
+                if !state.supported_version() {
                     return Err(Error::Invalid("Unsupported cloud state"));
                 }
                 state.normalize_readiness_history();
@@ -160,6 +194,11 @@ impl Store {
     /// # Errors
     /// Syncs file contents and parent directory before returning to the provider.
     pub fn save(&self, state: &Deployment) -> Result<()> {
+        if !state.supported_version() {
+            return Err(Error::Invalid(
+                "Cloud state version does not match its same-worker siblings",
+            ));
+        }
         let bytes = serde_json::to_vec_pretty(state).map_err(|_| Error::Json)?;
         let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
         file.write_all(&bytes)?;
@@ -180,6 +219,38 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_bound_running_reachable_worker_with_its_source_is_ready() {
+        let ready = || -> Deployment {
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"ready-fixture","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+                "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"sessions":[],
+                "source_ready":true,
+                "worker":{"id":"worker1","name":"w","imageName":"i","desiredStatus":"RUNNING",
+                    "publicIp":"203.0.113.7","portMappings":{"22":22022}}
+            }))
+            .unwrap()
+        };
+        assert!(ready().worker_ready());
+        let changes: [fn(&mut Deployment); 6] = [
+            |state| state.stage = Stage::Stopping,
+            |state| state.source_ready = false,
+            |state| state.stop_requested = true,
+            |state| {
+                state.operation = CreateState::Bound {
+                    worker_id: "worker2".into(),
+                }
+            },
+            |state| state.worker.as_mut().unwrap().desired_status = "EXITED".into(),
+            |state| state.worker.as_mut().unwrap().port_mappings = None,
+        ];
+        for change in changes {
+            let mut state = ready();
+            change(&mut state);
+            assert!(!state.worker_ready(), "{state:?}");
+        }
+    }
     #[test]
     #[cfg(not(unix))]
     fn unsupported_cloud_control_does_not_create_or_modify_state() {
@@ -272,5 +343,55 @@ mod tests {
         assert!(state.image_replacement.is_none() && state.session_restart.is_none());
         let encoded = serde_json::to_vec_pretty(&state).unwrap();
         assert_eq!(String::from_utf8(encoded).unwrap(), LEGACY_ENCODING);
+        assert!(state.siblings.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)] // Store::lock needs durable directory updates, which only Unix hosts have.
+    fn only_the_sibling_record_version_loads_pinned_siblings() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_str(LEGACY_ENCODING).unwrap();
+        let mut set = super::super::siblings::Set {
+            primary_directory: "app".into(),
+            members: vec![super::super::siblings::Sibling {
+                alias: "native".into(),
+                repository: "example/native-lib".into(),
+                directory: "native-lib".into(),
+                revision: "b".repeat(40),
+                image_revision: None,
+                local_repository: "/synthetic/native-lib".into(),
+                profile: "gpu".into(),
+            }],
+        };
+        let write = |state: &Deployment| {
+            assert!(store.save(state).is_err(), "an unloadable record is never saved");
+            std::fs::write(root.path().join("deployment.json"), serde_json::to_vec(state).unwrap()).unwrap();
+        };
+        state.siblings = Some(set.clone());
+        write(&state);
+        assert!(store.load().is_err(), "version 1 never carries siblings");
+        state.version = super::super::siblings::RECORD_VERSION;
+        store.save(&state).unwrap();
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.siblings, state.siblings);
+        let encoded = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(encoded["siblings"]["members"][0]["directory"], "native-lib");
+        state.siblings = None;
+        write(&state);
+        assert!(store.load().is_err(), "the sibling version needs siblings");
+        set.members.clear();
+        state.siblings = Some(set);
+        assert!(
+            store.save(&state).is_err(),
+            "a set without members would not load again"
+        );
+        state.version = 1;
+        write(&state);
+        assert_eq!(
+            store.load().unwrap().unwrap().siblings,
+            None,
+            "a set without members is no siblings"
+        );
     }
 }

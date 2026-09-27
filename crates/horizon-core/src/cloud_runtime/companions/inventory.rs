@@ -32,14 +32,16 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
         let target = Target {
             scope: owner.scope.clone(),
             cloud_id: launch.id.clone(),
-            declaration: Declaration {
-                repository,
-                profile: launch.profile_name.clone(),
-            },
+            declaration: Declaration::new(repository, launch.profile_name.clone()),
         };
         if launch.id == owner.cloud_id {
             let prepared = repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner)?;
-            source = Some((target.clone(), prepared.config.companions));
+            let declarations = prepared
+                .config
+                .cloud_companions()
+                .map(|(alias, declaration)| (alias.to_owned(), declaration.clone()))
+                .collect();
+            source = Some((target.clone(), declarations));
         }
         inventory.push(target);
     }
@@ -52,8 +54,17 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
     })
 }
 
-fn identity(path: &Path, runner: &Runner<'_>) -> Result<String> {
-    let remote = runner.run(
+/// The GitHub `owner/name` of a checkout's origin. The origin URL is never emitted, since
+/// it may embed a credential that is refused only after it is read.
+/// # Errors
+/// The checkout has no origin, or one that is not a credential-free GitHub URL.
+pub(in crate::cloud_runtime) fn identity(path: &Path, runner: &Runner<'_>) -> Result<String> {
+    let remote = Runner {
+        cancel: runner.cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    }
+    .run(
         "Read companion repository identity",
         Command::new("git")
             .arg("-C")
@@ -72,11 +83,7 @@ fn from_remote(remote: &str) -> Result<String> {
             "Companions require a GitHub origin without embedded credentials",
         ))?;
     let name = name.strip_suffix(".git").unwrap_or(name);
-    let declaration = Declaration {
-        repository: name.into(),
-        profile: "identity".into(),
-    };
-    declaration
+    Declaration::new(name, "identity")
         .validate()
         .map_err(|_| Error::Invalid("Invalid companion repository origin"))?;
     Ok(name.into())

@@ -82,6 +82,12 @@ impl Connection {
         command.args(self.arguments("yes")).arg(remote);
         command
     }
+    pub(super) fn pinned_attachment(&self, encoded: &str) -> Vec<String> {
+        let mut arguments = self.arguments("yes");
+        arguments.insert(0, "-tt".into());
+        arguments.push(format!("horizon-cloud-worker attach-project-session {encoded}"));
+        arguments
+    }
     /// # Errors
     /// Checks the worker runtime through the existing OpenSSH transport and reports
     /// the optional features of the image that is actually running.
@@ -121,6 +127,51 @@ impl Connection {
             super::timeline::IMPORTING_DEPENDENCIES,
             &mut self.command("horizon-worker-source import"),
             Duration::from_secs(300),
+        )?;
+        Ok(())
+    }
+    /// # Errors
+    /// Uploads a sibling's pack into its own upload directory and imports it into that
+    /// sibling's repository only.
+    pub fn transfer_sibling(&self, alias: &str, pack: &Path, revision: &str, runner: &Runner<'_>) -> Result<()> {
+        if !valid_revision(revision) {
+            return Err(Error::Invalid("Invalid committed revision"));
+        }
+        let remote = SiblingRemote::new(alias)?;
+        runner.run(
+            "Sibling upload directory",
+            &mut self.command(&remote.stage),
+            Duration::from_secs(20),
+        )?;
+        self.upload(pack, &remote.pack, runner)?;
+        runner.run(
+            super::timeline::IMPORTING_OBJECTS,
+            &mut self.command(&remote.import(revision)),
+            Duration::from_secs(120),
+        )?;
+        Ok(())
+    }
+    /// # Errors
+    /// Uploads a sibling's verified source dependencies and imports them for it alone.
+    pub fn transfer_sibling_material(&self, alias: &str, archive: &Path, runner: &Runner<'_>) -> Result<()> {
+        let remote = SiblingRemote::new(alias)?;
+        self.upload(archive, &remote.archive, runner)?;
+        runner.run(
+            super::timeline::IMPORTING_DEPENDENCIES,
+            &mut self.command(&remote.material),
+            Duration::from_secs(300),
+        )?;
+        Ok(())
+    }
+    /// # Errors
+    /// Records the imported siblings and their checkout directories from `manifest`, a
+    /// [`super::siblings::Set::manifest`]. The worker refuses a manifest naming a revision
+    /// it has not imported and keeps the previous one.
+    pub fn record_siblings(&self, manifest: &str, runner: &Runner<'_>) -> Result<()> {
+        runner.run(
+            "Sibling manifest",
+            &mut self.command(&manifest_command(manifest)?),
+            Duration::from_secs(20),
         )?;
         Ok(())
     }
@@ -171,8 +222,50 @@ impl Connection {
         Ok(args)
     }
 }
+/// The worker commands and `/workspace`-relative upload paths of one sibling.
+struct SiblingRemote {
+    alias: String,
+    stage: String,
+    pack: String,
+    archive: String,
+    material: String,
+}
+
+impl SiblingRemote {
+    /// Only an alias the worker accepts, which also keeps it safe as shell text.
+    fn new(alias: &str) -> Result<Self> {
+        if !horizon_cloud::companions::valid_alias(alias) {
+            return Err(Error::Invalid("Invalid same-worker sibling alias"));
+        }
+        Ok(Self {
+            alias: alias.to_owned(),
+            stage: format!("horizon-worker-siblings stage {alias}"),
+            pack: format!("siblings/{alias}/horizon-transfer.pack"),
+            archive: format!("siblings/{alias}/horizon-source.tar"),
+            material: format!("horizon-worker-source import --sibling {alias}"),
+        })
+    }
+
+    fn import(&self, revision: &str) -> String {
+        format!("horizon-worker-import {revision} --sibling {}", self.alias)
+    }
+}
+
+/// `horizon-worker-siblings set` reading `manifest` from a quoted here-document, which the
+/// manifest's character set cannot end early or expand.
+fn manifest_command(manifest: &str) -> Result<String> {
+    if !manifest
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"{}[]\":,._-".contains(&byte))
+    {
+        return Err(Error::Invalid("Invalid same-worker sibling manifest"));
+    }
+    Ok(format!(
+        "horizon-worker-siblings set <<'HORIZON_SIBLINGS'\n{manifest}\nHORIZON_SIBLINGS"
+    ))
+}
 fn valid_revision(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
+    super::repository::is_commit_id(value)
 }
 
 #[cfg(all(test, unix))]
@@ -226,5 +319,41 @@ mod tests {
             "probe ignored its remaining budget: {elapsed:?}"
         );
         assert!(!connection.known_hosts.exists());
+    }
+
+    #[test]
+    fn revisions_are_full_lowercase_commit_ids_as_the_worker_requires() {
+        assert!(valid_revision(&"a".repeat(40)) && valid_revision(&"0".repeat(64)));
+        for revision in ["A".repeat(40), "a".repeat(39), "g".repeat(40), String::new()] {
+            assert!(!valid_revision(&revision), "{revision:?}");
+        }
+    }
+
+    #[test]
+    fn sibling_commands_and_uploads_stay_with_an_accepted_siblings_own_material() {
+        let remote = SiblingRemote::new("native-lib").unwrap();
+        assert_eq!(remote.stage, "horizon-worker-siblings stage native-lib");
+        assert_eq!(remote.pack, "siblings/native-lib/horizon-transfer.pack");
+        assert_eq!(remote.archive, "siblings/native-lib/horizon-source.tar");
+        assert_eq!(remote.material, "horizon-worker-source import --sibling native-lib");
+        assert_eq!(
+            remote.import(&"a".repeat(40)),
+            format!("horizon-worker-import {} --sibling native-lib", "a".repeat(40))
+        );
+        for alias in ["", "../escape", "Native", "native lib", "native;rm", &"a".repeat(65)] {
+            assert!(SiblingRemote::new(alias).is_err(), "{alias:?}");
+        }
+    }
+
+    #[test]
+    fn the_manifest_travels_in_a_quoted_here_document() {
+        let manifest = r#"{"version":1,"primary":"app","siblings":[]}"#;
+        assert_eq!(
+            manifest_command(manifest).unwrap(),
+            format!("horizon-worker-siblings set <<'HORIZON_SIBLINGS'\n{manifest}\nHORIZON_SIBLINGS")
+        );
+        for unsafe_text in ["{'}", "{$HOME}", "{\nHORIZON_SIBLINGS\n}", "{`id`}"] {
+            assert!(manifest_command(unsafe_text).is_err(), "{unsafe_text:?}");
+        }
     }
 }

@@ -19,6 +19,12 @@ impl Reason {
         let Some(raw) = FIELDS.iter().find_map(|name| fields.get(*name)?.as_str()) else {
             return Self::default();
         };
+        Self::from_text(raw, secret)
+    }
+
+    /// As `from_body`, for an explanation the caller already took from a body
+    /// whose shape differs, such as a message nested inside an error object.
+    pub(crate) fn from_text(raw: &str, secret: &str) -> Self {
         let mut remaining = raw.chars();
         if !secret.is_empty() && secret.chars().all(|expected| remaining.any(|c| c == expected)) {
             return Self::default();

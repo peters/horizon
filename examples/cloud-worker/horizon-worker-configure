@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Install worker-local tool bindings without copying account authentication."""
 import json
+import os
 import subprocess
 from pathlib import Path
 home = Path('/workspace/home')
@@ -14,6 +15,9 @@ if capabilities.get('browsers', []) or capabilities.get('browserstack') is not N
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):
     servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', '/workspace/device.json', 'mcp']}
+# Agents may stop the worker when done only where the profile opts in to stopping by itself.
+if capabilities.get('agents', []) and os.environ.get('HORIZON_IDLE_STOP_MINUTES', '').isdigit():
+    servers['horizon-worker'] = {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']}
 Path('/workspace/agent-mcp.json').write_text(json.dumps({'mcpServers': servers}))
 if capabilities.get('desktop', False):
     Path('/workspace/device.json').write_text(json.dumps({'id': 'cloud-desktop', 'endpoint': {'kind': 'local_x11', 'display': ':99'}}))

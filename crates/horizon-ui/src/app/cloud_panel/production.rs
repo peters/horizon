@@ -9,6 +9,8 @@ mod creation_tests;
 mod launch;
 mod lifecycle;
 mod machine_size;
+mod offer_publication;
+mod offers;
 mod presentation;
 mod prices;
 mod progress;
@@ -60,6 +62,8 @@ pub(super) struct Production {
     selected_profile: String,
     /// A CPU worker size chosen for the selected profile; `None` keeps the profile's size.
     size: Option<machine_size::Size>,
+    /// Where the new cloud may be placed; any allowed data center by default.
+    placement: horizon_core::cloud_panel::Placement,
     /// Provider prices and stock shown while choosing the size.
     prices: prices::State,
     setup_agent: Option<PanelKind>,
@@ -67,6 +71,8 @@ pub(super) struct Production {
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,
+    /// Prices sent to ready workers for their agents' cloud offers.
+    offer_publication: offer_publication::State,
 }
 #[derive(Default, PartialEq, Eq)]
 pub(super) enum Confirmation {
@@ -320,6 +326,7 @@ impl HorizonApp {
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
         self.prepare_cloud_companions(ctx);
+        self.publish_cloud_offers(ctx);
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);
@@ -479,7 +486,7 @@ impl HorizonApp {
                 return;
             }
         };
-        let settings = match Settings::load(&root.join("settings.json")) {
+        let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
             Ok(settings) => settings,
             Err(error) => {
                 self.cloud_prototype.production.runtimes.entry(id).or_default().error =
@@ -487,14 +494,14 @@ impl HorizonApp {
                 return;
             }
         };
-        let request = Request {
-            cloud_id: launch.id.clone(),
+        let request = Request::new(
+            launch.id.clone(),
             repository,
-            revision: launch.revision,
-            profile: launch.profile,
+            launch.revision,
+            launch.profile,
             state_root,
             settings,
-        };
+        );
         if let Err(error) = deployment::prepare(&request) {
             self.cloud_prototype.error = Some(error.to_string());
             return;
@@ -618,7 +625,7 @@ impl HorizonApp {
                 agent: agent.into(),
                 tmux: id.clone(),
                 branch: format!("agent/{id}"),
-                worktree: format!("/workspace/agents/{id}"),
+                worktree: cloud_runtime::siblings::session_worktree(&id, saved.siblings.as_ref()),
             };
             if !saved.sessions.iter().any(|s| s.panel_id == id) {
                 saved.sessions.push(session.clone());

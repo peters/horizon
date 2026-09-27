@@ -8,41 +8,56 @@ use super::{
 };
 use crate::{
     Cancellation, CloudError, Profile,
-    prices::{Availability, CpuFlavorPrice, GpuPrice, PriceList, SizeAvailability, StoragePrices},
+    prices::{Availability, CpuFlavorPrice, DataCenter, GpuPrice, PriceList, SizeAvailability, StoragePrices},
+    valid_id,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 
-/// `RunPod`'s storage list prices (September 2026): standard network volumes at $0.07
-/// for the first TB and $0.05 beyond it, and pod volumes at $0.10 while running and
-/// $0.20 while stopped. The catalog does not publish them.
+/// `RunPod`'s storage list prices: standard network volumes at $0.07 per GB-month for
+/// the first TB and $0.05 beyond it, pod volumes at $0.10 while running and $0.20 while
+/// stopped, and container disks at $0.10 while running. The catalog does not publish them.
 pub const STORAGE: StoragePrices = StoragePrices {
     network: 0.07,
     network_tier_gb: 1000,
     network_beyond: 0.05,
     pod_volume: (0.10, 0.20),
+    container: 0.10,
+    confirmed: "2026-09-26",
 };
 
 impl RunPod {
-    /// Secure Cloud prices for CPU flavors and GPU types, with each GPU's best
-    /// availability in `data_centers` (every data center when empty).
+    /// Secure Cloud prices for CPU flavors and GPU types, and the data centers in
+    /// `data_centers` (every one when empty) with their region and GPU stock.
     /// # Errors
     /// Fails on provider errors and on malformed catalogs.
     pub fn price_list(&self, data_centers: &[String], cancel: &Cancellation) -> Result<PriceList, CloudError> {
         let cpus: CpuCatalog = self.catalog("/cpus", cancel)?;
         let gpus: GpuCatalog = self.catalog("/gpus", cancel)?;
         let centers: Catalog = self.catalog("/datacenters?include=GPU_AVAILABILITY", cancel)?;
-        let mut best: std::collections::HashMap<String, Availability> = std::collections::HashMap::new();
-        for center in centers
+        let regions = centers
+            .data_centers
+            .iter()
+            .filter(|center| valid_id(&center.id) && !center.region.is_empty())
+            .map(|center| (center.id.clone(), center.region.clone()))
+            .collect();
+        let centers = centers
             .data_centers
             .into_iter()
-            .filter(|center| data_centers.is_empty() || data_centers.contains(&center.id))
-        {
-            for gpu in center.gpu_availability {
-                let level = availability(&gpu.availability)?;
-                let entry = best.entry(gpu.id).or_insert(level);
-                *entry = (*entry).min(level);
-            }
-        }
+            .filter(|center| valid_id(&center.id) && (data_centers.is_empty() || data_centers.contains(&center.id)))
+            .map(|center| {
+                let gpus = center
+                    .gpu_availability
+                    .into_iter()
+                    .map(|gpu| Ok((gpu.id, availability(&gpu.availability)?)))
+                    .collect::<Result<_, CloudError>>()?;
+                Ok(DataCenter {
+                    workspace_storage: center.network_volume_types.iter().any(|tier| tier == "STANDARD"),
+                    id: center.id,
+                    region: center.region,
+                    gpus,
+                })
+            })
+            .collect::<Result<Vec<_>, CloudError>>()?;
         Ok(PriceList {
             provider: "RunPod",
             cpu: cpus
@@ -60,13 +75,14 @@ impl RunPod {
                 .into_iter()
                 .filter(|gpu| gpu.secure && gpu.price.secure > 0.0)
                 .map(|gpu| GpuPrice {
-                    availability: best.get(&gpu.id).copied().unwrap_or(Availability::None),
                     id: gpu.id,
                     name: gpu.name,
                     memory_gb: gpu.memory,
                     hourly: gpu.price.secure,
                 })
                 .collect(),
+            data_centers: centers,
+            regions,
             storage: STORAGE,
         })
     }
@@ -92,11 +108,13 @@ impl RunPod {
             .map(|(_, id)| id)
             .collect();
         let flavors: Vec<&Flavor> = requested.iter().filter_map(|id| Flavor::get(id)).collect();
-        let stock = self.cpu_stock(&centers, &flavors, profile.cpu, cancel)?;
-        Ok(SizeAvailability {
-            best: stock.values().min().map_or(Availability::None, |&level| level.into()),
-            centers: stock.len(),
-        })
+        let mut centers: Vec<(String, Availability)> = self
+            .cpu_stock(&centers, &flavors, profile.cpu, cancel)?
+            .into_iter()
+            .map(|(center, level)| (center, level.into()))
+            .collect();
+        centers.sort();
+        Ok(SizeAvailability { centers })
     }
 
     fn catalog<T: DeserializeOwned>(&self, path: &str, cancel: &Cancellation) -> Result<T, CloudError> {

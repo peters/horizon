@@ -99,6 +99,7 @@ fn overlap_fixture(focused: bool, overlaps: bool) -> (tempfile::TempDir, egui::C
         revision: "a".repeat(40),
         profile_name: "dev".into(),
         profile: config.profiles.remove("dev").expect("profile"),
+        placement: horizon_core::cloud_panel::Placement::default(),
     });
     let (runtime_min, _) = group.runtime_bounds();
     app.cloud_prototype.groups.0.push(group);

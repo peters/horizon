@@ -29,9 +29,12 @@ fn run() -> cloud_runtime::Result<()> {
     if args.first().is_some_and(|command| command.starts_with("registry")) {
         return registry::run(&args);
     }
+    if args.first().is_some_and(|command| command == "offers") && (2..=3).contains(&args.len()) {
+        return offers(&PathBuf::from(&args[1]), args.get(2).map(String::as_str));
+    }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -67,7 +70,11 @@ fn run() -> cloud_runtime::Result<()> {
     if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
         return rebuild(&args, settings, &cancel);
     }
-    if !matches!(args[0].as_str(), "deploy" | "prepare-image") || !(6..=7).contains(&args.len()) {
+    let (args, siblings) = sibling_bindings(&args)?;
+    if !matches!(args[0].as_str(), "deploy" | "prepare-image")
+        || !(6..=7).contains(&args.len())
+        || (args[0] == "prepare-image" && !siblings.is_empty())
+    {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
     let repository = PathBuf::from(&args[2]).canonicalize()?;
@@ -80,20 +87,46 @@ fn run() -> cloud_runtime::Result<()> {
         .get(&args[3])
         .cloned()
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
-    let request = deployment::Request {
-        cloud_id: args[5].clone(),
+    let request = deployment::Request::new(
+        args[5].clone(),
         repository,
         revision,
         profile,
-        state_root: PathBuf::from(&args[4]),
+        PathBuf::from(&args[4]),
         settings,
-    };
+    );
     if args[0] == "prepare-image" {
         prepare_image(&request, &cancel, &print_event)?;
     } else {
-        deployment::deploy(&request, &cancel, &print_event)?;
+        deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
     }
     Ok(())
+}
+
+/// Separates `--sibling ALIAS=PATH` options, in their order, from the other arguments.
+fn sibling_bindings(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Vec<cloud_runtime::siblings::Binding>)> {
+    let mut positional = Vec::new();
+    let mut siblings = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg != "--sibling" {
+            positional.push(arg.clone());
+            continue;
+        }
+        let (alias, path) = args
+            .next()
+            .and_then(|binding| binding.split_once('='))
+            .ok_or(cloud_runtime::Error::Invalid("Use --sibling ALIAS=PATH"))?;
+        let local_repository = PathBuf::from(path).canonicalize().map_err(|error| {
+            eprintln!("--sibling {alias}={path}: {error}");
+            cloud_runtime::Error::Invalid("A --sibling checkout does not exist")
+        })?;
+        siblings.push(cloud_runtime::siblings::Binding {
+            alias: alias.to_owned(),
+            local_repository,
+        });
+    }
+    Ok((positional, siblings))
 }
 
 /// Prefixes each line with the seconds since this command started, for timing a deployment.
@@ -139,14 +172,14 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
     let state = Store::lock(&root)?
         .load()?
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
-    let request = deployment::Request {
-        cloud_id: state.cloud_id,
-        repository: state.repository,
-        revision: state.revision,
-        profile: state.profile,
-        state_root: root,
+    let request = deployment::Request::new(
+        state.cloud_id,
+        state.repository,
+        state.revision,
+        state.profile,
+        root,
         settings,
-    };
+    );
     match (args[0].as_str(), args.get(3)) {
         ("rebuild", Some(profile)) if args.len() == 4 => replacement::rebuild(&request, profile, cancel, &print_event),
         ("continue-rebuild", None) => replacement::continue_replacement(&request, cancel, &print_event),
@@ -197,5 +230,32 @@ fn prepare_image(
         registry.verify_image(&digest, cancel)?;
     }
     println!("Prepared: {digest}");
+    Ok(())
+}
+
+/// Ranks offers the way agents' `cloud_offers` does, from prices fetched now: `RunPod`'s
+/// in `offers`, and each other configured provider in `other_providers`, in its own
+/// currency.
+fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
+    use horizon_cloud::offers::{Requirements, hetzner_section, offers};
+    let requirements: Requirements = serde_json::from_str(requirements.unwrap_or("{}"))
+        .map_err(|_| cloud_runtime::Error::Invalid("Invalid offer requirements"))?;
+    requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
+    let settings = Settings::load(settings)?;
+    let cancel = Cancellation::default();
+    let (list, preferences) = cloud_runtime::prices::price_list(&settings, &cancel)?;
+    let other_providers: Vec<serde_json::Value> = cloud_runtime::prices::hetzner_catalog(&settings, &cancel)?
+        .map(|catalog| hetzner_section(&catalog, &requirements))
+        .into_iter()
+        .collect();
+    let answer = serde_json::json!({
+        "provider": list.provider,
+        "offers": offers(&list, &preferences, &requirements),
+        "other_providers": other_providers,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?
+    );
     Ok(())
 }

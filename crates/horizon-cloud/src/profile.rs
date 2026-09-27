@@ -36,6 +36,9 @@ pub struct Profile {
     /// Minutes without agent activity before a dedicated worker stops itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop_minutes: Option<u16>,
+    /// Lowest CUDA version, as `major.minor`, a GPU host must offer to run the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_cuda_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -122,8 +125,35 @@ impl CloudConfig {
             {
                 return Err(ProfileError::Invalid(crate::runpod::volumes::INVALID_REQUEST_SIZE));
             }
+            if profile.provider == crate::hetzner::PROVIDER
+                && !crate::hetzner::volumes::SIZE_GB.contains(&u32::from(profile.storage.volume_gb))
+            {
+                return Err(ProfileError::Invalid(
+                    "A Hetzner workspace volume must be between 10 and 10,240 GB",
+                ));
+            }
         }
         Ok(config)
+    }
+
+    /// Companions on their own clouds, the only ones that take part in selection and SSH grants.
+    pub fn cloud_companions(&self) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions_placed(crate::companions::Placement::Cloud)
+    }
+
+    /// Sibling repositories checked out next to this one on the same worker.
+    pub fn same_worker_siblings(&self) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions_placed(crate::companions::Placement::SameWorker)
+    }
+
+    fn companions_placed(
+        &self,
+        placement: crate::companions::Placement,
+    ) -> impl Iterator<Item = (&str, &crate::companions::Declaration)> {
+        self.companions
+            .iter()
+            .filter(move |(_, declaration)| declaration.placement == placement)
+            .map(|(alias, declaration)| (alias.as_str(), declaration))
     }
 }
 impl Profile {
@@ -131,10 +161,24 @@ impl Profile {
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
         self.capabilities.validate()?;
-        if self.provider != "runpod" && !(design_fixture && matches!(self.provider.as_str(), "daytona" | "fly")) {
+        let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
+        let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
+        if !(supported || fixture) {
             return Err(ProfileError::Invalid(
-                "Only RunPod can deploy workers; Daytona and Fly.io are design fixtures",
+                "Supported providers are RunPod and Hetzner; Daytona and Fly.io are design fixtures",
             ));
+        }
+        if self.provider == crate::hetzner::PROVIDER {
+            if self.gpu {
+                return Err(ProfileError::Invalid(
+                    "Hetzner has no GPU workers; use RunPod for a GPU profile",
+                ));
+            }
+            if self.capabilities.browserstack.is_some() {
+                return Err(ProfileError::Invalid(
+                    "Hosted devices are not available on Hetzner clouds yet",
+                ));
+            }
         }
         if self.cpu == 0 || self.memory_gb == 0 || self.storage.container_gb == 0 || self.storage.volume_gb == 0 {
             return Err(ProfileError::Invalid("CPU, memory and storage must be positive"));
@@ -153,6 +197,16 @@ impl Profile {
                 return Err(ProfileError::Invalid(
                     "idle_stop_minutes cannot be combined with hosted devices",
                 ));
+            }
+        }
+        if let Some(version) = &self.min_cuda_version {
+            if cuda_version(version).is_none() {
+                return Err(ProfileError::Invalid(
+                    "min_cuda_version must be major.minor, such as 12.8",
+                ));
+            }
+            if !self.gpu {
+                return Err(ProfileError::Invalid("min_cuda_version requires gpu: true"));
             }
         }
         if !valid_image(&self.image) {
@@ -174,6 +228,17 @@ impl Profile {
 pub const IDLE_STOP_ENVIRONMENT_KEY: &str = "HORIZON_IDLE_STOP_MINUTES";
 /// Accepted idle periods: long enough to outlast a quiet build, at most one day.
 pub const IDLE_STOP_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
+/// A CUDA version written `major.minor`, as numbers so that 12.11 is above 12.2.
+#[must_use]
+pub(crate) fn cuda_version(value: &str) -> Option<(u16, u16)> {
+    let number = |part: &str| {
+        (!part.is_empty() && part.len() <= 4 && part.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| part.parse().ok())
+            .flatten()
+    };
+    let (major, minor) = value.split_once('.')?;
+    Some((number(major)?, number(minor)?))
+}
 #[must_use]
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -229,6 +294,39 @@ mod tests {
             }
         }
         assert!(CloudConfig::parse_design_fixture(&serde_yaml::to_string(&fixture).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn hetzner_profiles_are_cpu_only_with_hetzner_volume_limits() {
+        for (size, accepted) in [(9, false), (10, true), (4001, true), (10_240, true), (10_241, false)] {
+            let mut config = CloudConfig::parse(EXAMPLE).unwrap();
+            config.profiles.retain(|name, _| name == "image-only");
+            config.default = "image-only".into();
+            let profile = config.profiles.get_mut("image-only").unwrap();
+            profile.provider = crate::hetzner::PROVIDER.into();
+            profile.storage.volume_gb = size;
+            let yaml = serde_yaml::to_string(&config).unwrap();
+            assert_eq!(CloudConfig::parse(&yaml).is_ok(), accepted, "size={size}");
+        }
+        let mut profile = CloudConfig::parse(EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("image-only")
+            .unwrap();
+        profile.provider = crate::hetzner::PROVIDER.into();
+        assert!(profile.validate(false).is_ok());
+        profile.gpu = true;
+        assert!(profile.validate(false).is_err(), "Hetzner has no hourly GPUs");
+        profile.gpu = false;
+        profile.capabilities.browserstack = Some(crate::BrowserStack {
+            provider: crate::BrowserStack::default_provider(),
+            targets: ["ios_phone".into()].into(),
+            local_ports: [8080].into(),
+        });
+        assert!(
+            profile.validate(false).is_err(),
+            "hosted devices are not wired for Hetzner"
+        );
     }
 
     #[test]
@@ -313,6 +411,51 @@ mod tests {
             local_ports: [8080].into(),
         });
         assert!(profile.validate(false).is_err());
+    }
+    #[test]
+    fn a_cuda_floor_is_optional_numeric_and_only_for_gpu_profiles() {
+        let config = CloudConfig::parse(EXAMPLE).unwrap();
+        assert!(
+            config
+                .profiles
+                .values()
+                .all(|profile| profile.min_cuda_version.is_none())
+        );
+        let yaml = EXAMPLE.replace("    # min_cuda_version: \"12.8\"", "    min_cuda_version: \"12.8\"");
+        assert_eq!(
+            CloudConfig::parse(&yaml).unwrap().profiles["gpu"]
+                .min_cuda_version
+                .as_deref(),
+            Some("12.8")
+        );
+        let mut profile = config.profiles["gpu"].clone();
+        let saved = serde_json::to_value(&profile).unwrap();
+        assert!(saved.get("min_cuda_version").is_none());
+        assert_eq!(serde_json::from_value::<Profile>(saved).unwrap(), profile);
+        for (version, accepted) in [
+            ("12.8", true),
+            ("13.0", true),
+            ("12.11", true),
+            ("12", false),
+            ("12.", false),
+            (".8", false),
+            ("12.8.1", false),
+            ("v12.8", false),
+            ("12.8 ", false),
+            ("12,8", false),
+            ("12345.0", false),
+        ] {
+            profile.min_cuda_version = Some(version.into());
+            assert_eq!(profile.validate(false).is_ok(), accepted, "version={version}");
+        }
+        profile.min_cuda_version = Some("12.8".into());
+        profile.gpu = false;
+        assert_eq!(
+            profile.validate(false).unwrap_err().to_string(),
+            "min_cuda_version requires gpu: true"
+        );
+        assert!(cuda_version("12.11") > cuda_version("12.2"));
+        assert!(cuda_version("13.0") > cuda_version("12.11"));
     }
     #[test]
     fn rejects_unsupported_and_secret_bearing_input_without_echoing() {

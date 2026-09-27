@@ -51,6 +51,8 @@ pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) ->
     state.stop_requested = false;
     state.browserstack_released = true;
     state.browserstack_targets.clear();
+    // A new worker starts without the previous worker's stop reason.
+    state.last_self_stop = None;
     store.save(state)
 }
 
@@ -221,14 +223,14 @@ mod tests {
             "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": []
         }))
         .unwrap();
-        let request = Request {
-            cloud_id: state.cloud_id.clone(),
+        let request = Request::new(
+            state.cloud_id.clone(),
             repository,
             revision,
-            profile: serde_json::from_value(profile).unwrap(),
-            state_root: cloud.clone(),
+            serde_json::from_value(profile).unwrap(),
+            cloud.clone(),
             settings,
-        };
+        );
         assert!(super::super::deploy(&request, &horizon_cloud::Cancellation::default(), &|_| {}).is_err());
         let saved = Store::lock(&cloud).unwrap().load().unwrap().unwrap();
         assert_eq!(saved.stage, Stage::Validate);
@@ -260,14 +262,14 @@ mod tests {
             "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": []
         }))
         .unwrap();
-        let request = Request {
-            cloud_id: state.cloud_id.clone(),
-            repository: state.repository.clone(),
-            revision: state.revision.clone(),
-            profile: state.profile.clone(),
-            state_root: cloud.clone(),
+        let request = Request::new(
+            state.cloud_id.clone(),
+            state.repository.clone(),
+            state.revision.clone(),
+            state.profile.clone(),
+            cloud.clone(),
             settings,
-        };
+        );
         assert!(super::super::deploy(&request, &horizon_cloud::Cancellation::default(), &|_| {}).is_err());
         let saved = Store::lock(&cloud).unwrap().load().unwrap().unwrap();
         assert_eq!(saved.stage, Stage::Deleted);
@@ -313,14 +315,14 @@ mod tests {
             "registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
         }))
         .unwrap();
-        super::super::prepare(&Request {
-            cloud_id: state.cloud_id.clone(),
-            repository: state.repository.clone(),
-            revision: state.revision,
+        super::super::prepare(&Request::new(
+            state.cloud_id.clone(),
+            state.repository.clone(),
+            state.revision,
             profile,
-            state_root: root.path().into(),
+            root.path().into(),
             settings,
-        })
+        ))
         .unwrap();
         let store = Store::lock(root.path()).unwrap();
         let saved = store.load().unwrap().unwrap();

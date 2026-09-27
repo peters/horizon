@@ -500,6 +500,16 @@ new image digest through the pod update and observes which image of the pair the
 provider reports; it keeps no journal, so callers record intent first.
 `runpod::billing` reads one worker's validated billing buckets from RunPod v2
 pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
+`host` renders provider-neutral `#cloud-config` user data that runs the unchanged
+worker image under Docker on a rented virtual machine; it performs no provider I/O.
+`hetzner` is a standalone Hetzner Cloud REST adapter that nothing calls yet. It uses
+the same `CreateState` fence for servers and volumes, reconciles a lost create
+through the operation label and the provider's unique names, and tries placements
+in order only after a capacity refusal. `hetzner::catalog` lists x86 offers with
+live per-location availability. It targets the current API as described by
+Hetzner's OpenAPI spec; `scripts/check-hetzner-api.py` checks every operation and
+field it uses against that spec. Deployment wiring comes after a provider seam in
+`horizon-core`.
 The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
 `startup::StartupMetadata` is bounded opaque, non-secret creation data saved in
 `WorkerSpec`. The RunPod request passes it through one environment value, and the
@@ -570,6 +580,15 @@ recipe, drives the journaled switch of its bound worker, settles an interrupted 
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
 SSH steps live in `replacement::live` behind a trait, so every persistence boundary is
 tested offline.
+`deployment` orchestrates one deploy and still owns registry binding, provisioning,
+ready bookkeeping, initial state and replacement commits; the other steps have leaves.
+`sizing` applies CPU, memory and machine settings until a worker is requested;
+`image` prepares the worker image and checks its contract before allocation;
+`source` validates and packs the committed source before allocation and transfers
+it to the ready worker; `git_credentials` and `agent_credentials` install or clear
+the worker's credential bindings; `readiness` waits for the worker under one
+deadline; `redeploy` reopens a deleted cloud; and `deletion` deletes the worker
+and its workspace storage. The orchestrator's tests live in `deployment/tests.rs`.
 `worker_contract` shares capability transport and contract validation
 between local image checks and SSH readiness, including legacy full-image support.
 `cost` estimates a worker's current run from the provider's effective hourly rate
@@ -717,3 +736,28 @@ staging has a content digest; exposed data is checked only through fixed root
 identities so normal file, Git and home changes survive retries and startup.
 Uncertain builds remain retained and fence cancellation. None of these records
 authorizes an agent process or public project attachment.
+
+
+Persistent session runtime uses the same signed membership journal for one-shot
+start and terminal stop intent. Protocol `session_runtime` separates fresh status
+observations from historical receipts. Host `project_reservations::session_runtime`
+checks pending base/next revisions without mutating the journal. Worker
+`bootstrap::session_runtime` owns authenticated dispatch; `records` binds external
+launch evidence and durability barriers, `policy` fixes executable/environment
+qualification, `supervisor` owns private tmux and inherited launch authority, and
+`process` owns Linux process identity, pidfds and subreaper cleanup. Long-lived
+supervisors release the allocation lease between observations. Only an intact
+supervisor can establish terminal cleanup; restart never replays a launch or
+signals persisted PIDs. Published session data remains mutable and retained.
+
+Interactive attachment uses protocol `session_attachment` and a separate signed
+transport action. Host `project_reservations::attachment` revalidates the current
+owning journal and retains private copies of pinned SSH material for the client
+lifetime. Worker `session_runtime::attachment` authenticates membership, launch
+and endpoint identity under the allocation lock. Its `terminal` leaf owns a
+private intermediary PTY and fixed attach-only child; `bridge` owns bounded byte
+and ancillary-descriptor queues. The supervisor publishes endpoint identity only
+on initial launch. Existing records without that binding remain inspectable and
+stoppable but cannot be adopted for attachment. Authorization opens input and
+output forwarding before releasing the same lock that orders terminal stop;
+no allocation lock is held during interactive relay.

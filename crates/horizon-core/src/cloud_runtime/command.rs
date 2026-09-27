@@ -11,6 +11,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+/// The error of a local command that outlived its timeout.
+pub(super) const TIMED_OUT: &str = "Local operation timed out";
 pub struct Runner<'a> {
     pub cancel: &'a Cancellation,
     pub emit: &'a dyn Fn(Event),
@@ -253,7 +255,7 @@ impl Runner<'_> {
             if self.cancel.is_cancelled() || started.elapsed() > timeout {
                 stop(&mut child);
                 self.cancel.check()?;
-                return Err(Error::Invalid("Local operation timed out"));
+                return Err(Error::Invalid(TIMED_OUT));
             }
             if status.is_none() {
                 status = child.try_wait()?;

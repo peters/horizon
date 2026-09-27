@@ -62,10 +62,14 @@ COPY horizon-worker-start \
     horizon-worker-configure \
     horizon-worker-supervise \
     horizon-worker-idle \
+    horizon-worker-stop \
     horizon-worker-run \
     horizon-worker-session \
     horizon-worker-source \
     horizon-worker-import \
+    horizon-worker-siblings \
+    horizon-worker-session-env \
+    horizon-worker-gpu-lock \
     horizon-worker-git-auth \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \

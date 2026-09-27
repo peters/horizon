@@ -1,5 +1,5 @@
 use super::super::{
-    Cancellation, CreateState, Stage,
+    Cancellation, Stage,
     command::Runner,
     settings::Settings,
     ssh::Connection,
@@ -30,7 +30,7 @@ pub(super) trait Transport {
     fn publish(&mut self, cloud: &str, catalog: &Catalog) -> Result<()>;
 }
 
-pub(super) struct Live<'a> {
+pub(in crate::cloud_runtime) struct Live<'a> {
     root: &'a Path,
     settings: &'a Settings,
     cancel: &'a Cancellation,
@@ -62,6 +62,31 @@ impl<'a> Live<'a> {
             .get(cloud)
             .map(|(_, state)| state)
             .ok_or(Error::Invalid("Missing companion state"))
+    }
+
+    /// Sends prices to the ready worker of `cloud` over the owner connection companions
+    /// use; a worker that is not ready gets nothing.
+    pub(in crate::cloud_runtime) fn send_offers(
+        &mut self,
+        cloud: &str,
+        snapshot: &horizon_cloud_protocol::offers::Snapshot,
+    ) -> Result<super::super::offer_publication::Published> {
+        use super::super::offer_publication::Published;
+        snapshot.validate().map_err(Error::Invalid)?;
+        // The worker refuses larger input, so such prices are never worth an SSH attempt.
+        if serde_json::to_vec(snapshot).map_or(true, |bytes| bytes.len() > horizon_cloud_protocol::offers::MAX_BYTES) {
+            return Err(Error::Invalid("Cloud offer prices are too large for a worker"));
+        }
+        if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
+            return Ok(Published::NotReady);
+        }
+        self.exchange(
+            cloud,
+            "horizon-cloud-worker cloud-offers publish",
+            snapshot,
+            Duration::from_secs(45),
+        )?;
+        Ok(Published::Sent)
     }
 
     fn exchange(
@@ -125,18 +150,12 @@ impl Transport for Live<'_> {
             return Ok(None);
         };
         let Some(worker) = &state.worker else { return Ok(None) };
-        let bound = matches!(&state.operation, CreateState::Bound { worker_id } if worker_id == &worker.id);
         let status = if state.stop_requested
             || matches!(state.stage, Stage::Stopped | Stage::Stopping)
             || worker.desired_status == "EXITED"
         {
             Status::Stopped
-        } else if bound
-            && state.stage == Stage::Ready
-            && state.source_ready
-            && worker.desired_status == "RUNNING"
-            && worker.ssh_address().is_some()
-        {
+        } else if state.worker_ready() {
             Status::Ready
         } else {
             Status::Unavailable
@@ -189,5 +208,41 @@ mod tests {
         live.release("target");
         assert!(Store::lock(&root.path().join("target")).is_ok());
         assert!(Store::lock(&root.path().join("source")).is_err());
+    }
+
+    #[test]
+    fn prices_wait_for_a_ready_worker() {
+        use crate::cloud_runtime::offer_publication::{Published, Snapshot, VERSION};
+        let root = tempfile::tempdir().unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+        })).unwrap();
+        let cancel = Cancellation::default();
+        let snapshot = Snapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            list: horizon_cloud::prices::PriceList {
+                provider: "RunPod",
+                cpu: Vec::new(),
+                gpus: Vec::new(),
+                data_centers: Vec::new(),
+                regions: BTreeMap::new(),
+                storage: horizon_cloud::runpod::prices::STORAGE,
+            },
+            preferences: horizon_cloud::prices::Preferences::default(),
+        };
+        // A cloud without a worker gets nothing, and no SSH command runs.
+        let mut live = Live::new(root.path(), &settings, &cancel);
+        assert_eq!(live.send_offers("cloud", &snapshot).unwrap(), Published::NotReady);
+        let unsupported = Snapshot {
+            version: VERSION + 1,
+            ..snapshot.clone()
+        };
+        assert!(live.send_offers("cloud", &unsupported).is_err());
+        // Prices a worker would refuse as too large are refused here, before any SSH.
+        let mut oversized = snapshot;
+        oversized.preferences.gpu_types = vec!["x".repeat(8 * 1024); 64];
+        assert!(oversized.validate().is_ok());
+        assert!(live.send_offers("cloud", &oversized).is_err());
     }
 }
