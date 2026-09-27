@@ -275,7 +275,10 @@ class CapabilitiesTests(unittest.TestCase):
         self.write('/workspace/capabilities.json', {'agents': ['claude']})
         for environment, expected in [(dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), True), ({}, False),
                                       # Horizon stops a worker without a credential, as on Hetzner.
-                                      ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False)]:
+                                      ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False),
+                                      # A period the watcher refuses leaves it passive.
+                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='5'), False),
+                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False)]:
             with mock.patch.dict(os.environ, environment, clear=True):
                 self.configure()
             servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
