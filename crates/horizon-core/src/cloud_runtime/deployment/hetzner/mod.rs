@@ -63,11 +63,12 @@ fn image_registry(image: &str) -> String {
     }
 }
 
-/// A registry host in one spelling, folding Docker Hub's aliases together.
+/// A registry host in one spelling, folding together the Docker Hub aliases the
+/// host configuration stores under Docker Hub's credential key.
 fn registry_host(host: &str) -> String {
     let host = host.to_ascii_lowercase();
     match host.as_str() {
-        "index.docker.io" | "registry-1.docker.io" | "registry.hub.docker.com" => "docker.io".into(),
+        "index.docker.io" | "registry-1.docker.io" => "docker.io".into(),
         _ => host,
     }
 }

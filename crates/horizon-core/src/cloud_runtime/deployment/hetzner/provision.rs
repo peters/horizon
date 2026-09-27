@@ -116,7 +116,20 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         },
         |progress| emit(Event::Output(format!("{progress:?}"))),
     )?;
-    // Recorded only once it meets the profile, as readiness requires.
+    // Recorded only once it meets the profile and holds exactly this volume from
+    // both sides, as readiness requires.
+    let volume = compute
+        .client
+        .inspect_volume(volume.id, cancel)?
+        .ok_or(CloudError::WorkerLost)?;
+    volume.verify(&operation)?;
+    if !super::readiness::holds(&server, &volume)
+        || !super::readiness::admitted(&server, &compute.allowed, Some(location.as_str()))
+    {
+        return Err(Error::Invalid(
+            "The new server does not hold this cloud's workspace volume where the settings allow",
+        ));
+    }
     let described = worker(&server, spec, &volume)?;
     described.verify(spec)?;
     described.verify_resources(spec)?;

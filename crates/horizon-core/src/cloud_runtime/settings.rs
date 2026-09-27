@@ -207,9 +207,10 @@ impl Hetzner {
             return Ok(None);
         };
         validate_private_key_file(&pull.password_file)?;
-        // Every buffer that held the password is wiped when dropped.
-        let read = zeroize::Zeroizing::new(std::fs::read_to_string(&pull.password_file)?);
-        let trimmed = read.trim();
+        let read = read_secret(&pull.password_file)?;
+        let trimmed = std::str::from_utf8(&read)
+            .map_err(|_| Error::Invalid("The registry pull password file must hold one printable token"))?
+            .trim();
         // Checked here so a refused password is never moved into a buffer that
         // is dropped unwiped.
         if trimmed.is_empty() || trimmed.bytes().any(|b| b <= 32 || b >= 127) {
@@ -230,15 +231,30 @@ impl Hetzner {
     pub fn credential(&self) -> Result<Credential> {
         self.validate()?;
         validate_private_key_file(&self.token_file)?;
-        // Read into a wiped buffer and checked while borrowed, so no copy of the
-        // token outlives this call unwiped, even when it is refused.
-        let read = zeroize::Zeroizing::new(std::fs::read_to_string(&self.token_file)?);
-        let token = read.trim();
+        // Checked while borrowed, so no copy of the token outlives this call
+        // unwiped, even when it is refused.
+        let read = read_secret(&self.token_file)?;
+        let token = std::str::from_utf8(&read)
+            .map_err(|_| Error::Invalid("The Hetzner token file must hold one printable token"))?
+            .trim();
         if token.is_empty() || token.bytes().any(|b| b <= 32 || b >= 127) {
             return Err(Error::Invalid("The Hetzner token file must hold one printable token"));
         }
         Credential::new(token.to_owned()).map_err(Error::from)
     }
+}
+
+/// A secret file's bytes in a wiped buffer sized up front for the largest
+/// accepted file, so neither a failed read nor a reallocation leaves a copy
+/// behind. Decoding happens on the borrowed bytes.
+fn read_secret(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    const LIMIT: u64 = 4096;
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(usize::try_from(LIMIT + 1).unwrap_or(4097)));
+    std::fs::File::open(path)?.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(Error::Invalid("Credential file is too large"));
+    }
+    Ok(bytes)
 }
 
 pub(super) fn validate_ssh_identity(path: &Path) -> Result<()> {
@@ -395,6 +411,8 @@ mod tests {
             assert!(hetzner.credential().is_err(), "a readable token file is refused");
             std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
             assert!(hetzner.credential().is_ok());
+            std::fs::write(&token, b"secret-token\xff").unwrap();
+            assert!(hetzner.credential().is_err(), "a token that is not text is refused");
         }
     }
 

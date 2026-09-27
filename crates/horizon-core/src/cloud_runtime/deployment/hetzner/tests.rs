@@ -176,6 +176,11 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     hub.image = "team/worker".into();
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("index.docker.io"));
     preflight(&spec.operation_id, &hub, &settings).unwrap();
+    settings.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.hub.docker.com"));
+    assert!(
+        preflight(&spec.operation_id, &hub, &settings).is_err(),
+        "an alias Docker stores under its own key would leave the pull without credentials"
+    );
     settings.hetzner.as_mut().unwrap().registry_pull = Some(crate::cloud_runtime::settings::RegistryPull {
         server: "example.azurecr.io".into(),
         username: "pull".into(),
@@ -460,6 +465,9 @@ mod failure_points {
         value["server"] = Value::Null;
         json!({"volume": value}).to_string()
     }
+    fn held_volume() -> String {
+        json!({"volume": serde_json::to_value(volume()).unwrap()}).to_string()
+    }
     fn created_server(cores: u32) -> String {
         json!({"server": {"id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": "initializing",
             "public_net": {"ipv4": null}, "server_type": {"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80},
@@ -606,6 +614,7 @@ mod failure_points {
             (200, listing("servers", &json!([]))),
             (200, free_volume()),
             (201, created_server(2)),
+            (200, held_volume()),
         ]);
         assert_eq!(
             state.operation,
@@ -617,6 +626,26 @@ mod failure_points {
             "an unverified server is never recorded as the worker"
         );
         assert!(kept && matches!(journal.volume, CreateState::Bound { .. }));
+    }
+
+    #[test]
+    fn a_server_whose_volume_does_not_name_it_is_never_recorded_as_the_worker() {
+        let (state, _, kept, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            (201, key()),
+            (200, listing("volumes", &json!([]))),
+            (201, created_volume()),
+            (200, free_volume()),
+            (200, listing("servers", &json!([]))),
+            (200, free_volume()),
+            (201, created_server(4)),
+            (200, free_volume()),
+        ]);
+        assert_eq!(state.operation, CreateState::Bound { worker_id: "42".into() });
+        assert!(state.worker.is_none() && kept);
     }
 
     #[test]
@@ -633,6 +662,7 @@ mod failure_points {
             (200, listing("servers", &json!([]))),
             (200, free_volume()),
             (201, created_server(4)),
+            (200, held_volume()),
         ]);
         assert_eq!(state.worker.unwrap().id, "42");
     }
