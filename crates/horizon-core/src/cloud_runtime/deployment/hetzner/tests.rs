@@ -1,6 +1,6 @@
 use super::{
     Journal,
-    provision::{allowed, fit, location, plan},
+    provision::{allowed, first_fit, fit, location, plan},
     throwaway_public_key, worker,
 };
 use horizon_cloud::{
@@ -243,17 +243,37 @@ fn the_host_plan_carries_the_worker_contract_and_no_idle_stop() {
 }
 
 #[test]
-fn a_recorded_location_is_kept_only_while_the_settings_allow_it() {
+fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
     let mut spec = spec();
-    assert_eq!(location(None, &spec).unwrap(), "hel1");
     assert_eq!(location(Some("hel1"), &spec).unwrap(), "hel1");
+    assert!(
+        location(None, &spec).is_err(),
+        "an existing volume always has a recorded location"
+    );
     spec.data_centers = vec!["nbg1".into()];
     assert!(
         location(Some("hel1"), &spec).is_err(),
         "the volume cannot follow a changed allow-list"
     );
+}
+
+#[test]
+fn without_a_volume_the_first_allowed_location_that_fits_is_chosen() {
+    let mut spec = spec();
+    spec.data_centers = vec!["fsn1".into(), "nbg1".into(), "hel1".into()];
+    let offers = [
+        offer("cx23", "fsn1", 2, 4.0),
+        offer("cx33", "nbg1", 4, 8.0),
+        offer("cx33", "hel1", 4, 8.0),
+        offer("cx33", "ash", 4, 8.0),
+    ];
+    let (location, placements) = first_fit(&offers, &spec).unwrap();
+    assert_eq!(location, "nbg1", "fsn1 has no fitting type, and ash is not allowed");
+    assert_eq!(placements.len(), 1);
+    spec.data_centers = vec!["ash".into()];
+    assert!(first_fit(&offers[..3], &spec).is_err());
     spec.data_centers.clear();
-    assert!(location(None, &spec).is_err());
+    assert!(first_fit(&offers, &spec).is_err());
 }
 
 #[test]
@@ -274,4 +294,301 @@ fn a_malformed_worker_key_is_refused_by_the_spec() {
         spec.validate().is_err(),
         "an empty key would boot a worker nobody can reach"
     );
+}
+
+#[test]
+fn readiness_accepts_only_a_server_and_volume_that_hold_each_other() {
+    use super::readiness::holds;
+    let (server, volume) = (server("running", Some("192.0.2.10")), volume());
+    assert!(holds(&server, &volume));
+    let mut detached = volume.clone();
+    detached.server = None;
+    assert!(!holds(&server, &detached));
+    let mut elsewhere = server.clone();
+    elsewhere.location.name = "nbg1".into();
+    assert!(!holds(&elsewhere, &volume));
+    let mut extra = server.clone();
+    extra.volumes = vec![9, 10];
+    assert!(!holds(&extra, &volume));
+}
+
+/// A scripted Hetzner API. A response containing `@PUBLIC_KEY@` echoes the
+/// public key of the request it answers, as Hetzner does for a new SSH key.
+#[cfg(unix)]
+mod provider {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    pub(super) type Requests = Arc<Mutex<Vec<String>>>;
+
+    pub(super) fn serve(responses: Vec<(u16, String)>) -> (SocketAddr, Requests, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let observed = requests.clone();
+        let task = thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            for (status, body) in responses {
+                // A request the script expects but provisioning never sends ends the fake.
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() > deadline {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("fake accept failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut input = Vec::new();
+                let mut buffer = [0; 8192];
+                loop {
+                    let read = stream.read(&mut buffer).unwrap();
+                    input.extend_from_slice(&buffer[..read]);
+                    if let Some(end) = input.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&input[..end]).to_ascii_lowercase();
+                        let length = header
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if input.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8(input).unwrap();
+                let body = if body.contains("@PUBLIC_KEY@") {
+                    let sent: serde_json::Value =
+                        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+                    body.replace("@PUBLIC_KEY@", sent["public_key"].as_str().unwrap())
+                } else {
+                    body
+                };
+                observed.lock().unwrap().push(request);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        (address, requests, task)
+    }
+}
+
+#[cfg(unix)]
+mod failure_points {
+    use super::{provider, spec, volume};
+    use crate::cloud_runtime::{
+        deployment::hetzner::{Compute, Journal, provision, retained},
+        state::{Deployment, Store},
+    };
+    use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
+    use serde_json::{Value, json};
+
+    fn listing(key: &str, items: &Value) -> String {
+        let mut page = json!({"meta": {"pagination": {"next_page": null}}});
+        page[key] = items.clone();
+        page.to_string()
+    }
+    fn error(status: u16, code: &str) -> (u16, String) {
+        (status, json!({"error": {"code": code, "message": code}}).to_string())
+    }
+    fn server_types(cores: u32) -> String {
+        let price = json!({"location": "hel1", "price_hourly": {"net": "0.01"}, "price_monthly": {"net": "5"}});
+        let kind = json!({"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80, "cpu_type": "shared",
+            "architecture": "x86", "prices": [price],
+            "locations": [{"name": "hel1", "available": true, "recommended": true, "deprecation": null}]});
+        listing("server_types", &json!([kind]))
+    }
+    fn locations() -> String {
+        listing("locations", &json!([{"name": "hel1", "network_zone": "eu-central"}]))
+    }
+    fn pricing() -> String {
+        json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}})
+            .to_string()
+    }
+    fn key() -> String {
+        json!({"ssh_key": {"id": 5, "name": format!("horizon-cloud-{}", spec().operation_id), "public_key": "@PUBLIC_KEY@",
+            "labels": {"horizon-operation": spec().operation_id}}})
+        .to_string()
+    }
+    fn created_volume() -> String {
+        let mut value = serde_json::to_value(volume()).unwrap();
+        value["server"] = Value::Null;
+        json!({"volume": value, "action": {"id": 1, "status": "success"}}).to_string()
+    }
+    fn free_volume() -> String {
+        let mut value = serde_json::to_value(volume()).unwrap();
+        value["server"] = Value::Null;
+        json!({"volume": value}).to_string()
+    }
+    fn created_server(cores: u32) -> String {
+        json!({"server": {"id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": "initializing",
+            "public_net": {"ipv4": null}, "server_type": {"name": "cx33", "cores": cores, "memory": 8.0, "disk": 80},
+            "location": {"name": "hel1"}, "labels": {"horizon-operation": spec().operation_id}, "volumes": [9]},
+            "action": {"id": 2, "status": "success"}, "next_actions": []})
+        .to_string()
+    }
+
+    /// Runs provisioning for a fresh cloud against `responses` and returns the
+    /// saved deployment, the journal and the number of requests served.
+    fn provision_with(responses: Vec<(u16, String)>) -> (Deployment, Journal, bool, usize) {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let spec = spec();
+        let mut state: Deployment = serde_json::from_value(json!({
+            "version": 1, "cloud_id": spec.operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+            "profile": spec.profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec,
+            "worker": null, "sessions": []
+        }))
+        .unwrap();
+        store.save(&state).unwrap();
+        let (address, requests, task) = provider::serve(responses);
+        let compute = Compute {
+            client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
+            settings: serde_json::from_value(
+                json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
+            )
+            .unwrap(),
+        };
+        let result = provision(&compute, &store, &mut state, &spec, &Cancellation::default(), &|_| {});
+        task.join().unwrap();
+        let served = requests.lock().unwrap().len();
+        assert!(result.is_err() || served > 0);
+        let saved = store.load().unwrap().unwrap();
+        let journal = Journal::load(root.path()).unwrap();
+        let kept = retained(root.path()).unwrap();
+        (saved, journal, kept, served)
+    }
+
+    #[test]
+    fn nothing_is_created_when_no_type_fits() {
+        let (state, journal, kept, served) =
+            provision_with(vec![(200, server_types(2)), (200, locations()), (200, pricing())]);
+        assert_eq!(served, 3, "only the catalog was read");
+        assert!(journal.key.is_none() && journal.location.is_none() && !kept);
+        assert_eq!(state.operation, CreateState::Prepared);
+    }
+
+    #[test]
+    fn a_failed_key_registration_leaves_the_key_recorded_for_deletion() {
+        let (state, journal, kept, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            error(503, "unavailable"),
+        ]);
+        assert!(
+            journal.key.is_some() && kept,
+            "a key may exist on Hetzner, so the cloud keeps it"
+        );
+        assert!(
+            journal.location.is_none(),
+            "no volume was requested, so no location is fixed"
+        );
+        assert_eq!(
+            (journal.volume, state.operation),
+            (CreateState::Prepared, CreateState::Prepared)
+        );
+    }
+
+    #[test]
+    fn an_uncertain_volume_request_stays_fenced_for_reconciliation() {
+        let (state, journal, kept, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            (201, key()),
+            (200, listing("volumes", &json!([]))),
+            error(503, "unavailable"),
+        ]);
+        assert_eq!(journal.volume, CreateState::Requested);
+        assert_eq!(
+            journal.location.as_deref(),
+            Some("hel1"),
+            "recorded before the request it fixes"
+        );
+        assert!(kept);
+        assert_eq!(state.operation, CreateState::Prepared);
+    }
+
+    #[test]
+    fn an_uncertain_server_request_stays_fenced_with_its_volume_bound() {
+        let (state, journal, kept, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            (201, key()),
+            (200, listing("volumes", &json!([]))),
+            (201, created_volume()),
+            (200, free_volume()),
+            (200, listing("servers", &json!([]))),
+            (200, free_volume()),
+            error(503, "unavailable"),
+        ]);
+        assert_eq!(journal.volume, CreateState::Bound { worker_id: "9".into() });
+        assert_eq!(state.operation, CreateState::Requested);
+        assert!(kept && state.worker.is_none());
+    }
+
+    #[test]
+    fn a_server_below_the_profile_is_bound_but_never_recorded_as_the_worker() {
+        let (state, journal, kept, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            (201, key()),
+            (200, listing("volumes", &json!([]))),
+            (201, created_volume()),
+            (200, free_volume()),
+            (200, listing("servers", &json!([]))),
+            (200, free_volume()),
+            (201, created_server(2)),
+        ]);
+        assert_eq!(
+            state.operation,
+            CreateState::Bound { worker_id: "42".into() },
+            "bound so it can be deleted"
+        );
+        assert!(
+            state.worker.is_none(),
+            "an unverified server is never recorded as the worker"
+        );
+        assert!(kept && matches!(journal.volume, CreateState::Bound { .. }));
+    }
+
+    #[test]
+    fn a_verified_server_becomes_the_worker() {
+        let (state, _, _, _) = provision_with(vec![
+            (200, server_types(4)),
+            (200, locations()),
+            (200, pricing()),
+            (200, listing("ssh_keys", &json!([]))),
+            (201, key()),
+            (200, listing("volumes", &json!([]))),
+            (201, created_volume()),
+            (200, free_volume()),
+            (200, listing("servers", &json!([]))),
+            (200, free_volume()),
+            (201, created_server(4)),
+        ]);
+        assert_eq!(state.worker.unwrap().id, "42");
+    }
 }

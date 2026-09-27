@@ -52,6 +52,13 @@ pub(in crate::cloud_runtime::deployment) fn wait(
             .ok_or(horizon_cloud::CloudError::WorkerLost)?;
         remaining(deadline, runner)?;
         server.verify(&state.cloud_id)?;
+        // The server and the journaled volume must hold each other in one location,
+        // or the worker's workspace is not the cloud's volume.
+        if !holds(&server, &volume) {
+            return Err(Error::Invalid(
+                "The server does not hold this cloud's workspace volume; check or delete the cloud",
+            ));
+        }
         let described = worker(&server, spec, &volume)?;
         // The provider's answer, not the offer chosen earlier, must meet the profile.
         described.verify(spec)?;
@@ -109,4 +116,12 @@ fn remaining(deadline: Instant, runner: &Runner<'_>) -> Result<Duration> {
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
         .ok_or(Error::Invalid(TIMEOUT))
+}
+
+/// Whether the server and the volume hold each other in one location.
+pub(super) fn holds(
+    server: &horizon_cloud::hetzner::servers::Server,
+    volume: &horizon_cloud::hetzner::volumes::Volume,
+) -> bool {
+    server.volumes == [volume.id] && volume.server == Some(server.id) && server.location == volume.location
 }

@@ -17,8 +17,10 @@ use std::collections::BTreeMap;
 
 /// The Hetzner app image with Docker preinstalled that the host plan expects.
 const HOST_IMAGE: &str = "docker-ce";
-/// A device path in Hetzner's form, for checking a host plan before its volume exists.
-const PROBE_DEVICE: &str = "/dev/disk/by-id/scsi-0HC_Volume_0";
+/// A device path in Hetzner's form with the longest possible volume ID, for
+/// checking a host plan before its volume exists: the real path can only be
+/// shorter, so the user data cannot outgrow its limit after allocation.
+const PROBE_DEVICE: &str = "/dev/disk/by-id/scsi-0HC_Volume_18446744073709551615";
 
 pub(in crate::cloud_runtime::deployment) fn provision(
     compute: &Compute,
@@ -40,14 +42,22 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     host.cloud_config()?;
     let root = store.root().to_path_buf();
     let mut journal = Journal::load(&root)?;
-    let location = location(journal.location.as_deref(), spec)?;
     // Every read-only check comes before the first request that creates anything.
-    // A requested or bound server was placed already; reconnecting to it must not
-    // depend on the catalog still offering its type, only on the settings allowing it.
-    let placements = if state.operation == CreateState::Prepared {
-        fit(&compute.client.catalog(cancel)?.offers, spec, &location)?
+    // A volume fixes the location; until one exists, the first allowed location
+    // with a fitting server type is chosen. A requested or bound server was placed
+    // already, so reconnecting to it depends on the settings allowing its type,
+    // not on the catalog still offering it.
+    let volume_exists = journal.volume != CreateState::Prepared;
+    let (location, placements) = if volume_exists {
+        let location = location(journal.location.as_deref(), spec)?;
+        let placements = if state.operation == CreateState::Prepared {
+            fit(&compute.client.catalog(cancel)?.offers, spec, &location)?
+        } else {
+            allowed(spec, &location)
+        };
+        (location, placements)
     } else {
-        allowed(spec, &location)
+        first_fit(&compute.client.catalog(cancel)?.offers, spec)?
     };
     if journal.key.is_none() {
         journal.key = Some(throwaway_public_key()?);
@@ -55,7 +65,9 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     }
     let public_key = journal.key.clone().ok_or(Error::Invalid("Missing Hetzner SSH key"))?;
     let key = compute.client.ensure_ssh_key(&operation, &public_key, cancel)?;
-    if journal.location.is_none() {
+    // Recorded before the volume request it fixes; a location chosen earlier but
+    // never used by a volume is replaced.
+    if journal.location.as_deref() != Some(location.as_str()) {
         journal.location = Some(location.clone());
         journal.save(&root)?;
     }
@@ -102,22 +114,32 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     store.save(state)
 }
 
-/// Where the cloud's volume and server go. A recorded location is fixed by the
-/// volume created there; until then the first allowed location is only a
-/// candidate. Settings can change while a cloud has a volume but no server yet,
-/// so a recorded location they no longer allow is refused rather than used.
+/// The location of an existing workspace volume. Settings can change while a
+/// cloud has a volume but no server yet, so a location they no longer allow is
+/// refused rather than used.
 pub(super) fn location(recorded: Option<&str>, spec: &WorkerSpec) -> Result<String> {
     match recorded {
-        Some(location) if !spec.data_centers.iter().any(|allowed| allowed == location) => Err(Error::Invalid(
+        Some(location) if spec.data_centers.iter().any(|allowed| allowed == location) => Ok(location.to_owned()),
+        Some(_) => Err(Error::Invalid(
             "This cloud's workspace volume is in a location the Hetzner settings no longer allow",
         )),
-        Some(location) => Ok(location.to_owned()),
-        None => spec
-            .data_centers
-            .first()
-            .cloned()
-            .ok_or(Error::Invalid("Hetzner settings list no location")),
+        None => Err(Error::Invalid("This cloud's workspace volume has no recorded location")),
     }
+}
+
+/// For a cloud without a volume: the first allowed location, in order, where a
+/// configured server type fits, with those types. Only allowed locations are
+/// considered, and nothing is recorded until a volume is requested there.
+pub(super) fn first_fit(offers: &[Offer], spec: &WorkerSpec) -> Result<(String, Vec<Placement>)> {
+    if spec.data_centers.is_empty() {
+        return Err(Error::Invalid("Hetzner settings list no location"));
+    }
+    spec.data_centers
+        .iter()
+        .find_map(|location| fit(offers, spec, location).ok().map(|placements| (location.clone(), placements)))
+        .ok_or(Error::Invalid(
+            "No configured Hetzner server type has the profile's CPU, memory and container disk in any allowed location",
+        ))
 }
 
 /// Every configured server type in the location, in order, for reconciling a
