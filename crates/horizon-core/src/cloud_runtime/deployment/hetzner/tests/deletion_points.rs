@@ -52,6 +52,7 @@ fn delete_from(operation: &CreateState, journal: &Journal, responses: Vec<(u16, 
             locations: vec!["hel1".into()],
             server_types: vec!["cx33".into()],
         },
+        registries: None,
     };
     delete_with(&compute, &store, &mut state, &Cancellation::default()).unwrap();
     task.join().unwrap();
