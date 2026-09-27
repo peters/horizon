@@ -3,7 +3,7 @@
 //! container's, whose key can change once while the worker settles, so each
 //! probe uses a scratch known-hosts file. The key is pinned for this server
 //! only after the worker contract is validated.
-use super::{Compute, Journal, worker};
+use super::{Compute, Journal, JournalFile as _, worker};
 use crate::cloud_runtime::{
     Error, Event, Result, Stage, WorkerContract,
     command::Runner,
@@ -13,7 +13,10 @@ use crate::cloud_runtime::{
     state::{Deployment, Store},
     timeline::{AWAITING_ENDPOINT, AWAITING_SERVICES},
 };
-use horizon_cloud::{CreateState, WorkerSpec, WorkerStatus};
+use horizon_cloud::{
+    CreateState, WorkerSpec, WorkerStatus,
+    hetzner::cloud::{admitted, holds},
+};
 use std::time::{Duration, Instant};
 
 const TIMEOUT: &str = "Worker readiness timed out; the server remains allocated for inspection or explicit deletion";
@@ -124,24 +127,4 @@ fn remaining(deadline: Instant, runner: &Runner<'_>) -> Result<Duration> {
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
         .ok_or(Error::Invalid(TIMEOUT))
-}
-
-/// Whether the server and the volume hold each other in one location.
-pub(super) fn holds(
-    server: &horizon_cloud::hetzner::servers::Server,
-    volume: &horizon_cloud::hetzner::volumes::Volume,
-) -> bool {
-    server.volumes == [volume.id] && volume.server == Some(server.id) && server.location == volume.location
-}
-
-/// Whether the server's type and location are allowed now, and its location is
-/// the one its volume fixed.
-pub(super) fn admitted(
-    server: &horizon_cloud::hetzner::servers::Server,
-    allowed: &super::Allowed,
-    location: Option<&str>,
-) -> bool {
-    allowed.server_types.contains(&server.server_type.name)
-        && allowed.locations.contains(&server.location.name)
-        && location == Some(server.location.name.as_str())
 }

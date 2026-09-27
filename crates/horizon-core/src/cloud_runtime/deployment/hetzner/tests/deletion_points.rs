@@ -4,7 +4,7 @@ use super::{provider, server, spec, volume};
 use crate::cloud_runtime::{
     Stage,
     deployment::hetzner::{
-        Allowed, Compute, Journal,
+        Allowed, Compute, Journal, JournalFile as _,
         lifecycle::{delete_with, reconcile_with, stop_with},
         retained,
     },

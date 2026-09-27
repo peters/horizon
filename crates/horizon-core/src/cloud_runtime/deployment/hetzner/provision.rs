@@ -1,6 +1,6 @@
 //! Requests the key, the workspace volume and the server, each behind a durable
 //! record so a lost response never creates a second billed resource.
-use super::{Allowed, Compute, Journal, throwaway_public_key, worker};
+use super::{Compute, Journal, JournalFile as _, throwaway_public_key, worker};
 use crate::cloud_runtime::{
     Error, Event, Result,
     state::{Deployment, Store},
@@ -8,19 +8,10 @@ use crate::cloud_runtime::{
 use horizon_cloud::{
     Cancellation, CloudError, CreateState, WorkerSpec,
     hetzner::{
-        catalog::Offer,
-        servers::{Placement, ServerRequest},
+        cloud::{HOST_IMAGE, PROBE_DEVICE, allowed, first_fit, fit, location, plan, supported},
+        servers::ServerRequest,
     },
-    host,
 };
-use std::collections::BTreeMap;
-
-/// The Hetzner app image with Docker preinstalled that the host plan expects.
-const HOST_IMAGE: &str = "docker-ce";
-/// A device path in Hetzner's form with the longest possible volume ID, for
-/// checking a host plan before its volume exists: the real path can only be
-/// shorter, so the user data cannot outgrow its limit after allocation.
-const PROBE_DEVICE: &str = "/dev/disk/by-id/scsi-0HC_Volume_18446744073709551615";
 
 pub(in crate::cloud_runtime::deployment) fn provision(
     compute: &Compute,
@@ -135,8 +126,8 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         .inspect_volume(volume.id, cancel)?
         .ok_or(CloudError::WorkerLost)?;
     volume.verify(&operation)?;
-    if !super::readiness::holds(&server, &volume)
-        || !super::readiness::admitted(&server, &compute.allowed, Some(location.as_str()))
+    if !horizon_cloud::hetzner::cloud::holds(&server, &volume)
+        || !horizon_cloud::hetzner::cloud::admitted(&server, &compute.allowed, Some(location.as_str()))
     {
         return Err(Error::Invalid(
             "The new server does not hold this cloud's workspace volume where the settings allow",
@@ -182,114 +173,4 @@ fn journal_for(root: &std::path::Path, state: &Deployment) -> Result<Journal> {
         journal.save(root)?;
     }
     Ok(journal)
-}
-
-/// The location of an existing workspace volume. Settings can change while a
-/// cloud has a volume, so a location they no longer allow is refused rather than used.
-pub(super) fn location(recorded: Option<&str>, allowed: &Allowed) -> Result<String> {
-    match recorded {
-        Some(location) if allowed.locations.iter().any(|name| name == location) => Ok(location.to_owned()),
-        Some(_) => Err(Error::Invalid(
-            "This cloud's workspace volume is in a location the Hetzner settings no longer allow",
-        )),
-        None => Err(Error::Invalid("This cloud's workspace volume has no recorded location")),
-    }
-}
-
-/// For a cloud without a volume: the first allowed location, in order, where an
-/// allowed server type fits, with those types. Nothing is recorded until a
-/// volume is requested there.
-pub(super) fn first_fit(offers: &[Offer], spec: &WorkerSpec, allowed: &Allowed) -> Result<(String, Vec<Placement>)> {
-    if allowed.locations.is_empty() {
-        return Err(Error::Invalid("Hetzner settings list no location"));
-    }
-    allowed
-        .locations
-        .iter()
-        .find_map(|location| {
-            fit(offers, spec, &allowed.server_types, location)
-                .ok()
-                .map(|placements| (location.clone(), placements))
-        })
-        .ok_or(Error::Invalid(
-            "No configured Hetzner server type has the profile's CPU, memory and container disk in any allowed location",
-        ))
-}
-
-/// Every allowed server type in the location, in order, for reconciling a
-/// server that was already requested.
-pub(super) fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
-    server_types
-        .iter()
-        .map(|server_type| Placement {
-            server_type: server_type.clone(),
-            location: location.to_owned(),
-        })
-        .collect()
-}
-
-/// A shared worker's startup data has no Hetzner path yet.
-fn supported(spec: &WorkerSpec) -> Result<()> {
-    if spec.startup_metadata.is_some() {
-        return Err(Error::Invalid("Shared workers are not available on Hetzner yet"));
-    }
-    Ok(())
-}
-
-/// The configured server types, in order, whose CPU, memory and local disk fit the profile in the volume's
-/// location. Hetzner's availability flag is advisory, so it is not used to skip a type.
-pub(super) fn fit(
-    offers: &[Offer],
-    spec: &WorkerSpec,
-    server_types: &[String],
-    location: &str,
-) -> Result<Vec<Placement>> {
-    let fits = |server_type: &String| {
-        offers.iter().any(|offer| {
-            &offer.server_type == server_type
-                && offer.location == location
-                && offer.cores >= u32::from(spec.profile.cpu)
-                && offer.memory_gb >= f64::from(spec.profile.memory_gb)
-                && offer.disk_gb >= u32::from(spec.profile.storage.container_gb)
-        })
-    };
-    let placements: Vec<Placement> = server_types
-        .iter()
-        .filter(|server_type| fits(server_type))
-        .map(|server_type| Placement {
-            server_type: server_type.clone(),
-            location: location.to_owned(),
-        })
-        .collect();
-    if placements.is_empty() {
-        return Err(Error::Invalid(
-            "No configured Hetzner server type has the profile's CPU, memory and container disk in the workspace's location",
-        ));
-    }
-    Ok(placements)
-}
-
-/// The host plan for this worker. The environment matches what the worker image
-/// expects from any provider; nothing secret is in it.
-pub(super) fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan> {
-    let environment = BTreeMap::from([
-        ("PUBLIC_KEY".to_owned(), spec.public_key.clone()),
-        ("HORIZON_CLOUD_OPERATION".to_owned(), spec.operation_id.clone()),
-        (
-            "HORIZON_WORKER_CAPABILITIES".to_owned(),
-            serde_json::to_string(&spec.profile.capabilities).map_err(|_| Error::Json)?,
-        ),
-    ]);
-    Ok(host::Plan {
-        image: spec.image_digest.clone(),
-        environment,
-        registry,
-        workspace_device: device.to_owned(),
-        shm_gb: shared_memory_gb(spec.profile.memory_gb),
-    })
-}
-
-/// A quarter of the worker's memory for Chromium's shared memory, within the host's limits.
-fn shared_memory_gb(memory_gb: u16) -> u8 {
-    u8::try_from((memory_gb / 4).clamp(1, 16)).unwrap_or(1)
 }

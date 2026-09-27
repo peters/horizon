@@ -513,10 +513,16 @@ through the operation label and the provider's unique names, and tries placement
 in order only after a capacity refusal. `hetzner::catalog` lists x86 offers with
 live per-location availability. It targets the current API as described by
 Hetzner's OpenAPI spec; `scripts/check-hetzner-api.py` checks every operation and
-field it uses against that spec. In `horizon-core`, `deployment::hetzner` owns the
-Hetzner path: a preflight before any record, provisioning behind the deployment's
-fence and its own `hetzner.json` journal (volume, location, SSH key), and bounded
-readiness. `deploy` dispatches to it by the profile's provider, and so do check,
+field it uses against that spec. `hetzner::cloud` holds the provider rules that
+need no storage: the `Journal` a caller persists for a cloud (volume, location,
+SSH key, released server, delete intent), the placement `Policy` and its fitting
+rules, the host plan, the pull-login check, the worker view of a server and the
+checks that a server and its volume hold each other where the policy allows.
+Provider code moves here so it can be reused outside Horizon; the provisioning
+sequence and the lifecycle follow. In `horizon-core`, `deployment::hetzner` keeps
+the Horizon glue: a preflight before any record, the settings, the `hetzner.json`
+file beside the deployment record, provisioning behind the deployment's fence,
+and bounded readiness over SSH. `deploy` dispatches to it by the profile's provider, and so do check,
 stop, resume and delete through `deployment::hetzner::lifecycle`, where stopping
 deletes the server and keeps the volume; RunPod code is unchanged.
 The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.
