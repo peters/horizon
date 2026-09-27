@@ -37,6 +37,8 @@ pub(super) struct State {
     /// When the price fetch behind `list_error` failed.
     pub list_failed_at: Option<Instant>,
     list_job: Option<Job<(PriceList, Preferences)>>,
+    /// Manual refresh invalidates current offers without removing their presentation.
+    refreshed_after: Option<Instant>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
     /// Every data center's region as people say it, kept from the latest list so cards
@@ -58,7 +60,7 @@ impl State {
             return;
         }
         self.recheck_runpod();
-        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+        if self.list.as_ref().is_none_or(|list| !self.current(list.at)) {
             self.fetch_list(root, ctx);
         }
         // Hetzner is offered beside RunPod for CPU profiles when this machine has a binding.
@@ -69,7 +71,7 @@ impl State {
         let current = self
             .sizes
             .get(&key)
-            .is_some_and(|size| size.as_ref().is_ok_and(|size| !stale(size.at)));
+            .is_some_and(|size| size.as_ref().is_ok_and(|size| self.current(size.at)));
         if !profile.gpu
             && !current
             && !self.size_jobs.contains_key(&key)
@@ -104,7 +106,7 @@ impl State {
         if cfg!(test) {
             return;
         }
-        if self.list.as_ref().is_none_or(|list| stale(list.at)) {
+        if self.list.as_ref().is_none_or(|list| !self.current(list.at)) {
             self.fetch_list(root, ctx);
         }
         self.hetzner.request(root, ctx);
@@ -120,7 +122,11 @@ impl State {
 
     /// The price list while it is current, never an older one.
     pub fn fresh_list(&self) -> Option<&Fetched<(PriceList, Preferences)>> {
-        self.list.as_ref().filter(|list| !stale(list.at))
+        self.list.as_ref().filter(|list| self.current(list.at))
+    }
+
+    fn current(&self, at: Instant) -> bool {
+        !stale(at) && self.refreshed_after.is_none_or(|refresh| at >= refresh)
     }
 
     /// The region of `data_center` as people say it, once a price list has been fetched.
@@ -215,15 +221,12 @@ impl State {
         }
     }
 
-    /// Forgets fetched prices, errors and checks in flight so the next frame asks again.
+    /// Requests new prices while retaining the last display and any requests in flight.
     pub fn refresh(&mut self) {
-        self.list = None;
+        self.refreshed_after = Some(Instant::now());
         self.list_error = None;
         self.list_failed_at = None;
-        self.list_job = None;
-        self.sizes.clear();
-        self.size_jobs.clear();
-        self.hetzner.refresh();
+        self.sizes.retain(|_, result| result.is_ok());
     }
 
     /// Whether this machine can use `RunPod`: false once a fetch found no API key, as on
@@ -240,7 +243,7 @@ impl State {
     }
 
     pub fn loading(&self) -> bool {
-        self.list_job.is_some()
+        self.list_job.is_some() || !self.size_jobs.is_empty()
     }
 
     /// Stock of `size` for `profile`: `None` while it is being checked, including when
@@ -256,10 +259,27 @@ impl State {
             return None;
         }
         match self.sizes.get(&key)? {
-            Ok(fetched) if stale(fetched.at) => None,
+            Ok(fetched) if !self.current(fetched.at) => None,
             Ok(fetched) => Some(Ok(&fetched.value)),
             Err(error) => Some(Err(error.as_str())),
         }
+    }
+
+    /// Last known stock for stable UI choices while fresh stock is being fetched.
+    /// Agent offers continue to use the current catalog rather than this display cache.
+    pub fn displayed_size(&self, profile: &Profile, size: Size) -> Option<Result<&SizeAvailability, &str>> {
+        self.size(profile, size).or_else(|| {
+            let sized = Profile {
+                cpu: size.0,
+                memory_gb: size.1,
+                ..profile.clone()
+            };
+            self.sizes
+                .get(&key(&sized))?
+                .as_ref()
+                .ok()
+                .map(|fetched| Ok(&fetched.value))
+        })
     }
 }
 
@@ -482,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn finished_fetches_are_kept_until_a_refresh_and_failures_wait_for_one() {
+    fn finished_fetches_stay_visible_during_refresh_and_failures_wait_for_one() {
         let mut state = State::default();
         let (tx, rx) = channel();
         state.list_job = Some(rx);
@@ -494,7 +514,7 @@ mod tests {
         assert!(!state.loading());
         assert_eq!(state.list.as_ref().unwrap().value.0.provider, "RunPod");
         state.refresh();
-        assert!(state.list.is_none());
+        assert!(state.list.is_some() && state.fresh_list().is_none());
 
         let (tx, rx) = channel();
         state.list_job = Some(rx);
@@ -534,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_refresh_hides_old_prices_and_refresh_drops_checks_in_flight() {
+    fn a_failed_refresh_hides_old_prices_and_refresh_keeps_checks_in_flight() {
         let mut state = State {
             list: Some(Fetched {
                 value: (list(), Preferences::default()),
@@ -554,9 +574,31 @@ mod tests {
         let (size_tx, rx) = channel();
         state.size_jobs.insert(key(&profile()), rx);
         state.refresh();
-        assert!(!state.loading() && state.list_error.is_none() && state.size_jobs.is_empty());
-        assert!(list_tx.send(Ok(now((list(), Preferences::default())))).is_err());
-        assert!(size_tx.send(Ok(now(available()))).is_err());
+        assert!(state.loading() && state.list_error.is_none() && !state.size_jobs.is_empty());
+        list_tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        size_tx.send(Ok(now(available()))).unwrap();
+        state.poll();
+        assert!(state.fresh_list().is_some());
+        assert!(state.size(&profile(), (8, 32)).is_some());
+    }
+
+    #[test]
+    fn manual_refresh_retains_display_but_invalidates_current_offers() {
+        let mut state = State {
+            list: Some(now((list(), Preferences::default()))),
+            ..State::default()
+        };
+        let profile = profile();
+        state.sizes.insert(key(&profile), Ok(now(available())));
+        state.refresh();
+        assert!(state.list.is_some(), "keep region and GPU controls in place");
+        assert!(state.fresh_list().is_none(), "agents wait for fresh offers");
+        assert!(state.size(&profile, (profile.cpu, profile.memory_gb)).is_none());
+        assert_eq!(
+            state.displayed_size(&profile, (profile.cpu, profile.memory_gb)),
+            Some(Ok(&available()))
+        );
+        assert!(!state.runpod_unknown(), "a refresh does not disable provider selection");
     }
 
     #[test]
@@ -674,6 +716,32 @@ mod tests {
                 }),
             );
             assert_eq!(state.size(&profile, (8, 32)), None);
+        }
+    }
+
+    #[test]
+    fn updating_covers_catalog_and_size_requests_in_either_completion_order() {
+        for catalog_first in [true, false] {
+            let mut state = State::default();
+            let (list_tx, list_rx) = channel();
+            let (size_tx, size_rx) = channel();
+            state.list_job = Some(list_rx);
+            state.size_jobs.insert(key(&profile()), size_rx);
+            assert!(state.loading());
+            if catalog_first {
+                list_tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+            } else {
+                size_tx.send(Ok(now(available()))).unwrap();
+            }
+            state.poll();
+            assert!(state.loading(), "the remaining request still updates displayed stock");
+            if catalog_first {
+                size_tx.send(Ok(now(available()))).unwrap();
+            } else {
+                list_tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+            }
+            state.poll();
+            assert!(!state.loading());
         }
     }
 }

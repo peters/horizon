@@ -123,10 +123,6 @@ impl State {
         self.failed_at = Some(Instant::now());
     }
 
-    pub(super) fn refresh(&mut self) {
-        *self = Self::default();
-    }
-
     /// Whether senders should wait for a running fetch: only for [`WAIT_FOR_FETCH`], so
     /// a slow Hetzner never holds back the `RunPod` prices.
     pub fn worth_waiting_for(&self) -> bool {
@@ -280,6 +276,25 @@ mod tests {
     }
 
     #[test]
+    fn runpod_refresh_preserves_other_provider_choices_and_pending_fetch() {
+        let mut prices = super::super::State::default();
+        prices.hetzner.answered(Some(catalog()));
+        prices.hetzner.server_types = vec!["cx43".into()];
+        prices.hetzner.locations = vec!["hel1".into()];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        prices.hetzner.job = Some(receiver);
+        prices.refresh();
+        assert!(prices.runpod_bound() && prices.hetzner.bound());
+        assert!(prices.hetzner.fresh().is_some());
+        assert_eq!(prices.hetzner.server_types(), ["cx43"]);
+        assert_eq!(prices.hetzner.locations(), ["hel1"]);
+        sender.send(Err("Synthetic failure".into())).unwrap();
+        prices.poll();
+        assert_eq!(prices.hetzner.error(), Some("Synthetic failure"));
+        assert!(prices.hetzner.bound());
+    }
+
+    #[test]
     fn sections_follow_the_binding_the_fetch_and_its_failure() {
         let requirements = horizon_core::cloud_runtime::offers::Requirements::default();
         let mut state = State::default();
@@ -318,8 +333,6 @@ mod tests {
             late[0]["error"],
             "cloud_offers_unavailable: Hetzner prices are still being fetched"
         );
-        state.refresh();
-        assert!(state.job.is_none() && state.fresh().is_none());
     }
 
     #[test]

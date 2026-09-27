@@ -36,7 +36,7 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
     let size = if profile.gpu {
         None
     } else {
-        prices.size(profile, (profile.cpu, profile.memory_gb))
+        prices.displayed_size(profile, (profile.cpu, profile.memory_gb))
     };
     list.data_centers
         .iter()
