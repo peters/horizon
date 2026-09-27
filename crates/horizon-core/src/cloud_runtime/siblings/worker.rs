@@ -101,6 +101,7 @@ mod tests {
                 repository: "example/native-lib".into(),
                 directory: "native-lib".into(),
                 revision: "b".repeat(40),
+                image_revision: None,
                 local_repository: "/synthetic/native-lib".into(),
                 profile: "gpu".into(),
             }],

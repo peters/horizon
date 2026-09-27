@@ -49,8 +49,13 @@ pub struct Sibling {
     pub repository: String,
     /// Its checkout directory beside the primary's on the worker.
     pub directory: String,
-    /// The committed `HEAD` of `local_repository` when the sibling was chosen.
+    /// The committed `HEAD` of `local_repository` when the sibling was chosen, and the
+    /// revision its checkout on the worker was imported at.
     pub revision: String,
+    /// The commit whose recipe the current image layers, once an image rebuild moved past
+    /// `revision`. The checkout on the worker stays at `revision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_revision: Option<String>,
     /// Canonical checkout on this machine; never sent to a worker.
     pub local_repository: PathBuf,
     /// The profile in the sibling's own committed configuration whose recipe is layered.
@@ -142,9 +147,9 @@ pub enum SiblingError {
     #[error("Sibling `{0}` checkout is no longer where it was pinned from; restore it there or create a new cloud")]
     Moved(String),
     #[error(
-        "Rebuilding the image of a cloud with same-worker siblings is not supported yet; create a new cloud instead"
+        "The latest commit changes this cloud's same-worker siblings or their repositories; create a new cloud to use them"
     )]
-    Rebuild,
+    Changed,
 }
 
 impl Sibling {
@@ -159,15 +164,15 @@ impl Sibling {
         }
     }
 
-    /// The recipe committed at the pinned revision, checked against the primary platform.
+    /// The recipe committed at `revision`, checked against the primary platform.
     /// # Errors
-    /// The checkout lost the pinned commit, its configuration, profile or build section is
+    /// The checkout lost that commit, its configuration, profile or build section is
     /// missing or incompatible, Git could not run or timed out, or the runner was cancelled.
-    pub fn recipe(&self, primary: &Build, runner: &Runner<'_>) -> Result<Build> {
+    pub fn recipe(&self, revision: &str, primary: &Build, runner: &Runner<'_>) -> Result<Build> {
         recipe(
             &self.alias,
             &self.local_repository,
-            &self.revision,
+            revision,
             &self.profile,
             primary,
             runner,
@@ -205,21 +210,107 @@ pub(super) fn bind(bindings: &[Binding], state: &mut Deployment, runner: &Runner
     Ok(true)
 }
 
+/// The latest committed revision of each recorded sibling for an image rebuild, resolved
+/// from its recorded checkout exactly as a deploy resolves a choice, against `config`, the
+/// primary's configuration at the commit being rebuilt. Only revisions may move: the
+/// worker's checkout directories and repositories are fixed.
 /// # Errors
-/// A cloud with siblings cannot rebuild its image until rebuilds layer the siblings too.
-pub(super) fn refuse_rebuild(state: &Deployment) -> Result<()> {
-    if state.siblings.is_some() {
-        return Err(SiblingError::Rebuild.into());
+/// Any resolution refusal, and [`SiblingError::Changed`] when the siblings resolve to
+/// anything but new revisions of the recorded ones.
+pub fn latest(
+    set: &Set,
+    primary: &Path,
+    config: &CloudConfig,
+    profile: &Profile,
+    runner: &Runner<'_>,
+) -> Result<Vec<String>> {
+    let bindings: Vec<_> = set
+        .members
+        .iter()
+        .map(|sibling| {
+            Ok(Binding {
+                alias: sibling.alias.clone(),
+                local_repository: sibling.checkout()?.to_path_buf(),
+            })
+        })
+        .collect::<Result<_>>()?;
+    // A recorded set has members, so resolution always returns one.
+    let resolved = resolve(primary, config, profile, &bindings, runner)
+        .map_err(|error| match error {
+            // The latest commit declares or names the siblings differently than this cloud.
+            Error::Sibling(
+                SiblingError::Undeclared(_)
+                | SiblingError::SeparateCloud(_)
+                | SiblingError::Primary(_)
+                | SiblingError::Directory(_)
+                | SiblingError::DirectoryName(_)
+                | SiblingError::OriginMismatch { .. }
+                | SiblingError::PrimaryOrigin,
+            ) => SiblingError::Changed.into(),
+            other => other,
+        })?
+        .ok_or(SiblingError::Changed)?;
+    let same = |recorded: &Sibling, latest: &Sibling| {
+        (
+            &recorded.alias,
+            &recorded.repository,
+            &recorded.directory,
+            &recorded.local_repository,
+            &recorded.profile,
+        ) == (
+            &latest.alias,
+            &latest.repository,
+            &latest.directory,
+            &latest.local_repository,
+            &latest.profile,
+        )
+    };
+    if resolved.primary_directory != set.primary_directory
+        || resolved.members.len() != set.members.len()
+        || !set
+            .members
+            .iter()
+            .zip(&resolved.members)
+            .all(|(recorded, latest)| same(recorded, latest))
+    {
+        return Err(SiblingError::Changed.into());
     }
-    Ok(())
+    Ok(resolved.members.into_iter().map(|sibling| sibling.revision).collect())
 }
 
 impl Set {
     /// A recorded set names at least one sibling, since one without members decodes as
-    /// none, and no more than a worker accepts.
+    /// none, and no more than a worker accepts, each at commit IDs.
     #[must_use]
     pub fn fits(&self) -> bool {
         (1..=MAX_SIBLINGS).contains(&self.members.len())
+            && self.members.iter().all(|sibling| {
+                repository::is_commit_id(&sibling.revision)
+                    && sibling
+                        .image_revision
+                        .as_deref()
+                        .is_none_or(|revision| repository::is_commit_id(revision) && revision != sibling.revision)
+            })
+    }
+
+    /// What an image rebuild at `latest`, in layering order, changes for each sibling
+    /// whose recipe moved past the one the current image layers.
+    #[must_use]
+    pub fn moved(&self, latest: &[String]) -> Vec<String> {
+        let short = |revision: &str| revision.get(..12).unwrap_or(revision).to_owned();
+        self.members
+            .iter()
+            .zip(latest)
+            .filter(|(sibling, latest)| sibling.image_revision.as_ref().unwrap_or(&sibling.revision) != *latest)
+            .map(|(sibling, latest)| {
+                format!(
+                    "Sibling {} has a newer recipe at {}: a changed image layers it, and its checkout on the worker stays at {}",
+                    sibling.alias,
+                    short(latest),
+                    short(&sibling.revision)
+                )
+            })
+            .collect()
     }
 
     /// Whether `bindings` name the recorded aliases, in order, at the same checkouts. A
@@ -318,6 +409,7 @@ pub fn resolve(
             repository: declaration.repository.clone(),
             directory: directory.to_owned(),
             revision,
+            image_revision: None,
             local_repository: checkout,
             profile: declaration.profile.clone(),
         });
