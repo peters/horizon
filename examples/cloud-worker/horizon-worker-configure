@@ -11,6 +11,8 @@ capabilities = json.loads(Path('/workspace/capabilities.json').read_text())
 servers = {}
 if capabilities.get('agents', []):
     servers['horizon-cloud-companions'] = {'command': '/usr/local/bin/horizon-cloud-worker', 'args': ['companions', 'mcp']}
+    # Reports "off" until the owner shares their local network from the cloud card.
+    servers['horizon-local-network'] = {'command': '/usr/local/bin/horizon-cloud-worker', 'args': ['local-network', 'mcp']}
 if capabilities.get('browsers', []) or capabilities.get('browserstack') is not None:
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):

@@ -2,10 +2,11 @@
 use std::io::{self, Read, Write};
 use toml_edit::{DocumentMut, Item, Table};
 
-const MANAGED: [&str; 4] = [
+const MANAGED: [&str; 5] = [
     "horizon-browser",
     "horizon-device",
     "horizon-cloud-companions",
+    "horizon-local-network",
     "horizon-worker",
 ];
 #[derive(serde::Deserialize)]
