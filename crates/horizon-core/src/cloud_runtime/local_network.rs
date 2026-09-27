@@ -1,10 +1,14 @@
 //! Local Network Bridge: lets one cloud's worker open TCP connections to devices on the
-//! network this computer is on, through a proxy that runs here. [`Scope`] is the whole policy
-//! that proxy applies.
+//! network this computer is on, through a scope-checking proxy that runs here.
+//!
+//! [`Scope`] is the whole policy and the [`Proxy`] applies it: the worker only ever reaches
+//! the proxy's loopback port, and dropping the proxy closes every relayed connection.
 mod scope;
+mod socks;
 
 use horizon_cloud_protocol::local_network::{Reply, Subnet};
 pub use scope::ScopeError;
+pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS};
 use std::{
     io,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
@@ -37,6 +41,47 @@ pub enum Destination {
     Address(SocketAddr),
     /// Resolved by [`Scope`] on this computer, never by the worker.
     Name(String, u16),
+}
+
+/// A SOCKS5 proxy on this computer's loopback that reaches only what its [`Scope`] admits.
+pub struct Proxy {
+    subnet: Subnet,
+    inner: socks::Proxy,
+}
+
+impl Proxy {
+    /// Serves the subnet of the network that carries this computer's default route, for as
+    /// long as that address and interface still carry it.
+    ///
+    /// # Errors
+    /// Fails when there is no shareable network or the loopback listener cannot bind.
+    pub fn start() -> Result<Self, StartError> {
+        let scope = Scope::current()?;
+        Ok(Self::with_gate(scope.subnet(), Arc::new(scope))?)
+    }
+
+    fn with_gate(subnet: Subnet, gate: Arc<dyn socks::Gate>) -> io::Result<Self> {
+        Ok(Self {
+            subnet,
+            inner: socks::Proxy::start(gate)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn subnet(&self) -> Subnet {
+        self.subnet
+    }
+
+    /// The loopback port that the bridge's reverse forward targets.
+    #[must_use]
+    pub const fn port(&self) -> u16 {
+        self.inner.port()
+    }
+
+    #[must_use]
+    pub fn counters(&self) -> Counters {
+        self.inner.counters()
+    }
 }
 
 type Resolve = Box<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, Reply> + Send + Sync>;

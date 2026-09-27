@@ -189,3 +189,11 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
     assert_eq!(resolve(&lookups, "localhost", 80), Err(Reply::GeneralFailure));
     assert_eq!(lookups.load(Ordering::Acquire), MAX_LOOKUPS);
 }
+
+#[test]
+fn the_proxy_reports_its_subnet_port_and_counters() {
+    let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
+    assert_eq!(proxy.subnet(), subnet());
+    assert_ne!(proxy.port(), 0);
+    assert_eq!(proxy.counters(), Counters::default());
+}
