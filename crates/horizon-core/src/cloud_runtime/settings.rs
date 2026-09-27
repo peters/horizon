@@ -209,7 +209,15 @@ impl Hetzner {
         validate_private_key_file(&pull.password_file)?;
         // Every buffer that held the password is wiped when dropped.
         let read = zeroize::Zeroizing::new(std::fs::read_to_string(&pull.password_file)?);
-        let password = Credential::new(read.trim().to_owned())?;
+        let trimmed = read.trim();
+        // Checked here so a refused password is never moved into a buffer that
+        // is dropped unwiped.
+        if trimmed.is_empty() || trimmed.bytes().any(|b| b <= 32 || b >= 127) {
+            return Err(Error::Invalid(
+                "The registry pull password file must hold one printable token",
+            ));
+        }
+        let password = Credential::new(trimmed.to_owned())?;
         Ok(Some(horizon_cloud::host::RegistryLogin {
             server: pull.server.clone(),
             username: pull.username.clone(),

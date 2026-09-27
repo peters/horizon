@@ -94,7 +94,11 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         },
         |progress| emit(Event::Output(format!("{progress:?}"))),
     )?;
-    state.worker = Some(worker(&server, spec, &volume)?);
+    // Recorded only once it meets the profile, as readiness requires.
+    let described = worker(&server, spec, &volume)?;
+    described.verify(spec)?;
+    described.verify_resources(spec)?;
+    state.worker = Some(described);
     store.save(state)
 }
 
