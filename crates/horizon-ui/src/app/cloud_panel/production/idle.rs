@@ -16,8 +16,8 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(120);
 
 /// What the idle watch tells the cloud's card.
 pub(super) enum Report {
-    /// Horizon stopped the cloud; the saved record, when it could be read back as
-    /// stopped, and the line to log.
+    /// Horizon stopped the cloud, or began to and must be asked to finish; the
+    /// saved record, when it could be read back, and the line to log.
     Stopped(Option<Box<Deployment>>, String),
     /// A check failed; logged once until the failure changes.
     Failed(String),
@@ -123,6 +123,17 @@ fn run(
                 return;
             }
             Err(error) => {
+                // A stop that began and then failed leaves the record stopping and no
+                // longer watched: show it, so the card offers to finish the stop.
+                if let Ok(Some(state)) = load()
+                    && state.stage == Stage::Stopping
+                {
+                    report(Report::Stopped(
+                        Some(Box::new(state)),
+                        format!("Horizon's idle stop did not finish ({error}); choose Reconcile stop to finish it."),
+                    ));
+                    return;
+                }
                 let message = format!("Idle check failed: {error}");
                 if failed.as_ref() != Some(&message) && !report(Report::Failed(message.clone())) {
                     return;
@@ -184,9 +195,18 @@ impl Runtime {
             Report::Stopped(state, line) => {
                 self.cancel = None;
                 self.progress.stage(Stage::Stopped, std::time::Instant::now());
-                self.stage = Some(Stage::Stopped);
                 if let Some(state) = state {
+                    self.stage = Some(state.stage);
                     self.state = Some(*state);
+                } else {
+                    // Without the saved record, the one shown is marked stopped and its
+                    // released server forgotten, so nothing connects to it.
+                    self.stage = Some(Stage::Stopped);
+                    if let Some(state) = &mut self.state {
+                        state.stage = Stage::Stopped;
+                        state.stop_requested = true;
+                        state.worker = None;
+                    }
                 }
                 self.desktop = None;
                 self.error = None;
@@ -384,18 +404,46 @@ mod tests {
             assert_eq!(reports.len(), 1);
             assert!(!reports[0].0 && reports[0].1.ends_with("choose Check provider to show it."));
         }
-        // The card shows it stopped, keeping the record it had.
+        // The card shows it stopped, and the record it had no longer reads as ready.
         let (sender, received) = channel();
+        let mut ready = stopped();
+        (ready.stage, ready.stop_requested) = (Stage::Ready, false);
         let mut runtime = Runtime {
             idle_reports: Some(received),
-            state: Some(stopped()),
+            state: Some(ready),
             stage: Some(Stage::Ready),
             ..Runtime::default()
         };
         sender.send(Report::Stopped(None, "stopped".into())).unwrap();
         runtime.poll_idle();
         assert_eq!(runtime.stage, Some(Stage::Stopped));
-        assert!(runtime.state.is_some());
+        let state = runtime.state.as_ref().unwrap();
+        assert!(state.stage == Stage::Stopped && state.stop_requested && state.worker.is_none());
+    }
+
+    #[test]
+    fn a_stop_that_began_and_failed_is_shown_for_the_card_to_finish() {
+        let reports = RefCell::new(Vec::new());
+        run(
+            &Cancellation::default(),
+            Duration::ZERO,
+            |_| Err(Error::Command("Hetzner server shutdown")),
+            || {
+                let mut stopping = stopped();
+                stopping.stage = Stage::Stopping;
+                Ok(Some(stopping))
+            },
+            &|report| {
+                if let Report::Stopped(state, line) = report {
+                    reports.borrow_mut().push((state.map(|state| state.stage), line));
+                }
+                true
+            },
+        );
+        let reports = reports.into_inner();
+        assert_eq!(reports.len(), 1, "reported once, and the watch ends");
+        assert_eq!(reports[0].0, Some(Stage::Stopping));
+        assert!(reports[0].1.contains("choose Reconcile stop"));
     }
 
     #[test]
