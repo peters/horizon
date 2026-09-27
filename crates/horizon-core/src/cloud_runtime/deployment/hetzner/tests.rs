@@ -583,10 +583,23 @@ mod failure_points {
     fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
         // An unfinished delete, with its key, volume or server left, is refused before any request.
         let terminated = CreateState::Terminated { worker_id: "8".into() };
-        for (key, volume, operation) in [
-            (Some("ssh-ed25519 AAAA"), terminated.clone(), CreateState::Prepared),
-            (None, terminated, CreateState::Requested),
-            (Some("ssh-ed25519 AAAA"), CreateState::Prepared, CreateState::Prepared),
+        // A delete that finished but was never followed by a redeploy still holds
+        // the old workspace's source state, so it is refused too.
+        for (key, volume, operation, source_ready) in [
+            (
+                Some("ssh-ed25519 AAAA"),
+                terminated.clone(),
+                CreateState::Prepared,
+                false,
+            ),
+            (None, terminated.clone(), CreateState::Requested, false),
+            (
+                Some("ssh-ed25519 AAAA"),
+                CreateState::Prepared,
+                CreateState::Prepared,
+                false,
+            ),
+            (None, terminated, CreateState::Prepared, true),
         ] {
             let (_, journal, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
                 let key = key.map(String::from);
@@ -600,6 +613,7 @@ mod failure_points {
                 .save(root)
                 .unwrap();
                 state.operation = operation.clone();
+                state.source_ready = source_ready;
             });
             assert_eq!((served, journal.location), (0, None));
         }
