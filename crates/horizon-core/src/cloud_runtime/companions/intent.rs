@@ -129,12 +129,57 @@ pub struct Journal {
     /// A deduplicated submit's response may be lost too. Retain its request ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     retries: BTreeMap<OperationId, OperationId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<Retired>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Retired {
+    owner: Owner,
+    journal: Journal,
 }
 
 impl Journal {
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        self.active_empty() && self.retired.is_empty()
+    }
+
+    fn active_empty(&self) -> bool {
         self.bindings.is_empty() && self.intents.is_empty() && self.history.is_empty() && self.retries.is_empty()
+    }
+
+    fn pending(&self) -> bool {
+        self.intents.values().any(|intent| intent.state.pending())
+    }
+
+    /// Retire authorization after grant cleanup, retaining old request IDs forever.
+    /// An uncertain operation must be reconciled under its original owner first.
+    pub(super) fn retire(&mut self, owner: &Owner) -> Result<bool> {
+        self.validate(owner)?;
+        if self.pending() {
+            return Ok(false);
+        }
+        if !self.active_empty() {
+            if self.retired.len() >= 64 {
+                return Err(Error::Invalid(
+                    "Companion ownership history is full; retain the journal for recovery",
+                ));
+            }
+            let journal = Self {
+                bindings: std::mem::take(&mut self.bindings),
+                intents: std::mem::take(&mut self.intents),
+                history: std::mem::take(&mut self.history),
+                retries: std::mem::take(&mut self.retries),
+                retired: Vec::new(),
+            };
+            self.retired.push(Retired {
+                owner: owner.clone(),
+                journal,
+            });
+        }
+        Ok(true)
     }
 
     #[must_use]
@@ -183,6 +228,13 @@ impl Journal {
     /// # Errors
     /// Rejects absent bindings, conflicting actions and reused IDs for another request.
     pub fn submit(&mut self, alias: &str, action: Action, operation_id: OperationId) -> Result<Intent> {
+        if self
+            .retired
+            .iter()
+            .any(|retired| retired.journal.operation(operation_id).is_some())
+        {
+            return Err(Error::Invalid("Operation ID belongs to retired companion ownership"));
+        }
         let binding = self
             .bindings
             .get(alias)
@@ -267,7 +319,12 @@ impl Journal {
     /// # Errors
     /// Rejects corrupt or transplanted state before any caller can use it.
     pub fn validate(&self, owner: &Owner) -> Result<()> {
-        if self.bindings.len() > 64 || self.intents.len() > 64 || self.history.len() > 256 || self.retries.len() > 256 {
+        if self.bindings.len() > 64
+            || self.intents.len() > 64
+            || self.history.len() > 256
+            || self.retries.len() > 256
+            || self.retired.len() > 64
+        {
             return Err(Error::Invalid("Companion lifecycle journal is too large"));
         }
         let mut targets = BTreeMap::new();
@@ -309,6 +366,29 @@ impl Journal {
         for (retry, canonical) in &self.retries {
             if ids.contains(retry) || !ids.contains(canonical) {
                 return Err(Error::Invalid("Invalid companion retry history"));
+            }
+        }
+        ids.extend(self.retries.keys().copied());
+        for retired in &self.retired {
+            if !retired.journal.retired.is_empty()
+                || retired.journal.active_empty()
+                || retired.journal.pending()
+                || retired.owner.cloud_id != owner.cloud_id
+            {
+                return Err(Error::Invalid("Invalid retired companion ownership"));
+            }
+            retired.journal.validate(&retired.owner)?;
+            for id in retired
+                .journal
+                .intents
+                .values()
+                .map(|intent| intent.operation_id)
+                .chain(retired.journal.history.keys().copied())
+                .chain(retired.journal.retries.keys().copied())
+            {
+                if !ids.insert(id) {
+                    return Err(Error::Invalid("Operation ID crosses companion owners"));
+                }
             }
         }
         Ok(())

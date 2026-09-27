@@ -2,6 +2,9 @@ use super::*;
 use crate::cloud_runtime::{CreateState, Stage, state::Deployment};
 use horizon_cloud::companions::{Placement, Scope};
 
+#[cfg(unix)]
+mod migration;
+
 fn owner() -> Owner {
     Owner {
         scope: Scope {
