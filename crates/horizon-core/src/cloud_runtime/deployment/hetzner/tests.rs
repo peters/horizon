@@ -71,6 +71,7 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
         key: Some(throwaway_public_key().unwrap()),
+        released: Some("42".into()),
     };
     saved.save(root.path()).unwrap();
     assert_eq!(Journal::load(root.path()).unwrap(), saved);
@@ -637,4 +638,50 @@ mod failure_points {
         let (state, _, _, _) = provision_with(and(until_server(), [(201, created_server(4)), (200, held_volume())]));
         assert_eq!(state.worker.unwrap().id, "42");
     }
+}
+
+#[cfg(unix)]
+fn stored(
+    root: &std::path::Path,
+    operation: &CreateState,
+) -> (
+    crate::cloud_runtime::state::Store,
+    crate::cloud_runtime::state::Deployment,
+) {
+    let store = crate::cloud_runtime::state::Store::lock(root).unwrap();
+    let state: crate::cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+        "profile": spec().profile, "stage": "Stopped", "operation": operation, "spec": spec(),
+        "worker": worker(&server("running", Some("192.0.2.10")), &spec(), &volume()).unwrap(),
+        "sessions": [], "stop_requested": true
+    }))
+    .unwrap();
+    store.save(&state).unwrap();
+    (store, state)
+}
+
+#[test]
+#[cfg(unix)]
+fn resuming_clears_only_a_released_servers_fence() {
+    use super::lifecycle::resume;
+    let root = tempfile::tempdir().unwrap();
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let (store, mut state) = stored(root.path(), &bound);
+    assert!(
+        resume(&store, &mut state).is_err(),
+        "a server that was not released is resumed by starting it"
+    );
+    let mut journal = Journal::load(root.path()).unwrap();
+    journal.released = Some("42".into());
+    journal.save(root.path()).unwrap();
+    resume(&store, &mut state).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(
+        saved.operation,
+        CreateState::Prepared,
+        "the next reconnect requests a new server"
+    );
+    assert_eq!(saved.stage, crate::cloud_runtime::Stage::Readiness);
+    assert!(!saved.stop_requested && saved.worker.is_none());
+    assert!(Journal::load(root.path()).unwrap().released.is_none());
 }

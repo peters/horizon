@@ -3,6 +3,7 @@
 //! fenced by the deployment's `operation`; the volume, the chosen location and
 //! the SSH key live in this cloud's `hetzner.json` journal, so `RunPod` clouds and
 //! their records are untouched.
+pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
 mod readiness;
 #[cfg(test)]
@@ -169,6 +170,10 @@ pub(super) struct Journal {
     /// private half is never kept, and the host's sshd is masked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) key: Option<String>,
+    /// The server a stop deleted. While the deployment is still bound to it, the
+    /// cloud is stopped rather than lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) released: Option<String>,
 }
 
 fn prepared() -> CreateState {
@@ -183,6 +188,7 @@ impl Journal {
                 location: None,
                 volume: CreateState::Prepared,
                 key: None,
+                released: None,
             }),
             Err(error) => Err(error.into()),
         }
