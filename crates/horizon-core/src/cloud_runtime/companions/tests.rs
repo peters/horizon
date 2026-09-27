@@ -116,6 +116,7 @@ impl Fixture {
                         id: format!("worker-{id}"),
                         revision: "a".repeat(40),
                         address: horizon_cloud::SshEndpoint::new("127.0.0.1".parse().unwrap(), 2222),
+                        private: None,
                         status: Status::Ready,
                     },
                 )
@@ -586,4 +587,44 @@ fn persisted_same_worker_grants_are_rejected() {
     std::fs::write(&path, tampered).unwrap();
     let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
     assert!(store.load().is_err());
+}
+
+#[test]
+fn companions_in_one_private_network_zone_connect_privately() {
+    use super::transport::Worker;
+    let endpoint =
+        |ip: [u8; 4], port| horizon_cloud::SshEndpoint::new(std::net::IpAddr::from(ip).into(), port).unwrap();
+    let worker = |public: [u8; 4], private: Option<([u8; 4], &str)>| Worker {
+        id: "worker".into(),
+        revision: "a".repeat(40),
+        address: Some(endpoint(public, 22)),
+        private: private.map(|(ip, zone)| (endpoint(ip, 22), zone.to_owned())),
+        status: Status::Ready,
+    };
+    let chosen = |source: &Worker, target: &Worker| {
+        let address = super::reconcile::endpoint(source, target).unwrap();
+        (format!("{:?}", address.host()), address.port())
+    };
+    let public = (format!("{:?}", endpoint([203, 0, 113, 9], 22).host()), 22);
+    let private = (format!("{:?}", endpoint([10, 72, 0, 3], 22).host()), 22);
+    let target = worker([203, 0, 113, 9], Some(([10, 72, 0, 3], "eu-central")));
+    assert_eq!(
+        chosen(&worker([203, 0, 113, 8], Some(([10, 72, 0, 2], "eu-central"))), &target),
+        private
+    );
+    assert_eq!(
+        chosen(&worker([203, 0, 113, 8], Some(([10, 72, 0, 2], "us-east"))), &target),
+        public,
+        "another zone"
+    );
+    assert_eq!(
+        chosen(&worker([203, 0, 113, 8], None), &target),
+        public,
+        "a source without a private network"
+    );
+    assert_eq!(
+        chosen(&target, &worker([203, 0, 113, 9], None)),
+        public,
+        "a target without one"
+    );
 }

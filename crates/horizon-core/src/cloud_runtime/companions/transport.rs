@@ -19,6 +19,9 @@ pub(super) struct Worker {
     pub id: String,
     pub revision: String,
     pub address: Option<horizon_cloud::SshEndpoint>,
+    /// The worker's sshd on a provider private network, with the network zone
+    /// it is reachable from.
+    pub private: Option<(horizon_cloud::SshEndpoint, String)>,
     pub status: Status,
 }
 
@@ -188,6 +191,7 @@ impl Transport for Live<'_> {
             id: worker.id.clone(),
             revision: state.revision.clone(),
             address: worker.ssh_endpoint(),
+            private: worker.private_ssh_endpoint().zip(worker.network_zone.clone()),
             status,
         }))
     }
