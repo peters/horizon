@@ -32,7 +32,7 @@ pub(super) fn stopped_note(runtime: &Runtime) -> &'static str {
     }
 }
 
-pub(super) fn delete_confirmation(runtime: &Runtime) -> &'static str {
+pub(in crate::app::cloud_panel::production) fn delete_confirmation(runtime: &Runtime) -> &'static str {
     match stopped(runtime) {
         StoppedCost::WorkerKept => {
             "Delete this worker and its managed workspace storage? Running sessions and files in that storage cannot be recovered. Any separately attached network volumes retain their files and credentials and remain billable until deleted."

@@ -636,6 +636,9 @@ stay in local temporary Docker configs; only verified pull material is transferr
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
+Cloud close confirmation and session-local close intent live in
+`cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
+channels, and removal rechecks durable resource ownership before discarding panels.
 UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.
 

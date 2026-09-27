@@ -8,7 +8,7 @@ mod self_stop;
 #[cfg(test)]
 mod tests;
 mod timeline;
-mod wording;
+pub(super) mod wording;
 impl HorizonApp {
     pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
         self.ensure_cloud_provider_logo(ctx);

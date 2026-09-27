@@ -1,6 +1,7 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
 mod capabilities;
 mod cards;
+mod close;
 mod companions;
 mod creation;
 mod creation_job;
@@ -49,6 +50,7 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 
 #[derive(Default)]
 pub(super) struct Production {
+    close: close::State,
     pub(super) setup: setup::State,
     pub creating: bool,
     launch: launch::State,
@@ -330,6 +332,7 @@ impl HorizonApp {
         }
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);
+        self.finish_closing_clouds(ctx);
         for id in resumed {
             self.start_production_deployment(id, ctx);
         }
@@ -395,6 +398,7 @@ impl HorizonApp {
         if !self.cloud_prototype.initialized || self.cloud_prototype.production.session_id != session {
             self.cloud_prototype.initialized = true;
             self.cloud_prototype.production.pending_creation = None;
+            self.cloud_prototype.production.close = close::State::default();
             self.cloud_prototype.production.session_id = session;
             self.cloud_prototype.root = Some(horizon_core::HorizonHome::resolve().root().join("cloud"));
             self.cloud_prototype.groups = self.board.cloud_groups.clone();
