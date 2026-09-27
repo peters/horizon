@@ -644,6 +644,9 @@ ordinary panel types; worker/provider operations run outside the render thread.
 Creation's `profiles` leaf groups CPU and GPU profiles; `gpu_choice` presents
 available GPU types. Shared flavor validation distinguishes exact CPU sizes
 from GPU host CPU and memory minimums before either interface requests a worker.
+`cloud_runtime/prices/watch` validates a fixed size/location against a current
+catalog. Creation's `watch` leaf owns only the dialog's explicit, transient opt-in;
+it submits the ordinary launch once and drops the watch on cancellation or change.
 
 `horizon-cloud-worker` hosts the existing browser runtime and public MCP queues
 inside one container. The device CLI owns serialized native input and attribution.

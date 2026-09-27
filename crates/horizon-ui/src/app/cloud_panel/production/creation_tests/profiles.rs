@@ -183,7 +183,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     assert!(
         has_label(&output, "CPU size"),
         "the size row is outside the collapsed Advanced section"
@@ -209,7 +209,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
         Some((16, 32)),
         "vCPU changes keep the memory family"
     );
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(&output, "development · 16 vCPU · 32 GB"));
     assert!(
         !has_label(&output, "8 GB · compute-optimized"),
@@ -217,7 +217,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
     );
     click(&ctx, &mut app, label_rect(&output, "64 GB · general purpose").center());
     assert_eq!(app.cloud_prototype.production.size, Some((16, 64)));
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(&output, "development · 16 vCPU · 64 GB"));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);

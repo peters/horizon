@@ -17,6 +17,7 @@ pub(super) struct State {
     cancel: cloud_runtime::Cancellation,
     pub revision: Option<String>,
     pub submitted: bool,
+    pub watch: Option<cloud_runtime::prices::watch::Selection>,
     pub accounts_checked: bool,
     ready_profiles: Vec<String>,
     /// Same-worker siblings chosen for this launch.

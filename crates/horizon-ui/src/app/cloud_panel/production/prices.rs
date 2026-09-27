@@ -41,6 +41,7 @@ pub(super) struct State {
     refreshed_after: Option<Instant>,
     sizes: HashMap<SizeKey, Result<Fetched<SizeAvailability>, String>>,
     size_jobs: HashMap<SizeKey, Job<SizeAvailability>>,
+    size_failed_at: HashMap<SizeKey, Instant>,
     /// Every data center's region as people say it, kept from the latest list so cards
     /// can name where a worker landed without work on every frame.
     regions: HashMap<String, String>,
@@ -160,6 +161,16 @@ impl State {
             self.list_error = None;
             self.list_failed_at = None;
         }
+        self.size_failed_at.retain(|key, at| {
+            if at.elapsed() >= RETRY_FAILED {
+                if matches!(self.sizes.get(key), Some(Err(_))) {
+                    self.sizes.remove(key);
+                }
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Time until the prices or stock shown for `profile` go stale, unless a fetch is running.
@@ -180,6 +191,11 @@ impl State {
             .chain(
                 self.list_failed_at
                     .filter(|_| self.list_job.is_none())
+                    .map(|at| RETRY_FAILED.saturating_sub(at.elapsed())),
+            )
+            .chain(
+                self.size_failed_at
+                    .get(&key(profile))
                     .map(|at| RETRY_FAILED.saturating_sub(at.elapsed())),
             )
             .min()
@@ -210,6 +226,11 @@ impl State {
             let mut job = self.size_jobs.remove(&key);
             match finished(&mut job) {
                 Some(result) => {
+                    if result.is_err() {
+                        self.size_failed_at.insert(key, Instant::now());
+                    } else {
+                        self.size_failed_at.remove(&key);
+                    }
                     self.sizes.insert(key, result);
                 }
                 None => {
@@ -227,6 +248,7 @@ impl State {
         self.list_error = None;
         self.list_failed_at = None;
         self.sizes.retain(|_, result| result.is_ok());
+        self.size_failed_at.clear();
     }
 
     /// Whether this machine can use `RunPod`: false once a fetch found no API key, as on
@@ -742,6 +764,35 @@ mod tests {
             }
             state.poll();
             assert!(!state.loading());
+        }
+    }
+
+    #[test]
+    fn failed_size_stock_retries_after_a_bounded_pause_and_recovers() {
+        let mut state = State::default();
+        let profile = profile();
+        let (tx, rx) = channel();
+        state.size_jobs.insert(key(&profile), rx);
+        tx.send(Err("Temporary stock failure".into())).unwrap();
+        state.poll();
+        state.recheck_runpod();
+        assert_eq!(state.size(&profile, (8, 32)), Some(Err("Temporary stock failure")));
+        assert!(
+            state
+                .until_stale(&profile)
+                .is_some_and(|wait| !wait.is_zero() && wait <= RETRY_FAILED)
+        );
+        if let Some(expired) = Instant::now().checked_sub(RETRY_FAILED) {
+            state.size_failed_at.insert(key(&profile), expired);
+            state.recheck_runpod();
+            assert!(state.size(&profile, (8, 32)).is_none());
+            assert!(!state.sizes.contains_key(&key(&profile)), "the request path may retry");
+            let (tx, rx) = channel();
+            state.size_jobs.insert(key(&profile), rx);
+            tx.send(Ok(now(available()))).unwrap();
+            state.poll();
+            assert_eq!(state.size(&profile, (8, 32)), Some(Ok(&available())));
+            assert!(state.size_failed_at.is_empty());
         }
     }
 }

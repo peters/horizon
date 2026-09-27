@@ -18,6 +18,7 @@ mod pricing;
 mod profiles;
 pub(super) mod provider;
 pub(super) mod siblings;
+mod watch;
 
 #[derive(Default)]
 struct Actions {
@@ -49,7 +50,7 @@ impl HorizonApp {
         } else {
             0.0
         };
-        let body_height = (viewport.height() - 240.0 - reason_space).max(100.0);
+        let body_height = (viewport.height() - 330.0 - reason_space).max(100.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
@@ -95,7 +96,8 @@ impl HorizonApp {
                     .show(ui, |ui| {
                         ui.add_enabled_ui(
                             self.cloud_prototype.production.pending_creation.is_none()
-                                && !self.cloud_prototype.production.launch.submitted,
+                                && !self.cloud_prototype.production.launch.submitted
+                                && self.cloud_prototype.production.launch.watch.is_none(),
                             |ui| {
                                 actions.repository = fields(
                                     ui,
@@ -116,9 +118,7 @@ impl HorizonApp {
                             ui.colored_label(theme::PALETTE_RED(), error);
                         }
                     });
-                ui.add_space(16.0);
-                ui.separator();
-                ui.add_space(8.0);
+                watch::controls(ui, &mut self.cloud_prototype.production);
                 footer(ui, &self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
@@ -139,6 +139,7 @@ impl HorizonApp {
         if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
             self.cloud_prototype.production.launch.submitted = true;
         }
+        watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
     }
@@ -564,5 +565,6 @@ fn can_submit(form: &Production) -> bool {
         && (form.profiles.is_some() || form.launch.loading())
         && form.pending_creation.is_none()
         && !form.launch.submitted
+        && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
 }
