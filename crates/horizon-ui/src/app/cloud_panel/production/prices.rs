@@ -219,6 +219,12 @@ impl State {
         !self.runpod_missing
     }
 
+    /// Whether the first `RunPod` fetch is still running, so whether this machine has a
+    /// `RunPod` key is not known yet.
+    pub fn runpod_unknown(&self) -> bool {
+        self.list_job.is_some() && self.list.is_none() && self.list_error.is_none() && !self.runpod_missing
+    }
+
     pub fn loading(&self) -> bool {
         self.list_job.is_some()
     }
@@ -306,6 +312,13 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 /// tests, which never contact it and run on Unix only.
 #[cfg(all(test, unix))]
 impl State {
+    /// As the dialog is while its first `RunPod` fetch runs.
+    pub fn runpod_checking(&mut self) {
+        let (sender, receiver) = channel();
+        std::mem::forget(sender);
+        self.list_job = Some(receiver);
+    }
+
     /// As a fetch finds it on a machine set up for Hetzner alone.
     pub fn runpod_key_missing(&mut self) {
         self.runpod_missing = true;

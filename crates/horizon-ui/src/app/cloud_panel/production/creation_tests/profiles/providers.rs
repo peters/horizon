@@ -343,6 +343,29 @@ fn a_hetzner_only_machine_offers_only_hetzner_and_never_moves_a_runpod_profile_o
     assert_eq!(launch.profile.provider, "hetzner");
 }
 
+#[test]
+fn a_runpod_cloud_waits_for_the_first_check_of_the_runpod_key() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // The dialog just opened: its first RunPod fetch has not answered.
+    app.cloud_prototype.production.prices.runpod_checking();
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.pending_creation.is_none());
+    assert!(
+        app.cloud_prototype
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("still checking this machine's RunPod key")),
+        "{:?}",
+        app.cloud_prototype.error
+    );
+}
+
 /// A Hetzner catalog as the running Horizon would have it with a binding.
 fn hetzner_binding(app: &mut HorizonApp) {
     let catalog = serde_json::from_value(serde_json::json!({
