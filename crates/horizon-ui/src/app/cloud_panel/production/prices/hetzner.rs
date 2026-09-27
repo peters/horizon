@@ -2,7 +2,16 @@
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
 use super::{Fetched, Job, RETRY_FAILED, finished, spawn, stale};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
-use std::{path::Path, time::Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+
+/// Longest wait for a running Hetzner fetch before prices go to workers without it.
+const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
+/// An agent's answer waits for a running Hetzner fetch only while more than this is
+/// left before its deadline; after that it reports Hetzner as still being fetched.
+const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
 #[derive(Default)]
 pub(in crate::app) struct State {
@@ -11,6 +20,8 @@ pub(in crate::app) struct State {
     error: Option<String>,
     failed_at: Option<Instant>,
     job: Option<Job<Option<HetznerCatalog>>>,
+    /// When the running fetch started.
+    started: Option<Instant>,
 }
 
 impl State {
@@ -27,11 +38,16 @@ impl State {
         }
         if self.job.is_none() && self.error.is_none() && self.fetched.as_ref().is_none_or(|fetched| stale(fetched.at)) {
             self.job = Some(spawn(root, ctx, prices::hetzner_catalog));
+            self.started = Some(Instant::now());
         }
     }
 
     pub(super) fn poll(&mut self) {
-        match finished(&mut self.job) {
+        let finished = finished(&mut self.job);
+        if self.job.is_none() {
+            self.started = None;
+        }
+        match finished {
             Some(Ok(fetched)) => {
                 self.fetched = Some(fetched);
                 self.error = None;
@@ -51,9 +67,15 @@ impl State {
         *self = Self::default();
     }
 
-    /// Whether a fetch is running, so senders can wait for its catalog.
-    pub fn pending(&self) -> bool {
-        self.job.is_some()
+    /// Whether senders should wait for a running fetch: only for [`WAIT_FOR_FETCH`], so
+    /// a slow Hetzner never holds back the `RunPod` prices.
+    pub fn worth_waiting_for(&self) -> bool {
+        self.job.is_some() && self.started.is_some_and(|started| started.elapsed() < WAIT_FOR_FETCH)
+    }
+
+    /// Until a failed fetch may be asked again, for waking an idle app.
+    pub fn retry_in(&self) -> Option<Duration> {
+        self.failed_at.map(|at| RETRY_FAILED.saturating_sub(at.elapsed()))
     }
 
     /// The current catalog, when this machine has a Hetzner binding.
@@ -61,15 +83,24 @@ impl State {
         self.fetched.as_ref().filter(|fetched| !stale(fetched.at))
     }
 
-    /// Hetzner's part of a `cloud_offers` answer, or `None` while its catalog is being
-    /// fetched: empty without a binding, the reason when the fetch failed, and offers in
-    /// euros from a current catalog.
+    /// Hetzner's part of a `cloud_offers` answer: empty without a binding, the reason
+    /// when the fetch failed, and offers in euros from a current catalog. `None` while its
+    /// catalog is being fetched and more than [`ANSWER_MARGIN_MILLIS`] remain until
+    /// `deadline_in_millis`; closer to the deadline Hetzner is reported as still being
+    /// fetched, so the rest of the answer is not lost.
     pub fn sections(
         &self,
         requirements: &horizon_core::cloud_runtime::offers::Requirements,
+        deadline_in_millis: i64,
     ) -> Option<Vec<serde_json::Value>> {
         if self.job.is_some() {
-            return None;
+            if deadline_in_millis > ANSWER_MARGIN_MILLIS {
+                return None;
+            }
+            return Some(vec![serde_json::json!({
+                "provider": "Hetzner",
+                "error": "cloud_offers_unavailable: Hetzner prices are still being fetched",
+            })]);
         }
         if let Some(error) = &self.error {
             return Some(vec![
@@ -128,11 +159,19 @@ mod tests {
     fn sections_follow_the_binding_the_fetch_and_its_failure() {
         let requirements = horizon_core::cloud_runtime::offers::Requirements::default();
         let mut state = State::default();
-        assert_eq!(state.sections(&requirements), Some(Vec::new()), "nothing asked yet");
+        assert_eq!(
+            state.sections(&requirements, i64::MAX),
+            Some(Vec::new()),
+            "nothing asked yet"
+        );
         state.answered(None);
-        assert_eq!(state.sections(&requirements), Some(Vec::new()), "no Hetzner binding");
+        assert_eq!(
+            state.sections(&requirements, i64::MAX),
+            Some(Vec::new()),
+            "no Hetzner binding"
+        );
         state.answered(Some(catalog()));
-        let sections = state.sections(&requirements).unwrap();
+        let sections = state.sections(&requirements, i64::MAX).unwrap();
         assert_eq!(
             (sections[0]["provider"].as_str(), sections[0]["currency"].as_str()),
             (Some("Hetzner"), Some("EUR"))
@@ -144,12 +183,17 @@ mod tests {
             "as workers report it"
         );
         state.failed("Missing Hetzner token");
-        let failed = state.sections(&requirements).unwrap();
+        let failed = state.sections(&requirements, i64::MAX).unwrap();
         assert_eq!(failed[0]["error"], "cloud_offers_unavailable: Missing Hetzner token");
         // While a fetch runs, the answer waits for it.
         let (_sender, receiver) = std::sync::mpsc::channel();
         state.job = Some(receiver);
-        assert_eq!(state.sections(&requirements), None);
+        assert_eq!(state.sections(&requirements, i64::MAX), None);
+        let late = state.sections(&requirements, 1_000).unwrap();
+        assert_eq!(
+            late[0]["error"],
+            "cloud_offers_unavailable: Hetzner prices are still being fetched"
+        );
         state.refresh();
         assert!(state.job.is_none() && state.fresh().is_none());
     }

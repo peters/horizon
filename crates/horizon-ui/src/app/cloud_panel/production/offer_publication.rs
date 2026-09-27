@@ -107,6 +107,8 @@ struct Delivery {
     retry_at: Option<Instant>,
     /// The Hetzner catalog fetch the worker has; `None` until one arrives.
     hetzner: Option<Instant>,
+    /// Whether that catalog had offers, so an empty one is sent only to clear them.
+    hetzner_offers: bool,
     /// No Hetzner attempt before this, after a failed one.
     hetzner_retry_at: Option<Instant>,
 }
@@ -118,6 +120,8 @@ struct Job {
     observed: Option<Instant>,
     /// The Hetzner catalog fetch being sent, if any.
     hetzner: Option<Instant>,
+    /// Whether the catalog being sent has offers.
+    hetzner_offers: bool,
     receiver: Receiver<Result<(Published, Hetzner), String>>,
 }
 
@@ -142,6 +146,7 @@ impl State {
             observed: None,
             retry_at: None,
             hetzner: None,
+            hetzner_offers: false,
             hetzner_retry_at: None,
         });
         let hetzner = match &outcome {
@@ -167,6 +172,7 @@ impl State {
         match hetzner {
             Hetzner::Delivered => {
                 delivery.hetzner = job.hetzner;
+                delivery.hetzner_offers = job.hetzner_offers;
                 delivery.hetzner_retry_at = None;
             }
             Hetzner::Failed => delivery.hetzner_retry_at = Some(now + HETZNER_RETRY),
@@ -192,6 +198,10 @@ impl State {
             return;
         }
         let hetzner_at = hetzner.as_ref().map(|(_, at)| *at);
+        // An empty catalog only clears offers a worker was given; others never need it.
+        let offers = hetzner
+            .as_ref()
+            .is_some_and(|(catalog, _)| !catalog.catalog.offers.is_empty());
         let (target, snapshot) = if let Some(target) = due(&self.delivered, ready, fetched.at, now).cloned() {
             let (list, preferences) = &fetched.value;
             let snapshot = Snapshot {
@@ -202,7 +212,7 @@ impl State {
             };
             (target, Some(snapshot))
         } else if let Some(at) = hetzner_at
-            && let Some(target) = due_hetzner(&self.delivered, ready, fetched.at, at, now).cloned()
+            && let Some(target) = due_hetzner(&self.delivered, ready, (fetched.at, at, offers), now).cloned()
         {
             (target, None)
         } else {
@@ -210,6 +220,12 @@ impl State {
         };
         let (cloud, worker) = target;
         let observed = snapshot.as_ref().map(|_| fetched.at);
+        let had_offers = self
+            .delivered
+            .get(&cloud)
+            .is_some_and(|delivery| delivery.worker == worker && delivery.hetzner_offers);
+        let hetzner = hetzner.filter(|_| offers || had_offers);
+        let hetzner_at = hetzner.as_ref().map(|(_, at)| *at);
         let job = Job {
             receiver: start(
                 Arc::clone(&self.publisher),
@@ -222,6 +238,7 @@ impl State {
             worker,
             observed,
             hetzner: hetzner_at,
+            hetzner_offers: offers,
         };
         self.job = Some(job);
     }
@@ -232,8 +249,7 @@ impl State {
 fn due_hetzner<'a>(
     delivered: &HashMap<String, Delivery>,
     ready: &'a [(String, String)],
-    observed: Instant,
-    hetzner: Instant,
+    (observed, hetzner, offers): (Instant, Instant, bool),
     now: Instant,
 ) -> Option<&'a (String, String)> {
     ready.iter().find(|(cloud, worker)| {
@@ -241,6 +257,7 @@ fn due_hetzner<'a>(
             delivery.worker == *worker
                 && delivery.observed == Some(observed)
                 && delivery.hetzner != Some(hetzner)
+                && (offers || delivery.hetzner_offers)
                 && delivery.hetzner_retry_at.is_none_or(|at| now >= at)
         })
     })
@@ -321,8 +338,9 @@ impl HorizonApp {
             ctx.request_repaint_after(Duration::from_secs(30));
             return;
         };
-        // Hetzner's catalog travels with the list, so a running fetch is waited for.
-        if prices.hetzner.pending() {
+        // Hetzner's catalog travels with the list, so a running fetch is waited for, but
+        // only briefly: a slow Hetzner never holds back the list.
+        if prices.hetzner.worth_waiting_for() {
             ctx.request_repaint_after(Duration::from_secs(1));
             return;
         }
@@ -350,13 +368,18 @@ impl HorizonApp {
         let refresh = super::prices::FRESH
             .saturating_sub(fetched.at.elapsed())
             .min(catalog_refresh.unwrap_or(Duration::MAX));
+        // Retries already due are handled by this step; only future ones need a wake.
         let retry = publication
             .delivered
             .values()
             .flat_map(|delivery| [delivery.retry_at, delivery.hetzner_retry_at])
             .flatten()
+            .filter(|at| *at > now)
             .min()
-            .map(|at| at.saturating_duration_since(now));
+            .map(|at| at.saturating_duration_since(now))
+            .into_iter()
+            .chain(prices.hetzner.retry_in().filter(|wait| !wait.is_zero()))
+            .min();
         ctx.request_repaint_after(retry.map_or(refresh, |retry| retry.min(refresh)));
         publication.step(&root, &ready, fetched, hetzner, now, ctx);
     }
@@ -411,6 +434,7 @@ mod tests {
             observed: Some(observed),
             retry_at: None,
             hetzner: None,
+            hetzner_offers: false,
             hetzner_retry_at: None,
         };
         delivered.insert("a".to_owned(), sent("w1", first));
@@ -444,6 +468,7 @@ mod tests {
             observed: None,
             retry_at: Some(retry_at),
             hetzner: None,
+            hetzner_offers: false,
             hetzner_retry_at: None,
         };
         let mut retries = HashMap::new();
@@ -524,7 +549,10 @@ mod tests {
             version: VERSION,
             observed_at_millis,
             catalog: serde_json::from_value(serde_json::json!({
-                "offers": [], "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {}, "ipv4_hour_eur": {}, "regions": {},
+                "offers": [{"server_type": "cx43", "location": "hel1", "cores": 8, "memory_gb": 16.0, "disk_gb": 160,
+                    "dedicated": false, "hourly_eur": 0.0256, "monthly_eur": 15.99, "available": true, "recommended": true}],
+                "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5}, "ipv4_hour_eur": {"hel1": 0.0008},
+                "regions": {"hel1": "EUROPE"},
             }))
             .unwrap(),
         }
@@ -538,6 +566,68 @@ mod tests {
             state.poll(now);
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn an_empty_catalog_goes_only_to_workers_that_had_offers() {
+        let (mut state, received) = recording(vec![Hetzner::Delivered, Hetzner::Delivered]);
+        let fetched = priced();
+        let ready = vec![("a".to_owned(), "w1".to_owned()), ("b".to_owned(), "w2".to_owned())];
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let empty = HetznerSnapshot {
+            catalog: super::empty_catalog(),
+            ..catalog(1)
+        };
+        // A worker that never had offers gets its list without the empty catalog.
+        state.step(
+            Path::new("/unused"),
+            &ready,
+            &fetched,
+            Some((empty.clone(), now)),
+            now,
+            &ctx,
+        );
+        let (cloud, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((cloud.as_str(), snapshot.is_some(), sent_hetzner), ("a", true, None));
+        finish(&mut state, now);
+        // A worker that was given offers gets the empty catalog to clear them.
+        state.delivered.insert(
+            "b".to_owned(),
+            Delivery {
+                worker: "w2".into(),
+                observed: Some(fetched.at),
+                retry_at: None,
+                hetzner: Some(now.checked_sub(Duration::from_mins(20)).unwrap()),
+                hetzner_offers: true,
+                hetzner_retry_at: None,
+            },
+        );
+        let cleared = Instant::now();
+        state.step(
+            Path::new("/unused"),
+            &ready,
+            &fetched,
+            Some((empty.clone(), cleared)),
+            now,
+            &ctx,
+        );
+        let (cloud, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((cloud.as_str(), snapshot.is_none()), ("b", true));
+        assert_eq!(sent_hetzner, Some(empty.clone()));
+        finish(&mut state, now);
+        assert_eq!(state.delivered["b"].hetzner, Some(cleared));
+        assert!(!state.delivered["b"].hetzner_offers);
+        // Nothing more is due: neither worker needs the empty catalog now.
+        state.step(
+            Path::new("/unused"),
+            &ready,
+            &fetched,
+            Some((empty, cleared)),
+            now,
+            &ctx,
+        );
+        assert!(state.job.is_none());
     }
 
     #[test]
@@ -670,6 +760,7 @@ mod tests {
                 observed: Some(earlier),
                 retry_at: None,
                 hetzner: None,
+                hetzner_offers: false,
                 hetzner_retry_at: None,
             },
         );
@@ -679,6 +770,7 @@ mod tests {
             worker: "w1".into(),
             observed: Some(now),
             hetzner: None,
+            hetzner_offers: false,
             receiver,
         });
         sender.send(Err("unreachable".into())).unwrap();
@@ -692,6 +784,7 @@ mod tests {
             worker: "w1".into(),
             observed: Some(now),
             hetzner: None,
+            hetzner_offers: false,
             receiver,
         });
         state.poll(now);
@@ -705,6 +798,7 @@ mod tests {
                 observed: Some(earlier),
                 retry_at: Some(now + RETRY),
                 hetzner: None,
+                hetzner_offers: false,
                 hetzner_retry_at: None,
             }
         );
