@@ -1,46 +1,23 @@
-//! Deletion cleans up the record each provisioning failure point leaves, and an
-//! interrupted stop is finished rather than taken for a released server.
-use super::{provider, server, spec, volume};
+//! How Horizon records a stop: an interrupted stop is finished rather than taken
+//! for a released server. Deletion itself is tested in `horizon_cloud::hetzner::cloud`.
+use super::{provider, server, spec};
 use crate::cloud_runtime::{
     Stage,
     deployment::hetzner::{
         Allowed, Compute, Journal, JournalFile as _,
-        lifecycle::{delete_with, reconcile_with, stop_with},
+        lifecycle::{reconcile_with, stop_with},
         retained,
     },
     state::{Deployment, Store},
 };
 use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
-use serde_json::{Value, json};
+use serde_json::json;
 
-fn listing(key: &str, items: &Value) -> String {
-    let mut page = json!({"meta": {"pagination": {"next_page": null}}});
-    page[key] = items.clone();
-    page.to_string()
-}
 fn gone() -> (u16, String) {
     (
         404,
         json!({"error": {"code": "not_found", "message": "not found"}}).to_string(),
     )
-}
-fn key() -> Value {
-    json!({"id": 5, "name": format!("horizon-cloud-{}", spec().operation_id),
-        "public_key": "ssh-ed25519 AAAA", "labels": {"horizon-operation": spec().operation_id}})
-}
-fn free_volume() -> Value {
-    let mut value = serde_json::to_value(volume()).unwrap();
-    value["server"] = Value::Null;
-    value
-}
-
-/// Deletes a cloud whose record is `operation` and `journal`, against `responses`.
-fn delete_from(operation: &CreateState, journal: &Journal, responses: Vec<(u16, String)>) -> (Deployment, bool) {
-    let (state, kept, requests) = act_on(operation, journal, responses, |compute, store, state| {
-        delete_with(compute, store, state, &Cancellation::default()).unwrap();
-    });
-    assert!(requests.iter().any(|request| request.starts_with("DELETE ")));
-    (state, kept)
 }
 
 /// Runs `act` on a cloud whose record is `operation` and `journal`, stopping,
@@ -90,64 +67,6 @@ fn journal(volume: CreateState) -> Journal {
         released: None,
         deleting: false,
     }
-}
-
-#[test]
-fn a_registered_key_alone_is_deleted() {
-    let mut only_key = journal(CreateState::Prepared);
-    only_key.location = None;
-    let (_, kept) = delete_from(
-        &CreateState::Prepared,
-        &only_key,
-        vec![
-            (200, listing("ssh_keys", &json!([key()]))),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (204, String::new()),
-            (200, listing("ssh_keys", &json!([]))),
-        ],
-    );
-    assert!(!kept, "nothing remains, so the cloud can be removed");
-}
-
-#[test]
-fn an_uncertain_volume_is_found_by_label_and_deleted() {
-    let (_, kept) = delete_from(
-        &CreateState::Prepared,
-        &journal(CreateState::Requested),
-        vec![
-            (200, listing("volumes", &json!([free_volume()]))),
-            (200, json!({"volume": free_volume()}).to_string()),
-            (204, String::new()),
-            gone(),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (204, String::new()),
-            (200, listing("ssh_keys", &json!([]))),
-        ],
-    );
-    assert!(!kept);
-}
-
-#[test]
-fn an_uncertain_server_is_found_by_label_and_deleted_with_its_volume() {
-    let server = serde_json::to_value(server("running", Some("192.0.2.10"))).unwrap();
-    let (state, kept) = delete_from(
-        &CreateState::Requested,
-        &journal(CreateState::Bound { worker_id: "9".into() }),
-        vec![
-            (200, listing("servers", &json!([server]))),
-            (200, json!({"server": server}).to_string()),
-            (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
-            gone(),
-            (200, json!({"volume": free_volume()}).to_string()),
-            (204, String::new()),
-            gone(),
-            (200, listing("ssh_keys", &json!([]))),
-            (200, listing("ssh_keys", &json!([]))),
-        ],
-    );
-    assert_eq!(state.operation, CreateState::Terminated { worker_id: "42".into() });
-    assert!(!kept);
 }
 
 #[test]
@@ -217,63 +136,6 @@ fn a_stop_records_the_release_before_it_shuts_the_server_down() {
 }
 
 #[test]
-fn a_volume_request_that_created_nothing_is_settled_after_a_second_look() {
-    let (_, kept) = delete_from(
-        &CreateState::Prepared,
-        &journal(CreateState::Requested),
-        vec![
-            (200, listing("volumes", &json!([]))),
-            (200, listing("volumes", &json!([]))),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (204, String::new()),
-            (200, listing("ssh_keys", &json!([]))),
-        ],
-    );
-    assert!(!kept);
-}
-
-#[test]
-fn a_server_request_that_created_nothing_is_settled_and_its_volume_deleted() {
-    let (state, kept) = delete_from(
-        &CreateState::Requested,
-        &journal(CreateState::Bound { worker_id: "9".into() }),
-        vec![
-            (200, listing("servers", &json!([]))),
-            (200, listing("servers", &json!([]))),
-            (200, json!({"volume": free_volume()}).to_string()),
-            (204, String::new()),
-            gone(),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (200, listing("ssh_keys", &json!([key()]))),
-            (204, String::new()),
-            (200, listing("ssh_keys", &json!([]))),
-        ],
-    );
-    assert_eq!(state.operation, CreateState::Prepared);
-    assert!(!kept);
-}
-
-#[test]
-fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
-    let off = (200, json!({"server": server("off", None)}).to_string());
-    let held = (200, json!({"volume": volume()}).to_string());
-    let bound = CreateState::Bound { worker_id: "42".into() };
-    let journal = journal(CreateState::Bound { worker_id: "9".into() });
-    act_on(&bound, &journal, vec![off, held], |compute, store, state| {
-        let refused = reconcile_with(
-            compute,
-            &|| Ok(compute.allowed.clone()),
-            store,
-            state,
-            &Cancellation::default(),
-        )
-        .unwrap_err();
-        assert!(refused.to_string().contains("still billed"));
-    });
-}
-
-#[test]
 fn a_stop_interrupted_after_its_delete_is_finished_by_check_without_a_recorded_worker() {
     let bound = CreateState::Bound { worker_id: "42".into() };
     let mut released = journal(CreateState::Bound { worker_id: "9".into() });
@@ -282,7 +144,7 @@ fn a_stop_interrupted_after_its_delete_is_finished_by_check_without_a_recorded_w
         assert!(state.worker.is_none());
         // Ownership alone settles a released server: the placement is never consulted.
         let moved = || {
-            Err(crate::cloud_runtime::Error::Invalid(
+            Err(horizon_cloud::CloudError::Invalid(
                 "The cloud's location is no longer allowed",
             ))
         };

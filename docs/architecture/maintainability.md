@@ -520,11 +520,14 @@ rules, the host plan, the pull-login check, the worker view of a server and the
 checks that a server and its volume hold each other where the policy allows.
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
-caller's `Records` before the provider request that record guards. Provider code
-lives here so it can be reused outside Horizon; the lifecycle follows. In
-`horizon-core`, `deployment::hetzner` keeps the Horizon glue: a preflight before
-any record, the settings and pull login, the `hetzner.json` file and the
-deployment record behind `Records`, and bounded readiness over SSH. `deploy` dispatches to it by the profile's provider, and so do check,
+caller's `Records` before the provider request that record guards.
+`hetzner::cloud::{check, stop, resumable, delete}` are the lifecycle: stopping
+releases the server and keeps the volume, and every step is recorded through
+`Records` and `StopRecords` first. Provider code lives here so it can be reused
+outside Horizon. In `horizon-core`, `deployment::hetzner` keeps the Horizon glue:
+a preflight before any record, the settings and pull login, the `hetzner.json`
+file and the deployment record (server fence and stop stage) behind the records
+traits, and bounded readiness over SSH. `deploy` dispatches to it by the profile's provider, and so do check,
 stop, resume and delete through `deployment::hetzner::lifecycle`, where stopping
 deletes the server and keeps the volume; RunPod code is unchanged.
 The crate must not depend on core/UI, terminal, browser, device, Git, settings storage or a provider CLI.

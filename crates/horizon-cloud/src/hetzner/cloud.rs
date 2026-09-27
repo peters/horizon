@@ -11,10 +11,12 @@ use crate::{CloudError, CreateState, Worker, WorkerSpec, WorkerStatus, host};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod lifecycle;
 mod provision;
 #[cfg(test)]
 mod tests;
 
+pub use lifecycle::{Check, Cloud, Stop, StopRecords, UNRESOLVED_GRACE, check, delete, released, resumable, stop};
 pub use provision::{Records, Request, provision};
 
 /// The Hetzner app image with Docker preinstalled that the host plan expects.

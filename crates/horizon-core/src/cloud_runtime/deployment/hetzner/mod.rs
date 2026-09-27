@@ -105,6 +105,19 @@ impl Compute {
         })
     }
 
+    /// The cloud named by `operation_id`, for a lifecycle action.
+    pub(super) fn cloud<'a>(
+        &'a self,
+        operation_id: &'a str,
+        cancel: &'a horizon_cloud::Cancellation,
+    ) -> horizon_cloud::hetzner::cloud::Cloud<'a> {
+        horizon_cloud::hetzner::cloud::Cloud {
+            client: &self.client,
+            operation_id,
+            cancel,
+        }
+    }
+
     /// For stopping and deleting, which place nothing: resources are checked by
     /// ownership alone, so a changed placement policy never blocks their cleanup.
     pub(super) fn cleanup(settings: &Settings) -> Result<Self> {
