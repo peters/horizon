@@ -99,6 +99,8 @@ fn a_running_server_is_described_as_a_verified_worker() {
     assert!(running.verify_resources(&larger).is_err());
     let off = worker(&server("off", None), &spec, &volume()).unwrap();
     assert_eq!(off.status(), horizon_cloud::WorkerStatus::Stopped);
+    let unknown = worker(&server("unknown", None), &spec, &volume()).unwrap();
+    assert_eq!(unknown.status(), horizon_cloud::WorkerStatus::Lost);
     assert!(off.ssh_address().is_none());
 }
 

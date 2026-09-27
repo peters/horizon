@@ -206,12 +206,17 @@ impl Journal {
 /// data pins; the server's identity was checked through its name and label.
 pub(super) fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Worker> {
     let address = server.ssh_address();
-    let stopped = server.status() == horizon_cloud::WorkerStatus::Stopped;
+    // Transitional states read as starting; an unknown one stays lost.
+    let desired = match server.status() {
+        horizon_cloud::WorkerStatus::Stopped => "EXITED",
+        horizon_cloud::WorkerStatus::Lost => "UNKNOWN",
+        _ => "RUNNING",
+    };
     serde_json::from_value(serde_json::json!({
         "id": server.id.to_string(),
         "name": server.name,
         "imageName": spec.image_digest,
-        "desiredStatus": if stopped { "EXITED" } else { "RUNNING" },
+        "desiredStatus": desired,
         "publicIp": address.map_or_else(String::new, |address| address.ip().to_string()),
         "portMappings": address.map(|address| serde_json::json!({"22": address.port()})),
         "vcpuCount": server.server_type.cores,
