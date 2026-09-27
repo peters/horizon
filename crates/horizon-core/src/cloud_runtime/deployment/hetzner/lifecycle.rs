@@ -80,7 +80,15 @@ pub(super) fn reconcile_with(
         // is proven gone the stop is unfinished and is not reported as stopped;
         // stopping again finishes it.
         if compute.client.inspect_server(id, cancel)?.is_none() {
-            report.worker = state.worker.as_ref().map(released).transpose()?;
+            // The release is proven, so the stop is finished even if it was
+            // interrupted before saving so, and whether or not a worker was recorded.
+            state.worker = state.worker.as_ref().map(released).transpose()?;
+            if !(state.stop_requested && state.stage == Stage::Stopped) {
+                state.stop_requested = true;
+                state.stage = Stage::Stopped;
+                store.save(state)?;
+            }
+            report.worker.clone_from(&state.worker);
         } else if !(state.stop_requested && state.stage == Stage::Stopping) {
             // A stop that recorded only its release restores its stop intent, so
             // nothing reconnects to the server before stopping again finishes it.

@@ -258,3 +258,19 @@ fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
         assert!(refused.to_string().contains("still billed"));
     });
 }
+
+#[test]
+fn a_stop_interrupted_after_its_delete_is_finished_by_check_without_a_recorded_worker() {
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let mut released = journal(CreateState::Bound { worker_id: "9".into() });
+    released.released = Some("42".into());
+    let (state, kept, _) = act_on(&bound, &released, vec![gone()], |compute, store, state| {
+        assert!(state.worker.is_none());
+        reconcile_with(compute, store, state, &Cancellation::default()).unwrap();
+    });
+    assert!(
+        state.stop_requested && state.stage == Stage::Stopped,
+        "resume is now possible"
+    );
+    assert!(kept, "the workspace volume stays");
+}
