@@ -392,9 +392,22 @@ fn prepare_startup(session_store: &SessionStore, config: &Config, cli_args: &Cli
     }
 }
 
+/// The log filter from `RUST_LOG`, or Horizon's default. Raw HTTP from the provider
+/// clients is never logged: at trace level `ureq_proto` dumps request bytes, and with
+/// them the API tokens and registry logins in their headers. The directive replaces
+/// any `RUST_LOG` has for that target, so no setting turns it back on.
+fn log_filter(configured: Option<&str>) -> tracing_subscriber::EnvFilter {
+    let filter = configured
+        .and_then(|directives| tracing_subscriber::EnvFilter::try_new(directives).ok())
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"));
+    match "ureq_proto=off".parse() {
+        Ok(silenced) => filter.add_directive(silenced),
+        Err(_) => filter,
+    }
+}
+
 fn init_tracing() {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"));
+    let env_filter = log_filter(std::env::var("RUST_LOG").ok().as_deref());
 
     // Stdout is an MCP protocol channel in `--browser-mcp` mode. Keep every
     // tracing event on stderr so a coordination warning can never corrupt a
@@ -478,6 +491,35 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         blank,
         remote_profile,
     })
+}
+
+#[cfg(test)]
+mod log_filter_tests {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    /// Whether `target` records at trace level under the filter built from `configured`.
+    fn traces(configured: Option<&str>, target: &str) -> bool {
+        let subscriber = tracing_subscriber::registry().with(super::log_filter(configured));
+        tracing::subscriber::with_default(subscriber, || match target {
+            "ureq_proto::util" => tracing::enabled!(target: "ureq_proto::util", tracing::Level::TRACE),
+            _ => tracing::enabled!(target: "horizon_core", tracing::Level::TRACE),
+        })
+    }
+
+    #[test]
+    fn raw_http_is_never_logged_whatever_rust_log_says() {
+        for configured in [
+            None,
+            Some("trace"),
+            Some("ureq_proto=trace"),
+            Some("trace,ureq_proto=trace"),
+            Some("not a filter ["),
+        ] {
+            assert!(!traces(configured, "ureq_proto::util"), "{configured:?}");
+        }
+        assert!(traces(Some("trace"), "horizon_core"), "other targets keep their level");
+        assert!(!traces(None, "horizon_core"), "the default stays at info");
+    }
 }
 
 #[cfg(test)]
