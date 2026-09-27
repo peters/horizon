@@ -74,9 +74,20 @@ pub struct Description {
     pub creatable: bool,
     /// The workspace volume sizes a CPU cloud can have there, in GB, inclusive.
     pub cpu_volume_gb: (u32, u32),
-    /// Whether a worker there can stop its own billing, so a profile may set
-    /// `idle_stop_minutes`. A Hetzner worker holds no credential that could.
-    pub idle_stop: bool,
+    /// Who stops a worker there after `idle_stop_minutes` without activity.
+    pub idle_stop: IdleStop,
+}
+
+/// Who stops an idle worker on a provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleStop {
+    /// Nobody: a profile there may not set `idle_stop_minutes`.
+    Unsupported,
+    /// The worker itself, with a credential the provider gives it for its own billing.
+    Worker,
+    /// Horizon, from the idle record the worker keeps, and only while Horizon runs:
+    /// the provider gives the worker no credential that could stop it.
+    Horizon,
 }
 
 pub const RUNPOD: Description = Description {
@@ -90,7 +101,7 @@ pub const RUNPOD: Description = Description {
     stopped: StoppedCost::WorkerKept,
     choices: &[Choice::GpuType, Choice::Region],
     creatable: true,
-    idle_stop: true,
+    idle_stop: IdleStop::Worker,
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
         *crate::runpod::volumes::REQUEST_SIZE_GB.end(),
@@ -108,7 +119,8 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
-    idle_stop: false,
+    // Horizon cannot stop an idle Hetzner cloud yet.
+    idle_stop: IdleStop::Unsupported,
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),
         *crate::hetzner::volumes::SIZE_GB.end(),
@@ -144,7 +156,7 @@ impl Description {
         let volume = u32::from(profile.storage.volume_gb);
         candidate.validate(false).is_ok()
             && (profile.gpu || (smallest..=largest).contains(&volume))
-            && (self.idle_stop || profile.idle_stop_minutes.is_none())
+            && (self.idle_stop != IdleStop::Unsupported || profile.idle_stop_minutes.is_none())
     }
 
     /// The providers among `configured` a cloud of `profile` can choose from, in the

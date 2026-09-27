@@ -7,6 +7,8 @@ use super::{
 use horizon_cloud::{WorkerStatus, runpod::RunPod};
 use std::path::Path;
 
+pub use super::deployment::hetzner::idle::IdleCheck;
+
 #[derive(Debug)]
 pub struct ReconciledDeployment {
     pub state: Deployment,
@@ -225,6 +227,14 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
     state.stage = Stage::Stopped;
     store.save(&state)?;
     Ok(state)
+}
+
+/// # Errors
+/// Reads a Hetzner cloud's idle record and stops the cloud, as Stop does, once it
+/// has been idle for its whole period. `RunPod` workers stop themselves, so any
+/// other cloud reports `NotWatched`.
+pub fn idle_check(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<IdleCheck> {
+    super::deployment::hetzner::idle::check(root, settings, cancel)
 }
 
 /// # Errors
