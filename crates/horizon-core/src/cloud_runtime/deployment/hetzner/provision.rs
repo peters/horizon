@@ -58,9 +58,12 @@ pub(in crate::cloud_runtime::deployment) fn provision(
 /// fails is kept, so the caller reports its cause rather than the provider
 /// layer's generic persistence error.
 pub(super) struct Saved<'a> {
-    store: &'a Store,
+    pub(super) store: &'a Store,
     pub(super) state: &'a mut Deployment,
     failed: Option<Error>,
+    /// Whether a stop's stage is saved again even when it is already recorded, as
+    /// a stop does before each provider request; a check saves only a change.
+    pub(super) resave: bool,
 }
 
 impl<'a> Saved<'a> {
@@ -69,6 +72,7 @@ impl<'a> Saved<'a> {
             store,
             state,
             failed: None,
+            resave: false,
         }
     }
 

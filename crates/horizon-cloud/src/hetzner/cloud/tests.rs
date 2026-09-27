@@ -1,5 +1,6 @@
 use super::*;
 
+mod lifecycle;
 mod sequence;
 use crate::hetzner::{catalog::Offer, servers::Server, volumes::Volume};
 
