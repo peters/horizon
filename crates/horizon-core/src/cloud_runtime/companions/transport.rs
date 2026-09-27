@@ -89,6 +89,31 @@ impl<'a> Live<'a> {
         Ok(Published::Sent)
     }
 
+    /// Sends Hetzner's catalog to the ready worker of `cloud`, beside its price list.
+    /// Worker images without Hetzner support refuse the command; their price list is
+    /// unaffected.
+    pub(in crate::cloud_runtime) fn send_hetzner_offers(
+        &mut self,
+        cloud: &str,
+        snapshot: &horizon_cloud_protocol::offers::HetznerSnapshot,
+    ) -> Result<super::super::offer_publication::Published> {
+        use super::super::offer_publication::Published;
+        snapshot.validate().map_err(Error::Invalid)?;
+        if serde_json::to_vec(snapshot).map_or(true, |bytes| bytes.len() > horizon_cloud_protocol::offers::MAX_BYTES) {
+            return Err(Error::Invalid("Hetzner offer prices are too large for a worker"));
+        }
+        if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
+            return Ok(Published::NotReady);
+        }
+        self.exchange(
+            cloud,
+            "horizon-cloud-worker cloud-offers publish-hetzner",
+            snapshot,
+            Duration::from_secs(45),
+        )?;
+        Ok(Published::Sent)
+    }
+
     fn exchange(
         &mut self,
         cloud: &str,
@@ -244,5 +269,36 @@ mod tests {
         oversized.preferences.gpu_types = vec!["x".repeat(8 * 1024); 64];
         assert!(oversized.validate().is_ok());
         assert!(live.send_offers("cloud", &oversized).is_err());
+    }
+
+    #[test]
+    fn hetzner_prices_wait_for_a_ready_worker_and_refuse_bad_snapshots() {
+        use crate::cloud_runtime::offer_publication::{HetznerSnapshot, Published, VERSION};
+        let root = tempfile::tempdir().unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/absent", "ssh_identity_file":"/absent", "docker_config":"/absent", "cpu_flavors":[], "gpu_types":[]
+        })).unwrap();
+        let cancel = Cancellation::default();
+        let snapshot = HetznerSnapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            catalog: horizon_cloud::hetzner::catalog::Catalog {
+                offers: Vec::new(),
+                volume_gb_month_eur: 0.0572,
+                ipv4_month_eur: BTreeMap::new(),
+                ipv4_hour_eur: BTreeMap::new(),
+                regions: BTreeMap::new(),
+            },
+        };
+        let mut live = Live::new(root.path(), &settings, &cancel);
+        assert_eq!(
+            live.send_hetzner_offers("cloud", &snapshot).unwrap(),
+            Published::NotReady
+        );
+        let unsupported = HetznerSnapshot {
+            version: VERSION + 1,
+            ..snapshot
+        };
+        assert!(live.send_hetzner_offers("cloud", &unsupported).is_err());
     }
 }

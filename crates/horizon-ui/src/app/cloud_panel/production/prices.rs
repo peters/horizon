@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) mod hetzner;
+
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_mins(15);
 /// How long agents' requests get the same failed price fetch before one asks again.
@@ -40,6 +42,8 @@ pub(super) struct State {
     /// Every data center's region as people say it, kept from the latest list so cards
     /// can name where a worker landed without work on every frame.
     regions: HashMap<String, String>,
+    /// Hetzner's catalog, fetched beside the list when this machine has a binding.
+    pub hetzner: hetzner::State,
 }
 
 impl State {
@@ -94,6 +98,7 @@ impl State {
         if self.list.as_ref().is_none_or(|list| stale(list.at)) {
             self.fetch_list(root, ctx);
         }
+        self.hetzner.request(root, ctx);
     }
 
     /// The failed price fetch agents' requests report, the same one for every request
@@ -155,6 +160,7 @@ impl State {
 
     /// Collects finished fetches.
     pub fn poll(&mut self) {
+        self.hetzner.poll();
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
@@ -194,6 +200,7 @@ impl State {
         self.list_job = None;
         self.sizes.clear();
         self.size_jobs.clear();
+        self.hetzner.refresh();
     }
 
     pub fn loading(&self) -> bool {
