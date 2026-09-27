@@ -11,6 +11,11 @@ use super::PresetPickerAction;
 use super::support::{preset_picker_heading, render_grouped_preset_rows};
 
 impl HorizonApp {
+    pub(in crate::app) fn preset_picker_rect(&self, ctx: &Context) -> Option<Rect> {
+        self.pending_preset_pick?;
+        ctx.memory(|memory| memory.area_rect(Id::new("canvas_preset_picker")))
+    }
+
     pub(in crate::app) fn render_dir_picker(&mut self, ctx: &Context) {
         let Some(picker) = self.dir_picker.as_mut() else {
             return;
@@ -147,6 +152,25 @@ impl HorizonApp {
         target_workspace: Option<WorkspaceId>,
         canvas_pos: [f32; 2],
     ) -> (Rect, Option<PresetPickerAction>) {
+        #[cfg(feature = "cloud-workspaces")]
+        let cloud = target_workspace
+            .and_then(|workspace| {
+                self.cloud_prototype
+                    .groups
+                    .at_position(&self.board, workspace, canvas_pos)
+            })
+            .map(|index| &self.cloud_prototype.groups.0[index]);
+        let unavailable_reason = |kind| {
+            #[cfg(feature = "cloud-workspaces")]
+            {
+                cloud.and_then(|group| group.unavailable_panel_reason(kind))
+            }
+            #[cfg(not(feature = "cloud-workspaces"))]
+            {
+                let _ = kind;
+                None
+            }
+        };
         let mut selected_action = None;
         let area_response = egui::Area::new(popup_id)
             .fixed_pos(screen_pos)
@@ -160,6 +184,7 @@ impl HorizonApp {
                     .inner_margin(Margin::symmetric(8, 6))
                     .show(ui, |ui| {
                         ui.set_min_width(160.0);
+                        ui.set_max_width(320.0);
                         ui.label(
                             egui::RichText::new(preset_picker_heading(target_workspace))
                                 .size(11.0)
@@ -178,9 +203,19 @@ impl HorizonApp {
                             ui.separator();
                         }
 
-                        if let Some(action) =
-                            render_grouped_preset_rows(ui, target_workspace, canvas_pos, &self.presets)
-                        {
+                        let action = egui::ScrollArea::vertical()
+                            .max_height((ctx.content_rect().height() - 120.0).max(100.0))
+                            .show(ui, |ui| {
+                                render_grouped_preset_rows(
+                                    ui,
+                                    target_workspace,
+                                    canvas_pos,
+                                    &self.presets,
+                                    unavailable_reason,
+                                )
+                            })
+                            .inner;
+                        if let Some(action) = action {
                             selected_action = Some(action);
                         }
                     });
@@ -222,5 +257,58 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{app::test_support::test_app, test_egui::DiscardTextures};
+
+    #[test]
+    fn picker_wheel_stays_available_to_the_menu_without_panning_canvas() {
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("Fixture");
+        app.pending_preset_pick = Some((Some(workspace), [400.0, 200.0], std::time::Instant::now()));
+        let ctx = Context::default();
+        for _ in 0..2 {
+            let _ = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    app.show_preset_picker_popup(
+                        ui.ctx(),
+                        Id::new("canvas_preset_picker"),
+                        Pos2::new(400.0, 200.0),
+                        Some(workspace),
+                        [400.0, 200.0],
+                    );
+                })
+                .discard_textures();
+        }
+        let position = app.preset_picker_rect(&ctx).unwrap().center();
+        assert!(app.overlay_exclusion_zones(&ctx).contains(position));
+        let before = app.canvas_view;
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -80.0),
+                            modifiers: egui::Modifiers::NONE,
+                            phase: egui::TouchPhase::Move,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    app.handle_canvas_pan(ui.ctx());
+                    assert!(ui.ctx().input(|input| input.smooth_scroll_delta.y < 0.0));
+                },
+            )
+            .discard_textures();
+        assert_eq!(app.canvas_view, before);
+        app.pending_preset_pick = None;
+        assert!(app.preset_picker_rect(&ctx).is_none());
     }
 }

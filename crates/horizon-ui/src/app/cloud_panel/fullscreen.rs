@@ -154,14 +154,6 @@ impl HorizonApp {
         if exit {
             self.exit_cloud_fullscreen(ui.ctx());
         }
-        if let Some(error) = &self.cloud_prototype.error {
-            egui::Area::new(Id::new("cloud-fullscreen-error"))
-                .order(Order::Tooltip)
-                .fixed_pos(egui::pos2(24.0, 64.0))
-                .show(ui.ctx(), |ui| {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                });
-        }
         true
     }
 }

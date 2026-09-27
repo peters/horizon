@@ -219,6 +219,30 @@ impl HorizonApp {
         self.render_cloud_creation(ctx);
         self.render_cloud_accounts(ctx);
         self.release_workspaces_after_creation(ctx);
+        self.render_cloud_error(ctx);
+    }
+
+    fn render_cloud_error(&mut self, ctx: &egui::Context) {
+        if self.cloud_prototype.creation_open() {
+            return;
+        }
+        let Some(error) = &self.cloud_prototype.error else {
+            return;
+        };
+        let mut dismissed = false;
+        egui::Area::new(Id::new("cloud-error"))
+            .order(Order::Tooltip)
+            .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width((ctx.content_rect().width() - 48.0).clamp(120.0, 560.0));
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                    dismissed = ui.button("Dismiss").clicked();
+                });
+            });
+        if dismissed {
+            self.cloud_prototype.error = None;
+        }
     }
 }
 
@@ -424,6 +448,59 @@ mod tests {
     use super::*;
     use crate::app::test_support::test_app;
     use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn cloud_error_is_visible_without_fullscreen_and_can_be_dismissed() {
+        use egui::{Event, PointerButton};
+        let (_temp, mut app) = test_app();
+        app.cloud_prototype.error = Some("Agent is disabled by this cloud profile".into());
+        assert!(app.cloud_prototype.fullscreen.is_none());
+        let ctx = egui::Context::default();
+        let mut frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.render_cloud_error(ui.ctx()),
+            )
+            .discard_textures()
+        };
+        frame(vec![]);
+        let output = frame(vec![]);
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.galley.text().contains("Agent is disabled"))
+        );
+        let dismiss = texts.iter().find(|text| text.galley.text() == "Dismiss").unwrap();
+        let pos = dismiss.pos + dismiss.galley.rect.center().to_vec2();
+        frame(vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        frame(vec![Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        }]);
+        assert!(app.cloud_prototype.error.is_none());
+    }
 
     /// Painted texts with their bounds and clip rectangles, and the width reserved for the cost badge.
     type Header = (Vec<(String, Rect, Rect)>, f32);

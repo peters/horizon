@@ -93,11 +93,12 @@ impl HorizonApp {
                 viewport.min,
                 Pos2::new(viewport.max.x, viewport.min.y + 70.0),
             )];
+            zones.extend(self.preset_picker_rect(ctx));
             zones.extend(self.settings_panel_rect(ctx, viewport));
             zones.extend(self.settings_bar_rect(ctx, viewport));
             return OverlayExclusion::new(zones);
         }
-        let mut zones = Vec::new();
+        let mut zones: Vec<_> = self.preset_picker_rect(ctx).into_iter().collect();
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
         } else {
