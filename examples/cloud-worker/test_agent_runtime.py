@@ -63,6 +63,11 @@ sys.exit(23)
         self.assertEqual(child['args'][0], '--session-id')
         self.assertEqual(len(child['args'][1]), 36)
         self.assertEqual(child['args'][2:], ['--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        again = self.launch()
+        self.assertEqual(again['args'], child['args'])
+        project = self.workspace / 'home/.claude/projects/repo'
+        project.mkdir(parents=True)
+        (project / f"{child['args'][1]}.jsonl").write_text('{}\n')
         resumed = self.launch()
         self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         self.assertEqual(child['env'], {
