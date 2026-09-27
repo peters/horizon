@@ -139,14 +139,15 @@ pub(super) fn stop_with(compute: &Compute, store: &Store, state: &mut Deployment
             .inspect_server(id, cancel)?
             .ok_or(CloudError::WorkerLost)?;
         server.verify(&operation)?;
-        state.stop_requested = true;
-        state.stage = Stage::Stopping;
-        store.save(state)?;
-        // Recorded before the shutdown and the delete, so until the server is
-        // proven gone the cloud reads as an unfinished stop, never as stopped or lost.
+        // Recorded first, before the shutdown and the delete, so until the server
+        // is proven gone the cloud reads as an unfinished stop, never as stopped
+        // or lost, and check reports no worker for it.
         journal.released = Some(worker_id.clone());
         journal.save(store.root())?;
     }
+    state.stop_requested = true;
+    state.stage = Stage::Stopping;
+    store.save(state)?;
     // A retried stop also shuts down a server that still runs before deleting it.
     // Deleting proves the server gone.
     settle_shutdown(compute, &operation, id, cancel)?;
