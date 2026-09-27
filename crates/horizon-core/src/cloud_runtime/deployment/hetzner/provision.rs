@@ -51,7 +51,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     // or bound server is only reconciled, so a rotated pull credential never
     // blocks recovering it. The volume's real device path is only known after it exists.
     let login = if state.operation == CreateState::Prepared {
-        super::pull_login(compute, &spec.profile.image)?
+        super::pull_login(&compute.settings, compute.registries.as_ref(), &spec.profile.image)?
     } else {
         None
     };

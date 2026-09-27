@@ -7,9 +7,8 @@ same location. The New cloud dialog does not offer Hetzner profiles yet; deploy
 them with the deployment coordinator (`cloud_deploy`). Stop, resume, check,
 delete and rebuild are not wired yet and are refused before any provider
 request; delete a test cloud's server, volume and SSH key in the Hetzner console.
-Horizon also checks the cloud ID, `idle_stop_minutes`, the token and the
-locations before it records or builds anything, and the registry pull
-credential before it creates anything.
+Horizon also checks the cloud ID, `idle_stop_minutes`, the token, the locations
+and the registry pull credential before it records or builds anything.
 
 ## How a deployment runs
 

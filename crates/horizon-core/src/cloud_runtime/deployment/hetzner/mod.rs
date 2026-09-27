@@ -51,22 +51,33 @@ fn registry_host(host: &str) -> String {
     }
 }
 
+/// Checks the pull login before the deployment is recorded or its image built,
+/// unless the server is already requested or bound and so only reconciled.
+pub(super) fn admit(settings: &Settings, image: &str, operation: &CreateState) -> Result<()> {
+    if matches!(operation, CreateState::Requested | CreateState::Bound { .. }) {
+        return Ok(());
+    }
+    pull_login(super::sizing::hetzner(settings)?, settings.registries.as_ref(), image).map(drop)
+}
+
 /// The pull login a host needs for `image`, which provisioning loads only while
 /// a server can still be created.
 /// # Errors
 /// Refuses a private image without a login, a login for another registry and
 /// a spelling Docker would look up under a key the host does not write.
-pub(super) fn pull_login(compute: &Compute, image: &str) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
+pub(super) fn pull_login(
+    hetzner: &crate::cloud_runtime::settings::Hetzner,
+    registries: Option<&crate::cloud_runtime::registry::Config>,
+    image: &str,
+) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
     // A private image the machine has a registry binding for needs a pull login
     // on the host; without one the host's pull would fail after allocation.
-    let private = compute
-        .registries
-        .as_ref()
+    let private = registries
         .map(|config| config.select(image))
         .transpose()?
         .flatten()
         .is_some();
-    let login = compute.settings.registry_login()?;
+    let login = hetzner.registry_login()?;
     match &login {
         None if private => {
             return Err(Error::Invalid(

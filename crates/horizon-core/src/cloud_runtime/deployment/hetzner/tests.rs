@@ -79,10 +79,8 @@ fn the_journal_starts_prepared_and_round_trips_durably() {
         br#"{"volume":{"state":"prepared"},"extra":1}"#,
     )
     .unwrap();
-    assert!(
-        Journal::load(root.path()).is_err(),
-        "an unknown field is refused, not dropped"
-    );
+    // An unknown field is refused, not dropped.
+    assert!(Journal::load(root.path()).is_err());
 }
 
 #[test]
@@ -97,10 +95,8 @@ fn a_running_server_is_described_as_a_verified_worker() {
     running.verify_resources(&spec).unwrap();
     let mut larger = spec.clone();
     larger.profile.storage.container_gb = 100;
-    assert!(
-        running.verify_resources(&larger).is_err(),
-        "an 80 GB local disk cannot hold a 100 GB container disk"
-    );
+    // An 80 GB local disk cannot hold a 100 GB container disk.
+    assert!(running.verify_resources(&larger).is_err());
     let off = worker(&server("off", None), &spec, &volume()).unwrap();
     assert_eq!(off.status(), horizon_cloud::WorkerStatus::Stopped);
     assert!(off.ssh_address().is_none());
@@ -126,7 +122,7 @@ fn private_file(path: &std::path::Path, contents: &str) -> std::path::PathBuf {
 
 #[test]
 fn unsupported_requests_fail_the_preflight_before_any_state() {
-    use super::{Compute, preflight, pull_login};
+    use super::{admit, preflight, pull_login};
     let root = tempfile::tempdir().unwrap();
     let token = private_file(&root.path().join("token"), "secret-token");
     let mut settings: crate::cloud_runtime::settings::Settings = serde_json::from_value(serde_json::json!({
@@ -137,16 +133,14 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     .unwrap();
     let mut spec = spec();
     preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
-    assert!(
-        preflight("Cloud_1", &spec.profile, &settings).is_err(),
-        "not a Hetzner resource name"
-    );
+    // Not a Hetzner resource name.
+    assert!(preflight("Cloud_1", &spec.profile, &settings).is_err());
     spec.profile.idle_stop_minutes = Some(30);
     assert!(preflight(&spec.operation_id, &spec.profile, &settings).is_err());
     spec.profile.idle_stop_minutes = None;
     // The pull login is checked where provisioning loads it, before any request.
     let pull = |settings: &crate::cloud_runtime::settings::Settings, image: &str| {
-        pull_login(&Compute::new(settings).unwrap(), image).map(|login| login.is_some())
+        pull_login(settings.hetzner.as_ref().unwrap(), settings.registries.as_ref(), image).map(|login| login.is_some())
     };
     let mut private = settings.clone();
     private.registries = serde_json::from_value(serde_json::json!({"root": root.path(), "bindings": [{
@@ -158,6 +152,9 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
         pull(&private, &spec.profile.image).unwrap_err().to_string(),
         "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner"
     );
+    // Checked before the deployment is recorded, unless its server is only reconciled.
+    assert!(admit(&private, &spec.profile.image, &CreateState::Prepared).is_err());
+    admit(&private, &spec.profile.image, &CreateState::Requested).unwrap();
     let password = private_file(&root.path().join("pull"), "pull-secret");
     let login = |server: &str| crate::cloud_runtime::settings::RegistryPull {
         server: server.into(),
@@ -177,30 +174,22 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     assert!(pull(&settings, &hub.image).unwrap());
     let mut explicit = hub.clone();
     explicit.image = "registry-1.docker.io/team/worker".into();
-    assert!(
-        pull(&settings, &explicit.image).is_err(),
-        "Docker would look this login up under registry-1.docker.io"
-    );
+    // Docker would look this login up under registry-1.docker.io.
+    assert!(pull(&settings, &explicit.image).is_err());
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.hub.docker.com"));
-    assert!(
-        pull(&settings, &hub.image).is_err(),
-        "an alias Docker stores under its own key would leave the pull without credentials"
-    );
+    // An alias Docker stores under its own key would leave the pull without credentials.
+    assert!(pull(&settings, &hub.image).is_err());
     settings.hetzner.as_mut().unwrap().registry_pull = Some(crate::cloud_runtime::settings::RegistryPull {
         server: "example.azurecr.io".into(),
         username: "pull".into(),
         password_file: root.path().join("missing"),
     });
-    assert!(
-        pull(&settings, &spec.profile.image).is_err(),
-        "an unreadable pull credential"
-    );
+    // An unreadable pull credential.
+    assert!(pull(&settings, &spec.profile.image).is_err());
     preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
     settings.hetzner = None;
-    assert!(
-        preflight(&spec.operation_id, &spec.profile, &settings).is_err(),
-        "no Hetzner settings"
-    );
+    // No Hetzner settings.
+    assert!(preflight(&spec.operation_id, &spec.profile, &settings).is_err());
 }
 
 #[test]
@@ -227,10 +216,8 @@ fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() 
     assert!(fit(&offers[..1], &spec, &types, "hel1").is_err());
     let mut small_disk = spec.clone();
     small_disk.profile.storage.container_gb = 100;
-    assert!(
-        fit(&offers, &small_disk, &types, "hel1").is_err(),
-        "an 80 GB local disk cannot hold a 100 GB container disk"
-    );
+    // An 80 GB local disk cannot hold a 100 GB container disk.
+    assert!(fit(&offers, &small_disk, &types, "hel1").is_err());
     assert!(fit(&offers, &spec, &types, "fsn1").is_err());
 }
 
@@ -265,14 +252,10 @@ fn allowing(locations: &[&str], server_types: &[&str]) -> Allowed {
 fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
     let allowed = allowing(&["hel1"], &["cx33"]);
     assert_eq!(location(Some("hel1"), &allowed).unwrap(), "hel1");
-    assert!(
-        location(None, &allowed).is_err(),
-        "an existing volume always has a recorded location"
-    );
-    assert!(
-        location(Some("hel1"), &allowing(&["nbg1"], &["cx33"])).is_err(),
-        "the volume cannot follow a changed allow-list"
-    );
+    // An existing volume always has a recorded location.
+    assert!(location(None, &allowed).is_err());
+    // The volume cannot follow a changed allow-list.
+    assert!(location(Some("hel1"), &allowing(&["nbg1"], &["cx33"])).is_err());
 }
 
 #[test]
@@ -290,10 +273,8 @@ fn without_a_volume_the_first_allowed_location_that_fits_is_chosen() {
     assert_eq!(placements.len(), 1);
     assert!(first_fit(&offers[..3], &spec, &allowing(&["ash"], &["cx33"])).is_err());
     assert!(first_fit(&offers, &spec, &allowing(&[], &["cx33"])).is_err());
-    assert!(
-        first_fit(&offers, &spec, &allowing(&["nbg1"], &["cx23"])).is_err(),
-        "only the current allowed types are considered"
-    );
+    // Only the current allowed types are considered.
+    assert!(first_fit(&offers, &spec, &allowing(&["nbg1"], &["cx23"])).is_err());
 }
 
 #[test]
@@ -310,14 +291,10 @@ fn readiness_admits_only_a_server_the_current_policy_allows_where_its_volume_is(
     let server = server("running", Some("192.0.2.10"));
     let allowed = allowing(&["hel1"], &["cx33"]);
     assert!(admitted(&server, &allowed, Some("hel1")));
-    assert!(
-        !admitted(&server, &allowing(&["hel1"], &["cpx32"]), Some("hel1")),
-        "a resized server type"
-    );
-    assert!(
-        !admitted(&server, &allowing(&["nbg1"], &["cx33"]), Some("hel1")),
-        "a location no longer allowed"
-    );
+    // A resized server type.
+    assert!(!admitted(&server, &allowing(&["hel1"], &["cpx32"]), Some("hel1")));
+    // A location no longer allowed.
+    assert!(!admitted(&server, &allowing(&["nbg1"], &["cx33"]), Some("hel1")));
     assert!(!admitted(&server, &allowed, Some("nbg1")), "not where its volume is");
 }
 
@@ -326,10 +303,8 @@ fn a_malformed_worker_key_is_refused_by_the_spec() {
     let mut spec = spec();
     spec.validate().unwrap();
     spec.public_key = String::new();
-    assert!(
-        spec.validate().is_err(),
-        "an empty key would boot a worker nobody can reach"
-    );
+    // An empty key would boot a worker nobody can reach.
+    assert!(spec.validate().is_err());
 }
 
 #[test]
@@ -643,10 +618,8 @@ mod failure_points {
             CreateState::Bound { worker_id: "42".into() },
             "bound so it can be deleted"
         );
-        assert!(
-            state.worker.is_none(),
-            "an unverified server is never recorded as the worker"
-        );
+        // An unverified server is never recorded as the worker.
+        assert!(state.worker.is_none());
         assert!(kept && matches!(journal.volume, CreateState::Bound { .. }));
     }
 

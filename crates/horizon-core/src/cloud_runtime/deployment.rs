@@ -373,6 +373,9 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             siblings: None,
         }
     };
+    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        hetzner::admit(&request.settings, &request.profile.image, &state.operation)?;
+    }
     store.save(&state)?;
     Ok(state)
 }
