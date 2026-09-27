@@ -539,3 +539,15 @@ fn partial_credential_replacement_cannot_save_the_unchanged_opposite_secret() {
         assert!(draft.validate().is_ok());
     }
 }
+
+#[test]
+fn registry_work_without_a_runpod_key_says_so_and_creates_nothing() {
+    let (root, mut settings) = fixture();
+    settings.runpod_key_file = root.path().join("no-runpod-key");
+    let refused = Prepared::for_image(&settings, &image(), None, false).map(drop);
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        crate::cloud_runtime::settings::RUNPOD_KEY_MISSING
+    );
+    assert!(!root.path().join("registry").exists(), "no registry state is created");
+}

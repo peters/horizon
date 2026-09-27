@@ -259,7 +259,12 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
     let settings = Settings::load(settings)?;
     let cancel = Cancellation::default();
-    let (list, preferences) = cloud_runtime::prices::price_list(&settings, &cancel)?;
+    // A machine set up for Hetzner alone has no RunPod offers, and says why.
+    let runpod = if settings.runpod_configured() {
+        Some(cloud_runtime::prices::price_list(&settings, &cancel)?)
+    } else {
+        None
+    };
     // A Hetzner failure is reported beside RunPod's offers, as agents' answers do.
     let other_providers: Vec<serde_json::Value> = match cloud_runtime::prices::hetzner_catalog(&settings, &cancel) {
         Ok(catalog) => catalog
@@ -268,11 +273,19 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
             .collect(),
         Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
     };
-    let answer = serde_json::json!({
-        "provider": list.provider,
-        "offers": offers(&list, &preferences, &requirements),
-        "other_providers": other_providers,
-    });
+    let answer = match &runpod {
+        Some((list, preferences)) => serde_json::json!({
+            "provider": list.provider,
+            "offers": offers(list, preferences, &requirements),
+            "other_providers": other_providers,
+        }),
+        None => serde_json::json!({
+            "provider": "RunPod",
+            "unavailable": cloud_runtime::settings::RUNPOD_KEY_MISSING,
+            "offers": [],
+            "other_providers": other_providers,
+        }),
+    };
     println!(
         "{}",
         serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?

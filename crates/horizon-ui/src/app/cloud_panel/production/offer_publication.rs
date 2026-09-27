@@ -195,7 +195,7 @@ impl State {
         &mut self,
         root: &Path,
         ready: &[(String, String)],
-        fetched: &Fetched<(PriceList, Preferences)>,
+        fetched: Option<&Fetched<(PriceList, Preferences)>>,
         hetzner: Option<(HetznerSnapshot, Instant)>,
         now: Instant,
         ctx: &egui::Context,
@@ -211,7 +211,10 @@ impl State {
         let bound = hetzner
             .as_ref()
             .is_some_and(|(snapshot, _)| snapshot.catalog != empty_catalog());
-        let (target, snapshot) = if let Some(target) = due(&self.delivered, ready, fetched.at, now).cloned() {
+        let observed = fetched.map(|fetched| fetched.at);
+        let (target, snapshot) = if let Some(fetched) = fetched
+            && let Some(target) = due(&self.delivered, ready, fetched.at, now).cloned()
+        {
             let (list, preferences) = &fetched.value;
             let snapshot = Snapshot {
                 version: VERSION,
@@ -221,14 +224,14 @@ impl State {
             };
             (target, Some(snapshot))
         } else if let Some(at) = hetzner_at
-            && let Some(target) = due_hetzner(&self.delivered, ready, (fetched.at, at, bound), now).cloned()
+            && let Some(target) = due_hetzner(&self.delivered, ready, (observed, at, bound), now).cloned()
         {
             (target, None)
         } else {
             return;
         };
         let (cloud, worker) = target;
-        let observed = snapshot.as_ref().map(|_| fetched.at);
+        let observed = snapshot.as_ref().and(observed);
         let had_catalog = self
             .delivered
             .get(&cloud)
@@ -255,21 +258,23 @@ impl State {
 }
 
 /// The next ready cloud whose worker has the current price list but lacks the Hetzner
-/// catalog observed at `hetzner`, once any failed attempt's retry is due.
+/// catalog observed at `hetzner`, once any failed attempt's retry is due. Without a
+/// `RunPod` list (`observed` is `None`, as on a machine set up for Hetzner alone), the
+/// catalog goes on its own, to workers that have had nothing yet as well.
 fn due_hetzner<'a>(
     delivered: &HashMap<String, Delivery>,
     ready: &'a [(String, String)],
-    (observed, hetzner, bound): (Instant, Instant, bool),
+    (observed, hetzner, bound): (Option<Instant>, Instant, bool),
     now: Instant,
 ) -> Option<&'a (String, String)> {
     ready.iter().find(|(cloud, worker)| {
-        delivered.get(cloud).is_some_and(|delivery| {
-            delivery.worker == *worker
-                && delivery.observed == Some(observed)
-                && delivery.hetzner != Some(hetzner)
-                && (bound || delivery.has_catalog != Some(false))
-                && delivery.hetzner_retry_at.is_none_or(|at| now >= at)
-        })
+        let Some(delivery) = delivered.get(cloud).filter(|delivery| delivery.worker == *worker) else {
+            return observed.is_none() && bound;
+        };
+        observed.is_none_or(|observed| delivery.observed == Some(observed))
+            && delivery.hetzner != Some(hetzner)
+            && (bound || delivery.has_catalog != Some(false))
+            && delivery.hetzner_retry_at.is_none_or(|at| now >= at)
     })
 }
 
@@ -340,14 +345,18 @@ impl HorizonApp {
         }
         let prices = &mut production.prices;
         prices.poll();
+        // A RunPod key added since is found once the failed fetch's pause has passed.
+        prices.recheck_runpod();
         // A failed fetch is asked again once agents' requests stop reporting it.
         if prices.recent_list_error().is_none() {
             prices.request_fresh_list(&root, ctx);
         }
-        let Some(fetched) = prices.fresh_list() else {
+        let fetched = prices.fresh_list();
+        // A machine set up for Hetzner alone publishes its catalog without a RunPod list.
+        if fetched.is_none() && prices.runpod_bound() {
             ctx.request_repaint_after(Duration::from_secs(30));
             return;
-        };
+        }
         // Hetzner's catalog travels with the list, so a running fetch is waited for, but
         // only briefly: a slow Hetzner never holds back the list.
         if prices.hetzner.worth_waiting_for() {
@@ -375,8 +384,10 @@ impl HorizonApp {
             .hetzner
             .fresh()
             .map(|catalog| super::prices::FRESH.saturating_sub(catalog.at.elapsed()));
-        let refresh = super::prices::FRESH
-            .saturating_sub(fetched.at.elapsed())
+        let refresh = fetched
+            .map_or(Duration::MAX, |fetched| {
+                super::prices::FRESH.saturating_sub(fetched.at.elapsed())
+            })
             .min(catalog_refresh.unwrap_or(Duration::MAX));
         // Retries already due are handled by this step; only future ones need a wake.
         let retry = publication
@@ -606,7 +617,7 @@ mod tests {
             state.step(
                 Path::new("/unused"),
                 ready,
-                &fetched,
+                Some(&fetched),
                 Some((snapshot.clone(), at)),
                 now,
                 &ctx,
@@ -661,7 +672,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(1), observed)),
             now,
             &ctx,
@@ -688,12 +699,41 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(1), observed)),
             now,
             &ctx,
         );
         assert!(state.job.is_none());
+    }
+
+    #[test]
+    fn without_a_runpod_list_workers_get_the_hetzner_catalog_alone() {
+        let (mut state, received) = recording(vec![Hetzner::Delivered, Hetzner::Delivered]);
+        let ready = vec![("a".to_owned(), "w1".to_owned())];
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let at = Instant::now();
+        // A worker that has had nothing yet gets the catalog, with no list.
+        state.step(Path::new("/unused"), &ready, None, Some((catalog(1), at)), now, &ctx);
+        let (_, snapshot, sent) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(snapshot.is_none());
+        assert_eq!(sent, Some(catalog(1)));
+        finish(&mut state, now);
+        assert_eq!(state.delivered["a"].hetzner, Some(at));
+        assert_eq!(state.delivered["a"].observed, None);
+        // Once it has it, nothing more goes until a newer catalog.
+        state.step(Path::new("/unused"), &ready, None, Some((catalog(1), at)), now, &ctx);
+        assert!(state.job.is_none());
+        // Nor does an empty catalog go to a worker that never had one.
+        let (mut fresh, _) = recording(vec![Hetzner::Delivered]);
+        let empty = HetznerSnapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            catalog: empty_catalog(),
+        };
+        fresh.step(Path::new("/unused"), &ready, None, Some((empty, at)), now, &ctx);
+        assert!(fresh.job.is_none());
     }
 
     #[test]
@@ -707,7 +747,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(1), first)),
             now,
             &ctx,
@@ -719,7 +759,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(2), second)),
             now,
             &ctx,
@@ -736,7 +776,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(3), third)),
             refused_at,
             &ctx,
@@ -750,7 +790,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(3), third)),
             refused_at,
             &ctx,
@@ -759,7 +799,7 @@ mod tests {
         state.step(
             Path::new("/unused"),
             &ready,
-            &fetched,
+            Some(&fetched),
             Some((catalog(3), third)),
             refused_at + HETZNER_RETRY,
             &ctx,

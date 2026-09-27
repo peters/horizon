@@ -153,7 +153,7 @@ impl State {
     /// A `RunPod` key added in Cloud settings since the fetch found none is found by
     /// asking again after a failed fetch's usual pause; without a key that fetch
     /// reads only the settings.
-    fn recheck_runpod(&mut self) {
+    pub(super) fn recheck_runpod(&mut self) {
         if self.runpod_missing && self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
             self.list_error = None;
             self.list_failed_at = None;

@@ -165,14 +165,30 @@ pub(crate) fn rank_here(requirements: &Requirements) -> Result<serde_json::Value
     rank(requirements, Path::new(SNAPSHOT), manifest::now_millis())
 }
 
+const NO_PRICES_YET: &str =
+    "cloud_offers_unavailable: no prices from the Horizon that owns this cloud yet; they arrive while it runs";
+
 fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json::Value, String> {
     requirements
         .validate()
         .map_err(|error| format!("cloud_offers_invalid_request: {error}"))?;
-    let file = std::fs::File::open(path).map_err(|_| {
-        "cloud_offers_unavailable: no prices from the Horizon that owns this cloud yet; they arrive while it runs"
-            .to_owned()
-    })?;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        // A Horizon set up without a RunPod key sends only its other providers.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let other_providers = other_providers(requirements, &hetzner_path(path), now);
+            if other_providers.is_empty() {
+                return Err(NO_PRICES_YET.to_owned());
+            }
+            return Ok(serde_json::json!({
+                "provider": "RunPod",
+                "unavailable": "The Horizon that owns this cloud sends no RunPod prices",
+                "offers": [],
+                "other_providers": other_providers,
+            }));
+        }
+        Err(_) => return Err(NO_PRICES_YET.to_owned()),
+    };
     let snapshot =
         decode(file).map_err(|_| "cloud_offers_unavailable: the prices on this worker cannot be read".to_owned())?;
     if future(&snapshot, now) {
@@ -182,6 +198,20 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
         .unwrap_or(0)
         .saturating_sub(snapshot.observed_at_millis);
     if age > MAX_AGE_MILLIS {
+        // Current offers from other providers are not held back by stale RunPod
+        // prices, as when the owning Horizon stopped using RunPod.
+        let other_providers = other_providers(requirements, &hetzner_path(path), now);
+        if other_providers.iter().any(|section| section.get("offers").is_some()) {
+            return Ok(serde_json::json!({
+                "provider": snapshot.list.provider,
+                "unavailable": format!(
+                    "The RunPod prices on this worker are {} minutes old; they refresh while the Horizon that owns this cloud runs",
+                    age / 60_000
+                ),
+                "offers": [],
+                "other_providers": other_providers,
+            }));
+        }
         return Err(format!(
             "cloud_offers_stale: the newest prices on this worker are {} minutes old; they refresh while the Horizon that owns this cloud runs",
             age / 60_000
