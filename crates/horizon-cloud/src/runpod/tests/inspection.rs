@@ -206,23 +206,62 @@ fn cluster_pod_attachment_prevents_storage_deletion() {
     let (provider, requests, task) = server(vec![
         (200, volume_body()),
         (200, endpoints(&json!([]))),
+        (
+            200,
+            json!({"pods":[],"pagination":{"hasNextPage":true,"nextCursor":"cluster-page"}}).to_string(),
+        ),
         (200, pods(&json!([attached]))),
     ]);
     let mut state = State::Bound {
         volume: volume(),
         creation: None,
     };
-    assert!(
-        provider
-            .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
-                "must not delete"
-            ))
-            .is_err()
-    );
+    let original = state.clone();
+    assert!(matches!(
+        provider.terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| panic!(
+            "must not delete"
+        )),
+        Err(CloudError::Invalid(
+            "Workspace volume is still attached to a worker; storage was not deleted"
+        ))
+    ));
+    assert_eq!(state, original);
     task.join().unwrap();
     let requests = requests.lock().unwrap();
     assert!(requests[2].starts_with("GET /pods?includeClusterPods=true "));
+    assert!(requests[3].starts_with("GET /pods?includeClusterPods=true&cursor=cluster-page "));
     assert!(requests.iter().all(|r| r.starts_with("GET ")));
+}
+
+#[test]
+fn unrelated_cluster_mounts_do_not_prevent_owned_storage_cleanup() {
+    let mut unrelated = worker(&spec());
+    unrelated["dataCenterId"] = json!("test-region");
+    unrelated["cluster"] = json!({"id":"cluster1","rank":0});
+    unrelated["mounts"] = json!({"network":[{"volumeId":"other-volume","path":"/workspace"}]});
+    let (provider, requests, task) = server(vec![
+        (200, volume_body()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([unrelated.clone()]))),
+        (200, unrelated.to_string()),
+        (204, String::new()),
+        (404, String::new()),
+    ]);
+    let mut state = State::Bound {
+        volume: volume(),
+        creation: None,
+    };
+    provider
+        .terminate_volume(&volume_spec(), &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(state, State::Deleted);
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 6);
+    assert!(requests[2].starts_with("GET /pods?includeClusterPods=true "));
+    assert!(requests[3].starts_with("GET /pods/worker1 "));
+    assert!(requests[4].starts_with("DELETE /network-volumes/owned-volume "));
+    assert!(requests[5].starts_with("GET /network-volumes/owned-volume "));
 }
 
 #[test]

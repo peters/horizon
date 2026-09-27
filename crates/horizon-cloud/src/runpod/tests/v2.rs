@@ -202,7 +202,7 @@ fn all_pod_pages_are_required_even_when_the_first_is_empty() {
         .unwrap();
     assert!(matches!(result.outcome, Outcome::Found { .. }));
     task.join().unwrap();
-    assert!(requests.lock().unwrap()[1].starts_with("GET /pods?includeClusterPods=true&cursor=a%2B%2F%3D "));
+    assert!(requests.lock().unwrap()[1].starts_with("GET /pods?includeClusterPods=false&cursor=a%2B%2F%3D "));
 }
 
 #[test]

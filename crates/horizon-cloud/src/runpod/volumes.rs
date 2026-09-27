@@ -1,5 +1,5 @@
 //! Dedicated workspace storage with a durable fence around every allocation.
-use super::{RunPod, flavors::Flavor, json};
+use super::{RunPod, flavors::Flavor, json, wire};
 use crate::{Cancellation, CloudError, NetworkVolume, Progress, Worker, WorkerSpec, valid_id};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -471,7 +471,11 @@ impl RunPod {
     ) -> Result<bool> {
         progress(Progress::CheckingAttachments);
         self.require_no_serverless_endpoints(cancel)?;
-        let workers = self.list(cancel)?;
+        let workers = self
+            .pages("/pods?includeClusterPods=true", "pods", cancel)?
+            .into_iter()
+            .map(wire::attachment_worker)
+            .collect::<Result<Vec<_>>>()?;
         let count = workers.len();
         for (index, worker) in workers.into_iter().enumerate() {
             if allowed == Some(worker.id.as_str()) {

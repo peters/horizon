@@ -155,6 +155,18 @@ fn resource(value: f64) -> Result<u32, CloudError> {
 }
 
 pub(super) fn worker(value: serde_json::Value) -> Result<Worker, CloudError> {
+    // Exact inspection and unexpected list/create responses must not grant Pod
+    // lifecycle authority over a resource managed only through the Cluster API.
+    if value.get("cluster").is_some() {
+        return Err(CloudError::Invalid(
+            "Cluster member Pods cannot be managed as standalone workers",
+        ));
+    }
+    attachment_worker(value)
+}
+
+/// Includes cluster members for complete storage attachment visibility only.
+pub(super) fn attachment_worker(value: serde_json::Value) -> Result<Worker, CloudError> {
     serde_json::from_value::<Pod>(value)
         .map_err(|_| CloudError::InvalidResponse)?
         .worker()

@@ -170,9 +170,10 @@ impl RunPod {
         Ok(worker)
     }
     /// # Errors
+    /// Lists only standalone lifecycle workers; cluster members cannot use Pod mutations.
     /// Returns transport, authentication or response errors; failures carry at most a sanitized provider reason.
     pub fn list(&self, cancel: &Cancellation) -> Result<Vec<Worker>, CloudError> {
-        self.pages("/pods?includeClusterPods=true", "pods", cancel)?
+        self.pages("/pods?includeClusterPods=false", "pods", cancel)?
             .into_iter()
             .map(wire::worker)
             .collect()

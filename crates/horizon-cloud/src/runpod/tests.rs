@@ -1,4 +1,5 @@
 use super::*;
+mod clusters;
 mod cuda;
 mod fresh;
 mod idle_stop;
