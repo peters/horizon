@@ -15,6 +15,11 @@ pub fn terminate(
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let replacement = state.replacement_worker()?;
+    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid(
+            "Deleting Hetzner clouds is not available yet; delete the server, volume and SSH key in the Hetzner console",
+        ));
+    }
     let provider = RunPod::new(settings.credential()?);
     if state.operation != CreateState::Prepared {
         let runner = Runner {

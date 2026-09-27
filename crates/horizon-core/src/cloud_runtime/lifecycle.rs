@@ -53,6 +53,7 @@ pub fn reconcile(
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
+    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     // Settling commits only a new image and pull credential for the same worker.
     super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
@@ -88,6 +89,17 @@ pub fn reconcile(
     Ok(ReconciledDeployment { state, report })
 }
 
+/// A Hetzner record, once Hetzner clouds can be deployed, has no check, stop,
+/// resume or hosted-device path yet; nothing here may reach `RunPod` for it.
+fn refuse_hetzner(state: &Deployment) -> Result<()> {
+    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
+        return Err(Error::Invalid(
+            "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console",
+        ));
+    }
+    Ok(())
+}
+
 /// A verified worker that stopped itself or was stopped elsewhere becomes an
 /// ordinary stopped cloud, so only an explicit Resume starts it again.
 fn record_stopped(state: &mut Deployment) {
@@ -117,6 +129,7 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
         .spec
         .as_ref()
         .ok_or(Error::Invalid("Missing worker specification"))?;
+    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     let worker = provider
         .inspect(&id, cancel)?
@@ -192,6 +205,7 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
         .spec
         .as_ref()
         .ok_or(Error::Invalid("Missing worker specification"))?;
+    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     let worker = provider
         .inspect(worker_id, cancel)?
@@ -217,6 +231,7 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
     let CreateState::Bound { worker_id } = &state.operation else {
         return Err(Error::Invalid("No bound worker"));
     };
+    refuse_hetzner(&state)?;
     let provider = RunPod::new(settings.credential()?);
     let worker = provider
         .inspect(worker_id, cancel)?
@@ -240,6 +255,76 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
 mod tests {
     use super::*;
     use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
+
+    #[test]
+    fn hetzner_clouds_are_refused_before_any_runpod_request() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = serde_json::json!({"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8});
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"hetzner-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"42"},
+            "spec":{
+                "operation_id":"hetzner-cloud","image_digest":format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+                "profile":profile,"public_key":"unused","registry_auth_id":null,"gpu_types":[],
+                "cpu_flavors":["cx23"],"data_centers":["hel1"]
+            },
+            "worker":null,"sessions":[]
+        }))
+        .unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        store.save(&state).unwrap();
+        drop(store);
+        // A settings file whose RunPod key cannot even be read: any RunPod path would fail differently.
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/missing","ssh_identity_file":"/missing","docker_config":"/missing",
+            "registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        let cancel = Cancellation::default();
+        let refused = "Checking, stopping, resuming and releasing hosted devices for Hetzner clouds is not available yet; use the Hetzner console";
+        assert_eq!(
+            reconcile(root.path(), &settings, None, &cancel)
+                .unwrap_err()
+                .to_string(),
+            refused
+        );
+        assert_eq!(stop(root.path(), &settings, &cancel).unwrap_err().to_string(), refused);
+        assert_eq!(
+            resume(root.path(), &settings, &cancel).unwrap_err().to_string(),
+            refused
+        );
+        assert_eq!(
+            revoke_browserstack(root.path(), &settings, &cancel)
+                .unwrap_err()
+                .to_string(),
+            refused
+        );
+        let error = super::super::deployment::terminate(root.path(), &settings, &cancel, &|_| {}).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("Deleting Hetzner clouds is not available yet")
+        );
+        let request = super::super::deployment::Request::new(
+            state.cloud_id.clone(),
+            state.repository.clone(),
+            state.revision.clone(),
+            state.profile.clone(),
+            root.path().into(),
+            settings.clone(),
+        );
+        let error = super::super::deployment::replacement::rebuild(&request, "cpu", &cancel, &|_| {}).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Rebuilding a Hetzner cloud's image is not available yet"
+        );
+        let store = Store::lock(root.path()).unwrap();
+        assert_eq!(
+            store.load().unwrap().unwrap().stage,
+            Stage::Ready,
+            "nothing was recorded"
+        );
+    }
 
     fn pending(root: &Path, requested: bool) -> Vec<u8> {
         let profile = serde_json::json!({"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8});

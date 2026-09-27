@@ -53,6 +53,21 @@ pub struct Hetzner {
     pub server_types: Vec<String>,
     /// Locations to try, in order, such as `hel1`.
     pub locations: Vec<String>,
+    /// A read-only pull credential for a private worker image. It reaches the
+    /// server's user data, which stays readable to the host for the server's
+    /// life, so use a short-lived token scoped to the image repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_pull: Option<RegistryPull>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryPull {
+    /// The registry host, such as `example.azurecr.io`.
+    pub server: String,
+    pub username: String,
+    /// A private file holding the token or password.
+    pub password_file: PathBuf,
 }
 #[must_use]
 pub fn default_agents() -> Vec<horizon_cloud::Agent> {
@@ -150,6 +165,14 @@ impl Hetzner {
                 "Hetzner settings need server types and locations such as cx43 and hel1",
             ));
         }
+        if self.registry_pull.as_ref().is_some_and(|pull| {
+            !pull.password_file.is_absolute()
+                || !horizon_cloud::host::RegistryLogin::valid_identity(&pull.server, &pull.username)
+        }) {
+            return Err(Error::Invalid(
+                "The Hetzner registry pull needs a registry host such as example.azurecr.io, a username without ':' and an absolute password file",
+            ));
+        }
         Ok(())
     }
 
@@ -174,6 +197,22 @@ impl Hetzner {
             ));
         }
         Ok(chosen)
+    }
+
+    /// The pull login for the worker host, when a private image needs one.
+    /// # Errors
+    /// Requires a private, readable password file.
+    pub fn registry_login(&self) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
+        let Some(pull) = &self.registry_pull else {
+            return Ok(None);
+        };
+        validate_private_key_file(&pull.password_file)?;
+        let password = Credential::new(std::fs::read_to_string(&pull.password_file)?.trim().to_owned())?;
+        Ok(Some(horizon_cloud::host::RegistryLogin {
+            server: pull.server.clone(),
+            username: pull.username.clone(),
+            password,
+        }))
     }
 
     /// # Errors
@@ -340,6 +379,68 @@ mod tests {
             std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
             assert!(hetzner.credential().is_ok());
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hetzner_registry_pull_is_optional_private_and_redacted() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        let mut pulling = serde_json::json!({
+            "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+            "docker_config": absolute("docker"), "registry_pull_auth_id": null,
+            "cpu_flavors": ["cpu3c"], "gpu_types": [],
+            "hetzner": {"token_file": absolute("hetzner-token"), "server_types": ["cx43"], "locations": ["hel1"]},
+        });
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        let hetzner = Settings::load(&path).unwrap().hetzner.unwrap();
+        assert!(
+            hetzner.registry_login().unwrap().is_none(),
+            "public images need no login"
+        );
+        let password = absolute("pull-token");
+        std::fs::write(&password, "pull-secret\n").unwrap();
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+        pulling["hetzner"]["registry_pull"] =
+            serde_json::json!({"server": "example.azurecr.io", "username": "pull", "password_file": password});
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        let login = Settings::load(&path)
+            .unwrap()
+            .hetzner
+            .unwrap()
+            .registry_login()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (login.server.as_str(), login.username.as_str()),
+            ("example.azurecr.io", "pull")
+        );
+        assert!(!format!("{login:?}").contains("pull-secret"));
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            Settings::load(&path)
+                .unwrap()
+                .hetzner
+                .unwrap()
+                .registry_login()
+                .is_err()
+        );
+        for (field, value) in [
+            ("server", "https://example.azurecr.io"),
+            ("server", "Example.azurecr.io"),
+            ("username", "pull:er"),
+            ("username", ""),
+        ] {
+            let mut invalid = pulling.clone();
+            invalid["hetzner"]["registry_pull"][field] = serde_json::json!(value);
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(Settings::load(&path).is_err(), "{field}={value}");
+        }
+        pulling["hetzner"]["registry_pull"]["password_file"] = serde_json::json!("relative");
+        std::fs::write(&path, pulling.to_string()).unwrap();
+        assert!(Settings::load(&path).is_err());
     }
 
     #[test]
