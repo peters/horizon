@@ -1,7 +1,13 @@
-//! Deletion cleans up the record each provisioning failure point leaves.
+//! Deletion cleans up the record each provisioning failure point leaves, and an
+//! interrupted stop is finished rather than taken for a released server.
 use super::{provider, server, spec, volume};
 use crate::cloud_runtime::{
-    deployment::hetzner::{Allowed, Compute, Journal, lifecycle::delete_with, retained},
+    Stage,
+    deployment::hetzner::{
+        Allowed, Compute, Journal,
+        lifecycle::{delete_with, reconcile_with, stop_with},
+        retained,
+    },
     state::{Deployment, Store},
 };
 use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
@@ -30,13 +36,29 @@ fn free_volume() -> Value {
 
 /// Deletes a cloud whose record is `operation` and `journal`, against `responses`.
 fn delete_from(operation: &CreateState, journal: &Journal, responses: Vec<(u16, String)>) -> (Deployment, bool) {
+    let (state, kept, requests) = act_on(operation, journal, responses, |compute, store, state| {
+        delete_with(compute, store, state, &Cancellation::default()).unwrap();
+    });
+    assert!(requests.iter().any(|request| request.starts_with("DELETE ")));
+    (state, kept)
+}
+
+/// Runs `act` on a cloud whose record is `operation` and `journal`, stopping,
+/// against `responses`; returns the saved deployment, whether anything is
+/// retained and the requests served.
+fn act_on(
+    operation: &CreateState,
+    journal: &Journal,
+    responses: Vec<(u16, String)>,
+    act: impl FnOnce(&Compute, &Store, &mut Deployment),
+) -> (Deployment, bool, Vec<String>) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();
     let spec = spec();
     let mut state: Deployment = serde_json::from_value(json!({
         "version": 1, "cloud_id": spec.operation_id, "repository": "/fixture", "revision": "a".repeat(40),
-        "profile": spec.profile, "stage": "Provision", "operation": operation, "spec": spec,
-        "worker": null, "sessions": []
+        "profile": spec.profile, "stage": "Stopping", "operation": operation, "spec": spec,
+        "worker": null, "sessions": [], "stop_requested": true
     }))
     .unwrap();
     store.save(&state).unwrap();
@@ -54,16 +76,10 @@ fn delete_from(operation: &CreateState, journal: &Journal, responses: Vec<(u16, 
         },
         registries: None,
     };
-    delete_with(&compute, &store, &mut state, &Cancellation::default()).unwrap();
+    act(&compute, &store, &mut state);
     task.join().unwrap();
-    assert!(
-        requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|request| request.starts_with("DELETE "))
-    );
-    (store.load().unwrap().unwrap(), retained(root.path()).unwrap())
+    let requests = requests.lock().unwrap().clone();
+    (store.load().unwrap().unwrap(), retained(root.path()).unwrap(), requests)
 }
 
 fn journal(volume: CreateState) -> Journal {
@@ -129,4 +145,34 @@ fn an_uncertain_server_is_found_by_label_and_deleted_with_its_volume() {
     );
     assert_eq!(state.operation, CreateState::Terminated { worker_id: "42".into() });
     assert!(!kept);
+}
+
+#[test]
+fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_is_gone() {
+    let server = serde_json::to_value(server("off", None)).unwrap();
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let mut released = journal(CreateState::Bound { worker_id: "9".into() });
+    released.released = Some("42".into());
+    let still_there = (200, json!({"server": server}).to_string());
+    let (_, _, requests) = act_on(&bound, &released, vec![still_there.clone()], |compute, store, state| {
+        let report = reconcile_with(compute, store, state, &Cancellation::default()).unwrap();
+        assert!(report.worker.is_none(), "no stopped worker while the server exists");
+    });
+    assert_eq!(requests.len(), 1);
+    // Stopping again deletes the server the first stop released.
+    let deleted = vec![
+        still_there,
+        (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
+        gone(),
+    ];
+    let (state, kept, requests) = act_on(&bound, &released, deleted, |compute, store, state| {
+        stop_with(compute, store, state, &Cancellation::default()).unwrap();
+    });
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("DELETE ") && request.contains("/servers/42 "))
+    );
+    assert_eq!((state.stage, state.operation), (Stage::Stopped, bound));
+    assert!(kept, "the workspace volume stays");
 }

@@ -674,6 +674,12 @@ fn resuming_clears_only_a_released_servers_fence() {
     let mut journal = Journal::load(root.path()).unwrap();
     journal.released = Some("42".into());
     journal.save(root.path()).unwrap();
+    state.stage = crate::cloud_runtime::Stage::Stopping;
+    assert!(
+        resume(&store, &mut state).is_err(),
+        "an unfinished stop has not proven the server gone"
+    );
+    state.stage = crate::cloud_runtime::Stage::Stopped;
     resume(&store, &mut state).unwrap();
     let saved = store.load().unwrap().unwrap();
     assert_eq!(

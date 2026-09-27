@@ -25,7 +25,16 @@ pub(in crate::cloud_runtime) fn reconcile(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<Reconciliation> {
-    let compute = Compute::new(settings)?;
+    reconcile_with(&Compute::new(settings)?, store, state, cancel)
+}
+
+/// As `reconcile`, with the Hetzner client given.
+pub(super) fn reconcile_with(
+    compute: &Compute,
+    store: &Store,
+    state: &mut Deployment,
+    cancel: &Cancellation,
+) -> Result<Reconciliation> {
     let journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
     let mut report = Reconciliation {
@@ -65,19 +74,24 @@ pub(in crate::cloud_runtime) fn reconcile(
         }
         CreateState::Bound { worker_id } => worker_id,
     };
+    let id = parse(&bound)?;
     if journal.released.as_deref() == Some(bound.as_str()) {
-        report.worker = state.worker.as_ref().map(released).transpose()?;
+        // A stop records the release before deleting the server. Until the server
+        // is proven gone the stop is unfinished and is not reported as stopped;
+        // stopping again finishes it.
+        if compute.client.inspect_server(id, cancel)?.is_none() {
+            report.worker = state.worker.as_ref().map(released).transpose()?;
+        }
         report.outcome = Outcome::Inactive { worker_id: bound };
         return Ok(report);
     }
-    let id = parse(&bound)?;
     let Some(server) = compute.client.inspect_server(id, cancel)? else {
         report.outcome = Outcome::Missing { worker_id: bound };
         return Ok(report);
     };
     server.verify(&operation)?;
     let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker was requested"))?;
-    let volume = volume(&compute, &journal, &operation, cancel)?;
+    let volume = volume(compute, &journal, &operation, cancel)?;
     // A found server is recorded as the worker only as readiness would accept it.
     if !super::readiness::holds(&server, &volume)
         || !super::readiness::admitted(&server, &compute.allowed, journal.location.as_deref())
@@ -105,10 +119,14 @@ pub(in crate::cloud_runtime) fn stop(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<()> {
+    stop_with(&Compute::new(settings)?, store, state, cancel)
+}
+
+/// As `stop`, with the Hetzner client given.
+pub(super) fn stop_with(compute: &Compute, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
     let CreateState::Bound { worker_id } = state.operation.clone() else {
         return Err(Error::Invalid("Reconcile a bound worker before stopping it"));
     };
-    let compute = Compute::new(settings)?;
     let mut journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
     if journal.released.as_deref() != Some(worker_id.as_str()) {
@@ -122,7 +140,7 @@ pub(in crate::cloud_runtime) fn stop(
         state.stop_requested = true;
         state.stage = Stage::Stopping;
         store.save(state)?;
-        if let Err(error) = settle_shutdown(&compute, &operation, id, cancel) {
+        if let Err(error) = settle_shutdown(compute, &operation, id, cancel) {
             (state.stop_requested, state.stage) = previous;
             store.save(state)?;
             return Err(error);
@@ -131,11 +149,13 @@ pub(in crate::cloud_runtime) fn stop(
         // stop of this server rather than a lost worker.
         journal.released = Some(worker_id.clone());
         journal.save(store.root())?;
-        let mut fence = state.operation.clone();
-        compute
-            .client
-            .delete_server(&operation, &mut fence, cancel, |_| Ok(()), |_| {})?;
     }
+    // Deleting proves the server gone, also when a retried stop finds the release
+    // recorded but its delete unconfirmed.
+    let mut fence = state.operation.clone();
+    compute
+        .client
+        .delete_server(&operation, &mut fence, cancel, |_| Ok(()), |_| {})?;
     state.worker = state.worker.as_ref().map(released).transpose()?;
     state.stop_requested = true;
     state.stage = Stage::Stopped;
@@ -146,8 +166,11 @@ pub(in crate::cloud_runtime) fn stop(
 /// that attaches the same volume, then waits for readiness as a first start does.
 pub(in crate::cloud_runtime) fn resume(store: &Store, state: &mut Deployment) -> Result<()> {
     let mut journal = Journal::load(store.root())?;
+    // Only a finished stop, which proved the released server gone, is resumed.
     let released = match &state.operation {
-        CreateState::Bound { worker_id } => journal.released.as_deref() == Some(worker_id.as_str()),
+        CreateState::Bound { worker_id } => {
+            state.stage == Stage::Stopped && journal.released.as_deref() == Some(worker_id.as_str())
+        }
         _ => false,
     };
     if !released {
@@ -203,23 +226,19 @@ pub(super) fn delete_with(
             _ => return Err(CloudError::DuplicateWorkers.into()),
         }
     }
-    if let CreateState::Bound { worker_id } = state.operation.clone() {
-        if journal.released.as_deref() == Some(worker_id.as_str()) {
-            state.operation = CreateState::Terminated { worker_id };
-            store.save(state)?;
-        } else {
-            let mut fence = state.operation.clone();
-            compute.client.delete_server(
-                &operation,
-                &mut fence,
-                cancel,
-                |next| {
-                    state.operation = next.clone();
-                    store.save(state).map_err(|_| CloudError::Persistence)
-                },
-                |_| {},
-            )?;
-        }
+    // A released server is deleted too: its stop may not have confirmed the delete.
+    if matches!(state.operation, CreateState::Bound { .. }) {
+        let mut fence = state.operation.clone();
+        compute.client.delete_server(
+            &operation,
+            &mut fence,
+            cancel,
+            |next| {
+                state.operation = next.clone();
+                store.save(state).map_err(|_| CloudError::Persistence)
+            },
+            |_| {},
+        )?;
     }
     let mut fence = journal.volume.clone();
     if fence == CreateState::Requested {
