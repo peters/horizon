@@ -424,6 +424,7 @@ fn name_destination(name: &[u8]) -> Option<Destination> {
             !label.is_empty()
                 && label.len() <= 63
                 && !label.starts_with('-')
+                && !label.ends_with('-')
                 && label
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))

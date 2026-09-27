@@ -188,11 +188,14 @@ fn ipv6_and_literal_addresses_in_name_form_are_checked_as_addresses() {
 fn a_refused_destination_is_never_dialled_and_a_closed_port_is_refused_by_the_device() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let closed_port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    // Held until the proxy has its own port, so the proxy cannot be given this one.
+    let reserved = TcpListener::bind("127.0.0.1:0").unwrap();
+    let closed_port = reserved.local_addr().unwrap();
     let (proxy, _) = proxy(FixtureGate {
         allowed: vec![closed_port],
         ..FixtureGate::default()
     });
+    drop(reserved);
     let mut socket = client(&proxy);
     greet(&mut socket);
     socket.write_all(&ipv4_request(closed_port)).unwrap();
@@ -270,7 +273,19 @@ fn names_follow_dns_syntax() {
     // 253 octets, with or without the root dot.
     assert!(name_destination(format!("{}b", "a.".repeat(126)).as_bytes()).is_some());
     assert!(name_destination(format!("{}b.", "a.".repeat(126)).as_bytes()).is_some());
-    for invalid in ["", ".", "a..b", ".a", "-a.b", "a b", "a/b", "a:b", "a\0b"] {
+    for invalid in [
+        "",
+        ".",
+        "a..b",
+        ".a",
+        "-a.b",
+        "a-.b",
+        "camera-.local",
+        "a b",
+        "a/b",
+        "a:b",
+        "a\0b",
+    ] {
         assert_eq!(name_destination(invalid.as_bytes()), None, "{invalid:?}");
     }
     assert_eq!(name_destination(long_label.as_bytes()), None);
