@@ -38,6 +38,11 @@ const MAX_SIBLINGS: usize = 16;
 pub struct Binding {
     pub alias: String,
     pub local_repository: PathBuf,
+    /// The commit the checkout was reviewed at, when one was. Resolution then pins exactly
+    /// this commit and refuses a checkout whose `HEAD` moved away from it. Omitted when
+    /// none, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 /// One sibling pinned for a deployment.
@@ -146,6 +151,8 @@ pub enum SiblingError {
     Late,
     #[error("Sibling `{0}` checkout is no longer where it was pinned from; restore it there or create a new cloud")]
     Moved(String),
+    #[error("Sibling `{0}` checkout moved to another commit after it was checked; check it again")]
+    Advanced(String),
     #[error(
         "The latest commit changes this cloud's same-worker siblings or their repositories; create a new cloud to use them"
     )]
@@ -231,6 +238,7 @@ pub fn latest(
             Ok(Binding {
                 alias: sibling.alias.clone(),
                 local_repository: sibling.checkout()?.to_path_buf(),
+                revision: None,
             })
         })
         .collect::<Result<_>>()?;
@@ -320,7 +328,12 @@ impl Set {
             return Ok(false);
         }
         for (sibling, binding) in self.members.iter().zip(bindings) {
-            if sibling.alias != binding.alias {
+            if sibling.alias != binding.alias
+                || binding
+                    .revision
+                    .as_ref()
+                    .is_some_and(|expected| *expected != sibling.revision)
+            {
                 return Ok(false);
             }
             let checkout = top_level(&binding.local_repository, runner)
@@ -403,6 +416,9 @@ pub fn resolve(
         }
         let revision = repository::resolve_with_runner(&checkout, "HEAD", runner)
             .map_err(|error| refused(error, SiblingError::NoCommit(alias.clone())))?;
+        if binding.revision.as_ref().is_some_and(|expected| *expected != revision) {
+            return Err(SiblingError::Advanced(alias.clone()).into());
+        }
         recipe(alias, &checkout, &revision, &declaration.profile, primary_build, runner)?;
         members.push(Sibling {
             alias: alias.clone(),

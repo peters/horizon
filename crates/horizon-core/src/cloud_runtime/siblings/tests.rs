@@ -71,6 +71,7 @@ impl Fixture {
             .map(|(alias, path)| Binding {
                 alias: (*alias).into(),
                 local_repository: self.path(path),
+                revision: None,
             })
             .collect();
         resolve(
@@ -435,6 +436,7 @@ fn an_origin_with_a_credential_is_refused_without_being_emitted() {
         &[Binding {
             alias: "native".into(),
             local_repository: fixture.path("native-lib"),
+            revision: None,
         }],
         &runner,
     );
@@ -467,6 +469,7 @@ fn a_deployment_keeps_the_siblings_chosen_before_its_image_was_built() {
     let chosen = [Binding {
         alias: "native".into(),
         local_repository: fixture.path("native-lib"),
+        revision: None,
     }];
     assert!(!bind(&[], &mut state, &runner).unwrap());
     assert!(state.siblings.is_none());
@@ -484,6 +487,7 @@ fn a_deployment_keeps_the_siblings_chosen_before_its_image_was_built() {
     let inside = [Binding {
         alias: "native".into(),
         local_repository: fixture.path("native-lib/.horizon"),
+        revision: None,
     }];
     assert!(
         !bind(&inside, &mut state, &runner).unwrap(),
@@ -494,6 +498,7 @@ fn a_deployment_keeps_the_siblings_chosen_before_its_image_was_built() {
     let moved = [Binding {
         alias: "native".into(),
         local_repository: app.clone(),
+        revision: None,
     }];
     assert!(matches!(
         bind(&moved, &mut state, &runner),
@@ -676,4 +681,81 @@ fn a_recorded_set_holds_commit_ids_and_names_only_moved_recipes() {
         set.members[0].image_revision = Some(image_revision);
         assert!(!set.fits());
     }
+}
+
+#[test]
+fn an_expected_revision_pins_exactly_the_reviewed_commit() {
+    let fixture = Fixture::new();
+    let app = fixture.path("app");
+    std::fs::write(
+        app.join(".horizon/cloud.yml"),
+        format!("{PROFILES}companions:\n{NATIVE}"),
+    )
+    .unwrap();
+    git(&app, &["commit", "--quiet", "-am", "Declare siblings"]);
+    let config = primary_config(NATIVE);
+    let profile = &config.profiles["dev"];
+    let checkout = fixture.path("native-lib");
+    let reviewed = git(&checkout, &["rev-parse", "HEAD"]);
+    let expecting = |revision: &str| {
+        [Binding {
+            alias: "native".into(),
+            local_repository: checkout.clone(),
+            revision: Some(revision.to_owned()),
+        }]
+    };
+    let runner = fixture.runner();
+    let set = resolve(&app, &config, profile, &expecting(&reviewed), &runner)
+        .unwrap()
+        .unwrap();
+    assert_eq!(set.members[0].revision, reviewed);
+    let refusal = resolve(&app, &config, profile, &expecting(&"f".repeat(40)), &runner);
+    assert!(
+        matches!(refusal, Err(Error::Sibling(SiblingError::Advanced(ref alias))) if alias == "native"),
+        "{refusal:?}"
+    );
+
+    // A retry after a failure before the set was recorded checks the checkout again.
+    git(&checkout, &["commit", "--quiet", "--allow-empty", "-m", "Move on"]);
+    let mut state: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"siblings","repository":app,"revision":git(&app, &["rev-parse", "HEAD"]),
+        "profile":profile,"stage":"Validate","operation":{"state":"prepared"},"spec":null,"worker":null,"sessions":[]
+    }))
+    .unwrap();
+    assert!(matches!(
+        bind(&expecting(&reviewed), &mut state, &runner),
+        Err(Error::Sibling(SiblingError::Advanced(_)))
+    ));
+    assert!(state.siblings.is_none(), "a refused choice records nothing");
+
+    // Once recorded, a retry expecting the pinned commit keeps it; another commit is refused.
+    let moved_to = git(&checkout, &["rev-parse", "HEAD"]);
+    assert!(bind(&expecting(&moved_to), &mut state, &runner).unwrap());
+    assert!(!bind(&expecting(&moved_to), &mut state, &runner).unwrap());
+    assert!(matches!(
+        bind(&expecting(&reviewed), &mut state, &runner),
+        Err(Error::Sibling(SiblingError::Rebound))
+    ));
+    assert_eq!(state.siblings.as_ref().unwrap().members[0].revision, moved_to);
+}
+
+#[test]
+fn a_binding_without_an_expected_revision_keeps_its_encoding() {
+    let binding = Binding {
+        alias: "native".into(),
+        local_repository: "/synthetic/native-lib".into(),
+        revision: None,
+    };
+    let encoded = serde_json::to_value(&binding).unwrap();
+    assert!(encoded.get("revision").is_none());
+    let legacy: Binding =
+        serde_json::from_value(serde_json::json!({"alias":"native","local_repository":"/synthetic/native-lib"}))
+            .unwrap();
+    assert_eq!(legacy, binding);
+    let expected = Binding {
+        revision: Some("a".repeat(40)),
+        ..binding
+    };
+    let round_trip: Binding = serde_json::from_value(serde_json::to_value(&expected).unwrap()).unwrap();
+    assert_eq!(round_trip, expected);
 }
