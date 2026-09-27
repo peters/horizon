@@ -218,21 +218,31 @@ pub(super) struct LocationOffer {
     pub stopped_month: f64,
     /// Hetzner's advisory flag; an unlisted type can still be created.
     pub listed: bool,
-    /// Further configured types that fit, tried in order when the first is sold out.
-    pub fallbacks: Vec<String>,
+    /// Further configured types that fit, tried in order when the first is sold out,
+    /// each with its own price per hour.
+    pub fallbacks: Vec<(String, f64)>,
 }
 
-/// Offers per location for `profile`, in the catalog's location order, from the server
-/// types this machine's settings try. Empty without a catalog.
+/// Offers per location for `profile`, from the server types this machine's settings
+/// try, in the order deployment tries the allowed locations, so the first is the one a
+/// cloud placed in any allowed location gets. Without a location allow-list, in the
+/// catalog's order. Empty without a catalog.
 pub(super) fn location_offers(prices: &State, profile: &Profile) -> Vec<LocationOffer> {
     let hetzner = &prices.hetzner;
     let Some(catalog) = hetzner.fresh().and_then(|fetched| fetched.value.as_ref()) else {
         return Vec::new();
     };
     let stopped_month = catalog.volume_gb_month_eur * f64::from(profile.storage.volume_gb);
-    let mut locations: Vec<&str> = catalog.offers.iter().map(|offer| offer.location.as_str()).collect();
-    locations.sort_unstable();
-    locations.dedup();
+    let mut locations: Vec<&str> = if hetzner.locations().is_empty() {
+        catalog.offers.iter().map(|offer| offer.location.as_str()).collect()
+    } else {
+        hetzner.locations().iter().map(String::as_str).collect()
+    };
+    if hetzner.locations().is_empty() {
+        locations.sort_unstable();
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    locations.retain(|location| seen.insert(*location));
     locations
         .into_iter()
         .filter_map(|location| {
@@ -259,7 +269,9 @@ pub(super) fn location_offers(prices: &State, profile: &Profile) -> Vec<Location
                 running_month: first.monthly_eur + stopped_month + ipv4,
                 stopped_month,
                 listed: first.available,
-                fallbacks: fitting.map(|offer| offer.server_type.clone()).collect(),
+                fallbacks: fitting
+                    .map(|offer| (offer.server_type.clone(), offer.hourly_eur))
+                    .collect(),
             })
         })
         .collect()
@@ -358,11 +370,11 @@ pub(super) fn card(
                     }
                 }
             });
-            // The cheapest location stands for "any"; a chosen one shows its own offer.
+            // "Any" shows the location deployment tries first; a chosen one shows its own offer.
             let shown = offers
                 .iter()
                 .find(|offer| placement.data_centers == [offer.location.clone()])
-                .or_else(|| offers.iter().min_by(|a, b| a.hourly.total_cmp(&b.hourly)));
+                .or_else(|| offers.first());
             if let Some(offer) = shown {
                 offer_details(ui, provider, offer, placement.data_centers.is_empty());
             }
@@ -409,13 +421,15 @@ fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer, any
         euros(offer.stopped_month)
     ));
     if !offer.fallbacks.is_empty() {
-        ui.small(format!(
-            "If it is sold out: {}, at its own price.",
-            offer.fallbacks.join(", ")
-        ));
+        let fallbacks: Vec<String> = offer
+            .fallbacks
+            .iter()
+            .map(|(server_type, hourly)| format!("{server_type} at {}/h", euros(*hourly)))
+            .collect();
+        ui.small(format!("If it is sold out: {}.", fallbacks.join(", ")));
     }
     if any {
-        ui.small("This is the cheapest allowed location; the cloud can be placed in another, which can cost more. Choose a location for its exact price.");
+        ui.small("Horizon tries this location first. If no allowed type has capacity there when the cloud is created, it goes to the next allowed location, which can cost more. Choose a location for its exact price.");
     }
     if !offer.listed {
         ui.small(format!(

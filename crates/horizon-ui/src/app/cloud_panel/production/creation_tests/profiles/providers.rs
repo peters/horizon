@@ -55,14 +55,14 @@ fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
     );
     // cx23 is too small for 4 vCPU / 8 GB, so cx33 is the first configured type that fits.
     assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"));
-    assert!(has_label(&output, "If it is sold out: cpx32, at its own price."));
+    assert!(has_label(&output, "If it is sold out: cpx32 at €0.0569/h."));
     // 20 GB workspace volume by default: €1.14 kept while stopped. The cap is the shown
-    // type's in the shown location, and "any" says another location can cost more.
+    // type's in the location deployment tries first, and "any" says another can cost more.
     assert!(has_label(
         &output,
         "On cx33 in hel1: at most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
     ));
-    assert!(painted(&output).contains("This is the cheapest allowed location"));
+    assert!(painted(&output).contains("Horizon tries this location first."));
     assert!(has_label(
         &output,
         "Hetzner lists this type as unavailable here; creation confirms whether it can be rented."
@@ -86,7 +86,7 @@ fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
 }
 
 #[test]
-fn a_hetzner_cloud_is_refused_until_creatable_and_switching_back_clears_its_location() {
+fn a_hetzner_cloud_records_its_provider_and_location_and_switching_back_clears_it() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -106,25 +106,6 @@ fn a_hetzner_cloud_is_refused_until_creatable_and_switching_back_clears_its_loca
         label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
     );
     assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
-    // Until Horizon can create clouds on Hetzner, creation is refused before anything is recorded.
-    let output = tall_frame(&ctx, &mut app);
-    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while app.cloud_prototype.production.pending_creation.is_some() {
-        assert!(Instant::now() < deadline, "repository validation did not complete");
-        tall_frame(&ctx, &mut app);
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        app.cloud_prototype.groups.0.iter().all(|group| group.remote.is_none()),
-        "no cloud is created"
-    );
-    assert!(
-        app.cloud_prototype
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("cannot create clouds on this provider yet"))
-    );
     // Switching back to RunPod clears the Hetzner location.
     let output = tall_frame(&ctx, &mut app);
     click(
@@ -137,6 +118,79 @@ fn a_hetzner_cloud_is_refused_until_creatable_and_switching_back_clears_its_loca
         Some("runpod")
     );
     assert!(app.cloud_prototype.production.placement.is_any());
+}
+
+#[test]
+fn any_location_shows_the_offer_deployment_tries_first_in_the_settings_order() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let offer = |location: &str, hourly: f64| {
+        serde_json::json!({"server_type": "cx33", "location": location, "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
+            "dedicated": false, "hourly_eur": hourly, "monthly_eur": 8.49, "available": true, "recommended": false})
+    };
+    let catalog = serde_json::from_value(serde_json::json!({
+        "offers": [offer("hel1", 0.0136), offer("nbg1", 0.02)],
+        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5, "nbg1": 0.5},
+        "ipv4_hour_eur": {"hel1": 0.0008, "nbg1": 0.0008}, "regions": {"hel1": "EUROPE", "nbg1": "EUROPE"},
+    }))
+    .unwrap();
+    // The settings try nbg1 first, although hel1 is cheaper.
+    app.cloud_prototype
+        .production
+        .prices
+        .hetzner
+        .answered_with_policy(Some(catalog), &["cx33"], &["nbg1", "hel1"]);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0200/h"));
+    assert!(painted(&output).contains("On cx33 in nbg1"));
+}
+
+#[test]
+fn a_hetzner_cloud_is_created_with_its_provider_and_location() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    );
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    super::finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "hetzner");
+    assert_eq!(launch.placement.data_centers, ["hel1"]);
+    assert_eq!(
+        app.cloud_prototype
+            .groups
+            .0
+            .last()
+            .unwrap()
+            .environment
+            .provider
+            .as_deref(),
+        Some("hetzner")
+    );
 }
 
 #[test]

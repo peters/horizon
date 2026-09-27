@@ -37,16 +37,16 @@ pub fn prepare(directory: &str, revision: &str, runner: &Runner<'_>) -> super::R
     })
 }
 
-/// The profiles the New cloud dialog can create. Its prices, credential checks and
-/// sizing are `RunPod`'s, so Hetzner profiles stay out of it until the dialog knows
-/// Hetzner.
+/// The profiles the New cloud dialog can create: those a provider Horizon creates
+/// clouds on accepts, such as a Hetzner CPU profile, by that provider's description.
 fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
-    config
-        .profiles
-        .retain(|_, profile| profile.provider != horizon_cloud::hetzner::PROVIDER);
+    config.profiles.retain(|_, profile| {
+        horizon_cloud::provider::by_id(&profile.provider)
+            .is_some_and(|provider| provider.creatable && provider.supports(profile))
+    });
     if !config.profiles.contains_key(&config.default) {
         config.default = config.profiles.keys().next().cloned().ok_or(Error::Invalid(
-            "This repository's cloud profiles are all for Hetzner, which the New cloud dialog cannot create yet.",
+            "No profile in this repository's .horizon/cloud.yml can run on a provider Horizon creates clouds on.",
         ))?;
     }
     Ok(config)
@@ -219,16 +219,14 @@ mod tests {
         )
     }
     #[test]
-    fn the_new_cloud_dialog_offers_only_profiles_it_can_create() {
+    fn the_new_cloud_dialog_offers_hetzner_and_runpod_profiles() {
         let yaml = "version: 1\ndefault: cheap\nprofiles:\n  cheap:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
         let config = creatable(CloudConfig::parse(yaml).unwrap()).unwrap();
-        assert_eq!(config.profiles.keys().collect::<Vec<_>>(), ["dev"]);
+        assert_eq!(config.profiles.keys().collect::<Vec<_>>(), ["cheap", "dev"]);
         assert_eq!(
-            config.default, "dev",
-            "a Hetzner default gives way to a profile the dialog can create"
+            config.default, "cheap",
+            "a Hetzner CPU profile is usable as the default"
         );
-        let only = yaml.replace("provider: runpod", "provider: hetzner");
-        assert!(creatable(CloudConfig::parse(&only).unwrap()).is_err());
     }
 
     #[test]

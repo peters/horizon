@@ -13,9 +13,9 @@ const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 /// left before its deadline; after that it reports Hetzner as still being fetched.
 const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
-/// A fetch's catalog and configured server types, or the reason it failed for a machine
-/// with a Hetzner binding.
-type Fetch = Result<(Option<HetznerCatalog>, Vec<String>), String>;
+/// A fetch's catalog with the configured server types and locations, or the reason it
+/// failed for a machine with a Hetzner binding.
+type Fetch = Result<(Option<HetznerCatalog>, Vec<String>, Vec<String>), String>;
 
 #[derive(Default)]
 pub(in crate::app) struct State {
@@ -23,6 +23,8 @@ pub(in crate::app) struct State {
     fetched: Option<Fetched<Option<HetznerCatalog>>>,
     /// The server types this machine's settings try, in order, from the same fetch.
     server_types: Vec<String>,
+    /// The locations this machine's settings allow, in the order deployment tries them.
+    locations: Vec<String>,
     /// Whether the last finished fetch found a Hetzner binding, kept while the catalog is
     /// refreshed and when fetching it failed.
     bound: bool,
@@ -54,13 +56,13 @@ impl State {
         }
         if self.job.is_none() && self.error.is_none() && self.fetched.as_ref().is_none_or(|fetched| stale(fetched.at)) {
             self.job = Some(spawn(root, ctx, |settings, cancel| {
-                let server_types = settings
+                let (server_types, locations) = settings
                     .hetzner
                     .as_ref()
-                    .map(|hetzner| hetzner.server_types.clone())
+                    .map(|hetzner| (hetzner.server_types.clone(), hetzner.locations.clone()))
                     .unwrap_or_default();
                 match prices::hetzner_catalog(settings, cancel) {
-                    Ok(catalog) => Ok(Ok((catalog, server_types))),
+                    Ok(catalog) => Ok(Ok((catalog, server_types, locations))),
                     Err(error) if settings.hetzner.is_some() => Ok(Err(error.to_string())),
                     Err(error) => Err(error),
                 }
@@ -87,12 +89,13 @@ impl State {
         }
         match finished {
             Some(Ok(Fetched {
-                value: Ok((catalog, server_types)),
+                value: Ok((catalog, server_types, locations)),
                 at,
             })) => {
                 self.bound = catalog.is_some();
                 self.fetched = Some(Fetched { value: catalog, at });
                 self.server_types = server_types;
+                self.locations = locations;
                 self.error = None;
                 self.failed_at = None;
             }
@@ -136,6 +139,11 @@ impl State {
     /// The server types this machine's settings try, in order.
     pub fn server_types(&self) -> &[String] {
         &self.server_types
+    }
+
+    /// The locations this machine's settings allow, in the order deployment tries them.
+    pub fn locations(&self) -> &[String] {
+        &self.locations
     }
 
     /// The reason the last fetch failed, while it is reported.
@@ -197,6 +205,12 @@ impl State {
     pub fn answered_with_types(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str]) {
         self.answered(catalog);
         self.server_types = server_types.iter().map(|&name| name.to_owned()).collect();
+    }
+
+    /// As `answered_with_types`, with the allowed locations in the settings' order.
+    pub fn answered_with_policy(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str], locations: &[&str]) {
+        self.answered_with_types(catalog, server_types);
+        self.locations = locations.iter().map(|&name| name.to_owned()).collect();
     }
 }
 

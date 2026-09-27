@@ -304,6 +304,7 @@ fn paint_header(
     let provider = group.environment.provider.as_deref().unwrap_or("Local");
     let provider = match provider {
         "runpod" => "RunPod",
+        "hetzner" => "Hetzner",
         "daytona" => "Daytona",
         "fly" => "Fly.io",
         "local" => "Local",
