@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 use std::{
     net::Ipv4Addr,
     sync::{
@@ -197,3 +199,191 @@ fn the_proxy_reports_its_subnet_port_and_counters() {
     assert_ne!(proxy.port(), 0);
     assert_eq!(proxy.counters(), Counters::default());
 }
+
+#[cfg(unix)]
+fn wait_for_state(bridge: &Bridge, mut matches: impl FnMut(&State) -> bool) -> State {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = bridge.status().state;
+        if matches(&state) {
+            return state;
+        }
+        assert!(Instant::now() < deadline, "bridge stayed {state:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Shell stand-ins for the worker; they need a POSIX shell.
+#[cfg(unix)]
+mod supervision {
+    use super::*;
+    use std::{path::PathBuf, process::Command};
+
+    struct Script {
+        prepare: String,
+        hold: String,
+        log: PathBuf,
+    }
+
+    impl session::Transport for Script {
+        fn prepare(&self) -> Command {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &self.prepare]);
+            command
+        }
+
+        fn hold(&self, nonce: &horizon_cloud_protocol::local_network::Nonce, subnet: Subnet, port: u16) -> Command {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args([
+                    "-c",
+                    &self.hold,
+                    "hold",
+                    nonce.as_str(),
+                    &subnet.to_string(),
+                    &port.to_string(),
+                ])
+                .env("LOG", &self.log);
+            command
+        }
+
+        fn heartbeat(&self) -> Duration {
+            Duration::from_millis(100)
+        }
+    }
+
+    fn start(prepare: &str, hold: &str) -> (Bridge, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let script = Script {
+            prepare: prepare.into(),
+            hold: hold.into(),
+            log: root.path().join("log"),
+        };
+        let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
+        let bridge = Bridge::with_parts(proxy, script).unwrap();
+        (bridge, root)
+    }
+
+    const PREPARED: &str = "printf 'horizon-local-network=1\\n'";
+    const HOLD: &str = r#"printf '%s %s %s\n' "$1" "$2" "$3" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; while read -r _; do printf 'beat\n' >> "$LOG"; done"#;
+
+    fn log(root: &tempfile::TempDir) -> String {
+        std::fs::read_to_string(root.path().join("log")).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_confirmed_session_is_active_and_receives_heartbeats() {
+        let (bridge, root) = start(PREPARED, HOLD);
+        assert_eq!(
+            wait_for_state(&bridge, |state| matches!(state, State::Active { .. })),
+            State::Active {
+                proxy: "127.0.0.1:41234".parse().unwrap()
+            }
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while log(&root).matches("beat").count() < 2 {
+            assert!(Instant::now() < deadline, "no heartbeats: {}", log(&root));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let first = log(&root);
+        let arguments: Vec<_> = first.lines().next().unwrap().split(' ').collect();
+        assert_eq!(arguments[0].len(), 32);
+        assert_eq!(arguments[1], "192.168.1.0/24");
+        assert_eq!(arguments[2].parse::<u16>().unwrap(), bridge.proxy.port());
+        let status = bridge.status();
+        assert_eq!((status.subnet, status.counters), (subnet(), Counters::default()));
+    }
+
+    #[test]
+    fn an_image_without_the_helper_fails_without_retrying() {
+        for old in [
+            "printf '%s\\n' 'Cloud worker service: Usage: horizon-cloud-worker serve|connect'",
+            "printf '%s\\n' 'bash: line 1: horizon-cloud-worker: command not found'",
+        ] {
+            let (bridge, root) = start(old, HOLD);
+            assert_eq!(
+                wait_for_state(&bridge, |state| matches!(state, State::Failed { .. })),
+                State::Failed {
+                    error: session::UNSUPPORTED.into()
+                }
+            );
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(log(&root), "");
+        }
+        // A supported helper reporting something else missing is retried.
+        let (bridge, _root) = start("printf '%s\\n' 'Directory not found'", HOLD);
+        assert!(matches!(
+            wait_for_state(&bridge, |state| !matches!(state, State::Starting)),
+            State::Reconnecting { .. }
+        ));
+    }
+
+    #[test]
+    fn a_lost_session_reports_why_and_starts_again_with_a_fresh_nonce() {
+        let hold = r#"printf '%s\n' "$1" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; printf 'Connection closed\033[2J by remote host\377\n' >&2; exit 255"#;
+        let (bridge, root) = start(PREPARED, hold);
+        assert_eq!(
+            wait_for_state(&bridge, |state| matches!(state, State::Reconnecting { .. })),
+            State::Reconnecting {
+                error: "Connection closed[2J by remote host\u{fffd}".into()
+            }
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while log(&root).lines().count() < 2 {
+            assert!(Instant::now() < deadline, "no retry");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let nonces: Vec<_> = log(&root).lines().map(str::to_owned).collect();
+        assert_ne!(nonces[0], nonces[1]);
+    }
+
+    #[test]
+    fn an_unreachable_worker_and_a_silent_helper_are_retried() {
+        let (bridge, _root) = start("exit 255", HOLD);
+        assert_eq!(
+            wait_for_state(&bridge, |state| matches!(state, State::Reconnecting { .. })),
+            State::Reconnecting {
+                error: "Cannot reach the worker over SSH".into()
+            }
+        );
+        drop(bridge);
+        let (bridge, _root) = start("printf '%s\\n' 'Read-only file system'", HOLD);
+        assert_eq!(
+            wait_for_state(&bridge, |state| matches!(state, State::Reconnecting { .. })),
+            State::Reconnecting {
+                error: "The worker could not prepare the bridge: Read-only file system".into()
+            }
+        );
+        drop(bridge);
+        // A ready line naming anything but a worker loopback port is not a confirmation.
+        let (bridge, _root) = start(
+            PREPARED,
+            r#"printf '{"proxy":"0.0.0.0:41234"}\n'; exec cat > /dev/null"#,
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(bridge.status().state, State::Starting);
+    }
+
+    #[test]
+    fn stopping_the_bridge_ends_the_session_process() {
+        let hold = r#"printf '%s\n' "$$" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; exec sleep 600"#;
+        let (bridge, root) = start(PREPARED, hold);
+        wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
+        let pid = log(&root).trim().to_owned();
+        let started = Instant::now();
+        drop(bridge);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let alive = Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "session process {pid} survived the bridge");
+    }
+}
+
+/// A real `ssh -R` against a user-level OpenSSH server. CI runners do not provide `sshd`;
+/// run with `HORIZON_TEST_SSHD=/path/to/sshd cargo test -p horizon-core local_network -- --ignored`.
+#[cfg(unix)]
+mod end_to_end;
