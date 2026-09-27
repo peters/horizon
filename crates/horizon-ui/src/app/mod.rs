@@ -13,6 +13,7 @@ mod browser_remote_create;
 mod browser_requests;
 mod canvas;
 mod canvas_drag;
+mod canvas_gesture;
 mod canvas_scroll;
 mod cloud_offers;
 #[cfg(feature = "cloud-workspaces")]
@@ -312,6 +313,7 @@ pub struct HorizonApp {
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_available_update: Option<AvailableUpdate>,
     next_surge_update_check_at: Option<Instant>,
+    canvas_gesture: canvas_gesture::CanvasGesture,
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
@@ -445,7 +447,8 @@ impl eframe::App for HorizonApp {
         theme::bg_for(self.resolved_theme).to_normalized_gamma_f32()
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.filter_canvas_gesture(ctx, raw_input);
         let viewport_id = raw_input.viewport_id;
         self.ime_commit_normalizer.normalize(viewport_id, &mut raw_input.events);
         let frame_keyboard_events = self.observed_keyboard_inputs.take_frame_key_events(raw_input);

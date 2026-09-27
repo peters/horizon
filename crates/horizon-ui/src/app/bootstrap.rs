@@ -185,7 +185,7 @@ impl HorizonApp {
             surge_update_check_rx: None,
             surge_available_update: None,
             next_surge_update_check_at,
-            pending_preset_pick: None,
+            canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             dir_picker: None,
             command_palette: None,
             search_overlay: None,
