@@ -145,7 +145,7 @@ fn start_cloud_says_why_it_is_disabled() {
         "{both}"
     );
 
-    app.cloud_prototype.production.launch.hold_loading_for_test();
+    let _loading = app.cloud_prototype.production.launch.hold_loading_for_test();
     let while_loading = painted(&ctx, &mut app);
     assert!(
         while_loading.contains("A cloud title is required before Start cloud can be used."),

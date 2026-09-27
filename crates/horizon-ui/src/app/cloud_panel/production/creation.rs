@@ -470,8 +470,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
     }
 }
 
-/// Offered CPU worker sizes; a GPU profile's size is fixed. Buttons and inline notes rather
-/// than drop-downs and tooltips, which would draw below this Tooltip-order modal.
 fn title_requirement(ui: &mut Ui, form: &Production) {
     if form.title.trim().is_empty() {
         ui.label(

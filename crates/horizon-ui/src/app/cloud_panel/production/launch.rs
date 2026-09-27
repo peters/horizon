@@ -26,11 +26,11 @@ impl State {
     }
 
     #[cfg(all(test, unix))]
-    pub(super) fn hold_loading_for_test(&mut self) {
+    pub(super) fn hold_loading_for_test(&mut self) -> impl Send + use<> {
         let (sender, receiver) = channel();
         self.receiver = Some(receiver);
-        // The sender must outlive this call or the next frame treats preparation as interrupted.
-        std::mem::forget(sender);
+        // Keep this guard alive while rendering to model an in-flight preparation.
+        sender
     }
 }
 impl Drop for State {
