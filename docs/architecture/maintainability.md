@@ -639,6 +639,8 @@ layout calculations. Corner resizing of a cloud frame lives in `cloud_panel/resi
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
 channels, and removal rechecks durable resource ownership before discarding panels.
+`production/readiness` shares the add-panel menu and empty-state readiness gate;
+it checks the targeted cloud's current runtime before offering panel creation.
 UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.
 Creation's `profiles` leaf groups CPU and GPU profiles; `gpu_choice` presents

@@ -144,7 +144,8 @@ impl HorizonApp {
                 action = Some(Action::Rename(group.issue));
             }
             if group.panels.is_empty() && !group.collapsed {
-                empty_group(ctx, group, rect, transform, clip);
+                let ready = self.cloud_prototype.production.accepts_panels(group);
+                empty_group(ctx, group, rect, transform, clip, ready);
             }
         }
         if moved {
@@ -416,7 +417,14 @@ fn cloud_glyph(painter: &egui::Painter, center: Pos2, color: Color32) {
     );
 }
 
-fn empty_group(ctx: &egui::Context, group: &CloudGroup, rect: Rect, transform: egui::emath::TSTransform, clip: Rect) {
+fn empty_group(
+    ctx: &egui::Context,
+    group: &CloudGroup,
+    rect: Rect,
+    transform: egui::emath::TSTransform,
+    clip: Rect,
+    ready: bool,
+) {
     egui::Area::new(Id::new(("cloud-empty", group.issue)))
         .order(Order::Middle)
         .fixed_pos(rect.min + Vec2::new(36.0, HEADER + 56.0))
@@ -433,14 +441,22 @@ fn empty_group(ctx: &egui::Context, group: &CloudGroup, rect: Rect, transform: e
             );
             ui.add_space(12.0);
             ui.label(
-                RichText::new("Ctrl-double-click anywhere inside this cloud")
-                    .size(15.0)
-                    .color(theme::FG_SOFT()),
+                RichText::new(if ready {
+                    "Ctrl-double-click anywhere inside this cloud"
+                } else {
+                    "This cloud is not ready to accept panels yet."
+                })
+                .size(15.0)
+                .color(theme::FG_SOFT()),
             );
             ui.label(
-                RichText::new("to add an agent, browser or another panel.")
-                    .size(15.0)
-                    .color(theme::FG_DIM()),
+                RichText::new(if ready {
+                    "to add an agent, browser or another panel."
+                } else {
+                    "Deploy or reconnect it, then add panels when it is ready."
+                })
+                .size(15.0)
+                .color(theme::FG_DIM()),
             );
             ui.add_space(28.0);
             ui.label(
