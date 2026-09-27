@@ -127,3 +127,22 @@ Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPo
 
 Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
 beside the price list, so older worker images keep taking RunPod prices unchanged.
+
+## New cloud
+
+With a Hetzner binding, **New cloud** shows a Provider choice for CPU profiles.
+Choosing Hetzner replaces RunPod's regions and prices with Hetzner's offers for
+the chosen size:
+
+- one entry per allowed location, showing the first server type from
+  `server_types` that has the size, which is the one Horizon requests first;
+- its hourly price, the most a month of running costs with the workspace volume
+  and IPv4 address, and what a stopped cloud keeps paying (the volume only);
+- the types tried next if it is sold out, and Hetzner's advisory availability.
+
+Choosing a location places the cloud there. **Any allowed location** keeps
+every location in `locations`. The new cloud records `provider: hetzner` even
+when the repository profile names RunPod. Until Horizon can create clouds on
+Hetzner, Start cloud is refused before anything is recorded, and the dialog
+says so.
+

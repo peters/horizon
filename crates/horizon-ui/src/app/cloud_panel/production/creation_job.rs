@@ -82,12 +82,7 @@ impl HorizonApp {
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
-        let profile = match form.size {
-            Some(size) => cloud_runtime::flavors::sized(profile, size)?,
-            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
-            None if profile.gpu => profile.clone(),
-            None => cloud_runtime::flavors::sized(profile, (profile.cpu, profile.memory_gb))?,
-        };
+        let profile = launch_profile(profile, form.provider, form.size)?;
         let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);
         let revision = if let Some(revision) = &form.launch.revision {
@@ -201,7 +196,7 @@ impl HorizonApp {
         let mut group = CloudGroup::new(id, pending.title, pending.workspace, resolved.repository, position);
         group.environment.id.clone_from(&pending.launch.id);
         group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
-        group.environment.provider = Some("runpod".into());
+        group.environment.provider = Some(pending.launch.profile.provider.clone());
         group.environment.profile = Some(pending.launch.profile_name.clone());
         group.environment.image.clone_from(&pending.launch.profile.image);
         group.remote = Some(pending.launch);
@@ -216,6 +211,28 @@ impl HorizonApp {
         }
         Ok(())
     }
+}
+
+/// `profile` on the chosen provider at the chosen size, as the new cloud records it.
+/// Refused before anything is recorded while Horizon cannot create clouds there.
+pub(super) fn launch_profile(
+    profile: &horizon_core::cloud_runtime::prices::Profile,
+    chosen: Option<&'static cloud_runtime::provider::Description>,
+    size: Option<super::machine_size::Size>,
+) -> cloud_runtime::Result<horizon_core::cloud_runtime::prices::Profile> {
+    let provider = super::creation::provider::current(chosen, profile);
+    if !provider.creatable {
+        return Err(cloud_runtime::Error::Invalid(
+            "Horizon cannot create clouds on this provider yet; choose another provider",
+        ));
+    }
+    // A choice made for another profile, or before the profile changed, is checked again.
+    if !provider.supports(profile) {
+        return Err(cloud_runtime::Error::Invalid(
+            "This profile cannot run on the chosen provider",
+        ));
+    }
+    super::creation::provider::sized(provider, profile, size)
 }
 
 #[cfg(all(test, unix))]

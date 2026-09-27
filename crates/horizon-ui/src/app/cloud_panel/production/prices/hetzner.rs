@@ -4,7 +4,7 @@ use super::{Fetched, Job, RETRY_FAILED, finished, spawn, stale};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
 use std::{
     path::Path,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Longest wait for a running Hetzner fetch before prices go to workers without it.
@@ -13,15 +13,27 @@ const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 /// left before its deadline; after that it reports Hetzner as still being fetched.
 const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
+/// A fetch's catalog and configured server types, or the reason it failed for a machine
+/// with a Hetzner binding.
+type Fetch = Result<(Option<HetznerCatalog>, Vec<String>), String>;
+
 #[derive(Default)]
 pub(in crate::app) struct State {
     /// The latest catalog; `None` inside when this machine has no Hetzner binding.
     fetched: Option<Fetched<Option<HetznerCatalog>>>,
+    /// The server types this machine's settings try, in order, from the same fetch.
+    server_types: Vec<String>,
+    /// Whether the last finished fetch found a Hetzner binding, kept while the catalog is
+    /// refreshed and when fetching it failed.
+    bound: bool,
     error: Option<String>,
     failed_at: Option<Instant>,
-    job: Option<Job<Option<HetznerCatalog>>>,
+    /// A failure with a binding comes back as an `Err` inside, so the binding is known.
+    job: Option<Job<Fetch>>,
     /// When the running fetch started.
     started: Option<Instant>,
+    /// When the settings the last fetch read were saved.
+    settings_saved: Option<SystemTime>,
 }
 
 impl State {
@@ -32,13 +44,39 @@ impl State {
         if cfg!(test) {
             return;
         }
+        let saved = std::fs::metadata(root.join("settings.json"))
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        self.forget_if_settings_changed(saved);
         if self.failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
             self.error = None;
             self.failed_at = None;
         }
         if self.job.is_none() && self.error.is_none() && self.fetched.as_ref().is_none_or(|fetched| stale(fetched.at)) {
-            self.job = Some(spawn(root, ctx, prices::hetzner_catalog));
+            self.job = Some(spawn(root, ctx, |settings, cancel| {
+                let server_types = settings
+                    .hetzner
+                    .as_ref()
+                    .map(|hetzner| hetzner.server_types.clone())
+                    .unwrap_or_default();
+                match prices::hetzner_catalog(settings, cancel) {
+                    Ok(catalog) => Ok(Ok((catalog, server_types))),
+                    Err(error) if settings.hetzner.is_some() => Ok(Err(error.to_string())),
+                    Err(error) => Err(error),
+                }
+            }));
             self.started = Some(Instant::now());
+            self.settings_saved = saved;
+        }
+    }
+
+    /// Saved settings can add, change or remove the binding, so a catalog or failure from
+    /// earlier settings is fetched again. The binding found is kept until then.
+    fn forget_if_settings_changed(&mut self, saved: Option<SystemTime>) {
+        if self.job.is_none() && saved != self.settings_saved {
+            self.fetched = None;
+            self.error = None;
+            self.failed_at = None;
         }
     }
 
@@ -48,19 +86,30 @@ impl State {
             self.started = None;
         }
         match finished {
-            Some(Ok(fetched)) => {
-                self.fetched = Some(fetched);
+            Some(Ok(Fetched {
+                value: Ok((catalog, server_types)),
+                at,
+            })) => {
+                self.bound = catalog.is_some();
+                self.fetched = Some(Fetched { value: catalog, at });
+                self.server_types = server_types;
                 self.error = None;
                 self.failed_at = None;
             }
-            // A catalog that could not be refreshed is no longer offered as current.
-            Some(Err(error)) => {
-                self.fetched = None;
-                self.error = Some(error);
-                self.failed_at = Some(Instant::now());
+            Some(Ok(Fetched { value: Err(error), .. })) => {
+                self.bound = true;
+                self.fail(error);
             }
+            Some(Err(error)) => self.fail(error),
             None => {}
         }
+    }
+
+    /// A catalog that could not be refreshed is no longer offered as current.
+    fn fail(&mut self, error: String) {
+        self.fetched = None;
+        self.error = Some(error);
+        self.failed_at = Some(Instant::now());
     }
 
     pub(super) fn refresh(&mut self) {
@@ -76,6 +125,22 @@ impl State {
     /// Until a failed fetch may be asked again, for waking an idle app.
     pub fn retry_in(&self) -> Option<Duration> {
         self.failed_at.map(|at| RETRY_FAILED.saturating_sub(at.elapsed()))
+    }
+
+    /// Whether this machine has a Hetzner binding, as the last finished fetch found,
+    /// even while its catalog is refreshed or could not be fetched.
+    pub fn bound(&self) -> bool {
+        self.bound
+    }
+
+    /// The server types this machine's settings try, in order.
+    pub fn server_types(&self) -> &[String] {
+        &self.server_types
+    }
+
+    /// The reason the last fetch failed, while it is reported.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// The current catalog, when this machine has a Hetzner binding.
@@ -125,17 +190,31 @@ impl State {
     }
 }
 
+/// A catalog with the configured server types, for the dialog tests, which run on Unix
+/// only.
+#[cfg(all(test, unix))]
+impl State {
+    pub fn answered_with_types(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str]) {
+        self.answered(catalog);
+        self.server_types = server_types.iter().map(|&name| name.to_owned()).collect();
+    }
+}
+
 /// A catalog as if Hetzner had just answered, for tests, which never contact it.
 #[cfg(test)]
 impl State {
     pub fn answered(&mut self, catalog: Option<HetznerCatalog>) {
+        self.bound = catalog.is_some();
         self.fetched = Some(Fetched {
             value: catalog,
             at: Instant::now(),
         });
     }
 
+    /// A fetch that failed for a machine with a Hetzner binding.
     pub fn failed(&mut self, error: &str) {
+        self.bound = true;
+        self.fetched = None;
         self.error = Some(error.to_owned());
         self.failed_at = Some(Instant::now());
     }
@@ -196,5 +275,19 @@ mod tests {
         );
         state.refresh();
         assert!(state.job.is_none() && state.fresh().is_none());
+    }
+
+    #[test]
+    fn saving_settings_fetches_the_catalog_again() {
+        let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let mut state = State::default();
+        state.answered(Some(catalog()));
+        state.settings_saved = Some(saved);
+        state.forget_if_settings_changed(Some(saved));
+        assert!(state.fresh().is_some(), "unchanged settings keep the catalog");
+        state.failed("Hetzner answered 503");
+        state.forget_if_settings_changed(Some(saved + Duration::from_secs(1)));
+        assert!(state.fresh().is_none() && state.error().is_none() && state.retry_in().is_none());
+        assert!(state.bound(), "the binding found is kept until the next fetch");
     }
 }

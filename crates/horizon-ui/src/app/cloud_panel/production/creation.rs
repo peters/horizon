@@ -3,13 +3,19 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement, dir_search};
+use horizon_core::{
+    ShortcutBinding, ShortcutKey, ShortcutModifiers,
+    cloud_panel::Placement,
+    cloud_runtime::provider::{Choice, Placement as ProviderPlacement, Pricing},
+    dir_search,
+};
 use std::path::Path;
 
 mod costs;
 mod gpu_choice;
 mod placement;
 mod pricing;
+pub(super) mod provider;
 
 #[derive(Default)]
 struct Actions {
@@ -61,7 +67,7 @@ impl HorizonApp {
                     ui.disable();
                 }
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-                heading(ui);
+                heading(ui, provider::label(&self.cloud_prototype.production));
                 ui.add_space(16.0);
                 egui::ScrollArea::vertical()
                     .id_salt("cloud-creation-body")
@@ -190,6 +196,7 @@ impl HorizonApp {
             form.selected_profile.clear();
             form.size = None;
             form.placement = Placement::default();
+            form.provider = None;
             form.launch.accounts_checked = false;
             self.cloud_prototype.error = None;
         }
@@ -200,7 +207,7 @@ fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
     ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
 
-fn heading(ui: &mut Ui) {
+fn heading(ui: &mut Ui, provider: &str) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("New cloud").size(26.0).strong().color(theme::FG()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -209,7 +216,7 @@ fn heading(ui: &mut Ui) {
                 .corner_radius(8)
                 .inner_margin(egui::Margin::symmetric(12, 6))
                 .show(ui, |ui| {
-                    ui.label(RichText::new("RunPod").size(13.0).color(theme::FG_SOFT()));
+                    ui.label(RichText::new(provider).size(13.0).color(theme::FG_SOFT()));
                 });
         });
     });
@@ -285,7 +292,30 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             }
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
-            if let Some(size) = pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {
+            let choices = provider::choices(&form.prices, profile);
+            // A provider chosen before the profile or the configured providers changed is
+            // dropped once it is no longer a choice, with the place it named.
+            if form.provider.is_some_and(|chosen| !choices.contains(&chosen)) {
+                form.provider = None;
+                form.placement = Placement::default();
+            }
+            let provider = provider::current(form.provider, profile);
+            if choices.len() > 1
+                && let Some(chosen) = provider::choice(ui, &choices, provider)
+            {
+                form.provider = Some(chosen);
+                // Each provider names places and sizes its own way.
+                form.placement = Placement::default();
+                form.size = None;
+            }
+            // Providers that price flavors offer their flavor sizes with prices; others
+            // offer the sizes of their configured server types.
+            let size = if provider.pricing == Pricing::Flavors {
+                pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb))
+            } else {
+                provider::size_field(ui, &form.prices, profile, (cpu, memory_gb))
+            };
+            if let Some(size) = size {
                 form.size = Some(size);
             }
             let sized = horizon_core::cloud_runtime::prices::Profile {
@@ -293,14 +323,28 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 memory_gb,
                 ..profile.clone()
             };
-            if let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement) {
-                form.placement = placement;
-            }
-            ui.add_space(4.0);
-            match pricing::card(ui, &form.prices, &sized, &form.placement) {
-                Some(pricing::CardAction::Refresh) => form.prices.refresh(),
-                Some(pricing::CardAction::UseGpu(gpu)) => form.placement.gpu_types = vec![gpu],
-                None => {}
+            match provider.placement {
+                ProviderPlacement::Locations => {
+                    ui.add_space(4.0);
+                    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
+                        form.placement = placement;
+                    }
+                }
+                ProviderPlacement::DataCenters => {
+                    if provider.offers(Choice::Region)
+                        && let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement)
+                    {
+                        form.placement = placement;
+                    }
+                    ui.add_space(4.0);
+                    match pricing::card(ui, &form.prices, &sized, &form.placement) {
+                        Some(pricing::CardAction::Refresh) => form.prices.refresh(),
+                        Some(pricing::CardAction::UseGpu(gpu)) if provider.offers(Choice::GpuType) => {
+                            form.placement.gpu_types = vec![gpu];
+                        }
+                        Some(pricing::CardAction::UseGpu(_)) | None => {}
+                    }
+                }
             }
         }
     }
@@ -360,6 +404,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                     if form.selected_profile != *name {
                         form.size = None;
                         form.placement = Placement::default();
+                        form.provider = None;
                     }
                     form.selected_profile.clone_from(name);
                     form.launch.accounts_checked = false;
@@ -381,10 +426,16 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 memory_gb,
                 ..profile.clone()
             };
-            if let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement) {
+            // Data centers and GPU types are chosen only where the provider has them.
+            let provider = provider::current(form.provider, profile);
+            if provider.placement == ProviderPlacement::DataCenters
+                && let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement)
+            {
                 form.placement = placement;
             }
-            if let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement) {
+            if provider.offers(Choice::GpuType)
+                && let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement)
+            {
                 form.placement = placement;
             }
         }
