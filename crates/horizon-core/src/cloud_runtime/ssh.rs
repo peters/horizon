@@ -15,13 +15,13 @@ impl Connection {
     /// Requires a usable public SSH mapping from the reconciled worker.
     pub fn new(worker: &Worker, settings: &Settings, root: &Path) -> Result<Self> {
         let address = worker
-            .ssh_address()
+            .ssh_endpoint()
             .ok_or(Error::Invalid("Worker has no SSH endpoint yet"))?;
         if !valid_id(&worker.id) {
             return Err(Error::Invalid("Invalid worker ID"));
         }
         Ok(Self {
-            host: address.ip().to_string(),
+            host: address.host().to_string(),
             port: address.port(),
             identity: settings.ssh_identity_file.clone(),
             known_hosts: root.join(format!("known-hosts-{}", worker.id)),
@@ -175,7 +175,7 @@ impl Connection {
         )?;
         Ok(())
     }
-    fn upload(&self, source: &Path, destination: &str, runner: &Runner<'_>) -> Result<()> {
+    fn upload_command(&self, source: &Path, destination: &str) -> Command {
         let mut scp = Command::new("scp");
         let args = self.args();
         // scp uses -P for the port, but otherwise shares OpenSSH's options.
@@ -195,6 +195,10 @@ impl Connection {
             self.host.clone()
         };
         scp.arg(source).arg(format!("root@{host}:/workspace/{destination}"));
+        scp
+    }
+    fn upload(&self, source: &Path, destination: &str, runner: &Runner<'_>) -> Result<()> {
+        let scp = self.upload_command(source, destination);
         runner.transfer(
             super::timeline::UPLOADING_SOURCE,
             &scp,
@@ -275,12 +279,12 @@ mod tests {
     use std::{net::TcpListener, sync::mpsc, thread, time::Instant};
 
     #[test]
-    fn readiness_budget_interrupts_a_stalled_ssh_handshake() {
+    fn readiness_budget_interrupts_a_stalled_hostname_ssh_handshake() {
         let root = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let connection = Connection {
-            host: "127.0.0.1".into(),
+            host: "localhost".into(),
             port: listener.local_addr().unwrap().port(),
             identity: root.path().join("missing-test-key"),
             known_hosts: root.path().join("known-hosts"),
@@ -319,6 +323,43 @@ mod tests {
             "probe ignored its remaining budget: {elapsed:?}"
         );
         assert!(!connection.known_hosts.exists());
+    }
+
+    #[test]
+    fn dns_and_ip_destinations_keep_bound_identity_in_ssh_and_scp() {
+        let root = tempfile::tempdir().unwrap();
+        for host in ["worker.example.invalid", "192.0.2.1", "2001:db8::1"] {
+            let worker: Worker = serde_json::from_value(serde_json::json!({
+                "id":"worker1", "name":"fixture", "imageName":"fixture", "desiredStatus":"RUNNING",
+                "sshHost":host, "portMappings":{"22":2222}
+            }))
+            .unwrap();
+            let settings: Settings = serde_json::from_value(serde_json::json!({
+                "runpod_key_file":root.path().join("key"), "ssh_identity_file":root.path().join("identity"),
+                "docker_config":root.path().join("docker"), "registry_pull_auth_id":null,
+                "cpu_flavors":[], "gpu_types":[]
+            }))
+            .unwrap();
+            let connection = Connection::new(&worker, &settings, root.path()).unwrap();
+            assert_eq!(connection.host, host);
+            let args = connection.args();
+            assert!(args.contains(&format!("root@{host}")));
+            assert!(args.contains(&"HostKeyAlias=horizon-cloud-worker1".into()));
+            let scp = connection.upload_command(Path::new("source.pack"), "horizon-transfer.pack");
+            let args: Vec<_> = scp.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+            let destination = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host.to_owned()
+            };
+            assert_eq!(
+                args.last().unwrap(),
+                &format!("root@{destination}:/workspace/horizon-transfer.pack")
+            );
+            assert!(args.contains(&"HostKeyAlias=horizon-cloud-worker1".into()));
+            let pinned = connection.pinned_command("true");
+            assert!(pinned.get_args().any(|arg| arg == "StrictHostKeyChecking=yes"));
+        }
     }
 
     #[test]

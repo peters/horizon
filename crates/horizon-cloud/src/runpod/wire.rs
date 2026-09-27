@@ -1,5 +1,5 @@
 //! v2 wire types are separate from the durable worker journal format.
-use crate::{CloudError, NetworkVolume, Worker};
+use crate::{CloudError, NetworkVolume, SshHost, Worker};
 use serde::Deserialize;
 use std::{collections::BTreeMap, net::IpAddr};
 
@@ -87,15 +87,17 @@ impl Pod {
             None => (None, None),
         };
         // Other account Pods may use valid endpoints unsupported by Horizon's
-        // numeric-root transport. Keep their identity/mounts in account scans.
+        // root transport. Keep their identity/mounts in account scans.
         let direct = self.ssh.direct.and_then(|direct| {
             if direct.port == 0 || direct.username != "root" {
                 return None;
             }
-            Some((direct.host.parse::<IpAddr>().ok()?, direct.port))
+            Some((direct.host.parse::<SshHost>().ok()?, direct.port))
         });
-        let (public_ip, port_mappings) = direct.map_or((None, None), |(host, port)| {
-            (Some(host), Some(BTreeMap::from([("22".to_owned(), port)])))
+        let (public_ip, ssh_host, port_mappings) = direct.map_or((None, None, None), |(host, port)| {
+            let ip = host.as_str().parse::<IpAddr>().ok();
+            let dns = ip.is_none().then_some(host);
+            (ip, dns, Some(BTreeMap::from([("22".to_owned(), port)])))
         });
         let (network_volume, volume_in_gb, volume_mount_path) =
             if let Some(mount) = self.mounts.network.into_iter().next() {
@@ -122,6 +124,7 @@ impl Pod {
             image_name: self.image,
             desired_status: self.status,
             public_ip,
+            ssh_host,
             port_mappings,
             cost_per_hr: Some(self.cost),
             adjusted_cost_per_hr: None,

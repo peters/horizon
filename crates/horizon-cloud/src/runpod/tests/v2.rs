@@ -331,14 +331,14 @@ fn untrusted_status_ssh_or_mounts_cannot_certify_readiness() {
     for invalid in cases {
         assert!(matches!(wire::worker(invalid), Err(CloudError::InvalidResponse)));
     }
-    for (host, username) in [("worker.example.invalid", "root"), ("192.0.2.1", "custom-user")] {
+    for (host, username) in [("unsafe host", "root"), ("192.0.2.1", "custom-user")] {
         let mut unsupported = base.clone();
         unsupported["ssh"] = json!({"direct":{"host":host,"port":22,"username":username}});
-        assert!(wire::worker(unsupported).unwrap().ssh_address().is_none());
+        assert!(wire::worker(unsupported).unwrap().ssh_endpoint().is_none());
     }
     let mut proxy = base;
     proxy["ssh"] = json!({"direct":null,"proxy":{"command":"untrusted shell command"}});
-    assert!(wire::worker(proxy).unwrap().ssh_address().is_none());
+    assert!(wire::worker(proxy).unwrap().ssh_endpoint().is_none());
 }
 
 #[test]
@@ -361,4 +361,45 @@ fn create_body_uses_only_v2_compute_mount_and_credential_fields() {
     ] {
         assert!(body.get(field).is_none());
     }
+}
+
+#[test]
+fn dns_ssh_hosts_survive_inspection_and_durable_worker_round_trips() {
+    for host in ["worker.example.invalid", "Worker-1.example.invalid."] {
+        let mut pod = worker(&spec());
+        pod["ssh"]["direct"]["host"] = json!(host);
+        let (provider, requests, task) = server(vec![(200, pod.to_string())]);
+        let inspected = provider
+            .inspect_with_timeout("worker1", &Cancellation::default(), Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1, "inspection never resolves DNS");
+        assert_eq!(inspected.status(), crate::WorkerStatus::Running);
+        let saved = serde_json::to_value(&inspected).unwrap();
+        assert_eq!(saved["sshHost"], host);
+        let restored: Worker = serde_json::from_value(saved).unwrap();
+        let endpoint = restored.ssh_endpoint().unwrap();
+        assert_eq!(endpoint.host().as_str(), host);
+        assert_eq!(endpoint.port(), 22001);
+        assert!(restored.public_ip.is_none());
+    }
+}
+
+#[test]
+fn numeric_and_legacy_workers_keep_their_existing_serialized_address() {
+    for host in ["192.0.2.1", "2001:db8::1"] {
+        let mut pod = worker(&spec());
+        pod["ssh"]["direct"]["host"] = json!(host);
+        let inspected = wire::worker(pod).unwrap();
+        let saved = serde_json::to_value(&inspected).unwrap();
+        assert!(saved.get("sshHost").is_none());
+        assert_eq!(saved["publicIp"], host);
+        let restored: Worker = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), saved);
+        assert_eq!(restored.ssh_endpoint().unwrap().host().as_str(), host);
+        assert_eq!(restored.ssh_address().unwrap().ip().to_string(), host);
+    }
+    let legacy: Worker = serde_json::from_value(saved_worker(&spec())).unwrap();
+    assert_eq!(legacy.ssh_endpoint().unwrap().host().as_str(), "192.0.2.1");
 }

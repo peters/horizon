@@ -115,7 +115,7 @@ impl Fixture {
                     Worker {
                         id: format!("worker-{id}"),
                         revision: "a".repeat(40),
-                        address: Some("127.0.0.1:2222".parse().unwrap()),
+                        address: horizon_cloud::SshEndpoint::new("127.0.0.1".parse().unwrap(), 2222),
                         status: Status::Ready,
                     },
                 )

@@ -135,6 +135,13 @@ for private file permissions, repository matching, removal and token-scope limit
 
 ## Provider API and storage requirements
 
+Direct root SSH endpoints accept numeric IPs and validated ASCII DNS hostnames.
+Provider inspection and cleanup never resolve hostnames; the bounded OpenSSH
+transport performs resolution when connecting. Proxy command strings and
+non-root endpoints are not executed. Older worker records retain their numeric
+address format; hostname destinations require the updated worker for companion
+connections.
+
 The shared UI, CLI and MCP adapter uses the [RunPod REST v2 API](https://docs.runpod.io/api-reference-v2/overview)
 for workers, capacity, registry credentials, storage and billing. Existing saved
 worker identities and volume journals remain readable. Upgrading does not replay

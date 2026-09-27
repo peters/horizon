@@ -10,7 +10,6 @@ use horizon_cloud_protocol::companion::{Request, Response};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
-    net::SocketAddr,
     path::Path,
     time::Duration,
 };
@@ -19,7 +18,7 @@ use std::{
 pub(super) struct Worker {
     pub id: String,
     pub revision: String,
-    pub address: Option<SocketAddr>,
+    pub address: Option<horizon_cloud::SshEndpoint>,
     pub status: Status,
 }
 
@@ -163,7 +162,7 @@ impl Transport for Live<'_> {
         Ok(Some(Worker {
             id: worker.id.clone(),
             revision: state.revision.clone(),
-            address: worker.ssh_address(),
+            address: worker.ssh_endpoint(),
             status,
         }))
     }

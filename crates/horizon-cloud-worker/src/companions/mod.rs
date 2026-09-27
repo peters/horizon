@@ -117,7 +117,7 @@ impl Runtime {
                 port,
                 host_key,
                 ..
-            } => self.connect(grant, alias, *host, *port, host_key),
+            } => self.connect(grant, alias, host, *port, host_key),
             Request::Revoke { .. } => {
                 self.authorized_key(grant, None)?;
                 Ok(Response::Revoked)

@@ -136,14 +136,14 @@ pub fn create(
         if Instant::now() >= deadline {
             return Err(Error::Unresolved);
         }
-        if allocation.observe(cancel)?.ssh_address().is_some() {
+        if allocation.observe(cancel)?.ssh_endpoint().is_some() {
             break;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
     let attachment = allocation.confirm(cancel)?;
-    let address = attachment.worker().ssh_address().ok_or(Error::Invalid)?;
-    let target = target(&record, address)?;
+    let address = attachment.worker().ssh_endpoint().ok_or(Error::Invalid)?;
+    let target = endpoint_target(&record, &address)?;
     enroll(&record, &target, &runner, deadline)?;
     initialize(owner, &mut record, &target, &runner, deadline)?;
     complete(owner, &mut record, &target, cancel, deadline)
@@ -400,6 +400,12 @@ fn persist_provider(record: &Record, owner: &mut Owner) -> std::result::Result<(
     record.save(owner).map_err(|_| CloudError::Persistence)
 }
 fn target(record: &Record, address: std::net::SocketAddr) -> Result<bootstrap_recovery::Target> {
+    endpoint_target(
+        record,
+        &horizon_cloud::SshEndpoint::new(address.ip().into(), address.port()).ok_or(Error::Invalid)?,
+    )
+}
+fn endpoint_target(record: &Record, address: &horizon_cloud::SshEndpoint) -> Result<bootstrap_recovery::Target> {
     let CreateState::Bound { worker_id } = &record.worker else {
         return Err(Error::Invalid);
     };
@@ -407,7 +413,7 @@ fn target(record: &Record, address: std::net::SocketAddr) -> Result<bootstrap_re
         startup: record.startup.clone().ok_or(Error::Invalid)?,
         worker_id: worker_id.clone(),
         connection: Connection {
-            host: address.ip().to_string(),
+            host: address.host().to_string(),
             port: address.port(),
             identity: record.request.identity_file.clone(),
             known_hosts: record.request.known_hosts.clone(),
@@ -421,7 +427,7 @@ fn inspect_target(provider: &RunPod, record: &Record, cancel: &Cancellation) -> 
     };
     let worker = provider.inspect(worker_id, cancel)?.ok_or(Error::Unresolved)?;
     worker.verify(&record.spec)?;
-    target(record, worker.ssh_address().ok_or(Error::Unresolved)?)
+    endpoint_target(record, &worker.ssh_endpoint().ok_or(Error::Unresolved)?)
 }
 fn verify_new_pin_path(path: &std::path::Path) -> Result<()> {
     let parent = path.parent().ok_or(Error::Invalid)?;

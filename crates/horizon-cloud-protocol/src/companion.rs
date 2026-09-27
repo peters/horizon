@@ -1,6 +1,6 @@
 //! Dedicated-worker SSH grant operations. These operations never manage compute.
+use horizon_cloud::SshHost;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 
 pub const VERSION: u32 = 1;
 
@@ -18,7 +18,7 @@ pub enum Request {
     Connect {
         grant: String,
         alias: String,
-        host: IpAddr,
+        host: SshHost,
         port: u16,
         host_key: String,
     },
@@ -138,5 +138,28 @@ impl Catalog {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ssh_tests {
+    use super::*;
+
+    #[test]
+    fn connection_hosts_keep_the_string_wire_format_and_reject_injection() {
+        for host in ["192.0.2.1", "2001:db8::1", "worker.example.invalid"] {
+            let wire = serde_json::json!({"operation":"connect", "grant":"pair", "alias":"app",
+                "host":host, "port":22, "host_key":"fixture"});
+            let request: Request = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
+        for host in ["host\nProxyCommand id", "user@host", "-oProxyCommand=id"] {
+            assert!(
+                serde_json::from_value::<Request>(serde_json::json!({
+                "operation":"connect", "grant":"pair", "alias":"app", "host":host,
+                "port":22, "host_key":"fixture"}))
+                .is_err()
+            );
+        }
     }
 }

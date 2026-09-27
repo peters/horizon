@@ -93,7 +93,7 @@ impl Deployment {
                 && self.source_ready
                 && !self.stop_requested
                 && worker.desired_status == "RUNNING"
-                && worker.ssh_address().is_some()
+                && worker.ssh_endpoint().is_some()
         })
     }
 

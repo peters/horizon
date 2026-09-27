@@ -761,3 +761,5 @@ on initial launch. Existing records without that binding remain inspectable and
 stoppable but cannot be adopted for attachment. Authorization opens input and
 output forwarding before releasing the same lock that orders terminal stop;
 no allocation lock is held during interactive relay.
+
+The shared `horizon-cloud::SshHost` and `SshEndpoint` types validate provider SSH destinations without DNS lookups. Controller and companion SSH transports resolve validated names inside their bounded subprocesses, while worker journals retain legacy numeric fields.

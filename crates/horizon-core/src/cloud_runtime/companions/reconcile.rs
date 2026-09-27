@@ -249,7 +249,7 @@ fn connect(
         &Request::Connect {
             grant: grant.id.clone(),
             alias: alias.into(),
-            host: address.ip(),
+            host: address.host().clone(),
             port: address.port(),
             host_key,
         },
