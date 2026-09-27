@@ -286,7 +286,8 @@ pub(super) fn validate_private_key_file(path: &Path) -> Result<()> {
     if !meta.is_file() || meta.len() == 0 || meta.len() > 4096 {
         return Err(Error::Invalid("Invalid API-key file"));
     }
-    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    // Sized for the whole read up front, so no reallocation frees an unwiped copy.
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(4097));
     std::fs::File::open(path)?.take(4097).read_to_end(&mut bytes)?;
     if bytes.len() > 4096 || bytes.iter().all(u8::is_ascii_whitespace) {
         return Err(Error::Invalid("API-key file must contain a nonempty credential"));

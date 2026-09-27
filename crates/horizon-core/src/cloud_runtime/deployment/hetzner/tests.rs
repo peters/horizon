@@ -495,7 +495,8 @@ mod failure_points {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
         let mut state: Deployment = serde_json::from_value(json!({
-            "version": 1, "cloud_id": spec.operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+            // The deployment keeps the canonical cloud ID; `spec` may name another.
+            "version": 1, "cloud_id": super::spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
             "profile": spec.profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec,
             "worker": null, "sessions": []
         }))
@@ -528,6 +529,16 @@ mod failure_points {
         let mut small = spec();
         small.profile.storage.volume_gb = 5;
         let (state, journal, kept, served) = provision_spec(&small, Vec::new());
+        assert_eq!(served, 0);
+        assert!(journal.key.is_none() && !kept);
+        assert_eq!(state.operation, CreateState::Prepared);
+    }
+
+    #[test]
+    fn a_spec_for_another_cloud_is_refused_before_any_request() {
+        let mut other = spec();
+        other.operation_id = "another-cloud".into();
+        let (state, journal, kept, served) = provision_spec(&other, Vec::new());
         assert_eq!(served, 0);
         assert!(journal.key.is_none() && !kept);
         assert_eq!(state.operation, CreateState::Prepared);

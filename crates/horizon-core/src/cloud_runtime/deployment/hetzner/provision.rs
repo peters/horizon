@@ -31,6 +31,11 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     emit: &dyn Fn(Event),
 ) -> Result<()> {
     let operation = state.cloud_id.clone();
+    // Resources are named after the deployment, and user data and verification
+    // follow the spec, so the two must describe the same cloud before any request.
+    if spec.operation_id != operation || spec.profile != state.profile {
+        return Err(Error::Invalid("Deployment and worker identities differ"));
+    }
     // The worker's key, image digest and machine types are part of the host
     // configuration; a malformed one would boot a worker nobody can reach.
     spec.validate()?;

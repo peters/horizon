@@ -14,10 +14,12 @@ and the registry pull credential before it records or builds anything.
 
 1. Horizon registers a throwaway SSH key for the cloud. Its private half is
    discarded; it only stops Hetzner from generating and emailing a root password.
-2. It picks the first allowed location and creates an ext4 workspace volume
-   there. The volume fixes the location for the cloud's whole life.
-3. It tries the allowed server types that have the profile's CPU and memory, in
-   order. A capacity refusal (HTTP 412 `resource_unavailable` or HTTP 422
+2. It picks the first allowed location, in order, where an allowed server type
+   has the profile's CPU, memory and container disk, skipping locations where
+   none does, and creates an ext4 workspace volume there. The volume fixes the
+   location for the cloud's whole life.
+3. It tries the allowed server types that have the profile's CPU, memory and
+   container disk in that location, in order. A capacity refusal (HTTP 412 `resource_unavailable` or HTTP 422
    `placement_error`) moves on to the next type; any other refusal stops.
    Hetzner's availability flag is advisory, so every allowed type is tried.
 4. The server boots Hetzner's `docker-ce` image with user data that mounts the
@@ -118,7 +120,8 @@ Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPo
   server and address;
 - only the locations in `locations` are listed, with every server type, and
   `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
-- offers stay informational (`rentable: false`) until Horizon can create clouds on Hetzner.
+- offers stay informational (`rentable: false`) until the New cloud dialog can price and
+  create Hetzner clouds; the deployment coordinator already deploys them.
 
 Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
 beside the price list, so older worker images keep taking RunPod prices unchanged.
