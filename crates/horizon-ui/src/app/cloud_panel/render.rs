@@ -302,13 +302,16 @@ fn paint_header(
         );
     }
     let provider = group.environment.provider.as_deref().unwrap_or("Local");
-    let provider = match provider {
-        "runpod" => "RunPod",
-        "hetzner" => "Hetzner",
-        "daytona" => "Daytona",
-        "fly" => "Fly.io",
-        "local" => "Local",
-        other => other,
+    // Providers Horizon deploys on are named by their description; the rest are the
+    // prototype's design fixtures.
+    let provider = match horizon_core::cloud_runtime::provider::by_id(provider) {
+        Some(described) => described.label,
+        None => match provider {
+            "daytona" => "Daytona",
+            "fly" => "Fly.io",
+            "local" => "Local",
+            other => other,
+        },
     };
     let profile = group.environment.profile.as_deref().unwrap_or("Development");
     painter.text(

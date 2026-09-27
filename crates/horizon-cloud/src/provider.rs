@@ -76,6 +76,11 @@ pub struct Description {
     pub cpu_volume_gb: (u32, u32),
     /// Who stops a worker there after `idle_stop_minutes` without activity.
     pub idle_stop: IdleStop,
+    /// The provider's site, as a card names it, such as `runpod.io`.
+    pub site: &'static str,
+    /// Whether the provider pulls private images with a registry auth it stores
+    /// (`registry_pull_auth_id`); otherwise the host logs in to the registry itself.
+    pub registry_auth: bool,
 }
 
 /// Who stops an idle worker on a provider.
@@ -102,6 +107,8 @@ pub const RUNPOD: Description = Description {
     choices: &[Choice::GpuType, Choice::Region],
     creatable: true,
     idle_stop: IdleStop::Worker,
+    registry_auth: true,
+    site: "runpod.io",
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
         *crate::runpod::volumes::REQUEST_SIZE_GB.end(),
@@ -121,6 +128,8 @@ pub const HETZNER: Description = Description {
     creatable: crate::offers::HETZNER_DEPLOYABLE,
     // The project token must never reach a worker, so Horizon stops it.
     idle_stop: IdleStop::Horizon,
+    registry_auth: false,
+    site: "hetzner.com",
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),
         *crate::hetzner::volumes::SIZE_GB.end(),
@@ -137,6 +146,13 @@ pub fn by_id(id: &str) -> Option<&'static Description> {
 }
 
 impl Description {
+    /// The provider `profile` names; a profile without a known one is a `RunPod` one,
+    /// as profiles were before providers were named.
+    #[must_use]
+    pub fn of(profile: &Profile) -> &'static Self {
+        by_id(&profile.provider).unwrap_or(&RUNPOD)
+    }
+
     /// Whether this provider supports `choice`.
     #[must_use]
     pub fn offers(&self, choice: Choice) -> bool {
@@ -241,6 +257,22 @@ mod tests {
         for id in ["runpod", crate::hetzner::PROVIDER] {
             assert!(by_id(id).is_some(), "{id}");
         }
+    }
+
+    #[test]
+    fn a_profile_names_its_provider_and_what_it_does() {
+        let mut profile: Profile = serde_json::from_value(serde_json::json!({
+            "provider": "hetzner", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8,
+            "storage": {"container_gb": 20, "volume_gb": 50}
+        }))
+        .unwrap();
+        assert_eq!(Description::of(&profile), &HETZNER);
+        // Only RunPod stores a pull auth.
+        assert_eq!((RUNPOD.registry_auth, HETZNER.registry_auth), (true, false));
+        assert_eq!((RUNPOD.site, HETZNER.site), ("runpod.io", "hetzner.com"));
+        // A provider Horizon does not know reads as RunPod, as profiles were before providers.
+        profile.provider = "elsewhere".into();
+        assert_eq!(Description::of(&profile), &RUNPOD);
     }
 
     #[test]

@@ -256,7 +256,13 @@ pub(in crate::app::cloud_panel) fn runtime_heading(
         }
         ui.label(RichText::new("runpod.io").size(15.0).color(theme::FG_DIM()));
     } else {
+        let described = group
+            .environment
+            .provider
+            .as_deref()
+            .and_then(horizon_core::cloud_runtime::provider::by_id);
         let (name, domain) = match group.environment.provider.as_deref() {
+            _ if let Some(described) = described => (described.label, described.site),
             Some("daytona") => ("Daytona", "daytona.io"),
             Some("fly") => ("Fly.io", "fly.io"),
             other => (other.unwrap_or("Runtime"), ""),

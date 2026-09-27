@@ -39,10 +39,7 @@ impl ReconciledDeployment {
     /// What a stop kept of this cloud's worker, and so what Resume does.
     #[must_use]
     pub fn stopped(&self) -> horizon_cloud::provider::StoppedCost {
-        horizon_cloud::provider::by_id(&self.state.profile.provider)
-            .map_or(horizon_cloud::provider::StoppedCost::WorkerKept, |provider| {
-                provider.stopped
-            })
+        horizon_cloud::provider::Description::of(&self.state.profile).stopped
     }
 }
 

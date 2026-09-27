@@ -97,7 +97,10 @@ pub fn decide(
             if state.worker.as_ref().is_some_and(|worker| &worker.id != worker_id) {
                 return Decision::Refuse(Refusal::IdentityMismatch);
             }
-            let released = state.profile.provider == horizon_cloud::hetzner::PROVIDER && state.stage == Stage::Stopped;
+            // A provider whose stop deletes the server has no worker to report once stopped.
+            let released = horizon_cloud::provider::Description::of(&state.profile).stopped
+                == horizon_cloud::provider::StoppedCost::ServerDeleted
+                && state.stage == Stage::Stopped;
             if !released && state.worker.is_none() {
                 return Decision::ReconcileOnly;
             }
