@@ -1,5 +1,5 @@
-//! Which destinations a bridge may reach: hosts on the network it started on, reached through
-//! the same interface, never this computer.
+//! Which destinations a bridge may reach: hosts on the network it started on, reached from this
+//! computer's address there, never this computer.
 use horizon_cloud_protocol::local_network::{Subnet, SubnetError};
 use std::{
     io,
@@ -125,7 +125,9 @@ fn usable_host(address: Ipv4Addr) -> bool {
 /// other IPv6 address is outside the scope in this version. `source` names the local address
 /// the connection would leave from: a more specific route inside the subnet, such as a VPN or
 /// a virtual machine network, or a local address this computer did not list, leaves from
-/// somewhere else and is refused.
+/// somewhere else and is refused. The check is on the route's source address only; a route
+/// that this computer's administrator sets up to send the bridged network's own source address
+/// out of another interface is not detected.
 pub(super) fn admits(
     network: &Network,
     host: &Host,
@@ -192,7 +194,7 @@ pub(super) mod tests {
         (host.current_network().unwrap(), host)
     }
 
-    /// Decides as if every destination were routed out of the bridged interface.
+    /// Decides as if every destination were routed from the bridged address.
     fn check(network: &Network, host: &Host, destination: IpAddr) -> bool {
         admits(network, host, destination, || Some(LAN))
     }
@@ -220,7 +222,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn destinations_routed_out_of_another_interface_are_refused() {
+    fn destinations_routed_from_another_address_are_refused() {
         let (network, host) = home();
         let camera = v4(192, 168, 1, 50);
         for source in [

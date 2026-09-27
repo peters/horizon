@@ -44,9 +44,9 @@ type ReadHost = Box<dyn Fn() -> io::Result<scope::Host> + Send + Sync>;
 type Source = Box<dyn Fn(SocketAddr) -> Option<Ipv4Addr> + Send + Sync>;
 
 /// Which destinations a bridge may reach: hosts on the network this computer was on when the
-/// bridge started, reached through the same interface, never this computer itself. Names are
-/// resolved here, and only the checked addresses are returned for dialling, so a name cannot
-/// resolve again to something else.
+/// bridge started, reached from this computer's address there, never this computer itself.
+/// Names are resolved here, and only the checked addresses are returned for dialling, so a name
+/// cannot resolve again to something else.
 pub struct Scope {
     network: scope::Network,
     resolve: Resolve,
