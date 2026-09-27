@@ -326,3 +326,18 @@ fn a_budgeted_inspection_ends_with_its_budget_as_a_transport_failure() {
         Err(CloudError::Transport)
     ));
 }
+
+#[test]
+fn a_loopback_client_talks_only_to_this_machine() {
+    let credential = || Credential::new("secret-test-key".into()).unwrap();
+    assert!(Hetzner::loopback(credential(), "192.0.2.1:80".parse().unwrap()).is_err());
+    let (hetzner, requests, task) = provider(vec![(200, json!({"server": servers::server(42)}))]);
+    let address: std::net::SocketAddr = hetzner.endpoint.trim_start_matches("http://").parse().unwrap();
+    let client = Hetzner::loopback(credential(), address).unwrap();
+    assert_eq!(
+        client.inspect_server(42, &Cancellation::default()).unwrap().unwrap().id,
+        42
+    );
+    task.join().unwrap();
+    assert!(requests.lock().unwrap()[0].starts_with("GET /servers/42 "));
+}
