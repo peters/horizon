@@ -275,6 +275,13 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         &mut form.title,
         "e.g. Feature development",
     );
+    if form.title.trim().is_empty() && !form.launch.loading() {
+        ui.label(
+            RichText::new("A cloud title is required before Start cloud can be used.")
+                .size(14.0)
+                .color(theme::FG()),
+        );
+    }
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
     }
@@ -467,28 +474,34 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
 /// Offered CPU worker sizes; a GPU profile's size is fixed. Buttons and inline notes rather
 /// than drop-downs and tooltips, which would draw below this Tooltip-order modal.
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
+    if let Some(reason) = submit_reason(form) {
+        ui.label(RichText::new(reason).size(14.0).color(theme::FG()));
+        ui.add_space(6.0);
+    }
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), 40.0),
         Layout::right_to_left(Align::Center),
         |ui| {
-            actions.create |= ui
-                .add_enabled(
-                    can_submit(form),
-                    Button::new(
-                        RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
-                            "Starting cloud…"
-                        } else {
-                            "Start cloud"
-                        })
-                        .size(14.0)
-                        .strong(),
-                    )
-                    .min_size(Vec2::new(136.0, 40.0))
-                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
-                    .stroke(Stroke::new(1.0, theme::ACCENT()))
-                    .corner_radius(10),
+            let mut start = ui.add_enabled(
+                can_submit(form),
+                Button::new(
+                    RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
+                        "Starting cloud…"
+                    } else {
+                        "Start cloud"
+                    })
+                    .size(14.0)
+                    .strong(),
                 )
-                .clicked();
+                .min_size(Vec2::new(136.0, 40.0))
+                .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
+                .stroke(Stroke::new(1.0, theme::ACCENT()))
+                .corner_radius(10),
+            );
+            if let Some(reason) = submit_reason(form) {
+                start = start.on_disabled_hover_text(reason);
+            }
+            actions.create |= start.clicked();
             actions.cancel = ui
                 .add(
                     Button::new(RichText::new("Cancel").size(14.0))
@@ -498,6 +511,21 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
                 .clicked();
         },
     );
+}
+
+fn submit_reason(form: &Production) -> Option<&'static str> {
+    if form.pending_creation.is_some() || form.launch.submitted {
+        return None;
+    }
+    match (
+        form.title.trim().is_empty(),
+        form.profiles.is_none() && !form.launch.loading(),
+    ) {
+        (false, false) => None,
+        (true, false) => Some("Enter a cloud title to start this cloud."),
+        (false, true) => Some("Read the repository profile before starting."),
+        (true, true) => Some("Enter a cloud title and read the repository profile."),
+    }
 }
 
 fn can_submit(form: &Production) -> bool {

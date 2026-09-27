@@ -117,6 +117,28 @@ fn opening_workspace_cloud_focuses_title_without_an_extra_click() {
 }
 
 #[test]
+fn start_cloud_says_why_it_is_disabled() {
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.production.creating = true;
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let blob = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(blob.contains("cloud title"), "{blob}");
+    assert!(blob.contains("Enter a cloud title"), "{blob}");
+}
+
+#[test]
 fn creation_tab_navigation_never_activates_the_toolbar() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
