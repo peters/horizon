@@ -178,8 +178,14 @@ pub fn stop(
             .inspect_server(id, cancel)?
             .ok_or(CloudError::WorkerLost)?
             .verify(operation_id)?;
-        journal.released = Some(worker_id.clone());
-        records.journal(journal)?;
+        save(
+            journal,
+            Journal {
+                released: Some(worker_id.clone()),
+                ..journal.clone()
+            },
+            records,
+        )?;
     }
     records.stop(Stop::Stopping)?;
     // A retried stop also shuts down a server that still runs before deleting it.
@@ -222,8 +228,14 @@ pub fn delete(
         cancel,
     } = cloud;
     if !journal.deleting {
-        journal.deleting = true;
-        records.journal(journal)?;
+        save(
+            journal,
+            Journal {
+                deleting: true,
+                ..journal.clone()
+            },
+            records,
+        )?;
     }
     if *operation == CreateState::Requested {
         let mut found = unresolved(grace, cancel, || client.find_servers(operation_id, cancel))?;
@@ -273,17 +285,37 @@ pub fn delete(
             |_| {},
         )?;
     }
-    journal.volume = fence;
-    journal.released = None;
-    records.journal(journal)?;
+    save(
+        journal,
+        Journal {
+            volume: fence,
+            released: None,
+            ..journal.clone()
+        },
+        records,
+    )?;
     // The key is recorded before it is registered, so without a record there is
     // none; with one, a registration whose response was lost is looked for twice.
     if journal.key.is_some() && !unresolved(grace, cancel, || client.find_ssh_keys(operation_id, cancel))?.is_empty() {
         client.delete_ssh_key(operation_id, cancel)?;
     }
     // The key is gone and proven absent, so the cloud no longer keeps anything.
-    journal.key = None;
-    records.journal(journal)
+    save(
+        journal,
+        Journal {
+            key: None,
+            ..journal.clone()
+        },
+        records,
+    )
+}
+
+/// Saves `next` and only then lets the caller's journal take it, so a failed
+/// save leaves the journal as it is on disk and a retry saves the change again.
+fn save(journal: &mut Journal, next: Journal, records: &mut impl Records) -> Result<(), CloudError> {
+    records.journal(&next)?;
+    *journal = next;
+    Ok(())
 }
 
 /// The last known worker, as a stopped worker with no endpoint.

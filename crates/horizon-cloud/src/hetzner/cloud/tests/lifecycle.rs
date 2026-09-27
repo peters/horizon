@@ -201,3 +201,38 @@ fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
     assert!(refused.to_string().contains("still billed"));
     assert!(kept.stops.is_empty() && kept.operation.is_none(), "nothing is recorded");
 }
+
+/// Records whose every journal save fails.
+struct Refusing;
+
+impl Records for Refusing {
+    fn journal(&mut self, _: &Journal) -> Result<(), CloudError> {
+        Err(CloudError::Persistence)
+    }
+
+    fn operation(&mut self, _: &CreateState) -> Result<(), CloudError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_delete_whose_intent_cannot_be_saved_changes_nothing() {
+    let (client, requests, task) = provider(Vec::new());
+    let mut operation = CreateState::Bound { worker_id: "42".into() };
+    let mut journal = journal(CreateState::Bound { worker_id: "9".into() });
+    let before = journal.clone();
+    let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+    let cloud = Cloud {
+        client: &client,
+        operation_id: &operation_id,
+        cancel: &cancel,
+    };
+    assert!(matches!(
+        delete(cloud, &mut operation, &mut journal, &mut Refusing, Duration::ZERO),
+        Err(CloudError::Persistence)
+    ));
+    task.join().unwrap();
+    // Unsaved, the intent is not taken either, so a retry saves it before deleting.
+    assert_eq!(journal, before);
+    assert!(requests.lock().unwrap().is_empty());
+}
