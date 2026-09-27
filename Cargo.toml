@@ -116,6 +116,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 libc = "0.2.189"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
+# Interface addresses and netmasks on Linux, macOS and Windows without unsafe
+# code in Horizon crates; Local Network Bridge derives its scope from them.
+if-addrs = "0.15.0"
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 regex = "1.13.1"

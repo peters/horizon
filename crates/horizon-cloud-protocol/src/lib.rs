@@ -5,6 +5,7 @@ pub mod bootstrap;
 pub mod companion;
 mod identity;
 pub mod inspection;
+pub mod local_network;
 pub mod membership;
 pub mod offers;
 mod placement;
