@@ -21,7 +21,8 @@ const MISSING: &str = "The registry has no such image; check the image reference
 /// Checks that `login` can read `image`, an image reference such as
 /// `example.azurecr.io/team/worker@sha256:...`.
 /// # Errors
-/// Refuses a login the registry rejects and an image it does not have.
+/// Refuses a login the registry rejects and an image it does not have, and
+/// reports `CloudError::Cancelled` once `cancel` is cancelled.
 pub fn verify_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation) -> Result<(), CloudError> {
     verify_pull_at(login, image, cancel, "https")
 }
@@ -49,7 +50,6 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
         return Ok(());
     };
     let authorization = match challenged.status().as_u16() {
-        404 => return Err(CloudError::Invalid(MISSING)),
         401 => {
             let challenge = challenged
                 .headers()
@@ -95,7 +95,8 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
                 None => return Ok(()),
             }
         }
-        // Public (200), so the login is not needed to read it, or indefinite.
+        // Public (200), so the login is not needed to read it, or indefinite: a
+        // registry may answer 404 to an anonymous request to hide a private image.
         _ => return Ok(()),
     };
     cancel.check()?;

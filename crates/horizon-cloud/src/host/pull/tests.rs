@@ -210,3 +210,15 @@ fn challenges_are_read_with_quoted_and_bare_values() {
     );
     assert_eq!(Challenge::parse("Negotiate"), None);
 }
+
+#[test]
+fn an_anonymous_not_found_is_left_to_the_host() {
+    // Registries may answer 404 to an anonymous request to hide a private image.
+    let (address, seen, task) = registry(vec![(404, "", "")]);
+    check(&address, task).unwrap();
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the login is not tried without a challenge"
+    );
+}

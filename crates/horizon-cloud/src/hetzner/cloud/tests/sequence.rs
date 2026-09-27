@@ -696,3 +696,64 @@ fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused, "an adopted volume may hold a workspace");
 }
+
+#[test]
+fn the_pull_login_is_checked_before_a_server_is_created_and_never_on_a_reconnect() {
+    let policy = Policy {
+        locations: vec!["hel1".into()],
+        server_types: vec!["cx33".into()],
+    };
+    let spec = spec();
+    let registry = spec.image_digest.split('/').next().unwrap().to_owned();
+    let login = || crate::host::RegistryLogin {
+        server: registry.clone(),
+        username: "puller".into(),
+        password: crate::Credential::new("secret".into()).unwrap(),
+    };
+    let request = |login| Request {
+        spec: &spec,
+        policy: &policy,
+        login: Some(login),
+        fresh: true,
+    };
+    // A new server: the refused login stops everything before the first request.
+    let (client, requests, task) = provider(Vec::new());
+    let client = client.with_pull_check(|_, _, _| Err(CloudError::Invalid("refused by the registry")));
+    let (mut operation, mut journal, mut kept) = (CreateState::Prepared, Journal::default(), Kept::default());
+    let refused = provision(
+        &client,
+        request(login()),
+        &mut operation,
+        &mut journal,
+        &mut kept,
+        &Cancellation::default(),
+        |_| {},
+    );
+    task.join().unwrap();
+    assert!(matches!(refused, Err(CloudError::Invalid("refused by the registry"))));
+    assert!(requests.lock().unwrap().is_empty() && kept.journal.is_none());
+    // A requested server is only reconciled; its login is never checked again.
+    let (client, requests, task) = provider(vec![(200, listing("servers", &json!([])))]);
+    let client = client.with_pull_check(|_, _, _| panic!("a reconnect checks no login"));
+    let mut operation = CreateState::Requested;
+    let mut journal = Journal {
+        location: Some("hel1".into()),
+        volume: CreateState::Bound { worker_id: "9".into() },
+        key: Some(super::super::throwaway_public_key().unwrap()),
+        ..Journal::default()
+    };
+    let _ = provision(
+        &client,
+        request(login()),
+        &mut operation,
+        &mut journal,
+        &mut Kept::default(),
+        &Cancellation::default(),
+        |_| {},
+    );
+    task.join().unwrap();
+    assert!(
+        !requests.lock().unwrap().is_empty(),
+        "the reconnect went on to the provider"
+    );
+}
