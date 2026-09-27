@@ -270,3 +270,22 @@ fn hetzner_offers_come_beside_the_price_list_in_their_own_currency() {
     assert!(publish_hetzner(&b"{\"version\":1}"[..], &hetzner, NOW).is_err());
     assert_eq!(std::fs::read(&hetzner).unwrap(), b"{");
 }
+
+#[test]
+fn a_horizon_without_runpod_prices_still_offers_its_other_providers() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
+    let agent = request("horizon:cloud-a", HOST, &serde_json::json!({"min_vcpu": 8}));
+    // Nothing sent at all: still waiting for prices.
+    let nothing = answer_from(&agent, (&path, &sessions), HOST, NOW);
+    assert!(error(&nothing).contains("no prices from the Horizon that owns this cloud yet"));
+    // Only a Hetzner catalog, as a Horizon set up without a RunPod key sends.
+    let minute_ago = u64::try_from(NOW).unwrap() - 60_000;
+    publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner_path(&path), NOW).unwrap();
+    let answered = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert_eq!(answered["offers"], serde_json::json!([]));
+    assert!(answered["unavailable"].as_str().unwrap().contains("no RunPod prices"));
+    assert_eq!(answered["other_providers"][0]["provider"], "Hetzner");
+}
