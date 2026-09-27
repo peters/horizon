@@ -230,7 +230,14 @@ impl Hetzner {
     pub fn credential(&self) -> Result<Credential> {
         self.validate()?;
         validate_private_key_file(&self.token_file)?;
-        Credential::new(std::fs::read_to_string(&self.token_file)?.trim().to_owned()).map_err(Error::from)
+        // Read into a wiped buffer and checked while borrowed, so no copy of the
+        // token outlives this call unwiped, even when it is refused.
+        let read = zeroize::Zeroizing::new(std::fs::read_to_string(&self.token_file)?);
+        let token = read.trim();
+        if token.is_empty() || token.bytes().any(|b| b <= 32 || b >= 127) {
+            return Err(Error::Invalid("The Hetzner token file must hold one printable token"));
+        }
+        Credential::new(token.to_owned()).map_err(Error::from)
     }
 }
 

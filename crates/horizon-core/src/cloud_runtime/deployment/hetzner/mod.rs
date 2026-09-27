@@ -13,6 +13,11 @@ pub(super) use provision::provision;
 /// Checks what a Hetzner cloud needs before any record, build or provider
 /// request, so an unsupported request fails at once and leaves nothing behind.
 pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settings: &Settings) -> Result<()> {
+    if !horizon_cloud::hetzner::volumes::SIZE_GB.contains(&u32::from(profile.storage.volume_gb)) {
+        return Err(Error::Invalid(
+            "A Hetzner workspace volume must be between 10 and 10,240 GB",
+        ));
+    }
     horizon_cloud::hetzner::resource_name(cloud_id).map_err(|_| {
         Error::Invalid("A Hetzner cloud needs an ID of lowercase letters, digits and hyphens, at most 48 characters")
     })?;
@@ -89,14 +94,29 @@ const JOURNAL: &str = "hetzner.json";
 pub(super) struct Compute {
     pub(super) client: Hetzner,
     pub(super) settings: crate::cloud_runtime::settings::Hetzner,
+    /// Where and on what this cloud may run under the current settings and its
+    /// placement. Every attempt, retry and reconnect is checked against these,
+    /// not against the policy recorded when the cloud was first provisioned.
+    pub(super) allowed: Allowed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Allowed {
+    pub(super) locations: Vec<String>,
+    pub(super) server_types: Vec<String>,
 }
 
 impl Compute {
     pub(super) fn new(settings: &Settings) -> Result<Self> {
-        let settings = super::sizing::hetzner(settings)?.clone();
+        let hetzner = super::sizing::hetzner(settings)?.clone();
+        let allowed = Allowed {
+            locations: hetzner.locations_for(settings.placement.as_ref())?,
+            server_types: hetzner.server_types.clone(),
+        };
         Ok(Self {
-            client: Hetzner::new(settings.credential()?),
-            settings,
+            client: Hetzner::new(hetzner.credential()?),
+            settings: hetzner,
+            allowed,
         })
     }
 }

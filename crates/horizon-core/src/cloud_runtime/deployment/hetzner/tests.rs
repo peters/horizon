@@ -1,5 +1,5 @@
 use super::{
-    Journal,
+    Allowed, Journal,
     provision::{allowed, first_fit, fit, location, plan},
     throwaway_public_key, worker,
 };
@@ -202,7 +202,8 @@ fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() 
         offer("cpx32", "nbg1", 4, 8.0),
         offer("ccx23", "hel1", 4, 16.0),
     ];
-    let placements = fit(&offers, &spec, "hel1").unwrap();
+    let types = spec.cpu_flavors.clone();
+    let placements = fit(&offers, &spec, &types, "hel1").unwrap();
     let chosen: Vec<_> = placements
         .iter()
         .map(|p| (p.server_type.as_str(), p.location.as_str()))
@@ -212,14 +213,14 @@ fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() 
         [("cx33", "hel1"), ("cpx32", "hel1")],
         "in configured order, unlisted types ignored"
     );
-    assert!(fit(&offers[..1], &spec, "hel1").is_err());
+    assert!(fit(&offers[..1], &spec, &types, "hel1").is_err());
     let mut small_disk = spec.clone();
     small_disk.profile.storage.container_gb = 100;
     assert!(
-        fit(&offers, &small_disk, "hel1").is_err(),
+        fit(&offers, &small_disk, &types, "hel1").is_err(),
         "an 80 GB local disk cannot hold a 100 GB container disk"
     );
-    assert!(fit(&offers, &spec, "fsn1").is_err());
+    assert!(fit(&offers, &spec, &types, "fsn1").is_err());
 }
 
 #[test]
@@ -242,47 +243,71 @@ fn the_host_plan_carries_the_worker_contract_and_no_idle_stop() {
     assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
 }
 
+fn allowing(locations: &[&str], server_types: &[&str]) -> Allowed {
+    Allowed {
+        locations: locations.iter().map(|&name| name.into()).collect(),
+        server_types: server_types.iter().map(|&name| name.into()).collect(),
+    }
+}
+
 #[test]
 fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
-    let mut spec = spec();
-    assert_eq!(location(Some("hel1"), &spec).unwrap(), "hel1");
+    let allowed = allowing(&["hel1"], &["cx33"]);
+    assert_eq!(location(Some("hel1"), &allowed).unwrap(), "hel1");
     assert!(
-        location(None, &spec).is_err(),
+        location(None, &allowed).is_err(),
         "an existing volume always has a recorded location"
     );
-    spec.data_centers = vec!["nbg1".into()];
     assert!(
-        location(Some("hel1"), &spec).is_err(),
+        location(Some("hel1"), &allowing(&["nbg1"], &["cx33"])).is_err(),
         "the volume cannot follow a changed allow-list"
     );
 }
 
 #[test]
 fn without_a_volume_the_first_allowed_location_that_fits_is_chosen() {
-    let mut spec = spec();
-    spec.data_centers = vec!["fsn1".into(), "nbg1".into(), "hel1".into()];
+    let spec = spec();
     let offers = [
         offer("cx23", "fsn1", 2, 4.0),
         offer("cx33", "nbg1", 4, 8.0),
         offer("cx33", "hel1", 4, 8.0),
         offer("cx33", "ash", 4, 8.0),
     ];
-    let (location, placements) = first_fit(&offers, &spec).unwrap();
+    let (location, placements) =
+        first_fit(&offers, &spec, &allowing(&["fsn1", "nbg1", "hel1"], &["cx23", "cx33"])).unwrap();
     assert_eq!(location, "nbg1", "fsn1 has no fitting type, and ash is not allowed");
     assert_eq!(placements.len(), 1);
-    spec.data_centers = vec!["ash".into()];
-    assert!(first_fit(&offers[..3], &spec).is_err());
-    spec.data_centers.clear();
-    assert!(first_fit(&offers, &spec).is_err());
+    assert!(first_fit(&offers[..3], &spec, &allowing(&["ash"], &["cx33"])).is_err());
+    assert!(first_fit(&offers, &spec, &allowing(&[], &["cx33"])).is_err());
+    assert!(
+        first_fit(&offers, &spec, &allowing(&["nbg1"], &["cx23"])).is_err(),
+        "only the current allowed types are considered"
+    );
 }
 
 #[test]
-fn a_placed_server_is_reconciled_against_the_settings_not_the_catalog() {
-    let spec = spec();
-    let placements = allowed(&spec, "hel1");
+fn a_placed_server_is_reconciled_against_the_current_types_not_the_catalog() {
+    let placements = allowed(&["cx33".into(), "cpx32".into()], "hel1");
     let types: Vec<_> = placements.iter().map(|p| p.server_type.as_str()).collect();
-    assert_eq!(types, ["cx23", "cx33", "cpx32"]);
+    assert_eq!(types, ["cx33", "cpx32"]);
     assert!(placements.iter().all(|p| p.location == "hel1"));
+}
+
+#[test]
+fn readiness_admits_only_a_server_the_current_policy_allows_where_its_volume_is() {
+    use super::readiness::admitted;
+    let server = server("running", Some("192.0.2.10"));
+    let allowed = allowing(&["hel1"], &["cx33"]);
+    assert!(admitted(&server, &allowed, Some("hel1")));
+    assert!(
+        !admitted(&server, &allowing(&["hel1"], &["cpx32"]), Some("hel1")),
+        "a resized server type"
+    );
+    assert!(
+        !admitted(&server, &allowing(&["nbg1"], &["cx33"]), Some("hel1")),
+        "a location no longer allowed"
+    );
+    assert!(!admitted(&server, &allowed, Some("nbg1")), "not where its volume is");
 }
 
 #[test]
@@ -392,7 +417,7 @@ mod provider {
 mod failure_points {
     use super::{provider, spec, volume};
     use crate::cloud_runtime::{
-        deployment::hetzner::{Compute, Journal, provision, retained},
+        deployment::hetzner::{Allowed, Compute, Journal, provision, retained},
         state::{Deployment, Store},
     };
     use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
@@ -446,9 +471,15 @@ mod failure_points {
     /// Runs provisioning for a fresh cloud against `responses` and returns the
     /// saved deployment, the journal and the number of requests served.
     fn provision_with(responses: Vec<(u16, String)>) -> (Deployment, Journal, bool, usize) {
+        provision_spec(&spec(), responses)
+    }
+
+    fn provision_spec(
+        spec: &horizon_cloud::WorkerSpec,
+        responses: Vec<(u16, String)>,
+    ) -> (Deployment, Journal, bool, usize) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
-        let spec = spec();
         let mut state: Deployment = serde_json::from_value(json!({
             "version": 1, "cloud_id": spec.operation_id, "repository": "/fixture", "revision": "a".repeat(40),
             "profile": spec.profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec,
@@ -463,8 +494,12 @@ mod failure_points {
                 json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
             )
             .unwrap(),
+            allowed: Allowed {
+                locations: vec!["hel1".into()],
+                server_types: vec!["cx33".into()],
+            },
         };
-        let result = provision(&compute, &store, &mut state, &spec, &Cancellation::default(), &|_| {});
+        let result = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {});
         task.join().unwrap();
         let served = requests.lock().unwrap().len();
         assert!(result.is_err() || served > 0);
@@ -472,6 +507,16 @@ mod failure_points {
         let journal = Journal::load(root.path()).unwrap();
         let kept = retained(root.path()).unwrap();
         (saved, journal, kept, served)
+    }
+
+    #[test]
+    fn a_volume_size_hetzner_refuses_is_refused_before_any_request() {
+        let mut small = spec();
+        small.profile.storage.volume_gb = 5;
+        let (state, journal, kept, served) = provision_spec(&small, Vec::new());
+        assert_eq!(served, 0);
+        assert!(journal.key.is_none() && !kept);
+        assert_eq!(state.operation, CreateState::Prepared);
     }
 
     #[test]

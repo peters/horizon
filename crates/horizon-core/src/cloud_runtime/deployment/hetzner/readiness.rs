@@ -54,6 +54,13 @@ pub(in crate::cloud_runtime::deployment) fn wait(
         server.verify(&state.cloud_id)?;
         // The server and the journaled volume must hold each other in one location,
         // or the worker's workspace is not the cloud's volume.
+        // The server's type and location must still be allowed, and its location
+        // must be the one its volume fixed; a resize or a changed policy is refused.
+        if !admitted(&server, &compute.allowed, journal.location.as_deref()) {
+            return Err(Error::Invalid(
+                "The server's type or location is not one the Hetzner settings allow for this cloud",
+            ));
+        }
         if !holds(&server, &volume) {
             return Err(Error::Invalid(
                 "The server does not hold this cloud's workspace volume; check or delete the cloud",
@@ -124,4 +131,16 @@ pub(super) fn holds(
     volume: &horizon_cloud::hetzner::volumes::Volume,
 ) -> bool {
     server.volumes == [volume.id] && volume.server == Some(server.id) && server.location == volume.location
+}
+
+/// Whether the server's type and location are allowed now, and its location is
+/// the one its volume fixed.
+pub(super) fn admitted(
+    server: &horizon_cloud::hetzner::servers::Server,
+    allowed: &super::Allowed,
+    location: Option<&str>,
+) -> bool {
+    allowed.server_types.contains(&server.server_type.name)
+        && allowed.locations.contains(&server.location.name)
+        && location == Some(server.location.name.as_str())
 }

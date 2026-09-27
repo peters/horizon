@@ -1,6 +1,6 @@
 //! Requests the key, the workspace volume and the server, each behind a durable
 //! record so a lost response never creates a second billed resource.
-use super::{Compute, Journal, throwaway_public_key, worker};
+use super::{Allowed, Compute, Journal, throwaway_public_key, worker};
 use crate::cloud_runtime::{
     Error, Event, Result,
     state::{Deployment, Store},
@@ -35,6 +35,11 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     // configuration; a malformed one would boot a worker nobody can reach.
     spec.validate()?;
     supported(spec)?;
+    if !horizon_cloud::hetzner::volumes::SIZE_GB.contains(&u32::from(spec.profile.storage.volume_gb)) {
+        return Err(Error::Invalid(
+            "A Hetzner workspace volume must be between 10 and 10,240 GB",
+        ));
+    }
     // The whole host configuration, registry login included, is loaded once and
     // rendered before the first provider request, so an invalid one leaves
     // nothing behind. The volume's real device path is only known after it exists.
@@ -49,15 +54,20 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     // not on the catalog still offering it.
     let volume_exists = journal.volume != CreateState::Prepared;
     let (location, placements) = if volume_exists {
-        let location = location(journal.location.as_deref(), spec)?;
+        let location = location(journal.location.as_deref(), &compute.allowed)?;
         let placements = if state.operation == CreateState::Prepared {
-            fit(&compute.client.catalog(cancel)?.offers, spec, &location)?
+            fit(
+                &compute.client.catalog(cancel)?.offers,
+                spec,
+                &compute.allowed.server_types,
+                &location,
+            )?
         } else {
-            allowed(spec, &location)
+            allowed(&compute.allowed.server_types, &location)
         };
         (location, placements)
     } else {
-        first_fit(&compute.client.catalog(cancel)?.offers, spec)?
+        first_fit(&compute.client.catalog(cancel)?.offers, spec, &compute.allowed)?
     };
     if journal.key.is_none() {
         journal.key = Some(throwaway_public_key()?);
@@ -115,11 +125,10 @@ pub(in crate::cloud_runtime::deployment) fn provision(
 }
 
 /// The location of an existing workspace volume. Settings can change while a
-/// cloud has a volume but no server yet, so a location they no longer allow is
-/// refused rather than used.
-pub(super) fn location(recorded: Option<&str>, spec: &WorkerSpec) -> Result<String> {
+/// cloud has a volume, so a location they no longer allow is refused rather than used.
+pub(super) fn location(recorded: Option<&str>, allowed: &Allowed) -> Result<String> {
     match recorded {
-        Some(location) if spec.data_centers.iter().any(|allowed| allowed == location) => Ok(location.to_owned()),
+        Some(location) if allowed.locations.iter().any(|name| name == location) => Ok(location.to_owned()),
         Some(_) => Err(Error::Invalid(
             "This cloud's workspace volume is in a location the Hetzner settings no longer allow",
         )),
@@ -127,25 +136,30 @@ pub(super) fn location(recorded: Option<&str>, spec: &WorkerSpec) -> Result<Stri
     }
 }
 
-/// For a cloud without a volume: the first allowed location, in order, where a
-/// configured server type fits, with those types. Only allowed locations are
-/// considered, and nothing is recorded until a volume is requested there.
-pub(super) fn first_fit(offers: &[Offer], spec: &WorkerSpec) -> Result<(String, Vec<Placement>)> {
-    if spec.data_centers.is_empty() {
+/// For a cloud without a volume: the first allowed location, in order, where an
+/// allowed server type fits, with those types. Nothing is recorded until a
+/// volume is requested there.
+pub(super) fn first_fit(offers: &[Offer], spec: &WorkerSpec, allowed: &Allowed) -> Result<(String, Vec<Placement>)> {
+    if allowed.locations.is_empty() {
         return Err(Error::Invalid("Hetzner settings list no location"));
     }
-    spec.data_centers
+    allowed
+        .locations
         .iter()
-        .find_map(|location| fit(offers, spec, location).ok().map(|placements| (location.clone(), placements)))
+        .find_map(|location| {
+            fit(offers, spec, &allowed.server_types, location)
+                .ok()
+                .map(|placements| (location.clone(), placements))
+        })
         .ok_or(Error::Invalid(
             "No configured Hetzner server type has the profile's CPU, memory and container disk in any allowed location",
         ))
 }
 
-/// Every configured server type in the location, in order, for reconciling a
+/// Every allowed server type in the location, in order, for reconciling a
 /// server that was already requested.
-pub(super) fn allowed(spec: &WorkerSpec, location: &str) -> Vec<Placement> {
-    spec.cpu_flavors
+pub(super) fn allowed(server_types: &[String], location: &str) -> Vec<Placement> {
+    server_types
         .iter()
         .map(|server_type| Placement {
             server_type: server_type.clone(),
@@ -164,7 +178,12 @@ fn supported(spec: &WorkerSpec) -> Result<()> {
 
 /// The configured server types, in order, whose CPU, memory and local disk fit the profile in the volume's
 /// location. Hetzner's availability flag is advisory, so it is not used to skip a type.
-pub(super) fn fit(offers: &[Offer], spec: &WorkerSpec, location: &str) -> Result<Vec<Placement>> {
+pub(super) fn fit(
+    offers: &[Offer],
+    spec: &WorkerSpec,
+    server_types: &[String],
+    location: &str,
+) -> Result<Vec<Placement>> {
     let fits = |server_type: &String| {
         offers.iter().any(|offer| {
             &offer.server_type == server_type
@@ -174,8 +193,7 @@ pub(super) fn fit(offers: &[Offer], spec: &WorkerSpec, location: &str) -> Result
                 && offer.disk_gb >= u32::from(spec.profile.storage.container_gb)
         })
     };
-    let placements: Vec<Placement> = spec
-        .cpu_flavors
+    let placements: Vec<Placement> = server_types
         .iter()
         .filter(|server_type| fits(server_type))
         .map(|server_type| Placement {
