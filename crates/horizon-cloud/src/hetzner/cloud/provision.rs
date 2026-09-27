@@ -88,13 +88,14 @@ pub fn provision(
     // fitting server type is a candidate, in the policy's order. A requested or
     // bound server was placed already, so reconnecting to it depends on the policy
     // allowing its type, not on the catalog still offering it.
-    // A cleanup a sold-out location left unfinished is completed first.
-    if journal.vacating {
+    // An empty volume an earlier attempt left, sold out or interrupted, is deleted
+    // first, so the cloud is placed afresh.
+    if journal.unused && *operation == CreateState::Prepared && journal.volume != CreateState::Prepared {
         release_empty_volume(client, operation_id, journal, records, cancel)?;
     }
-    // Only a volume this request creates is known to be empty, so the cloud may
-    // move only while it has no volume, neither recorded nor found by label; a
-    // found one is adopted and holds whatever the workspace held.
+    // Only a volume requested for the cloud's first server is known to be empty,
+    // so the cloud may move only while it has no volume, neither recorded nor
+    // found by label; a found one is adopted and holds whatever the workspace held.
     let found = if journal.volume == CreateState::Prepared {
         client.find_volumes(operation_id, cancel)?
     } else {
@@ -152,6 +153,7 @@ pub fn provision(
             client,
             &mut Place {
                 spec,
+                movable,
                 location: &location,
                 placements: &placements,
                 key: &key,
@@ -180,6 +182,8 @@ pub fn provision(
 /// Where one placement attempt goes.
 struct Place<'a> {
     spec: &'a WorkerSpec,
+    /// Whether the volume this attempt requests is the cloud's first, and so empty.
+    movable: bool,
     location: &'a str,
     placements: &'a [Placement],
     key: &'a SshKey,
@@ -200,9 +204,10 @@ fn place(
     let operation_id = at.spec.operation_id.as_str();
     // Recorded before the volume request it fixes; a location chosen earlier but
     // never used by a volume is replaced.
-    if journal.location.as_deref() != Some(at.location) {
+    if journal.location.as_deref() != Some(at.location) || (at.movable && !journal.unused) {
         let next = Journal {
             location: Some(at.location.to_owned()),
+            unused: journal.unused || at.movable,
             ..journal.clone()
         };
         records.journal(&next)?;
@@ -239,15 +244,26 @@ fn place(
         &server_request,
         operation,
         cancel,
-        |next| records.operation(next),
+        |next| {
+            // A server holds the volume from now on, so it is no longer known empty.
+            if journal.unused && matches!(next, CreateState::Bound { .. }) {
+                let saved = Journal {
+                    unused: false,
+                    ..journal.clone()
+                };
+                records.journal(&saved)?;
+                *journal = saved;
+            }
+            records.operation(next)
+        },
         &mut *progress,
     )?;
     Ok((server, volume))
 }
 
-/// Deletes the workspace volume a sold-out location left, proves it gone and
+/// Deletes the empty workspace volume an earlier attempt left, proves it gone and
 /// returns the journal to no volume and no location, as if it had never been
-/// requested.
+/// requested. Only a volume the journal marks `unused` is ever passed here.
 fn release_empty_volume(
     client: &Hetzner,
     operation_id: &str,
@@ -255,14 +271,7 @@ fn release_empty_volume(
     records: &mut impl Records,
     cancel: &Cancellation,
 ) -> Result<(), CloudError> {
-    if !journal.vacating {
-        let next = Journal {
-            vacating: true,
-            ..journal.clone()
-        };
-        records.journal(&next)?;
-        *journal = next;
-    }
+    debug_assert!(journal.unused, "only an unused volume is released");
     let mut fence = journal.volume.clone();
     let snapshot = journal.clone();
     client.delete_volume(
@@ -275,7 +284,7 @@ fn release_empty_volume(
                 CreateState::Terminated { .. } => Journal {
                     volume: CreateState::Prepared,
                     location: None,
-                    vacating: false,
+                    unused: false,
                     ..snapshot.clone()
                 },
                 other => Journal {
@@ -290,7 +299,7 @@ fn release_empty_volume(
     *journal = Journal {
         volume: CreateState::Prepared,
         location: None,
-        vacating: false,
+        unused: false,
         ..journal.clone()
     };
     Ok(())

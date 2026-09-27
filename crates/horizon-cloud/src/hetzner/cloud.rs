@@ -50,10 +50,13 @@ pub struct Journal {
     /// finished, then starts the redeployed cloud afresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleting: bool,
-    /// Set before an empty workspace volume in a sold-out location is deleted, so
-    /// a retry finishes that cleanup before it provisions anywhere.
+    /// The recorded workspace volume was requested for the cloud's first server and
+    /// no server has held it, so it is empty: a retry may delete it and place the
+    /// cloud afresh, in another location if this one is sold out. Saved with the
+    /// location before the volume request and cleared before a server is recorded
+    /// as bound, so a volume that ever held a workspace never carries it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub vacating: bool,
+    pub unused: bool,
 }
 
 fn prepared() -> CreateState {
@@ -68,7 +71,7 @@ impl Default for Journal {
             key: None,
             released: None,
             deleting: false,
-            vacating: false,
+            unused: false,
         }
     }
 }

@@ -24,6 +24,12 @@ impl Records for Kept {
     }
 
     fn operation(&mut self, operation: &CreateState) -> Result<(), CloudError> {
+        // A volume a server holds may hold a workspace, so it is never left marked empty.
+        assert!(
+            !matches!(operation, CreateState::Bound { .. })
+                || !self.journal.as_ref().is_some_and(|journal| journal.unused),
+            "the volume is marked used before the server is recorded as bound"
+        );
         self.operation = Some(operation.clone());
         Ok(())
     }
@@ -538,18 +544,20 @@ fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
     assert_eq!(worker.data_center(), Some("nbg1"));
     assert_eq!(journal.location.as_deref(), Some("nbg1"));
     assert_eq!(journal.volume, CreateState::Bound { worker_id: "10".into() });
+    assert!(!journal.unused, "a server holds the volume now");
     let requests = requests.lock().unwrap();
     assert!(requests.iter().any(|request| request.starts_with("DELETE /volumes/9 ")));
 }
 
 #[test]
-fn an_unfinished_vacate_is_completed_before_the_cloud_moves() {
-    // The earlier attempt recorded the cleanup, then stopped before the volume was gone.
+fn an_empty_volume_an_interrupted_attempt_left_is_deleted_before_the_cloud_is_placed_again() {
+    // The earlier attempt created the cloud's first volume, then stopped before any
+    // server held it: the location answered sold out, or the process ended.
     let journal = Journal {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
         key: Some("ssh-ed25519 AAAA".into()),
-        vacating: true,
+        unused: true,
         ..Journal::default()
     };
     let outcome = run(
@@ -558,14 +566,14 @@ fn an_unfinished_vacate_is_completed_before_the_cloud_moves() {
         false,
         and(released(free()).to_vec(), catalog_of(2)),
     );
-    assert!(!outcome.journal.vacating, "the cleanup finished");
+    assert!(!outcome.journal.unused, "the cleanup finished");
     assert_eq!(outcome.journal.volume, CreateState::Prepared);
     assert_eq!(outcome.journal.location, None);
 }
 
 #[test]
 fn a_volume_found_by_label_is_adopted_and_never_deleted_when_sold_out() {
-    // No volume recorded, but one exists: it may hold work, so it is never vacated.
+    // No volume recorded, but one exists: it may hold work, so it is never deleted.
     let found = [(200, listing("volumes", &json!([free()])))];
     let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
     let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
@@ -588,4 +596,34 @@ fn a_volume_found_by_label_is_adopted_and_never_deleted_when_sold_out() {
         CreateState::Bound { worker_id: "9".into() },
         "the found volume stays"
     );
+}
+
+#[test]
+fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() {
+    // A stop released the server that held this volume; resuming finds its location sold out.
+    let journal = Journal {
+        location: Some("hel1".into()),
+        volume: CreateState::Bound { worker_id: "9".into() },
+        key: Some(super::super::throwaway_public_key().unwrap()),
+        ..Journal::default()
+    };
+    let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
+    let responses = and(
+        and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
+        vec![
+            (200, json!({"volume": free()})),
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free()})),
+            error(412, "resource_unavailable"),
+        ],
+    );
+    let outcome = run(CreateState::Prepared, journal, false, responses);
+    assert!(outcome.worker.is_none());
+    assert_eq!(outcome.served, 9, "the sold-out answer ends it, with no delete");
+    assert_eq!(
+        outcome.journal.volume,
+        CreateState::Bound { worker_id: "9".into() },
+        "the workspace stays"
+    );
+    assert_eq!(outcome.journal.location.as_deref(), Some("hel1"));
 }
