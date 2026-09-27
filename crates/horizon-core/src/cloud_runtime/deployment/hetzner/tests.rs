@@ -1,8 +1,9 @@
-use super::{Journal, JournalFile as _, throwaway_public_key, worker};
-use horizon_cloud::{
-    CreateState, WorkerSpec,
-    hetzner::{servers::Server, volumes::Volume},
-};
+#[cfg(unix)]
+use super::worker;
+use super::{Journal, JournalFile as _, throwaway_public_key};
+#[cfg(unix)]
+use horizon_cloud::hetzner::{servers::Server, volumes::Volume};
+use horizon_cloud::{CreateState, WorkerSpec};
 
 fn spec() -> WorkerSpec {
     let profile: horizon_cloud::Profile = serde_json::from_value(serde_json::json!({
@@ -23,6 +24,9 @@ fn spec() -> WorkerSpec {
     }
 }
 
+// The server and volume fixtures serve the provisioning tests, which need a real
+// store and so run on Unix only.
+#[cfg(unix)]
 fn server(status: &str, address: Option<&str>) -> Server {
     serde_json::from_value(serde_json::json!({
         "id": 42, "name": format!("horizon-cloud-{}", spec().operation_id), "status": status,
@@ -33,6 +37,7 @@ fn server(status: &str, address: Option<&str>) -> Server {
     .unwrap()
 }
 
+#[cfg(unix)]
 fn volume() -> Volume {
     serde_json::from_value(serde_json::json!({
         "id": 9, "name": format!("horizon-cloud-{}", spec().operation_id), "size": 50, "location": {"name": "hel1"},

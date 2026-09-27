@@ -82,7 +82,6 @@ fn the_throwaway_key_is_a_valid_distinct_ed25519_key() {
     assert_ne!(first, throwaway_public_key().unwrap());
 }
 
-/// Writes `contents` to `path` readable only by its owner, as secret files must be.
 #[test]
 fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() {
     let spec = spec();
