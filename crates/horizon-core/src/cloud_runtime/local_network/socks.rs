@@ -258,6 +258,7 @@ enum Refusal {
 fn serve(mut client: TcpStream, mut slot: Slot) {
     // Accepted sockets inherit the listener's nonblocking mode on Windows.
     if client.set_nonblocking(false).is_err() || slot.register(&client).is_err() {
+        slot.shared.refuse();
         return;
     }
     let _ = client.set_nodelay(true);
@@ -451,6 +452,20 @@ fn relay(shared: &Arc<Shared>, client: TcpStream, upstream: TcpStream) {
     let _ = downstream.join();
 }
 
+/// Writes as much of `bytes` as the peer takes and returns how much that was.
+fn write_counted(to: &mut TcpStream, bytes: &[u8]) -> usize {
+    let mut written = 0;
+    while written < bytes.len() {
+        match to.write(&bytes[written..]) {
+            Ok(0) => break,
+            Ok(count) => written += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    written
+}
+
 /// Copies until end of input, then half-closes the other side so each direction ends on its own.
 fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
     let mut buffer = vec![0; BUFFER_BYTES];
@@ -463,7 +478,10 @@ fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
             Ok(count) => {
                 let (allowed, spent) = shared.reserve(count as u64);
                 let allowed = usize::try_from(allowed).unwrap_or(count);
-                if to.write_all(&buffer[..allowed]).is_err() {
+                let written = write_counted(&mut to, &buffer[..allowed]);
+                if written < allowed {
+                    // Undelivered bytes go back to the budget and out of the count.
+                    shared.bytes.fetch_sub((allowed - written) as u64, Ordering::AcqRel);
                     break;
                 }
                 if spent {
