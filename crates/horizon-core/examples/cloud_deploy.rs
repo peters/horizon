@@ -50,7 +50,20 @@ fn run() -> cloud_runtime::Result<()> {
             "{}",
             serde_json::to_string(&recovered.report).map_err(|_| cloud_runtime::Error::Json)?
         );
-        println!("{}", recovered.report.outcome.explanation());
+        if recovered.confirmed_stopped() {
+            // As the cloud panel says it: what Resume does follows the provider.
+            println!(
+                "Stopped. {}",
+                match recovered.stopped() {
+                    cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
+                    cloud_runtime::provider::StoppedCost::ServerDeleted => {
+                        "Resume creates a new server that attaches the same workspace volume."
+                    }
+                }
+            );
+        } else {
+            println!("{}", recovered.report.outcome.explanation());
+        }
         return Ok(());
     }
     if args[0] == "delete" && args.len() == 3 {
