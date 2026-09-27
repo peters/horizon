@@ -294,6 +294,21 @@ fn auth_key(server: &str) -> &str {
 
 const HEADER: &str = "#cloud-config\n";
 
+/// Serializes `value` as JSON into a wiped buffer of exactly `capacity` bytes.
+/// The writer is a fixed slice, so an oversized value fails with nothing
+/// reallocated, and no unwiped copy of a secret it carries is left behind.
+pub(crate) fn json_in_wiped(
+    value: &impl Serialize,
+    capacity: usize,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, CloudError> {
+    let mut buffer = zeroize::Zeroizing::new(vec![0; capacity]);
+    let mut rest = &mut buffer[..];
+    serde_json::to_writer(&mut rest, value).map_err(|_| CloudError::Invalid("Request does not fit its buffer"))?;
+    let written = capacity - rest.len();
+    buffer.truncate(written);
+    Ok(buffer)
+}
+
 /// The `write_files` item for Docker's login, written by hand so the credential
 /// never passes through the YAML serializer, which copies scalars into memory it
 /// does not wipe. The content is base64, which needs no YAML quoting, and every
@@ -335,9 +350,14 @@ fn registry_config(registry: &RegistryLogin) -> Result<zeroize::Zeroizing<String
     let config = Config {
         auths: BTreeMap::from([(key, Auth { auth: &auth })]),
     };
-    let mut json = zeroize::Zeroizing::new(Vec::with_capacity(auth.len() + key.len() + 64));
-    serde_json::to_writer(&mut *json, &config)
-        .map_err(|_| CloudError::Invalid("Registry login could not be encoded"))?;
+    // The key is a validated host name; JSON escaping at most multiplies it by six.
+    let capacity = key
+        .len()
+        .checked_mul(6)
+        .and_then(|key| key.checked_add(auth.len()))
+        .and_then(|size| size.checked_add(64))
+        .ok_or(CloudError::Invalid("Registry login could not be encoded"))?;
+    let mut json = json_in_wiped(&config, capacity)?;
     let text = String::from_utf8(std::mem::take(&mut *json))
         .map_err(|_| CloudError::Invalid("Registry login could not be encoded"))?;
     Ok(zeroize::Zeroizing::new(text))

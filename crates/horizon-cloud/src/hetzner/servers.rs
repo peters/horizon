@@ -448,14 +448,13 @@ fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<zer
         ssh_keys: request.ssh_key.map(|key| [key.id]),
     };
     // JSON escaping at most multiplies a character by six (`\u0000`).
-    let capacity = request.user_data.len() * 6 + 1024;
-    let mut out = zeroize::Zeroizing::new(Vec::with_capacity(capacity));
-    let allocated = out.capacity();
-    serde_json::to_writer(&mut *out, &body).map_err(|_| CloudError::Invalid("Invalid server request"))?;
-    if out.capacity() != allocated {
-        return Err(CloudError::Invalid("Server request outgrew its buffer"));
-    }
-    Ok(out)
+    let capacity = request
+        .user_data
+        .len()
+        .checked_mul(6)
+        .and_then(|size| size.checked_add(1024))
+        .ok_or(CloudError::Invalid("Server user data is too large"))?;
+    crate::host::json_in_wiped(&body, capacity)
 }
 
 fn bind(

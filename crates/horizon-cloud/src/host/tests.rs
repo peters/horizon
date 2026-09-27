@@ -284,3 +284,14 @@ fn repository_paths_stop_at_dockers_255_character_limit() {
     )));
     assert!(!valid_digest_reference(&format!("{}@{digest}", "w".repeat(256))));
 }
+
+#[test]
+fn json_is_written_into_a_fixed_wiped_buffer_or_refused() {
+    let value = serde_json::json!({"secret": "a\nb"});
+    let written = super::json_in_wiped(&value, 64).unwrap();
+    assert_eq!(&written[..], br#"{"secret":"a\nb"}"#);
+    assert!(
+        super::json_in_wiped(&value, 8).is_err(),
+        "an oversized value fails without growing the buffer"
+    );
+}
