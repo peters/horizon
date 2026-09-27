@@ -55,3 +55,22 @@ against the spec published on 2026-09-23 (info.version 1.0.0; newest changelog
 entry 2026-09-23). `scripts/check-hetzner-api.py` checks every operation and
 field Horizon uses against the live spec; run it before changing the Hetzner
 integration.
+
+## Offers
+
+With a `hetzner` binding, Hetzner offers appear beside RunPod's wherever offers are
+ranked: `cloud_deploy offers SETTINGS [REQUIREMENTS_JSON]` from this computer, and the
+`cloud_offers` tool for agents on its workers once the host sends them the catalog.
+Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPod:
+
+- amounts are euros, net of VAT, never converted, and `max_hourly` is read in euros for them;
+- each estimate is for a run that starts now, billed per started hour and capped per
+  calendar month (UTC) for compute, the workspace volume and the IPv4 address;
+- `stopped_monthly` is the kept volume only, since a stopped Hetzner cloud releases its
+  server and address;
+- only the locations in `locations` are listed, with every server type, and
+  `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
+- offers stay informational (`rentable: false`) until Horizon can create clouds on Hetzner.
+
+Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
+beside the price list, so older worker images keep taking RunPod prices unchanged.

@@ -152,3 +152,121 @@ fn only_a_valid_snapshot_replaces_the_prices() {
     let kept = decode(std::fs::File::open(&path).unwrap()).unwrap();
     assert_eq!(kept.observed_at_millis, 1);
 }
+
+fn hetzner_snapshot(observed_at_millis: u64) -> Vec<u8> {
+    use horizon_cloud::hetzner::catalog::{Catalog, Offer};
+    serde_json::to_vec(&HetznerSnapshot {
+        version: horizon_cloud_protocol::offers::VERSION,
+        observed_at_millis,
+        catalog: Catalog {
+            offers: vec![Offer {
+                server_type: "cx43".into(),
+                location: "hel1".into(),
+                cores: 8,
+                memory_gb: 16.0,
+                disk_gb: 160,
+                dedicated: false,
+                hourly_eur: 0.0256,
+                monthly_eur: 15.99,
+                available: false,
+                recommended: false,
+            }],
+            volume_gb_month_eur: 0.0572,
+            ipv4_month_eur: std::collections::BTreeMap::from([("hel1".into(), 0.5)]),
+            ipv4_hour_eur: std::collections::BTreeMap::from([("hel1".into(), 0.0008)]),
+            regions: std::collections::BTreeMap::from([("hel1".into(), "EUROPE".into())]),
+        },
+    })
+    .unwrap()
+}
+
+#[test]
+fn hetzner_offers_come_beside_the_price_list_in_their_own_currency() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    let hetzner = hetzner_path(&path);
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
+    let agent = request("horizon:cloud-a", HOST, &serde_json::json!({"min_vcpu": 8}));
+    let minute_ago = u64::try_from(NOW).unwrap() - 60_000;
+    publish(snapshot(minute_ago).as_slice(), &path, NOW).unwrap();
+    // Without a Hetzner catalog the answer is as before, with no other providers.
+    let plain = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert_eq!(plain["other_providers"], serde_json::json!([]));
+    assert_eq!(plain["offers"][0]["currency"], "USD");
+
+    publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner, NOW).unwrap();
+    let answered = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    let section = &answered["other_providers"][0];
+    assert_eq!(
+        (section["provider"].as_str(), section["currency"].as_str()),
+        (Some("Hetzner"), Some("EUR"))
+    );
+    assert_eq!(section["observed_seconds_ago"], 60);
+    assert_eq!(section["offers"][0]["id"], "cx43");
+    assert_eq!(
+        section["offers"][0]["availability"], "unlisted",
+        "advisory availability never hides the offer"
+    );
+
+    // A stale or future-dated catalog is reported, never offered as current.
+    publish_hetzner(
+        hetzner_snapshot(u64::try_from(NOW).unwrap() - 21 * 60_000).as_slice(),
+        &hetzner,
+        NOW,
+    )
+    .unwrap();
+    let stale = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert!(
+        stale["other_providers"][0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("cloud_offers_stale")
+    );
+    assert!(stale["other_providers"][0].get("offers").is_none());
+    let ahead = u64::try_from(NOW).unwrap() + 6 * 60_000;
+    assert!(publish_hetzner(hetzner_snapshot(ahead).as_slice(), &hetzner, NOW).is_err());
+    // A catalog stored earlier and now dated ahead of this worker's clock, as after the
+    // clock moves back, is reported rather than offered.
+    std::fs::write(&hetzner, hetzner_snapshot(ahead)).unwrap();
+    let future = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert!(
+        future["other_providers"][0]["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("dated in the future")
+    );
+    assert!(future["other_providers"][0].get("offers").is_none());
+    // An unreadable catalog does not take the price list down with it.
+    std::fs::write(&hetzner, b"{").unwrap();
+    let broken = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert_eq!(broken["offers"][0]["currency"], "USD");
+    assert!(
+        broken["other_providers"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be read")
+    );
+    // A catalog that cannot be opened is reported, not taken for a missing one.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner, NOW).unwrap();
+        std::fs::set_permissions(&hetzner, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads any file, so the check only applies to other users.
+        if std::fs::File::open(&hetzner).is_err() {
+            let unreadable = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+            assert!(
+                unreadable["other_providers"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("cannot be read")
+            );
+        }
+        std::fs::set_permissions(&hetzner, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&hetzner, b"{").unwrap();
+    }
+    // Invalid input is refused and leaves the stored catalog alone.
+    assert!(publish_hetzner(&b"{\"version\":1}"[..], &hetzner, NOW).is_err());
+    assert_eq!(std::fs::read(&hetzner).unwrap(), b"{");
+}

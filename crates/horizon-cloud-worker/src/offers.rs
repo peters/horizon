@@ -7,14 +7,16 @@ use horizon_browser_control::manifest::{
     self,
     provider_usage::{UsageRequest, UsageResult},
 };
-use horizon_cloud::offers::{Requirements, offers};
-use horizon_cloud_protocol::offers::{MAX_BYTES, Snapshot};
+use horizon_cloud::offers::{Requirements, hetzner_section, offers};
+use horizon_cloud_protocol::offers::{HetznerSnapshot, MAX_BYTES, Snapshot};
 use std::{
     io::{self, Read, Write},
     path::Path,
 };
 
 const SNAPSHOT: &str = "/run/sshd/cloud-offers.json";
+/// Hetzner's catalog, beside the price list, when the owning Horizon has a Hetzner binding.
+const HETZNER: &str = "cloud-offers-hetzner.json";
 /// One directory per agent session this worker runs.
 const SESSIONS: &str = "/workspace/sessions";
 /// The owning Horizon sends prices at most 15 minutes old while it runs; older ones are
@@ -28,7 +30,14 @@ pub(crate) fn run() -> io::Result<()> {
     let args: Vec<_> = std::env::args().skip(2).collect();
     match args.as_slice() {
         [command] if command == "publish" => publish(io::stdin().lock(), Path::new(SNAPSHOT), manifest::now_millis()),
-        _ => Err(io::Error::other("Usage: horizon-cloud-worker cloud-offers publish")),
+        [command] if command == "publish-hetzner" => publish_hetzner(
+            io::stdin().lock(),
+            &hetzner_path(Path::new(SNAPSHOT)),
+            manifest::now_millis(),
+        ),
+        _ => Err(io::Error::other(
+            "Usage: horizon-cloud-worker cloud-offers publish|publish-hetzner",
+        )),
     }
 }
 
@@ -40,6 +49,27 @@ fn publish(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
         ));
     }
     write_private(path, &serde_json::to_vec(&snapshot)?)
+}
+
+fn hetzner_path(snapshot: &Path) -> std::path::PathBuf {
+    snapshot.with_file_name(HETZNER)
+}
+
+fn publish_hetzner(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
+    let snapshot = decode_hetzner(reader)?;
+    if dated_ahead(snapshot.observed_at_millis, now) {
+        return Err(io::Error::other(
+            "Hetzner offer prices are dated in the future; check this computer's and the worker's clocks",
+        ));
+    }
+    write_private(path, &serde_json::to_vec(&snapshot)?)
+}
+
+fn decode_hetzner(reader: impl Read) -> io::Result<HetznerSnapshot> {
+    let snapshot: HetznerSnapshot =
+        serde_json::from_slice(&bounded(reader)?).map_err(|_| io::Error::other("Invalid Hetzner offer snapshot"))?;
+    snapshot.validate().map_err(io::Error::other)?;
+    Ok(snapshot)
 }
 
 /// Replaces `path` atomically. Each publication writes a file of its own first, so
@@ -59,17 +89,25 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn future(snapshot: &Snapshot, now: i64) -> bool {
-    snapshot.observed_at_millis > u64::try_from(now).unwrap_or(0).saturating_add(MAX_SKEW_MILLIS)
+    dated_ahead(snapshot.observed_at_millis, now)
 }
 
-fn decode(reader: impl Read) -> io::Result<Snapshot> {
+fn dated_ahead(observed_at_millis: u64, now: i64) -> bool {
+    observed_at_millis > u64::try_from(now).unwrap_or(0).saturating_add(MAX_SKEW_MILLIS)
+}
+
+fn bounded(reader: impl Read) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > MAX_BYTES {
         return Err(io::Error::other("Cloud offer snapshot is too large"));
     }
+    Ok(bytes)
+}
+
+fn decode(reader: impl Read) -> io::Result<Snapshot> {
     let snapshot: Snapshot =
-        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid cloud offer snapshot"))?;
+        serde_json::from_slice(&bounded(reader)?).map_err(|_| io::Error::other("Invalid cloud offer snapshot"))?;
     snapshot.validate().map_err(io::Error::other)?;
     Ok(snapshot)
 }
@@ -154,5 +192,45 @@ fn rank(requirements: &Requirements, path: &Path, now: i64) -> Result<serde_json
         "observed_at_millis": snapshot.observed_at_millis,
         "observed_seconds_ago": age / 1_000,
         "offers": offers(&snapshot.list, &snapshot.preferences, requirements),
+        "other_providers": other_providers(requirements, &hetzner_path(path), now),
     }))
+}
+
+/// Offers from providers besides the price list, each in its own currency and never
+/// ranked with another's. Empty when the owning Horizon sent no such catalog.
+fn other_providers(requirements: &Requirements, path: &Path, now: i64) -> Vec<serde_json::Value> {
+    let unavailable = |error: String| serde_json::json!({"provider": "Hetzner", "error": error});
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        // No Hetzner binding on the owning Horizon, or no catalog sent yet.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(_) => {
+            return vec![unavailable(
+                "cloud_offers_unavailable: the Hetzner prices on this worker cannot be read".to_owned(),
+            )];
+        }
+    };
+    let Ok(snapshot) = decode_hetzner(file) else {
+        return vec![unavailable(
+            "cloud_offers_unavailable: the Hetzner prices on this worker cannot be read".to_owned(),
+        )];
+    };
+    if dated_ahead(snapshot.observed_at_millis, now) {
+        return vec![unavailable(
+            "cloud_offers_unavailable: the Hetzner prices on this worker are dated in the future".to_owned(),
+        )];
+    }
+    let age = u64::try_from(now)
+        .unwrap_or(0)
+        .saturating_sub(snapshot.observed_at_millis);
+    if age > MAX_AGE_MILLIS {
+        return vec![unavailable(format!(
+            "cloud_offers_stale: the newest Hetzner prices on this worker are {} minutes old",
+            age / 60_000
+        ))];
+    }
+    let mut section = hetzner_section(&snapshot.catalog, requirements);
+    section["observed_at_millis"] = serde_json::json!(snapshot.observed_at_millis);
+    section["observed_seconds_ago"] = serde_json::json!(age / 1_000);
+    vec![section]
 }

@@ -29,9 +29,12 @@ fn run() -> cloud_runtime::Result<()> {
     if args.first().is_some_and(|command| command.starts_with("registry")) {
         return registry::run(&args);
     }
+    if args.first().is_some_and(|command| command == "offers") && (2..=3).contains(&args.len()) {
+        return offers(&PathBuf::from(&args[1]), args.get(2).map(String::as_str));
+    }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -227,5 +230,32 @@ fn prepare_image(
         registry.verify_image(&digest, cancel)?;
     }
     println!("Prepared: {digest}");
+    Ok(())
+}
+
+/// Ranks offers the way agents' `cloud_offers` does, from prices fetched now: `RunPod`'s
+/// in `offers`, and each other configured provider in `other_providers`, in its own
+/// currency.
+fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
+    use horizon_cloud::offers::{Requirements, hetzner_section, offers};
+    let requirements: Requirements = serde_json::from_str(requirements.unwrap_or("{}"))
+        .map_err(|_| cloud_runtime::Error::Invalid("Invalid offer requirements"))?;
+    requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
+    let settings = Settings::load(settings)?;
+    let cancel = Cancellation::default();
+    let (list, preferences) = cloud_runtime::prices::price_list(&settings, &cancel)?;
+    let other_providers: Vec<serde_json::Value> = cloud_runtime::prices::hetzner_catalog(&settings, &cancel)?
+        .map(|catalog| hetzner_section(&catalog, &requirements))
+        .into_iter()
+        .collect();
+    let answer = serde_json::json!({
+        "provider": list.provider,
+        "offers": offers(&list, &preferences, &requirements),
+        "other_providers": other_providers,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?
+    );
     Ok(())
 }

@@ -18,6 +18,18 @@ pub fn hetzner(catalog: &Catalog, requirements: &Requirements) -> Vec<Offer> {
     hetzner_at(catalog, requirements, OffsetDateTime::now_utc())
 }
 
+/// The Hetzner part of a `cloud_offers` answer: its offers for `requirements`, in their
+/// own currency and never ranked together with another provider's.
+#[must_use]
+pub fn hetzner_section(catalog: &Catalog, requirements: &Requirements) -> serde_json::Value {
+    serde_json::json!({
+        "provider": "Hetzner",
+        "currency": EUR,
+        "deployable": DEPLOYABLE,
+        "offers": hetzner(catalog, requirements),
+    })
+}
+
 /// As [`hetzner`], for a run that starts at `start`. Hetzner caps each price per
 /// calendar month (UTC), so the estimate follows the month boundaries after `start`.
 #[must_use]
@@ -34,7 +46,11 @@ pub fn hetzner_at(catalog: &Catalog, requirements: &Requirements, start: OffsetD
     };
     // The workspace volume is kept while the cloud is stopped; the server and its
     // IPv4 address are deleted then.
-    let volume_month = catalog.volume_gb_month_eur * f64::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
+    let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
+    if !crate::hetzner::volumes::SIZE_GB.contains(&storage_gb) {
+        return Vec::new();
+    }
+    let volume_month = catalog.volume_gb_month_eur * f64::from(storage_gb);
     let wanted = requirements.region.as_deref().map(normalize);
     let mut offers: Vec<Offer> = catalog
         .offers

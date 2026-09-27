@@ -1,7 +1,10 @@
 //! Prices the owning Horizon hands to its workers, so agents there can rank cloud offers
 //! without the provider account. A snapshot informs estimates; it never reserves compute
 //! or grants access.
-use horizon_cloud::prices::{Preferences, PriceList};
+use horizon_cloud::{
+    hetzner::catalog::Catalog,
+    prices::{Preferences, PriceList},
+};
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
@@ -40,9 +43,70 @@ impl Snapshot {
     }
 }
 
+/// Hetzner's catalog, sent as its own snapshot beside the price list so workers that do
+/// not know Hetzner keep taking the price list unchanged.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HetznerSnapshot {
+    pub version: u32,
+    /// When the owning Horizon fetched the catalog, in milliseconds since the Unix epoch.
+    pub observed_at_millis: u64,
+    pub catalog: Catalog,
+}
+
+impl HetznerSnapshot {
+    /// # Errors
+    /// Rejects another version and catalogs far larger than Hetzner publishes.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != VERSION {
+            return Err("Unsupported Hetzner offer snapshot");
+        }
+        let catalog = &self.catalog;
+        if catalog.offers.len() > 1024
+            || catalog.regions.len() > 64
+            || catalog.ipv4_month_eur.len() > 64
+            || catalog.ipv4_hour_eur.len() > 64
+        {
+            return Err("Hetzner offer snapshot is too large");
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hetzner_snapshots_carry_one_version_and_bounded_catalogs() {
+        let snapshot = HetznerSnapshot {
+            version: VERSION,
+            observed_at_millis: 1,
+            catalog: Catalog {
+                offers: Vec::new(),
+                volume_gb_month_eur: 0.0572,
+                ipv4_month_eur: std::collections::BTreeMap::new(),
+                ipv4_hour_eur: std::collections::BTreeMap::new(),
+                regions: std::collections::BTreeMap::from([("hel1".into(), "EUROPE".into())]),
+            },
+        };
+        assert!(snapshot.validate().is_ok());
+        let decoded: HetznerSnapshot = serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert!(
+            HetznerSnapshot {
+                version: VERSION + 1,
+                ..snapshot.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        let mut crowded = snapshot;
+        crowded.catalog.regions = (0..65)
+            .map(|index| (format!("l{index}"), "EUROPE".to_owned()))
+            .collect();
+        assert!(crowded.validate().is_err());
+    }
 
     #[test]
     fn snapshots_carry_one_version_and_bounded_lists() {

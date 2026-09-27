@@ -288,8 +288,9 @@ fn limits_apply_and_bad_amounts_are_rejected() {
         .validate()
         .is_ok()
     };
-    assert!(!storage(false, 0) && !storage(false, 9) && !storage(false, 4001));
-    assert!(storage(false, 10) && storage(false, 4000));
+    // RunPod holds up to 4000 GB and Hetzner up to 10,240 GB; each lists only its own.
+    assert!(!storage(false, 0) && !storage(false, 9) && !storage(false, 10_241));
+    assert!(storage(false, 10) && storage(false, 4000) && storage(false, 4001) && storage(false, 10_240));
     assert!(!storage(true, 0) && storage(true, 5));
     // Requirements for the other kind of worker are refused rather than ignored.
     let rejected = [
@@ -332,4 +333,23 @@ fn limits_apply_and_bad_amounts_are_rejected() {
         .is_ok()
     );
     assert!(Requirements::default().validate().is_ok());
+}
+
+#[test]
+fn runpod_lists_no_cpu_offers_for_a_workspace_it_cannot_hold() {
+    let requirements = Requirements {
+        storage_gb: Some(5000),
+        ..Requirements::default()
+    };
+    assert!(requirements.validate().is_ok());
+    assert!(offers(&list(), &Preferences::default(), &requirements).is_empty());
+    let gpu = Requirements {
+        gpu: true,
+        storage_gb: Some(5000),
+        ..Requirements::default()
+    };
+    assert!(
+        !offers(&list(), &Preferences::default(), &gpu).is_empty(),
+        "GPU workers keep a pod volume"
+    );
 }
