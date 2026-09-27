@@ -32,20 +32,21 @@ fn has_label(output: &egui::FullOutput, label: &str) -> bool {
 }
 
 fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
+    let size = ctx.content_rect().size();
     for pressed in [true, false] {
-        dialog_frame(
-            ctx,
-            app,
-            vec![
-                Event::PointerMoved(position),
-                Event::PointerButton {
-                    pos: position,
-                    button: PointerButton::Primary,
-                    pressed,
-                    modifiers: Modifiers::NONE,
-                },
-            ],
-        );
+        let mut input = raw_input([size.x, size.y], None);
+        input.events = vec![
+            Event::PointerMoved(position),
+            Event::PointerButton {
+                pos: position,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        let _ = ctx
+            .run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
+            .discard_textures();
     }
 }
 
@@ -96,27 +97,6 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
-    for _ in 0..8 {
-        dialog_frame(&ctx, &mut app, Vec::new());
-    }
-    dialog_frame(
-        &ctx,
-        &mut app,
-        vec![
-            Event::PointerMoved(egui::pos2(450.0, 300.0)),
-            Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                phase: egui::TouchPhase::Move,
-                delta: egui::vec2(0.0, -240.0),
-                modifiers: Modifiers::NONE,
-            },
-        ],
-    );
-    for _ in 0..8 {
-        dialog_frame(&ctx, &mut app, Vec::new());
-    }
     let output = dialog_frame(&ctx, &mut app, Vec::new());
     let profile = label_rect(&output, "prebuilt");
     let create = label_rect(&output, "Start cloud");
@@ -205,7 +185,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
     prepare(&mut app, &ctx, temp.path());
     let output = dialog_frame(&ctx, &mut app, Vec::new());
     assert!(
-        has_label(&output, "Size"),
+        has_label(&output, "CPU size"),
         "the size row is outside the collapsed Advanced section"
     );
     assert!(has_label(&output, "development · 4 vCPU · 8 GB"));
@@ -289,7 +269,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
         centers: vec![("EU-RO-1".into(), Availability::High)],
     };
     production.prices.answered(list, preferences, vec![(profile, stock)]);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(&output, "Region"));
     assert!(has_label(&output, "Any region\n1 in stock"));
     assert!(has_label(
@@ -305,7 +285,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
         app.cloud_prototype.production.placement.is_any(),
         "a sold-out region cannot be chosen"
     );
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Europe\n1 in stock").center());
     let europe = horizon_core::cloud_panel::Placement {
         region: Some("Europe".into()),
@@ -313,7 +293,7 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_cannot_be_chosen() 
         gpu_types: Vec::new(),
     };
     assert_eq!(app.cloud_prototype.production.placement, europe);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    let output = tall_frame(&ctx, &mut app);
     assert!(has_label(
         &output,
         "The workspace stays in Europe, and a stopped cloud resumes there."
@@ -412,7 +392,7 @@ fn a_gpu_in_stock_is_offered_without_preferences_and_dropped_for_a_cpu_profile()
 }
 
 #[test]
-fn size_choice_resets_with_the_profile_or_repository_and_gpu_size_is_fixed() {
+fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -422,41 +402,23 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_size_is_fixed() {
     accelerated.gpu = true;
     config.profiles.insert("accelerated".into(), accelerated);
     let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "16 vCPU").center());
-    assert_eq!(app.cloud_prototype.production.size, Some((16, 32)));
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
-    for _ in 0..8 {
-        dialog_frame(&ctx, &mut app, Vec::new());
-    }
-    scroll(&ctx, &mut app, -240.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "16 vCPU · 32 GB memory · CPU only"));
+    assert!(has_label(&output, "CPU profiles"));
+    assert!(has_label(&output, "GPU profiles"));
+    app.cloud_prototype.production.size = Some((16, 32));
     click(&ctx, &mut app, label_rect(&output, "development").center());
-    assert_eq!(
-        app.cloud_prototype.production.size,
-        Some((16, 32)),
-        "reselecting the same profile keeps its size"
-    );
+    assert_eq!(app.cloud_prototype.production.size, Some((16, 32)));
     let output = dialog_frame(&ctx, &mut app, Vec::new());
     click(&ctx, &mut app, label_rect(&output, "accelerated").center());
     assert_eq!(app.cloud_prototype.production.selected_profile, "accelerated");
     assert_eq!(app.cloud_prototype.production.size, None);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "4 vCPU · 8 GB memory · GPU"));
-    // Offscreen labels are not painted, so return to the size row before checking absences.
-    scroll(&ctx, &mut app, 480.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "Size"));
-    assert!(has_label(&output, "4 vCPU · 8 GB · GPU"), "GPU size is shown as text");
-    assert!(has_label(&output, "GPU workers use the size set by their profile."));
-    for choice in ["2 vCPU", "4 vCPU", "16 vCPU", "8 GB · compute-optimized"] {
-        assert!(!has_label(&output, choice), "GPU profiles offer no {choice} choice");
-    }
-    app.cloud_prototype.production.selected_profile = "development".into();
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "32 vCPU").center());
-    assert_eq!(app.cloud_prototype.production.size, Some((32, 64)));
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Minimum resources per GPU"));
+    assert!(!has_label(&output, "CPU size"));
+    app.cloud_prototype.production.size = Some((3, 17));
+    let profile = &app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["accelerated"];
+    let sized =
+        creation::provider::sized(&horizon_core::cloud_runtime::provider::RUNPOD, profile, Some((3, 17))).unwrap();
+    assert_eq!((sized.cpu, sized.memory_gb), (3, 17));
     app.set_cloud_repository(&temp.path().join("another-repository"));
     assert_eq!(app.cloud_prototype.production.size, None);
 }
@@ -471,12 +433,7 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
     ctx.memory_mut(|memory| memory.surrender_focus(Id::new("cloud-title")));
     dialog_frame(&ctx, &mut app, Vec::new());
     assert_eq!(ctx.memory(egui::Memory::focused), None);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
-    for _ in 0..8 {
-        dialog_frame(&ctx, &mut app, Vec::new());
-    }
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-revision")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
     let press = |app: &mut HorizonApp, key| {
         for pressed in [true, false] {
             dialog_frame(
@@ -492,7 +449,7 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
             );
         }
     };
-    for _ in 0..3 {
+    for _ in 0..2 {
         press(&mut app, Key::Tab);
     }
     press(&mut app, Key::Space);

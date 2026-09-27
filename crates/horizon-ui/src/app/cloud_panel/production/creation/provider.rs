@@ -67,7 +67,7 @@ pub(in crate::app::cloud_panel) fn sized(
     if provider.pricing == provider::Pricing::Flavors {
         return Ok(match size {
             Some(size) => flavors::sized(&profile, size)?,
-            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
+            // A GPU profile specifies minimum host resources; CPU sizes must be offered.
             None if profile.gpu => profile,
             None => flavors::sized(&profile, (profile.cpu, profile.memory_gb))?,
         });

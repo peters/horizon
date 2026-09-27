@@ -15,6 +15,7 @@ mod costs;
 mod gpu_choice;
 mod placement;
 mod pricing;
+mod profiles;
 pub(super) mod provider;
 pub(super) mod siblings;
 
@@ -325,8 +326,12 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             ui.spinner();
             ui.label("Preparing cloud…");
         });
-    } else if let Some(config) = &form.profiles {
+    } else if form.profiles.is_some() {
+        profiles::field(ui, form);
         ui.small(&form.repository);
+        let Some(config) = &form.profiles else {
+            return RepositoryAction::None;
+        };
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
             // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
             if !profile.gpu {
@@ -374,6 +379,11 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 memory_gb,
                 ..profile.clone()
             };
+            if provider.offers(Choice::GpuType)
+                && let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement)
+            {
+                form.placement = placement;
+            }
             match provider.placement {
                 ProviderPlacement::Locations => {
                     ui.add_space(4.0);
@@ -446,29 +456,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
         )
         .clicked();
     ui.add_space(8.0);
-    ui.label(RichText::new("Profile").size(14.0).strong().color(theme::FG()));
     if let Some(config) = &form.profiles {
-        ui.horizontal_wrapped(|ui| {
-            for name in config.profiles.keys() {
-                if ui
-                    .add(
-                        Button::new(RichText::new(name).size(14.0))
-                            .selected(form.selected_profile == *name)
-                            .min_size(Vec2::new(0.0, 34.0))
-                            .corner_radius(8),
-                    )
-                    .clicked()
-                {
-                    if form.selected_profile != *name {
-                        form.size = None;
-                        form.placement = Placement::default();
-                        form.provider = None;
-                    }
-                    form.selected_profile.clone_from(name);
-                    form.launch.accounts_checked = false;
-                }
-            }
-        });
         if let Some(profile) = config.profiles.get(&form.selected_profile) {
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.label(
@@ -488,11 +476,6 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
             let provider = provider::current(form.provider, profile);
             if provider.placement == ProviderPlacement::DataCenters
                 && let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement)
-            {
-                form.placement = placement;
-            }
-            if provider.offers(Choice::GpuType)
-                && let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement)
             {
                 form.placement = placement;
             }
