@@ -91,7 +91,14 @@ fn run(
             // Another operation holds the cloud: a skipped check, which neither fails
             // nor clears a failure, so the next check decides.
             Err(Error::Busy) => {}
-            Ok(IdleCheck::NotWatched) => return,
+            // No longer ready: if that is a stop this watch began and could not
+            // finish, the card is shown it before the watch ends.
+            Ok(IdleCheck::NotWatched) => {
+                if let Some(state) = stopping(&load, interval) {
+                    report(unfinished(state, "the server may still run"));
+                }
+                return;
+            }
             Ok(IdleCheck::Stopped { idle }) => {
                 // Ends this watch's presentation of the released server itself, so the
                 // card never has to cancel a token a newer operation may own.
@@ -125,13 +132,8 @@ fn run(
             Err(error) => {
                 // A stop that began and then failed leaves the record stopping and no
                 // longer watched: show it, so the card offers to finish the stop.
-                if let Ok(Some(state)) = load()
-                    && state.stage == Stage::Stopping
-                {
-                    report(Report::Stopped(
-                        Some(Box::new(state)),
-                        format!("Horizon's idle stop did not finish ({error}); choose Reconcile stop to finish it."),
-                    ));
+                if let Some(state) = stopping(&load, interval) {
+                    report(unfinished(state, &error.to_string()));
                     return;
                 }
                 let message = format!("Idle check failed: {error}");
@@ -142,6 +144,26 @@ fn run(
             }
         }
     }
+}
+
+/// The saved record when it shows a stop in progress, read with the same retries
+/// as a finished stop's record, since another operation may hold it briefly.
+fn stopping(load: &impl Fn() -> cloud_runtime::Result<Option<Deployment>>, interval: Duration) -> Option<Deployment> {
+    (0..30).find_map(|_| match load() {
+        Ok(state) => Some(state.filter(|state| state.stage == Stage::Stopping)),
+        Err(_) => {
+            std::thread::sleep(interval.min(Duration::from_secs(1)));
+            None
+        }
+    })?
+}
+
+/// A stop that began and did not finish, for the card to offer finishing it.
+fn unfinished(state: Deployment, reason: &str) -> Report {
+    Report::Stopped(
+        Some(Box::new(state)),
+        format!("Horizon's idle stop did not finish ({reason}); choose Reconcile stop to finish it."),
+    )
 }
 
 /// Sleeps for `interval` in short steps; false once `cancel` is cancelled.
@@ -419,6 +441,47 @@ mod tests {
         assert_eq!(runtime.stage, Some(Stage::Stopped));
         let state = runtime.state.as_ref().unwrap();
         assert!(state.stage == Stage::Stopped && state.stop_requested && state.worker.is_none());
+    }
+
+    #[test]
+    fn a_stop_left_unfinished_is_shown_even_after_a_busy_reload() {
+        // The failed stop's reload finds the record busy; the next check sees it stopping.
+        let loads = RefCell::new(0);
+        let checks = RefCell::new(
+            vec![
+                Err(Error::Command("Hetzner server shutdown")),
+                Ok(IdleCheck::NotWatched),
+            ]
+            .into_iter(),
+        );
+        let reports = RefCell::new(Vec::new());
+        run(
+            &Cancellation::default(),
+            Duration::ZERO,
+            |_| checks.borrow_mut().next().unwrap(),
+            || {
+                *loads.borrow_mut() += 1;
+                if *loads.borrow() <= 30 {
+                    return Err(Error::Busy);
+                }
+                let mut stopping = stopped();
+                stopping.stage = Stage::Stopping;
+                Ok(Some(stopping))
+            },
+            &|report| {
+                match report {
+                    Report::Stopped(state, _) => reports.borrow_mut().push(state.map(|state| state.stage)),
+                    Report::Failed(_) => reports.borrow_mut().push(None),
+                    Report::Checked => {}
+                }
+                true
+            },
+        );
+        assert_eq!(
+            reports.into_inner(),
+            [None, Some(Stage::Stopping)],
+            "logged, then shown"
+        );
     }
 
     #[test]
