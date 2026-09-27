@@ -214,50 +214,41 @@ impl HorizonApp {
 }
 
 /// `profile` on the chosen provider at the chosen size, as the new cloud records it.
+/// Refused before anything is recorded while Horizon cannot create clouds there.
 fn launch_profile(
     profile: &horizon_core::cloud_runtime::prices::Profile,
-    provider: Option<&'static str>,
+    chosen: Option<&'static cloud_runtime::provider::Description>,
     size: Option<super::machine_size::Size>,
 ) -> cloud_runtime::Result<horizon_core::cloud_runtime::prices::Profile> {
-    let profile = match provider {
-        Some(provider) if provider != profile.provider => horizon_core::cloud_runtime::prices::Profile {
-            provider: provider.to_owned(),
-            ..profile.clone()
-        },
-        _ => profile.clone(),
-    };
-    if profile.provider == super::creation::provider::HETZNER {
-        return hetzner_profile(&profile, size);
-    }
-    Ok(match size {
-        Some(size) => cloud_runtime::flavors::sized(&profile, size)?,
-        // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
-        None if profile.gpu => profile,
-        None => cloud_runtime::flavors::sized(&profile, (profile.cpu, profile.memory_gb))?,
-    })
-}
-
-/// `profile` sized for Hetzner. Hetzner's server types are checked when the cloud is
-/// placed, so only the profile's own rules apply here. Refused while Horizon cannot
-/// create clouds on Hetzner, before anything is recorded.
-fn hetzner_profile(
-    profile: &horizon_core::cloud_runtime::prices::Profile,
-    size: Option<super::machine_size::Size>,
-) -> cloud_runtime::Result<horizon_core::cloud_runtime::prices::Profile> {
-    if !cloud_runtime::offers::HETZNER_DEPLOYABLE {
+    let provider = super::creation::provider::current(chosen, profile);
+    if !provider.creatable {
         return Err(cloud_runtime::Error::Invalid(
-            "Creating clouds on Hetzner arrives in a coming update; choose RunPod for now",
+            "Horizon cannot create clouds on this provider yet; choose another provider",
         ));
     }
+    let profile = horizon_core::cloud_runtime::prices::Profile {
+        provider: provider.id.to_owned(),
+        ..profile.clone()
+    };
+    if provider.pricing == cloud_runtime::provider::Pricing::Flavors {
+        return Ok(match size {
+            Some(size) => cloud_runtime::flavors::sized(&profile, size)?,
+            // A GPU profile's size is fixed; a CPU profile's own size must also be offered.
+            None if profile.gpu => profile,
+            None => cloud_runtime::flavors::sized(&profile, (profile.cpu, profile.memory_gb))?,
+        });
+    }
+    // Server types are checked when the cloud is placed; only the profile's own rules
+    // apply here.
     let (cpu, memory_gb) = size.unwrap_or((profile.cpu, profile.memory_gb));
     let sized = horizon_core::cloud_runtime::prices::Profile {
         cpu,
         memory_gb,
-        ..profile.clone()
+        ..profile
     };
     sized
         .validate(false)
-        .map_err(|_| cloud_runtime::Error::Invalid("This profile cannot run on Hetzner"))?;
+        .map_err(|_| cloud_runtime::Error::Invalid("This profile cannot run on the chosen provider"))?;
     Ok(sized)
 }
 

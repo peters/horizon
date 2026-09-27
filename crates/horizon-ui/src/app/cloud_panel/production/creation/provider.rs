@@ -1,6 +1,7 @@
-//! The provider a new CPU cloud runs on, and Hetzner's offers for it. Hetzner is offered
-//! beside `RunPod` when this machine has a Hetzner binding; nothing moves a cloud between
-//! providers on its own.
+//! The provider a new cloud runs on, read from each provider's description, and the
+//! offers of providers that place workers in named locations. A provider choice is shown
+//! only when more than one configured provider supports the profile; nothing moves a
+//! cloud between providers on its own.
 use super::{
     super::{
         Production,
@@ -12,47 +13,71 @@ use crate::theme;
 use egui::{Frame, Margin, RichText, Stroke, Ui};
 use horizon_core::{
     cloud_panel::Placement,
-    cloud_runtime::{offers::HETZNER_DEPLOYABLE, prices::Profile},
+    cloud_runtime::{
+        prices::Profile,
+        provider::{self, Description},
+    },
 };
 
-pub(in crate::app::cloud_panel) const RUNPOD: &str = "runpod";
-pub(in crate::app::cloud_panel) const HETZNER: &str = "hetzner";
+/// The providers this machine can use: `RunPod`, whose settings New cloud requires, and
+/// each other provider once its catalog shows a binding.
+fn configured(prices: &State) -> Vec<&'static Description> {
+    let mut configured = vec![&provider::RUNPOD];
+    if prices.hetzner.fresh().is_some_and(|fetched| fetched.value.is_some()) {
+        configured.push(&provider::HETZNER);
+    }
+    configured
+}
+
+/// The providers a new cloud of `profile` can choose from. A choice is shown only when
+/// there is more than one.
+pub(super) fn choices(prices: &State, profile: &Profile) -> Vec<&'static Description> {
+    Description::choices(profile, &configured(prices))
+}
 
 /// The provider a new cloud of `profile` uses: the one chosen in the dialog, or else the
 /// profile's own.
-pub(super) fn current(chosen: Option<&'static str>, profile: &Profile) -> &'static str {
-    chosen.unwrap_or(if profile.provider == HETZNER { HETZNER } else { RUNPOD })
+pub(in crate::app::cloud_panel) fn current(
+    chosen: Option<&'static Description>,
+    profile: &Profile,
+) -> &'static Description {
+    chosen
+        .or_else(|| provider::by_id(&profile.provider))
+        .unwrap_or(&provider::RUNPOD)
 }
 
 /// The provider's name for the dialog heading.
 pub(super) fn label(form: &Production) -> &'static str {
-    let profile = form
-        .profiles
+    form.profiles
         .as_ref()
-        .and_then(|config| config.profiles.get(&form.selected_profile));
-    match profile.map(|profile| current(form.provider, profile)) {
-        Some(HETZNER) => "Hetzner",
-        _ => "RunPod",
-    }
+        .and_then(|config| config.profiles.get(&form.selected_profile))
+        .map_or(provider::RUNPOD.label, |profile| current(form.provider, profile).label)
 }
 
-/// Whether to offer a provider choice for `profile`: CPU profiles, when this machine has a
-/// Hetzner binding or the profile already names Hetzner.
-pub(super) fn offered(prices: &State, profile: &Profile) -> bool {
-    !profile.gpu
-        && (profile.provider == HETZNER || prices.hetzner.fresh().is_some_and(|fetched| fetched.value.is_some()))
+/// How a provider bills, for the provider choice.
+fn billing(provider: &Description) -> String {
+    let currency = match provider.currency {
+        "USD" => "US dollars",
+        "EUR" => "euros",
+        other => other,
+    };
+    let vat = if provider.net_of_vat { ", net of VAT" } else { "" };
+    let kinds = if provider.gpu { "CPU and GPU" } else { "CPU" };
+    format!("{currency}{vat} · {kinds}")
 }
 
-/// `RunPod` or Hetzner. Returns a newly chosen provider.
-pub(super) fn choice(ui: &mut Ui, current: &str) -> Option<&'static str> {
+/// One button per provider in `choices`. Returns a newly chosen provider.
+pub(super) fn choice(
+    ui: &mut Ui,
+    choices: &[&'static Description],
+    current: &Description,
+) -> Option<&'static Description> {
     ui.label(RichText::new("Provider").size(14.0).strong().color(theme::FG()));
     let mut chosen = None;
     ui.horizontal_wrapped(|ui| {
-        for (provider, label, detail) in [
-            (RUNPOD, "RunPod", "US dollars · CPU and GPU"),
-            (HETZNER, "Hetzner", "euros, net of VAT · CPU"),
-        ] {
-            if option(ui, label, current == provider, Some(detail), None) && current != provider {
+        for &provider in choices {
+            let selected = provider == current;
+            if option(ui, provider.label, selected, Some(&billing(provider)), None) && !selected {
                 chosen = Some(provider);
             }
         }
@@ -131,8 +156,14 @@ pub(super) fn euros(value: f64) -> String {
     }
 }
 
-/// Hetzner's offers for `profile` and the location choice. Returns a newly chosen placement.
-pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &Placement) -> Option<Placement> {
+/// The offers of a provider that places workers in named locations, for `profile`, and
+/// the location choice. Returns a newly chosen placement.
+pub(super) fn card(
+    ui: &mut Ui,
+    prices: &State,
+    (provider, profile): (&Description, &Profile),
+    placement: &Placement,
+) -> Option<Placement> {
     let mut chosen = None;
     Frame::new()
         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.06))
@@ -143,25 +174,28 @@ pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &P
             ui.set_width(ui.available_width());
             let hetzner = &prices.hetzner;
             if let Some(error) = hetzner.error() {
-                ui.colored_label(theme::PALETTE_RED(), format!("Hetzner prices unavailable: {error}"));
+                ui.colored_label(theme::PALETTE_RED(), format!("{} prices unavailable: {error}", provider.label));
                 return;
             }
             let Some(fetched) = hetzner.fresh() else {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Checking Hetzner prices…");
+                    ui.label(format!("Checking {} prices…", provider.label));
                 });
                 return;
             };
             if fetched.value.is_none() {
-                ui.label("Add Hetzner in Cloud settings to create clouds there.");
+                ui.label(format!("Add {} in Cloud settings to create clouds there.", provider.label));
                 return;
             }
             let offers = location_offers(prices, profile);
             if offers.is_empty() {
                 ui.colored_label(
                     theme::PALETTE_RED(),
-                    "No configured Hetzner server type has this size in an allowed location.",
+                    format!(
+                        "No configured {} server type has this size in an allowed location.",
+                        provider.label
+                    ),
                 );
                 return;
             }
@@ -213,14 +247,20 @@ pub(super) fn card(ui: &mut Ui, prices: &State, profile: &Profile, placement: &P
                     ui.small(format!("If it is sold out: {}.", offer.fallbacks.join(", ")));
                 }
                 if !offer.listed {
-                    ui.small("Hetzner lists this type as unavailable here; creation confirms whether it can be rented.");
+                    ui.small(format!(
+                        "{} lists this type as unavailable here; creation confirms whether it can be rented.",
+                        provider.label
+                    ));
                 }
             }
             ui.small("Billed per started hour, capped per calendar month. Prices are euros, net of VAT.");
-            if !HETZNER_DEPLOYABLE {
+            if !provider.creatable {
                 ui.colored_label(
                     theme::PALETTE_YELLOW(),
-                    "Creating clouds on Hetzner arrives in a coming update; these prices are for comparison.",
+                    format!(
+                        "Creating clouds on {} arrives in a coming update; these prices are for comparison.",
+                        provider.label
+                    ),
                 );
             }
         });

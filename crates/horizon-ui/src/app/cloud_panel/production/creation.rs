@@ -3,7 +3,12 @@ use super::{HorizonApp, Production};
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
-use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement, dir_search};
+use horizon_core::{
+    ShortcutBinding, ShortcutKey, ShortcutModifiers,
+    cloud_panel::Placement,
+    cloud_runtime::provider::{Choice, Placement as ProviderPlacement, Pricing},
+    dir_search,
+};
 use std::path::Path;
 
 mod costs;
@@ -288,15 +293,17 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
             let provider = provider::current(form.provider, profile);
-            if provider::offered(&form.prices, profile)
-                && let Some(chosen) = provider::choice(ui, provider)
+            let choices = provider::choices(&form.prices, profile);
+            if choices.len() > 1
+                && let Some(chosen) = provider::choice(ui, &choices, provider)
             {
                 form.provider = Some(chosen);
-                // Data centers and locations name different places.
+                // Each provider names places its own way.
                 form.placement = Placement::default();
             }
-            let hetzner = provider == provider::HETZNER && !profile.gpu;
-            if let Some(size) = pricing::size_field(ui, (!hetzner).then_some(&form.prices), profile, (cpu, memory_gb)) {
+            // Per-size prices and flavor families belong to providers that price flavors.
+            let flavors = (provider.pricing == Pricing::Flavors).then_some(&form.prices);
+            if let Some(size) = pricing::size_field(ui, flavors, profile, (cpu, memory_gb)) {
                 form.size = Some(size);
             }
             let sized = horizon_core::cloud_runtime::prices::Profile {
@@ -304,20 +311,27 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 memory_gb,
                 ..profile.clone()
             };
-            if hetzner {
-                ui.add_space(4.0);
-                if let Some(placement) = provider::card(ui, &form.prices, &sized, &form.placement) {
-                    form.placement = placement;
+            match provider.placement {
+                ProviderPlacement::Locations => {
+                    ui.add_space(4.0);
+                    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
+                        form.placement = placement;
+                    }
                 }
-            } else {
-                if let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement) {
-                    form.placement = placement;
-                }
-                ui.add_space(4.0);
-                match pricing::card(ui, &form.prices, &sized, &form.placement) {
-                    Some(pricing::CardAction::Refresh) => form.prices.refresh(),
-                    Some(pricing::CardAction::UseGpu(gpu)) => form.placement.gpu_types = vec![gpu],
-                    None => {}
+                ProviderPlacement::DataCenters => {
+                    if provider.offers(Choice::Region)
+                        && let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement)
+                    {
+                        form.placement = placement;
+                    }
+                    ui.add_space(4.0);
+                    match pricing::card(ui, &form.prices, &sized, &form.placement) {
+                        Some(pricing::CardAction::Refresh) => form.prices.refresh(),
+                        Some(pricing::CardAction::UseGpu(gpu)) if provider.offers(Choice::GpuType) => {
+                            form.placement.gpu_types = vec![gpu];
+                        }
+                        Some(pricing::CardAction::UseGpu(_)) | None => {}
+                    }
                 }
             }
         }
