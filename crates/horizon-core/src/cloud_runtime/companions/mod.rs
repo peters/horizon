@@ -1,4 +1,5 @@
 //! Local companion authorization and SSH reconciliation. No provider lifecycle operations.
+pub mod intent;
 pub mod inventory;
 mod journal;
 mod reconcile;
@@ -129,7 +130,7 @@ fn execute(
     journal.save(&state)?;
     let mut snapshot = reconcile::run(journal, &mut state, if moved { None } else { context }, transport)?;
     if moved {
-        if state.grants.is_empty() {
+        if state.grants.is_empty() && state.intents.is_empty() {
             state.owner = owner.clone();
             journal.save(&state)?;
         }
