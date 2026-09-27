@@ -107,8 +107,9 @@ struct Delivery {
     retry_at: Option<Instant>,
     /// The Hetzner catalog fetch the worker has; `None` until one arrives.
     hetzner: Option<Instant>,
-    /// Whether that catalog had offers, so an empty one is sent only to clear them.
-    hetzner_offers: bool,
+    /// Whether the worker holds a Hetzner catalog, so the empty one that stands for no
+    /// binding is kept current there; `None` when unknown, as after a restart.
+    has_catalog: Option<bool>,
     /// No Hetzner attempt before this, after a failed one.
     hetzner_retry_at: Option<Instant>,
 }
@@ -120,8 +121,8 @@ struct Job {
     observed: Option<Instant>,
     /// The Hetzner catalog fetch being sent, if any.
     hetzner: Option<Instant>,
-    /// Whether the catalog being sent has offers.
-    hetzner_offers: bool,
+    /// Whether the catalog being sent comes from a Hetzner binding, not the empty one.
+    bound: bool,
     receiver: Receiver<Result<(Published, Hetzner), String>>,
 }
 
@@ -146,7 +147,7 @@ impl State {
             observed: None,
             retry_at: None,
             hetzner: None,
-            hetzner_offers: false,
+            has_catalog: None,
             hetzner_retry_at: None,
         });
         let hetzner = match &outcome {
@@ -172,8 +173,13 @@ impl State {
         match hetzner {
             Hetzner::Delivered => {
                 delivery.hetzner = job.hetzner;
-                delivery.hetzner_offers = job.hetzner_offers;
+                delivery.has_catalog = Some(true);
                 delivery.hetzner_retry_at = None;
+            }
+            // Clearing a worker that may never have had a catalog is tried once; older
+            // images refuse it every time.
+            Hetzner::Failed if !job.bound && delivery.has_catalog.is_none() => {
+                delivery.has_catalog = Some(false);
             }
             Hetzner::Failed => delivery.hetzner_retry_at = Some(now + HETZNER_RETRY),
             Hetzner::NotSent => {}
@@ -199,9 +205,12 @@ impl State {
         }
         let hetzner_at = hetzner.as_ref().map(|(_, at)| *at);
         // An empty catalog only clears offers a worker was given; others never need it.
-        let offers = hetzner
+        // A bound catalog goes to every worker, even with no offers after location
+        // filtering. The empty one that stands for no binding only keeps workers that
+        // hold a catalog current, so it never goes stale there.
+        let bound = hetzner
             .as_ref()
-            .is_some_and(|(catalog, _)| !catalog.catalog.offers.is_empty());
+            .is_some_and(|(snapshot, _)| snapshot.catalog != empty_catalog());
         let (target, snapshot) = if let Some(target) = due(&self.delivered, ready, fetched.at, now).cloned() {
             let (list, preferences) = &fetched.value;
             let snapshot = Snapshot {
@@ -212,7 +221,7 @@ impl State {
             };
             (target, Some(snapshot))
         } else if let Some(at) = hetzner_at
-            && let Some(target) = due_hetzner(&self.delivered, ready, (fetched.at, at, offers), now).cloned()
+            && let Some(target) = due_hetzner(&self.delivered, ready, (fetched.at, at, bound), now).cloned()
         {
             (target, None)
         } else {
@@ -220,11 +229,12 @@ impl State {
         };
         let (cloud, worker) = target;
         let observed = snapshot.as_ref().map(|_| fetched.at);
-        let had_offers = self
+        let had_catalog = self
             .delivered
             .get(&cloud)
-            .is_some_and(|delivery| delivery.worker == worker && delivery.hetzner_offers);
-        let hetzner = hetzner.filter(|_| offers || had_offers);
+            .filter(|delivery| delivery.worker == worker)
+            .is_none_or(|delivery| delivery.has_catalog != Some(false));
+        let hetzner = hetzner.filter(|_| bound || had_catalog);
         let hetzner_at = hetzner.as_ref().map(|(_, at)| *at);
         let job = Job {
             receiver: start(
@@ -238,7 +248,7 @@ impl State {
             worker,
             observed,
             hetzner: hetzner_at,
-            hetzner_offers: offers,
+            bound,
         };
         self.job = Some(job);
     }
@@ -249,7 +259,7 @@ impl State {
 fn due_hetzner<'a>(
     delivered: &HashMap<String, Delivery>,
     ready: &'a [(String, String)],
-    (observed, hetzner, offers): (Instant, Instant, bool),
+    (observed, hetzner, bound): (Instant, Instant, bool),
     now: Instant,
 ) -> Option<&'a (String, String)> {
     ready.iter().find(|(cloud, worker)| {
@@ -257,7 +267,7 @@ fn due_hetzner<'a>(
             delivery.worker == *worker
                 && delivery.observed == Some(observed)
                 && delivery.hetzner != Some(hetzner)
-                && (offers || delivery.hetzner_offers)
+                && (bound || delivery.has_catalog != Some(false))
                 && delivery.hetzner_retry_at.is_none_or(|at| now >= at)
         })
     })
@@ -434,7 +444,7 @@ mod tests {
             observed: Some(observed),
             retry_at: None,
             hetzner: None,
-            hetzner_offers: false,
+            has_catalog: None,
             hetzner_retry_at: None,
         };
         delivered.insert("a".to_owned(), sent("w1", first));
@@ -468,7 +478,7 @@ mod tests {
             observed: None,
             retry_at: Some(retry_at),
             hetzner: None,
-            hetzner_offers: false,
+            has_catalog: None,
             hetzner_retry_at: None,
         };
         let mut retries = HashMap::new();
@@ -569,64 +579,74 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_catalog_goes_only_to_workers_that_had_offers() {
-        let (mut state, received) = recording(vec![Hetzner::Delivered, Hetzner::Delivered]);
+    fn the_no_binding_catalog_keeps_holders_current_and_a_bound_empty_one_goes_to_all() {
+        let (mut state, received) = recording(vec![
+            Hetzner::Delivered,
+            Hetzner::Delivered,
+            Hetzner::Delivered,
+            Hetzner::Failed,
+        ]);
         let fetched = priced();
-        let ready = vec![("a".to_owned(), "w1".to_owned()), ("b".to_owned(), "w2".to_owned())];
         let ctx = egui::Context::default();
         let now = Instant::now();
-        let empty = HetznerSnapshot {
+        let tombstone = HetznerSnapshot {
             catalog: super::empty_catalog(),
             ..catalog(1)
         };
-        // A worker that never had offers gets its list without the empty catalog.
-        state.step(
-            Path::new("/unused"),
-            &ready,
-            &fetched,
-            Some((empty.clone(), now)),
-            now,
-            &ctx,
-        );
-        let (cloud, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!((cloud.as_str(), snapshot.is_some(), sent_hetzner), ("a", true, None));
+        let known = |has_catalog| Delivery {
+            worker: "w1".into(),
+            observed: Some(fetched.at),
+            retry_at: None,
+            hetzner: Some(now.checked_sub(Duration::from_mins(20)).unwrap()),
+            has_catalog: Some(has_catalog),
+            hetzner_retry_at: None,
+        };
+        let ready = vec![("a".to_owned(), "w1".to_owned())];
+        let send = |state: &mut State, ready: &[(String, String)], snapshot: &HetznerSnapshot, at: Instant| {
+            state.step(
+                Path::new("/unused"),
+                ready,
+                &fetched,
+                Some((snapshot.clone(), at)),
+                now,
+                &ctx,
+            );
+        };
+        // A worker known to hold no catalog never needs the no-binding one.
+        state.delivered.insert("a".to_owned(), known(false));
+        send(&mut state, &ready, &tombstone, now);
+        assert!(state.job.is_none());
+        // A bound catalog goes to it even when location filtering left no offers.
+        let mut bound_empty = catalog(2);
+        bound_empty.catalog.offers.clear();
+        send(&mut state, &ready, &bound_empty, now);
+        let (_, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(snapshot.is_none());
+        assert_eq!(sent_hetzner, Some(bound_empty));
         finish(&mut state, now);
-        // A worker that was given offers gets the empty catalog to clear them.
-        state.delivered.insert(
-            "b".to_owned(),
-            Delivery {
-                worker: "w2".into(),
-                observed: Some(fetched.at),
-                retry_at: None,
-                hetzner: Some(now.checked_sub(Duration::from_mins(20)).unwrap()),
-                hetzner_offers: true,
-                hetzner_retry_at: None,
-            },
-        );
-        let cleared = Instant::now();
-        state.step(
-            Path::new("/unused"),
-            &ready,
-            &fetched,
-            Some((empty.clone(), cleared)),
-            now,
-            &ctx,
-        );
+        assert_eq!(state.delivered["a"].has_catalog, Some(true));
+        // A worker holding a catalog gets the no-binding one, and each newer one, so it
+        // never goes stale there.
+        for at in [Instant::now(), Instant::now() + Duration::from_mins(15)] {
+            send(&mut state, &ready, &tombstone, at);
+            let (_, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(snapshot.is_none());
+            assert_eq!(sent_hetzner.as_ref(), Some(&tombstone));
+            finish(&mut state, now);
+            assert_eq!(state.delivered["a"].hetzner, Some(at));
+        }
+        // A worker Horizon knows nothing about, as after a restart, is tried once with
+        // its list; an older image refusing it is not asked again.
+        let unknown = vec![("c".to_owned(), "w3".to_owned())];
+        let later = Instant::now() + Duration::from_mins(30);
+        send(&mut state, &unknown, &tombstone, later);
         let (cloud, snapshot, sent_hetzner) = received.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!((cloud.as_str(), snapshot.is_none()), ("b", true));
-        assert_eq!(sent_hetzner, Some(empty.clone()));
+        assert_eq!((cloud.as_str(), snapshot.is_some()), ("c", true));
+        assert_eq!(sent_hetzner.as_ref(), Some(&tombstone));
         finish(&mut state, now);
-        assert_eq!(state.delivered["b"].hetzner, Some(cleared));
-        assert!(!state.delivered["b"].hetzner_offers);
-        // Nothing more is due: neither worker needs the empty catalog now.
-        state.step(
-            Path::new("/unused"),
-            &ready,
-            &fetched,
-            Some((empty, cleared)),
-            now,
-            &ctx,
-        );
+        assert_eq!(state.delivered["c"].has_catalog, Some(false));
+        assert_eq!(state.delivered["c"].hetzner_retry_at, None);
+        send(&mut state, &unknown, &tombstone, later);
         assert!(state.job.is_none());
     }
 
@@ -760,7 +780,7 @@ mod tests {
                 observed: Some(earlier),
                 retry_at: None,
                 hetzner: None,
-                hetzner_offers: false,
+                has_catalog: None,
                 hetzner_retry_at: None,
             },
         );
@@ -770,7 +790,7 @@ mod tests {
             worker: "w1".into(),
             observed: Some(now),
             hetzner: None,
-            hetzner_offers: false,
+            bound: true,
             receiver,
         });
         sender.send(Err("unreachable".into())).unwrap();
@@ -784,7 +804,7 @@ mod tests {
             worker: "w1".into(),
             observed: Some(now),
             hetzner: None,
-            hetzner_offers: false,
+            bound: true,
             receiver,
         });
         state.poll(now);
@@ -798,7 +818,7 @@ mod tests {
                 observed: Some(earlier),
                 retry_at: Some(now + RETRY),
                 hetzner: None,
-                hetzner_offers: false,
+                has_catalog: None,
                 hetzner_retry_at: None,
             }
         );

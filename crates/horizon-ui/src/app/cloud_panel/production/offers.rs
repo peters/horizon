@@ -30,7 +30,9 @@ impl HorizonApp {
         prices.request_fresh_list(&root, ctx);
         // Other providers are ranked on their own, in their own currency, and a failed
         // Hetzner fetch is reported there without taking RunPod's offers down.
-        let deadline_in = request.deadline_at_millis - horizon_core::browser::manifest::now_millis();
+        let deadline_in = request
+            .deadline_at_millis
+            .saturating_sub(horizon_core::browser::manifest::now_millis());
         let other_providers = prices.hetzner.sections(&requirements, deadline_in)?;
         let fetched = prices.fresh_list()?;
         let (list, preferences) = &fetched.value;
