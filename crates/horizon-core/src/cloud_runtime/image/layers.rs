@@ -3,7 +3,6 @@ use super::{Error, Event, Progress, Result, Runner, TIMEOUT, contained, contract
 use crate::cloud_runtime::siblings::SiblingError;
 use horizon_cloud::{Build, Cancellation, CloudError};
 use std::{
-    collections::BTreeMap,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -15,9 +14,9 @@ const BASE_ARGUMENT: &str = "HORIZON_BASE";
 /// suffix keeps their tags apart from a pushed image's tag.
 const LAYER_REPOSITORY: &str = "horizon-layer";
 const CLEANUP_TIMEOUT: Duration = Duration::from_mins(1);
-/// Label key prefix stamped on each intermediate image. An image built on one inherits its
-/// labels, which proves the ancestry even when the base only changed metadata.
-const STAMP: &str = "horizon.sibling-base";
+/// One step of `docker history` per line, escaped so a multi-line command stays one line.
+/// Metadata-only steps appear too, and a cached rebuild reproduces every line.
+const HISTORY_FORMAT: &str = "{{json .CreatedAt}} {{json .CreatedBy}} {{json .Comment}}";
 
 /// A sibling recipe from its committed snapshot, built on the image before it.
 pub struct Layer<'a> {
@@ -54,7 +53,7 @@ impl<D: Fn() -> Command> Builder<'_, D> {
         self.build_layer(image, recipe, arguments, &[])
     }
 
-    /// Builds with `layering`, the base and stamp arguments of a layered build, after the
+    /// Builds with `layering`, the base argument of a layered build, after the
     /// Horizon build arguments.
     fn build_layer(&self, image: &str, recipe: &Recipe, arguments: &[String], layering: &[String]) -> Result<()> {
         self.runner
@@ -116,33 +115,17 @@ impl<D: Fn() -> Command> Builder<'_, D> {
                 "A previous attempt's intermediate sibling images could not be removed; remove the images named in the output with `docker image rm` and retry",
             ));
         }
-        let nonce = crate::cloud_runtime::new_id();
-        let stamp = |index: usize| (format!("{STAMP}.{index}"), nonce.clone());
-        let stamped = |index: usize| {
-            let (key, value) = stamp(index);
-            ["--label".to_owned(), format!("{key}={value}")]
-        };
         let built = (|| {
-            let Some(first) = local.first() else {
-                self.build(image, primary, arguments)?;
-                return self.image_id(image);
-            };
-            self.build_layer(first, primary, arguments, &stamped(0))?;
+            self.build(local.first().map_or(image, String::as_str), primary, arguments)?;
             for (index, (alias, recipe)) in layers.iter().enumerate() {
                 (self.runner.emit)(Event::Progress(Progress::activity(format!(
                     "Building sibling {alias} on the image before it"
                 ))));
-                let mut layering = vec!["--build-arg".to_owned(), format!("{BASE_ARGUMENT}={}", local[index])];
-                let target = match local.get(index + 1) {
-                    Some(next) => {
-                        layering.extend(stamped(index + 1));
-                        next.as_str()
-                    }
-                    None => image,
-                };
+                let target = local.get(index + 1).map_or(image, String::as_str);
+                let layering = ["--build-arg".to_owned(), format!("{BASE_ARGUMENT}={}", local[index])];
+                let base = self.ancestry(&local[index])?;
                 self.build_layer(target, recipe, arguments, &layering)?;
-                let (key, value) = stamp(index);
-                if self.labels(target)?.get(&key) != Some(&value) {
+                if !self.ancestry(target)?.descends_from(&base) {
                     return Err(SiblingError::Base((*alias).to_owned()).into());
                 }
             }
@@ -153,7 +136,7 @@ impl<D: Fn() -> Command> Builder<'_, D> {
         let cleanup = Runner {
             cancel: &cancel,
             emit: self.runner.emit,
-            secrets: Vec::new(),
+            secrets: self.runner.secrets.clone(),
         };
         let cleanup = self.remove_layers(&local, &cleanup).and_then(|removed| {
             if removed {
@@ -173,16 +156,50 @@ impl<D: Fn() -> Command> Builder<'_, D> {
         finish_contract(built, cleanup)
     }
 
-    /// The labels of a local image, including those it inherited from its base.
-    fn labels(&self, image: &str) -> Result<BTreeMap<String, String>> {
-        let labels = self.runner.run(
-            "local image labels",
-            (self.docker)().args(["image", "inspect", "--format", "{{json .Config.Labels}}", image]),
-            Duration::from_secs(30),
+    /// What an image built on `image` keeps of it: its build steps, including those that
+    /// only change metadata, and its layer contents. Nothing build-specific is stamped on
+    /// the images, so a cached rebuild of the same recipes reproduces the final digest.
+    fn ancestry(&self, image: &str) -> Result<Ancestry> {
+        let history = self.quiet(
+            "local image history",
+            (self.docker)().args([
+                "history",
+                "--no-trunc",
+                "--human=false",
+                "--format",
+                HISTORY_FORMAT,
+                image,
+            ]),
         )?;
-        serde_json::from_str::<Option<BTreeMap<String, String>>>(labels.trim())
-            .map(Option::unwrap_or_default)
-            .map_err(|_| Error::Invalid("Invalid local image labels"))
+        let layers = self.quiet(
+            "local image layers",
+            (self.docker)().args(["image", "inspect", "--format", "{{json .RootFS.Layers}}", image]),
+        )?;
+        let ancestry = Ancestry {
+            history: history.lines().map(str::to_owned).collect(),
+            layers: serde_json::from_str(layers.trim()).map_err(|_| Error::Invalid("Invalid local image layers"))?,
+        };
+        if ancestry.history.is_empty() {
+            return Err(Error::Invalid("A local image reports no build history"));
+        }
+        Ok(ancestry)
+    }
+
+    /// Runs `command` without echoing its output, which can be long and names build steps,
+    /// and passes that output on, redacted as the build's, only when the command fails.
+    fn quiet(&self, name: &'static str, command: &mut Command) -> Result<String> {
+        let output = std::cell::RefCell::new(Vec::new());
+        let collect = |event| output.borrow_mut().push(event);
+        let result = Runner {
+            cancel: self.runner.cancel,
+            emit: &collect,
+            secrets: self.runner.secrets.clone(),
+        }
+        .run(name, command, Duration::from_secs(30));
+        if result.is_err() {
+            output.into_inner().into_iter().for_each(self.runner.emit);
+        }
+        result
     }
 
     /// Only the `docker` driver builds on images in the local store; another driver would
@@ -227,6 +244,22 @@ impl<D: Fn() -> Command> Builder<'_, D> {
             remaining.join(" ")
         )));
         Ok(false)
+    }
+}
+
+/// The build steps, newest first, and layer diff IDs, oldest first, of a local image.
+struct Ancestry {
+    history: Vec<String>,
+    layers: Vec<String>,
+}
+
+impl Ancestry {
+    /// Whether an image with this ancestry was built on `base`: it ends with the base's whole
+    /// history and starts with its layers. A recipe that ignores `HORIZON_BASE` and builds on
+    /// another image fails this, unless that image itself descends from an identical cached
+    /// base, whose steps and layers the check cannot tell apart.
+    fn descends_from(&self, base: &Self) -> bool {
+        self.history.ends_with(&base.history) && self.layers.starts_with(&base.layers)
     }
 }
 
