@@ -1,6 +1,10 @@
 #!/usr/bin/python3
 """Stop this dedicated worker after its configured period without agent activity, or
-when an agent whose task is done asks through horizon-worker-stop."""
+when an agent whose task is done asks through horizon-worker-stop.
+
+A provider that gives the worker no credential to stop itself has Horizon stop it
+instead: the watcher then only records how long the worker has been idle, and
+`horizon-worker-idle --report` prints that record for Horizon to read."""
 import json
 import os
 from pathlib import Path
@@ -31,6 +35,11 @@ STOP_LOG = Path('/workspace/.horizon/self-stops.jsonl')
 QUIET_SECONDS = 120
 CPU_SAMPLE_SECONDS = 3
 REASON_LIMIT = 200
+# Rewritten every poll; Horizon reads it through --report.
+REPORT = Path('/run/horizon-worker/idle.json')
+# An older record is from a watcher that stopped sampling, so it proves nothing.
+REPORT_FRESH_SECONDS = 3 * POLL_SECONDS
+REPORT_CONTRACT = 'horizon-idle-report-contract=1'
 
 
 def last_output():
@@ -77,6 +86,38 @@ class Activity:
                 self.last_active = now
         self.last_cpu, self.last_sample = cpu, now
         return now - self.last_active >= self.idle_seconds
+
+
+def write_report(activity, now, path=REPORT):
+    """Records how long this worker has been idle, replacing the previous record whole."""
+    record = {'at': int(now), 'idle_seconds': max(0, int(now - activity.last_active)),
+              'idle_stop_seconds': activity.idle_seconds}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_suffix('.new')
+    pending.write_text(json.dumps(record, separators=(',', ':')))
+    pending.replace(path)
+
+
+def report(path=REPORT, now=time.time):
+    """Prints the current idle record for Horizon. Returns the exit status: a missing,
+    malformed or stale record is refused rather than read as activity or idleness."""
+    try:
+        record = json.loads(path.read_text())
+    except OSError:
+        print('This worker has no idle record; its idle watcher is not running.', file=sys.stderr)
+        return 1
+    except ValueError:
+        record = None
+    fields = ('at', 'idle_seconds', 'idle_stop_seconds')
+    if not isinstance(record, dict) or not all(
+            type(record.get(field)) is int and record[field] >= 0 for field in fields):
+        print('This worker\'s idle record is malformed.', file=sys.stderr)
+        return 1
+    if not 0 <= now() - record['at'] <= REPORT_FRESH_SECONDS:
+        print('This worker\'s idle record is stale; its idle watcher stopped sampling.', file=sys.stderr)
+        return 1
+    print(json.dumps({field: record[field] for field in fields[1:]}, separators=(',', ':')))
+    return 0
 
 
 def stop_worker(pod_id, key):
@@ -284,16 +325,25 @@ def main():
         passive('invalid idle period')
     minutes = int(minutes)
     pod_id, key = os.environ.get('RUNPOD_POD_ID'), os.environ.get('RUNPOD_API_KEY')
-    if not pod_id or not key:
-        passive('the provider supplied no worker credential')
-    threading.Thread(target=serve_stop_requests, args=(pod_id, key), daemon=True).start()
+    # Without a credential this worker cannot stop itself; Horizon reads the record and stops it.
+    stops_itself = bool(pod_id and key)
+    if stops_itself:
+        threading.Thread(target=serve_stop_requests, args=(pod_id, key), daemon=True).start()
+    else:
+        print('No worker credential; recording idle time for Horizon to stop this worker', flush=True)
     activity = Activity(minutes * 60, time.time(), cpu_seconds())
     next_request = 0
     while True:
         # Activity is sampled every poll; only the provider request waits between retries.
         time.sleep(POLL_SECONDS)
         now = time.time()
-        if not activity.observe(now, last_output(), cpu_seconds()) or now < next_request:
+        idle = activity.observe(now, last_output(), cpu_seconds())
+        try:
+            write_report(activity, now)
+        # A record that cannot be written goes stale, which Horizon reads as unknown.
+        except OSError as error:
+            print('Idle record not written: ' + type(error).__name__, flush=True)
+        if not stops_itself or not idle or now < next_request:
             continue
         print(f'No agent activity for {minutes} minutes; stopping this worker', flush=True)
         os.sync()
@@ -309,5 +359,17 @@ def main():
         next_request = now + RETRY_SECONDS
 
 
+def entry(arguments):
+    if arguments == ['--report']:
+        return report()
+    if arguments == ['--report-contract']:
+        print(REPORT_CONTRACT)
+        return 0
+    if arguments:
+        print('Usage: horizon-worker-idle [--report | --report-contract]', file=sys.stderr)
+        return 2
+    return main()
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(entry(sys.argv[1:]))

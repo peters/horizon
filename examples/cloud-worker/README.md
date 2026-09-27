@@ -39,6 +39,11 @@ averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on 
 hosts); lighter background work does not keep it running.
 `horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
 this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other images.
+A provider that gives the worker no credential to stop itself, such as Hetzner, has
+Horizon stop it instead: the watcher then only rewrites `/run/horizon-worker/idle.json`
+every minute with how long the worker has been idle, and `horizon-worker-idle --report`
+prints that record, refusing one older than three minutes. Images whose watcher keeps
+this record also report `horizon-idle-report-contract=1`.
 The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
 `horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
 `stop_this_worker` tool on opted-in workers, asks it to stop the worker when a task is
