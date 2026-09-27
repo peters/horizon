@@ -212,7 +212,7 @@ fn wait_for_sequence(session: &Session, minimum: u64) -> u64 {
 }
 
 #[test]
-fn hidden_viewer_receives_first_image_and_retains_only_latest_without_repainting() -> Result<(), ViewError> {
+fn hidden_viewer_receives_first_image_and_retains_only_latest_with_delayed_repaints() -> Result<(), ViewError> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let ctx = Context::default();
@@ -223,9 +223,14 @@ fn hidden_viewer_receives_first_image_and_retains_only_latest_without_repainting
         let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
     }
     let repaints = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&repaints);
-    ctx.set_request_repaint_callback(move |_| {
-        count.fetch_add(1, Ordering::Relaxed);
+    let delayed = Arc::new(AtomicUsize::new(0));
+    let (count, count_delayed) = (Arc::clone(&repaints), Arc::clone(&delayed));
+    ctx.set_request_repaint_callback(move |info| {
+        if info.delay.is_zero() {
+            count.fetch_add(1, Ordering::Relaxed);
+        } else {
+            count_delayed.fetch_add(1, Ordering::Relaxed);
+        }
     });
     assert_eq!(session.observation().received_frame_sequence, 0);
     send_pixel(&mut stream)?;
@@ -245,7 +250,13 @@ fn hidden_viewer_receives_first_image_and_retains_only_latest_without_repainting
         session.latest_full().unwrap().pixels[0],
         egui::Color32::from_rgb(200, 10, 30)
     );
+    // Hidden frames only schedule the bounded background upload; nothing
+    // repaints the host at the stream rate.
     assert_eq!(repaints.load(Ordering::Relaxed), 0);
+    assert!(
+        delayed.load(Ordering::Relaxed) >= 1,
+        "hidden frame never scheduled an upload"
+    );
     // A visible update must trigger the same callback: the negative check above
     // must not pass simply because egui is coalescing every repaint request.
     send_pixel(&mut stream)?;

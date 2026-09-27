@@ -181,3 +181,24 @@ fn actual_discarded_pass_is_replaced_by_the_final_pass_context() {
     assert!(passes.last().unwrap().ui_pass > passes[0].ui_pass);
     assert_eq!(host(&app, panel).ui_pass, passes.last().unwrap().ui_pass);
 }
+
+#[test]
+fn off_canvas_viewer_keeps_uploading_without_being_presented() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5901"));
+    let owner = "agent".to_string();
+    app.panel_render_caches
+        .device_ui_state
+        .insert(panel, crate::device_widget::DeviceUiState::connected_fixture(&owner));
+    app.board.panel_mut(panel).expect("device").layout.position = [100_000.0, 100_000.0];
+    render(&ctx, &mut app);
+    assert!(!rendered(&app, panel));
+    assert_eq!(host(&app, panel).exclusion, Some(HostExclusion::OutsideCanvas));
+    let observation = app.device_observation(panel, &owner).expect("observation");
+    assert!(observation.image.image_received);
+    assert_eq!(observation.image.frame_sequence, 1);
+    assert!(!observation.image.image_displayed);
+    assert_eq!(
+        observation.diagnostics.expect("diagnostics").presentation,
+        horizon_core::browser::manifest::device::Presentation::NotRendered
+    );
+}

@@ -103,7 +103,8 @@ later navigation key.
    `list`, then `create` for this endpoint in the calling agent's current workspace.
    Inspect the returned panel: require connected, image received, image displayed,
    and advancing frame sequence during changing output. `visible: true` alone is
-   insufficient. Pause interactive testing if the live native image goes off-screen.
+   insufficient. If the live native image later goes off-screen, the person
+   navigated away: keep testing and recording; do not pause or reveal again.
 3. Find the actual Horizon child PID within the fixture's owned process tree.
    Record `/proc/<pid>/exe` and its SHA-256 against the frozen binary. The launcher
    PID may belong to bubblewrap. Match the exact window to that child PID.

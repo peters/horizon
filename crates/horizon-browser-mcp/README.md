@@ -428,16 +428,24 @@ UI frame and requires a connected image intersecting the drawing clip. An old
 texture after a disconnect is not a live image. The frame sequence counts
 uploaded images in the current connection and resets on explicit reconnect.
 
-Hidden and off-canvas viewers continue receiving at their configured refresh rate
-without frame-triggered repaints or off-screen GPU uploads. `received_frame_sequence`
-counts worker-published image updates independently of `frame_sequence` uploads.
-It advances without UI rendering and resets on reconnect; inspection does not
-consume the pending image. Revealing a viewer displays the latest retained image,
-even if the desktop has since become static. Older hosts omit this field, which
-new clients deserialize as zero: that alone does not establish failed reception.
-Neither counter is a connection heartbeat. An unchanged desktop can keep both
-stationary; use connection errors to identify failures, and require
-`image_displayed` separately when proving a live visible view.
+Viewers that are not drawn (hidden, off canvas, behind a fullscreen panel)
+continue receiving at their configured refresh rate and upload the latest
+received frame about once a second instead of at the stream rate, so
+`image_received`, `frame_sequence` and `last_uploaded_age_millis` stay live
+evidence and the retained image is current when the person comes back.
+`received_frame_sequence` counts worker-published image updates independently of
+those uploads. Both advance without the viewer being drawn and reset on
+reconnect; inspection does not consume the pending image. Revealing a viewer
+displays the latest retained image, even if the desktop has since become static.
+Older hosts omit `received_frame_sequence`, which new clients deserialize as
+zero, and pause uploads while a viewer is not drawn: neither alone establishes
+failed reception. Neither counter is a connection heartbeat. An unchanged
+desktop can keep both stationary; use connection errors to identify failures,
+and require `image_displayed` separately when proving a live visible view. A
+viewer that was displayed earlier in the connection (`last_displayed_age_millis`
+present) and now reports `not_rendered` with `outside_canvas` was navigated away
+from by the person: keep testing and recording, do not pause the lane, and do
+not reveal again just to advance counters.
 
 
 All operations require a Horizon-injected caller and host identity. Discovery

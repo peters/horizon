@@ -160,7 +160,13 @@ decisions and attempted operations with the task's private smoke evidence.
    at most one visibility request, one reveal and one justified reconnect, followed by a
    recorded outcome. Further recovery requires new diagnostic evidence. A
    blocked native lane does not block headless checks, and it never authorizes a
-   restart of the user's Horizon or automation of their desktop.
+   restart of the user's Horizon or automation of their desktop. A viewer that
+   was displayed earlier in the connection (`last_displayed_age_millis` present
+   under the same `connection_generation`) and now reports `not_rendered` with
+   `outside_canvas` while uploads or reception keep advancing was navigated away
+   from by the person: keep the interactive test and its recording running, do
+   not pause the lane, and do not spend the reveal budget just to advance
+   counters; reveal only when the person's attention is needed.
 
 `image_received` and `frame_sequence` retain their original texture-upload
 meaning for compatibility. The separate decoded-frame counter is available only

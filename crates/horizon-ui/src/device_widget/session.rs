@@ -218,6 +218,16 @@ impl Session {
         (session, receiver)
     }
 
+    /// Marks the viewer undrawn and routes its wakes to `viewport`, the pass
+    /// that uploads for it, so a closed detached window cannot keep them.
+    /// Returns whether an image or status change is waiting.
+    pub(super) fn pending_in_background(&self, viewport: ViewportId) -> bool {
+        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.visible = false;
+        state.viewport = viewport;
+        state.image.is_some() || state.status.is_some()
+    }
+
     pub(super) fn set_visible(&self, visible: bool) {
         self.updates
             .lock()
@@ -278,13 +288,22 @@ impl Drop for Session {
 }
 
 fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
-    let viewport = {
+    let (drawn, viewport) = {
         let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.status = Some(status);
-        state.visible.then_some(state.viewport)
+        (state.visible, state.viewport)
     };
-    if let Some(viewport) = viewport {
+    wake_ui(ctx, drawn, viewport);
+}
+
+/// A drawn viewer repaints for every frame; an undrawn one only asks for the
+/// bounded background upload, so a hidden or off-canvas stream never drives
+/// the host at its own rate.
+fn wake_ui(ctx: &Context, drawn: bool, viewport: ViewportId) {
+    if drawn {
         ctx.request_repaint_of(viewport);
+    } else {
+        ctx.request_repaint_after_for(super::BACKGROUND_UPLOAD_INTERVAL, viewport);
     }
 }
 
@@ -365,7 +384,7 @@ async fn stream_desktop(
             let full = framebuffer.full_image()?;
             let image = present_image(&full, options)?;
             *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(full);
-            let viewport = {
+            let (drawn, viewport) = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
@@ -375,11 +394,9 @@ async fn stream_desktop(
                 state.produced_with = Some(options.for_desktop(framebuffer.size()));
                 state.desktop = Some(framebuffer.size());
                 state.received_frame_sequence = state.received_frame_sequence.saturating_add(1);
-                state.visible.then_some(state.viewport)
+                (state.visible, state.viewport)
             };
-            if let Some(viewport) = viewport {
-                ctx.request_repaint_of(viewport);
-            }
+            wake_ui(ctx, drawn, viewport);
         }
         tokio::time::timeout(
             Duration::from_secs(5),

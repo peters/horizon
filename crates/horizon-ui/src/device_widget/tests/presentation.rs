@@ -27,7 +27,7 @@ fn invisible_sizing_ui_never_counts_as_displayed_image() {
     };
     let _ = ctx
         .run_ui(egui::RawInput::default(), |ui| {
-            state.update_texture(ui, patterned_desktop());
+            state.update_texture(ui.ctx(), patterned_desktop());
             ui.set_invisible();
             state.show(ui, &device, true);
             assert!(state.image.received);

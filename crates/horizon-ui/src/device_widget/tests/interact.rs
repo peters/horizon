@@ -40,7 +40,7 @@ fn frame(
             |ui| state.show(ui, device, true),
         )
         .discard_textures();
-    state.finish_frame();
+    state.finish_frame(ctx);
     output
 }
 
@@ -321,7 +321,7 @@ fn a_drag_that_leaves_the_window_or_a_hidden_viewer_releases_what_is_held() {
     drain(&mut receiver);
     // A frame in which the panel is not drawn at all.
     state.begin_frame();
-    state.finish_frame();
+    state.finish_frame(&ctx);
     assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
     assert!(!state.captured);
 }
@@ -353,7 +353,7 @@ fn a_click_on_ui_covering_the_image_does_not_reach_the_desktop() {
                 },
             )
             .discard_textures();
-        state.finish_frame();
+        state.finish_frame(&ctx);
     };
     // egui lays a new area out invisibly first; hit testing sees it after.
     for events in [
@@ -410,7 +410,7 @@ fn a_discarded_pass_does_not_send_its_input_twice() {
             },
         )
         .discard_textures();
-    state.finish_frame();
+    state.finish_frame(&ctx);
     assert_eq!(passes, 2, "the frame ran a second pass");
     let sent = drain(&mut receiver);
     assert_eq!(
@@ -479,7 +479,7 @@ fn frame_with_modifiers(
             |ui| state.show(ui, device, true),
         )
         .discard_textures();
-    state.finish_frame();
+    state.finish_frame(ctx);
     output
 }
 
@@ -687,7 +687,7 @@ fn window_focus_loss_releases_and_the_first_wheel_uses_the_current_pointer() {
             |ui| state.show(ui, &device, true),
         )
         .discard_textures();
-    state.finish_frame();
+    state.finish_frame(&ctx);
     assert!(keys(&drain(&mut receiver)).contains(&(0xff0d, false)));
     assert!(!state.captured);
 }
@@ -720,7 +720,7 @@ fn a_press_on_covering_ui_stays_there_even_if_the_pointer_then_reaches_the_image
                 },
             )
             .discard_textures();
-        state.finish_frame();
+        state.finish_frame(&ctx);
     };
     covered(&mut state, Vec::new());
     covered(&mut state, Vec::new());
