@@ -92,6 +92,9 @@ fn run(
             Err(Error::Busy) => {}
             Ok(IdleCheck::NotWatched) => return,
             Ok(IdleCheck::Stopped { idle }) => {
+                // Ends this watch's presentation of the released server itself, so the
+                // card never has to cancel a token a newer operation may own.
+                cancel.cancel();
                 let line = format!(
                     "No agent activity for {} minutes, so Horizon stopped this cloud. \
                      Resume creates a new server that attaches the same workspace volume.",
@@ -164,11 +167,11 @@ impl Runtime {
         match report {
             Report::Checked => {}
             Report::Failed(message) => self.push_log(message),
+            // Only the watch of the current operation reports here: every new
+            // operation replaces or drops the channel, and the watch already ended
+            // its presentation, whose token is the one this card holds.
             Report::Stopped(state, line) => {
-                // Ends the presentation of the released server, as Stop does.
-                if let Some(cancel) = self.cancel.take() {
-                    cancel.cancel();
-                }
+                self.cancel = None;
                 self.progress.stage(Stage::Stopped, std::time::Instant::now());
                 self.stage = Some(state.stage);
                 self.state = Some(*state);
@@ -202,10 +205,14 @@ mod tests {
 
     /// Runs the watch over `results`, one per check, and returns what it reported.
     fn watch(results: Vec<cloud_runtime::Result<IdleCheck>>) -> Vec<String> {
+        watch_with(&Cancellation::default(), results)
+    }
+
+    fn watch_with(cancel: &Cancellation, results: Vec<cloud_runtime::Result<IdleCheck>>) -> Vec<String> {
         let results = RefCell::new(results.into_iter());
         let reports = RefCell::new(Vec::new());
         run(
-            &Cancellation::default(),
+            cancel,
             Duration::ZERO,
             |_| results.borrow_mut().next().unwrap_or(Ok(IdleCheck::NotWatched)),
             || Ok(Some(stopped())),
@@ -229,16 +236,24 @@ mod tests {
                 limit: Duration::from_secs(600),
             })
         };
-        let reports = watch(vec![
-            active(),
-            Err(Error::Busy),
-            active(),
-            Ok(IdleCheck::Stopped {
-                idle: Duration::from_mins(11),
-            }),
-            active(),
-        ]);
+        let cancel = Cancellation::default();
+        let reports = watch_with(
+            &cancel,
+            vec![
+                active(),
+                Err(Error::Busy),
+                active(),
+                Ok(IdleCheck::Stopped {
+                    idle: Duration::from_mins(11),
+                }),
+                active(),
+            ],
+        );
         assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(
+            cancel.is_cancelled(),
+            "the watch ends its own presentation of the released server"
+        );
         assert!(reports[0].starts_with("Stopped: No agent activity for 11 minutes"));
     }
 
@@ -315,11 +330,35 @@ mod tests {
             .unwrap();
         runtime.poll_idle();
         assert_eq!(runtime.stage, Some(Stage::Stopped));
-        assert!(cancel.is_cancelled(), "the presentation of the released server ends");
+        // The watch ended its presentation; the card only lets go of the token.
+        assert!(runtime.cancel.is_none() && !cancel.is_cancelled());
         assert!(runtime.receiver.is_none() && runtime.idle_reports.is_none() && runtime.error.is_none());
         assert_eq!(
             runtime.logs.iter().rev().take(2).collect::<Vec<_>>(),
             ["stopped when idle", "Idle check failed: busy"]
         );
+    }
+
+    #[test]
+    fn a_stop_reported_after_a_newer_operation_began_is_never_applied() {
+        let (reports, received) = channel();
+        let newer = Cancellation::default();
+        let mut runtime = Runtime {
+            idle_reports: Some(received),
+            cancel: Some(newer.clone()),
+            stage: Some(Stage::Stopping),
+            ..Runtime::default()
+        };
+        // What starting Stop, Delete or Resume does to the card's idle watch.
+        runtime.idle_reports = None;
+        assert!(
+            reports
+                .send(Report::Stopped(Box::new(stopped()), "late".into()))
+                .is_err(),
+            "the late watch finds nobody listening"
+        );
+        runtime.poll_idle();
+        assert_eq!(runtime.stage, Some(Stage::Stopping));
+        assert!(runtime.cancel.is_some() && !newer.is_cancelled());
     }
 }

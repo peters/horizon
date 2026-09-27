@@ -225,6 +225,8 @@ impl HorizonApp {
         if let Some(cancel) = runtime.cancel.take() {
             cancel.cancel();
         }
+        // A stop the idle watch reports late must not apply to this operation.
+        runtime.idle_reports = None;
         runtime.desktop = None;
         runtime.confirmation = Confirmation::None;
         runtime.rebuild = None;
