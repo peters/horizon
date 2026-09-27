@@ -100,14 +100,17 @@ Hetzner off removes the binding.
   has a new host key, pinned after its worker contract passes. Processes from
   before the stop are gone; `/workspace` is kept.
 - **Check** reports a released server as stopped once it is gone, and a missing
-  one as lost. It never creates, starts or deletes anything. If a stop was
+  one as lost. A server powered off any other way is still billed, so check
+  reports that and leaves the cloud as it is; stop it to release the server.
+  Check never creates, starts or deletes anything. If a stop was
   interrupted before its server was gone, the cloud stays stopping and cannot be
   resumed; stopping again finishes it.
 - **Delete** removes the server, the workspace volume and the SSH key, and
   confirms each is gone. Only then can the cloud be removed from Horizon. A
   create request whose response was lost counts as having created nothing only
   if a second look 30 seconds later still finds nothing. Redeploying a deleted
-  cloud creates a new volume.
+  cloud creates a new volume. Stop and delete work even after the settings stop
+  allowing the cloud's location.
 
 ## Not available on Hetzner yet
 

@@ -235,3 +235,15 @@ fn a_server_request_that_created_nothing_is_settled_and_its_volume_deleted() {
     assert_eq!(state.operation, CreateState::Prepared);
     assert!(!kept);
 }
+
+#[test]
+fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
+    let off = (200, json!({"server": server("off", None)}).to_string());
+    let held = (200, json!({"volume": volume()}).to_string());
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let journal = journal(CreateState::Bound { worker_id: "9".into() });
+    act_on(&bound, &journal, vec![off, held], |compute, store, state| {
+        let refused = reconcile_with(compute, store, state, &Cancellation::default()).unwrap_err();
+        assert!(refused.to_string().contains("still billed"));
+    });
+}

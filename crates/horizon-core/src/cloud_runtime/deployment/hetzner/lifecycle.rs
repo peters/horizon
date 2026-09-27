@@ -100,14 +100,17 @@ pub(super) fn reconcile_with(
             "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",
         ));
     }
+    // A powered-off server is still billed, so it is never reported as stopped;
+    // only a stop, which deletes it, stops the cloud.
+    if server.status() == WorkerStatus::Stopped {
+        return Err(Error::Invalid(
+            "The Hetzner server is powered off but still billed; stop the cloud to release it",
+        ));
+    }
     let described = worker(&server, spec, &volume)?;
     described.verify(spec)?;
     described.verify_resources(spec)?;
-    report.outcome = if server.status() == WorkerStatus::Stopped {
-        Outcome::Inactive { worker_id: bound }
-    } else {
-        Outcome::Found { worker_id: bound }
-    };
+    report.outcome = Outcome::Found { worker_id: bound };
     report.worker = Some(described);
     Ok(report)
 }
@@ -119,7 +122,7 @@ pub(in crate::cloud_runtime) fn stop(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<()> {
-    stop_with(&Compute::new(settings)?, store, state, cancel)
+    stop_with(&Compute::cleanup(settings)?, store, state, cancel)
 }
 
 /// As `stop`, with the Hetzner client given.
@@ -190,7 +193,7 @@ pub(in crate::cloud_runtime) fn delete(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<()> {
-    delete_with(&Compute::new(settings)?, store, state, cancel)
+    delete_with(&Compute::cleanup(settings)?, store, state, cancel)
 }
 
 /// As `delete`, with the Hetzner client given.

@@ -136,6 +136,11 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     .unwrap();
     let mut spec = spec();
     preflight(&spec.operation_id, &spec.profile, &settings).unwrap();
+    // A cloud placed where the settings no longer allow can still be stopped and deleted.
+    let mut elsewhere = settings.clone();
+    elsewhere.placement = serde_json::from_value(serde_json::json!({"data_centers": ["nbg1"]})).unwrap();
+    assert!(super::Compute::new(&elsewhere).is_err());
+    super::Compute::cleanup(&elsewhere).unwrap();
     // Not a Hetzner resource name.
     assert!(preflight("Cloud_1", &spec.profile, &settings).is_err());
     spec.profile.idle_stop_minutes = Some(30);
@@ -563,6 +568,26 @@ mod failure_points {
 
     #[test]
     fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
+        // An unfinished delete, with its key or server left, is refused before any request.
+        for (key, operation) in [
+            (Some("ssh-ed25519 AAAA"), CreateState::Prepared),
+            (None, CreateState::Requested),
+        ] {
+            let (_, journal, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
+                let volume = CreateState::Terminated { worker_id: "8".into() };
+                let key = key.map(String::from);
+                Journal {
+                    location: None,
+                    volume,
+                    key,
+                    released: None,
+                }
+                .save(root)
+                .unwrap();
+                state.operation = operation.clone();
+            });
+            assert_eq!((served, journal.location), (0, None));
+        }
         let (_, journal, _, _) = provision_adjusted(
             &spec(),
             and(until_volume(), [error(503, "unavailable")]),

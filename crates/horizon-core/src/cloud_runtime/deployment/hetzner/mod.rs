@@ -153,6 +153,21 @@ impl Compute {
             registries: settings.registries.clone(),
         })
     }
+
+    /// For stopping and deleting, which place nothing: resources are checked by
+    /// ownership alone, so a changed placement policy never blocks their cleanup.
+    pub(super) fn cleanup(settings: &Settings) -> Result<Self> {
+        let hetzner = super::sizing::hetzner(settings)?.clone();
+        Ok(Self {
+            client: Hetzner::new(hetzner.credential()?),
+            settings: hetzner,
+            allowed: Allowed {
+                locations: Vec::new(),
+                server_types: Vec::new(),
+            },
+            registries: None,
+        })
+    }
 }
 
 /// What this cloud owns on Hetzner besides its server. Every change is durable
