@@ -318,6 +318,8 @@ mod failure_points {
             "server_type": {"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80},
             "location": {"name": "hel1"}, "labels": labels, "volumes": [9]});
         let responses = vec![
+            // No volume from an earlier attempt, so the cloud may move if sold out.
+            (200, listing("volumes", json!([]))),
             (200, listing("server_types", json!([kind]))),
             (200, listing("locations", json!([{"name": "hel1", "network_zone": "eu-central"}]))),
             (200, json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}).to_string()),
