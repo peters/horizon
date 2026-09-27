@@ -4,7 +4,7 @@ use super::{
     settings::Settings,
     state::{Deployment, Store},
 };
-use horizon_cloud::{WorkerStatus, runpod::RunPod};
+use horizon_cloud::WorkerStatus;
 use std::path::Path;
 
 pub use super::deployment::hetzner::idle::IdleCheck;
@@ -49,14 +49,7 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     if !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. }) {
         return Ok(false);
     }
-    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Ok(!super::deployment::hetzner::retained(store.root())?);
-    }
-    match &state.spec {
-        Some(_) => Ok(!super::deployment::storage::retained(store, state)?),
-        None => Ok(!store.root().join("workspace-volume.json").try_exists()?
-            && !store.root().join("workspace-volume.required").try_exists()?),
-    }
+    Ok(!super::providers::retained(store, state)?)
 }
 
 /// # Errors
@@ -74,38 +67,15 @@ pub fn reconcile(
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
-    let (report, operation) = if hetzner(&state) {
-        let report = super::deployment::hetzner::lifecycle::reconcile(&store, &mut state, settings, cancel)?;
-        (report, state.operation.clone())
-    } else {
-        let provider = RunPod::new(settings.credential()?);
-        // Settling commits only a new image and pull credential for the same worker.
-        super::deployment::replacement::settle(&provider, &store, &mut state, cancel)?;
-        let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
-        let mut operation = state.operation.clone();
-        let report = provider.reconcile(&spec, &mut operation, worker_hint, cancel, |next| {
-            if matches!(next, CreateState::Terminated { .. }) && state.requires_browserstack_release() {
-                return Err(horizon_cloud::CloudError::Invalid(
-                    "Worker terminated; verify hosted-device release before recording cleanup",
-                ));
-            }
-            state.operation = next.clone();
-            store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
-        })?;
-        (report, operation)
-    };
+    let (report, operation) =
+        super::providers::lifecycle(&state, settings).check(&store, &mut state, worker_hint, cancel)?;
     let changed = report.worker.is_some() || matches!(operation, CreateState::Terminated { .. });
     if let Some(worker) = &report.worker {
         state.worker = Some(worker.clone());
         record_stopped(&mut state);
     }
     if matches!(operation, CreateState::Terminated { .. }) {
-        let retained = if hetzner(&state) {
-            super::deployment::hetzner::retained(store.root())?
-        } else {
-            super::deployment::storage::retained(&store, &state)?
-        };
-        if retained {
+        if super::providers::retained(&store, &state)? {
             return Err(Error::Invalid(
                 "Worker termination is confirmed, but workspace storage remains; explicitly delete the cloud to finish cleanup",
             ));
@@ -118,20 +88,6 @@ pub fn reconcile(
         store.save(&state)?;
     }
     Ok(ReconciledDeployment { state, report })
-}
-
-/// Hetzner clouds release their server on stop; see `deployment::hetzner::lifecycle`.
-fn hetzner(state: &Deployment) -> bool {
-    state.profile.provider == horizon_cloud::hetzner::PROVIDER
-}
-
-/// Hetzner profiles cannot request hosted devices, so a Hetzner cloud has none to
-/// release; nothing here may reach `RunPod` for it.
-fn refuse_hetzner(state: &Deployment) -> Result<()> {
-    if state.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid("Hetzner clouds hold no hosted devices to release"));
-    }
-    Ok(())
 }
 
 /// A verified worker that stopped itself or was stopped elsewhere becomes an
@@ -155,74 +111,7 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
-    if hetzner(&state) {
-        super::deployment::hetzner::lifecycle::stop(&store, &mut state, settings, cancel)?;
-        return Ok(state);
-    }
-    let CreateState::Bound { worker_id } = &state.operation else {
-        return Err(Error::Invalid("Reconcile a bound worker before stopping it"));
-    };
-    let id = worker_id.clone();
-    let spec = state
-        .spec
-        .as_ref()
-        .ok_or(Error::Invalid("Missing worker specification"))?;
-    let provider = RunPod::new(settings.credential()?);
-    let worker = provider
-        .inspect(&id, cancel)?
-        .ok_or(horizon_cloud::CloudError::WorkerLost)?;
-    worker.verify(spec)?;
-    if state.requires_browserstack_release() {
-        if worker.status() == WorkerStatus::Stopped {
-            return Err(Error::Invalid(
-                "Worker stopped before remote-device release; resume it to verify cleanup",
-            ));
-        }
-        let connection = super::ssh::Connection::new(&worker, settings, store.root())?;
-        super::browser_auth::revoke(
-            &connection,
-            &super::command::Runner {
-                cancel,
-                emit: &|_| {},
-                secrets: Vec::new(),
-            },
-        )?;
-    }
-    if state.profile.capabilities.browserstack.is_some() {
-        state.browserstack_released = true;
-        store.save(&state)?;
-    }
-    let previous = (state.stop_requested, state.stage);
-    state.stop_requested = true;
-    state.stage = Stage::Stopping;
-    store.save(&state)?;
-    if worker.status() != WorkerStatus::Stopped
-        && let Err(error) = provider.stop(spec, &id, cancel)
-    {
-        if matches!(
-            error,
-            horizon_cloud::CloudError::Unauthorized
-                | horizon_cloud::CloudError::Rejected(_)
-                | horizon_cloud::CloudError::Cancelled
-        ) {
-            (state.stop_requested, state.stage) = previous;
-            store.save(&state)?;
-        }
-        return Err(error.into());
-    }
-    state.worker = provider.inspect(&id, cancel)?;
-    if !state
-        .worker
-        .as_ref()
-        .is_some_and(|worker| worker.status() == WorkerStatus::Stopped)
-    {
-        store.save(&state)?;
-        return Err(Error::Invalid(
-            "Stop requested but not confirmed. Reconcile the stop before resuming.",
-        ));
-    }
-    state.stage = Stage::Stopped;
-    store.save(&state)?;
+    super::providers::lifecycle(&state, settings).stop(&store, &mut state, cancel)?;
     Ok(state)
 }
 
@@ -246,32 +135,7 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
-    if hetzner(&state) {
-        // No provider call follows here, so a cancelled Resume must stop before the
-        // fence is cleared: the reconnect it leads to creates a billed server.
-        cancel.check()?;
-        return super::deployment::hetzner::lifecycle::resume(&store, &mut state);
-    }
-    let CreateState::Bound { worker_id } = &state.operation else {
-        return Err(Error::Invalid("No existing worker to resume"));
-    };
-    let spec = state
-        .spec
-        .as_ref()
-        .ok_or(Error::Invalid("Missing worker specification"))?;
-    let provider = RunPod::new(settings.credential()?);
-    let worker = provider
-        .inspect(worker_id, cancel)?
-        .ok_or(horizon_cloud::CloudError::WorkerLost)?;
-    worker.verify(spec)?;
-    let requested = std::time::SystemTime::now();
-    if worker.status() == WorkerStatus::Stopped {
-        provider.start(spec, worker_id, cancel)?;
-    }
-    state.timeline = Some(super::timeline::Timeline::resume_requested(requested));
-    state.stop_requested = false;
-    state.stage = Stage::Readiness;
-    store.save(&state)
+    super::providers::lifecycle(&state, settings).resume(&store, &mut state, cancel)
 }
 
 /// # Errors
@@ -280,27 +144,7 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
-    let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker specification"))?;
-    let CreateState::Bound { worker_id } = &state.operation else {
-        return Err(Error::Invalid("No bound worker"));
-    };
-    refuse_hetzner(&state)?;
-    let provider = RunPod::new(settings.credential()?);
-    let worker = provider
-        .inspect(worker_id, cancel)?
-        .ok_or(horizon_cloud::CloudError::WorkerLost)?;
-    worker.verify(spec)?;
-    let connection = super::ssh::Connection::new(&worker, settings, store.root())?;
-    super::browser_auth::revoke(
-        &connection,
-        &super::command::Runner {
-            cancel,
-            emit: &|_| {},
-            secrets: Vec::new(),
-        },
-    )?;
-    state.browserstack_released = true;
-    store.save(&state)?;
+    super::providers::lifecycle(&state, settings).release_devices(&store, &mut state, cancel)?;
     Ok(state)
 }
 
