@@ -228,13 +228,13 @@ fn prepare_registry(
 /// The provider a cloud deploys on, chosen by its profile.
 enum Compute {
     RunPod(RunPod),
-    Hetzner(hetzner::Compute),
+    Hetzner(Box<hetzner::Compute>),
 }
 
 impl Compute {
     fn new(request: &Request) -> Result<Self> {
         if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-            Ok(Self::Hetzner(hetzner::Compute::new(&request.settings)?))
+            Ok(Self::Hetzner(Box::new(hetzner::Compute::new(&request.settings)?)))
         } else {
             Ok(Self::RunPod(RunPod::new(request.settings.credential()?)))
         }
