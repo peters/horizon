@@ -13,15 +13,23 @@ const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
 /// left before its deadline; after that it reports Hetzner as still being fetched.
 const ANSWER_MARGIN_MILLIS: i64 = 3_000;
 
+/// A fetch's catalog and configured server types, or the reason it failed for a machine
+/// with a Hetzner binding.
+type Fetch = Result<(Option<HetznerCatalog>, Vec<String>), String>;
+
 #[derive(Default)]
 pub(in crate::app) struct State {
     /// The latest catalog; `None` inside when this machine has no Hetzner binding.
     fetched: Option<Fetched<Option<HetznerCatalog>>>,
     /// The server types this machine's settings try, in order, from the same fetch.
     server_types: Vec<String>,
+    /// Whether the last finished fetch found a Hetzner binding, kept while the catalog is
+    /// refreshed and when fetching it failed.
+    bound: bool,
     error: Option<String>,
     failed_at: Option<Instant>,
-    job: Option<Job<(Option<HetznerCatalog>, Vec<String>)>>,
+    /// A failure with a binding comes back as an `Err` inside, so the binding is known.
+    job: Option<Job<Fetch>>,
     /// When the running fetch started.
     started: Option<Instant>,
 }
@@ -45,7 +53,11 @@ impl State {
                     .as_ref()
                     .map(|hetzner| hetzner.server_types.clone())
                     .unwrap_or_default();
-                Ok((prices::hetzner_catalog(settings, cancel)?, server_types))
+                match prices::hetzner_catalog(settings, cancel) {
+                    Ok(catalog) => Ok(Ok((catalog, server_types))),
+                    Err(error) if settings.hetzner.is_some() => Ok(Err(error.to_string())),
+                    Err(error) => Err(error),
+                }
             }));
             self.started = Some(Instant::now());
         }
@@ -58,22 +70,29 @@ impl State {
         }
         match finished {
             Some(Ok(Fetched {
-                value: (catalog, server_types),
+                value: Ok((catalog, server_types)),
                 at,
             })) => {
+                self.bound = catalog.is_some();
                 self.fetched = Some(Fetched { value: catalog, at });
                 self.server_types = server_types;
                 self.error = None;
                 self.failed_at = None;
             }
-            // A catalog that could not be refreshed is no longer offered as current.
-            Some(Err(error)) => {
-                self.fetched = None;
-                self.error = Some(error);
-                self.failed_at = Some(Instant::now());
+            Some(Ok(Fetched { value: Err(error), .. })) => {
+                self.bound = true;
+                self.fail(error);
             }
+            Some(Err(error)) => self.fail(error),
             None => {}
         }
+    }
+
+    /// A catalog that could not be refreshed is no longer offered as current.
+    fn fail(&mut self, error: String) {
+        self.fetched = None;
+        self.error = Some(error);
+        self.failed_at = Some(Instant::now());
     }
 
     pub(super) fn refresh(&mut self) {
@@ -89,6 +108,12 @@ impl State {
     /// Until a failed fetch may be asked again, for waking an idle app.
     pub fn retry_in(&self) -> Option<Duration> {
         self.failed_at.map(|at| RETRY_FAILED.saturating_sub(at.elapsed()))
+    }
+
+    /// Whether this machine has a Hetzner binding, as the last finished fetch found,
+    /// even while its catalog is refreshed or could not be fetched.
+    pub fn bound(&self) -> bool {
+        self.bound
     }
 
     /// The server types this machine's settings try, in order.
@@ -157,13 +182,17 @@ impl State {
     }
 
     pub fn answered(&mut self, catalog: Option<HetznerCatalog>) {
+        self.bound = catalog.is_some();
         self.fetched = Some(Fetched {
             value: catalog,
             at: Instant::now(),
         });
     }
 
+    /// A fetch that failed for a machine with a Hetzner binding.
     pub fn failed(&mut self, error: &str) {
+        self.bound = true;
+        self.fetched = None;
         self.error = Some(error.to_owned());
         self.failed_at = Some(Instant::now());
     }

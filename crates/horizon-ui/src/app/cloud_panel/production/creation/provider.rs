@@ -20,10 +20,11 @@ use horizon_core::{
 };
 
 /// The providers this machine can use: `RunPod`, whose settings New cloud requires, and
-/// each other provider once its catalog shows a binding.
+/// each other provider once a fetch finds its binding, including while its catalog is
+/// refreshed or could not be fetched.
 fn configured(prices: &State) -> Vec<&'static Description> {
     let mut configured = vec![&provider::RUNPOD];
-    if prices.hetzner.fresh().is_some_and(|fetched| fetched.value.is_some()) {
+    if prices.hetzner.bound() {
         configured.push(&provider::HETZNER);
     }
     configured
@@ -174,7 +175,10 @@ pub(super) fn card(
             ui.set_width(ui.available_width());
             let hetzner = &prices.hetzner;
             if let Some(error) = hetzner.error() {
-                ui.colored_label(theme::PALETTE_RED(), format!("{} prices unavailable: {error}", provider.label));
+                ui.colored_label(
+                    theme::PALETTE_RED(),
+                    format!("{} prices unavailable: {error}", provider.label),
+                );
                 return;
             }
             let Some(fetched) = hetzner.fresh() else {
@@ -185,10 +189,22 @@ pub(super) fn card(
                 return;
             };
             if fetched.value.is_none() {
-                ui.label(format!("Add {} in Cloud settings to create clouds there.", provider.label));
+                ui.label(format!(
+                    "Add {} in Cloud settings to create clouds there.",
+                    provider.label
+                ));
                 return;
             }
             let offers = location_offers(prices, profile);
+            // A chosen location that no longer offers this size is cleared, so creation
+            // never goes somewhere other than the offer shown.
+            if !placement.data_centers.is_empty()
+                && !offers
+                    .iter()
+                    .any(|offer| placement.data_centers == [offer.location.clone()])
+            {
+                chosen = Some(Placement::default());
+            }
             if offers.is_empty() {
                 ui.colored_label(
                     theme::PALETTE_RED(),
@@ -201,14 +217,20 @@ pub(super) fn card(
             }
             ui.label(RichText::new("Location").size(14.0).strong().color(theme::FG()));
             ui.horizontal_wrapped(|ui| {
-                if option(ui, "Any allowed location", placement.data_centers.is_empty(), None, None) {
+                if option(
+                    ui,
+                    "Any allowed location",
+                    placement.data_centers.is_empty(),
+                    None,
+                    None,
+                ) {
                     chosen = Some(Placement::default());
                 }
                 for offer in &offers {
-                    let label = offer
-                        .region
-                        .as_deref()
-                        .map_or_else(|| offer.location.clone(), |region| format!("{} · {region}", offer.location));
+                    let label = offer.region.as_deref().map_or_else(
+                        || offer.location.clone(),
+                        |region| format!("{} · {region}", offer.location),
+                    );
                     let detail = format!("{} · {}/h", offer.server_type, euros(offer.hourly));
                     let selected = placement.data_centers == [offer.location.clone()];
                     if option(ui, &label, selected, Some(&detail), None) && !selected {
@@ -225,33 +247,7 @@ pub(super) fn card(
                 .find(|offer| placement.data_centers == [offer.location.clone()])
                 .or_else(|| offers.iter().min_by(|a, b| a.hourly.total_cmp(&b.hourly)));
             if let Some(offer) = shown {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!(
-                        "{} · {} vCPU · {:.0} GB · {}/h",
-                        offer.server_type,
-                        offer.cores,
-                        offer.memory_gb,
-                        euros(offer.hourly)
-                    ))
-                    .size(15.0)
-                    .strong()
-                    .color(theme::FG()),
-                );
-                ui.label(format!(
-                    "At most {} a month running, with the workspace volume and IPv4 address. {} a month stopped: only the volume is kept.",
-                    euros(offer.running_month),
-                    euros(offer.stopped_month)
-                ));
-                if !offer.fallbacks.is_empty() {
-                    ui.small(format!("If it is sold out: {}.", offer.fallbacks.join(", ")));
-                }
-                if !offer.listed {
-                    ui.small(format!(
-                        "{} lists this type as unavailable here; creation confirms whether it can be rented.",
-                        provider.label
-                    ));
-                }
+                offer_details(ui, provider, offer);
             }
             ui.small("Billed per started hour, capped per calendar month. Prices are euros, net of VAT.");
             if !provider.creatable {
@@ -265,4 +261,36 @@ pub(super) fn card(
             }
         });
     chosen
+}
+
+/// The offer shown for the chosen location, or the cheapest for any: its price, what a
+/// month costs running and stopped, the fallback types and the advisory availability.
+fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer) {
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(format!(
+            "{} · {} vCPU · {:.0} GB · {}/h",
+            offer.server_type,
+            offer.cores,
+            offer.memory_gb,
+            euros(offer.hourly)
+        ))
+        .size(15.0)
+        .strong()
+        .color(theme::FG()),
+    );
+    ui.label(format!(
+        "At most {} a month running, with the workspace volume and IPv4 address. {} a month stopped: only the volume is kept.",
+        euros(offer.running_month),
+        euros(offer.stopped_month)
+    ));
+    if !offer.fallbacks.is_empty() {
+        ui.small(format!("If it is sold out: {}.", offer.fallbacks.join(", ")));
+    }
+    if !offer.listed {
+        ui.small(format!(
+            "{} lists this type as unavailable here; creation confirms whether it can be rented.",
+            provider.label
+        ));
+    }
 }

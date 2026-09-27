@@ -215,7 +215,7 @@ impl HorizonApp {
 
 /// `profile` on the chosen provider at the chosen size, as the new cloud records it.
 /// Refused before anything is recorded while Horizon cannot create clouds there.
-fn launch_profile(
+pub(super) fn launch_profile(
     profile: &horizon_core::cloud_runtime::prices::Profile,
     chosen: Option<&'static cloud_runtime::provider::Description>,
     size: Option<super::machine_size::Size>,
@@ -224,6 +224,12 @@ fn launch_profile(
     if !provider.creatable {
         return Err(cloud_runtime::Error::Invalid(
             "Horizon cannot create clouds on this provider yet; choose another provider",
+        ));
+    }
+    // A choice made for another profile, or before the profile changed, is checked again.
+    if !provider.supports(profile) {
+        return Err(cloud_runtime::Error::Invalid(
+            "This profile cannot run on the chosen provider",
         ));
     }
     let profile = horizon_core::cloud_runtime::prices::Profile {

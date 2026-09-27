@@ -62,13 +62,17 @@ pub(super) fn size_field(ui: &mut Ui, prices: Option<&State>, profile: &Profile,
                 }
             }
         });
-        if let Some(warning) = machine_size::unoffered(current, disk) {
-            ui.colored_label(theme::PALETTE_RED(), warning);
-        } else if prices.is_some() {
-            // Tooltips would draw below this modal, so the offer rule is shown inline.
-            ui.small(format!(
-                "RunPod CPU sizes offered with this profile's {disk} GB container disk."
-            ));
+        // The offered sizes are RunPod's; other providers say in their own card whether
+        // a size fits.
+        if prices.is_some() {
+            if let Some(warning) = machine_size::unoffered(current, disk) {
+                ui.colored_label(theme::PALETTE_RED(), warning);
+            } else {
+                // Tooltips would draw below this modal, so the offer rule is shown inline.
+                ui.small(format!(
+                    "RunPod CPU sizes offered with this profile's {disk} GB container disk."
+                ));
+            }
         }
     }
     chosen.filter(|size| *size != current)
