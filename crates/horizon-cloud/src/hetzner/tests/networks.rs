@@ -70,3 +70,19 @@ fn a_location_names_its_network_zone() {
     task.join().unwrap();
     assert!(requests.lock().unwrap()[0].starts_with("GET /locations?name=hel1&page=1"));
 }
+
+#[test]
+fn a_server_is_reached_only_through_its_one_address_on_horizons_network() {
+    use crate::hetzner::{networks::horizon_address, servers::PrivateNet};
+    let net = |network, ip: [u8; 4]| PrivateNet { network, ip: ip.into() };
+    assert_eq!(horizon_address(&[net(7, [10, 72, 0, 3])]), Some([10, 72, 0, 3].into()));
+    // Another network attached first is skipped.
+    assert_eq!(
+        horizon_address(&[net(9, [192, 168, 0, 5]), net(7, [10, 72, 0, 3])]),
+        Some([10, 72, 0, 3].into())
+    );
+    // No address, one outside the subnet, or two inside it: none is published.
+    assert_eq!(horizon_address(&[]), None);
+    assert_eq!(horizon_address(&[net(7, [10, 72, 200, 3])]), None);
+    assert_eq!(horizon_address(&[net(7, [10, 72, 0, 3]), net(8, [10, 72, 0, 4])]), None);
+}

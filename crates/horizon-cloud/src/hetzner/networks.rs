@@ -93,7 +93,9 @@ impl Hetzner {
             cancel,
         )?;
         if found.len() > 1 {
-            return Err(CloudError::DuplicateWorkers);
+            return Err(CloudError::Invalid(
+                "Several Hetzner networks are labelled as Horizon's for this zone; delete all but one",
+            ));
         }
         let Some(network) = found.pop() else { return Ok(None) };
         if !network.serves(zone) {
@@ -102,6 +104,22 @@ impl Hetzner {
             ));
         }
         Ok(Some(network))
+    }
+}
+
+/// The server's address on Horizon's network: the one attached network address in
+/// Horizon's subnet. None when there is none, or several, since an address on
+/// another network may not reach the other clouds.
+#[must_use]
+pub fn horizon_address(nets: &[super::servers::PrivateNet]) -> Option<std::net::Ipv4Addr> {
+    let mut ours = nets.iter().map(|net| net.ip).filter(|ip| {
+        let [first, second, third, _] = ip.octets();
+        // 10.72.0.0/17, the subnet every Horizon network has.
+        first == 10 && second == 72 && third < 128
+    });
+    match (ours.next(), ours.next()) {
+        (Some(ip), None) => Some(ip),
+        _ => None,
     }
 }
 

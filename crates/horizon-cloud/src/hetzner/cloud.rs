@@ -296,7 +296,7 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         "volumeInGb": volume.size,
         "volumeMountPath": "/workspace",
         "dataCenterId": server.location.name,
-        "privateIp": server.private_net.first().map(|net| net.ip.to_string()),
+        "privateIp": crate::hetzner::networks::horizon_address(&server.private_net).map(|ip| ip.to_string()),
         "networkZone": server.location.network_zone,
         "env": env,
     }))
