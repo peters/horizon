@@ -24,6 +24,14 @@ impl State {
     pub fn loading(&self) -> bool {
         self.receiver.is_some()
     }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn hold_loading_for_test(&mut self) -> impl Send + use<> {
+        let (sender, receiver) = channel();
+        self.receiver = Some(receiver);
+        // Keep this guard alive while rendering to model an in-flight preparation.
+        sender
+    }
 }
 impl Drop for State {
     fn drop(&mut self) {

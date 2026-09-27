@@ -40,7 +40,12 @@ impl HorizonApp {
         }
         let viewport = ctx.content_rect();
         let width = (viewport.width() - 64.0).clamp(240.0, 640.0);
-        let body_height = (viewport.height() - 240.0).max(100.0);
+        let reason_space = if submit_reason(&self.cloud_prototype.production).is_some() {
+            28.0
+        } else {
+            0.0
+        };
+        let body_height = (viewport.height() - 240.0 - reason_space).max(100.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
@@ -275,6 +280,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
         &mut form.title,
         "e.g. Feature development",
     );
+    title_requirement(ui, form);
     if title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) && can_submit(form) {
         *submit = true;
     }
@@ -464,13 +470,25 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
     }
 }
 
-/// Offered CPU worker sizes; a GPU profile's size is fixed. Buttons and inline notes rather
-/// than drop-downs and tooltips, which would draw below this Tooltip-order modal.
+fn title_requirement(ui: &mut Ui, form: &Production) {
+    if form.title.trim().is_empty() {
+        ui.label(
+            RichText::new("A cloud title is required before Start cloud can be used.")
+                .size(14.0)
+                .color(theme::FG()),
+        );
+    }
+}
+
 fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
+    if let Some(reason) = submit_reason(form) {
+        ui.label(RichText::new(reason).size(14.0).color(theme::FG()));
+    }
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), 40.0),
         Layout::right_to_left(Align::Center),
         |ui| {
+            // A tooltip draws under this modal, so the reason is painted above the button.
             actions.create |= ui
                 .add_enabled(
                     can_submit(form),
@@ -498,6 +516,21 @@ fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
                 .clicked();
         },
     );
+}
+
+fn submit_reason(form: &Production) -> Option<&'static str> {
+    if form.pending_creation.is_some() || form.launch.submitted {
+        return None;
+    }
+    match (
+        form.title.trim().is_empty(),
+        form.profiles.is_none() && !form.launch.loading(),
+    ) {
+        (false, false) => None,
+        (true, false) => Some("Enter a cloud title to start this cloud."),
+        (false, true) => Some("Read the repository profile before starting."),
+        (true, true) => Some("Enter a cloud title and read the repository profile."),
+    }
 }
 
 fn can_submit(form: &Production) -> bool {
