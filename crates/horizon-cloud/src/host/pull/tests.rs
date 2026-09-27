@@ -167,6 +167,19 @@ fn references_resolve_as_docker_resolves_them() {
         parse("registry.test:5000/worker:v1"),
         owned("registry.test:5000", "worker", "v1")
     );
+    // A tag beside a digest is dropped; a registry port is kept.
+    assert_eq!(
+        parse("example.azurecr.io/team/worker:v1@sha256:abc"),
+        owned("example.azurecr.io", "team/worker", "sha256:abc")
+    );
+    assert_eq!(
+        parse("registry.test:5000/worker:v1@sha256:abc"),
+        owned("registry.test:5000", "worker", "sha256:abc")
+    );
+    assert_eq!(
+        parse("ubuntu:24.04@sha256:abc"),
+        owned("registry-1.docker.io", "library/ubuntu", "sha256:abc")
+    );
     assert_eq!(
         parse("registry.test:5000/worker"),
         owned("registry.test:5000", "worker", "latest")

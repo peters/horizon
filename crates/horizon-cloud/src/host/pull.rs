@@ -175,7 +175,13 @@ struct Reference {
 impl Reference {
     fn parse(image: &str) -> Option<Self> {
         let (name, target) = match image.split_once('@') {
-            Some((name, digest)) => (name, digest.to_owned()),
+            // A digest names the image; a tag beside it, as in `worker:v1@sha256:...`,
+            // is only a label. The tag is in the last path component, never a port.
+            Some((name, digest)) => {
+                let last = name.rfind('/').map_or(0, |slash| slash + 1);
+                let name = name[last..].find(':').map_or(name, |colon| &name[..last + colon]);
+                (name, digest.to_owned())
+            }
             None => match image.rsplit_once(':') {
                 Some((name, tag)) if !tag.contains('/') => (name, tag.to_owned()),
                 _ => (image, "latest".to_owned()),
