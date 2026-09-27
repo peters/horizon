@@ -7,8 +7,9 @@ same location. The New cloud dialog does not offer Hetzner profiles yet; deploy
 them with the deployment coordinator (`cloud_deploy`). Stop, resume, check,
 delete and rebuild are not wired yet and are refused before any provider
 request; delete a test cloud's server, volume and SSH key in the Hetzner console.
-Horizon also checks the cloud ID, `idle_stop_minutes`, the token, the locations
-and the registry pull credential before it records or builds anything.
+Horizon also checks the cloud ID, `idle_stop_minutes`, the token and the
+locations before it records or builds anything, and the registry pull
+credential before it creates anything.
 
 ## How a deployment runs
 
@@ -87,7 +88,9 @@ Hetzner off removes the binding.
 
   The credential reaches the server's user data, which the host can read for
   the server's whole life (the container cannot). Use a read-only token scoped
-  to the image repository, with a short expiry.
+  to the image repository, with a short expiry. Horizon reads it only while a
+  server can still be created; a retry that reconnects to a server already
+  requested does not need it, so an expired token never blocks recovering one.
 
 ## Not available on Hetzner yet
 
