@@ -126,6 +126,8 @@ fn run_spec(
         login: None,
         fresh,
     };
+    // What the caller had recorded before: a run is judged only by what it records.
+    let (recorded_operation, recorded_journal) = (operation.clone(), journal.clone());
     let mut kept = Kept::default();
     let worker = provision(
         &client,
@@ -138,9 +140,9 @@ fn run_spec(
     )
     .ok();
     task.join().unwrap();
-    let journal = kept.journal.unwrap_or(journal);
+    let journal = kept.journal.unwrap_or(recorded_journal);
     Outcome {
-        operation: kept.operation.unwrap_or(operation),
+        operation: kept.operation.unwrap_or(recorded_operation),
         kept: journal.retains(),
         journal,
         served: requests.lock().unwrap().len(),

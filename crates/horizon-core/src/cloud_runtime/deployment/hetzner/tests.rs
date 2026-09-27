@@ -256,12 +256,23 @@ mod failure_points {
         pull: Option<&serde_json::Value>,
     ) -> (String, Deployment, bool) {
         let root = tempfile::tempdir().unwrap();
-        let store = Store::lock(root.path()).unwrap();
+        provision_in(root.path(), spec, operation, pull, false)
+    }
+
+    /// As `provision_at`, in `root` and with the deployment's `source_ready`.
+    fn provision_in(
+        root: &std::path::Path,
+        spec: &horizon_cloud::WorkerSpec,
+        operation: &CreateState,
+        pull: Option<&serde_json::Value>,
+        source_ready: bool,
+    ) -> (String, Deployment, bool) {
+        let store = Store::lock(root).unwrap();
         let mut state: Deployment = serde_json::from_value(json!({
             // The deployment keeps the canonical cloud ID; `spec` may name another.
             "version": 1, "cloud_id": super::spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
             "profile": spec.profile, "stage": "Provision", "operation": operation, "spec": spec,
-            "worker": null, "sessions": []
+            "worker": null, "sessions": [], "source_ready": source_ready
         }))
         .unwrap();
         store.save(&state).unwrap();
@@ -285,7 +296,80 @@ mod failure_points {
         let error = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {})
             .unwrap_err()
             .to_string();
-        (error, store.load().unwrap().unwrap(), retained(root.path()).unwrap())
+        (error, store.load().unwrap().unwrap(), retained(root).unwrap())
+    }
+
+    #[test]
+    fn a_verified_worker_is_saved_with_the_deployment() {
+        let listing = |key: &str, items: serde_json::Value| {
+            let mut page = json!({"meta": {"pagination": {"next_page": null}}});
+            page[key] = items;
+            page.to_string()
+        };
+        let name = format!("horizon-cloud-{}", spec().operation_id);
+        let labels = json!({"horizon-operation": spec().operation_id});
+        let mut free = serde_json::to_value(super::volume()).unwrap();
+        free["server"] = serde_json::Value::Null;
+        let price = json!({"location": "hel1", "price_hourly": {"net": "0.01"}, "price_monthly": {"net": "5"}});
+        let kind = json!({"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80, "cpu_type": "shared",
+            "architecture": "x86", "prices": [price], "locations": [{"name": "hel1", "available": true}]});
+        let server = json!({"id": 42, "name": name, "status": "initializing", "public_net": {"ipv4": null},
+            "server_type": {"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80},
+            "location": {"name": "hel1"}, "labels": labels, "volumes": [9]});
+        let responses = vec![
+            (200, listing("server_types", json!([kind]))),
+            (200, listing("locations", json!([{"name": "hel1", "network_zone": "eu-central"}]))),
+            (200, json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}).to_string()),
+            (200, listing("ssh_keys", json!([]))),
+            (201, json!({"ssh_key": {"id": 5, "name": name, "public_key": "@PUBLIC_KEY@", "labels": labels}}).to_string()),
+            (200, listing("volumes", json!([]))),
+            (201, json!({"volume": free, "action": {"id": 1, "status": "success"}}).to_string()),
+            (200, json!({"volume": free}).to_string()),
+            (200, listing("servers", json!([]))),
+            (200, json!({"volume": free}).to_string()),
+            (201, json!({"server": server, "action": {"id": 2, "status": "success"}, "next_actions": []}).to_string()),
+            (200, json!({"volume": super::volume()}).to_string()),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let mut state: Deployment = serde_json::from_value(json!({
+            "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+            "profile": spec().profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec(),
+            "worker": null, "sessions": []
+        }))
+        .unwrap();
+        store.save(&state).unwrap();
+        let (address, _, task) = super::provider::serve(responses);
+        let compute = Compute {
+            client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
+            settings: serde_json::from_value(
+                json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
+            )
+            .unwrap(),
+            allowed: Allowed {
+                locations: vec!["hel1".into()],
+                server_types: vec!["cx33".into()],
+            },
+            registries: None,
+        };
+        provision(&compute, &store, &mut state, &spec(), &Cancellation::default(), &|_| {}).unwrap();
+        task.join().unwrap();
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.operation, CreateState::Bound { worker_id: "42".into() });
+        assert_eq!(saved.worker.unwrap().id, "42");
+    }
+
+    #[test]
+    fn a_deleted_cloud_that_still_claims_its_old_source_is_not_provisioned_afresh() {
+        let root = tempfile::tempdir().unwrap();
+        let deleted = crate::cloud_runtime::deployment::hetzner::Journal {
+            volume: CreateState::Terminated { worker_id: "8".into() },
+            deleting: true,
+            ..Default::default()
+        };
+        crate::cloud_runtime::deployment::hetzner::JournalFile::save(&deleted, root.path()).unwrap();
+        let (error, _, _) = provision_in(root.path(), &spec(), &CreateState::Prepared, None, true);
+        assert_eq!(error, "Finish deleting this Hetzner cloud before deploying it again");
     }
 
     #[test]

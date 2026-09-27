@@ -39,35 +39,65 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     };
     let mut journal = Journal::load(store.root())?;
     let mut operation = state.operation.clone();
+    let mut saved = Saved::new(store, state);
     let worker = cloud::provision(
         &compute.client,
         request,
         &mut operation,
         &mut journal,
-        &mut Saved {
-            store,
-            state: &mut *state,
-        },
+        &mut saved,
         cancel,
         |progress| emit(Event::Output(format!("{progress:?}"))),
-    )?;
+    );
+    let worker = saved.finish(worker)?;
     state.worker = Some(worker);
     store.save(state)
 }
 
-/// The deployment record and `hetzner.json`, each saved durably.
-struct Saved<'a> {
+/// The deployment record and `hetzner.json`, each saved durably. A save that
+/// fails is kept, so the caller reports its cause rather than the provider
+/// layer's generic persistence error.
+pub(super) struct Saved<'a> {
     store: &'a Store,
-    state: &'a mut Deployment,
+    pub(super) state: &'a mut Deployment,
+    failed: Option<Error>,
+}
+
+impl<'a> Saved<'a> {
+    pub(super) fn new(store: &'a Store, state: &'a mut Deployment) -> Self {
+        Self {
+            store,
+            state,
+            failed: None,
+        }
+    }
+
+    /// The result of a provider call made with these records, with a failed
+    /// save reported as itself.
+    pub(super) fn finish<T>(self, result: std::result::Result<T, CloudError>) -> Result<T> {
+        result.map_err(|error| match (error, self.failed) {
+            (CloudError::Persistence, Some(failed)) => failed,
+            (error, _) => error.into(),
+        })
+    }
+
+    pub(super) fn keep(&mut self, saved: Result<()>) -> std::result::Result<(), CloudError> {
+        saved.map_err(|error| {
+            self.failed = Some(error);
+            CloudError::Persistence
+        })
+    }
 }
 
 impl Records for Saved<'_> {
     fn journal(&mut self, journal: &Journal) -> std::result::Result<(), CloudError> {
-        journal.save(self.store.root()).map_err(|_| CloudError::Persistence)
+        let saved = journal.save(self.store.root());
+        self.keep(saved)
     }
 
     fn operation(&mut self, operation: &CreateState) -> std::result::Result<(), CloudError> {
         self.state.operation = operation.clone();
-        self.store.save(self.state).map_err(|_| CloudError::Persistence)
+        let saved = self.store.save(self.state);
+        self.keep(saved)
     }
 }
