@@ -113,6 +113,11 @@ impl HorizonApp {
                 })
             })
             .map_or(target, |(workspace, position)| (Some(workspace), position));
+        #[cfg(feature = "cloud-workspaces")]
+        if !self.preset_target_accepts_cloud_panels(target.0, target.1) {
+            self.pending_preset_pick = None;
+            return;
+        }
         self.pending_preset_pick = Some((target.0, target.1, std::time::Instant::now()));
     }
 
@@ -120,6 +125,11 @@ impl HorizonApp {
         let Some((target_workspace, canvas_pos, opened_at)) = self.pending_preset_pick else {
             return;
         };
+        #[cfg(feature = "cloud-workspaces")]
+        if !self.preset_target_accepts_cloud_panels(target_workspace, canvas_pos) {
+            self.pending_preset_pick = None;
+            return;
+        }
 
         let popup_id = Id::new("canvas_preset_picker");
         let canvas_rect = self.canvas_rect(ctx);

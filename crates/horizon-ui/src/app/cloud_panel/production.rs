@@ -16,6 +16,7 @@ mod offers;
 mod presentation;
 mod prices;
 mod progress;
+mod readiness;
 mod rebuild;
 mod repository_setup;
 mod sessions;
