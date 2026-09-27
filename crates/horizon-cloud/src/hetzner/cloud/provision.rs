@@ -183,7 +183,7 @@ pub fn provision(
 /// Where one placement attempt goes.
 struct Place<'a> {
     spec: &'a WorkerSpec,
-    /// Whether the volume this attempt requests is the cloud's first, and so empty.
+    /// Whether this attempt places the cloud's first volume, so one it creates is empty.
     movable: bool,
     location: &'a str,
     placements: &'a [Placement],
@@ -205,34 +205,32 @@ fn place(
     let operation_id = at.spec.operation_id.as_str();
     // Recorded before the volume request it fixes; a location chosen earlier but
     // never used by a volume is replaced.
-    if journal.location.as_deref() != Some(at.location) || (at.movable && !journal.unused) {
+    if journal.location.as_deref() != Some(at.location) {
         let next = Journal {
             location: Some(at.location.to_owned()),
-            unused: journal.unused || at.movable,
             ..journal.clone()
         };
         records.journal(&next)?;
         *journal = next;
     }
     let mut fence = journal.volume.clone();
-    // A volume this attempt did not request, such as one a lagging listing hid
-    // earlier and that is now found and adopted, may hold a workspace: it is saved
-    // as used in the same record that binds it.
-    let requested = std::cell::Cell::new(fence == CreateState::Requested);
+    // Only a volume Hetzner answers that this call created is known to be empty,
+    // and it is saved as such in the same record that binds it. One found by
+    // label, adopted after a name clash or reconciled after a lost answer may be
+    // older and hold a workspace, so it never is; a lost answer only means the
+    // cloud stays in this location.
     let unused = std::cell::Cell::new(journal.unused);
-    let ensured = client.ensure_volume(
+    let ensured = client.ensure_volume_traced(
         operation_id,
         at.location,
         u32::from(at.spec.profile.storage.volume_gb),
         &mut fence,
         cancel,
-        |next| {
+        |next, created| {
             let mut saved = journal.clone();
             saved.volume = next.clone();
-            match next {
-                CreateState::Requested => requested.set(true),
-                CreateState::Bound { .. } if !requested.get() => saved.unused = false,
-                _ => {}
+            if matches!(next, CreateState::Bound { .. }) {
+                saved.unused = at.movable && created;
             }
             records.journal(&saved)?;
             unused.set(saved.unused);

@@ -236,3 +236,33 @@ fn a_delete_whose_intent_cannot_be_saved_changes_nothing() {
     assert_eq!(journal, before);
     assert!(requests.lock().unwrap().is_empty());
 }
+
+#[test]
+fn a_server_found_for_an_uncertain_request_marks_its_volume_used_before_it_is_bound() {
+    // The server request's answer was lost; the server exists and may hold the workspace.
+    let found = (200, listing("servers", &json!([server("running", Some("192.0.2.10"))])));
+    let (client, _, task) = provider(vec![found]);
+    let mut operation = CreateState::Requested;
+    let policy = || {
+        Ok(Policy {
+            locations: vec!["hel1".into()],
+            server_types: vec!["cx33".into()],
+        })
+    };
+    let mut kept = Kept::default();
+    let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+    let cloud = Cloud {
+        client: &client,
+        operation_id: &operation_id,
+        cancel: &cancel,
+    };
+    let unused = Journal {
+        unused: true,
+        ..journal(CreateState::Bound { worker_id: "9".into() })
+    };
+    // What follows the binding is not this test's concern.
+    let _ = check(cloud, Some(&spec()), &mut operation, &unused, &policy, &mut kept);
+    task.join().unwrap();
+    assert_eq!(kept.operation, Some(CreateState::Bound { worker_id: "42".into() }));
+    assert!(!kept.journal.expect("the journal is saved").unused);
+}

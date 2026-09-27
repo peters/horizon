@@ -433,6 +433,8 @@ fn resuming_clears_only_a_released_servers_fence() {
     );
     let mut journal = Journal::load(root.path()).unwrap();
     journal.released = Some("42".into());
+    // Even a volume wrongly left marked empty is never deleted once a server held it.
+    journal.unused = true;
     journal.save(root.path()).unwrap();
     state.stage = crate::cloud_runtime::Stage::Stopping;
     assert!(
@@ -449,7 +451,8 @@ fn resuming_clears_only_a_released_servers_fence() {
     );
     assert_eq!(saved.stage, crate::cloud_runtime::Stage::Readiness);
     assert!(!saved.stop_requested && saved.worker.is_none());
-    assert!(Journal::load(root.path()).unwrap().released.is_none());
+    let journal = Journal::load(root.path()).unwrap();
+    assert!(journal.released.is_none() && !journal.unused);
 }
 
 /// Deletion cleans up the record each provisioning failure point leaves.

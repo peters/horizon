@@ -629,37 +629,52 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
 }
 
 #[test]
-fn a_lost_volume_create_is_reconciled_where_it_was_requested_and_released_if_sold_out() {
-    // The volume request went out, its response was lost, and the volume exists now.
+fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
+    // The volume request went out and its answer was lost: the volume found now may
+    // be that one or an older one, so it is never deleted to move the cloud.
     let journal = Journal {
         location: Some("hel1".into()),
         volume: CreateState::Requested,
         key: Some(super::super::throwaway_public_key().unwrap()),
-        unused: true,
         ..Journal::default()
     };
     let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
     let responses = and(
-        and(
-            and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
-            vec![
-                (200, listing("volumes", &json!([free()]))),
-                (200, listing("servers", &json!([]))),
-                (200, json!({"volume": free()})),
-                error(412, "resource_unavailable"),
-            ],
-        ),
-        released(free()),
+        and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
+        vec![
+            (200, listing("volumes", &json!([free()]))),
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free()})),
+            error(412, "resource_unavailable"),
+        ],
     );
     let outcome = run(CreateState::Prepared, journal, false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 12, "reconciled, refused and released");
-    assert_eq!(
-        outcome.journal.volume,
-        CreateState::Prepared,
-        "the empty volume is gone"
+    assert_eq!(outcome.served, 9, "reconciled and refused, with no delete");
+    assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
+    assert!(!outcome.journal.unused);
+}
+
+#[test]
+fn a_volume_whose_name_is_taken_is_adopted_as_used_and_never_deleted_when_sold_out() {
+    // Both listings missed a volume that exists, so the create finds its name taken.
+    let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
+    let responses = and(
+        and(catalog(), key),
+        vec![
+            (200, listing("volumes", &json!([]))),
+            error(409, "uniqueness_error"),
+            (200, listing("volumes", &json!([free()]))),
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free()})),
+            error(412, "resource_unavailable"),
+        ],
     );
-    assert!(!outcome.journal.unused && outcome.journal.location.is_none());
+    let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
+    assert!(outcome.worker.is_none());
+    assert_eq!(outcome.served, 12, "sold out, with no delete");
+    assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
+    assert!(!outcome.journal.unused);
 }
 
 #[test]

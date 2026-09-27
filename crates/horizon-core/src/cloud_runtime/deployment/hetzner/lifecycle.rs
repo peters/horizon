@@ -133,6 +133,8 @@ pub(in crate::cloud_runtime) fn resume(store: &Store, state: &mut Deployment) ->
     ));
     store.save(state)?;
     journal.released = None;
+    // A server held this volume, so it is never deleted to move the cloud.
+    journal.unused = false;
     journal.save(store.root())
 }
 
