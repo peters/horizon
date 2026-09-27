@@ -44,6 +44,14 @@ pub(super) fn preflight(cloud_id: &str, profile: &horizon_cloud::Profile, settin
                 "This image is private; add hetzner.registry_pull with a read-only pull token before deploying on Hetzner",
             ));
         }
+        // Docker keeps this spelling in the image reference and looks its login up
+        // under that host, while the host configuration stores Docker Hub logins
+        // under Docker Hub's key, so the pull would find no credentials.
+        Some(_) if profile.image.to_ascii_lowercase().starts_with("registry-1.docker.io/") => {
+            return Err(Error::Invalid(
+                "Name a private Docker Hub image docker.io/... rather than registry-1.docker.io/... for Hetzner",
+            ));
+        }
         Some(login) if registry_host(&login.server) != image_registry(&profile.image) => {
             return Err(Error::Invalid(
                 "hetzner.registry_pull names a different registry than the profile's image",

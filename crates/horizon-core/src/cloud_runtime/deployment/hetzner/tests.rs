@@ -176,6 +176,12 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
     hub.image = "team/worker".into();
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("index.docker.io"));
     preflight(&spec.operation_id, &hub, &settings).unwrap();
+    let mut explicit = hub.clone();
+    explicit.image = "registry-1.docker.io/team/worker".into();
+    assert!(
+        preflight(&spec.operation_id, &explicit, &settings).is_err(),
+        "Docker would look this login up under registry-1.docker.io"
+    );
     settings.hetzner.as_mut().unwrap().registry_pull = Some(login("registry.hub.docker.com"));
     assert!(
         preflight(&spec.operation_id, &hub, &settings).is_err(),
