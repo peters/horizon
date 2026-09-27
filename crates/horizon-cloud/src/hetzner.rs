@@ -147,6 +147,25 @@ impl Hetzner {
         }
     }
 
+    /// A client for a fake Hetzner API on this machine, so callers in other
+    /// crates can test their provisioning against scripted provider answers.
+    /// Only a loopback address is accepted, so a credential can never be sent to
+    /// another host this way, and actions are polled without delay.
+    /// # Errors
+    /// Refuses addresses that are not loopback.
+    #[doc(hidden)]
+    pub fn loopback(credential: Credential, address: std::net::SocketAddr) -> Result<Self, CloudError> {
+        if !address.ip().is_loopback() {
+            return Err(CloudError::Invalid(
+                "A test Hetzner endpoint must be a loopback address",
+            ));
+        }
+        let mut client = Self::new(credential);
+        client.endpoint = format!("http://{address}");
+        client.poll = Duration::from_millis(1);
+        Ok(client)
+    }
+
     /// Every item of a paginated collection. `query` holds the filters, without paging.
     pub(crate) fn list_all<T: DeserializeOwned>(
         &self,
