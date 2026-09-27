@@ -1,8 +1,8 @@
 //! Requests the key, the workspace volume and the server, each behind a durable
 //! record so a lost response never creates a second billed resource.
 use super::{
-    HOST_IMAGE, Journal, PROBE_DEVICE, Policy, admitted, allowed, first_fit, fit, holds, location, plan, supported,
-    throwaway_public_key, worker,
+    HOST_IMAGE, Journal, PROBE_DEVICE, Policy, admitted, allowed, check_login, first_fit, fit, holds, location, plan,
+    supported, throwaway_public_key, worker,
 };
 use crate::{
     Cancellation, CloudError, CreateState, Progress, Worker, WorkerSpec,
@@ -65,6 +65,9 @@ pub fn provision(
     // configuration; a malformed one would boot a worker nobody can reach.
     spec.validate()?;
     supported(spec)?;
+    // A login for another registry would only fail the host's pull after the server
+    // is billed. Whether the image needs one is the caller's to decide.
+    check_login(login.as_ref(), false, &spec.image_digest)?;
     if !SIZE_GB.contains(&u32::from(spec.profile.storage.volume_gb)) {
         return Err(CloudError::Invalid(
             "A Hetzner workspace volume must be between 10 and 10,240 GB",

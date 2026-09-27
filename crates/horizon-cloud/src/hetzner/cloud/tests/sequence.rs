@@ -382,3 +382,37 @@ fn an_uncertain_volume_request_moves_the_callers_fence_too() {
     // sending a second billed volume request.
     assert_eq!(journal.volume, CreateState::Requested);
 }
+
+#[test]
+fn a_login_for_another_registry_is_refused_before_any_request() {
+    let (client, requests, task) = provider(Vec::new());
+    let policy = Policy {
+        locations: vec!["hel1".into()],
+        server_types: vec!["cx33".into()],
+    };
+    let spec = spec();
+    let request = Request {
+        spec: &spec,
+        policy: &policy,
+        login: Some(crate::host::RegistryLogin {
+            server: "other.example".into(),
+            username: "puller".into(),
+            password: crate::Credential::new("secret".into()).unwrap(),
+        }),
+        fresh: true,
+    };
+    let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
+    let mut kept = Kept::default();
+    let refused = provision(
+        &client,
+        request,
+        &mut operation,
+        &mut journal,
+        &mut kept,
+        &Cancellation::default(),
+        |_| {},
+    );
+    assert!(matches!(refused, Err(CloudError::Invalid(_))));
+    task.join().unwrap();
+    assert!(requests.lock().unwrap().is_empty() && kept.journal.is_none());
+}
