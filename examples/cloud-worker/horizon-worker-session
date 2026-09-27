@@ -3,6 +3,10 @@
 # Relaunch: horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
 set -euo pipefail
 umask 077
+shared=false
+if [ "${1:-}" = --shared ]; then
+    shared=true; shift
+fi
 operation=
 if [ "${1:-}" = --relaunch ]; then
     operation="${2:?operation required}"; shift 2
@@ -24,12 +28,56 @@ running() { tmux -L horizon-cloud has-session -t "=$id" 2>/dev/null; }
 # A session's own manifest snapshot fixes its layout, so a later manifest never moves it.
 # Without one, the primary worktree is the session root itself.
 load_layout() {
+    if [ -f "$session/shared-checkout" ]; then
+        shared=true
+        root=/workspace/checkout
+        worktree="$root"
+    else
+        shared=false
+    fi
     [ -f "$session/siblings.json" ] || return 0
     local listing primary
     listing="$(horizon-worker-siblings layout "$session/siblings.json")"
     { read -r primary; mapfile -t siblings; } <<< "$listing"
     [ -n "$primary" ] && [ "${#siblings[@]}" -gt 0 ] || { echo 'Invalid session layout' >&2; exit 3; }
     worktree="$root/$primary"
+}
+# Publish a shared checkout once, before any session can enter it. After that,
+# another panel must never reset its edits or select a branch on the user's behalf.
+prepare_shared() {
+    local state=/workspace/shared-checkout-state
+    exec 8>/workspace/shared-checkout.lock
+    flock 8
+    if [ -f "$state/ready" ]; then
+        [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
+        if [ -f "$session/siblings.json" ]; then
+            cmp -s "$session/siblings.json" "$state/siblings.json" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }
+        elif [ -e "$state/siblings.json" ]; then
+            echo 'Shared checkout layout mismatch' >&2; exit 3
+        fi
+        all_present || { echo 'Shared checkout is missing or belongs to another repository. No process was started.' >&2; exit 3; }
+    else
+        # An interrupted first preparation is uncertain; never reset a visible directory on retry.
+        if [ -e "$state" ] || [ -e "$root" ]; then
+            echo 'Shared checkout preparation was interrupted. Inspect it before retrying; no files were reset.' >&2; exit 3
+        fi
+        mkdir "$state"
+        printf '%s\n' "$revision" > "$state/revision"
+        if [ -f "$session/siblings.json" ]; then cp "$session/siblings.json" "$state/siblings.json"; fi
+        sync -f "$state"
+        if [ "$worktree" != "$root" ]; then mkdir "$root"; fi
+        prepare /workspace/repository.git "$worktree" "$revision"
+        local entry fields
+        for entry in "${siblings[@]}"; do
+            read -r -a fields <<< "$entry"
+            prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
+        done
+        sync -f "$root"
+        touch "$state/ready"
+        sync -f "$state/ready"
+    fi
+    flock -u 8
+    exec 8>&-
 }
 # A worktree counts only when it belongs to its own repository; another clone at that path does not.
 present() {
@@ -51,10 +99,14 @@ all_present() {
 prepare() {
     local repository="$1" path="$2" base="$3" alias="${4:-}"
     if [ ! -e "$path/.git" ]; then
-        if ! git --git-dir="$repository" show-ref --verify --quiet "refs/heads/agent/$id"; then
-            git --git-dir="$repository" branch "agent/$id" "$base"
+        if "$shared"; then
+            git --git-dir="$repository" worktree add --detach "$path" "$base"
+        else
+            if ! git --git-dir="$repository" show-ref --verify --quiet "refs/heads/agent/$id"; then
+                git --git-dir="$repository" branch "agent/$id" "$base"
+            fi
+            git --git-dir="$repository" worktree add "$path" "agent/$id"
         fi
-        git --git-dir="$repository" worktree add "$path" "agent/$id"
     elif ! present "$path" "$repository"; then
         echo 'Session worktree belongs to another repository. No process was started.' >&2; exit 3
     fi
@@ -129,6 +181,7 @@ else
     staging="$(mktemp -d /workspace/sessions/.preparing-XXXXXX)"
     printf '%s\n' "$agent" > "$staging/agent"
     printf '%s\n' "$revision" > "$staging/revision"
+    if "$shared"; then touch "$staging/shared-checkout"; fi
     if [ -f /workspace/siblings.json ]; then
         horizon-worker-siblings show > "$staging/siblings.json"
         listing="$(horizon-worker-siblings layout "$staging/siblings.json")"
@@ -139,12 +192,16 @@ else
 fi
 load_layout
 if ! running; then
-    if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
-    prepare /workspace/repository.git "$worktree" "$revision"
-    for entry in "${siblings[@]}"; do
-        read -r -a fields <<< "$entry"
-        prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
-    done
+    if "$shared"; then
+        prepare_shared
+    else
+        if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
+        prepare /workspace/repository.git "$worktree" "$revision"
+        for entry in "${siblings[@]}"; do
+            read -r -a fields <<< "$entry"
+            prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
+        done
+    fi
     session_data
     # Persist the launch fence before starting a process; an uncertain launch cannot be replayed.
     touch "$session/launch-requested"

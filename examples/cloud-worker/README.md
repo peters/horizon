@@ -261,19 +261,35 @@ the image has `horizon-worker-siblings` and supports the session layout below.
 
 ### Session layout
 
+New Horizon panels request `horizon-worker-session --shared SESSION AGENT REVISION`.
+The first panel prepares one shared checkout at `/workspace/checkout`, or a primary
+and its siblings beneath that directory. Later shell and agent panels enter that
+same checkout without creating a branch, checking out files again, or resetting
+committed, uncommitted or untracked work. Branches and additional worktrees remain
+manual. Concurrent first panels serialize preparation. An interrupted initial
+preparation is fenced for inspection rather than reset on retry.
+
+The worker advertises `horizon-shared-checkout-contract=1`. Rebuild an older worker
+image before adding these panels. Previously recorded sessions retain their own
+paths and branches; reconnect does not migrate or reset them. Per-session process
+identity, transcripts and cache directories remain separate.
+
 A new session copies the manifest into its own state as
 `/workspace/sessions/SESSION/siblings.json` when the manifest lists at least one
 sibling. That snapshot fixes the session's layout for its lifetime: attach and
-relaunch always use it, and a later manifest change affects only new sessions. A
+relaunch always use it. New shared sessions must match the already prepared shared
+layout and source revision; a changed manifest is refused without altering files. A
 session without a snapshot, including every session created before siblings existed,
 keeps the single layout.
 
 | Layout | Primary worktree (process working directory) | Sibling worktrees |
 |--------|----------------------------------------------|-------------------|
-| Single | `/workspace/agents/SESSION` | none |
-| Siblings | `/workspace/agents/SESSION/PRIMARY` | `/workspace/agents/SESSION/DIRECTORY` per sibling |
+| Shared single | `/workspace/checkout` | none |
+| Shared siblings | `/workspace/checkout/PRIMARY` | `/workspace/checkout/DIRECTORY` per sibling |
+| Legacy single | `/workspace/agents/SESSION` | none |
+| Legacy siblings | `/workspace/agents/SESSION/PRIMARY` | `/workspace/agents/SESSION/DIRECTORY` per sibling |
 
-Every worktree is on branch `agent/SESSION` of its own repository: the primary at the
+Legacy worktrees are on branch `agent/SESSION` of their own repository: the primary at the
 session's revision, each sibling at its manifest revision. Submodules and LFS content
 are prepared from each repository's own material before the launch fence, so relative
 paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch

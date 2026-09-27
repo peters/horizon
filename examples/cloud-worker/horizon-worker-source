@@ -14,6 +14,7 @@ import tempfile
 
 PRIMARY = Path('/workspace/source')
 AGENTS = Path('/workspace/agents')
+SHARED = Path('/workspace/checkout')
 
 
 def material(alias=None):
@@ -94,9 +95,9 @@ def import_source(root, upload):
 
 
 def beside_siblings(worktree, repository):
-    # /workspace/agents/SESSION/DIRECTORY: a worktree of exactly this repository in a
-    # session root that is not itself a worktree.
-    if worktree.parent.parent != AGENTS or not (worktree / '.git').is_file() or (worktree.parent / '.git').exists():
+    # A sibling lives beneath the shared or legacy session root and must belong
+    # to exactly this repository; the root itself must not be a worktree.
+    if (worktree.parent.parent != AGENTS and worktree.parent != SHARED) or not (worktree / '.git').is_file() or (worktree.parent / '.git').exists():
         return False
     common = subprocess.run(['git', '-C', str(worktree), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                             capture_output=True, text=True, check=False)
@@ -106,7 +107,7 @@ def beside_siblings(worktree, repository):
 def checkout(worktree, alias=None):
     root = material(alias)
     worktree = Path(worktree).resolve()
-    alone = alias is None and worktree.parent in (AGENTS, Path('/workspace/companions/worktrees'))
+    alone = alias is None and (worktree == SHARED or worktree.parent in (AGENTS, Path('/workspace/companions/worktrees')))
     if not (alone or beside_siblings(worktree, root.parent / 'repository.git' if alias else Path('/workspace/repository.git'))):
         raise ValueError('Invalid agent worktree')
     if not (root / 'manifest.json').exists():

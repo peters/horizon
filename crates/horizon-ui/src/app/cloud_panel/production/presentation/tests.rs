@@ -181,6 +181,47 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
 
 #[test]
 #[cfg(unix)]
+fn new_panels_share_a_checkout_while_recorded_sessions_keep_their_paths() {
+    let (temp, mut app) = restore_fixture();
+    let directory = temp.path().join("fixture");
+    {
+        let store = cloud_runtime::state::Store::lock(&directory).unwrap();
+        let mut saved = store.load().unwrap().unwrap();
+        saved.sessions.push(cloud_runtime::state::Session {
+            panel_id: "legacy".into(),
+            agent: "shell".into(),
+            tmux: "legacy".into(),
+            branch: "agent/legacy".into(),
+            worktree: "/workspace/agents/legacy".into(),
+        });
+        store.save(&saved).unwrap();
+    }
+    for id in ["one", "two", "legacy"] {
+        let mut options = horizon_core::PanelOptions {
+            kind: PanelKind::Shell,
+            local_id: Some(id.into()),
+            ..Default::default()
+        };
+        app.prepare_cloud_remote_panel(0, &mut options).unwrap();
+        let command = options.args.last().unwrap();
+        assert_eq!(command.contains("--shared"), id != "legacy");
+    }
+    let store = cloud_runtime::state::Store::lock(&directory).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(saved.sessions.len(), 3);
+    for session in saved.sessions {
+        if session.panel_id == "legacy" {
+            assert_eq!(session.worktree, "/workspace/agents/legacy");
+            assert_eq!(session.branch, "agent/legacy");
+        } else {
+            assert_eq!(session.worktree, "/workspace/checkout");
+            assert!(session.branch.is_empty());
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn empty_worker_discovery_reports_missing_process_without_opening_a_replacement() {
     let (_temp, mut app) = restore_fixture();
     let mut saved = RuntimeState::from_board(

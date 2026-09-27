@@ -626,13 +626,18 @@ impl HorizonApp {
                 PanelKind::Grok => "grok",
                 _ => "shell",
             };
-            let session = Session {
-                panel_id: id.clone(),
-                agent: agent.into(),
-                tmux: id.clone(),
-                branch: format!("agent/{id}"),
-                worktree: cloud_runtime::siblings::session_worktree(&id, saved.siblings.as_ref()),
-            };
+            let session = saved
+                .sessions
+                .iter()
+                .find(|session| session.panel_id == id)
+                .cloned()
+                .unwrap_or_else(|| Session {
+                    panel_id: id.clone(),
+                    agent: agent.into(),
+                    tmux: id.clone(),
+                    branch: String::new(),
+                    worktree: cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref()),
+                });
             if !saved.sessions.iter().any(|s| s.panel_id == id) {
                 saved.sessions.push(session.clone());
                 store.save(&saved)?;

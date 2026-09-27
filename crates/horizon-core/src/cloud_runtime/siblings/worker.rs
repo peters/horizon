@@ -5,6 +5,8 @@ use super::{Error, Result, Set};
 use crate::cloud_runtime::{git_auth, state::Deployment};
 use serde::Serialize;
 
+pub const SHARED_CHECKOUT_ROOT: &str = "/workspace/checkout";
+
 /// The input of `horizon-worker-siblings set`.
 #[derive(Serialize)]
 struct Manifest<'a> {
@@ -78,13 +80,12 @@ pub fn git_grants(credentials: &[git_auth::Binding], state: &Deployment) -> Resu
     git_auth::Prepared::for_repositories(credentials, &state.repository, &siblings)
 }
 
-/// The primary worktree of agent session `session` on the worker: the session root itself
-/// for a single repository, or the primary's directory inside it beside its siblings.
+/// The cloud's shared primary checkout, beside its selected siblings when present.
 #[must_use]
-pub fn session_worktree(session: &str, siblings: Option<&Set>) -> String {
+pub fn shared_worktree(siblings: Option<&Set>) -> String {
     match siblings {
-        Some(set) => format!("/workspace/agents/{session}/{}", set.primary_directory),
-        None => format!("/workspace/agents/{session}"),
+        Some(set) => format!("{SHARED_CHECKOUT_ROOT}/{}", set.primary_directory),
+        None => SHARED_CHECKOUT_ROOT.into(),
     }
 }
 
@@ -125,8 +126,8 @@ mod tests {
 
     #[test]
     fn a_session_with_siblings_works_in_the_primary_directory_of_its_root() {
-        assert_eq!(session_worktree("agent1", None), "/workspace/agents/agent1");
-        assert_eq!(session_worktree("agent1", Some(&set())), "/workspace/agents/agent1/app");
+        assert_eq!(shared_worktree(None), "/workspace/checkout");
+        assert_eq!(shared_worktree(Some(&set())), "/workspace/checkout/app");
     }
 
     #[test]
