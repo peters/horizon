@@ -11,8 +11,8 @@ use super::{
     settings::Settings,
     state::{Deployment, Store},
 };
-use horizon_cloud::Profile;
 use horizon_cloud::runpod::recovery::Reconciliation;
+use horizon_cloud::{Profile, provider::Kind};
 
 /// What a provider does for a cloud's lifecycle.
 pub(super) trait Lifecycle {
@@ -36,59 +36,59 @@ pub(super) trait Lifecycle {
     fn delete(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<()>;
 }
 
-/// Whether `profile` is a Hetzner one; every other profile is a `RunPod` one.
-fn hetzner(profile: &Profile) -> bool {
-    horizon_cloud::provider::Description::of(profile).id == horizon_cloud::hetzner::PROVIDER
+/// Which provider `profile` names; a match on it must handle every provider.
+fn kind(profile: &Profile) -> Kind {
+    horizon_cloud::provider::Description::of(profile).kind
 }
 
 /// Checks what the provider needs before any record, build or request, so an
 /// unsupported request fails at once and leaves nothing behind.
 pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) -> Result<()> {
-    if hetzner(profile) {
-        return super::deployment::hetzner::preflight(cloud_id, profile, settings);
+    match kind(profile) {
+        Kind::Hetzner => super::deployment::hetzner::preflight(cloud_id, profile, settings),
+        Kind::RunPod => Ok(()),
     }
-    Ok(())
 }
 
 /// Checks what the provider needs before the deployment is recorded for `image`,
 /// unless its worker is already requested or bound and so only reconciled.
 pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operation: &CreateState) -> Result<()> {
-    if hetzner(profile) {
-        return super::deployment::hetzner::admit(settings, image, operation);
+    match kind(profile) {
+        Kind::Hetzner => super::deployment::hetzner::admit(settings, image, operation),
+        Kind::RunPod => Ok(()),
     }
-    Ok(())
 }
 
 /// The machine types a worker may run on, in the order they are tried: `RunPod` CPU
 /// flavors, or a Hetzner cloud's server types.
 pub(super) fn cpu_flavors(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
-    if hetzner(profile) {
-        return hetzner::cpu_flavors(settings);
+    match kind(profile) {
+        Kind::Hetzner => hetzner::cpu_flavors(settings),
+        Kind::RunPod => runpod::cpu_flavors(profile, settings),
     }
-    runpod::cpu_flavors(profile, settings)
 }
 
 /// Where a worker may run: `RunPod` data centers, or a Hetzner cloud's locations.
 pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
-    if hetzner(profile) {
-        return hetzner::data_centers(settings);
+    match kind(profile) {
+        Kind::Hetzner => hetzner::data_centers(settings),
+        Kind::RunPod => Ok(settings.data_centers.clone()),
     }
-    Ok(settings.data_centers.clone())
 }
 
 /// Whether anything the cloud created on its provider may still exist, read from
 /// local records only, so it needs no provider credential.
 pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
-    if hetzner(&state.profile) {
-        return hetzner::retained(store);
+    match kind(&state.profile) {
+        Kind::Hetzner => hetzner::retained(store),
+        Kind::RunPod => runpod::retained(store, state),
     }
-    runpod::retained(store, state)
 }
 
 /// The lifecycle of the provider `state`'s profile names.
 pub(super) fn lifecycle<'a>(state: &Deployment, settings: &'a Settings) -> Box<dyn Lifecycle + 'a> {
-    if hetzner(&state.profile) {
-        return Box::new(hetzner::Hetzner { settings });
+    match kind(&state.profile) {
+        Kind::Hetzner => Box::new(hetzner::Hetzner { settings }),
+        Kind::RunPod => Box::new(runpod::RunPod { settings }),
     }
-    Box::new(runpod::RunPod { settings })
 }
