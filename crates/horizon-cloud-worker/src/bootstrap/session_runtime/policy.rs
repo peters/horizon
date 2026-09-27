@@ -70,7 +70,10 @@ pub(super) fn environment(command: &mut Command, home: &Path) {
         .env("TERM", "xterm-256color")
         .env("LANG", "C.UTF-8")
         .env("DISABLE_AUTOUPDATER", "1")
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        // Same reason as a local Claude panel: the alternate screen hides the
+        // conversation from the terminal scrollback and history meter.
+        .env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
 }
 
 struct ChildGuard(Child);
@@ -117,4 +120,22 @@ pub(super) fn execute(command: &mut Command, timeout: Duration) -> io::Result<Ve
     let mut bytes = Vec::new();
     output.take(length).read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::environment;
+    use std::{path::Path, process::Command};
+
+    #[test]
+    fn claude_stays_in_the_terminal_scrollback() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf %s \"$CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN\"");
+        environment(&mut command, Path::new("/tmp"));
+        let output = command.output().expect("print the scrollback setting");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.stdout, b"1");
+    }
 }
