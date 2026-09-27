@@ -42,8 +42,9 @@ component licenses described in [THIRD-PARTY.md](THIRD-PARTY.md). The GPU image
 retains the complete upstream CUDA development base and its vendor notices.
 
 Commit the intended source revision and hydrate its Git LFS assets before
-deploying. Each agent receives its own worktree. Run `.horizon/validate.sh cpu`
-or `.horizon/validate.sh gpu` in that worktree. Build caches are separated by
+deploying. New shell and agent panels share the cloud checkout; create branches
+and additional worktrees manually when needed. Run `.horizon/validate.sh cpu`
+or `.horizon/validate.sh gpu` in the checkout you are validating. Build caches are separated by
 worktree and profile on the persistent worker volume. Tests run serially by
 default to reduce timing and port-reuse interference; set `RUST_TEST_THREADS`
 explicitly to choose another concurrency level. When invoked as root, test

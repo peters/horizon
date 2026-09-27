@@ -20,7 +20,7 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
     render_hetzner(ui, draft);
     ui.add_space(18.0);
     ui.label(RichText::new("Coding agents").size(16.0).strong());
-    ui.label(RichText::new("Choose one or both. Each agent gets its own worktree.").color(theme::FG_SOFT()));
+    ui.label(RichText::new("Choose one or both. New panels share the cloud checkout.").color(theme::FG_SOFT()));
     let selected_agents = draft.selected_agents().to_vec();
     for (agent, label, mode, value, saved) in [
         (

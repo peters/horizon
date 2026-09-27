@@ -224,7 +224,7 @@ impl Connection {
             .strip_prefix(super::siblings::SHARED_CHECKOUT_ROOT)
             .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'));
         let guard = if shared {
-            "if ! contract=$(horizon-worker-check) || ! printf '%s\\n' \"$contract\" | grep -qx 'horizon-shared-checkout-contract=1'; then \
+            "contract=$(horizon-worker-check) || { status=$?; printf '%s\\n' \"$contract\"; exit \"$status\"; }; if ! printf '%s\\n' \"$contract\" | grep -qx 'horizon-shared-checkout-contract=1'; then \
              printf '%s\\n' 'Rebuild the cloud worker image before adding panels: shared checkouts are not supported.'; \
              exit 3; fi; "
         } else {
@@ -335,9 +335,15 @@ mod tests {
         assert_eq!(refused.status.code(), Some(3));
         assert!(String::from_utf8_lossy(&refused.stdout).contains("Rebuild the cloud worker image"));
         assert!(!log.exists());
+        let failed = run(&session, "Worker runtime validation failed", "7");
+        assert_eq!(failed.status.code(), Some(7));
+        assert_eq!(
+            String::from_utf8_lossy(&failed.stdout).trim(),
+            "Worker runtime validation failed"
+        );
         assert_eq!(
             run(&session, "horizon-shared-checkout-contract=1", "1").status.code(),
-            Some(3)
+            Some(1)
         );
         assert!(!log.exists());
         assert!(
