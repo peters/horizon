@@ -34,7 +34,7 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH]... (deploy only) | stop|resume|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -119,7 +119,8 @@ fn run() -> cloud_runtime::Result<()> {
     Ok(())
 }
 
-/// Separates `--sibling ALIAS=PATH` options, in their order, from the other arguments.
+/// Separates `--sibling ALIAS=PATH[@REVISION]` options, in their order, from the other
+/// arguments. A revision makes the deployment refuse a checkout whose `HEAD` moved from it.
 fn sibling_bindings(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Vec<cloud_runtime::siblings::Binding>)> {
     let mut positional = Vec::new();
     let mut siblings = Vec::new();
@@ -132,7 +133,16 @@ fn sibling_bindings(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Vec<
         let (alias, path) = args
             .next()
             .and_then(|binding| binding.split_once('='))
-            .ok_or(cloud_runtime::Error::Invalid("Use --sibling ALIAS=PATH"))?;
+            .ok_or(cloud_runtime::Error::Invalid("Use --sibling ALIAS=PATH[@REVISION]"))?;
+        // Only a full commit ID after the last `@` is a revision, so paths may contain `@`.
+        let (path, revision) = match path.rsplit_once('@') {
+            Some((path, revision))
+                if matches!(revision.len(), 40 | 64) && revision.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                (path, Some(revision.to_ascii_lowercase()))
+            }
+            _ => (path, None),
+        };
         let local_repository = PathBuf::from(path).canonicalize().map_err(|error| {
             eprintln!("--sibling {alias}={path}: {error}");
             cloud_runtime::Error::Invalid("A --sibling checkout does not exist")
@@ -140,6 +150,7 @@ fn sibling_bindings(args: &[String]) -> cloud_runtime::Result<(Vec<String>, Vec<
         siblings.push(cloud_runtime::siblings::Binding {
             alias: alias.to_owned(),
             local_repository,
+            revision,
         });
     }
     Ok((positional, siblings))
