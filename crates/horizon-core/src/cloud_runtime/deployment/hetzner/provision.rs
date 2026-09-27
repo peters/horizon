@@ -30,22 +30,14 @@ pub(in crate::cloud_runtime::deployment) fn provision(
 ) -> Result<()> {
     let operation = state.cloud_id.clone();
     supported(spec)?;
-    // The whole host configuration, registry login included, is rendered once
-    // before the first provider request, so an invalid one leaves nothing behind.
-    // The volume's real device path is only known after it exists.
-    plan(spec, PROBE_DEVICE, compute.settings.registry_login()?)?.cloud_config()?;
+    // The whole host configuration, registry login included, is loaded once and
+    // rendered before the first provider request, so an invalid one leaves
+    // nothing behind. The volume's real device path is only known after it exists.
+    let mut host = plan(spec, PROBE_DEVICE, compute.settings.registry_login()?)?;
+    host.cloud_config()?;
     let root = store.root().to_path_buf();
     let mut journal = Journal::load(&root)?;
-    // A recorded location is fixed by the volume created there; until then the
-    // first allowed location is only a candidate and is not recorded.
-    let location = match &journal.location {
-        Some(location) => location.clone(),
-        None => spec
-            .data_centers
-            .first()
-            .cloned()
-            .ok_or(Error::Invalid("Hetzner settings list no location"))?,
-    };
+    let location = location(journal.location.as_deref(), spec)?;
     // Every read-only check comes before the first request that creates anything.
     let placements = fit(&compute.client.catalog(cancel)?.offers, spec, &location)?;
     if journal.key.is_none() {
@@ -72,7 +64,8 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         },
     )?;
     journal.volume = fence;
-    let user_data = plan(spec, &volume.linux_device, compute.settings.registry_login()?)?.cloud_config()?;
+    host.workspace_device.clone_from(&volume.linux_device);
+    let user_data = host.cloud_config()?;
     let request = ServerRequest {
         operation_id: &operation,
         placements: &placements,
@@ -94,6 +87,24 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     )?;
     state.worker = Some(worker(&server, spec, &volume)?);
     store.save(state)
+}
+
+/// Where the cloud's volume and server go. A recorded location is fixed by the
+/// volume created there; until then the first allowed location is only a
+/// candidate. Settings can change while a cloud has a volume but no server yet,
+/// so a recorded location they no longer allow is refused rather than used.
+pub(super) fn location(recorded: Option<&str>, spec: &WorkerSpec) -> Result<String> {
+    match recorded {
+        Some(location) if !spec.data_centers.iter().any(|allowed| allowed == location) => Err(Error::Invalid(
+            "This cloud's workspace volume is in a location the Hetzner settings no longer allow",
+        )),
+        Some(location) => Ok(location.to_owned()),
+        None => spec
+            .data_centers
+            .first()
+            .cloned()
+            .ok_or(Error::Invalid("Hetzner settings list no location")),
+    }
 }
 
 /// A shared worker's startup data has no Hetzner path yet.
@@ -127,7 +138,7 @@ pub(super) fn fit(offers: &[Offer], spec: &WorkerSpec, location: &str) -> Result
         .collect();
     if placements.is_empty() {
         return Err(Error::Invalid(
-            "No configured Hetzner server type has the profile's CPU and memory in the workspace's location",
+            "No configured Hetzner server type has the profile's CPU, memory and container disk in the workspace's location",
         ));
     }
     Ok(placements)

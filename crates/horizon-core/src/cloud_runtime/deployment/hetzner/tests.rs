@@ -1,6 +1,6 @@
 use super::{
     Journal,
-    provision::{fit, plan},
+    provision::{fit, location, plan},
     throwaway_public_key, worker,
 };
 use horizon_cloud::{
@@ -240,4 +240,18 @@ fn the_host_plan_carries_the_worker_contract_and_no_idle_stop() {
         assert!(rendered.contains(expected), "{expected}");
     }
     assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
+}
+
+#[test]
+fn a_recorded_location_is_kept_only_while_the_settings_allow_it() {
+    let mut spec = spec();
+    assert_eq!(location(None, &spec).unwrap(), "hel1");
+    assert_eq!(location(Some("hel1"), &spec).unwrap(), "hel1");
+    spec.data_centers = vec!["nbg1".into()];
+    assert!(
+        location(Some("hel1"), &spec).is_err(),
+        "the volume cannot follow a changed allow-list"
+    );
+    spec.data_centers.clear();
+    assert!(location(None, &spec).is_err());
 }
