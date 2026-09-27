@@ -208,7 +208,8 @@ struct Hold {
 impl Hold {
     fn spawn(mut command: Command) -> std::io::Result<Self> {
         let mut child = command.spawn()?;
-        let (sender, ready) = mpsc::channel();
+        // Only the first ready line is read; later output keeps draining but is not kept.
+        let (sender, ready) = mpsc::sync_channel(1);
         let mut hold = Self {
             input: child.stdin.take(),
             ready,
@@ -221,7 +222,7 @@ impl Hold {
             hold.readers
                 .push(spawn_reader("local-network-ready", output, move |line| {
                     if let Ok(ready) = serde_json::from_str::<Ready>(line) {
-                        let _ = sender.send(ready);
+                        let _ = sender.try_send(ready);
                     }
                 })?);
         }
