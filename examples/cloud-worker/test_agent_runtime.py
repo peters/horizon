@@ -60,7 +60,11 @@ sys.exit(23)
 
     def test_minimal_launch_disables_background_updates_and_preserves_contract(self):
         child = self.launch()
-        self.assertEqual(child['args'], ['--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        self.assertEqual(child['args'][0], '--session-id')
+        self.assertEqual(len(child['args'][1]), 36)
+        self.assertEqual(child['args'][2:], ['--mcp-config', str(self.workspace / 'agent-mcp.json')])
+        resumed = self.launch()
+        self.assertEqual(resumed['args'], ['--resume', child['args'][1], '--mcp-config', str(self.workspace / 'agent-mcp.json')])
         self.assertEqual(child['env'], {
             'DISABLE_AUTOUPDATER': '1', 'HOME': str(self.workspace / 'home'),
             'HORIZON': None, 'HORIZON_BROWSER_ACTOR': 'horizon:cloud-test-panel',

@@ -186,6 +186,11 @@ pub fn deploy_with_siblings(
         store.arm_browserstack(&mut state)?;
         browser_auth.install(&connection, &runner)?;
     }
+    // A reconnect brings back every recorded session. A running process is left
+    // alone; a lost one is started again in its existing worktree.
+    if arm_recorded_session_resume(&mut state) {
+        store.save(&state)?;
+    }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
     replacement::relaunch_sessions(&store, &mut state, &contract, emit, relaunch)?;
     state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
@@ -286,6 +291,15 @@ fn provision(
     )?;
     state.worker = Some(worker);
     Ok(())
+}
+
+/// Journals one relaunch for a worker that was ready before and still has sessions.
+fn arm_recorded_session_resume(state: &mut Deployment) -> bool {
+    if !super::timeline::reconnects(state) || state.session_restart.is_some() || state.sessions.is_empty() {
+        return false;
+    }
+    state.session_restart = Some(OperationId::generate());
+    true
 }
 
 fn begin_sessions(state: &mut Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {

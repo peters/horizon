@@ -363,3 +363,36 @@ fn reconnect_observes_an_image_update_that_may_be_in_flight() {
         assert_eq!(saved.stage, state.stage);
     }
 }
+
+#[test]
+fn a_reconnect_arms_resume_for_every_recorded_session() {
+    let session = serde_json::json!({
+        "panel_id":"panel","agent":"claude","tmux":"panel",
+        "branch":"agent/panel","worktree":"/workspace/agents/panel"
+    });
+    let mut reconnecting: Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"cloud","repository":"/tmp/repo","revision":"a".repeat(40),
+        "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
+        "stage":"Ready","operation":{"state":"bound","worker_id":"worker"},
+        "spec":null,"worker":null,"sessions":[session],"ready_history":"Observed"
+    }))
+    .unwrap();
+    assert!(arm_recorded_session_resume(&mut reconnecting));
+    let operation = reconnecting.session_restart.expect("resume armed");
+    assert!(
+        !arm_recorded_session_resume(&mut reconnecting),
+        "the same reconnect keeps one operation"
+    );
+    assert_eq!(reconnecting.session_restart, Some(operation));
+
+    let mut first = reconnecting.clone();
+    first.session_restart = None;
+    first.ready_history = ReadyHistory::Unobserved;
+    first.operation = CreateState::Prepared;
+    assert!(!arm_recorded_session_resume(&mut first));
+
+    let mut empty = reconnecting.clone();
+    empty.session_restart = None;
+    empty.sessions.clear();
+    assert!(!arm_recorded_session_resume(&mut empty));
+}
