@@ -183,7 +183,7 @@ fn cpu_summary(
         return;
     };
     let within = &placement.data_centers;
-    let stock = match prices.size(profile, (profile.cpu, profile.memory_gb)) {
+    let stock = match prices.displayed_size(profile, (profile.cpu, profile.memory_gb)) {
         None => Stock::Checking,
         Some(Ok(size)) => Stock::Known(size.best(within), Some(in_scope(size.count(within), placement))),
         Some(Err(error)) => Stock::Unknown(error.to_owned()),
@@ -489,20 +489,25 @@ fn footer(ui: &mut Ui, provider: &str, age: std::time::Duration, loading: bool) 
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!(
-                "{provider} list prices · updated {} · refreshed every {} sec",
+                "{provider} last known prices/stock · updated {} · refreshed every {} sec",
                 ago(age),
                 FRESH.as_secs()
             ))
             .size(11.0)
             .color(theme::FG_DIM()),
         );
-        if loading {
-            ui.spinner();
-        } else {
-            refresh = ui
-                .add(Button::new(RichText::new("Refresh").size(11.0).color(theme::ACCENT())).frame(false))
-                .clicked();
-        }
+        refresh = ui
+            .add_enabled(
+                !loading,
+                Button::new(
+                    RichText::new(if loading { "Updating…" } else { "Refresh" })
+                        .size(11.0)
+                        .color(theme::ACCENT()),
+                )
+                .min_size(Vec2::new(80.0, 22.0))
+                .frame(false),
+            )
+            .clicked();
     });
     refresh
 }
@@ -518,6 +523,23 @@ fn ago(age: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshing_does_not_change_footer_geometry() {
+        use crate::test_egui::DiscardTextures;
+        let mut bounds = Vec::new();
+        for loading in [false, true] {
+            let ctx = egui::Context::default();
+            let _ = ctx
+                .run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(600.0);
+                    footer(ui, "RunPod", std::time::Duration::from_secs(10), loading);
+                    bounds.push(ui.min_rect());
+                })
+                .discard_textures();
+        }
+        assert_eq!(bounds[0], bounds[1]);
+    }
 
     #[test]
     fn ages_read_naturally() {
