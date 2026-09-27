@@ -244,3 +244,35 @@ fn a_login_for_another_registry_is_never_sent() {
         );
     }
 }
+
+#[test]
+fn a_cancelled_check_is_never_left_to_the_host() {
+    // An indefinite answer is left to the host only while nobody cancelled.
+    let (address, _, task) = registry(vec![(401, BEARER, ""), (503, "", "")]);
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    let image = format!("{address}/team/worker@sha256:{}", "a".repeat(64));
+    let checked = super::check_pull(&login(&address), &image, &Cancellation::default(), "http");
+    task.join().unwrap();
+    // Left to the host when nobody cancelled ...
+    checked.unwrap();
+    // ... and cancelled when someone did, whatever the registry answered.
+    let (address, _, task) = registry(vec![]);
+    let image = format!("{address}/team/worker@sha256:{}", "a".repeat(64));
+    assert!(matches!(
+        verify_pull_at(&login(&address), &image, &cancel, "http"),
+        Err(CloudError::Cancelled)
+    ));
+    task.join().unwrap();
+}
+
+#[test]
+fn a_token_in_either_field_is_used() {
+    let (address, seen, task) = registry(vec![
+        (401, BEARER, ""),
+        (200, "", r#"{"token":"first","access_token":"first"}"#),
+        (200, "", ""),
+    ]);
+    check(&address, task).unwrap();
+    assert!(seen.lock().unwrap()[2].ends_with(" bearer"));
+}

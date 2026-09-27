@@ -31,6 +31,31 @@ pub fn verify_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation) ->
 }
 
 fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, scheme: &str) -> Result<(), CloudError> {
+    let checked = check_pull(login, image, cancel, scheme);
+    // A request cut short by cancellation is never taken as leave-it-to-the-host.
+    cancel.check()?;
+    checked
+}
+
+/// The token a token service granted, in either field registries use for it.
+#[derive(serde::Deserialize)]
+struct Grant {
+    token: Option<String>,
+    access_token: Option<String>,
+}
+
+/// The granted token, read without leaving an unwiped copy of it behind.
+fn granted(body: &mut ureq::Body) -> Option<zeroize::Zeroizing<String>> {
+    let bytes = zeroize::Zeroizing::new(body.with_config().limit(64 * 1024).read_to_vec().ok()?);
+    let Grant { token, access_token } = serde_json::from_slice(&bytes).ok()?;
+    let (token, access_token) = (
+        token.map(zeroize::Zeroizing::new),
+        access_token.map(zeroize::Zeroizing::new),
+    );
+    token.or(access_token)
+}
+
+fn check_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation, scheme: &str) -> Result<(), CloudError> {
     let Some(reference) = Reference::parse(image) else {
         return Ok(());
     };
@@ -82,17 +107,7 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
                         401 | 403 => return Err(CloudError::Invalid(REFUSED)),
                         _ => return Ok(()),
                     }
-                    let Some(token) = answer
-                        .body_mut()
-                        .read_json::<serde_json::Value>()
-                        .ok()
-                        .and_then(|body| {
-                            body.get("token")
-                                .or_else(|| body.get("access_token"))
-                                .and_then(serde_json::Value::as_str)
-                                .map(|token| zeroize::Zeroizing::new(token.to_owned()))
-                        })
-                    else {
+                    let Some(token) = granted(answer.body_mut()) else {
                         return Ok(());
                     };
                     zeroize::Zeroizing::new(format!("Bearer {}", token.as_str()))
