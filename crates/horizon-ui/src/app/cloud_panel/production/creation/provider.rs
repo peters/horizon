@@ -429,7 +429,7 @@ fn offer_details(ui: &mut Ui, provider: &Description, offer: &LocationOffer, any
         ui.small(format!("If it is sold out: {}.", fallbacks.join(", ")));
     }
     if any {
-        ui.small("Horizon tries this location first. If no allowed type has capacity there when the cloud is created, it goes to the next allowed location, which can cost more. Choose a location for its exact price.");
+        ui.small("Horizon places the cloud in this location, the first allowed one where a configured type has the size. If those types are all sold out there, creation stops with a capacity error; choose another location and start again.");
     }
     if !offer.listed {
         ui.small(format!(

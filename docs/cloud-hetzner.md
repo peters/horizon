@@ -164,9 +164,11 @@ the chosen size:
 - the types tried next if it is sold out, each at its own hourly price, and
   Hetzner's advisory availability.
 
-Choosing a location places the cloud there. **Any allowed location** keeps
-every location in `locations` and shows the offer in the first one, where
-Horizon tries first. The new cloud records `provider: hetzner` even when the
+Choosing a location places the cloud there. **Any allowed location** places it
+in the first location in `locations` where a configured type has the size, and
+shows that offer. Horizon does not move a new cloud to another location when
+those types are sold out: the sold-out types fall back only within that
+location, and then creation stops with a capacity error. The new cloud records `provider: hetzner` even when the
 repository profile names RunPod, and Start cloud deploys it on Hetzner. A
 repository profile that names `provider: hetzner` is offered too. The cloud's
 card shows its fixed size, and RunPod billing is not read for it.
