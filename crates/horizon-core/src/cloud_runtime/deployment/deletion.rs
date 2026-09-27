@@ -21,6 +21,8 @@ pub fn terminate(
             Stage::DeleteWorker,
             "Deleting the Hetzner server, workspace volume and SSH key and confirming their removal",
         );
+        // Once deletion starts it runs to the end; each step is recorded so it can resume.
+        cancel.check()?;
         super::hetzner::lifecycle::delete(&store, &mut state, settings, &committed())?;
         return finish_deletion(state, &store);
     }

@@ -491,14 +491,14 @@ mod failure_points {
         spec: &horizon_cloud::WorkerSpec,
         responses: Vec<(u16, String)>,
     ) -> (Deployment, Journal, bool, usize) {
-        provision_adjusted(spec, responses, |_, _| {})
+        provision_adjusted(spec, responses, |_, _, _| {})
     }
 
     /// As `provision_spec`, after `adjust` changes the settings or the saved state.
     fn provision_adjusted(
         spec: &horizon_cloud::WorkerSpec,
         responses: Vec<(u16, String)>,
-        adjust: impl FnOnce(&mut Compute, &mut Deployment),
+        adjust: impl FnOnce(&mut Compute, &mut Deployment, &std::path::Path),
     ) -> (Deployment, Journal, bool, usize) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::lock(root.path()).unwrap();
@@ -522,7 +522,7 @@ mod failure_points {
             },
             registries: None,
         };
-        adjust(&mut compute, &mut state);
+        adjust(&mut compute, &mut state, root.path());
         store.save(&state).unwrap();
         let result = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {});
         task.join().unwrap();
@@ -553,12 +553,33 @@ mod failure_points {
             (CreateState::Prepared, Vec::new(), 0),
             (CreateState::Requested, and(catalog(), [error(503, "unavailable")]), 4),
         ] {
-            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state| {
+            let (state, _, _, served) = provision_adjusted(&spec(), responses, |compute, state, _| {
                 compute.settings.registry_pull = serde_json::from_value(pull.clone()).unwrap();
                 state.operation = operation.clone();
             });
             assert_eq!((state.operation, served), (operation, expected));
         }
+    }
+
+    #[test]
+    fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
+        let (_, journal, _, _) = provision_adjusted(
+            &spec(),
+            and(until_volume(), [error(503, "unavailable")]),
+            |_, _, root| {
+                let deleted = Journal {
+                    location: Some("nbg1".into()),
+                    volume: CreateState::Terminated { worker_id: "8".into() },
+                    key: None,
+                    released: None,
+                };
+                deleted.save(root).unwrap();
+            },
+        );
+        assert_eq!(
+            (journal.volume, journal.location.as_deref()),
+            (CreateState::Requested, Some("hel1"))
+        );
     }
 
     #[test]

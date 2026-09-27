@@ -159,8 +159,9 @@ fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_
         assert!(report.worker.is_none(), "no stopped worker while the server exists");
     });
     assert_eq!(requests.len(), 1);
-    // Stopping again deletes the server the first stop released.
+    // Stopping again deletes the server the first stop released, after checking it is off.
     let deleted = vec![
+        still_there.clone(),
         still_there,
         (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
         gone(),
@@ -175,4 +176,62 @@ fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_
     );
     assert_eq!((state.stage, state.operation), (Stage::Stopped, bound));
     assert!(kept, "the workspace volume stays");
+}
+
+#[test]
+fn a_stop_records_the_release_before_it_shuts_the_server_down() {
+    let running = (
+        200,
+        json!({"server": server("running", Some("192.0.2.10"))}).to_string(),
+    );
+    let refused = (
+        503,
+        json!({"error": {"code": "unavailable", "message": "unavailable"}}).to_string(),
+    );
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let volume = journal(CreateState::Bound { worker_id: "9".into() });
+    let responses = vec![running.clone(), running.clone(), running, refused];
+    let (state, kept, _) = act_on(&bound, &volume, responses, |compute, store, state| {
+        assert!(stop_with(compute, store, state, &Cancellation::default()).is_err());
+        assert_eq!(Journal::load(store.root()).unwrap().released.as_deref(), Some("42"));
+    });
+    // A failed shutdown leaves an unfinished stop, which stopping again completes.
+    assert_eq!((state.stage, state.operation), (Stage::Stopping, bound));
+    assert!(kept);
+}
+
+#[test]
+fn a_volume_request_that_created_nothing_is_settled_after_a_second_look() {
+    let (_, kept) = delete_from(
+        &CreateState::Prepared,
+        &journal(CreateState::Requested),
+        vec![
+            (200, listing("volumes", &json!([]))),
+            (200, listing("volumes", &json!([]))),
+            (200, listing("ssh_keys", &json!([key()]))),
+            (204, String::new()),
+            (200, listing("ssh_keys", &json!([]))),
+        ],
+    );
+    assert!(!kept);
+}
+
+#[test]
+fn a_server_request_that_created_nothing_is_settled_and_its_volume_deleted() {
+    let (state, kept) = delete_from(
+        &CreateState::Requested,
+        &journal(CreateState::Bound { worker_id: "9".into() }),
+        vec![
+            (200, listing("servers", &json!([]))),
+            (200, listing("servers", &json!([]))),
+            (200, json!({"volume": free_volume()}).to_string()),
+            (204, String::new()),
+            gone(),
+            (200, listing("ssh_keys", &json!([key()]))),
+            (204, String::new()),
+            (200, listing("ssh_keys", &json!([]))),
+        ],
+    );
+    assert_eq!(state.operation, CreateState::Prepared);
+    assert!(!kept);
 }

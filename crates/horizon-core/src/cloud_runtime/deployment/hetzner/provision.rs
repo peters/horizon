@@ -58,7 +58,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     let root = store.root().to_path_buf();
-    let mut journal = Journal::load(&root)?;
+    let mut journal = reopened(&root)?;
     // Every read-only check comes before the first request that creates anything.
     // A volume fixes the location; until one exists, the first allowed location
     // with a fitting server type is chosen. A requested or bound server was placed
@@ -147,6 +147,18 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     described.verify_resources(spec)?;
     state.worker = Some(described);
     store.save(state)
+}
+
+/// The journal, with a deleted volume forgotten: only a delete terminates the
+/// volume, so a redeployed cloud starts a new one wherever the settings allow now.
+fn reopened(root: &std::path::Path) -> Result<Journal> {
+    let mut journal = Journal::load(root)?;
+    if matches!(journal.volume, CreateState::Terminated { .. }) {
+        journal.volume = CreateState::Prepared;
+        journal.location = None;
+        journal.save(root)?;
+    }
+    Ok(journal)
 }
 
 /// The location of an existing workspace volume. Settings can change while a

@@ -129,29 +129,24 @@ pub(super) fn stop_with(compute: &Compute, store: &Store, state: &mut Deployment
     };
     let mut journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
+    let id = parse(&worker_id)?;
     if journal.released.as_deref() != Some(worker_id.as_str()) {
-        let id = parse(&worker_id)?;
         let server = compute
             .client
             .inspect_server(id, cancel)?
             .ok_or(CloudError::WorkerLost)?;
         server.verify(&operation)?;
-        let previous = (state.stop_requested, state.stage);
         state.stop_requested = true;
         state.stage = Stage::Stopping;
         store.save(state)?;
-        if let Err(error) = settle_shutdown(compute, &operation, id, cancel) {
-            (state.stop_requested, state.stage) = previous;
-            store.save(state)?;
-            return Err(error);
-        }
-        // Recorded before the delete request, so a lost response still reads as a
-        // stop of this server rather than a lost worker.
+        // Recorded before the shutdown and the delete, so until the server is
+        // proven gone the cloud reads as an unfinished stop, never as stopped or lost.
         journal.released = Some(worker_id.clone());
         journal.save(store.root())?;
     }
-    // Deleting proves the server gone, also when a retried stop finds the release
-    // recorded but its delete unconfirmed.
+    // A retried stop also shuts down a server that still runs before deleting it.
+    // Deleting proves the server gone.
+    settle_shutdown(compute, &operation, id, cancel)?;
     let mut fence = state.operation.clone();
     compute
         .client
@@ -208,12 +203,12 @@ pub(super) fn delete_with(
     let mut journal = Journal::load(store.root())?;
     let operation = state.cloud_id.clone();
     if state.operation == CreateState::Requested {
-        let mut found = compute.client.find_servers(&operation, cancel)?;
+        let mut found = unresolved(cancel, || Ok(compute.client.find_servers(&operation, cancel)?))?;
         match found.len() {
             0 => {
-                return Err(Error::Invalid(
-                    "The server request is unresolved; check the Hetzner project before deleting",
-                ));
+                // The request never created a server.
+                state.operation = CreateState::Prepared;
+                store.save(state)?;
             }
             1 => {
                 let server = found.remove(0);
@@ -242,7 +237,7 @@ pub(super) fn delete_with(
     }
     let mut fence = journal.volume.clone();
     if fence == CreateState::Requested {
-        let found = compute.client.find_volumes(&operation, cancel)?;
+        let found = unresolved(cancel, || Ok(compute.client.find_volumes(&operation, cancel)?))?;
         match found.as_slice() {
             [] => fence = CreateState::Prepared,
             [volume] => {
@@ -276,6 +271,28 @@ pub(super) fn delete_with(
     // The key is gone and proven absent, so the cloud no longer keeps anything.
     journal.key = None;
     journal.save(store.root())
+}
+
+/// How long an uncertain request may still be processed after its response was lost.
+#[cfg(not(test))]
+const UNRESOLVED_GRACE: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const UNRESOLVED_GRACE: Duration = Duration::ZERO;
+
+/// What an uncertain create request left, found by label. Nothing found is trusted
+/// only after a second look a grace period later, so a request Hetzner was still
+/// processing when its response was lost has become visible.
+fn unresolved<T>(cancel: &Cancellation, find: impl Fn() -> Result<Vec<T>>) -> Result<Vec<T>> {
+    let found = find()?;
+    if !found.is_empty() {
+        return Ok(found);
+    }
+    let deadline = Instant::now() + UNRESOLVED_GRACE;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        cancel.check()?;
+    }
+    find()
 }
 
 /// Asks the operating system to shut down so the workspace is written out, and

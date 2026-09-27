@@ -104,7 +104,10 @@ Hetzner off removes the binding.
   interrupted before its server was gone, the cloud stays stopping and cannot be
   resumed; stopping again finishes it.
 - **Delete** removes the server, the workspace volume and the SSH key, and
-  confirms each is gone. Only then can the cloud be removed from Horizon.
+  confirms each is gone. Only then can the cloud be removed from Horizon. A
+  create request whose response was lost counts as having created nothing only
+  if a second look 30 seconds later still finds nothing. Redeploying a deleted
+  cloud creates a new volume.
 
 ## Not available on Hetzner yet
 
