@@ -240,6 +240,9 @@ pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
     if hetzner(&state) {
+        // No provider call follows here, so a cancelled Resume must stop before the
+        // fence is cleared: the reconnect it leads to creates a billed server.
+        cancel.check()?;
         return super::deployment::hetzner::lifecycle::resume(&store, &mut state);
     }
     let CreateState::Bound { worker_id } = &state.operation else {
@@ -367,6 +370,12 @@ mod tests {
             resume(root.path(), &settings, &cancel).unwrap_err().to_string(),
             "Stop the Hetzner cloud before resuming it"
         );
+        let cancelled = Cancellation::default();
+        cancelled.cancel();
+        assert!(matches!(
+            resume(root.path(), &settings, &cancelled).unwrap_err(),
+            Error::Provider(horizon_cloud::CloudError::Cancelled)
+        ));
         assert_eq!(
             revoke_browserstack(root.path(), &settings, &cancel)
                 .unwrap_err()
