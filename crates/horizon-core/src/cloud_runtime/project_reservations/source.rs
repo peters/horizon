@@ -278,6 +278,18 @@ fn export(repository: &Path, revision: &str, retained: &Path, owner_root: &Path,
 }
 
 impl Artifacts {
+    pub(in crate::cloud_runtime) fn matches(
+        &self,
+        project: &ProjectIdentity,
+        repository: &Path,
+        revision: &str,
+    ) -> bool {
+        &self.project == project
+            && self.repository == repository
+            && self.selection == revision
+            && self.descriptor.revision == revision
+    }
+
     #[cfg(target_os = "linux")]
     fn create(
         owner: &Owner,

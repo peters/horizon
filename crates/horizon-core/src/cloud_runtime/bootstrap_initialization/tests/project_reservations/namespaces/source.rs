@@ -1,4 +1,5 @@
 mod sessions;
+mod setup;
 use super::*;
 use crate::cloud_runtime::project_reservations::{journal::Journal, source};
 use horizon_cloud::Agent;

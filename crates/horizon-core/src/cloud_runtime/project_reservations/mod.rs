@@ -182,7 +182,7 @@ pub(super) fn started(owner: &Owner) -> std::result::Result<bool, super::owner::
     Ok(owner.load()?.get(journal::KEY).is_some())
 }
 
-fn execute(
+pub(super) fn execute(
     owner: &mut Owner,
     allocation: &bootstrap_initialization::Request,
     change: &Change,

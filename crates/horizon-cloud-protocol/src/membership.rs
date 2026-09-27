@@ -420,7 +420,10 @@ impl Manifest {
                 || member.capabilities.desktop
                 || member.capabilities.browser_tools()
                 || !member.ports.is_empty()
-                || !member.sessions.iter().any(|s| s.id == id && s.agent == Agent::Claude)
+                || !member
+                    .sessions
+                    .iter()
+                    .any(|s| s.id == id && s.agent == crate::session_runtime::SUPPORTED_AGENT)
             {
                 return Err(Error);
             }
