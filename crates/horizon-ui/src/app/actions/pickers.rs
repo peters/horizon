@@ -311,4 +311,64 @@ mod tests {
         app.pending_preset_pick = None;
         assert!(app.preset_picker_rect(&ctx).is_none());
     }
+
+    #[cfg(feature = "cloud-workspaces")]
+    #[test]
+    fn picker_renders_cloud_actions_only_outside_existing_clouds() {
+        let (_temp, mut app) = test_app();
+        app.presets = vec![horizon_core::PresetConfig {
+            name: "Shell".into(),
+            alias: None,
+            kind: horizon_core::PanelKind::Shell,
+            command: None,
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::Fresh,
+            ssh_connection: None,
+        }];
+        let workspace = app.board.create_workspace("Fixture");
+        let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+        app.cloud_prototype
+            .groups
+            .0
+            .push(horizon_core::cloud_panel::CloudGroup::new(
+                101,
+                "Local cloud".into(),
+                local_id,
+                "/synthetic".into(),
+                [0.0, 0.0],
+            ));
+        for (target, position, heading, offers_cloud) in [
+            (Some(workspace), [100.0, 100.0], "Add panel", false),
+            (Some(workspace), [4000.0, 100.0], "New Terminal", true),
+            (None, [4000.0, 100.0], "New Workspace", false),
+        ] {
+            let ctx = Context::default();
+            let mut labels = Vec::new();
+            for _ in 0..2 {
+                let output = ctx
+                    .run_ui(crate::app::test_support::raw_input([900.0, 700.0], None), |ui| {
+                        app.show_preset_picker_popup(
+                            ui.ctx(),
+                            Id::new("policy-picker"),
+                            Pos2::new(100.0, 100.0),
+                            target,
+                            position,
+                        );
+                    })
+                    .discard_textures();
+                labels = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                        _ => None,
+                    })
+                    .map(str::to_owned)
+                    .collect();
+            }
+            assert!(labels.iter().any(|label| label == heading), "{labels:?}");
+            assert_eq!(labels.iter().any(|label| label == "Cloud"), offers_cloud);
+            assert!(labels.iter().any(|label| label == "Shell"));
+        }
+    }
 }
