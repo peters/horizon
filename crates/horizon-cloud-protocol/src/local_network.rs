@@ -165,6 +165,14 @@ pub struct Ready {
     pub proxy: SocketAddrV4,
 }
 
+impl Ready {
+    /// A proxy on the worker's loopback with a real port; anything else is not a ready helper.
+    #[must_use]
+    pub fn usable(&self) -> bool {
+        self.proxy.ip().is_loopback() && self.proxy.port() != 0
+    }
+}
+
 /// The SOCKS5 reply codes the client proxy answers with, and the refusal agents see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reply {
@@ -308,6 +316,14 @@ mod tests {
         assert_eq!(ready.proxy, SocketAddrV4::new(Ipv4Addr::LOCALHOST, 41234));
         assert!(serde_json::from_str::<Ready>(r#"{"proxy":"127.0.0.1:1","extra":1}"#).is_err());
         assert!(serde_json::from_str::<Ready>(r#"{"proxy":"[::1]:1"}"#).is_err());
+        assert!(ready.usable());
+        for unusable in [
+            r#"{"proxy":"0.0.0.0:41234"}"#,
+            r#"{"proxy":"192.168.1.5:41234"}"#,
+            r#"{"proxy":"127.0.0.1:0"}"#,
+        ] {
+            assert!(!serde_json::from_str::<Ready>(unusable).unwrap().usable(), "{unusable}");
+        }
     }
 
     #[test]

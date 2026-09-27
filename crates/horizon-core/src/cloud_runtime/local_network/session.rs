@@ -221,7 +221,9 @@ impl Hold {
         if let Some(output) = hold.child.stdout.take() {
             hold.readers
                 .push(spawn_reader("local-network-ready", output, move |line| {
-                    if let Ok(ready) = serde_json::from_str::<Ready>(line) {
+                    if let Ok(ready) = serde_json::from_str::<Ready>(line)
+                        && ready.usable()
+                    {
                         let _ = sender.try_send(ready);
                     }
                 })?);

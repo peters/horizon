@@ -355,7 +355,11 @@ mod supervision {
             }
         );
         drop(bridge);
-        let (bridge, _root) = start(PREPARED, "exec cat > /dev/null");
+        // A ready line naming anything but a worker loopback port is not a confirmation.
+        let (bridge, _root) = start(
+            PREPARED,
+            r#"printf '{"proxy":"0.0.0.0:41234"}\n'; exec cat > /dev/null"#,
+        );
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(bridge.status().state, State::Starting);
     }
