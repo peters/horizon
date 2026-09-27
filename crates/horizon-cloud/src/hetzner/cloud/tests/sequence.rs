@@ -638,6 +638,9 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
         and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
         vec![
             (200, json!({"volume": free()})),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -645,7 +648,7 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
     );
     let outcome = run(CreateState::Prepared, journal, false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 9, "the sold-out answer ends it, with no delete");
+    assert_eq!(outcome.served, 11, "the sold-out answer ends it, with no delete");
     assert_eq!(
         outcome.journal.volume,
         CreateState::Bound { worker_id: "9".into() },
@@ -669,6 +672,9 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
         and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
         vec![
             (200, listing("volumes", &json!([free()]))),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -676,7 +682,7 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
     );
     let outcome = run(CreateState::Prepared, journal, false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 9, "reconciled and refused, with no delete");
+    assert_eq!(outcome.served, 11, "reconciled and refused, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused);
 }
@@ -691,6 +697,9 @@ fn a_volume_whose_name_is_taken_is_adopted_as_used_and_never_deleted_when_sold_o
             (200, listing("volumes", &json!([]))),
             error(409, "uniqueness_error"),
             (200, listing("volumes", &json!([free()]))),
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -698,7 +707,7 @@ fn a_volume_whose_name_is_taken_is_adopted_as_used_and_never_deleted_when_sold_o
     );
     let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 12, "sold out, with no delete");
+    assert_eq!(outcome.served, 14, "sold out, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused);
 }
@@ -711,6 +720,9 @@ fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold
     let responses = and(
         and(and(catalog(), key), adopted),
         vec![
+            // The new server's network: its location's zone, then Horizon's network there.
+            networked("hel1")[0].clone(),
+            networked("hel1")[1].clone(),
             (200, listing("servers", &json!([]))),
             (200, json!({"volume": free()})),
             error(412, "resource_unavailable"),
@@ -718,7 +730,7 @@ fn a_volume_a_lagging_listing_hid_is_adopted_as_used_and_never_deleted_when_sold
     );
     let outcome = run(CreateState::Prepared, Journal::default(), false, responses);
     assert!(outcome.worker.is_none());
-    assert_eq!(outcome.served, 10, "sold out, with no delete");
+    assert_eq!(outcome.served, 12, "sold out, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused, "an adopted volume may hold a workspace");
 }
