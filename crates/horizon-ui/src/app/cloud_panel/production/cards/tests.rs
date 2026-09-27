@@ -958,6 +958,10 @@ fn an_active_redeploy_keeps_the_selected_size_and_status() {
     assert!(texts.iter().any(|text| text == "16 vCPU · 32 GB · CPU only"));
     assert!(texts.iter().any(|text| text == "Redeploying cloud…"));
     assert!(
+        texts.iter().any(|text| text == "Validate"),
+        "redeploy shows the deployment stages"
+    );
+    assert!(
         texts
             .iter()
             .all(|text| !text.contains("Finish managed workspace storage cleanup"))
