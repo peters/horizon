@@ -250,13 +250,22 @@ pub(in crate::app::cloud_panel) fn runtime_heading(
         }
     });
     ui.add_space(10.0);
-    if group.environment.provider.as_deref() == Some("runpod") {
+    let described = group
+        .environment
+        .provider
+        .as_deref()
+        .and_then(horizon_core::cloud_runtime::provider::by_id);
+    // RunPod shows its logo in place of its name; every described provider shows its site.
+    if let Some(described) =
+        described.filter(|described| described.id == horizon_core::cloud_runtime::provider::RUNPOD.id)
+    {
         if let Some(logo) = logo {
             ui.add(egui::Image::new((logo.id(), Vec2::new(141.0, 32.0))).tint(theme::FG()));
         }
-        ui.label(RichText::new("runpod.io").size(15.0).color(theme::FG_DIM()));
+        ui.label(RichText::new(described.site).size(15.0).color(theme::FG_DIM()));
     } else {
         let (name, domain) = match group.environment.provider.as_deref() {
+            _ if let Some(described) = described => (described.label, described.site),
             Some("daytona") => ("Daytona", "daytona.io"),
             Some("fly") => ("Fly.io", "fly.io"),
             other => (other.unwrap_or("Runtime"), ""),

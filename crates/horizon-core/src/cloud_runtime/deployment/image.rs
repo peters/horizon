@@ -158,7 +158,8 @@ pub(super) fn prepare_image(
         image_digest: digest,
         profile: state.profile.clone(),
         public_key,
-        registry_auth_id: (state.profile.provider != horizon_cloud::hetzner::PROVIDER)
+        registry_auth_id: horizon_cloud::provider::Description::of(&state.profile)
+            .registry_auth
             .then(|| request.settings.registry_pull_auth_id.clone())
             .flatten(),
         gpu_types: request.settings.gpu_types.clone(),
