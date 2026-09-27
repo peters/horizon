@@ -136,3 +136,101 @@ fn historical_small_uncertain_volume_stays_fenced_then_can_reconcile_and_delete(
         1
     );
 }
+
+#[test]
+fn definite_volume_refusal_requires_durable_reset_before_a_later_retry() {
+    for status in [403, 422, 429] {
+        for failed_reset in [false, true] {
+            let spec = volume_spec(10);
+            let expected = volume(&spec);
+            let mut responses = vec![
+                (200, endpoints(&json!([]))),
+                (200, volumes(&json!([]))),
+                (status, "{}".into()),
+            ];
+            if !failed_reset {
+                responses.extend([
+                    (200, endpoints(&json!([]))),
+                    (200, volumes(&json!([]))),
+                    (201, serde_json::to_string(&expected).unwrap()),
+                ]);
+            }
+            let (provider, requests, task) = server(responses);
+            let mut state = State::Prepared;
+            let mut durable = state.clone();
+            let result = provider.ensure_volume(&spec, &mut state, &Cancellation::default(), |next| {
+                if failed_reset && *next == State::Prepared {
+                    return Err(CloudError::Persistence);
+                }
+                durable = next.clone();
+                Ok(())
+            });
+            assert_eq!(state, durable);
+            if failed_reset {
+                assert!(matches!(result, Err(CloudError::Persistence)));
+                assert_eq!(state, State::Requested);
+            } else {
+                match status {
+                    403 => assert!(matches!(result, Err(CloudError::Unauthorized))),
+                    422 => assert!(matches!(result, Err(CloudError::Rejected(_)))),
+                    429 => assert!(matches!(result, Err(CloudError::Http(429, _)))),
+                    _ => unreachable!(),
+                }
+                assert_eq!(state, State::Prepared);
+                assert_eq!(
+                    provider
+                        .ensure_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+                        .unwrap(),
+                    expected
+                );
+            }
+            task.join().unwrap();
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r.starts_with("POST "))
+                    .count(),
+                if failed_reset { 1 } else { 2 }
+            );
+        }
+    }
+}
+
+#[test]
+fn uncertain_volume_response_stays_fenced_on_empty_reconciliation() {
+    for status in [404, 408, 500, 503] {
+        let (provider, requests, task) = server(vec![
+            (200, endpoints(&json!([]))),
+            (200, volumes(&json!([]))),
+            (status, "{}".into()),
+            (200, volumes(&json!([]))),
+        ]);
+        let mut state = State::Prepared;
+        assert!(
+            provider
+                .ensure_volume(&volume_spec(10), &mut state, &Cancellation::default(), |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(state, State::Requested);
+        assert!(
+            provider
+                .ensure_volume(&volume_spec(10), &mut state, &Cancellation::default(), |_| panic!(
+                    "uncertain request must stay fenced"
+                ))
+                .is_err()
+        );
+        assert_eq!(state, State::Requested);
+        task.join().unwrap();
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.starts_with("POST "))
+                .count(),
+            1
+        );
+    }
+}

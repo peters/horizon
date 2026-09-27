@@ -40,7 +40,7 @@ impl RunPod {
                 Err(
                     error @ (CloudError::Unauthorized
                     | CloudError::Cancelled
-                    | CloudError::Http(402 | 413 | 422 | 429, _)),
+                    | CloudError::Http(402 | 404 | 413 | 422 | 429, _)),
                 ) => {
                     persist(&CreateState::Prepared)?;
                     *state = CreateState::Prepared;

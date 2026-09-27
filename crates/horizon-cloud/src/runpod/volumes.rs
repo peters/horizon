@@ -307,7 +307,12 @@ impl RunPod {
             cancel,
         );
         let value = match response {
-            Err(error @ (CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled)) => {
+            Err(
+                error @ (CloudError::Unauthorized
+                | CloudError::Rejected(_)
+                | CloudError::Cancelled
+                | CloudError::Http(429, _)),
+            ) => {
                 transition(state, State::Prepared, &mut persist)?;
                 return Err(error);
             }
