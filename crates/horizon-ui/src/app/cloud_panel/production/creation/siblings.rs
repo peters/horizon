@@ -109,6 +109,10 @@ impl State {
         profile: &str,
     ) {
         let (Some(config), Some(revision)) = (config, revision) else {
+            // While the primary is being read again, a checked choice keeps blocking launch
+            // until it is reviewed against what that read returns.
+            self.reviewing = None;
+            self.reviewed = None;
             return;
         };
         if self
@@ -572,6 +576,49 @@ mod tests {
             fixture.state.launch_bindings(&primary, Some(&"b".repeat(40)), "dev"),
             Err(NOT_REVIEWED),
             "a review covers only the revision it read"
+        );
+    }
+
+    #[test]
+    fn rereading_the_primary_blocks_a_passed_choice_until_it_is_reviewed_again() {
+        let mut fixture = Fixture::new();
+        fixture.settle();
+        fixture.row("consumer").chosen = true;
+        fixture.settle();
+        assert!(!fixture.state.blocks_launch());
+        let primary = fixture.path("app");
+        let ctx = fixture.ctx.clone();
+        let config = fixture.config.clone();
+        let revision = fixture.revision.clone();
+        for (revision, config) in [(None, Some(&config)), (Some(revision.as_str()), None)] {
+            fixture.state.sync(&ctx, &primary, revision, config, "dev");
+            assert!(fixture.state.blocks_launch(), "a reread must not keep the old review");
+        }
+        std::fs::write(fixture.root.path().join("app/notes.txt"), "later").unwrap();
+        let app = fixture.root.path().join("app");
+        git(&app, &["add", "."]);
+        git(&app, &["commit", "--quiet", "-m", "Later"]);
+        fixture.revision = git(&app, &["rev-parse", "HEAD"]);
+        fixture.sync_primary("app");
+        assert!(fixture.state.blocks_launch(), "the new revision is not reviewed yet");
+        fixture.settle();
+        assert!(!fixture.state.blocks_launch());
+        assert_eq!(
+            fixture
+                .state
+                .launch_bindings(&primary, Some(&fixture.revision), "dev")
+                .map(|bindings| bindings.len()),
+            Ok(1)
+        );
+        assert_eq!(
+            fixture.state.launch_bindings(&primary, Some(&revision), "dev"),
+            Err(NOT_REVIEWED),
+            "the earlier revision's review is gone"
+        );
+        fixture.state.sync(&ctx, &primary, None, None, "dev");
+        assert!(
+            fixture.state.blocks_launch(),
+            "choosing another repository blocks while it loads"
         );
     }
 
