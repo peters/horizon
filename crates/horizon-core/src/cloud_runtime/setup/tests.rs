@@ -148,3 +148,66 @@ fn first_use_generates_a_dedicated_usable_private_identity() {
     assert!(String::from_utf8(output.stdout).unwrap().starts_with("ssh-ed25519 "));
     settings::validate_ssh_identity(&saved.ssh_identity_file).unwrap();
 }
+
+#[test]
+fn hetzner_is_optional_and_its_token_stays_a_private_secret() {
+    let root = tempfile::tempdir().unwrap();
+    let draft = prepared(root.path());
+    assert!(!draft.hetzner.enabled, "new settings start without Hetzner");
+    assert_eq!(draft.hetzner.locations, "hel1, nbg1, fsn1");
+    let saved = draft.save().unwrap();
+    assert!(saved.hetzner.is_none());
+
+    // Turning Hetzner on needs a token.
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.hetzner.enabled = true;
+    assert_eq!(
+        draft.validate().unwrap_err().to_string(),
+        "Enter your Hetzner Cloud API token"
+    );
+    *draft.hetzner.token = "two words".into();
+    assert!(draft.validate().is_err(), "a token is one line without spaces");
+    *draft.hetzner.token = "synthetic-hetzner-token".into();
+    draft.hetzner.server_types = "cx43,  cpx42".into();
+    draft.hetzner.locations = "HEL1".into();
+    assert!(draft.validate().is_err(), "Hetzner names are lowercase");
+    draft.hetzner.locations = "hel1, nbg1".into();
+    let saved = draft.save().unwrap();
+    let hetzner = saved.hetzner.unwrap();
+    assert_eq!(
+        (hetzner.server_types, hetzner.locations),
+        (
+            vec!["cx43".to_owned(), "cpx42".to_owned()],
+            vec!["hel1".to_owned(), "nbg1".to_owned()]
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(&hetzner.token_file).unwrap(),
+        "synthetic-hetzner-token"
+    );
+    assert!(
+        !std::fs::read_to_string(root.path().join("settings.json"))
+            .unwrap()
+            .contains("synthetic-hetzner")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&hetzner.token_file).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
+
+    // Reopened, the saved token is kept without being shown, and turning Hetzner off
+    // removes the binding.
+    let mut reopened = Draft::load(root.path()).unwrap();
+    assert!(reopened.hetzner.enabled && reopened.hetzner.token.is_empty());
+    assert_eq!(reopened.hetzner.server_types, "cx43, cpx42");
+    assert_eq!(
+        reopened.clone().save().unwrap().hetzner.unwrap().token_file,
+        hetzner.token_file
+    );
+    reopened.hetzner.enabled = false;
+    assert!(reopened.save().unwrap().hetzner.is_none());
+}
