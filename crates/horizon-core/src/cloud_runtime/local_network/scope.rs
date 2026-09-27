@@ -6,15 +6,16 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
 };
 
-/// One address in each IPv4 documentation range. Routing a datagram socket towards them selects
-/// the default route without sending anything; if a more specific route catches one of them,
-/// they disagree and no network is shared.
-const ROUTE_PROBES: [Ipv4Addr; 3] = [
+/// Probes in both halves of the IPv4 space, three of them documentation addresses. Routing a
+/// datagram socket towards them selects the route without sending anything. Only the default
+/// route covers all of them, so a more specific route that catches some makes them disagree,
+/// and then no network is shared.
+const ROUTE_PROBES: [Ipv4Addr; 4] = [
+    Ipv4Addr::new(1, 1, 1, 1),
     Ipv4Addr::new(192, 0, 2, 1),
     Ipv4Addr::new(198, 51, 100, 1),
     Ipv4Addr::new(203, 0, 113, 1),
 ];
-
 /// One address of a local interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Address {
@@ -55,11 +56,9 @@ impl Host {
                 interface: interface.name,
             })
             .collect();
-        let mut sources = ROUTE_PROBES.map(|probe| source_for(SocketAddr::new(probe.into(), 9)));
-        sources.sort_unstable();
         Ok(Self {
             addresses,
-            route: if sources[0] == sources[2] { sources[0] } else { None },
+            route: agreed(ROUTE_PROBES.map(|probe| source_for(SocketAddr::new(probe.into(), 9)))),
         })
     }
 
@@ -89,6 +88,14 @@ impl Host {
             .iter()
             .any(|own| own.ip.to_canonical() == IpAddr::V4(address))
     }
+}
+
+/// The source every probe leaves from, if they all agree.
+fn agreed(sources: [Option<Ipv4Addr>; ROUTE_PROBES.len()]) -> Option<Ipv4Addr> {
+    sources
+        .iter()
+        .all(|source| *source == sources[0])
+        .then_some(sources[0])?
 }
 
 /// The local address this computer would send from to reach `destination`. Connecting a
@@ -302,6 +309,15 @@ pub(super) mod tests {
         moved.addresses[0].ip = v4(192, 168, 1, 21);
         moved.route = Some(Ipv4Addr::new(192, 168, 1, 21));
         assert_ne!(moved.current_network().ok(), Some(network));
+    }
+
+    #[test]
+    fn the_default_route_is_known_only_when_every_probe_agrees() {
+        let lan = Some(LAN);
+        assert_eq!(agreed([lan; 4]), lan);
+        assert_eq!(agreed([lan, lan, Some(Ipv4Addr::new(10, 8, 0, 2)), lan]), None);
+        assert_eq!(agreed([None, lan, lan, lan]), None);
+        assert_eq!(agreed([None; 4]), None);
     }
 
     #[test]

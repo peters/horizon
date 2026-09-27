@@ -60,7 +60,7 @@ fn names_resolving_outside_the_scope_are_refused_and_mixed_answers_are_filtered(
         Ok(match name {
             "outside.example" => addresses(&["8.8.8.8:0", "127.0.0.1:0", "[::1]:0", "192.168.1.20:0"]),
             "mixed.example" => addresses(&["10.0.0.5:0", "[fe80::1]:0", "192.168.1.60:0", "[::ffff:192.168.1.61]:0"]),
-            _ => return Err(io::Error::other("no such host")),
+            _ => return Err(Reply::HostUnreachable),
         }
         .into_iter()
         .map(|address| SocketAddr::new(address.ip(), port))
@@ -124,6 +124,27 @@ fn a_changed_network_is_reported_instead_of_connecting() {
             "{destination:?}"
         );
     }
+    // Leaving the network while a name resolves refuses it too.
+    let reads = Arc::new(AtomicUsize::new(0));
+    let during = Scope {
+        host: Box::new(move || {
+            Ok(if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                home()
+            } else {
+                scope::tests::host(&[("10.1.0.9", Some(24))], Some("10.1.0.9"))
+            })
+        }),
+        ..gate(Box::new(|_, port| {
+            Ok(addresses(&["192.168.1.50:0"])
+                .into_iter()
+                .map(|a| SocketAddr::new(a.ip(), port))
+                .collect())
+        }))
+    };
+    assert_eq!(
+        during.admit(&name("camera.example", 554)),
+        Err(Reply::NetworkUnreachable)
+    );
     let unreadable = Scope {
         host: Box::new(|| Err(io::Error::other("interfaces unavailable"))),
         ..gate(Box::new(|_, _| Ok(Vec::new())))
@@ -165,6 +186,6 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
     }
     // Lookups still running, even abandoned ones, hold their share of the limit.
     lookups.store(MAX_LOOKUPS, Ordering::Release);
-    assert!(resolve(&lookups, "localhost", 80).is_err());
+    assert_eq!(resolve(&lookups, "localhost", 80), Err(Reply::GeneralFailure));
     assert_eq!(lookups.load(Ordering::Acquire), MAX_LOOKUPS);
 }

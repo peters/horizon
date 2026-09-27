@@ -39,7 +39,7 @@ pub enum Destination {
     Name(String, u16),
 }
 
-type Resolve = Box<dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync>;
+type Resolve = Box<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, Reply> + Send + Sync>;
 type ReadHost = Box<dyn Fn() -> io::Result<scope::Host> + Send + Sync>;
 type Source = Box<dyn Fn(SocketAddr) -> Option<Ipv4Addr> + Send + Sync>;
 
@@ -80,14 +80,13 @@ impl Scope {
     /// Refuses destinations outside the scope, names that do not resolve, and every
     /// destination once this computer has left the bridged network.
     pub fn admit(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply> {
-        let host = (self.host)().map_err(|_| Reply::GeneralFailure)?;
-        if host.current_network().ok().as_ref() != Some(&self.network) {
-            return Err(Reply::NetworkUnreachable);
-        }
+        self.on_network()?;
         let candidates = match destination {
             Destination::Address(address) => vec![*address],
-            Destination::Name(name, port) => (self.resolve)(name, *port).map_err(|_| Reply::HostUnreachable)?,
+            Destination::Name(name, port) => (self.resolve)(name, *port)?,
         };
+        // A lookup takes time; decide on this computer as it is after it.
+        let host = self.on_network()?;
         let allowed: Vec<_> = candidates
             .into_iter()
             .map(|candidate| SocketAddr::new(candidate.ip().to_canonical(), candidate.port()))
@@ -98,6 +97,15 @@ impl Scope {
             return Err(Reply::NotAllowed);
         }
         Ok(allowed)
+    }
+
+    /// This computer now, while it is still on the bridged network.
+    fn on_network(&self) -> Result<scope::Host, Reply> {
+        let host = (self.host)().map_err(|_| Reply::GeneralFailure)?;
+        if host.current_network().ok().as_ref() != Some(&self.network) {
+            return Err(Reply::NetworkUnreachable);
+        }
+        Ok(host)
     }
 }
 
@@ -112,13 +120,14 @@ impl Drop for Lookup {
 
 /// The system resolver under a deadline. A lookup that outlives it finishes on its own thread
 /// and is discarded; it keeps its share of the lookup limit until then, so stalled lookups
-/// cannot pile up.
-fn resolve(lookups: &Arc<AtomicUsize>, name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+/// cannot pile up. A name that does not resolve in time is unreachable; the bridge's own
+/// limit is a general failure.
+fn resolve(lookups: &Arc<AtomicUsize>, name: &str, port: u16) -> Result<Vec<SocketAddr>, Reply> {
     lookups
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
             (running < MAX_LOOKUPS).then_some(running + 1)
         })
-        .map_err(|_| io::Error::other("Too many name lookups in progress"))?;
+        .map_err(|_| Reply::GeneralFailure)?;
     let lookup = Lookup(Arc::clone(lookups));
     let (sender, receiver) = mpsc::channel();
     let name = name.to_owned();
@@ -127,10 +136,12 @@ fn resolve(lookups: &Arc<AtomicUsize>, name: &str, port: u16) -> io::Result<Vec<
         .spawn(move || {
             let _lookup = lookup;
             let _ = sender.send((name.as_str(), port).to_socket_addrs().map(Iterator::collect));
-        })?;
-    receiver
-        .recv_timeout(RESOLVE_TIMEOUT)
-        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+        })
+        .map_err(|_| Reply::GeneralFailure)?;
+    match receiver.recv_timeout(RESOLVE_TIMEOUT) {
+        Ok(Ok(addresses)) => Ok(addresses),
+        Ok(Err(_)) | Err(_) => Err(Reply::HostUnreachable),
+    }
 }
 
 #[cfg(test)]
