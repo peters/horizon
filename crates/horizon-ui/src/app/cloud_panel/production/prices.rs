@@ -16,7 +16,7 @@ use std::{
 pub(super) mod hetzner;
 
 /// Prices and stock older than this are fetched again while the dialog is open.
-pub(super) const FRESH: Duration = Duration::from_mins(15);
+pub(super) const FRESH: Duration = Duration::from_secs(15);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
 
@@ -114,10 +114,7 @@ impl State {
     /// that waited on it. Once it is older than [`RETRY_FAILED`] it is forgotten, so the
     /// next request asks the provider again.
     pub fn recent_list_error(&mut self) -> Option<&str> {
-        if self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
-            self.list_error = None;
-            self.list_failed_at = None;
-        }
+        self.recheck_runpod();
         self.list_error.as_deref()
     }
 
@@ -150,11 +147,10 @@ impl State {
         }
     }
 
-    /// A `RunPod` key added in Cloud settings since the fetch found none is found by
-    /// asking again after a failed fetch's usual pause; without a key that fetch
-    /// reads only the settings.
+    /// Retry failed catalog requests after a pause, including settings reads that
+    /// found no key. Keep the last known binding state until the provider answers.
     pub(super) fn recheck_runpod(&mut self) {
-        if self.runpod_missing && self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
+        if self.list_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED) {
             self.list_error = None;
             self.list_failed_at = None;
         }
@@ -174,10 +170,10 @@ impl State {
         list.into_iter()
             .chain(size)
             .map(|at| FRESH.saturating_sub(at.elapsed()))
-            // A missing RunPod key is asked about again after the retry pause.
+            // Failed requests wake the idle dialog after the retry pause.
             .chain(
                 self.list_failed_at
-                    .filter(|_| self.runpod_missing && self.list_job.is_none())
+                    .filter(|_| self.list_job.is_none())
                     .map(|at| RETRY_FAILED.saturating_sub(at.elapsed())),
             )
             .min()
@@ -564,6 +560,45 @@ mod tests {
     }
 
     #[test]
+    fn failed_catalog_refresh_wakes_and_retries_after_backoff() {
+        let mut state = State::default();
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err("Provider temporarily unavailable".into())).unwrap();
+        state.poll();
+        let wait = state.until_stale(&profile()).unwrap();
+        assert!(wait <= RETRY_FAILED && wait > RETRY_FAILED / 2);
+        state.recheck_runpod();
+        assert!(state.list_error.is_some(), "do not retry every frame");
+        state.list_failed_at = Instant::now().checked_sub(RETRY_FAILED);
+        state.recheck_runpod();
+        assert!(state.list_error.is_none() && state.list_failed_at.is_none());
+        assert!(state.runpod_bound(), "a transient error does not remove the binding");
+    }
+
+    #[test]
+    fn fresh_catalog_replaces_removed_gpu_offers() {
+        let mut offered = list();
+        offered.gpus.push(prices::GpuPrice {
+            id: "removed".into(),
+            name: "Removed GPU".into(),
+            memory_gb: 24,
+            hourly: 0.5,
+        });
+        let mut state = State::default();
+        state.accept(Fetched {
+            value: (offered, Preferences::default()),
+            at: Instant::now().checked_sub(FRESH).unwrap(),
+        });
+        assert!(state.fresh_list().is_none(), "agents must not receive expired offers");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(state.fresh_list().unwrap().value.0.gpus.is_empty());
+    }
+
+    #[test]
     fn an_idle_dialog_wakes_when_its_prices_go_stale() {
         let cpu = profile();
         let gpu = Profile {
@@ -580,7 +615,7 @@ mod tests {
             }),
         );
         let wait = state.until_stale(&cpu).unwrap();
-        assert!(wait <= FRESH && wait > Duration::from_mins(14));
+        assert!(wait <= FRESH && wait > Duration::from_secs(14));
         assert_eq!(state.until_stale(&gpu), None);
 
         state.list = Some(Fetched {
@@ -629,7 +664,7 @@ mod tests {
         state.size_jobs.insert(key(&profile), rx);
         assert_eq!(state.size(&profile, (8, 32)), None);
         state.size_jobs.clear();
-        // A runner booted less than 15 minutes ago cannot express an expired instant.
+        // A freshly booted runner may not be able to express an expired instant.
         if let Some(expired) = Instant::now().checked_sub(FRESH) {
             state.sizes.insert(
                 key(&profile),

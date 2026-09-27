@@ -1,6 +1,6 @@
 //! Hetzner's catalog, fetched beside the `RunPod` price list when this machine has a
 //! Hetzner binding, for agents' offer requests and the prices sent to workers.
-use super::{Fetched, Job, RETRY_FAILED, finished, spawn, stale};
+use super::{Fetched, Job, RETRY_FAILED, finished, spawn};
 use horizon_core::cloud_runtime::prices::{self, HetznerCatalog};
 use std::{
     path::Path,
@@ -9,6 +9,8 @@ use std::{
 
 /// Longest wait for a running Hetzner fetch before prices go to workers without it.
 const WAIT_FOR_FETCH: Duration = Duration::from_secs(20);
+/// Hetzner's catalog keeps its own cadence; fast GPU stock polling is RunPod-specific.
+const FRESH: Duration = Duration::from_mins(15);
 /// An agent's answer waits for a running Hetzner fetch only while more than this is
 /// left before its deadline; after that it reports Hetzner as still being fetched.
 const ANSWER_MARGIN_MILLIS: i64 = 3_000;
@@ -39,7 +41,7 @@ pub(in crate::app) struct State {
 }
 
 impl State {
-    /// Fetches the catalog when there is none or it is older than [`super::FRESH`]. A failed
+    /// Fetches the catalog when there is none or it is older than [`FRESH`]. A failed
     /// fetch is asked again once it is older than [`RETRY_FAILED`].
     pub(super) fn request(&mut self, root: &Path, ctx: &egui::Context) {
         // UI tests resolve the developer's real Horizon home; they must never reach Hetzner.
@@ -54,7 +56,13 @@ impl State {
             self.error = None;
             self.failed_at = None;
         }
-        if self.job.is_none() && self.error.is_none() && self.fetched.as_ref().is_none_or(|fetched| stale(fetched.at)) {
+        if self.job.is_none()
+            && self.error.is_none()
+            && self
+                .fetched
+                .as_ref()
+                .is_none_or(|fetched| fetched.at.elapsed() >= FRESH)
+        {
             self.job = Some(spawn(root, ctx, |settings, cancel| {
                 let (server_types, locations) = settings
                     .hetzner
@@ -153,7 +161,12 @@ impl State {
 
     /// The current catalog, when this machine has a Hetzner binding.
     pub fn fresh(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
-        self.fetched.as_ref().filter(|fetched| !stale(fetched.at))
+        self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH)
+    }
+
+    /// Time until this provider's current catalog needs another fetch.
+    pub fn refresh_in(&self) -> Option<Duration> {
+        self.fresh().map(|fetched| FRESH.saturating_sub(fetched.at.elapsed()))
     }
 
     /// Hetzner's part of a `cloud_offers` answer: empty without a binding, the reason
@@ -246,6 +259,24 @@ mod tests {
             "regions": {"hel1": "EUROPE"},
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn catalog_keeps_its_cadence_when_runpod_stock_expires() {
+        let mut state = State {
+            fetched: Some(Fetched {
+                value: Some(catalog()),
+                at: Instant::now().checked_sub(super::super::FRESH).unwrap(),
+            }),
+            ..State::default()
+        };
+        assert!(state.fresh().is_some());
+        assert!(state.refresh_in().is_some_and(|wait| wait > Duration::from_mins(14)));
+        if let Some(expired) = Instant::now().checked_sub(FRESH) {
+            state.fetched.as_mut().unwrap().at = expired;
+            assert!(state.fresh().is_none());
+            assert!(state.refresh_in().is_none());
+        }
     }
 
     #[test]

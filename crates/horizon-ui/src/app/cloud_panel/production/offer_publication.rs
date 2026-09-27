@@ -1,7 +1,7 @@
 //! Keeps this Horizon's prices on its ready workers, so agents there can rank cloud
-//! offers without the provider account. While any cloud is ready, prices refresh every
-//! 15 minutes and each ready worker gets every fresh list once, with Hetzner's catalog
-//! when this machine has a Hetzner binding.
+//! offers without the provider account. While any cloud is ready, `RunPod` refreshes every
+//! 15 seconds and Hetzner every 15 minutes. Each ready worker gets every fresh list once,
+//! with Hetzner's catalog when this machine has a Hetzner binding.
 use super::{HorizonApp, Runtime, prices::Fetched};
 use horizon_core::cloud_runtime::{
     Cancellation, Stage,
@@ -380,10 +380,7 @@ impl HorizonApp {
         // Wake for the next refresh or the earliest recorded retry, whichever comes first.
         // Hetzner's catalog is refreshed on its own schedule, so wake for whichever
         // goes stale first; workers must never be left with an old catalog.
-        let catalog_refresh = prices
-            .hetzner
-            .fresh()
-            .map(|catalog| super::prices::FRESH.saturating_sub(catalog.at.elapsed()));
+        let catalog_refresh = prices.hetzner.refresh_in();
         let refresh = fetched
             .map_or(Duration::MAX, |fetched| {
                 super::prices::FRESH.saturating_sub(fetched.at.elapsed())

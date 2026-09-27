@@ -489,9 +489,9 @@ fn footer(ui: &mut Ui, provider: &str, age: std::time::Duration, loading: bool) 
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!(
-                "{provider} list prices · updated {} · refreshed every {} min",
+                "{provider} list prices · updated {} · refreshed every {} sec",
                 ago(age),
-                FRESH.as_secs() / 60
+                FRESH.as_secs()
             ))
             .size(11.0)
             .color(theme::FG_DIM()),
