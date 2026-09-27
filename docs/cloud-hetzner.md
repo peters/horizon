@@ -1,10 +1,35 @@
 # Hetzner Cloud workers
 
-Hetzner is being added as a second provider for CPU clouds (#972). This page
-covers what is configurable today. Deployment on Hetzner is not wired yet: a
-profile that names `hetzner` is accepted configuration, the New cloud dialog
-does not offer it, and preparing or deploying it fails with "Hetzner clouds
-cannot be deployed yet" before any cloud state is created.
+Hetzner is a second provider for CPU clouds (#972). A cloud whose profile names
+`hetzner` deploys on a Hetzner Cloud server: the server runs the unchanged
+worker image under Docker, and the workspace lives on a Hetzner volume in the
+same location. The New cloud dialog does not offer Hetzner profiles yet; deploy
+them with the deployment coordinator (`cloud_deploy`). Stop, resume, check,
+delete and rebuild are not wired yet and are refused before any provider
+request; delete a test cloud's server, volume and SSH key in the Hetzner console.
+Horizon also checks the cloud ID, `idle_stop_minutes`, the token, the locations
+and the registry pull credential before it records or builds anything.
+
+## How a deployment runs
+
+1. Horizon registers a throwaway SSH key for the cloud. Its private half is
+   discarded; it only stops Hetzner from generating and emailing a root password.
+2. It picks the first allowed location, in order, where an allowed server type
+   has the profile's CPU, memory and container disk, skipping locations where
+   none does, and creates an ext4 workspace volume there. The volume fixes the
+   location for the cloud's whole life.
+3. It tries the allowed server types that have the profile's CPU, memory and
+   container disk in that location, in order. A capacity refusal (HTTP 412 `resource_unavailable` or HTTP 422
+   `placement_error`) moves on to the next type; any other refusal stops.
+   Hetzner's availability flag is advisory, so every allowed type is tried.
+4. The server boots Hetzner's `docker-ce` image with user data that mounts the
+   volume, pulls the worker image by digest and runs it with sshd on port 22.
+5. Readiness waits for the worker contract over SSH. The server first answers
+   with its own sshd, so the host key is pinned only after the worker passes.
+
+A lost response never creates a second server or volume: each request is
+recorded first, and a retry looks the resource up by the cloud's label. The
+volume, location and key are recorded in the cloud's `hetzner.json`.
 
 ## Profile
 
@@ -50,6 +75,30 @@ Hetzner off removes the binding.
 - A cloud's chosen data centers narrow `locations` to the ones it names. They
   cannot add a location the settings do not allow; a cloud placed only in
   locations the settings do not allow is refused rather than moved.
+- `registry_pull` is optional and only needed for a private worker image:
+
+  ```json
+  "registry_pull": {
+    "server": "example.azurecr.io",
+    "username": "horizon-pull",
+    "password_file": "/home/me/.config/horizon/cloud/credentials/hetzner-pull"
+  }
+  ```
+
+  The credential reaches the server's user data, which the host can read for
+  the server's whole life (the container cannot). Use a read-only token scoped
+  to the image repository, with a short expiry. Horizon reads it only while a
+  server can still be created; a retry that reconnects to a server already
+  requested does not need it, so an expired token never blocks recovering one.
+
+## Not available on Hetzner yet
+
+- `idle_stop_minutes`: a Hetzner worker cannot stop its own billing, because a
+  powered-off server is still billed and deleting it needs a project-wide token.
+- Shared workers, hosted devices and image rebuilds.
+- Cloud IDs must be lowercase letters, digits and hyphens, at most 48
+  characters, and cannot start or end with a hyphen. Clouds created in the app
+  already are.
 
 Horizon targets the Hetzner Cloud API `v1` as described by its OpenAPI spec,
 <https://docs.hetzner.cloud/cloud.spec.json>, and the changelog feed,
@@ -73,7 +122,8 @@ Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPo
   server and address;
 - only the locations in `locations` are listed, with every server type, and
   `availability` is Hetzner's advisory flag (`listed` or `unlisted`), never a filter;
-- offers stay informational (`rentable: false`) until Horizon can create clouds on Hetzner.
+- offers stay informational (`rentable: false`) until the New cloud dialog can price and
+  create Hetzner clouds; the deployment coordinator already deploys them.
 
 Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
 beside the price list, so older worker images keep taking RunPod prices unchanged.
