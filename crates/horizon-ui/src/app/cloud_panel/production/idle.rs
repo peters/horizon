@@ -149,12 +149,12 @@ fn run(
 /// The saved record when it shows a stop in progress, read with the same retries
 /// as a finished stop's record, since another operation may hold it briefly.
 fn stopping(load: &impl Fn() -> cloud_runtime::Result<Option<Deployment>>, interval: Duration) -> Option<Deployment> {
-    (0..30).find_map(|_| match load() {
-        Ok(state) => Some(state.filter(|state| state.stage == Stage::Stopping)),
-        Err(_) => {
-            std::thread::sleep(interval.min(Duration::from_secs(1)));
-            None
+    (0..30).find_map(|_| {
+        if let Ok(state) = load() {
+            return Some(state.filter(|state| state.stage == Stage::Stopping));
         }
+        std::thread::sleep(interval.min(Duration::from_secs(1)));
+        None
     })?
 }
 
