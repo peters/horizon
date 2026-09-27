@@ -48,6 +48,10 @@ impl Default for CanvasGesture {
 }
 
 impl CanvasGesture {
+    pub(super) fn discard(&mut self) {
+        *self = Self::default();
+    }
+
     pub(super) fn take_completed(&mut self) -> Option<Pos2> {
         self.completed.take()
     }
@@ -268,10 +272,26 @@ impl CanvasGesture {
 }
 
 impl HorizonApp {
+    pub(super) fn canvas_gesture_enabled(&self) -> bool {
+        self.fullscreen_panel.is_none()
+            && !self.host_dialog_open()
+            && self.settings.is_none()
+            && self.session_manager.is_none()
+            && self.startup_chooser.is_none()
+            && self.command_palette.is_none()
+            && !self
+                .search_overlay
+                .as_ref()
+                .is_some_and(crate::search_overlay::SearchOverlay::input_focused)
+            && self.dir_picker.is_none()
+            && !self.root_viewport_stabilization_blocks_interaction()
+    }
+
     pub(super) fn filter_canvas_gesture(&mut self, ctx: &egui::Context, raw: &mut RawInput) {
         if raw.viewport_id != ViewportId::ROOT {
             return;
         }
+        self.canvas_gesture.completed = None;
         let session_id = self.active_session.as_ref().map(|session| session.session_id.as_str());
         if self.canvas_gesture.session_id.as_deref() != session_id {
             self.canvas_gesture.cancel();
@@ -291,19 +311,7 @@ impl HorizonApp {
             .events
             .iter()
             .any(|event| matches!(event, Event::PointerButton { button, .. } if *button != PointerButton::Primary));
-        let enabled = raw.focused
-            && !other_button_active
-            && self.fullscreen_panel.is_none()
-            && !self.host_dialog_open()
-            && self.settings.is_none()
-            && self.session_manager.is_none()
-            && self.startup_chooser.is_none()
-            && self.command_palette.is_none()
-            && !self
-                .search_overlay
-                .as_ref()
-                .is_some_and(crate::search_overlay::SearchOverlay::input_focused)
-            && self.dir_picker.is_none();
+        let enabled = raw.focused && !other_button_active && self.canvas_gesture_enabled();
         let canvas = self.canvas_rect(ctx);
         let exclusions = self.overlay_exclusion_zones(ctx);
         let options = ctx.options(|options| options.input_options);

@@ -1,5 +1,78 @@
 use super::*;
 
+#[test]
+fn completed_gesture_rechecks_current_modal_and_fullscreen_state() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let pos = Pos2::new(500.0, 400.0);
+    app.canvas_gesture.completed = Some(pos);
+    app.toggle_settings();
+    assert!(app.settings.is_some());
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+    app.settings = None;
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+
+    app.canvas_gesture.completed = Some(pos);
+    app.fullscreen_panel = Some(horizon_core::PanelId(99));
+    app.handle_canvas_double_click(&ctx);
+    app.fullscreen_panel = None;
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+}
+
+#[test]
+fn skipped_canvas_handler_cannot_reuse_a_previous_frames_completion() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    app.canvas_gesture.completed = Some(Pos2::new(500.0, 400.0));
+    let mut raw = raw_input([1400.0, 900.0], None);
+    app.filter_canvas_gesture(&ctx, &mut raw);
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+}
+
+#[test]
+fn viewport_stabilization_blocks_recognition_and_discards_reserved_input() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    app.arm_root_viewport_stabilizer(true, [1400.0, 900.0]);
+    app.startup_workspace_organization_pending = true;
+    assert!(!app.canvas_gesture_enabled());
+    let pos = Pos2::new(500.0, 400.0);
+    for (time, pressed) in [(1.0, true), (1.05, false), (1.15, true), (1.20, false)] {
+        let mut raw = raw_input([1400.0, 900.0], None);
+        raw.time = Some(time);
+        raw.events = vec![button(pos, pressed)];
+        app.filter_canvas_gesture(&ctx, &mut raw);
+        assert!(app.canvas_gesture.completed.is_none());
+        assert!(app.canvas_gesture.pending.is_none());
+    }
+    // Suppression may become active after raw input has already been filtered.
+    app.canvas_gesture.completed = Some(pos);
+    app.canvas_gesture.queued.push_back(Frame {
+        time: 1.3,
+        events: vec![button(pos, true)],
+    });
+    app.suppress_root_viewport_interaction(&ctx);
+    app.startup_workspace_organization_pending = false;
+    app.root_viewport_stabilizer = None;
+    assert!(app.canvas_gesture_enabled());
+    assert!(app.canvas_gesture.queued.is_empty());
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+    app.canvas_gesture.completed = Some(pos);
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_some());
+}
+
 fn button(pos: Pos2, pressed: bool) -> Event {
     Event::PointerButton {
         pos,
