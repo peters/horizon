@@ -24,6 +24,14 @@ impl State {
     pub fn loading(&self) -> bool {
         self.receiver.is_some()
     }
+
+    #[cfg(test)]
+    pub(super) fn hold_loading_for_test(&mut self) {
+        let (sender, receiver) = channel();
+        self.receiver = Some(receiver);
+        // The sender must outlive this call or the next frame treats preparation as interrupted.
+        std::mem::forget(sender);
+    }
 }
 impl Drop for State {
     fn drop(&mut self) {

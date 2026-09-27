@@ -123,19 +123,51 @@ fn start_cloud_says_why_it_is_disabled() {
     });
     app.root_viewport_stabilizer = None;
     app.cloud_prototype.production.creating = true;
-    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let blob = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(text) => Some(text.galley.text().to_string()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(blob.contains("cloud title"), "{blob}");
-    assert!(blob.contains("Enter a cloud title"), "{blob}");
+    let painted = |ctx: &egui::Context, app: &mut HorizonApp| {
+        frame(ctx, app, Vec::new(), Modifiers::NONE);
+        run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None))
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let both = painted(&ctx, &mut app);
+    assert!(
+        both.contains("A cloud title is required before Start cloud can be used."),
+        "{both}"
+    );
+    assert!(
+        both.contains("Enter a cloud title and read the repository profile."),
+        "{both}"
+    );
+
+    app.cloud_prototype.production.launch.hold_loading_for_test();
+    let while_loading = painted(&ctx, &mut app);
+    assert!(
+        while_loading.contains("A cloud title is required before Start cloud can be used."),
+        "{while_loading}"
+    );
+    assert!(
+        while_loading.contains("Enter a cloud title to start this cloud."),
+        "{while_loading}"
+    );
+
+    let (_temp, ctx, mut titled) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    titled.root_viewport_stabilizer = None;
+    titled.cloud_prototype.production.creating = true;
+    titled.cloud_prototype.production.title = "Feature".into();
+    let profile = painted(&ctx, &mut titled);
+    assert!(!profile.contains("A cloud title is required"), "{profile}");
+    assert!(
+        profile.contains("Read the repository profile before starting."),
+        "{profile}"
+    );
 }
 
 #[test]
