@@ -481,7 +481,7 @@ It does not substitute a browser viewer or depend on the laptop for device input
 The development example `cargo run -p horizon-core --example cloud_deploy -- ...`
 uses the same coordinator. Run it without arguments for its command synopsis.
 It supports image preparation without allocation, deployment, stop, resume,
-deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
+reconnect, endpoint, deletion, `rebuild SETTINGS STATE_ROOT PROFILE` with `continue-rebuild` and
 `cancel-rebuild`, and `reconcile SETTINGS STATE_ROOT [WORKER_ID]`. Reconciliation prints a
 structured outcome without worker environment or credentials and an explanation;
 the UI and this harness use the same locked coordinator and provider policy.
@@ -489,6 +489,38 @@ An unresolved outcome is a successful check, not permission to deploy again.
 `deploy` on a cloud whose worker and managed storage are confirmed deleted
 starts the same explicit redeploy as the card; it does not replace a missing or
 unresolved worker.
+
+`resume` does what **Resume worker** does on the card: it starts a stopped
+RunPod worker, or clears the fence of the server a Hetzner stop deleted, so a
+new one can be created. It then prints the next step: `reconnect SETTINGS
+STATE_ROOT` reconnects the recorded cloud as **Reconnect cloud** does. It reads
+the repository, revision, profile and same-worker siblings from the deployment
+record, so no `--sibling` options are needed, then waits for readiness and
+relaunches the recorded sessions. It never creates a cloud's first worker, never
+starts a stopped one and never reopens a deleted cloud; those stay with `deploy`
+and `resume`. A Hetzner stop deletes the server, so the reconnect after its
+resume creates the new server on the same workspace volume, as the card's does;
+it does so only on a volume a server has held. The harness loads the machine
+settings without the placement the card records for a cloud, so a resumed
+Hetzner cloud's recorded server types and locations are refreshed from the
+settings file. The workspace volume still fixes the location.
+
+The provider may assign a new public SSH port whenever the worker starts, for
+example after a resume or an image switch. `endpoint SETTINGS STATE_ROOT` checks
+the worker with the provider as `reconcile` does, creating, starting and deleting
+nothing, and like `reconcile` records what it finds, such as a worker that stopped
+itself. It then prints the running worker's current endpoint as JSON:
+`host`, `port`, `user`, `host_key_alias`, `known_hosts` and `identity_file`. It
+refuses a worker that is not running or whose host key Horizon has not pinned
+yet. Scripts can then connect with Horizon's pinned host key instead of a cached
+endpoint:
+
+```bash
+ssh -o StrictHostKeyChecking=yes -o HostKeyAlias="$alias" \
+  -o UserKnownHostsFile="$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+  -o IdentitiesOnly=yes -i "$identity_file" -p "$port" "$user@$host"
+```
+
 Cloud provisioning/reconciliation has no public MCP operation yet; the worker's
 browser/device MCP tools do not allocate or reconcile compute. This example is
 an integration harness, not an installed user command.

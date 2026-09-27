@@ -2,6 +2,7 @@
 use super::{
     Cancellation, CreateState, Error, Result, Stage,
     settings::Settings,
+    ssh::Connection,
     state::{Deployment, Store},
 };
 use horizon_cloud::WorkerStatus;
@@ -88,6 +89,41 @@ pub fn reconcile(
         store.save(&state)?;
     }
     Ok(ReconciledDeployment { state, report })
+}
+
+/// # Errors
+/// The SSH endpoint of the cloud's running worker as the provider reports it now,
+/// through the same check as [`reconcile`], with the host key Horizon pinned for the
+/// worker. The provider may assign a new public port whenever the worker starts.
+/// Refuses a worker that is not running, or whose host key Horizon has not pinned.
+pub fn endpoint(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Connection> {
+    let reconciled = reconcile(root, settings, None, cancel)?;
+    pinned_endpoint(&reconciled, settings, root)
+}
+
+fn pinned_endpoint(reconciled: &ReconciledDeployment, settings: &Settings, root: &Path) -> Result<Connection> {
+    let worker = reconciled
+        .report
+        .worker
+        .as_ref()
+        .filter(
+            |worker| matches!(&reconciled.state.operation, CreateState::Bound { worker_id } if *worker_id == worker.id),
+        )
+        .ok_or(Error::Invalid(
+            "The cloud has no running worker; deploy, resume or reconnect it first",
+        ))?;
+    if worker.status() != WorkerStatus::Running {
+        return Err(Error::Invalid(
+            "The worker is not running; resume or reconnect it first",
+        ));
+    }
+    let connection = Connection::new(worker, settings, root)?;
+    if !connection.known_hosts.try_exists()? {
+        return Err(Error::Invalid(
+            "Horizon has not pinned this worker's host key yet; reconnect it first",
+        ));
+    }
+    Ok(connection)
 }
 
 /// A verified worker that stopped itself or was stopped elsewhere becomes an
@@ -340,6 +376,60 @@ mod tests {
         state.worker = Some(worker("EXITED"));
         record_stopped(&mut state);
         assert_eq!(state.stage, Stage::Ready);
+    }
+
+    #[test]
+    fn the_endpoint_follows_the_reported_port_and_needs_the_pinned_host_key() {
+        use horizon_cloud::runpod::recovery::{Outcome, Reconciliation};
+        let temp = tempfile::tempdir().unwrap();
+        pending(temp.path(), false);
+        let state = Store::lock(temp.path()).unwrap().load().unwrap().unwrap();
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/unused","ssh_identity_file":"/synthetic/identity","docker_config":"/unused",
+            "registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        let reported = |id: &str, status: &str, port: u16| ReconciledDeployment {
+            state: state.clone(),
+            report: Reconciliation {
+                operation_id: "pending".into(),
+                outcome: Outcome::Found { worker_id: id.into() },
+                worker: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "id":id,"name":"pending","imageName":"registry.example/worker","desiredStatus":status,
+                        "publicIp":"192.0.2.10","portMappings":{"22":port}
+                    }))
+                    .unwrap(),
+                ),
+            },
+        };
+        let error = |reconciled: &ReconciledDeployment| {
+            pinned_endpoint(reconciled, &settings, temp.path())
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(error(&reported("worker1", "RUNNING", 40022)).contains("not pinned"));
+        std::fs::write(
+            temp.path().join("known-hosts-worker1"),
+            b"horizon-cloud-worker1 ssh-ed25519 AAAA\n",
+        )
+        .unwrap();
+        for port in [40022, 41517] {
+            let connection = pinned_endpoint(&reported("worker1", "RUNNING", port), &settings, temp.path()).unwrap();
+            assert_eq!((connection.host.as_str(), connection.port), ("192.0.2.10", port));
+            assert_eq!(connection.host_key_alias, "horizon-cloud-worker1");
+            assert_eq!(connection.known_hosts, temp.path().join("known-hosts-worker1"));
+            assert_eq!(connection.identity, Path::new("/synthetic/identity"));
+        }
+        assert!(error(&reported("worker1", "EXITED", 40022)).contains("not running"));
+        assert!(error(&reported("worker1", "STARTING", 40022)).contains("not running"));
+        assert!(
+            error(&reported("worker2", "RUNNING", 40022)).contains("no running worker"),
+            "only the recorded worker is this cloud's"
+        );
+        let mut missing = reported("worker1", "RUNNING", 40022);
+        missing.report.worker = None;
+        assert!(error(&missing).contains("no running worker"));
     }
 
     fn refused<T>(result: &Result<T>) -> bool {

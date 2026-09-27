@@ -34,37 +34,13 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]",
+            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | rebuild SETTINGS STATE_ROOT PROFILE | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume.",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
-        let recovered = cloud_runtime::lifecycle::reconcile(
-            &PathBuf::from(&args[2]),
-            &settings,
-            args.get(3).map(String::as_str),
-            &cancel,
-        )?;
-        println!(
-            "{}",
-            serde_json::to_string(&recovered.report).map_err(|_| cloud_runtime::Error::Json)?
-        );
-        if recovered.confirmed_stopped() {
-            // As the cloud panel says it: what Resume does follows the provider.
-            println!(
-                "Stopped. {}",
-                match recovered.stopped() {
-                    cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
-                    cloud_runtime::provider::StoppedCost::ServerDeleted => {
-                        "Resume creates a new server that attaches the same workspace volume."
-                    }
-                }
-            );
-        } else {
-            println!("{}", recovered.report.outcome.explanation());
-        }
-        return Ok(());
+        return reconcile(&args, &settings, &cancel);
     }
     if args[0] == "delete" && args.len() == 3 {
         return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel, &print_event);
@@ -81,7 +57,20 @@ fn run() -> cloud_runtime::Result<()> {
         return Ok(());
     }
     if args[0] == "resume" && args.len() == 3 {
-        return cloud_runtime::lifecycle::resume(&PathBuf::from(&args[2]), &settings, &cancel);
+        cloud_runtime::lifecycle::resume(&PathBuf::from(&args[2]), &settings, &cancel)?;
+        // As on the cloud card, a resumed cloud is ready only after its reconnect.
+        println!(
+            "Resume requested. Next: cloud_deploy reconnect {} {} brings it to Ready and relaunches its sessions; for a Hetzner cloud it creates the new server on the same workspace volume.",
+            args[1], args[2]
+        );
+        return Ok(());
+    }
+    if args[0] == "reconnect" && args.len() == 3 {
+        deployment::reconnect(&PathBuf::from(&args[2]), settings, &cancel, &print_event)?;
+        return Ok(());
+    }
+    if args[0] == "endpoint" && args.len() == 3 {
+        return endpoint(&PathBuf::from(&args[2]), &settings, &cancel);
     }
     if matches!(args[0].as_str(), "rebuild" | "continue-rebuild" | "cancel-rebuild") {
         return rebuild(&args, settings, &cancel);
@@ -115,6 +104,35 @@ fn run() -> cloud_runtime::Result<()> {
         prepare_image(&request, &cancel, &print_event)?;
     } else {
         deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
+    }
+    Ok(())
+}
+
+/// Checks the recorded worker with the provider without creating, starting or deleting anything.
+fn reconcile(args: &[String], settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    let recovered = cloud_runtime::lifecycle::reconcile(
+        &PathBuf::from(&args[2]),
+        settings,
+        args.get(3).map(String::as_str),
+        cancel,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&recovered.report).map_err(|_| cloud_runtime::Error::Json)?
+    );
+    if recovered.confirmed_stopped() {
+        // As the cloud panel says it: what Resume does follows the provider.
+        println!(
+            "Stopped. {}",
+            match recovered.stopped() {
+                cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
+                cloud_runtime::provider::StoppedCost::ServerDeleted => {
+                    "Resume creates a new server that attaches the same workspace volume."
+                }
+            }
+        );
+    } else {
+        println!("{}", recovered.report.outcome.explanation());
     }
     Ok(())
 }
@@ -300,6 +318,25 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     println!(
         "{}",
         serde_json::to_string_pretty(&answer).map_err(|_| cloud_runtime::Error::Json)?
+    );
+    Ok(())
+}
+
+/// Prints the running worker's SSH endpoint as the provider reports it now, with the
+/// host key Horizon pinned, so external tools connect exactly as Horizon does.
+fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    let connection = cloud_runtime::lifecycle::endpoint(root, settings, cancel)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "host": connection.host,
+            "port": connection.port,
+            "user": cloud_runtime::ssh::USER,
+            "host_key_alias": connection.host_key_alias,
+            "known_hosts": std::path::absolute(&connection.known_hosts)?,
+            "identity_file": connection.identity,
+        }))
+        .map_err(|_| cloud_runtime::Error::Json)?
     );
     Ok(())
 }

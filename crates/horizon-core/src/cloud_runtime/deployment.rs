@@ -5,6 +5,7 @@ mod git_credentials;
 pub(super) mod hetzner;
 mod image;
 mod readiness;
+mod reconnect;
 mod redeploy;
 pub mod replacement;
 mod sizing;
@@ -17,6 +18,7 @@ use agent_credentials::{configure_agent_auth, validate_agent_auth};
 pub use deletion::terminate;
 use git_credentials::configure_git_auth;
 use image::{prepare_image, validate_allocation_image};
+pub use reconnect::reconnect;
 use sizing::{assign_requested_size, refresh_allocation};
 
 use super::{
@@ -90,6 +92,17 @@ pub fn deploy_with_siblings(
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
+    run(request, bindings, |_, _| Ok(()), cancel, emit)
+}
+
+/// As [`deploy_with_siblings`], once `admit` accepts the record under the lock.
+fn run(
+    request: &Request,
+    bindings: &[siblings::Binding],
+    admit: fn(&Store, &Deployment) -> Result<()>,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<Deployment> {
     let started = Instant::now();
     let timeline = super::timeline::Recorder::default();
     let recorded = |event: Event| {
@@ -106,6 +119,7 @@ pub fn deploy_with_siblings(
     let provider = super::providers::compute(request)?;
     super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let mut state = initial_state(request, &store)?;
+    admit(&store, &state)?;
     let reconnected = super::timeline::reconnects(&state);
     if state.stage == Stage::Deleted {
         let public_key = current_public_key(&request.settings.ssh_identity_file)?;
