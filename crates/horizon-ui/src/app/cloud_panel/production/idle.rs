@@ -20,6 +20,10 @@ pub(super) enum Report {
     Stopped(Box<Deployment>, String),
     /// A check failed; logged once until the failure changes.
     Failed(String),
+    /// A check is about to run. Sent only to learn whether the card still listens,
+    /// so a watch whose card is gone, as after a session switch, ends before it
+    /// reads the record or stops anything.
+    Checked,
 }
 
 pub(super) type Reports = Receiver<Report>;
@@ -52,8 +56,11 @@ pub(super) fn watch(
             |cancel| cloud_runtime::lifecycle::idle_check(&root, &settings, cancel),
             || Store::lock(&root).and_then(|store| store.load()),
             &|report| {
+                let repaint = !matches!(report, Report::Checked);
                 let delivered = reports.send(report).is_ok();
-                ctx.request_repaint();
+                if repaint {
+                    ctx.request_repaint();
+                }
                 delivered
             },
         );
@@ -71,6 +78,9 @@ fn run(
 ) {
     let mut failed = None;
     while wait(cancel, interval) {
+        if !report(Report::Checked) {
+            return;
+        }
         let result = check(cancel);
         if cancel.is_cancelled() {
             return;
@@ -134,18 +144,25 @@ impl Runtime {
 
     /// Shows a stop the idle watch made as the card shows any finished Stop.
     pub(super) fn poll_idle(&mut self) {
-        let Some(reports) = &self.idle_reports else {
-            return;
-        };
-        let report = match reports.try_recv() {
-            Ok(report) => report,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                self.idle_reports = None;
+        loop {
+            let Some(reports) = &self.idle_reports else {
                 return;
-            }
-        };
+            };
+            let report = match reports.try_recv() {
+                Ok(report) => report,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.idle_reports = None;
+                    return;
+                }
+            };
+            self.show_idle(report);
+        }
+    }
+
+    fn show_idle(&mut self, report: Report) {
         match report {
+            Report::Checked => {}
             Report::Failed(message) => self.push_log(message),
             Report::Stopped(state, line) => {
                 // Ends the presentation of the released server, as Stop does.
@@ -196,6 +213,7 @@ mod tests {
                 reports.borrow_mut().push(match report {
                     Report::Failed(message) => message,
                     Report::Stopped(state, line) => format!("{:?}: {line}", state.stage),
+                    Report::Checked => return true,
                 });
                 true
             },
@@ -242,6 +260,26 @@ mod tests {
                 "Idle check failed: Reading the worker's idle record failed; inspect deployment output",
             ]
         );
+    }
+
+    #[test]
+    fn a_watch_whose_card_stopped_listening_checks_nothing_more() {
+        let checks = RefCell::new(0);
+        run(
+            &Cancellation::default(),
+            Duration::ZERO,
+            |_| {
+                *checks.borrow_mut() += 1;
+                Ok(IdleCheck::Active {
+                    idle: Duration::ZERO,
+                    limit: Duration::from_secs(600),
+                })
+            },
+            || panic!("nothing to load"),
+            // The card listened for the first check only.
+            &|report| matches!(report, Report::Checked) && *checks.borrow() == 0,
+        );
+        assert_eq!(*checks.borrow(), 1);
     }
 
     #[test]
