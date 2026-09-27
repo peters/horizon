@@ -154,11 +154,17 @@ fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_
     let mut released = journal(CreateState::Bound { worker_id: "9".into() });
     released.released = Some("42".into());
     let still_there = (200, json!({"server": server}).to_string());
-    let (_, _, requests) = act_on(&bound, &released, vec![still_there.clone()], |compute, store, state| {
+    let (state, _, requests) = act_on(&bound, &released, vec![still_there.clone()], |compute, store, state| {
+        // A stop that crashed after recording only its release.
+        (state.stage, state.stop_requested) = (Stage::Ready, false);
         let report = reconcile_with(compute, store, state, &Cancellation::default()).unwrap();
         assert!(report.worker.is_none(), "no stopped worker while the server exists");
     });
     assert_eq!(requests.len(), 1);
+    assert!(
+        state.stop_requested && state.stage == Stage::Stopping,
+        "the stop intent is restored"
+    );
     // Stopping again deletes the server the first stop released, after checking it is off.
     let deleted = vec![
         still_there.clone(),

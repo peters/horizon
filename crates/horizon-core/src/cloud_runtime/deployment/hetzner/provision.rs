@@ -58,7 +58,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     let root = store.root().to_path_buf();
-    let mut journal = reopened(&root, &state.operation)?;
+    let mut journal = journal_for(&root, &state.operation)?;
     // Every read-only check comes before the first request that creates anything.
     // A volume fixes the location; until one exists, the first allowed location
     // with a fitting server type is chosen. A requested or bound server was placed
@@ -149,11 +149,17 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     store.save(state)
 }
 
-/// The journal, with a deleted volume forgotten: only a delete terminates the
-/// volume, so a redeployed cloud starts a new one wherever the settings allow now.
-/// A delete that has not finished (its key or server remains) is refused first.
-fn reopened(root: &std::path::Path, operation: &CreateState) -> Result<Journal> {
+/// The journal provisioning goes on from. A server a stop released is never
+/// reconnected to. A deleted volume is forgotten: only a delete terminates the
+/// volume, so a redeployed cloud starts a new one wherever the settings allow now;
+/// a delete that has not finished (its key or server remains) is refused.
+fn journal_for(root: &std::path::Path, operation: &CreateState) -> Result<Journal> {
     let mut journal = Journal::load(root)?;
+    if matches!(operation, CreateState::Bound { worker_id } if journal.released.as_ref() == Some(worker_id)) {
+        return Err(Error::Invalid(
+            "This Hetzner cloud is stopping; stop it again to finish, then resume it",
+        ));
+    }
     if matches!(journal.volume, CreateState::Terminated { .. }) {
         if journal.key.is_some() || *operation != CreateState::Prepared {
             return Err(Error::Invalid(

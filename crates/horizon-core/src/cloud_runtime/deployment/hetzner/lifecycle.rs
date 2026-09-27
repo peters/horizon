@@ -81,6 +81,12 @@ pub(super) fn reconcile_with(
         // stopping again finishes it.
         if compute.client.inspect_server(id, cancel)?.is_none() {
             report.worker = state.worker.as_ref().map(released).transpose()?;
+        } else if !(state.stop_requested && state.stage == Stage::Stopping) {
+            // A stop that recorded only its release restores its stop intent, so
+            // nothing reconnects to the server before stopping again finishes it.
+            state.stop_requested = true;
+            state.stage = Stage::Stopping;
+            store.save(state)?;
         }
         report.outcome = Outcome::Inactive { worker_id: bound };
         return Ok(report);

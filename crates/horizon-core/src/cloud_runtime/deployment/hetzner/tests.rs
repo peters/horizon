@@ -567,6 +567,18 @@ mod failure_points {
     }
 
     #[test]
+    fn a_cloud_whose_stop_is_unfinished_is_never_reconnected() {
+        let bound = CreateState::Bound { worker_id: "42".into() };
+        let (state, _, _, served) = provision_adjusted(&spec(), Vec::new(), |_, state, root| {
+            state.operation = bound.clone();
+            let mut journal = Journal::load(root).unwrap();
+            journal.released = Some("42".into());
+            journal.save(root).unwrap();
+        });
+        assert_eq!((state.operation, served), (bound, 0));
+    }
+
+    #[test]
     fn a_redeployed_cloud_requests_a_new_volume_after_its_deleted_one() {
         // An unfinished delete, with its key or server left, is refused before any request.
         for (key, operation) in [
