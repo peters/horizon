@@ -8,7 +8,11 @@ pub use scope::ScopeError;
 use std::{
     io,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -16,6 +20,8 @@ use std::{
 /// Resolved addresses tried for one hostname.
 const MAX_ATTEMPTS: usize = 4;
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Name lookups running at once, including ones abandoned at their deadline.
+const MAX_LOOKUPS: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -54,9 +60,10 @@ impl Scope {
     /// # Errors
     /// Fails when there is no shareable network or the interfaces cannot be read.
     pub fn current() -> Result<Self, StartError> {
+        let lookups = Arc::new(AtomicUsize::new(0));
         Ok(Self {
             network: scope::Host::read()?.current_network()?,
-            resolve: Box::new(resolve),
+            resolve: Box::new(move |name, port| resolve(&lookups, name, port)),
             host: Box::new(scope::Host::read),
             source: Box::new(scope::source_for),
         })
@@ -73,43 +80,52 @@ impl Scope {
     /// Refuses destinations outside the scope, names that do not resolve, and every
     /// destination once this computer has left the bridged network.
     pub fn admit(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply> {
+        let host = (self.host)().map_err(|_| Reply::GeneralFailure)?;
+        if host.current_network().ok().as_ref() != Some(&self.network) {
+            return Err(Reply::NetworkUnreachable);
+        }
         let candidates = match destination {
             Destination::Address(address) => vec![*address],
             Destination::Name(name, port) => (self.resolve)(name, *port).map_err(|_| Reply::HostUnreachable)?,
         };
-        let host = (self.host)().map_err(|_| Reply::GeneralFailure)?;
-        let mut changed = false;
-        let mut allowed = Vec::new();
-        for candidate in candidates {
-            if allowed.len() == MAX_ATTEMPTS {
-                break;
-            }
-            let target = SocketAddr::new(candidate.ip().to_canonical(), candidate.port());
-            match scope::decide(&self.network, &host, candidate.ip(), || (self.source)(target)) {
-                scope::Decision::Allowed => allowed.push(target),
-                scope::Decision::OutsideScope => {}
-                scope::Decision::NetworkChanged => changed = true,
-            }
-        }
+        let allowed: Vec<_> = candidates
+            .into_iter()
+            .map(|candidate| SocketAddr::new(candidate.ip().to_canonical(), candidate.port()))
+            .filter(|target| scope::admits(&self.network, &host, target.ip(), || (self.source)(*target)))
+            .take(MAX_ATTEMPTS)
+            .collect();
         if allowed.is_empty() {
-            return Err(if changed {
-                Reply::NetworkUnreachable
-            } else {
-                Reply::NotAllowed
-            });
+            return Err(Reply::NotAllowed);
         }
         Ok(allowed)
     }
 }
 
+/// One running lookup's share of [`MAX_LOOKUPS`], held by its thread until the lookup returns.
+struct Lookup(Arc<AtomicUsize>);
+
+impl Drop for Lookup {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// The system resolver under a deadline. A lookup that outlives it finishes on its own thread
-/// and is discarded.
-fn resolve(name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+/// and is discarded; it keeps its share of the lookup limit until then, so stalled lookups
+/// cannot pile up.
+fn resolve(lookups: &Arc<AtomicUsize>, name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    lookups
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
+            (running < MAX_LOOKUPS).then_some(running + 1)
+        })
+        .map_err(|_| io::Error::other("Too many name lookups in progress"))?;
+    let lookup = Lookup(Arc::clone(lookups));
     let (sender, receiver) = mpsc::channel();
     let name = name.to_owned();
     thread::Builder::new()
         .name("local-network-resolve".into())
         .spawn(move || {
+            let _lookup = lookup;
             let _ = sender.send((name.as_str(), port).to_socket_addrs().map(Iterator::collect));
         })?;
     receiver

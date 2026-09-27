@@ -111,9 +111,19 @@ fn a_changed_network_is_reported_instead_of_connecting() {
         host: Box::new(|| Ok(scope::tests::host(&[("10.1.0.9", Some(24))], Some("10.1.0.9")))),
         ..gate(Box::new(|_, _| Ok(Vec::new())))
     };
-    let admit = |value: &str| Scope::admit(&changed, &Destination::Address(value.parse().unwrap()));
-    assert_eq!(admit("192.168.1.50:80"), Err(Reply::NetworkUnreachable));
-    assert_eq!(admit("8.8.8.8:80"), Err(Reply::NotAllowed));
+    // Every destination reports the change, and names are not even looked up.
+    for destination in [
+        Destination::Address("192.168.1.50:80".parse().unwrap()),
+        Destination::Address("8.8.8.8:80".parse().unwrap()),
+        Destination::Address("[fe80::1]:80".parse().unwrap()),
+        name("missing.example", 80),
+    ] {
+        assert_eq!(
+            changed.admit(&destination),
+            Err(Reply::NetworkUnreachable),
+            "{destination:?}"
+        );
+    }
     let unreadable = Scope {
         host: Box::new(|| Err(io::Error::other("interfaces unavailable"))),
         ..gate(Box::new(|_, _| Ok(Vec::new())))
@@ -144,5 +154,17 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
         // No shareable network, or interfaces a sandbox does not let the test read.
         Err(StartError::Scope(_) | StartError::Io(_)) => {}
     }
-    assert!(resolve("localhost", 80).is_ok_and(|addresses| addresses.iter().all(|address| address.port() == 80)));
+    let lookups = Arc::new(AtomicUsize::new(0));
+    assert!(
+        resolve(&lookups, "localhost", 80).is_ok_and(|addresses| addresses.iter().all(|address| address.port() == 80))
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while lookups.load(Ordering::Acquire) != 0 {
+        assert!(std::time::Instant::now() < deadline, "the lookup kept its share");
+        std::thread::yield_now();
+    }
+    // Lookups still running, even abandoned ones, hold their share of the limit.
+    lookups.store(MAX_LOOKUPS, Ordering::Release);
+    assert!(resolve(&lookups, "localhost", 80).is_err());
+    assert_eq!(lookups.load(Ordering::Acquire), MAX_LOOKUPS);
 }

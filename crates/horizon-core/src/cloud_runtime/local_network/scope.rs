@@ -6,9 +6,14 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
 };
 
-/// A documentation address: routing a datagram socket towards it selects the
-/// default route without sending anything.
-const ROUTE_PROBE: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 9);
+/// One address in each IPv4 documentation range. Routing a datagram socket towards them selects
+/// the default route without sending anything; if a more specific route catches one of them,
+/// they disagree and no network is shared.
+const ROUTE_PROBES: [Ipv4Addr; 3] = [
+    Ipv4Addr::new(192, 0, 2, 1),
+    Ipv4Addr::new(198, 51, 100, 1),
+    Ipv4Addr::new(203, 0, 113, 1),
+];
 
 /// One address of a local interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,14 +40,6 @@ pub(super) struct Network {
     pub(super) interface: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Decision {
-    Allowed,
-    OutsideScope,
-    /// The default route no longer leaves from the bridged address and interface.
-    NetworkChanged,
-}
-
 impl Host {
     /// # Errors
     /// Reports when the interface list cannot be read.
@@ -58,9 +55,11 @@ impl Host {
                 interface: interface.name,
             })
             .collect();
+        let mut sources = ROUTE_PROBES.map(|probe| source_for(SocketAddr::new(probe.into(), 9)));
+        sources.sort_unstable();
         Ok(Self {
             addresses,
-            route: source_for(ROUTE_PROBE),
+            route: if sources[0] == sources[2] { sources[0] } else { None },
         })
     }
 
@@ -114,30 +113,25 @@ fn usable_host(address: Ipv4Addr) -> bool {
         || address.octets()[0] >= 240)
 }
 
-/// Decides one resolved destination. IPv4-mapped IPv6 addresses are judged as the IPv4
-/// address they carry; every other IPv6 address is outside the scope in this version.
-/// `source` names the local address the connection would leave from: a more specific route
-/// inside the subnet, such as a VPN or a virtual machine network, or a local address this
-/// computer did not list, leaves from somewhere else and is refused.
-pub(super) fn decide(
+/// Whether one resolved destination is in scope; the caller has checked that `host` is still
+/// on `network`. IPv4-mapped IPv6 addresses are judged as the IPv4 address they carry; every
+/// other IPv6 address is outside the scope in this version. `source` names the local address
+/// the connection would leave from: a more specific route inside the subnet, such as a VPN or
+/// a virtual machine network, or a local address this computer did not list, leaves from
+/// somewhere else and is refused.
+pub(super) fn admits(
     network: &Network,
     host: &Host,
     destination: IpAddr,
     source: impl FnOnce() -> Option<Ipv4Addr>,
-) -> Decision {
+) -> bool {
     let IpAddr::V4(address) = destination.to_canonical() else {
-        return Decision::OutsideScope;
+        return false;
     };
-    if !usable_host(address) || !network.subnet.contains_host(address) || host.owns(address) {
-        return Decision::OutsideScope;
-    }
-    if host.current_network().ok().as_ref() != Some(network) {
-        return Decision::NetworkChanged;
-    }
-    if source() != Some(network.address) {
-        return Decision::OutsideScope;
-    }
-    Decision::Allowed
+    usable_host(address)
+        && network.subnet.contains_host(address)
+        && !host.owns(address)
+        && source() == Some(network.address)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -192,8 +186,8 @@ pub(super) mod tests {
     }
 
     /// Decides as if every destination were routed out of the bridged interface.
-    fn check(network: &Network, host: &Host, destination: IpAddr) -> Decision {
-        decide(network, host, destination, || Some(LAN))
+    fn check(network: &Network, host: &Host, destination: IpAddr) -> bool {
+        admits(network, host, destination, || Some(LAN))
     }
 
     #[test]
@@ -204,7 +198,7 @@ pub(super) mod tests {
             ("192.168.1.0/24".into(), LAN, "if0")
         );
         for allowed in [v4(192, 168, 1, 1), v4(192, 168, 1, 50), v4(192, 168, 1, 254)] {
-            assert_eq!(check(&network, &host, allowed), Decision::Allowed, "{allowed}");
+            assert!(check(&network, &host, allowed), "{allowed}");
         }
         for refused in [
             v4(192, 168, 1, 0),
@@ -214,7 +208,7 @@ pub(super) mod tests {
             v4(8, 8, 8, 8),
             v4(10, 0, 0, 1),
         ] {
-            assert_eq!(check(&network, &host, refused), Decision::OutsideScope, "{refused}");
+            assert!(!check(&network, &host, refused), "{refused}");
         }
     }
 
@@ -227,11 +221,7 @@ pub(super) mod tests {
             Some(Ipv4Addr::new(192, 168, 1, 50)),
             None,
         ] {
-            assert_eq!(
-                decide(&network, &host, camera, || source),
-                Decision::OutsideScope,
-                "{source:?}"
-            );
+            assert!(!admits(&network, &host, camera, || source), "{source:?}");
         }
         assert!(source_for(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 9)).is_some_and(|source| source.is_loopback()));
     }
@@ -250,12 +240,12 @@ pub(super) mod tests {
             IpAddr::V6(LAN.to_ipv6_mapped()),
             IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()),
         ] {
-            assert_eq!(check(&network, &host, own), Decision::OutsideScope, "{own}");
+            assert!(!check(&network, &host, own), "{own}");
         }
         // An address gained later on another interface is refused too.
         host.addresses
             .extend(self::host(&[("192.168.1.21", Some(24))], None).addresses);
-        assert_eq!(check(&network, &host, v4(192, 168, 1, 21)), Decision::OutsideScope);
+        assert!(!check(&network, &host, v4(192, 168, 1, 21)));
     }
 
     #[test]
@@ -271,10 +261,10 @@ pub(super) mod tests {
             "::192.168.1.50",
         ] {
             let address: IpAddr = refused.parse().unwrap();
-            assert_eq!(check(&network, &host, address), Decision::OutsideScope, "{refused}");
+            assert!(!check(&network, &host, address), "{refused}");
         }
         let mapped = IpAddr::V6(Ipv4Addr::new(192, 168, 1, 50).to_ipv6_mapped());
-        assert_eq!(check(&network, &host, mapped), Decision::Allowed);
+        assert!(check(&network, &host, mapped));
     }
 
     #[test]
@@ -292,26 +282,26 @@ pub(super) mod tests {
                 address: special,
                 interface: "if0".into(),
             };
-            let decision = decide(&network, &host, IpAddr::V4(special), || Some(special));
-            assert_eq!(decision, Decision::OutsideScope, "{special}");
+            assert!(
+                !admits(&network, &host, IpAddr::V4(special), || Some(special)),
+                "{special}"
+            );
         }
     }
 
     #[test]
-    fn a_different_current_network_pauses_the_bridge() {
+    fn the_same_subnet_on_another_address_or_interface_is_another_network() {
         let (network, host) = home();
-        let camera = v4(192, 168, 1, 50);
         let mut elsewhere = host.clone();
         elsewhere.route = Some(Ipv4Addr::new(172, 17, 0, 1));
-        assert_eq!(check(&network, &elsewhere, camera), Decision::NetworkChanged);
-        elsewhere.route = None;
-        assert_eq!(check(&network, &elsewhere, camera), Decision::NetworkChanged);
-        // The same subnet reached from another interface is another network.
-        let mut other = host.clone();
-        other.addresses[0].interface = "if9".into();
-        assert_eq!(check(&network, &other, camera), Decision::NetworkChanged);
-        // Out-of-scope destinations keep their own refusal.
-        assert_eq!(check(&network, &elsewhere, v4(8, 8, 8, 8)), Decision::OutsideScope);
+        assert_ne!(elsewhere.current_network().ok(), Some(network.clone()));
+        let mut renamed = host.clone();
+        renamed.addresses[0].interface = "if9".into();
+        assert_ne!(renamed.current_network().ok(), Some(network.clone()));
+        let mut moved = host;
+        moved.addresses[0].ip = v4(192, 168, 1, 21);
+        moved.route = Some(Ipv4Addr::new(192, 168, 1, 21));
+        assert_ne!(moved.current_network().ok(), Some(network));
     }
 
     #[test]
