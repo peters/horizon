@@ -25,12 +25,17 @@ pub(in crate::cloud_runtime) fn reconcile(
     settings: &Settings,
     cancel: &Cancellation,
 ) -> Result<Reconciliation> {
-    reconcile_with(&Compute::new(settings)?, store, state, cancel)
+    // Ownership checks alone settle a released or missing server, so a changed
+    // placement policy never blocks finishing a stop; the policy in force applies
+    // only when a live server is reported as the worker.
+    let policy = || Compute::new(settings).map(|compute| compute.allowed);
+    reconcile_with(&Compute::cleanup(settings)?, &policy, store, state, cancel)
 }
 
 /// As `reconcile`, with the Hetzner client given.
 pub(super) fn reconcile_with(
     compute: &Compute,
+    policy: &dyn Fn() -> Result<super::Allowed>,
     store: &Store,
     state: &mut Deployment,
     cancel: &Cancellation,
@@ -108,7 +113,7 @@ pub(super) fn reconcile_with(
     let volume = volume(compute, &journal, &operation, cancel)?;
     // A found server is recorded as the worker only as readiness would accept it.
     if !super::readiness::holds(&server, &volume)
-        || !super::readiness::admitted(&server, &compute.allowed, journal.location.as_deref())
+        || !super::readiness::admitted(&server, &policy()?, journal.location.as_deref())
     {
         return Err(Error::Invalid(
             "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",

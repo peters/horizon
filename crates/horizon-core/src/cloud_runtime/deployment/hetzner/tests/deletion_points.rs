@@ -160,7 +160,14 @@ fn an_interrupted_stop_is_neither_reported_stopped_nor_resumed_until_its_server_
     let (state, _, requests) = act_on(&bound, &released, vec![still_there.clone()], |compute, store, state| {
         // A stop that crashed after recording only its release.
         (state.stage, state.stop_requested) = (Stage::Ready, false);
-        let report = reconcile_with(compute, store, state, &Cancellation::default()).unwrap();
+        let report = reconcile_with(
+            compute,
+            &|| Ok(compute.allowed.clone()),
+            store,
+            state,
+            &Cancellation::default(),
+        )
+        .unwrap();
         assert!(report.worker.is_none(), "no stopped worker while the server exists");
     });
     assert_eq!(requests.len(), 1);
@@ -254,7 +261,14 @@ fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
     let bound = CreateState::Bound { worker_id: "42".into() };
     let journal = journal(CreateState::Bound { worker_id: "9".into() });
     act_on(&bound, &journal, vec![off, held], |compute, store, state| {
-        let refused = reconcile_with(compute, store, state, &Cancellation::default()).unwrap_err();
+        let refused = reconcile_with(
+            compute,
+            &|| Ok(compute.allowed.clone()),
+            store,
+            state,
+            &Cancellation::default(),
+        )
+        .unwrap_err();
         assert!(refused.to_string().contains("still billed"));
     });
 }
@@ -266,7 +280,13 @@ fn a_stop_interrupted_after_its_delete_is_finished_by_check_without_a_recorded_w
     released.released = Some("42".into());
     let (state, kept, _) = act_on(&bound, &released, vec![gone()], |compute, store, state| {
         assert!(state.worker.is_none());
-        reconcile_with(compute, store, state, &Cancellation::default()).unwrap();
+        // Ownership alone settles a released server: the placement is never consulted.
+        let moved = || {
+            Err(crate::cloud_runtime::Error::Invalid(
+                "The cloud's location is no longer allowed",
+            ))
+        };
+        reconcile_with(compute, &moved, store, state, &Cancellation::default()).unwrap();
     });
     assert!(
         state.stop_requested && state.stage == Stage::Stopped,

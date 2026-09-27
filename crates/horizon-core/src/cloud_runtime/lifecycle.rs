@@ -228,7 +228,10 @@ pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<D
 }
 
 /// # Errors
-/// Resumes the existing worker only. Missing workers and sessions remain explicit losses.
+/// Resumes a stopped cloud as its provider stops it (see `provider::StoppedCost`):
+/// `RunPod` resumes the existing worker only, while a Hetzner stop released its
+/// server, so the next reconnect creates a new one on the same workspace volume.
+/// Missing workers and sessions remain explicit losses.
 pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
