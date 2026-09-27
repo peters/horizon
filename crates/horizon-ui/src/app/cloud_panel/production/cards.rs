@@ -8,6 +8,7 @@ mod self_stop;
 #[cfg(test)]
 mod tests;
 mod timeline;
+mod wording;
 impl HorizonApp {
     pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
         self.ensure_cloud_provider_logo(ctx);
@@ -375,7 +376,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             action = Some(Action::Stop);
         }
     } else if runtime.stage == Some(Stage::Stopped) {
-        ui.label("Stopped. Storage can remain billable; previous processes may be lost.");
+        ui.label(wording::stopped_note(runtime));
         if ui.button("Resume worker").clicked() {
             action = Some(Action::Resume);
         }
@@ -452,7 +453,7 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     }
     let stoppable = !rebuild::blocks_stop(runtime);
     if stoppable && runtime.confirmation == Confirmation::Stop {
-        ui.label("Stop this worker? Running processes will end. Storage remains billable.");
+        ui.label(wording::stop_confirmation(runtime));
         if ui.button("Stop worker").clicked() {
             action = Some(Action::Stop);
         }
@@ -480,10 +481,7 @@ fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<A
 fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
     if runtime.state.is_some() {
         if runtime.confirmation == Confirmation::Delete {
-            ui.colored_label(
-                egui::Color32::LIGHT_RED,
-                "Delete this worker and its managed workspace storage? Running sessions and files in that storage cannot be recovered. Any separately attached network volumes retain their files and credentials and remain billable until deleted.",
-            );
+            ui.colored_label(egui::Color32::LIGHT_RED, wording::delete_confirmation(runtime));
             if ui.button("Delete resources permanently").clicked() {
                 return Some(Action::Delete);
             }
