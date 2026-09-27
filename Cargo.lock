@@ -2338,6 +2338,8 @@ name = "horizon-cloud"
 version = "0.2.7"
 dependencies = [
  "base64 0.23.1",
+ "ed25519-dalek",
+ "ring",
  "schemars",
  "serde",
  "serde_json",

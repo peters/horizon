@@ -3,7 +3,7 @@
 //! the workspace volume kept. The deployment stays bound to the released server
 //! and stopped; resuming clears that fence so the next reconnect creates a new
 //! server in the volume's location, attaching the same volume.
-use super::{Compute, Journal, worker};
+use super::{Compute, Journal, JournalFile as _, worker};
 use crate::cloud_runtime::{
     Error, Result, Stage,
     settings::Settings,
@@ -112,8 +112,8 @@ pub(super) fn reconcile_with(
     let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker was requested"))?;
     let volume = volume(compute, &journal, &operation, cancel)?;
     // A found server is recorded as the worker only as readiness would accept it.
-    if !super::readiness::holds(&server, &volume)
-        || !super::readiness::admitted(&server, &policy()?, journal.location.as_deref())
+    if !horizon_cloud::hetzner::cloud::holds(&server, &volume)
+        || !horizon_cloud::hetzner::cloud::admitted(&server, &policy()?, journal.location.as_deref())
     {
         return Err(Error::Invalid(
             "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",
