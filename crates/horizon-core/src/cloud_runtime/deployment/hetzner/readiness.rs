@@ -40,18 +40,19 @@ pub(in crate::cloud_runtime::deployment) fn wait(
         return Err(Error::Invalid("Missing workspace volume identity"));
     };
     let volume_id: u64 = volume_id.parse().map_err(|_| Error::Invalid("Invalid volume ID"))?;
-    let volume = compute
-        .client
-        .inspect_volume_within(volume_id, runner.cancel, Some(remaining(deadline, runner)?))?
-        .ok_or(horizon_cloud::CloudError::WorkerLost)?;
-    volume.verify(&state.cloud_id)?;
     loop {
+        // Both are inspected on every pass, so the attachment checked below is current.
         let server = compute
             .client
             .inspect_server_within(id, runner.cancel, Some(remaining(deadline, runner)?))?
             .ok_or(horizon_cloud::CloudError::WorkerLost)?;
+        let volume = compute
+            .client
+            .inspect_volume_within(volume_id, runner.cancel, Some(remaining(deadline, runner)?))?
+            .ok_or(horizon_cloud::CloudError::WorkerLost)?;
         remaining(deadline, runner)?;
         server.verify(&state.cloud_id)?;
+        volume.verify(&state.cloud_id)?;
         // The server and the journaled volume must hold each other in one location,
         // or the worker's workspace is not the cloud's volume.
         // The server's type and location must still be allowed, and its location
