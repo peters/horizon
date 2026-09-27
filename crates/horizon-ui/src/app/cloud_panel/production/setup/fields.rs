@@ -12,6 +12,8 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
     ui.label("RunPod API key");
     secret(ui, "compute-key", &mut draft.runpod_key, saved_compute);
     ui.small("Stored privately on this computer. Used only when you deploy or manage a worker.");
+    ui.add_space(12.0);
+    render_hetzner(ui, draft);
     ui.add_space(18.0);
     ui.label(RichText::new("Coding agents").size(16.0).strong());
     ui.label(RichText::new("Choose one or both. Each agent gets its own worktree.").color(theme::FG_SOFT()));
@@ -61,6 +63,34 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
             draft.settings.docker_host = (!endpoint.trim().is_empty()).then(|| endpoint.trim().to_owned());
         }
     });
+}
+
+/// Hetzner as an optional second provider for CPU clouds.
+fn render_hetzner(ui: &mut Ui, draft: &mut Draft) {
+    let saved = draft.settings.hetzner.is_some();
+    let hetzner = &mut draft.hetzner;
+    ui.checkbox(&mut hetzner.enabled, RichText::new("Hetzner Cloud (CPU only)").strong());
+    if !hetzner.enabled {
+        return;
+    }
+    ui.label("Hetzner Cloud API token");
+    secret(ui, "hetzner-token", &mut hetzner.token, saved);
+    ui.small("A read and write token for a project used only by Horizon. It covers the whole project, so it stays on this computer and never reaches a worker.");
+    ui.label("Server types, in order of preference");
+    list(ui, "hetzner-server-types", &mut hetzner.server_types);
+    ui.label("Locations, in order of preference");
+    list(ui, "hetzner-locations", &mut hetzner.locations);
+    ui.small("Prices are in euros, net of VAT. A stopped Hetzner cloud keeps only its workspace volume.");
+}
+
+/// A comma-separated list, as wide as the key fields.
+fn list(ui: &mut Ui, id: &str, value: &mut String) {
+    ui.add_sized(
+        [ui.available_width(), 38.0],
+        egui::TextEdit::singleline(value)
+            .id_salt(id)
+            .margin(egui::vec2(12.0, 10.0)),
+    );
 }
 
 fn secret(ui: &mut Ui, id: &str, value: &mut String, saved: bool) {

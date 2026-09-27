@@ -1,4 +1,5 @@
 //! First-use machine settings. Secret values never enter repository configuration.
+mod hetzner;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -7,6 +8,7 @@ use super::{
     Error, Result,
     settings::{self, Settings},
 };
+pub use hetzner::Draft as HetznerDraft;
 pub use horizon_cloud::Agent;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
@@ -30,6 +32,8 @@ pub struct Draft {
     pub openai_auth: Authentication,
     pub anthropic_auth: Authentication,
     pub registries: Vec<super::registry::draft::Draft>,
+    /// Optional: Hetzner as a second provider for CPU clouds.
+    pub hetzner: HetznerDraft,
 }
 
 impl Draft {
@@ -65,6 +69,7 @@ impl Draft {
                     .map(super::registry::draft::Draft::from_binding)
                     .collect()
             }),
+            hetzner: HetznerDraft::from_settings(settings.hetzner.as_ref()),
             settings,
             runpod_key: Zeroizing::new(String::new()),
             openai_key: Zeroizing::new(String::new()),
@@ -98,6 +103,8 @@ impl Draft {
         } else {
             horizon_cloud::Credential::new(self.runpod_key.trim().to_owned())?;
         }
+        self.hetzner
+            .validate(self.settings.hetzner.as_ref(), &self.root.join("credentials/hetzner"))?;
         if self.profile_agents.is_none() && self.settings.default_agents.is_empty() {
             return Err(Error::Invalid("Choose at least one coding agent"));
         }
@@ -152,6 +159,7 @@ impl Draft {
                 *binding = Some(write.secret(name, value)?);
             }
         }
+        self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
         if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
         {
             self.settings.ssh_identity_file = write.ssh_identity()?;

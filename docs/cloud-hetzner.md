@@ -27,8 +27,11 @@ profiles:
 
 ## Machine settings
 
-Add a `hetzner` section to the cloud `settings.json`. It is optional; settings
-without it are read and written exactly as before.
+Turn on **Hetzner Cloud** in Cloud settings, or add a `hetzner` section to the
+cloud `settings.json`. It is optional; settings without it are read and written
+exactly as before. The form stores the token as a private file under
+`credentials/` and keeps a saved token when the field is left blank; turning
+Hetzner off removes the binding.
 
 ```json
 "hetzner": {
