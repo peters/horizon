@@ -74,6 +74,9 @@ pub struct Description {
     pub creatable: bool,
     /// The workspace volume sizes a CPU cloud can have there, in GB, inclusive.
     pub cpu_volume_gb: (u32, u32),
+    /// Whether a worker there can stop its own billing, so a profile may set
+    /// `idle_stop_minutes`. A Hetzner worker holds no credential that could.
+    pub idle_stop: bool,
 }
 
 pub const RUNPOD: Description = Description {
@@ -87,6 +90,7 @@ pub const RUNPOD: Description = Description {
     stopped: StoppedCost::WorkerKept,
     choices: &[Choice::GpuType, Choice::Region],
     creatable: true,
+    idle_stop: true,
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
         *crate::runpod::volumes::REQUEST_SIZE_GB.end(),
@@ -104,6 +108,7 @@ pub const HETZNER: Description = Description {
     stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
+    idle_stop: false,
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),
         *crate::hetzner::volumes::SIZE_GB.end(),
@@ -137,7 +142,9 @@ impl Description {
         };
         let (smallest, largest) = self.cpu_volume_gb;
         let volume = u32::from(profile.storage.volume_gb);
-        candidate.validate(false).is_ok() && (profile.gpu || (smallest..=largest).contains(&volume))
+        candidate.validate(false).is_ok()
+            && (profile.gpu || (smallest..=largest).contains(&volume))
+            && (self.idle_stop || profile.idle_stop_minutes.is_none())
     }
 
     /// The providers among `configured` a cloud of `profile` can choose from, in the
@@ -222,5 +229,18 @@ mod tests {
         for id in ["runpod", crate::hetzner::PROVIDER] {
             assert!(by_id(id).is_some(), "{id}");
         }
+    }
+
+    #[test]
+    fn a_profile_that_stops_itself_when_idle_is_not_offered_where_workers_cannot() {
+        let mut profile: Profile = serde_json::from_value(serde_json::json!({
+            "provider": "runpod", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8,
+            "storage": {"container_gb": 20, "volume_gb": 50}
+        }))
+        .unwrap();
+        assert!(RUNPOD.supports(&profile) && HETZNER.supports(&profile));
+        profile.idle_stop_minutes = Some(30);
+        assert!(RUNPOD.supports(&profile));
+        assert!(!HETZNER.supports(&profile), "Hetzner deployment refuses idle stop");
     }
 }
