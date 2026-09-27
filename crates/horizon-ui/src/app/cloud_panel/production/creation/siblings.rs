@@ -8,7 +8,7 @@ use horizon_core::{
     cloud_runtime::{
         self, Cancellation,
         command::Runner,
-        siblings::{self, Binding, Candidate, Review},
+        siblings::{self, Binding, Candidate, Review, Sibling},
     },
 };
 use std::{
@@ -111,8 +111,7 @@ impl State {
         let (Some(config), Some(revision)) = (config, revision) else {
             // While the primary is being read again, a checked choice keeps blocking launch
             // until it is reviewed against what that read returns.
-            self.reviewing = None;
-            self.reviewed = None;
+            self.forget_review();
             return;
         };
         if self
@@ -129,13 +128,12 @@ impl State {
                 self.suggest(candidates);
             }
         }
-        self.wanted = self.key(repository, revision, profile);
-        if self
-            .reviewing
-            .as_ref()
-            .is_some_and(|(key, _)| Some(key) != self.wanted.as_ref())
-        {
-            self.reviewing = None;
+        let wanted = self.key(repository, revision, profile);
+        if wanted != self.wanted {
+            // A review describes the checkouts when it ran; any change of choice, including
+            // unchecking and checking again, reads them again.
+            self.forget_review();
+            self.wanted = wanted;
         }
         if let Some(result) = self.reviewing.as_ref().and_then(|(_, job)| job.poll())
             && let Some((key, _)) = self.reviewing.take()
@@ -166,24 +164,38 @@ impl State {
         self.wanted.as_ref().is_some_and(|wanted| !self.passed(wanted))
     }
 
-    /// The checked siblings, in declaration order, once their review for exactly this
-    /// primary, revision and profile passed.
+    /// The checked siblings as reviewed, in declaration order, once their review for exactly
+    /// this primary, revision and profile passed. Each carries the commit it was reviewed at.
     /// # Errors
     /// A checked sibling is unreviewed or refused.
-    pub(in crate::app::cloud_panel::production) fn launch_bindings(
+    pub(in crate::app::cloud_panel::production) fn launch_siblings(
         &self,
         repository: &str,
         revision: Option<&str>,
         profile: &str,
-    ) -> Result<Vec<Binding>, &'static str> {
+    ) -> Result<Vec<Sibling>, &'static str> {
         let Some(key) = self.key(repository, revision.unwrap_or_default(), profile) else {
             return Ok(Vec::new());
         };
-        if self.passed(&key) {
-            Ok(key.bindings)
-        } else {
-            Err(NOT_REVIEWED)
+        let Some((reviewed, Ok(review))) = &self.reviewed else {
+            return Err(NOT_REVIEWED);
+        };
+        if *reviewed != key || !review.passed() {
+            return Err(NOT_REVIEWED);
         }
+        key.bindings
+            .iter()
+            .map(|binding| match review.siblings.get(&binding.alias) {
+                Some(Ok(sibling)) => Ok(sibling.clone()),
+                _ => Err(NOT_REVIEWED),
+            })
+            .collect()
+    }
+
+    /// Discards the review, so the current choice is read again before it can launch.
+    pub(in crate::app::cloud_panel::production) fn forget_review(&mut self) {
+        self.reviewing = None;
+        self.reviewed = None;
     }
 
     pub(super) fn browse(&mut self, alias: String) {
@@ -510,6 +522,27 @@ mod tests {
             panic!("sibling jobs did not finish");
         }
 
+        /// What a launch would pin, as bindings.
+        fn bound(&self, primary: &str, revision: Option<&str>, profile: &str) -> Result<Vec<Binding>, &'static str> {
+            self.state.launch_siblings(primary, revision, profile).map(|siblings| {
+                siblings
+                    .into_iter()
+                    .map(|sibling| Binding {
+                        alias: sibling.alias,
+                        local_repository: sibling.local_repository,
+                    })
+                    .collect()
+            })
+        }
+
+        fn advance(&self, name: &str) -> String {
+            let checkout = self.root.path().join(name);
+            std::fs::write(checkout.join("later.txt"), "later").unwrap();
+            git(&checkout, &["add", "."]);
+            git(&checkout, &["commit", "--quiet", "-m", "Later"]);
+            git(&checkout, &["rev-parse", "HEAD"])
+        }
+
         fn row(&mut self, alias: &str) -> &mut Row {
             self.state.rows.iter_mut().find(|row| row.alias == alias).unwrap()
         }
@@ -540,10 +573,7 @@ mod tests {
         assert!(fixture.row("tool").path.is_empty());
         assert!(!fixture.state.blocks_launch());
         let primary = fixture.path("app");
-        assert_eq!(
-            fixture.state.launch_bindings(&primary, Some(&fixture.revision), "dev"),
-            Ok(Vec::new())
-        );
+        assert_eq!(fixture.bound(&primary, Some(&fixture.revision), "dev"), Ok(Vec::new()));
     }
 
     #[test]
@@ -556,10 +586,7 @@ mod tests {
         assert!(fixture.state.blocks_launch());
         let primary = fixture.path("app");
         let revision = fixture.revision.clone();
-        assert_eq!(
-            fixture.state.launch_bindings(&primary, Some(&revision), "dev"),
-            Err(NOT_REVIEWED)
-        );
+        assert_eq!(fixture.bound(&primary, Some(&revision), "dev"), Err(NOT_REVIEWED));
         fixture.settle();
         assert!(!fixture.state.blocks_launch());
         let head = git(fixture.root.path().join("consumer").as_path(), &["rev-parse", "HEAD"]);
@@ -568,12 +595,9 @@ mod tests {
             alias: "consumer".into(),
             local_repository: fixture.path("consumer").into(),
         }];
+        assert_eq!(fixture.bound(&primary, Some(&revision), "dev"), Ok(expected));
         assert_eq!(
-            fixture.state.launch_bindings(&primary, Some(&revision), "dev"),
-            Ok(expected)
-        );
-        assert_eq!(
-            fixture.state.launch_bindings(&primary, Some(&"b".repeat(40)), "dev"),
+            fixture.bound(&primary, Some(&"b".repeat(40)), "dev"),
             Err(NOT_REVIEWED),
             "a review covers only the revision it read"
         );
@@ -605,13 +629,12 @@ mod tests {
         assert!(!fixture.state.blocks_launch());
         assert_eq!(
             fixture
-                .state
-                .launch_bindings(&primary, Some(&fixture.revision), "dev")
+                .bound(&primary, Some(&fixture.revision), "dev")
                 .map(|bindings| bindings.len()),
             Ok(1)
         );
         assert_eq!(
-            fixture.state.launch_bindings(&primary, Some(&revision), "dev"),
+            fixture.bound(&primary, Some(&revision), "dev"),
             Err(NOT_REVIEWED),
             "the earlier revision's review is gone"
         );
@@ -620,6 +643,29 @@ mod tests {
             fixture.state.blocks_launch(),
             "choosing another repository blocks while it loads"
         );
+    }
+
+    #[test]
+    fn checking_again_reviews_the_checkout_at_its_current_commit() {
+        let mut fixture = Fixture::new();
+        fixture.settle();
+        fixture.row("consumer").chosen = true;
+        fixture.settle();
+        fixture.row("consumer").chosen = false;
+        fixture.sync_primary("app");
+        let head = fixture.advance("consumer");
+        fixture.row("consumer").chosen = true;
+        fixture.sync_primary("app");
+        assert!(matches!(fixture.status("consumer"), Status::Checking));
+        assert!(fixture.state.blocks_launch(), "the earlier review is not reused");
+        fixture.settle();
+        assert!(matches!(fixture.status("consumer"), Status::Ready(shown) if head.starts_with(&shown)));
+        let primary = fixture.path("app");
+        let pinned = fixture
+            .state
+            .launch_siblings(&primary, Some(&fixture.revision), "dev")
+            .unwrap();
+        assert_eq!(pinned[0].revision, head);
     }
 
     #[test]
@@ -741,16 +787,39 @@ mod tests {
                 .to_string()
                 .contains("chosen siblings")
         );
+        let create = |app: &mut crate::app::HorizonApp| {
+            app.create_production_cloud(&ctx).unwrap();
+            for _ in 0..500 {
+                app.poll_cloud_creation(&ctx);
+                if app.cloud_prototype.production.pending_creation.is_none() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            panic!("creation did not finish");
+        };
         settle(&mut app);
         assert!(super::super::can_submit(&app.cloud_prototype.production));
-        app.create_production_cloud(&ctx).unwrap();
-        for _ in 0..500 {
-            app.poll_cloud_creation(&ctx);
-            if app.cloud_prototype.production.pending_creation.is_none() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let head = fixture.advance("consumer");
+        create(&mut app);
+        assert!(
+            app.cloud_prototype
+                .error
+                .as_ref()
+                .is_some_and(|error| error.contains("moved to another commit")),
+            "{:?}",
+            app.cloud_prototype.error
+        );
+        assert!(
+            app.cloud_prototype.groups.0.is_empty(),
+            "a moved checkout creates nothing"
+        );
+        assert!(!super::super::can_submit(&app.cloud_prototype.production));
+        settle(&mut app);
+        let siblings = &app.cloud_prototype.production.launch.siblings;
+        let row = siblings.rows.iter().find(|row| row.alias == "consumer").unwrap();
+        assert!(matches!(siblings.status(row), Status::Ready(shown) if head.starts_with(&shown)));
+        create(&mut app);
         assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
         assert!(
             app.cloud_prototype.production.launch.siblings.rows.is_empty(),

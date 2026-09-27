@@ -197,6 +197,7 @@ impl SiblingError {
             | Self::InvalidConfig(alias)
             | Self::Base(alias)
             | Self::Moved(alias)
+            | Self::Advanced(alias)
             | Self::OriginMismatch { alias, .. }
             | Self::MissingProfile { alias, .. }
             | Self::ImageOnly { alias, .. }
@@ -213,6 +214,21 @@ impl SiblingError {
 }
 
 impl Sibling {
+    /// Refuses a checkout whose `HEAD` moved since this sibling was resolved, so a launch
+    /// pins only the commit that was reviewed.
+    /// # Errors
+    /// [`SiblingError::Advanced`] for a moved `HEAD`, a refusal naming the checkout when Git
+    /// cannot resolve it, and Git that could not run, timed out or was cancelled.
+    pub fn unmoved(&self, runner: &Runner<'_>) -> Result<()> {
+        let head = repository::resolve_with_runner(&self.local_repository, "HEAD", runner)
+            .map_err(|error| refused(error, SiblingError::NoCommit(self.alias.clone())))?;
+        if head == self.revision {
+            Ok(())
+        } else {
+            Err(SiblingError::Advanced(self.alias.clone()).into())
+        }
+    }
+
     /// The pinned checkout, which must still be where it was chosen.
     /// # Errors
     /// The checkout was moved or removed.

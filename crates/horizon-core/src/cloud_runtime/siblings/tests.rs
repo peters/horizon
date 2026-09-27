@@ -880,3 +880,22 @@ fn every_refusal_that_names_a_sibling_reports_its_alias() {
     assert_eq!(SiblingError::DirectoryName("-lib".into()).alias(), None);
     assert_eq!(SiblingError::PrimaryImageOnly.alias(), None);
 }
+
+#[test]
+fn a_reviewed_sibling_is_unmoved_only_while_its_head_is_the_reviewed_commit() {
+    let fixture = Fixture::new();
+    let set = fixture
+        .resolve(&primary_config(NATIVE), "dev", &[("native", "native-lib")])
+        .unwrap();
+    let sibling = &set.members[0];
+    sibling.unmoved(&fixture.runner()).unwrap();
+    let checkout = fixture.path("native-lib");
+    std::fs::write(checkout.join("later.txt"), "later").unwrap();
+    git(&checkout, &["add", "."]);
+    git(&checkout, &["commit", "--quiet", "-m", "Later"]);
+    assert!(matches!(
+        sibling.unmoved(&fixture.runner()),
+        Err(Error::Sibling(SiblingError::Advanced(alias))) if alias == "native"
+    ));
+    assert_eq!(SiblingError::Advanced("native".into()).alias(), Some("native"));
+}
