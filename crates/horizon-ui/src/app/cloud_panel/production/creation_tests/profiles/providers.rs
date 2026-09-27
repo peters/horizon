@@ -62,7 +62,7 @@ fn hetzner_is_offered_beside_runpod_with_euro_prices_and_a_location_choice() {
         &output,
         "On cx33 in hel1: at most €10.13 a month running, with the workspace volume and IPv4 address. €1.14 a month stopped: only the volume is kept."
     ));
-    assert!(painted(&output).contains("Horizon places the cloud in this location"));
+    assert!(painted(&output).contains("Horizon tries this location first"));
     assert!(has_label(
         &output,
         "Hetzner lists this type as unavailable here; creation confirms whether it can be rented."

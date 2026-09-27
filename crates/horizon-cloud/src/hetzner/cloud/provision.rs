@@ -6,7 +6,12 @@ use super::{
 };
 use crate::{
     Cancellation, CloudError, CreateState, Progress, Worker, WorkerSpec,
-    hetzner::{Hetzner, servers::ServerRequest, volumes::SIZE_GB},
+    hetzner::{
+        Hetzner,
+        keys::SshKey,
+        servers::{Placement, Server, ServerRequest},
+        volumes::{SIZE_GB, Volume},
+    },
     host,
 };
 
@@ -52,7 +57,7 @@ pub fn provision(
     journal: &mut Journal,
     records: &mut impl Records,
     cancel: &Cancellation,
-    progress: impl FnMut(Progress),
+    mut progress: impl FnMut(Progress),
 ) -> Result<Worker, CloudError> {
     let Request {
         spec,
@@ -79,12 +84,27 @@ pub fn provision(
     let mut host = plan(spec, PROBE_DEVICE, login)?;
     host.cloud_config()?;
     reopen(journal, operation, fresh, records)?;
-    // A volume fixes the location; until one exists, the first allowed location
-    // with a fitting server type is chosen. A requested or bound server was placed
-    // already, so reconnecting to it depends on the policy allowing its type, not
-    // on the catalog still offering it.
-    let (location, placements) = if journal.volume == CreateState::Prepared {
-        first_fit(&client.catalog(cancel)?.offers, spec, policy)?
+    // A volume fixes the location. Until one exists, every allowed location with a
+    // fitting server type is a candidate, in the policy's order. A requested or
+    // bound server was placed already, so reconnecting to it depends on the policy
+    // allowing its type, not on the catalog still offering it.
+    let movable = journal.volume == CreateState::Prepared;
+    let candidates = if movable {
+        let offers = client.catalog(cancel)?.offers;
+        let fitting: Vec<(String, Vec<Placement>)> = policy
+            .locations
+            .iter()
+            .filter_map(|location| {
+                fit(&offers, spec, &policy.server_types, location)
+                    .ok()
+                    .map(|placements| (location.clone(), placements))
+            })
+            .collect();
+        if fitting.is_empty() {
+            // The same refusal as before, naming what does not fit.
+            first_fit(&offers, spec, policy)?;
+        }
+        fitting
     } else {
         let location = location(journal.location.as_deref(), policy)?;
         let placements = if *operation == CreateState::Prepared {
@@ -92,7 +112,7 @@ pub fn provision(
         } else {
             allowed(&policy.server_types, &location)
         };
-        (location, placements)
+        vec![(location, placements)]
     };
     // Each journal change is saved before the caller's journal takes it, so a
     // failed save leaves the journal as it is on disk and a retry saves it again.
@@ -109,11 +129,63 @@ pub fn provision(
         .clone()
         .ok_or(CloudError::Invalid("Missing Hetzner SSH key"))?;
     let key = client.ensure_ssh_key(operation_id, &public_key, cancel)?;
+    let mut sold_out = None;
+    for (location, placements) in candidates {
+        let placed = place(
+            client,
+            &mut Place {
+                spec,
+                location: &location,
+                placements: &placements,
+                key: &key,
+                host: &mut host,
+            },
+            operation,
+            journal,
+            records,
+            cancel,
+            &mut progress,
+        );
+        match placed {
+            Ok((server, volume)) => return settle(client, spec, policy, &location, &server, &volume, cancel),
+            // Every type is sold out here and the volume was created by this call
+            // and never attached, so it holds nothing: delete it and move on.
+            Err(CloudError::Capacity(reason)) if movable && *operation == CreateState::Prepared => {
+                release_empty_volume(client, operation_id, journal, records, cancel)?;
+                sold_out = Some(reason);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(CloudError::Capacity(sold_out.unwrap_or_default()))
+}
+
+/// Where one placement attempt goes.
+struct Place<'a> {
+    spec: &'a WorkerSpec,
+    location: &'a str,
+    placements: &'a [Placement],
+    key: &'a SshKey,
+    host: &'a mut host::Plan,
+}
+
+/// Records the location, ensures the volume there and asks for a server
+/// holding it, trying the placements in order.
+fn place(
+    client: &Hetzner,
+    at: &mut Place<'_>,
+    operation: &mut CreateState,
+    journal: &mut Journal,
+    records: &mut impl Records,
+    cancel: &Cancellation,
+    progress: &mut impl FnMut(Progress),
+) -> Result<(Server, Volume), CloudError> {
+    let operation_id = at.spec.operation_id.as_str();
     // Recorded before the volume request it fixes; a location chosen earlier but
     // never used by a volume is replaced.
-    if journal.location.as_deref() != Some(location.as_str()) {
+    if journal.location.as_deref() != Some(at.location) {
         let next = Journal {
-            location: Some(location.clone()),
+            location: Some(at.location.to_owned()),
             ..journal.clone()
         };
         records.journal(&next)?;
@@ -122,8 +194,8 @@ pub fn provision(
     let mut fence = journal.volume.clone();
     let ensured = client.ensure_volume(
         operation_id,
-        &location,
-        u32::from(spec.profile.storage.volume_gb),
+        at.location,
+        u32::from(at.spec.profile.storage.volume_gb),
         &mut fence,
         cancel,
         |next| {
@@ -136,30 +208,85 @@ pub fn provision(
     // journal even when the request failed.
     journal.volume = fence;
     let volume = ensured?;
-    host.workspace_device.clone_from(&volume.linux_device);
-    let user_data = host.cloud_config()?;
+    at.host.workspace_device.clone_from(&volume.linux_device);
+    let user_data = at.host.cloud_config()?;
     let server_request = ServerRequest {
         operation_id,
-        placements: &placements,
+        placements: at.placements,
         image: HOST_IMAGE,
         user_data: &user_data,
         volume: Some(&volume),
-        ssh_key: Some(&key),
+        ssh_key: Some(at.key),
     };
     let server = client.ensure_server(
         &server_request,
         operation,
         cancel,
         |next| records.operation(next),
-        progress,
+        &mut *progress,
     )?;
-    // A worker only once it meets the profile and holds exactly this volume from
-    // both sides where the policy allows, as readiness requires.
+    Ok((server, volume))
+}
+
+/// Deletes the workspace volume a sold-out location left, proves it gone and
+/// returns the journal to no volume and no location, as if it had never been
+/// requested.
+fn release_empty_volume(
+    client: &Hetzner,
+    operation_id: &str,
+    journal: &mut Journal,
+    records: &mut impl Records,
+    cancel: &Cancellation,
+) -> Result<(), CloudError> {
+    let mut fence = journal.volume.clone();
+    let snapshot = journal.clone();
+    client.delete_volume(
+        operation_id,
+        &mut fence,
+        cancel,
+        |next| {
+            // Deleted and proven absent: nothing was requested any more.
+            let saved = match next {
+                CreateState::Terminated { .. } => Journal {
+                    volume: CreateState::Prepared,
+                    location: None,
+                    ..snapshot.clone()
+                },
+                other => Journal {
+                    volume: other.clone(),
+                    ..snapshot.clone()
+                },
+            };
+            records.journal(&saved)
+        },
+        |_| {},
+    )?;
+    *journal = Journal {
+        volume: CreateState::Prepared,
+        location: None,
+        ..journal.clone()
+    };
+    Ok(())
+}
+
+/// The placed server as a worker, once it meets the profile and holds exactly
+/// this volume from both sides where the policy allows, as readiness requires.
+fn settle(
+    client: &Hetzner,
+    spec: &WorkerSpec,
+    policy: &Policy,
+    location: &str,
+    server: &Server,
+    volume: &Volume,
+    cancel: &Cancellation,
+) -> Result<Worker, CloudError> {
+    let operation_id = spec.operation_id.as_str();
+    let server = server.clone();
     let volume = client
         .inspect_volume(volume.id, cancel)?
         .ok_or(CloudError::WorkerLost)?;
     volume.verify(operation_id)?;
-    if !holds(&server, &volume) || !admitted(&server, policy, Some(location.as_str())) {
+    if !holds(&server, &volume) || !admitted(&server, policy, Some(location)) {
         return Err(CloudError::Invalid(
             "The new server does not hold this cloud's workspace volume where the settings allow",
         ));

@@ -416,3 +416,121 @@ fn a_login_for_another_registry_is_refused_before_any_request() {
     task.join().unwrap();
     assert!(requests.lock().unwrap().is_empty() && kept.journal.is_none());
 }
+
+/// Deleting an empty volume: inspect it, delete it, see it gone.
+fn released(volume: Value) -> [(u16, Value); 3] {
+    let mut inspected = json!({});
+    inspected["volume"] = volume;
+    [
+        (200, inspected),
+        (204, Value::Null),
+        (404, json!({"error": {"code": "not_found", "message": "not found"}})),
+    ]
+}
+
+#[test]
+fn a_sold_out_only_location_leaves_neither_server_nor_volume() {
+    let outcome = fresh(and(
+        and(until_server(), [error(412, "resource_unavailable")]),
+        released(free()),
+    ));
+    assert!(outcome.worker.is_none());
+    assert_eq!(outcome.operation, CreateState::Prepared, "no server was created");
+    assert_eq!(
+        outcome.journal.volume,
+        CreateState::Prepared,
+        "the empty volume was deleted"
+    );
+    assert_eq!(outcome.journal.location, None);
+}
+
+#[test]
+fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
+    let located = |id: u32, location: &str| {
+        let mut value = free();
+        value["id"] = json!(id);
+        value["location"]["name"] = json!(location);
+        value["linux_device"] = json!(format!("/dev/disk/by-id/scsi-0HC_Volume_{id}"));
+        value
+    };
+    let price =
+        |location: &str| json!({"location": location, "price_hourly": {"net": "0.01"}, "price_monthly": {"net": "5"}});
+    let standing =
+        |location: &str| json!({"name": location, "available": true, "recommended": true, "deprecation": null});
+    let kind = json!({"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80, "cpu_type": "shared", "architecture": "x86",
+        "prices": [price("hel1"), price("nbg1")], "locations": [standing("hel1"), standing("nbg1")]});
+    let catalog = vec![
+        (200, listing("server_types", &json!([kind]))),
+        (
+            200,
+            listing(
+                "locations",
+                &json!([{"name": "hel1", "network_zone": "eu-central"}, {"name": "nbg1", "network_zone": "eu-central"}]),
+            ),
+        ),
+        (
+            200,
+            json!({"pricing": {"currency": "EUR", "volume": {"price_per_gb_month": {"net": "0.05"}}, "primary_ips": []}}),
+        ),
+    ];
+    let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
+    let attempt = |volume: Value| {
+        vec![
+            (200, listing("volumes", &json!([]))),
+            (
+                201,
+                json!({"volume": volume.clone(), "action": {"id": 1, "status": "success"}}),
+            ),
+            (200, json!({ "volume": volume.clone() })),
+            (200, listing("servers", &json!([]))),
+            (200, json!({ "volume": volume })),
+        ]
+    };
+    let mut created = created_server(4);
+    created["server"]["location"]["name"] = json!("nbg1");
+    created["server"]["volumes"] = json!([10]);
+    let mut held = located(10, "nbg1");
+    held["server"] = json!(42);
+    let responses = and(
+        and(
+            and(
+                and(and(catalog, key), attempt(located(9, "hel1"))),
+                [error(412, "resource_unavailable")],
+            ),
+            released(located(9, "hel1")),
+        ),
+        and(
+            attempt(located(10, "nbg1")),
+            [(201, created), (200, json!({ "volume": held }))],
+        ),
+    );
+    let (client, requests, task) = provider(responses);
+    let policy = Policy {
+        locations: vec!["hel1".into(), "nbg1".into()],
+        server_types: vec!["cx33".into()],
+    };
+    let spec = spec();
+    let request = Request {
+        spec: &spec,
+        policy: &policy,
+        login: None,
+        fresh: true,
+    };
+    let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
+    let worker = provision(
+        &client,
+        request,
+        &mut operation,
+        &mut journal,
+        &mut Kept::default(),
+        &Cancellation::default(),
+        |_| {},
+    )
+    .unwrap();
+    task.join().unwrap();
+    assert_eq!(worker.data_center(), Some("nbg1"));
+    assert_eq!(journal.location.as_deref(), Some("nbg1"));
+    assert_eq!(journal.volume, CreateState::Bound { worker_id: "10".into() });
+    let requests = requests.lock().unwrap();
+    assert!(requests.iter().any(|request| request.starts_with("DELETE /volumes/9 ")));
+}

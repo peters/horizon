@@ -202,7 +202,7 @@ impl Hetzner {
                 Err(failure) => return Err(failure.into()),
             }
         }
-        Err(CloudError::Rejected(refusal))
+        Err(CloudError::Capacity(refusal))
     }
 
     /// # Errors
