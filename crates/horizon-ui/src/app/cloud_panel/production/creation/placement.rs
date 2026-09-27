@@ -38,7 +38,8 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
     } else {
         prices.size(profile, (profile.cpu, profile.memory_gb))
     };
-    list.data_centers
+    let mut candidates: Vec<_> = list
+        .data_centers
         .iter()
         .filter(|center| profile.gpu || center.workspace_storage)
         .map(|center| {
@@ -72,7 +73,9 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
                 },
             }
         })
-        .collect()
+        .collect();
+    candidates.sort_by(|a, b| a.region.cmp(&b.region).then_with(|| a.center.id.cmp(&b.center.id)));
+    candidates
 }
 
 /// How many data centers have stock, once every one is known.
@@ -165,15 +168,7 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
         for region in &regions {
             let selected = current.data_centers == region.data_centers;
             let (detail, tint) = stock_label(region.in_stock);
-            // A region known to be sold out stays visible but cannot be chosen; one whose
-            // stock is unknown can, since the provider may still place the cloud there.
-            let enabled = selected || region.in_stock != Count::Known(0);
-            let clicked = ui
-                .add_enabled_ui(enabled, |ui| {
-                    option(ui, &region.name, selected, Some(&detail), Some(tint))
-                })
-                .inner;
-            if clicked {
+            if option(ui, &region.name, selected, Some(&detail), Some(tint)) {
                 chosen = Some(Placement {
                     region: Some(region.name.clone()),
                     data_centers: region.data_centers.clone(),
@@ -196,7 +191,7 @@ fn where_it_lives(placement: &Placement) -> String {
     format!("The workspace stays in {place}, and a stopped cloud resumes there.")
 }
 
-/// One data center, for the Advanced section: those with stock, and the chosen one.
+/// Every compatible allowed data center, including sold-out choices, for Advanced.
 /// Returns a newly chosen placement.
 pub(super) fn data_center_field(
     ui: &mut Ui,
@@ -209,15 +204,16 @@ pub(super) fn data_center_field(
     if candidates.is_empty() {
         return None;
     }
-    let shown: Vec<&Candidate<'_>> = candidates
-        .iter()
-        .filter(|candidate| candidate.stock != Stock::No || current.data_centers == [candidate.center.id.clone()])
-        .collect();
     ui.add_space(6.0);
     ui.label(RichText::new("Data center").size(14.0).strong().color(theme::FG()));
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(theme::PALETTE_GREEN(), "● In stock");
+        ui.colored_label(theme::PALETTE_RED(), "● Out of stock");
+        ui.colored_label(theme::FG_DIM(), "● Checking or unknown");
+    });
     let mut chosen = None;
     ui.horizontal_wrapped(|ui| {
-        for candidate in &shown {
+        for candidate in &candidates {
             let selected = current.data_centers == [candidate.center.id.clone()];
             if chip(
                 ui,
@@ -234,21 +230,18 @@ pub(super) fn data_center_field(
             }
         }
     });
-    if let Some(note) = hidden_note(candidates.len() - shown.len(), shown.is_empty()) {
-        ui.small(note);
+    ui.small("Out-of-stock locations stay selectable. Selecting one does not start a cloud.");
+    let excluded = list
+        .regions
+        .keys()
+        .filter(|id| !list.data_centers.iter().any(|center| center.id == **id))
+        .count();
+    if excluded > 0 {
+        ui.small(format!(
+            "Cloud settings exclude {excluded} other data centers from this list."
+        ));
     }
     chosen.filter(|placement| placement != current)
-}
-
-fn hidden_note(hidden: usize, none_shown: bool) -> Option<String> {
-    match (hidden, none_shown) {
-        (0, _) => None,
-        (1, true) => Some("The one data center for this cloud is out of stock right now.".to_owned()),
-        (hidden, true) => Some(format!(
-            "All {hidden} data centers for this cloud are out of stock right now."
-        )),
-        (hidden, false) => Some(format!("{hidden} more without stock for this cloud right now.")),
-    }
 }
 
 /// A compact choice with a title, a line under it and an optional stock dot, painted at
@@ -338,6 +331,107 @@ mod tests {
         }
     }
 
+    fn fixture() -> (State, Profile) {
+        use super::super::super::prices::Fetched;
+        use horizon_core::cloud_runtime::prices::{Preferences, RUNPOD_STORAGE};
+        let profile = horizon_core::cloud_panel::CloudConfig::parse(
+            "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n    gpu: true\n",
+        ).unwrap().profiles["dev"].clone();
+        let mut sold_out = center("EU-2", "EUROPE", false);
+        sold_out.gpus.clear();
+        let list = PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: Vec::new(),
+            data_centers: vec![center("US-1", "NORTH_AMERICA", true), sold_out],
+            regions: [("EU-2", "EUROPE"), ("US-1", "NORTH_AMERICA"), ("AS-3", "ASIA")]
+                .into_iter()
+                .map(|(id, region)| (id.to_owned(), region.to_owned()))
+                .collect(),
+            storage: RUNPOD_STORAGE,
+        };
+        let preferences = Preferences {
+            gpu_types: vec!["l4".into()],
+            ..Preferences::default()
+        };
+        let mut state = State::default();
+        state.list = Some(Fetched {
+            value: (list, preferences),
+            at: std::time::Instant::now(),
+        });
+        (state, profile)
+    }
+
+    fn choose_sold_out(region: bool, label: &str) -> Placement {
+        use crate::test_egui::DiscardTextures;
+        let (prices, profile) = fixture();
+        let ctx = egui::Context::default();
+        let mut selected = None;
+        let mut render = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    ui.set_width(600.0);
+                    selected = if region {
+                        region_field(ui, &prices, &profile, &Placement::default())
+                    } else {
+                        data_center_field(ui, &prices, &profile, &Placement::default())
+                    };
+                },
+            )
+            .discard_textures()
+        };
+        let output = render(Vec::new());
+        let at = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        for pressed in [true, false] {
+            let _ = render(vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        selected.unwrap()
+    }
+
+    #[test]
+    fn sold_out_data_centers_and_regions_are_visible_and_selectable() {
+        assert_eq!(choose_sold_out(false, "EU-2").data_centers, ["EU-2"]);
+        assert_eq!(choose_sold_out(true, "Europe\nnone in stock").data_centers, ["EU-2"]);
+    }
+
+    #[test]
+    fn choices_are_sorted_without_stock_filtering_and_cpu_requires_workspace_storage() {
+        let (prices, mut profile) = fixture();
+        let (list, preferences) = &prices.list.as_ref().unwrap().value;
+        let gpu = candidates(&prices, list, &preferences.gpu_types, &profile);
+        assert_eq!(
+            gpu.iter()
+                .map(|entry| (entry.center.id.as_str(), entry.stock))
+                .collect::<Vec<_>>(),
+            [("EU-2", Stock::No), ("US-1", Stock::Yes)]
+        );
+        profile.gpu = false;
+        let cpu = candidates(&prices, list, &[], &profile);
+        assert_eq!(cpu.len(), 1);
+        assert_eq!(cpu[0].center.id, "US-1");
+    }
+
     #[test]
     fn regions_group_data_centers_and_count_stock_once_known() {
         let (eu, eu2, us) = (
@@ -367,23 +461,6 @@ mod tests {
         assert_eq!(total, Count::Unknown);
         assert_eq!(stock_label(Count::Unknown).0, "stock unknown");
         assert_eq!(Count::Checking.with(Count::Known(2)), Count::Checking);
-    }
-
-    #[test]
-    fn a_sold_out_cloud_still_says_how_many_data_centers_it_could_use() {
-        assert_eq!(hidden_note(0, false), None);
-        assert_eq!(
-            hidden_note(13, false).as_deref(),
-            Some("13 more without stock for this cloud right now.")
-        );
-        assert_eq!(
-            hidden_note(3, true).as_deref(),
-            Some("All 3 data centers for this cloud are out of stock right now.")
-        );
-        assert_eq!(
-            hidden_note(1, true).as_deref(),
-            Some("The one data center for this cloud is out of stock right now.")
-        );
     }
 
     #[test]
