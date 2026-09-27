@@ -276,7 +276,7 @@ fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
         .fill(theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.20))
 }
 
-fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Action> {
+fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
     ui.label(DELETED_RESOURCES_MESSAGE);
     if let Some(elapsed) = runtime.progress.ended_in(Stage::Deleted) {
         ui.small(format!("Deleted in {}", cloud_runtime::progress::duration(elapsed)));
@@ -289,8 +289,8 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> O
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     if runtime.receiver.is_some() {
-        ui.spinner();
         ui.label("Redeploying cloud…");
+        progress_output(ui, id, runtime);
         return None;
     }
     if runtime.confirmation == Confirmation::Redeploy {
@@ -318,7 +318,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         return None;
     }
     if deleted_or_redeploying(runtime) {
-        return deleted_runtime_actions(ui, runtime);
+        return deleted_runtime_actions(ui, id, runtime);
     }
     if runtime.state.as_ref().is_some_and(|state| {
         matches!(
