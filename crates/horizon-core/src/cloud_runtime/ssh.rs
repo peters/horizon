@@ -219,8 +219,20 @@ impl Connection {
         }
         let mut args = self.args();
         args.insert(0, "-tt".into());
+        let shared = session
+            .worktree
+            .strip_prefix(super::siblings::SHARED_CHECKOUT_ROOT)
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'));
+        let guard = if shared {
+            "contract=$(horizon-worker-check) || { status=$?; printf '%s\\n' \"$contract\"; exit \"$status\"; }; if ! printf '%s\\n' \"$contract\" | grep -qx 'horizon-shared-checkout-contract=1'; then \
+             printf '%s\\n' 'Rebuild the cloud worker image before adding panels: shared checkouts are not supported.'; \
+             exit 3; fi; "
+        } else {
+            ""
+        };
+        let option = if shared { "--shared " } else { "" };
         args.push(format!(
-            "horizon-worker-session {} {} {revision}",
+            "{guard}horizon-worker-session {option}{} {} {revision}",
             session.panel_id, session.agent
         ));
         Ok(args)
@@ -277,6 +289,77 @@ mod tests {
     use super::*;
     use horizon_cloud::{Cancellation, Capabilities};
     use std::{net::TcpListener, sync::mpsc, thread, time::Instant};
+
+    #[test]
+    fn shared_attachment_refuses_old_images_and_legacy_attachment_keeps_its_protocol() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            (
+                "horizon-worker-check",
+                "printf '%s\\n' \"$CHECK_MARKER\"; exit \"$CHECK_EXIT\"",
+            ),
+            ("horizon-worker-session", "printf '%s\\n' \"$@\" > \"$SESSION_LOG\""),
+        ] {
+            let file = root.path().join(name);
+            fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(file, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let connection = Connection {
+            host: "example.invalid".into(),
+            port: 22,
+            identity: root.path().join("key"),
+            known_hosts: root.path().join("known-hosts"),
+            host_key_alias: "fixture".into(),
+        };
+        let mut session = Session {
+            panel_id: "panel".into(),
+            agent: "shell".into(),
+            tmux: "panel".into(),
+            branch: String::new(),
+            worktree: super::super::siblings::shared_worktree(None),
+        };
+        let log = root.path().join("session.log");
+        let run = |session: &Session, marker: &str, status: &str| {
+            let args = connection.attach_args(session, &"a".repeat(40)).unwrap();
+            Command::new("/bin/sh")
+                .args(["-c", args.last().unwrap()])
+                .env("PATH", format!("{}:/usr/bin:/bin", root.path().display()))
+                .env("CHECK_MARKER", marker)
+                .env("CHECK_EXIT", status)
+                .env("SESSION_LOG", &log)
+                .output()
+                .unwrap()
+        };
+        let refused = run(&session, "horizon-worker-contract=1", "0");
+        assert_eq!(refused.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&refused.stdout).contains("Rebuild the cloud worker image"));
+        assert!(!log.exists());
+        let failed = run(&session, "Worker runtime validation failed", "7");
+        assert_eq!(failed.status.code(), Some(7));
+        assert_eq!(
+            String::from_utf8_lossy(&failed.stdout).trim(),
+            "Worker runtime validation failed"
+        );
+        assert_eq!(
+            run(&session, "horizon-shared-checkout-contract=1", "1").status.code(),
+            Some(1)
+        );
+        assert!(!log.exists());
+        assert!(
+            run(&session, "horizon-shared-checkout-contract=1", "0")
+                .status
+                .success()
+        );
+        assert!(
+            fs::read_to_string(&log)
+                .unwrap()
+                .starts_with("--shared\npanel\nshell\n")
+        );
+        session.worktree = "/workspace/agents/panel".into();
+        assert!(run(&session, "", "0").status.success());
+        assert!(fs::read_to_string(&log).unwrap().starts_with("panel\nshell\n"));
+    }
 
     #[test]
     fn readiness_budget_interrupts_a_stalled_hostname_ssh_handshake() {

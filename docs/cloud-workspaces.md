@@ -1,7 +1,8 @@
 # Cloud workspaces
 
-A cloud is one remote development container. Its agent panels use separate Git
-branches and worktrees; browser and Device panels share that cloud's runtime.
+A cloud is one remote development container. New shell and agent panels share its
+Git checkout; branches and additional worktrees are created manually. Browser and
+Device panels share that cloud's runtime.
 Only RunPod provisions workers. Daytona and Fly.io appear in labelled design
 fixtures.
 
@@ -356,9 +357,11 @@ reconciled before the overview is fitted.
 
 ## Sessions and lifecycle
 
-Each agent has a stable tmux session, branch and worktree. Worktree isolation
-prevents concurrent writes to the same files; combining changes is explicit and
-can still produce merge conflicts. Closing Horizon detaches presentation while
+Each agent has a stable tmux session. New shell and agent panels share the same
+checkout, including branches, commits and uncommitted files. Coordinate concurrent
+edits or create separate worktrees manually when isolation is needed. Existing
+sessions retain their recorded paths; reconnecting does not migrate them. Older
+worker images must be rebuilt before adding shared-checkout panels. Closing Horizon detaches presentation while
 the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.

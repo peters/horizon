@@ -20,7 +20,7 @@ use std::{
 };
 
 mod worker;
-pub use worker::{git_grants, session_worktree};
+pub use worker::{SHARED_CHECKOUT_ROOT, git_grants, shared_worktree};
 
 /// Printed by `horizon-worker-check` when the worker lays out sibling checkouts per session.
 pub const CONTRACT: &str = "horizon-siblings-contract=1";
