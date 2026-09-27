@@ -9,6 +9,7 @@ pub mod host;
 pub mod offers;
 pub mod prices;
 mod profile;
+pub mod provider;
 mod reason;
 mod startup;
 pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};

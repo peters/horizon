@@ -8,7 +8,7 @@ use time::{Date, Month, OffsetDateTime};
 /// Whether Horizon can create clouds on Hetzner yet. The deployment wiring for #972
 /// turns this on; until then offers are informational only.
 pub const DEPLOYABLE: bool = false;
-const EUR: &str = "EUR";
+const EUR: &str = crate::provider::HETZNER.currency;
 
 /// Hetzner offers in `catalog` meeting `requirements`, cheapest estimated total first,
 /// each priced for a run that starts now. Hetzner has no hourly GPUs, so a GPU request

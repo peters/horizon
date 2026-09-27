@@ -12,7 +12,7 @@ pub mod deployment;
 pub mod git_auth;
 pub mod image;
 pub mod lifecycle;
-pub use horizon_cloud::offers;
+pub use horizon_cloud::{offers, provider};
 pub mod offer_publication;
 pub mod owner;
 pub mod prices;

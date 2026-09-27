@@ -14,7 +14,7 @@ const CPU_STORAGE_GB: std::ops::RangeInclusive<u32> = 10..=10_240;
 /// Hours in an average month, for prorating storage over the expected duration.
 const MONTH_HOURS: f64 = 730.0;
 /// `RunPod` bills in US dollars.
-const USD: &str = "USD";
+const USD: &str = crate::provider::RUNPOD.currency;
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
 const DEFAULT_STORAGE_GB: u16 = 20;
@@ -364,7 +364,7 @@ fn level(availability: Availability) -> &'static str {
 }
 
 mod hetzner;
-pub use hetzner::{hetzner, hetzner_section};
+pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_section};
 
 #[cfg(test)]
 mod tests;
