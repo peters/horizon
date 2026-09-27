@@ -136,7 +136,7 @@ impl HorizonApp {
                         .inner_margin(18)
                         .show(ui, |ui| {
                             ui.set_width(RUNTIME_WIDTH - 36.0);
-                            ui.spacing_mut().item_spacing.y = 4.0;
+                            readable_runtime_style(ui);
                             ui.set_min_height(RUNTIME_HEIGHT - 36.0);
                             egui::ScrollArea::vertical()
                                 .id_salt(("runtime-scroll", group.issue))
@@ -205,6 +205,25 @@ impl HorizonApp {
     }
 }
 
+/// Local card typography also applies to nested companion, progress and action rows.
+pub(super) fn readable_runtime_style(ui: &mut egui::Ui) {
+    use egui::TextStyle;
+    let style = ui.style_mut();
+    style.wrap_mode = Some(egui::TextWrapMode::Wrap);
+    for (text, size) in [
+        (TextStyle::Body, 16.0),
+        (TextStyle::Button, 16.0),
+        (TextStyle::Small, 14.0),
+        (TextStyle::Monospace, 14.0),
+    ] {
+        if let Some(font) = style.text_styles.get_mut(&text) {
+            font.size = font.size.max(size);
+        }
+    }
+    style.spacing.item_spacing.y = style.spacing.item_spacing.y.max(6.0);
+    style.spacing.interact_size.y = style.spacing.interact_size.y.max(28.0);
+}
+
 fn deployment_button(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeployment, action: &mut Option<Action>) {
     let running = demo.started.is_some() && !demo.finished;
     let label = if running {
@@ -228,7 +247,7 @@ fn deployment_button(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeploymen
     ui.add_space(7.0);
     ui.label(
         RichText::new("Simulated cloud · real local panels")
-            .size(14.0)
+            .size(16.0)
             .color(theme::FG_DIM()),
     );
 }
@@ -241,7 +260,7 @@ pub(in crate::app::cloud_panel) fn runtime_heading(
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("CLOUD RUNTIME")
-                .size(14.0)
+                .size(16.0)
                 .strong()
                 .color(theme::FG_SOFT()),
         );
@@ -287,7 +306,7 @@ fn runtime_options(
     action: &mut Option<Action>,
 ) {
     let current = group.environment.profile.as_deref().unwrap_or(&config.default);
-    ui.label(RichText::new("Runtime profile").size(14.0).color(theme::FG_SOFT()));
+    ui.label(RichText::new("Runtime profile").size(16.0).color(theme::FG_SOFT()));
     ui.add_enabled_ui(demo.started.is_none() || demo.finished, |ui| {
         egui::ComboBox::from_id_salt(("profile", group.issue))
             .width(244.0)
@@ -314,23 +333,23 @@ fn runtime_options(
                 profile.memory_gb,
                 if profile.gpu { "GPU" } else { "CPU only" }
             ))
-            .size(14.0)
+            .size(16.0)
             .color(theme::FG_SOFT()),
         );
         ui.label(
             RichText::new(&profile.image)
                 .monospace()
-                .size(14.0)
+                .size(16.0)
                 .color(theme::FG_DIM()),
         );
     }
     ui.label(
         RichText::new("From .horizon/cloud.yml")
-            .size(14.0)
+            .size(16.0)
             .color(theme::FG_DIM()),
     );
     ui.add_space(10.0);
-    ui.label(RichText::new("Panel layout").size(14.0).color(theme::FG_SOFT()));
+    ui.label(RichText::new("Panel layout").size(16.0).color(theme::FG_SOFT()));
     let accent = theme::workspace_accent(group.issue.saturating_sub(101) as usize);
     ui.horizontal(|ui| {
         let mut layout = group.layout;
@@ -381,13 +400,13 @@ fn deployment_steps(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeployment
         };
         ui.label(
             RichText::new(format!("{}  {title}", index + 1))
-                .size(14.0)
+                .size(16.0)
                 .strong()
                 .color(color),
         );
         ui.label(
             RichText::new(format!("{status} · {detail}"))
-                .size(14.0)
+                .size(16.0)
                 .color(theme::FG_DIM()),
         );
         egui::CollapsingHeader::new("Verbose output").id_salt((group.issue, index)).show(ui, |ui| {
@@ -398,7 +417,7 @@ fn deployment_steps(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeployment
                 _ => "[mock] Preparing task checkout\n[mock] Opening agent sessions\n[mock] New-device sign-in if required\n[local] Real panels handle their own login",
             }};
             egui::ScrollArea::vertical().id_salt(("log", group.issue, index)).max_height(108.0).show(ui, |ui| {
-                ui.label(RichText::new(output).monospace().size(14.0).color(theme::FG_SOFT()));
+                ui.label(RichText::new(output).monospace().size(16.0).color(theme::FG_SOFT()));
             });
         });
         ui.add_space(10.0);
