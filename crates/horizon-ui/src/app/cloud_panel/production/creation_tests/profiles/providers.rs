@@ -305,8 +305,7 @@ fn a_hetzner_only_machine_offers_only_hetzner_and_never_moves_a_runpod_profile_o
     });
     prepare(&mut app, &ctx, temp.path());
     // As the price fetch finds it on a machine set up for Hetzner alone.
-    app.cloud_prototype.production.prices.list_error =
-        Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
+    app.cloud_prototype.production.prices.runpod_key_missing();
     hetzner_binding(&mut app);
     let groups = app.cloud_prototype.groups.0.len();
     tall_frame(&ctx, &mut app);

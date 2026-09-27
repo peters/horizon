@@ -44,6 +44,10 @@ pub(super) struct State {
     regions: HashMap<String, String>,
     /// Hetzner's catalog, fetched beside the list when this machine has a binding.
     pub hetzner: hetzner::State,
+    /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
+    /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
+    /// on a machine set up for Hetzner alone.
+    runpod_missing: bool,
 }
 
 impl State {
@@ -171,9 +175,11 @@ impl State {
                     self.accept(fetched);
                     self.list_error = None;
                     self.list_failed_at = None;
+                    self.runpod_missing = false;
                 }
                 // Prices that could not be refreshed are no longer shown as current.
                 Err(error) => {
+                    self.runpod_missing |= error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
                     self.list = None;
                     self.list_error = Some(error);
                     self.list_failed_at = Some(Instant::now());
@@ -208,9 +214,9 @@ impl State {
     }
 
     /// Whether this machine can use `RunPod`: false once a fetch found no API key, as on
-    /// a machine set up for Hetzner alone, and true until then.
+    /// a machine set up for Hetzner alone, until `RunPod` answers a later fetch.
     pub fn runpod_bound(&self) -> bool {
-        self.list_error.as_deref() != Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING)
+        !self.runpod_missing
     }
 
     pub fn loading(&self) -> bool {
@@ -300,6 +306,12 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 /// tests, which never contact it and run on Unix only.
 #[cfg(all(test, unix))]
 impl State {
+    /// As a fetch finds it on a machine set up for Hetzner alone.
+    pub fn runpod_key_missing(&mut self) {
+        self.runpod_missing = true;
+        self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
+    }
+
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {
         self.accept(Fetched {
             value: (list, preferences),
@@ -381,6 +393,32 @@ mod tests {
         assert_eq!(state.region_of("AP-JP-1"), None);
         state.refresh();
         assert_eq!(state.region_of("EU-RO-1"), Some("Europe"), "regions outlive a refresh");
+    }
+
+    #[test]
+    fn a_missing_runpod_key_is_remembered_until_runpod_answers() {
+        let mut state = State::default();
+        assert!(state.runpod_bound(), "until a fetch says otherwise");
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(!state.runpod_bound());
+        // Neither a refresh nor an expired error offers RunPod again.
+        state.refresh();
+        assert!(!state.runpod_bound());
+        // Another failure says nothing about the key.
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err("The provider is unavailable".into())).unwrap();
+        state.poll();
+        assert!(!state.runpod_bound());
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+        state.poll();
+        assert!(state.runpod_bound(), "a key added since is used");
     }
 
     #[test]
