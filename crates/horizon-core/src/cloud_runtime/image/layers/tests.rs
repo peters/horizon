@@ -1,6 +1,6 @@
 use super::*;
 use crate::cloud_runtime::new_id;
-use std::{cell::RefCell, os::unix::fs::PermissionsExt};
+use std::cell::RefCell;
 
 const LOCAL: [&str; 2] = ["horizon-layer:t-0", "horizon-layer:t-1"];
 const REMOVE: &str = "image rm horizon-layer:t-0 horizon-layer:t-1";
@@ -12,27 +12,30 @@ case "$1 $2" in
   "buildx build")
     case "$* " in *"--tag $FAIL_TAG "*) exit 1 ;; esac
     if [ -n "$BLOCK" ]; then touch "$DIR/building"; sleep 10; fi
-    previous=; tag=; base=; label=
+    previous=; tag=; base=
     for argument in "$@"; do
       case "$previous" in
         --tag) tag=$argument ;;
-        --label) label=$argument ;;
         --build-arg) case "$argument" in HORIZON_BASE=*) base=${argument#HORIZON_BASE=} ;; esac ;;
       esac
       previous=$argument
     done
-    labels="$DIR/labels-$(echo "$tag" | tr '/:' '__')"
-    : > "$labels"
-    if [ -n "$base" ] && [ -z "$UNRELATED" ]; then cat "$DIR/labels-$(echo "$base" | tr '/:' '__')" >> "$labels"; fi
-    if [ -n "$label" ]; then echo "$label" >> "$labels"; fi ;;
+    history="$DIR/history-$(echo "$tag" | tr '/:' '__')"
+    echo "\"$tag\"" > "$history"
+    if [ -n "$base" ] && [ -z "$UNRELATED" ]; then cat "$DIR/history-$(echo "$base" | tr '/:' '__')" >> "$history"; fi ;;
+  "history --no-trunc")
+    if [ -n "$HISTORY_FAILS" ]; then echo "history refused for synthetic-secret" >&2; exit 1; fi
+    case "$6" in *t-0) if [ -n "$EMPTY_BASE" ]; then exit 0; fi ;; esac
+    cat "$DIR/history-$(echo "$6" | tr '/:' '__')" ;;
   "image rm") exit 1 ;;
   "image ls")
     if [ -n "$STALE" ] || { [ -n "$BLOCK" ] && [ -e "$DIR/building" ]; }; then echo horizon-layer:t-0; fi ;;
   "image inspect")
     case "$4" in
       "{{.Id}}") echo sha256:final ;;
-      *) awk -F= 'BEGIN { printf "{" } { printf "%s\"%s\":\"%s\"", (NR > 1 ? "," : ""), $1, $2 } END { print "}" }' \
-           "$DIR/labels-$(echo "$5" | tr '/:' '__')" ;;
+      *) if [ -n "$OTHER_LAYERS" ]; then case "$5" in *t-0) ;; *) echo '["sha256:other"]'; exit 0 ;; esac; fi
+         awk '{ step[NR] = $0 } END { printf "["; for (i = NR; i >= 1; i--) printf "%s%s", step[i], (i > 1 ? "," : ""); print "]" }' \
+           "$DIR/history-$(echo "$5" | tr '/:' '__')" ;;
     esac ;;
 esac
 "#;
@@ -60,8 +63,10 @@ fn runner<'a>(cancel: &'a Cancellation, emit: &'a dyn Fn(Event)) -> Runner<'a> {
 /// How the fake `docker` behaves: `buildx inspect` reports `driver`, a build tagging
 /// `fail_tag` fails, with `block` a build blocks after marking `building` and from then
 /// on the first layer stays listed, with `stale` it is always listed, and with
-/// `unrelated` no image inherits its base's labels. Otherwise an image's labels are its
-/// base's plus its own `--label`.
+/// `unrelated` no image keeps its base's history, with `history_fails` reading a history
+/// fails, with `empty_base` the first layer reports none, and with `other_layers` every
+/// image after the first reports other layers under a matching history. Otherwise an image's history is
+/// its own step followed by its base's, and its layers are its history, oldest first.
 struct Fake {
     root: tempfile::TempDir,
     driver: &'static str,
@@ -69,6 +74,9 @@ struct Fake {
     block: bool,
     stale: bool,
     unrelated: bool,
+    history_fails: bool,
+    empty_base: bool,
+    other_layers: bool,
 }
 
 impl Fake {
@@ -76,7 +84,6 @@ impl Fake {
         let root = tempfile::tempdir().unwrap();
         let script = root.path().join("docker");
         std::fs::write(&script, FAKE).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self {
             root,
             driver: "docker",
@@ -84,20 +91,29 @@ impl Fake {
             block: false,
             stale: false,
             unrelated: false,
+            history_fails: false,
+            empty_base: false,
+            other_layers: false,
         }
     }
 
     fn docker(&self) -> impl Fn() -> Command + '_ {
         let flag = |set: bool| if set { "1" } else { "" };
         move || {
-            let mut command = Command::new(self.root.path().join("docker"));
+            // Run through the shell rather than executing the script just written, which a
+            // concurrent test's fork can still hold open for writing (ETXTBSY).
+            let mut command = Command::new("/bin/sh");
+            command.arg(self.root.path().join("docker"));
             command
                 .env("DIR", self.root.path())
                 .env("DRIVER", self.driver)
                 .env("FAIL_TAG", self.fail_tag)
                 .env("BLOCK", flag(self.block))
                 .env("STALE", flag(self.stale))
-                .env("UNRELATED", flag(self.unrelated));
+                .env("UNRELATED", flag(self.unrelated))
+                .env("HISTORY_FAILS", flag(self.history_fails))
+                .env("EMPTY_BASE", flag(self.empty_base))
+                .env("OTHER_LAYERS", flag(self.other_layers));
             command
         }
     }
@@ -187,14 +203,12 @@ fn layers_build_in_order_on_fresh_local_bases_and_only_the_final_image_keeps_its
     let log = fake.log();
     let builds: Vec<_> = log.iter().filter(|line| line.starts_with("buildx build")).collect();
     assert_eq!(builds.len(), 3);
-    assert!(builds[0].contains("--label horizon.sibling-base.0=") && !builds[0].contains("HORIZON_BASE"));
-    assert!(builds[0].contains(" --tag horizon-layer:t-0 "));
-    assert!(builds[1].contains("HORIZON_BASE=horizon-layer:t-0 --label horizon.sibling-base.1="));
-    assert!(builds[1].contains(" --tag horizon-layer:t-1 "));
+    assert!(builds[0].contains(" --tag horizon-layer:t-0 ") && !builds[0].contains("HORIZON_BASE"));
+    assert!(builds[1].contains("HORIZON_BASE=horizon-layer:t-0 --tag horizon-layer:t-1 "));
     assert!(builds[2].contains("HORIZON_BASE=horizon-layer:t-1 --tag registry.example/worker:t "));
     assert!(
-        !builds[2].contains("--label"),
-        "the pushed image gets no stamp of its own"
+        !builds.iter().any(|build| build.contains("--label")),
+        "nothing build-specific is stamped, so a cached rebuild keeps its digest"
     );
     let first_build = log.iter().position(|line| line.starts_with("buildx build")).unwrap();
     let last_build = log.iter().rposition(|line| line.starts_with("buildx build")).unwrap();
@@ -271,6 +285,65 @@ fn a_sibling_that_ignores_its_base_is_refused_by_name() {
 }
 
 #[test]
+fn ancestry_needs_both_the_base_history_and_its_layers() {
+    let ancestry = |history: &[&str], layers: &[&str]| Ancestry {
+        history: history.iter().map(|step| (*step).to_owned()).collect(),
+        layers: layers.iter().map(|layer| (*layer).to_owned()).collect(),
+    };
+    let base = ancestry(&["base-2", "base-1"], &["layer-1"]);
+    assert!(ancestry(&["own", "base-2", "base-1"], &["layer-1", "own"]).descends_from(&base));
+    assert!(ancestry(&["base-2", "base-1"], &["layer-1"]).descends_from(&base));
+    assert!(!ancestry(&["own", "base-2", "base-1"], &["other", "own"]).descends_from(&base));
+    assert!(!ancestry(&["own", "base-1"], &["layer-1", "own"]).descends_from(&base));
+    let layered = Fake {
+        other_layers: true,
+        ..Fake::new()
+    };
+    match layered.build(&|_| {}, &Cancellation::default()) {
+        Err(Error::Sibling(SiblingError::Base(alias))) => assert_eq!(alias, "one"),
+        other => panic!("expected a base refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_unreadable_or_empty_base_history_is_never_taken_as_ancestry() {
+    let failing = Fake {
+        history_fails: true,
+        ..Fake::new()
+    };
+    let output = RefCell::new(Vec::new());
+    let emit = |event| {
+        if let Event::Output(line) = event {
+            output.borrow_mut().push(line);
+        }
+    };
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: vec!["synthetic-secret".into()],
+    };
+    let error = Builder {
+        docker: failing.docker(),
+        runner: &runner,
+    }
+    .build_layers("registry.example/worker:t", "t", &recipe(), &layers(), &[])
+    .unwrap_err();
+    assert!(matches!(error, Error::Command("local image history")), "{error:?}");
+    assert!(output.borrow().iter().any(|line| line.contains("history refused")));
+    assert!(
+        !output.borrow().iter().any(|line| line.contains("synthetic-secret")),
+        "passed-on output keeps the build's redactions"
+    );
+    let empty = Fake {
+        empty_base: true,
+        ..Fake::new()
+    };
+    let error = empty.build(&|_| {}, &Cancellation::default()).unwrap_err();
+    assert!(error.to_string().contains("no build history"), "{error}");
+}
+
+#[test]
 fn cancellation_stays_the_outcome_when_cleanup_also_fails() {
     let fake = Fake {
         block: true,
@@ -328,7 +401,9 @@ fn layers_build_on_the_local_image_before_them_and_leave_only_the_final_tag() {
         }
     };
     let primary = write("primary", &format!("FROM {base}\nRUN echo primary > /layers\n"));
-    let layer = |name: &str| format!("ARG HORIZON_BASE={base}\nFROM ${{HORIZON_BASE}}\nRUN echo {name} >> /layers\n");
+    let layer = |name: &str| {
+        format!("ARG HORIZON_BASE={base}\nFROM ${{HORIZON_BASE}}\nENV LAYER_{name}=1\nRUN echo {name} >> /layers\n")
+    };
     let layers = [
         ("one", write("one", &layer("one"))),
         ("two", write("two", &layer("two"))),
@@ -342,7 +417,11 @@ fn layers_build_on_the_local_image_before_them_and_leave_only_the_final_tag() {
     let tag = format!("horizon-test-{}", new_id());
     let image = format!("horizon-layer-test:{tag}");
     let built = builder.build_layers(&image, &tag, &primary, &layers, &[]).unwrap();
+    // A rebuild of the same inputs under another operation's tag reproduces the image.
+    let again = format!("horizon-test-{}", new_id());
+    let rebuilt = builder.build_layers(&format!("horizon-layer-test:{again}"), &again, &primary, &layers, &[]);
     let run = |args: &[&str]| String::from_utf8(Command::new("docker").args(args).output().unwrap().stdout).unwrap();
+    run(&["image", "rm", &format!("horizon-layer-test:{again}")]);
     let layered = run(&["run", "--rm", &image, "cat", "/layers"]);
     let local = run(&[
         "image",
@@ -353,6 +432,7 @@ fn layers_build_on_the_local_image_before_them_and_leave_only_the_final_tag() {
     ]);
     run(&["image", "rm", &image]);
     assert!(built.starts_with("sha256:"));
+    assert_eq!(rebuilt.unwrap(), built);
     assert_eq!(layered, "primary\none\ntwo\n");
     assert!(local.trim().is_empty(), "intermediate layers remain: {local}");
 }
