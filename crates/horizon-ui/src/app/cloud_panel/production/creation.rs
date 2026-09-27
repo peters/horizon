@@ -292,8 +292,14 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             }
             let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
             ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
-            let provider = provider::current(form.provider, profile);
             let choices = provider::choices(&form.prices, profile);
+            // A provider chosen before the profile or the configured providers changed is
+            // dropped once it is no longer a choice, with the place it named.
+            if form.provider.is_some_and(|chosen| !choices.contains(&chosen)) {
+                form.provider = None;
+                form.placement = Placement::default();
+            }
+            let provider = provider::current(form.provider, profile);
             if choices.len() > 1
                 && let Some(chosen) = provider::choice(ui, &choices, provider)
             {
@@ -301,9 +307,14 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 // Each provider names places its own way.
                 form.placement = Placement::default();
             }
-            // Per-size prices and flavor families belong to providers that price flavors.
-            let flavors = (provider.pricing == Pricing::Flavors).then_some(&form.prices);
-            if let Some(size) = pricing::size_field(ui, flavors, profile, (cpu, memory_gb)) {
+            // Providers that price flavors offer their flavor sizes with prices; others
+            // offer the sizes of their configured server types.
+            let size = if provider.pricing == Pricing::Flavors {
+                pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb))
+            } else {
+                provider::size_field(ui, &form.prices, profile, (cpu, memory_gb))
+            };
+            if let Some(size) = size {
                 form.size = Some(size);
             }
             let sized = horizon_core::cloud_runtime::prices::Profile {

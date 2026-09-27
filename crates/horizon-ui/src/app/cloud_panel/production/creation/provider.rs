@@ -5,6 +5,7 @@
 use super::{
     super::{
         Production,
+        machine_size::{self, Size},
         prices::{State, region_name},
     },
     pricing::option,
@@ -84,6 +85,83 @@ pub(super) fn choice(
         }
     });
     chosen
+}
+
+/// Size buttons from the configured server types of a provider that places workers in
+/// named locations: each vCPU count they have, and each memory size at the current count.
+/// The current size is always shown. Returns a newly chosen size.
+pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current: Size) -> Option<Size> {
+    ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
+    if profile.gpu {
+        ui.label(machine_size::fixed(current, true));
+        return None;
+    }
+    let sizes = server_sizes(prices, profile);
+    let mut cores: Vec<u16> = sizes.iter().map(|size| size.0).chain([current.0]).collect();
+    cores.sort_unstable();
+    cores.dedup();
+    let mut memory: Vec<u16> = sizes
+        .iter()
+        .filter(|size| size.0 == current.0)
+        .map(|size| size.1)
+        .chain([current.1])
+        .collect();
+    memory.sort_unstable();
+    memory.dedup();
+    let mut chosen = None;
+    ui.horizontal_wrapped(|ui| {
+        for cpu in cores {
+            if option(ui, &format!("{cpu} vCPU"), cpu == current.0, None, None) && cpu != current.0 {
+                // Keep the memory where a server type has it, else the smallest at that count.
+                let memory_gb = if sizes.contains(&(cpu, current.1)) {
+                    current.1
+                } else {
+                    sizes
+                        .iter()
+                        .filter(|size| size.0 == cpu)
+                        .map(|size| size.1)
+                        .min()
+                        .unwrap_or(current.1)
+                };
+                chosen = Some((cpu, memory_gb));
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        for memory_gb in memory {
+            if option(ui, &format!("{memory_gb} GB"), memory_gb == current.1, None, None) && memory_gb != current.1 {
+                chosen = Some((current.0, memory_gb));
+            }
+        }
+    });
+    chosen
+}
+
+/// The distinct sizes of the configured server types in the catalog whose disk holds the
+/// profile's container disk.
+fn server_sizes(prices: &State, profile: &Profile) -> Vec<Size> {
+    let hetzner = &prices.hetzner;
+    let Some(catalog) = hetzner.fresh().and_then(|fetched| fetched.value.as_ref()) else {
+        return Vec::new();
+    };
+    let mut sizes: Vec<Size> = catalog
+        .offers
+        .iter()
+        .filter(|offer| {
+            hetzner.server_types().contains(&offer.server_type)
+                && offer.disk_gb >= u32::from(profile.storage.container_gb)
+        })
+        .filter_map(|offer| {
+            let cpu = u16::try_from(offer.cores).ok()?;
+            // Server memory is listed in whole gigabytes; rounding its text avoids a
+            // lossy cast.
+            let memory_gb = format!("{:.0}", offer.memory_gb).parse::<u16>().ok()?;
+            (memory_gb > 0).then_some((cpu, memory_gb))
+        })
+        .collect();
+    sizes.sort_unstable();
+    sizes.dedup();
+    sizes
 }
 
 /// One location's offer for `profile`: the first configured server type that fits it,

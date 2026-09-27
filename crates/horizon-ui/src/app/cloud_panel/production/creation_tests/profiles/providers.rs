@@ -190,6 +190,12 @@ fn hetzner_fields_stay_consistent_as_its_catalog_and_the_profile_change() {
         painted(&output)
     );
     assert!(!painted(&output).contains("RunPod offers no CPU worker"));
+    // Hetzner's sizes come from its configured server types, not RunPod's flavors: the
+    // profile's own 3 vCPU and cx33's 4 vCPU, with 8 GB, and no RunPod-only size.
+    for label in ["3 vCPU", "4 vCPU", "8 GB"] {
+        assert!(has_label(&output, label), "{label}: {}", painted(&output));
+    }
+    assert!(!has_label(&output, "2 vCPU") && !has_label(&output, "16 vCPU"));
     click(
         &ctx,
         &mut app,
@@ -340,8 +346,23 @@ fn the_provider_choice_needs_two_providers_that_support_the_profile() {
     // Without a Hetzner binding only RunPod is configured.
     tall_frame(&ctx, &mut app);
     assert!(!has_label(&tall_frame(&ctx, &mut app), "Provider"));
-    // A GPU profile runs only on RunPod, even with a Hetzner binding.
+    // A GPU profile runs only on RunPod, even with a Hetzner binding, and a Hetzner choice
+    // made while the profile was CPU is dropped with its location.
     hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    );
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
     let production = &mut app.cloud_prototype.production;
     let profile = production
         .profiles
@@ -355,6 +376,8 @@ fn the_provider_choice_needs_two_providers_that_support_the_profile() {
     let output = tall_frame(&ctx, &mut app);
     assert!(!has_label(&output, "Provider"));
     assert!(!has_label(&output, "Location"));
+    let production = &app.cloud_prototype.production;
+    assert!(production.provider.is_none() && production.placement.is_any());
 }
 
 /// Asserts that no painted line, other than those starting with `allowed`, contains any of `terms`.

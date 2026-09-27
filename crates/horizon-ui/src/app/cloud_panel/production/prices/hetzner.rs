@@ -173,14 +173,19 @@ impl State {
     }
 }
 
-/// A catalog as if Hetzner had just answered, for tests, which never contact it.
-#[cfg(test)]
+/// A catalog with the configured server types, for the dialog tests, which run on Unix
+/// only.
+#[cfg(all(test, unix))]
 impl State {
     pub fn answered_with_types(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str]) {
         self.answered(catalog);
         self.server_types = server_types.iter().map(|&name| name.to_owned()).collect();
     }
+}
 
+/// A catalog as if Hetzner had just answered, for tests, which never contact it.
+#[cfg(test)]
+impl State {
     pub fn answered(&mut self, catalog: Option<HetznerCatalog>) {
         self.bound = catalog.is_some();
         self.fetched = Some(Fetched {

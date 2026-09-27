@@ -16,9 +16,8 @@ use horizon_core::{
     cloud_runtime::prices::{self, Availability, GpuPrice, Preferences, PriceList, Profile},
 };
 
-/// Size buttons for a CPU profile, each with its `RunPod` hourly price when `prices` are
-/// given. Returns a newly chosen size.
-pub(super) fn size_field(ui: &mut Ui, prices: Option<&State>, profile: &Profile, current: Size) -> Option<Size> {
+/// Size buttons for a CPU profile, each with its hourly price. Returns a newly chosen size.
+pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current: Size) -> Option<Size> {
     ui.label(RichText::new("Size").size(14.0).strong().color(theme::FG()));
     let mut chosen = None;
     if profile.gpu {
@@ -30,7 +29,7 @@ pub(super) fn size_field(ui: &mut Ui, prices: Option<&State>, profile: &Profile,
         ui.small("GPU workers use the size set by their profile.");
     } else {
         let disk = profile.storage.container_gb;
-        let list = prices.and_then(|prices| prices.list.as_ref()).map(|list| &list.value);
+        let list = prices.list.as_ref().map(|list| &list.value);
         ui.horizontal_wrapped(|ui| {
             for choice in machine_size::vcpu_choices(current, disk) {
                 let from = list.and_then(|(list, preferences)| {
@@ -48,31 +47,21 @@ pub(super) fn size_field(ui: &mut Ui, prices: Option<&State>, profile: &Profile,
         });
         ui.horizontal_wrapped(|ui| {
             for choice in machine_size::memory_choices(current, disk) {
-                // Flavor families name RunPod's machines; other providers see only the size.
-                let label = if prices.is_some() {
-                    choice.label.as_str()
-                } else {
-                    choice.label.split(" · ").next().unwrap_or_default()
-                };
                 let price = list
                     .and_then(|(list, preferences)| hourly(list, preferences, profile, choice.size))
                     .map(|(low, high)| format!("{}/h", range(low, high)));
-                if option(ui, label, choice.selected, price.as_deref(), None) {
+                if option(ui, &choice.label, choice.selected, price.as_deref(), None) {
                     chosen = Some(choice.size);
                 }
             }
         });
-        // The offered sizes are RunPod's; other providers say in their own card whether
-        // a size fits.
-        if prices.is_some() {
-            if let Some(warning) = machine_size::unoffered(current, disk) {
-                ui.colored_label(theme::PALETTE_RED(), warning);
-            } else {
-                // Tooltips would draw below this modal, so the offer rule is shown inline.
-                ui.small(format!(
-                    "RunPod CPU sizes offered with this profile's {disk} GB container disk."
-                ));
-            }
+        if let Some(warning) = machine_size::unoffered(current, disk) {
+            ui.colored_label(theme::PALETTE_RED(), warning);
+        } else {
+            // Tooltips would draw below this modal, so the offer rule is shown inline.
+            ui.small(format!(
+                "RunPod CPU sizes offered with this profile's {disk} GB container disk."
+            ));
         }
     }
     chosen.filter(|size| *size != current)
