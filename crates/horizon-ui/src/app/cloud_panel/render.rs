@@ -11,6 +11,7 @@ enum Action {
     Rename(u32),
     Collapse(u32),
     Remove(u32),
+    Close(u32),
 }
 
 impl HorizonApp {
@@ -97,10 +98,13 @@ impl HorizonApp {
                     ui.set_clip_rect(clip);
                     let (header, _) = ui.allocate_exact_size(Vec2::new(rect.width(), HEADER), Sense::hover());
                     let cost_width = paint_header(ui, group, header, accent, editing, cost);
+                    if group.remote.is_some() && close_button(ui, header) {
+                        action = Some(Action::Close(group.issue));
+                    }
                     if editing {
                         let field = Rect::from_min_size(
                             header.min + Vec2::new(64.0, 16.0),
-                            Vec2::new(header.width() - 180.0 - cost_width, 32.0),
+                            Vec2::new(header.width() - 220.0 - cost_width, 32.0),
                         );
                         title_action = show_inline_rename_editor(
                             ui,
@@ -119,7 +123,7 @@ impl HorizonApp {
                         }
                     }
                     let drag = ui.interact(
-                        header,
+                        Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom())),
                         ui.id().with("drag"),
                         if editing {
                             Sense::hover()
@@ -172,13 +176,14 @@ impl HorizonApp {
 
     fn cloud_action(&mut self, action: Action, ctx: &egui::Context) {
         let issue = match action {
-            Action::Rename(i) | Action::Collapse(i) | Action::Remove(i) => i,
+            Action::Rename(i) | Action::Collapse(i) | Action::Remove(i) | Action::Close(i) => i,
         };
         let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue) else {
             return;
         };
         let mut removed_from = None;
         match action {
+            Action::Close(_) => self.request_cloud_close(issue),
             Action::Rename(_) => {
                 self.cloud_prototype.renaming = Some(issue);
                 self.cloud_prototype
@@ -220,6 +225,7 @@ impl HorizonApp {
         self.render_cloud_accounts(ctx);
         self.release_workspaces_after_creation(ctx);
         self.render_cloud_error(ctx);
+        self.render_cloud_close_confirmation(ctx);
     }
 
     fn render_cloud_error(&mut self, ctx: &egui::Context) {
@@ -278,6 +284,28 @@ fn cloud_accent(id: u32) -> Color32 {
     theme::workspace_accent(id.saturating_sub(101) as usize)
 }
 
+fn close_button(ui: &egui::Ui, header: Rect) -> bool {
+    let close = close_rect(header);
+    let response = ui.interact(close, ui.id().with("close"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Close cloud"));
+    ui.painter().text(
+        close.center(),
+        Align2::CENTER_CENTER,
+        "×",
+        FontId::proportional(23.0),
+        if response.hovered() {
+            theme::BTN_CLOSE()
+        } else {
+            theme::FG_DIM()
+        },
+    );
+    response.on_hover_text("Close cloud…").clicked()
+}
+
+fn close_rect(header: Rect) -> Rect {
+    Rect::from_center_size(header.right_top() + Vec2::new(-24.0, 35.0), Vec2::splat(28.0))
+}
+
 /// Returns the width the optional cost badge takes from the title.
 fn paint_header(
     ui: &egui::Ui,
@@ -309,13 +337,13 @@ fn paint_header(
         theme::blend(theme::PANEL_BG(), accent, 0.15),
     );
     cloud_glyph(painter, mark, accent);
-    let badge = Rect::from_min_size(rect.right_top() + Vec2::new(-110.0, 23.0), Vec2::new(90.0, 25.0));
+    let badge = Rect::from_min_size(rect.right_top() + Vec2::new(-150.0, 23.0), Vec2::new(90.0, 25.0));
     let fill = theme::blend(theme::PANEL_BG(), accent, 0.09);
     let reserved = cost.map_or(0.0, |cost| cost_badge(painter, badge, cost, fill));
     if !editing {
         let title_rect = Rect::from_min_size(
             rect.min + Vec2::new(64.0, 16.0),
-            Vec2::new(rect.width() - 178.0 - reserved, 30.0),
+            Vec2::new(rect.width() - 218.0 - reserved, 30.0),
         );
         painter.with_clip_rect(title_rect).text(
             title_rect.left_center(),
