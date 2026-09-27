@@ -243,7 +243,7 @@ impl State {
     }
 
     pub fn loading(&self) -> bool {
-        self.list_job.is_some()
+        self.list_job.is_some() || !self.size_jobs.is_empty()
     }
 
     /// Stock of `size` for `profile`: `None` while it is being checked, including when
@@ -716,6 +716,32 @@ mod tests {
                 }),
             );
             assert_eq!(state.size(&profile, (8, 32)), None);
+        }
+    }
+
+    #[test]
+    fn updating_covers_catalog_and_size_requests_in_either_completion_order() {
+        for catalog_first in [true, false] {
+            let mut state = State::default();
+            let (list_tx, list_rx) = channel();
+            let (size_tx, size_rx) = channel();
+            state.list_job = Some(list_rx);
+            state.size_jobs.insert(key(&profile()), size_rx);
+            assert!(state.loading());
+            if catalog_first {
+                list_tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+            } else {
+                size_tx.send(Ok(now(available()))).unwrap();
+            }
+            state.poll();
+            assert!(state.loading(), "the remaining request still updates displayed stock");
+            if catalog_first {
+                size_tx.send(Ok(now(available()))).unwrap();
+            } else {
+                list_tx.send(Ok(now((list(), Preferences::default())))).unwrap();
+            }
+            state.poll();
+            assert!(!state.loading());
         }
     }
 }

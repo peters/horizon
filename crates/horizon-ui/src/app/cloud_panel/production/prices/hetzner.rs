@@ -278,9 +278,9 @@ mod tests {
     #[test]
     fn runpod_refresh_preserves_other_provider_choices_and_pending_fetch() {
         let mut prices = super::super::State::default();
-        prices
-            .hetzner
-            .answered_with_policy(Some(catalog()), &["cx43"], &["hel1"]);
+        prices.hetzner.answered(Some(catalog()));
+        prices.hetzner.server_types = vec!["cx43".into()];
+        prices.hetzner.locations = vec!["hel1".into()];
         let (sender, receiver) = std::sync::mpsc::channel();
         prices.hetzner.job = Some(receiver);
         prices.refresh();
