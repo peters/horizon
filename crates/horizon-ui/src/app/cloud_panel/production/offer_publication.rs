@@ -341,7 +341,15 @@ impl HorizonApp {
                 (snapshot, at)
             });
         // Wake for the next refresh or the earliest recorded retry, whichever comes first.
-        let refresh = super::prices::FRESH.saturating_sub(fetched.at.elapsed());
+        // Hetzner's catalog is refreshed on its own schedule, so wake for whichever
+        // goes stale first; workers must never be left with an old catalog.
+        let catalog_refresh = prices
+            .hetzner
+            .fresh()
+            .map(|catalog| super::prices::FRESH.saturating_sub(catalog.at.elapsed()));
+        let refresh = super::prices::FRESH
+            .saturating_sub(fetched.at.elapsed())
+            .min(catalog_refresh.unwrap_or(Duration::MAX));
         let retry = publication
             .delivered
             .values()

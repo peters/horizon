@@ -84,6 +84,11 @@ impl State {
             return Some(Vec::new());
         };
         let mut section = horizon_core::cloud_runtime::offers::hetzner_section(catalog, requirements);
+        let observed = std::time::SystemTime::now()
+            .checked_sub(fetched.at.elapsed())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|at| u64::try_from(at.as_millis()).unwrap_or(u64::MAX));
+        section["observed_at_millis"] = serde_json::json!(observed);
         section["observed_seconds_ago"] = serde_json::json!(fetched.at.elapsed().as_secs());
         Some(vec![section])
     }
@@ -134,6 +139,10 @@ mod tests {
         );
         assert_eq!(sections[0]["offers"][0]["id"], "cx43");
         assert_eq!(sections[0]["observed_seconds_ago"], 0);
+        assert!(
+            sections[0]["observed_at_millis"].as_u64().is_some_and(|at| at > 0),
+            "as workers report it"
+        );
         state.failed("Missing Hetzner token");
         let failed = state.sections(&requirements).unwrap();
         assert_eq!(failed[0]["error"], "cloud_offers_unavailable: Missing Hetzner token");
