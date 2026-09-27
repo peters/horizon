@@ -374,18 +374,20 @@ panel eligibility for a cached Ready record when an earlier preflight fails. Thi
 survive a provider restart; persistence still needs a live recovery test.
 
 Stop ends running processes; storage can remain billable. Idle stop is off unless
-a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops itself after that
-long without agent activity, even while this computer is offline. The worker
+a profile opts in: set `idle_stop_minutes` (10 to 1440) so a dedicated worker stops after that
+long without agent activity. The worker
 counts as active while any agent terminal prints output or its container uses
-at least half a CPU core, so a quiet build keeps it running. It stops only
-itself, using the provider's credential scoped to that worker, and never deletes
-anything. On Hetzner, where a worker holds no credential that could stop it,
-Horizon makes the stop while it is running; see [Hetzner idle stop](cloud-hetzner.md#idle-stop). Choose **Check provider** on the card afterwards: a worker confirmed
+at least half a CPU core, so a quiet build keeps it running. On RunPod the worker
+stops itself, even while this computer is offline, using the provider's credential
+scoped to that worker, and never deletes anything. Hetzner gives a worker no
+credential that could stop it, so there Horizon makes the stop, only while it is
+running, and the stop releases the server and keeps the volume as Stop does; see
+[Hetzner idle stop](cloud-hetzner.md#idle-stop). The rest of this section describes RunPod. Choose **Check provider** on the card afterwards: a worker confirmed
 stopped offers Resume like an explicitly stopped one, and nothing resumes it
 automatically. Profiles without the field never stop on their own, and workers
 shared across workspaces and profiles with hosted devices do not support it.
 
-The same opt-in lets an agent stop its worker when its task is done, such as when
+On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
 its pull request is merged, without this computer. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,

@@ -76,8 +76,10 @@ fn run(
             return;
         }
         match result {
-            // Busy: another operation holds the cloud, so the next check decides.
-            Ok(IdleCheck::Active { .. }) | Err(Error::Busy) => failed = None,
+            Ok(IdleCheck::Active { .. }) => failed = None,
+            // Another operation holds the cloud: a skipped check, which neither fails
+            // nor clears a failure, so the next check decides.
+            Err(Error::Busy) => {}
             Ok(IdleCheck::NotWatched) => return,
             Ok(IdleCheck::Stopped { idle }) => {
                 let line = format!(
@@ -226,6 +228,8 @@ mod tests {
     fn a_failure_is_logged_once_until_it_changes_and_a_cloud_no_longer_watched_ends_the_watch() {
         let reports = watch(vec![
             Err(Error::Invalid("The worker's idle record is malformed")),
+            // A skipped check between two equal failures logs nothing new.
+            Err(Error::Busy),
             Err(Error::Invalid("The worker's idle record is malformed")),
             Err(Error::Command("Reading the worker's idle record")),
             Ok(IdleCheck::NotWatched),
