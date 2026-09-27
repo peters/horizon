@@ -213,9 +213,7 @@ fn connect(
     if source.status != Status::Ready {
         return Ok((Status::Unavailable, None));
     }
-    let address = target
-        .address
-        .ok_or(Error::Invalid("Companion target has no SSH endpoint"))?;
+    let address = endpoint(&source, &target)?;
     grant.source_disconnected = false;
     grant.target_revoked = false;
     // Arm cleanup durably before the first potentially successful remote operation.
@@ -350,4 +348,20 @@ fn publish(transport: &mut impl Transport, catalog: &Catalog) -> Result<()> {
         ));
     }
     transport.publish(&catalog.source_cloud_id, catalog)
+}
+
+/// Where the source reaches the target: its private address when both run on a
+/// provider private network in the same zone, which keeps the connection off
+/// the public internet; its public endpoint otherwise.
+pub(super) fn endpoint(
+    source: &super::transport::Worker,
+    target: &super::transport::Worker,
+) -> Result<horizon_cloud::SshEndpoint> {
+    match (&source.private, &target.private) {
+        (Some((_, source_zone)), Some((address, target_zone))) if source_zone == target_zone => Ok(address.clone()),
+        _ => target
+            .address
+            .clone()
+            .ok_or(Error::Invalid("Companion target has no SSH endpoint")),
+    }
 }
