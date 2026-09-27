@@ -63,12 +63,21 @@ class IdleTests(unittest.TestCase):
                 raise SystemExit
         stop = mock.Mock(side_effect=[True, OSError('reset')])
         clock = iter(range(0, 100000, 100))
-        with mock.patch.dict('os.environ', environment, clear=True), \
-                mock.patch.dict(MODULE['main'].__globals__, {'stop_worker': stop, 'last_output': lambda: None,
-                                                            'cpu_seconds': lambda: samples.append(1)}), \
-                mock.patch('time.sleep', side_effect=sleep), mock.patch('time.time', side_effect=lambda: next(clock)), \
-                mock.patch('os.sync'), self.assertRaises(SystemExit):
-            MODULE['main']()
+        with tempfile.TemporaryDirectory() as root:
+            record = Path(root, 'idle.json')
+            def write(activity, now):
+                MODULE['write_report'](activity, now, path=record)
+            with mock.patch.dict('os.environ', environment, clear=True), \
+                    mock.patch.dict(MODULE['main'].__globals__, {
+                        'stop_worker': stop, 'serve_stop_requests': mock.Mock(), 'write_report': write,
+                        'last_output': lambda: None, 'cpu_seconds': lambda: samples.append(1)}), \
+                    mock.patch('time.sleep', side_effect=sleep), \
+                    mock.patch('time.time', side_effect=lambda: next(clock)), \
+                    mock.patch('os.sync'), self.assertRaises(SystemExit):
+                MODULE['main']()
+            # A worker that stops itself keeps the same record.
+            self.assertEqual(json.loads(record.read_text()),
+                             {'at': 1200, 'idle_seconds': 1200, 'idle_stop_seconds': 600})
         # Idle from 600 s: the first request, then the next only after the 600 s retry gap.
         self.assertEqual(stop.call_count, 2)
         self.assertEqual(set(sleeps), {60})
