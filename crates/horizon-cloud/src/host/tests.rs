@@ -40,6 +40,16 @@ fn content<'a>(config: &'a Value, path: &str) -> &'a str {
     file(config, path)["content"].as_str().unwrap()
 }
 
+/// Docker's login file, which the configuration carries base64-encoded.
+fn registry_json(config: &Value) -> serde_json::Value {
+    let entry = file(config, REGISTRY_FILE);
+    assert_eq!(entry["encoding"], "b64", "the login never passes through YAML as text");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(entry["content"].as_str().unwrap())
+        .unwrap();
+    serde_json::from_slice(&decoded).unwrap()
+}
+
 #[test]
 fn the_plan_becomes_root_only_files_a_volume_mount_and_one_service() {
     let config = parse(&plan());
@@ -62,7 +72,7 @@ fn the_plan_becomes_root_only_files_a_volume_mount_and_one_service() {
         assert_eq!(file(&config, path)["permissions"], mode, "{path}");
         assert_eq!(file(&config, path)["owner"], "root:root", "{path}");
     }
-    let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
+    let registry: serde_json::Value = registry_json(&config);
     let auth = registry["auths"]["registry.example"]["auth"].as_str().unwrap();
     assert_eq!(
         base64::engine::general_purpose::STANDARD.decode(auth).unwrap(),
@@ -213,14 +223,14 @@ fn docker_hub_logins_use_the_legacy_index_key() {
         let mut plan = plan();
         plan.registry.as_mut().unwrap().server = hub.into();
         let config = parse(&plan);
-        let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
+        let registry: serde_json::Value = registry_json(&config);
         assert!(
             registry["auths"]["https://index.docker.io/v1/"]["auth"].is_string(),
             "{hub}"
         );
     }
     let config = parse(&plan());
-    let registry: serde_json::Value = serde_json::from_str(content(&config, REGISTRY_FILE)).unwrap();
+    let registry: serde_json::Value = registry_json(&config);
     assert!(registry["auths"]["registry.example"].is_object());
 }
 

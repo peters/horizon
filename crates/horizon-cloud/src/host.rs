@@ -63,13 +63,15 @@ pub struct Plan {
     pub shm_gb: u8,
 }
 
+/// Serialized in field order; `write_files` is last so the registry login can be
+/// appended to that list without passing through the YAML serializer.
 #[derive(Serialize)]
 struct CloudConfig<'a> {
     ssh_pwauth: bool,
     disable_root: bool,
-    write_files: Vec<WriteFile<'a>>,
     mounts: Vec<[&'a str; 6]>,
     runcmd: Vec<Vec<&'a str>>,
+    write_files: Vec<WriteFile<'a>>,
 }
 #[derive(Serialize)]
 struct WriteFile<'a> {
@@ -101,7 +103,7 @@ impl Plan {
             permissions,
             content,
         };
-        let mut write_files = vec![
+        let write_files = vec![
             file(ENVIRONMENT_FILE, "0600", environment.as_str()),
             file(IMAGE_FILE, "0600", &image),
             file(SETUP, "0700", &setup),
@@ -109,9 +111,6 @@ impl Plan {
             file(START, "0700", &start),
             file(UNIT, "0644", &unit),
         ];
-        if let Some(registry) = &registry {
-            write_files.push(file(REGISTRY_FILE, "0600", registry.as_str()));
-        }
         let config = CloudConfig {
             ssh_pwauth: false,
             disable_root: true,
@@ -130,7 +129,14 @@ impl Plan {
             serde_yaml::to_string(&config)
                 .map_err(|_| CloudError::Invalid("Host configuration could not be encoded"))?,
         );
-        let document = zeroize::Zeroizing::new(format!("#cloud-config\n{}", yaml.as_str()));
+        let entry = registry.as_ref().map(|json| registry_entry(json)).transpose()?;
+        let length = HEADER.len() + yaml.len() + entry.as_ref().map_or(0, |entry| entry.len());
+        let mut document = zeroize::Zeroizing::new(String::with_capacity(length));
+        document.push_str(HEADER);
+        document.push_str(&yaml);
+        if let Some(entry) = &entry {
+            document.push_str(entry);
+        }
         if document.len() > USER_DATA_LIMIT {
             return Err(CloudError::Invalid(
                 "Host configuration exceeds the 32 KiB user-data limit",
@@ -284,6 +290,27 @@ fn auth_key(server: &str) -> &str {
         "docker.io" | "index.docker.io" | "registry-1.docker.io" => "https://index.docker.io/v1/",
         _ => server,
     }
+}
+
+const HEADER: &str = "#cloud-config\n";
+
+/// The `write_files` item for Docker's login, written by hand so the credential
+/// never passes through the YAML serializer, which copies scalars into memory it
+/// does not wipe. The content is base64, which needs no YAML quoting, and every
+/// buffer is wiped and sized up front. Must follow the serialized `write_files`.
+fn registry_entry(json: &str) -> Result<zeroize::Zeroizing<String>, CloudError> {
+    let prefix =
+        format!("- path: {REGISTRY_FILE}\n  owner: root:root\n  permissions: '0600'\n  encoding: b64\n  content: ");
+    let encoded = json.len().div_ceil(3) * 4;
+    let mut entry = zeroize::Zeroizing::new(String::with_capacity(prefix.len() + encoded + 1));
+    let allocated = entry.capacity();
+    entry.push_str(&prefix);
+    base64::engine::general_purpose::STANDARD.encode_string(json.as_bytes(), &mut entry);
+    entry.push('\n');
+    if entry.capacity() != allocated {
+        return Err(CloudError::Invalid("Registry login outgrew its buffer"));
+    }
+    Ok(entry)
 }
 
 /// Docker's `config.json` with one login. Every buffer holding the credential is
