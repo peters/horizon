@@ -15,8 +15,14 @@ if capabilities.get('browsers', []) or capabilities.get('browserstack') is not N
     servers['horizon-browser'] = {'command': '/usr/local/bin/horizon-browser', 'args': ['mcp', '--connect']}
 if capabilities.get('desktop', False):
     servers['horizon-device'] = {'command': '/usr/local/bin/horizon-device', 'args': ['--target', '/workspace/device.json', 'mcp']}
-# Agents may stop the worker when done only where the profile opts in to stopping by itself.
-if capabilities.get('agents', []) and os.environ.get('HORIZON_IDLE_STOP_MINUTES', '').isdigit():
+# Agents may stop the worker when done only where the profile opts in to stopping by itself
+# and the provider gave the worker a credential to stop with; a Hetzner worker has none
+# (Horizon stops it), so the tool could only ever refuse there.
+stops_itself = bool(os.environ.get('RUNPOD_POD_ID') and os.environ.get('RUNPOD_API_KEY'))
+# The watcher serves stop requests only for a period it accepts, as horizon-worker-idle does.
+minutes = os.environ.get('HORIZON_IDLE_STOP_MINUTES', '')
+idle_period = minutes.isdigit() and 10 <= int(minutes) <= 1440
+if capabilities.get('agents', []) and idle_period and stops_itself:
     servers['horizon-worker'] = {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']}
 Path('/workspace/agent-mcp.json').write_text(json.dumps({'mcpServers': servers}))
 if capabilities.get('desktop', False):
