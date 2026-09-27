@@ -6,7 +6,7 @@ use crate::cloud_runtime::{
     state::{Deployment, Store},
 };
 use horizon_cloud::{
-    Cancellation, CloudError, WorkerSpec,
+    Cancellation, CloudError, CreateState, WorkerSpec,
     hetzner::{
         catalog::Offer,
         servers::{Placement, ServerRequest},
@@ -29,6 +29,9 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     emit: &dyn Fn(Event),
 ) -> Result<()> {
     let operation = state.cloud_id.clone();
+    // The worker's key, image digest and machine types are part of the host
+    // configuration; a malformed one would boot a worker nobody can reach.
+    spec.validate()?;
     supported(spec)?;
     // The whole host configuration, registry login included, is loaded once and
     // rendered before the first provider request, so an invalid one leaves
@@ -39,7 +42,13 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     let mut journal = Journal::load(&root)?;
     let location = location(journal.location.as_deref(), spec)?;
     // Every read-only check comes before the first request that creates anything.
-    let placements = fit(&compute.client.catalog(cancel)?.offers, spec, &location)?;
+    // A requested or bound server was placed already; reconnecting to it must not
+    // depend on the catalog still offering its type, only on the settings allowing it.
+    let placements = if state.operation == CreateState::Prepared {
+        fit(&compute.client.catalog(cancel)?.offers, spec, &location)?
+    } else {
+        allowed(spec, &location)
+    };
     if journal.key.is_none() {
         journal.key = Some(throwaway_public_key()?);
         journal.save(&root)?;
@@ -105,6 +114,18 @@ pub(super) fn location(recorded: Option<&str>, spec: &WorkerSpec) -> Result<Stri
             .cloned()
             .ok_or(Error::Invalid("Hetzner settings list no location")),
     }
+}
+
+/// Every configured server type in the location, in order, for reconciling a
+/// server that was already requested.
+pub(super) fn allowed(spec: &WorkerSpec, location: &str) -> Vec<Placement> {
+    spec.cpu_flavors
+        .iter()
+        .map(|server_type| Placement {
+            server_type: server_type.clone(),
+            location: location.to_owned(),
+        })
+        .collect()
 }
 
 /// A shared worker's startup data has no Hetzner path yet.

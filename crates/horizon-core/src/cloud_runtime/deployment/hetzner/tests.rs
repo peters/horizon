@@ -1,6 +1,6 @@
 use super::{
     Journal,
-    provision::{fit, location, plan},
+    provision::{allowed, fit, location, plan},
     throwaway_public_key, worker,
 };
 use horizon_cloud::{
@@ -254,4 +254,24 @@ fn a_recorded_location_is_kept_only_while_the_settings_allow_it() {
     );
     spec.data_centers.clear();
     assert!(location(None, &spec).is_err());
+}
+
+#[test]
+fn a_placed_server_is_reconciled_against_the_settings_not_the_catalog() {
+    let spec = spec();
+    let placements = allowed(&spec, "hel1");
+    let types: Vec<_> = placements.iter().map(|p| p.server_type.as_str()).collect();
+    assert_eq!(types, ["cx23", "cx33", "cpx32"]);
+    assert!(placements.iter().all(|p| p.location == "hel1"));
+}
+
+#[test]
+fn a_malformed_worker_key_is_refused_by_the_spec() {
+    let mut spec = spec();
+    spec.validate().unwrap();
+    spec.public_key = String::new();
+    assert!(
+        spec.validate().is_err(),
+        "an empty key would boot a worker nobody can reach"
+    );
 }
