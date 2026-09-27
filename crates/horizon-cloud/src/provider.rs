@@ -12,13 +12,16 @@ pub enum Placement {
     Locations,
 }
 
-/// What a stopped cloud keeps paying for.
+/// What happens to the worker when a cloud stops. Either way only the workspace
+/// storage stays billed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoppedCost {
-    /// The stopped worker keeps its disk, and the workspace volume stays billed.
-    WorkerAndVolume,
-    /// Stopping deletes the server, so only the workspace volume stays billed.
-    VolumeOnly,
+    /// The stopped worker is kept, so it resumes where it was; a GPU cloud's pod volume
+    /// is its workspace and is billed at the stopped rate.
+    WorkerKept,
+    /// Stopping deletes the server; the workspace volume is kept and a new server is
+    /// created on start.
+    ServerDeleted,
 }
 
 /// How a provider prices a worker of a given size.
@@ -36,9 +39,10 @@ pub enum Pricing {
 pub enum Choice {
     /// A GPU type chosen for one cloud from those in stock.
     GpuType,
-    /// Third-party hosts, which a person must opt into.
+    /// Third-party hosts, which a person must opt into. No provider offers it yet:
+    /// clouds use Secure Cloud hosts only.
     CommunityHosts,
-    /// More than one kind of network volume storage.
+    /// More than one kind of network volume storage. No provider offers it yet.
     VolumeTiers,
     /// A region picker with live stock.
     Region,
@@ -66,7 +70,7 @@ pub struct Description {
     /// The choices this provider supports; interfaces show only these.
     pub choices: &'static [Choice],
     /// Whether Horizon can create clouds there yet; otherwise its prices are for
-    /// comparison only.
+    /// comparison only, and an interface that offers it must refuse to create there.
     pub creatable: bool,
     /// The workspace volume sizes a CPU cloud can have there, in GB, inclusive.
     pub cpu_volume_gb: (u32, u32),
@@ -80,13 +84,8 @@ pub const RUNPOD: Description = Description {
     gpu: true,
     placement: Placement::DataCenters,
     pricing: Pricing::Flavors,
-    stopped: StoppedCost::WorkerAndVolume,
-    choices: &[
-        Choice::GpuType,
-        Choice::CommunityHosts,
-        Choice::VolumeTiers,
-        Choice::Region,
-    ],
+    stopped: StoppedCost::WorkerKept,
+    choices: &[Choice::GpuType, Choice::Region],
     creatable: true,
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
@@ -102,7 +101,7 @@ pub const HETZNER: Description = Description {
     gpu: false,
     placement: Placement::Locations,
     pricing: Pricing::ServerTypes,
-    stopped: StoppedCost::VolumeOnly,
+    stopped: StoppedCost::ServerDeleted,
     choices: &[Choice::ServerTypeFallback],
     creatable: crate::offers::HETZNER_DEPLOYABLE,
     cpu_volume_gb: (
@@ -143,6 +142,8 @@ impl Description {
 
     /// The providers among `configured` a cloud of `profile` can choose from, in the
     /// order they are offered. A choice is worth showing only when there is more than one.
+    /// Providers that are not yet `creatable` are included so their prices can be
+    /// compared; callers refuse to create on them.
     #[must_use]
     pub fn choices(profile: &Profile, configured: &[&'static Self]) -> Vec<&'static Self> {
         ALL.into_iter()
@@ -167,21 +168,20 @@ mod tests {
         assert_eq!(by_id("hetzner"), Some(&HETZNER));
         assert_eq!(by_id("fly"), None);
         assert_eq!((RUNPOD.currency, HETZNER.currency), ("USD", "EUR"));
-        assert_eq!(HETZNER.stopped, StoppedCost::VolumeOnly);
-        assert_eq!(RUNPOD.stopped, StoppedCost::WorkerAndVolume);
+        assert_eq!(HETZNER.stopped, StoppedCost::ServerDeleted);
+        assert_eq!(RUNPOD.stopped, StoppedCost::WorkerKept);
         assert_eq!(
             (RUNPOD.pricing, HETZNER.pricing),
             (Pricing::Flavors, Pricing::ServerTypes)
         );
         assert_eq!(HETZNER.creatable, crate::offers::HETZNER_DEPLOYABLE);
         // Choices that are one provider's own concepts never apply to the other.
-        for choice in [
-            Choice::GpuType,
-            Choice::CommunityHosts,
-            Choice::VolumeTiers,
-            Choice::Region,
-        ] {
+        for choice in [Choice::GpuType, Choice::Region] {
             assert!(RUNPOD.offers(choice) && !HETZNER.offers(choice), "{choice:?}");
+        }
+        // Choices the code cannot honor yet are offered by no provider.
+        for choice in [Choice::CommunityHosts, Choice::VolumeTiers] {
+            assert!(ALL.iter().all(|provider| !provider.offers(choice)), "{choice:?}");
         }
         assert!(HETZNER.offers(Choice::ServerTypeFallback) && !RUNPOD.offers(Choice::ServerTypeFallback));
     }
