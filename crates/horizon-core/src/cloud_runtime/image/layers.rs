@@ -1,7 +1,7 @@
 //! Local image builds, including same-worker sibling recipes layered on the image before them.
-use super::{Error, Event, Progress, Result, Runner, TIMEOUT, contained, contract::finish_contract, valid_tag};
+use super::{Error, Event, Progress, Result, Runner, TIMEOUT, contained, contract::finish_cleanup, valid_tag};
 use crate::cloud_runtime::siblings::SiblingError;
-use horizon_cloud::{Build, Cancellation, CloudError};
+use horizon_cloud::{Build, Cancellation};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -147,13 +147,8 @@ impl<D: Fn() -> Command> Builder<'_, D> {
                 ))
             }
         });
-        if let (Err(Error::Provider(CloudError::Cancelled)), Err(failed)) = (&built, &cleanup) {
-            // Cancellation stays the outcome callers recognize; the next attempt removes the
-            // leftover tags before it builds.
-            (self.runner.emit)(Event::Output(format!("{failed}")));
-            return built;
-        }
-        finish_contract(built, cleanup)
+        // After a cancellation, the next attempt removes the leftover tags before it builds.
+        finish_cleanup(built, cleanup, self.runner.emit)
     }
 
     /// What an image built on `image` keeps of it: its build steps, including those that

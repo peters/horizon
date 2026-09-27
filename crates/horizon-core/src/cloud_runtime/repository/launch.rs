@@ -52,10 +52,14 @@ fn creatable(mut config: CloudConfig) -> super::Result<CloudConfig> {
     Ok(config)
 }
 
-/// The `.horizon/cloud.yml` committed at `revision`, or `None` when that commit has no
-/// readable file.
+/// The refusal of a committed `.horizon/cloud.yml` that does not parse.
+pub(crate) const INVALID_CONFIG: &str =
+    "Invalid .horizon/cloud.yml. Check its syntax, default profile and supported fields.";
+
+/// The `.horizon/cloud.yml` committed at `revision`, or `None` when Git finds no such file
+/// at that commit.
 /// # Errors
-/// Reports cancellation and an invalid configuration.
+/// Reports cancellation, Git that could not run or timed out, and an invalid configuration.
 pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) -> super::Result<Option<CloudConfig>> {
     // Configuration may contain invalid secret-bearing fields; never stream its blob to progress logs.
     let yaml = Runner {
@@ -73,12 +77,15 @@ pub fn committed_config(repository: &Path, revision: &str, runner: &Runner<'_>) 
         Duration::from_secs(30),
     );
     runner.cancel.check()?;
-    let Ok(yaml) = yaml else {
-        return Ok(None);
+    let yaml = match yaml {
+        Ok(yaml) => yaml,
+        // Only a failed lookup means the file is missing; anything else is operational.
+        Err(Error::Command(_)) => return Ok(None),
+        Err(error) => return Err(error),
     };
-    CloudConfig::parse(&yaml).map(Some).map_err(|_| {
-        Error::Invalid("Invalid .horizon/cloud.yml. Check its syntax, default profile and supported fields.")
-    })
+    CloudConfig::parse(&yaml)
+        .map(Some)
+        .map_err(|_| Error::Invalid(INVALID_CONFIG))
 }
 
 /// Read each machine binding once for a configuration, independent of its profile count.
@@ -326,6 +333,12 @@ mod tests {
         let error = read(temp.path()).err().unwrap().to_string();
         assert!(error.contains("Invalid .horizon/cloud.yml"));
         assert!(!error.contains("private-invalid-marker"));
+        // A read that fails for another reason is not reported as a missing file.
+        std::fs::write(temp.path().join(".horizon/cloud.yml"), "#".repeat(5 * 1024 * 1024)).unwrap();
+        git(temp.path(), &["add", "."]);
+        commit(temp.path());
+        let error = read(temp.path()).err().unwrap().to_string();
+        assert!(error.contains("exceeded its bound"), "{error}");
     }
     fn commit(path: &Path) {
         git(

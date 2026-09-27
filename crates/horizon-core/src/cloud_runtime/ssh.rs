@@ -265,7 +265,7 @@ fn manifest_command(manifest: &str) -> Result<String> {
     ))
 }
 fn valid_revision(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
+    super::repository::is_commit_id(value)
 }
 
 #[cfg(all(test, unix))]
@@ -319,6 +319,14 @@ mod tests {
             "probe ignored its remaining budget: {elapsed:?}"
         );
         assert!(!connection.known_hosts.exists());
+    }
+
+    #[test]
+    fn revisions_are_full_lowercase_commit_ids_as_the_worker_requires() {
+        assert!(valid_revision(&"a".repeat(40)) && valid_revision(&"0".repeat(64)));
+        for revision in ["A".repeat(40), "a".repeat(39), "g".repeat(40), String::new()] {
+            assert!(!valid_revision(&revision), "{revision:?}");
+        }
     }
 
     #[test]

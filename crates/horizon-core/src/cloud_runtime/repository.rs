@@ -44,8 +44,12 @@ pub fn resolve_with_runner(repository: &Path, revision: &str, runner: &Runner<'_
     }
     Ok(sha)
 }
+/// A full commit ID as Git prints it and the worker accepts it: lowercase hexadecimal.
 pub(crate) fn is_commit_id(revision: &str) -> bool {
-    matches!(revision.len(), 40 | 64) && revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+    matches!(revision.len(), 40 | 64)
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 /// # Errors
 /// Reports export/extraction failures. Local uncommitted files are never copied.

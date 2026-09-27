@@ -1,5 +1,6 @@
 use super::*;
 use crate::cloud_runtime::new_id;
+use horizon_cloud::CloudError;
 use std::cell::RefCell;
 
 const LOCAL: [&str; 2] = ["horizon-layer:t-0", "horizon-layer:t-1"];

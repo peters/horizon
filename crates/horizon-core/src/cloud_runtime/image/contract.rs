@@ -1,6 +1,6 @@
-use super::{Duration, Error, Images, Result, Runner};
+use super::{Duration, Error, Event, Images, Result, Runner};
 use crate::cloud_runtime::{git_auth, siblings, worker_contract};
-use horizon_cloud::{Cancellation, Capabilities, Profile};
+use horizon_cloud::{Cancellation, Capabilities, CloudError, Profile};
 
 impl Images<'_> {
     pub(super) fn validate(&self, image: &str, operation_id: &str, profile: &Profile) -> Result<()> {
@@ -48,7 +48,7 @@ impl Images<'_> {
                 sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))
             });
         // Killing a Docker client does not stop its daemon-owned container.
-        finish_contract(result, self.remove_contract(&name))
+        finish_cleanup(result, self.remove_contract(&name), self.runner.emit)
     }
 
     fn run_contract(&self, image: &str, name: &str, capabilities: &Capabilities, git_auth: bool) -> Result<String> {
@@ -123,8 +123,19 @@ fn validate_siblings(output: &str, grants: bool) -> Result<()> {
     Ok(())
 }
 
+/// The outcome of `result` after its cleanup. A cancellation stays the reported outcome, as
+/// callers recognize it, and a cleanup failure beside it is only emitted; otherwise as
+/// [`finish_contract`].
+pub(super) fn finish_cleanup<T>(result: Result<T>, cleanup: Result<()>, emit: &dyn Fn(Event)) -> Result<T> {
+    if let (Err(Error::Provider(CloudError::Cancelled)), Err(failed)) = (&result, &cleanup) {
+        emit(Event::Output(failed.to_string()));
+        return result;
+    }
+    finish_contract(result, cleanup)
+}
+
 /// The outcome of `result`, keeping a cleanup failure visible beside it.
-pub(super) fn finish_contract<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
+fn finish_contract<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
     match (result, cleanup) {
         (Err(primary), Err(cleanup)) => Err(Error::Cleanup {
             primary: Box::new(primary),
@@ -152,6 +163,31 @@ mod tests {
         assert!(finish_contract(Ok(()), Err(Error::Invalid("cleanup pending"))).is_err());
         assert!(finish_contract::<()>(Err(Error::Invalid("missing agent")), Ok(())).is_err());
         assert!(finish_contract(Ok(()), Ok(())).is_ok());
+    }
+
+    #[test]
+    fn cancellation_stays_the_outcome_when_cleanup_also_fails() {
+        let output = std::cell::RefCell::new(Vec::new());
+        let emit = |event| {
+            if let Event::Output(line) = event {
+                output.borrow_mut().push(line);
+            }
+        };
+        let cancelled = finish_cleanup::<()>(
+            Err(CloudError::Cancelled.into()),
+            Err(Error::Invalid("cleanup pending")),
+            &emit,
+        );
+        assert!(matches!(cancelled, Err(Error::Provider(CloudError::Cancelled))));
+        assert_eq!(*output.borrow(), ["cleanup pending"]);
+        let failed = finish_cleanup::<()>(
+            Err(Error::Invalid("missing agent")),
+            Err(Error::Invalid("cleanup pending")),
+            &emit,
+        );
+        assert!(matches!(failed, Err(Error::Cleanup { .. })));
+        assert!(finish_cleanup::<()>(Err(CloudError::Cancelled.into()), Ok(()), &emit).is_err());
+        assert_eq!(output.borrow().len(), 1);
     }
 
     #[test]
