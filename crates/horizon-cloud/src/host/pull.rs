@@ -17,12 +17,15 @@ const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, application/vnd.o
     application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json";
 const REFUSED: &str = "The registry refused the pull credential for this image; it may have expired or been revoked. Renew it before deploying";
 const MISSING: &str = "The registry has no such image; check the image reference before deploying";
+const OTHER_REGISTRY: &str = "The pull login names a different registry than the image";
 
 /// Checks that `login` can read `image`, an image reference such as
 /// `example.azurecr.io/team/worker@sha256:...`.
+/// The login is sent only to the image's own registry and its token service.
 /// # Errors
-/// Refuses a login the registry rejects and an image it does not have, and
-/// reports `CloudError::Cancelled` once `cancel` is cancelled.
+/// Refuses a login for another registry than the image's before any request, a
+/// login the registry rejects and an image it does not have, and reports
+/// `CloudError::Cancelled` once `cancel` is cancelled.
 pub fn verify_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation) -> Result<(), CloudError> {
     verify_pull_at(login, image, cancel, "https")
 }
@@ -31,6 +34,9 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
     let Some(reference) = Reference::parse(image) else {
         return Ok(());
     };
+    if api_host(&login.server) != reference.host {
+        return Err(CloudError::Invalid(OTHER_REGISTRY));
+    }
     cancel.check()?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
@@ -42,10 +48,9 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
         "{scheme}://{}/v2/{}/manifests/{}",
         reference.host, reference.repository, reference.target
     );
-    let basic = format!(
-        "Basic {}",
-        base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", login.username, login.password.value()))
-    );
+    let pair = zeroize::Zeroizing::new(format!("{}:{}", login.username, login.password.value()));
+    let encoded = zeroize::Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(pair.as_bytes()));
+    let basic = zeroize::Zeroizing::new(format!("Basic {}", encoded.as_str()));
     let Ok(challenged) = agent.head(&manifest).header("Accept", ACCEPT).call() else {
         return Ok(());
     };
@@ -57,7 +62,7 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or_default();
             match Challenge::parse(challenge) {
-                Some(Challenge::Basic) => basic,
+                Some(Challenge::Basic) => basic.clone(),
                 Some(Challenge::Bearer { realm, service }) => {
                     // Credentials go only to a token service reached over the same scheme.
                     if !realm.starts_with(&format!("{scheme}://")) {
@@ -69,7 +74,7 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
                     if let Some(service) = &service {
                         request = request.query("service", service);
                     }
-                    let Ok(mut answer) = request.header("Authorization", &basic).call() else {
+                    let Ok(mut answer) = request.header("Authorization", basic.as_str()).call() else {
                         return Ok(());
                     };
                     match answer.status().as_u16() {
@@ -85,12 +90,12 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
                             body.get("token")
                                 .or_else(|| body.get("access_token"))
                                 .and_then(serde_json::Value::as_str)
-                                .map(str::to_owned)
+                                .map(|token| zeroize::Zeroizing::new(token.to_owned()))
                         })
                     else {
                         return Ok(());
                     };
-                    format!("Bearer {token}")
+                    zeroize::Zeroizing::new(format!("Bearer {}", token.as_str()))
                 }
                 None => return Ok(()),
             }
@@ -103,7 +108,7 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
     let Ok(read) = agent
         .head(&manifest)
         .header("Accept", ACCEPT)
-        .header("Authorization", &authorization)
+        .header("Authorization", authorization.as_str())
         .call()
     else {
         return Ok(());
@@ -112,6 +117,17 @@ fn verify_pull_at(login: &RegistryLogin, image: &str, cancel: &Cancellation, sch
         401 | 403 => Err(CloudError::Invalid(REFUSED)),
         404 => Err(CloudError::Invalid(MISSING)),
         _ => Ok(()),
+    }
+}
+
+/// The registry API host a login or image names, lowercase, with Docker Hub's
+/// names folded into its API host.
+fn api_host(host: &str) -> String {
+    let host = host.to_ascii_lowercase();
+    if matches!(host.as_str(), "docker.io" | "index.docker.io" | "registry-1.docker.io") {
+        "registry-1.docker.io".into()
+    } else {
+        host
     }
 }
 
@@ -153,11 +169,7 @@ impl Reference {
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/' | b':' | b'+'))
         };
         (safe(&host) && safe(&repository) && safe(&target)).then(|| Self {
-            host: if docker_hub {
-                "registry-1.docker.io".into()
-            } else {
-                host
-            },
+            host: api_host(&host),
             repository,
             target,
         })

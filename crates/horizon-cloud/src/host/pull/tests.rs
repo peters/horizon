@@ -1,4 +1,4 @@
-use super::{Challenge, MISSING, REFUSED, Reference, verify_pull_at};
+use super::{Challenge, MISSING, OTHER_REGISTRY, REFUSED, Reference, api_host, verify_pull_at};
 use crate::{Cancellation, CloudError, Credential, host::RegistryLogin};
 use std::{
     io::{BufRead as _, BufReader, Write as _},
@@ -221,4 +221,26 @@ fn an_anonymous_not_found_is_left_to_the_host() {
         1,
         "the login is not tried without a challenge"
     );
+}
+
+#[test]
+fn a_login_for_another_registry_is_never_sent() {
+    let (address, seen, task) = registry(vec![]);
+    let image = format!("{address}/team/worker@sha256:{}", "a".repeat(64));
+    let refused = verify_pull_at(&login("other.test"), &image, &Cancellation::default(), "http");
+    task.join().unwrap();
+    assert!(matches!(refused, Err(CloudError::Invalid(message)) if message == OTHER_REGISTRY));
+    assert!(seen.lock().unwrap().is_empty(), "nothing is asked of any registry");
+    // Docker Hub's names are one registry; case does not matter.
+    for (login, image) in [
+        ("docker.io", "ubuntu"),
+        ("index.docker.io", "docker.io/team/worker"),
+        ("Registry.Test", "registry.test/worker"),
+    ] {
+        assert_eq!(
+            api_host(login),
+            Reference::parse(image).unwrap().host,
+            "{login} {image}"
+        );
+    }
 }
