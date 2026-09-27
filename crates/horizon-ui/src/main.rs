@@ -392,9 +392,26 @@ fn prepare_startup(session_store: &SessionStore, config: &Config, cli_args: &Cli
     }
 }
 
+/// The log filter from `RUST_LOG`, or Horizon's default.
+fn log_filter(configured: Option<&str>) -> tracing_subscriber::EnvFilter {
+    configured
+        .and_then(|directives| tracing_subscriber::EnvFilter::try_new(directives).ok())
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"))
+}
+
+/// Whether an event or span may be recorded at all. Raw HTTP from the provider clients
+/// never is: at trace level `ureq_proto` dumps request bytes, and with them the API
+/// tokens and registry logins in their headers. Applied beside the `RUST_LOG` filter,
+/// so no directive, however specific, turns it back on.
+fn recordable(metadata: &tracing::Metadata<'_>) -> bool {
+    let target = metadata.target();
+    !(target == "ureq_proto" || target.starts_with("ureq_proto::"))
+}
+
 fn init_tracing() {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"));
+    use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+    let env_filter = log_filter(std::env::var("RUST_LOG").ok().as_deref());
+    let recordable = tracing_subscriber::filter::filter_fn(recordable);
 
     // Stdout is an MCP protocol channel in `--browser-mcp` mode. Keep every
     // tracing event on stderr so a coordination warning can never corrupt a
@@ -408,9 +425,11 @@ fn init_tracing() {
             .with_ansi(false)
             .with_span_events(FmtSpan::CLOSE)
             .compact()
+            .finish()
+            .with(recordable)
             .init();
     } else {
-        subscriber.init();
+        subscriber.finish().with(recordable).init();
     }
 }
 
@@ -478,6 +497,41 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         blank,
         remote_profile,
     })
+}
+
+#[cfg(test)]
+mod log_filter_tests {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    /// Whether `target` records at trace level under the filters built from `configured`.
+    fn traces(configured: Option<&str>, target: &str) -> bool {
+        let subscriber = tracing_subscriber::registry()
+            .with(super::log_filter(configured))
+            .with(tracing_subscriber::filter::filter_fn(super::recordable));
+        tracing::subscriber::with_default(subscriber, || match target {
+            "ureq_proto::util" => tracing::enabled!(target: "ureq_proto::util", tracing::Level::TRACE),
+            "ureq_proto" => tracing::enabled!(target: "ureq_proto", tracing::Level::TRACE),
+            _ => tracing::enabled!(target: "horizon_core", tracing::Level::TRACE),
+        })
+    }
+
+    #[test]
+    fn raw_http_is_never_logged_whatever_rust_log_says() {
+        for configured in [
+            None,
+            Some("trace"),
+            Some("ureq_proto=trace"),
+            Some("ureq_proto::util=trace"),
+            Some("trace,ureq_proto=trace,ureq_proto::util=trace"),
+            Some("not a filter ["),
+        ] {
+            for target in ["ureq_proto", "ureq_proto::util"] {
+                assert!(!traces(configured, target), "{configured:?} {target}");
+            }
+        }
+        assert!(traces(Some("trace"), "horizon_core"), "other targets keep their level");
+        assert!(!traces(None, "horizon_core"), "the default stays at info");
+    }
 }
 
 #[cfg(test)]
