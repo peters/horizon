@@ -23,6 +23,7 @@ pub(super) fn render_grouped_preset_rows(
     target_workspace: Option<WorkspaceId>,
     canvas_pos: [f32; 2],
     presets: &[PresetConfig],
+    unavailable_reason: impl Fn(PanelKind) -> Option<&'static str>,
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
     let mut any_group_rendered = false;
@@ -48,8 +49,17 @@ pub(super) fn render_grouped_preset_rows(
                 group_started = true;
             }
 
-            if let Some(action) = render_preset_picker_row(ui, target_workspace, canvas_pos, preset) {
+            let reason = unavailable_reason(preset.kind);
+            let action = ui
+                .add_enabled_ui(reason.is_none(), |ui| {
+                    render_preset_picker_row(ui, target_workspace, canvas_pos, preset)
+                })
+                .inner;
+            if let Some(action) = action {
                 selected_action = Some(action);
+            }
+            if let Some(reason) = reason {
+                ui.add(egui::Label::new(egui::RichText::new(reason).size(11.0).color(theme::FG_DIM())).wrap());
             }
         }
 
@@ -333,5 +343,72 @@ mod tests {
         assert_eq!(entries[0].detail, "Shell");
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "prod-api"));
         assert!(!entries[0].keywords.iter().any(|keyword| keyword == "deploy"));
+    }
+    #[test]
+    fn unavailable_preset_displays_reason_and_cannot_choose_panel_or_directory() {
+        use crate::test_egui::DiscardTextures;
+        use egui::{Event, PointerButton, Pos2, Rect, Vec2};
+        let ctx = egui::Context::default();
+        let mut preset = shell_preset_with_stale_ssh_metadata();
+        preset.name = "Unavailable agent".into();
+        preset.kind = PanelKind::Codex;
+        let workspace = horizon_core::Board::new().create_workspace("Fixture");
+        let frame = |events| {
+            let mut action = None;
+            let output = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = super::render_grouped_preset_rows(
+                            ui,
+                            Some(workspace),
+                            [0.0, 0.0],
+                            std::slice::from_ref(&preset),
+                            |_| Some("Agent is disabled by this cloud profile"),
+                        );
+                    },
+                )
+                .discard_textures();
+            assert!(action.is_none());
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_string(),
+                        text.pos + text.galley.rect.center().to_vec2(),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let texts = frame(vec![]);
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _)| text == "Agent is disabled by this cloud profile")
+        );
+        for label in ["Unavailable agent", "Dir"] {
+            let pos = texts.iter().find(|(text, _)| text == label).unwrap().1;
+            frame(vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ]);
+            frame(vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }]);
+        }
     }
 }

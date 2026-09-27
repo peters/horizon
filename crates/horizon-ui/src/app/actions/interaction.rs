@@ -182,7 +182,16 @@ impl HorizonApp {
         canvas_rect: Rect,
         visible_workspace: Option<WorkspaceId>,
     ) {
-        if self.host_dialog_open() {
+        if self.host_dialog_open()
+            || self.preset_picker_rect(ctx).is_some_and(|rect| {
+                ctx.input(|input| {
+                    input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|position| rect.contains(position))
+                })
+            })
+        {
             reset_canvas_scroll(ctx);
             self.terminal_keyboard_events.clear();
             self.frame_keyboard_events.remove(&ctx.viewport_id());
