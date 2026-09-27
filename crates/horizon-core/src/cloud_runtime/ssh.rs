@@ -2,6 +2,8 @@
 use super::{Error, Result, WorkerContract, command::Runner, settings::Settings, state::Session, worker_contract};
 use horizon_cloud::{Worker, valid_id};
 use std::{path::Path, process::Command, time::Duration};
+/// The account every worker's sshd accepts.
+pub const USER: &str = "root";
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub host: String,
@@ -66,7 +68,7 @@ impl Connection {
             self.identity.to_string_lossy().into_owned(),
             "-p".into(),
             self.port.to_string(),
-            format!("root@{}", self.host),
+            format!("{USER}@{}", self.host),
         ]
     }
     #[must_use]
