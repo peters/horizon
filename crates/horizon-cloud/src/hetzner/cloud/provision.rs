@@ -89,8 +89,9 @@ pub fn provision(
     // bound server was placed already, so reconnecting to it depends on the policy
     // allowing its type, not on the catalog still offering it.
     // An empty volume an earlier attempt left, sold out or interrupted, is deleted
-    // first, so the cloud is placed afresh.
-    if journal.unused && *operation == CreateState::Prepared && journal.volume != CreateState::Prepared {
+    // first, so the cloud is placed afresh. One whose create response was lost is
+    // reconciled by label where it was requested first, and released if sold out.
+    if journal.unused && *operation == CreateState::Prepared && matches!(journal.volume, CreateState::Bound { .. }) {
         release_empty_volume(client, operation_id, journal, records, cancel)?;
     }
     // Only a volume requested for the cloud's first server is known to be empty,
@@ -167,9 +168,9 @@ pub fn provision(
         );
         match placed {
             Ok((server, volume)) => return settle(client, spec, policy, &location, &server, &volume, cancel),
-            // Every type is sold out here and the volume was created by this call
-            // and never attached, so it holds nothing: delete it and move on.
-            Err(CloudError::Capacity(reason)) if movable && *operation == CreateState::Prepared => {
+            // Every type is sold out here and no server ever held the volume, so it
+            // holds nothing: delete it and move on.
+            Err(CloudError::Capacity(reason)) if journal.unused && *operation == CreateState::Prepared => {
                 release_empty_volume(client, operation_id, journal, records, cancel)?;
                 sold_out = Some(reason);
             }

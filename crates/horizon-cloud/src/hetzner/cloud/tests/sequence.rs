@@ -627,3 +627,37 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
     );
     assert_eq!(outcome.journal.location.as_deref(), Some("hel1"));
 }
+
+#[test]
+fn a_lost_volume_create_is_reconciled_where_it_was_requested_and_released_if_sold_out() {
+    // The volume request went out, its response was lost, and the volume exists now.
+    let journal = Journal {
+        location: Some("hel1".into()),
+        volume: CreateState::Requested,
+        key: Some(super::super::throwaway_public_key().unwrap()),
+        unused: true,
+        ..Journal::default()
+    };
+    let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
+    let responses = and(
+        and(
+            and(rest, [(200, listing("ssh_keys", &json!([]))), (201, key())]),
+            vec![
+                (200, listing("volumes", &json!([free()]))),
+                (200, listing("servers", &json!([]))),
+                (200, json!({"volume": free()})),
+                error(412, "resource_unavailable"),
+            ],
+        ),
+        released(free()),
+    );
+    let outcome = run(CreateState::Prepared, journal, false, responses);
+    assert!(outcome.worker.is_none());
+    assert_eq!(outcome.served, 12, "reconciled, refused and released");
+    assert_eq!(
+        outcome.journal.volume,
+        CreateState::Prepared,
+        "the empty volume is gone"
+    );
+    assert!(!outcome.journal.unused && outcome.journal.location.is_none());
+}
