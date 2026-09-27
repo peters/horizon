@@ -300,7 +300,16 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 form.placement = Placement::default();
             }
             let provider = provider::current(form.provider, profile);
-            if choices.len() > 1
+            // A profile naming a provider this machine cannot use is never moved on its
+            // own: the person picks one it can, even when there is only one.
+            let unusable = !choices.is_empty() && !choices.contains(&provider);
+            if unusable {
+                ui.small(format!(
+                    "This profile names {}, which this machine has no credentials for. Choose a provider it can use.",
+                    provider.label
+                ));
+            }
+            if (choices.len() > 1 || unusable)
                 && let Some(chosen) = provider::choice(ui, &choices, provider)
             {
                 form.provider = Some(chosen);

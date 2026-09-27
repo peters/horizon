@@ -132,10 +132,18 @@ impl Settings {
         }
         Ok(())
     }
+    /// Whether this machine has a `RunPod` API key; a machine may use Hetzner alone.
+    #[must_use]
+    pub fn runpod_configured(&self) -> bool {
+        self.runpod_key_file.is_file()
+    }
     /// # Errors
     /// Requires a private, readable API-key file.
     pub fn credential(&self) -> Result<Credential> {
         self.validate()?;
+        if !self.runpod_configured() {
+            return Err(Error::Invalid(RUNPOD_KEY_MISSING));
+        }
         validate_private_key_file(&self.runpod_key_file)?;
         Credential::new(std::fs::read_to_string(&self.runpod_key_file)?.trim().to_owned()).map_err(Error::from)
     }
@@ -256,6 +264,9 @@ fn read_secret(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     }
     Ok(bytes)
 }
+
+/// Why a `RunPod` request cannot be made on a machine set up for Hetzner alone.
+pub const RUNPOD_KEY_MISSING: &str = "This machine has no RunPod API key; add one in cloud settings to use RunPod";
 
 pub(super) fn validate_ssh_identity(path: &Path) -> Result<()> {
     let meta = std::fs::metadata(path)?;

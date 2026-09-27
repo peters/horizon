@@ -82,6 +82,14 @@ impl HorizonApp {
             .as_ref()
             .and_then(|config| config.profiles.get(&form.selected_profile))
             .ok_or(cloud_runtime::Error::Invalid("Choose a repository profile"))?;
+        // Refused before anything is recorded; the deployment would fail the same way.
+        if super::creation::provider::current(form.provider, profile) == &cloud_runtime::provider::RUNPOD
+            && !form.prices.runpod_bound()
+        {
+            return Err(cloud_runtime::Error::Invalid(
+                cloud_runtime::settings::RUNPOD_KEY_MISSING,
+            ));
+        }
         let profile = launch_profile(profile, form.provider, form.size)?;
         let placement = form.placement.for_profile(profile.gpu);
         let repository = horizon_core::Config::expand_tilde(&form.repository);

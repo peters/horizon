@@ -7,11 +7,15 @@ pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
 }
 
 pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
-    let saved_compute = draft.has_saved_settings();
+    // Settings saved for Hetzner alone hold no RunPod key to keep.
+    let saved_compute = draft.has_saved_settings() && draft.settings.runpod_configured();
     ui.label(RichText::new("Compute account").size(16.0).strong());
     ui.label("RunPod API key");
     secret(ui, "compute-key", &mut draft.runpod_key, saved_compute);
-    ui.small("Stored privately on this computer. Used only when you deploy or manage a worker.");
+    ui.small(
+        "Stored privately on this computer. Used only when you deploy or manage a worker. \
+         Optional when Hetzner is on: clouds then run on Hetzner only.",
+    );
     ui.add_space(12.0);
     render_hetzner(ui, draft);
     ui.add_space(18.0);

@@ -95,10 +95,22 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
     let Ok(settings) = Settings::load(&root.join("settings.json")) else {
         return Vec::new();
     };
-    if cancel.check().is_err()
-        || settings.credential().is_err()
-        || !ssh_ready_with_cancel(&settings.ssh_identity_file, cancel)
-    {
+    // Each provider whose credential this machine holds; a profile is ready when one
+    // of them can run it, as the New cloud dialog then offers that provider.
+    let providers: Vec<_> = [
+        (settings.credential().is_ok(), &super::super::provider::RUNPOD),
+        (
+            settings
+                .hetzner
+                .as_ref()
+                .is_some_and(|hetzner| hetzner.credential().is_ok()),
+            &super::super::provider::HETZNER,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(bound, provider)| bound.then_some(provider))
+    .collect();
+    if cancel.check().is_err() || providers.is_empty() || !ssh_ready_with_cancel(&settings.ssh_identity_file, cancel) {
         return Vec::new();
     }
     let agents = [
@@ -120,6 +132,7 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
         .iter()
         .filter(|(_, profile)| {
             cancel.check().is_ok()
+                && providers.iter().any(|provider| provider.supports(profile))
                 && agents
                     .iter()
                     .all(|(agent, ready)| !profile.capabilities.permits_agent(agent) || *ready)
@@ -289,6 +302,41 @@ mod tests {
         assert!(!ready.iter().any(|name| name == "needs-repair"));
         cancel.cancel();
         assert!(ready_profiles(temp.path(), &config, &cancel).is_empty());
+    }
+
+    #[test]
+    fn a_hetzner_only_machine_is_ready_for_the_profiles_hetzner_can_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("identity");
+        assert!(
+            Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(&key)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let token = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        std::fs::write(token.path(), "synthetic-token").unwrap();
+        let settings = |hetzner: serde_json::Value| {
+            let settings = serde_json::json!({
+                "runpod_key_file": temp.path().join("no-runpod-key"), "ssh_identity_file": key,
+                "docker_config": temp.path().join("docker.json"), "cpu_flavors": [], "gpu_types": [],
+                "hetzner": hetzner
+            });
+            std::fs::write(temp.path().join("settings.json"), settings.to_string()).unwrap();
+        };
+        let mut config = CloudConfig::parse(CONFIG).unwrap();
+        let mut gpu = config.profiles["dev"].clone();
+        gpu.gpu = true;
+        config.profiles.insert("gpu".into(), gpu);
+        let cancel = super::super::super::Cancellation::default();
+        // No provider at all: nothing is ready.
+        settings(serde_json::Value::Null);
+        assert!(ready_profiles(temp.path(), &config, &cancel).is_empty());
+        settings(serde_json::json!({"token_file": token.path(), "server_types": ["cx33"], "locations": ["hel1"]}));
+        // Hetzner runs CPU clouds only.
+        assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["dev"]);
     }
 
     #[test]

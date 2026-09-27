@@ -207,6 +207,12 @@ impl State {
         self.hetzner.refresh();
     }
 
+    /// Whether this machine can use `RunPod`: false once a fetch found no API key, as on
+    /// a machine set up for Hetzner alone, and true until then.
+    pub fn runpod_bound(&self) -> bool {
+        self.list_error.as_deref() != Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING)
+    }
+
     pub fn loading(&self) -> bool {
         self.list_job.is_some()
     }

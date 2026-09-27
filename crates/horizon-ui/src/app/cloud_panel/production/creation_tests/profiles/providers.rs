@@ -298,6 +298,52 @@ fn a_launch_is_refused_when_the_chosen_provider_does_not_accept_the_profile() {
     );
 }
 
+#[test]
+fn a_hetzner_only_machine_offers_only_hetzner_and_never_moves_a_runpod_profile_on_its_own() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // As the price fetch finds it on a machine set up for Hetzner alone.
+    app.cloud_prototype.production.prices.list_error =
+        Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
+    hetzner_binding(&mut app);
+    let groups = app.cloud_prototype.groups.0.len();
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    // The profile names RunPod, so the one usable provider is offered, not chosen.
+    assert!(has_label(&output, "Provider"));
+    assert!(painted(&output).contains("which this machine has no credentials for"));
+    assert!(!has_label(&output, "RunPod\nUS dollars · CPU and GPU"));
+    assert!(app.cloud_prototype.production.provider.is_none());
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    tall_frame(&ctx, &mut app);
+    // Refused before anything is recorded or validated.
+    assert!(app.cloud_prototype.production.pending_creation.is_none());
+    assert_eq!(
+        app.cloud_prototype.groups.0.len(),
+        groups,
+        "nothing is recorded for RunPod"
+    );
+    assert_eq!(
+        app.cloud_prototype.error.take().as_deref(),
+        Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING)
+    );
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!painted(&output).contains("which this machine has no credentials for"));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    super::finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "hetzner");
+}
+
 /// A Hetzner catalog as the running Horizon would have it with a binding.
 fn hetzner_binding(app: &mut HorizonApp) {
     let catalog = serde_json::from_value(serde_json::json!({

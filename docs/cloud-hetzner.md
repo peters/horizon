@@ -58,6 +58,12 @@ exactly as before. The form stores the token as a private file under
 `credentials/` and keeps a saved token when the field is left blank; turning
 Hetzner off removes the binding.
 
+A machine can use Hetzner alone: with Hetzner on, the RunPod API key may stay
+empty. New cloud then offers only Hetzner, and only profiles Hetzner can run (CPU
+profiles without hosted devices) are ready. A profile that names RunPod is never
+moved on its own: the dialog shows the provider choice and Start cloud is refused
+until Hetzner is picked. Turning Hetzner off requires a RunPod key again.
+
 ```json
 "hetzner": {
   "token_file": "/home/me/.config/horizon/cloud/credentials/hetzner",
