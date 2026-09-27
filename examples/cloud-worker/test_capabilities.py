@@ -65,6 +65,17 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(status, 0, output)
             self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, (reported, missing))
 
+    def test_the_idle_record_is_reported_only_with_idle_stop_and_a_watcher_that_keeps_one(self):
+        declared = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n',
+                    'horizon-worker-idle': b'horizon-idle-report-contract=1\n'}
+        older = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n', 'horizon-worker-idle': b''}
+        for reported, missing, expected in [(declared, (), True), (older, (), False),
+                                            ({**declared, 'horizon-worker-supervise': b''}, (), False),
+                                            (declared, ('horizon-worker-idle',), False)]:
+            status, output, _ = self.run_check(missing=missing, reported=reported)
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
+
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
             imported = __import__(module)

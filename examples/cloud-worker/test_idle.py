@@ -63,20 +63,83 @@ class IdleTests(unittest.TestCase):
                 raise SystemExit
         stop = mock.Mock(side_effect=[True, OSError('reset')])
         clock = iter(range(0, 100000, 100))
-        with mock.patch.dict('os.environ', environment, clear=True), \
-                mock.patch.dict(MODULE['main'].__globals__, {'stop_worker': stop, 'last_output': lambda: None,
-                                                            'cpu_seconds': lambda: samples.append(1)}), \
-                mock.patch('time.sleep', side_effect=sleep), mock.patch('time.time', side_effect=lambda: next(clock)), \
-                mock.patch('os.sync'), self.assertRaises(SystemExit):
-            MODULE['main']()
+        with tempfile.TemporaryDirectory() as root:
+            record = Path(root, 'idle.json')
+            def write(activity, now):
+                MODULE['write_report'](activity, now, path=record)
+            with mock.patch.dict('os.environ', environment, clear=True), \
+                    mock.patch.dict(MODULE['main'].__globals__, {
+                        'stop_worker': stop, 'serve_stop_requests': mock.Mock(), 'write_report': write,
+                        'last_output': lambda: None, 'cpu_seconds': lambda: samples.append(1)}), \
+                    mock.patch('time.sleep', side_effect=sleep), \
+                    mock.patch('time.time', side_effect=lambda: next(clock)), \
+                    mock.patch('os.sync'), self.assertRaises(SystemExit):
+                MODULE['main']()
+            # A worker that stops itself keeps the same record.
+            self.assertEqual(json.loads(record.read_text()),
+                             {'at': 1200, 'idle_seconds': 1200, 'idle_stop_seconds': 600})
         # Idle from 600 s: the first request, then the next only after the 600 s retry gap.
         self.assertEqual(stop.call_count, 2)
         self.assertEqual(set(sleeps), {60})
         self.assertEqual(len(samples), 13)
 
+    def test_without_a_credential_the_watcher_only_records_idle_time(self):
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 12:
+                raise SystemExit
+        stop, serve = mock.Mock(), mock.Mock()
+        clock = iter(range(0, 100000, 60))
+        with tempfile.TemporaryDirectory() as root:
+            record = Path(root, 'idle.json')
+            def write(activity, now):
+                MODULE['write_report'](activity, now, path=record)
+            with mock.patch.dict('os.environ', {'HORIZON_IDLE_STOP_MINUTES': '10'}, clear=True), \
+                    mock.patch.dict(MODULE['main'].__globals__, {
+                        'stop_worker': stop, 'serve_stop_requests': serve, 'write_report': write,
+                        'last_output': lambda: None, 'cpu_seconds': lambda: None}), \
+                    mock.patch('time.sleep', side_effect=sleep), \
+                    mock.patch('time.time', side_effect=lambda: next(clock)), self.assertRaises(SystemExit):
+                MODULE['main']()
+            # Idle past the whole period, yet only Horizon may stop this worker.
+            stop.assert_not_called()
+            serve.assert_not_called()
+            self.assertEqual(json.loads(record.read_text()),
+                             {'at': 660, 'idle_seconds': 660, 'idle_stop_seconds': 600})
+
+    def test_the_report_prints_only_a_fresh_well_formed_record(self):
+        report = MODULE['report']
+        with tempfile.TemporaryDirectory() as root:
+            record = Path(root, 'idle.json')
+            self.assertEqual(report(path=record, now=lambda: 1000), 1)
+            activity = Activity(600, now=100)
+            MODULE['write_report'](activity, 1000, path=record)
+            self.assertFalse(Path(root, 'idle.new').exists())
+            with mock.patch('builtins.print') as printed:
+                self.assertEqual(report(path=record, now=lambda: 1180), 0)
+            printed.assert_called_once_with('{"idle_seconds":900,"idle_stop_seconds":600}')
+            # A watcher that stopped sampling, or a clock that went back, proves nothing.
+            self.assertEqual(report(path=record, now=lambda: 1181), 1)
+            self.assertEqual(report(path=record, now=lambda: 999), 1)
+            for malformed in ['[]', '{"at":1000,"idle_seconds":-1,"idle_stop_seconds":600}',
+                              '{"at":1000,"idle_seconds":true,"idle_stop_seconds":600}',
+                              '{"at":1000,"idle_seconds":"9","idle_stop_seconds":600}', '{"at":1000}', 'nope']:
+                record.write_text(malformed)
+                self.assertEqual(report(path=record, now=lambda: 1000), 1, malformed)
+
+    def test_only_the_report_options_are_accepted(self):
+        entry = MODULE['entry']
+        with mock.patch('builtins.print') as printed:
+            self.assertEqual(entry(['--report-contract']), 0)
+        printed.assert_called_once_with('horizon-idle-report-contract=1')
+        with mock.patch('builtins.print'):
+            self.assertEqual(entry(['--report', 'extra']), 2)
+            self.assertEqual(entry(['--other']), 2)
+
     def test_invalid_settings_stay_passive_instead_of_ending_the_worker(self):
         for environment in [{'HORIZON_IDLE_STOP_MINUTES': '5'},
-                            {'HORIZON_IDLE_STOP_MINUTES': '30'}]:
+                            {'HORIZON_IDLE_STOP_MINUTES': '1441'}, {}]:
             with mock.patch.dict('os.environ', environment, clear=True), \
                     mock.patch.dict(MODULE['main'].__globals__, {'passive': mock.Mock(side_effect=SystemExit)}):
                 with self.assertRaises(SystemExit):

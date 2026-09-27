@@ -126,6 +126,17 @@ def idle_stop_supported():
     return reply.returncode == 0 and reply.stdout == b'horizon-idle-stop-contract=1\n'
 
 
+def idle_report_supported():
+    # Horizon stops a worker without a stop credential from this record, so it needs
+    # a watcher that keeps one; older watchers reject the unknown option.
+    try:
+        reply = subprocess.run(['horizon-worker-idle', '--report-contract'],
+                               capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return reply.returncode == 0 and reply.stdout == b'horizon-idle-report-contract=1\n'
+
+
 def services_ready(selected):
     probe(['horizon-worker-supervise', '--check'])
     with socket.create_connection(('127.0.0.1', 47280), timeout=5) as connection:
@@ -219,6 +230,8 @@ try:
         pending.write_text(json.dumps(selected)); pending.chmod(0o600); pending.replace(runtime)
     if idle_stop_supported():
         print('horizon-idle-stop-contract=1')
+        if idle_report_supported():
+            print('horizon-idle-report-contract=1')
     # Sibling repositories need the manifest helper beside the session script.
     if shutil.which('horizon-worker-siblings'):
         print('horizon-siblings-contract=1')
