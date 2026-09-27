@@ -97,6 +97,24 @@ impl Shared {
         }
     }
 
+    /// Ends every open relay once the byte budget is spent; new ones are refused before dialling.
+    fn close_all(&self) {
+        let sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
+        for socket in sockets.open.values() {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+    }
+
+    /// Takes up to `count` bytes from the budget and returns how many may be relayed.
+    fn reserve(&self, count: u64) -> u64 {
+        let mut allowed = 0;
+        let _ = self.bytes.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            allowed = count.min(BYTE_BUDGET.saturating_sub(used));
+            Some(used + allowed)
+        });
+        allowed
+    }
+
     fn stopped(&self) -> bool {
         self.sockets.lock().unwrap_or_else(PoisonError::into_inner).stopped
     }
@@ -208,9 +226,13 @@ fn accept(listener: &TcpListener, shared: &Arc<Shared>) {
                     ids: Vec::with_capacity(2),
                 };
                 // A failed spawn drops the closure, and with it the slot and the socket.
-                let _ = thread::Builder::new()
+                if thread::Builder::new()
                     .name("local-network-connection".into())
-                    .spawn(move || serve(socket, slot));
+                    .spawn(move || serve(socket, slot))
+                    .is_err()
+                {
+                    shared.refuse();
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(ACCEPT_POLL),
             // A client that reset before it was accepted, or a brief lack of descriptors,
@@ -267,6 +289,10 @@ fn open(shared: &Shared, destination: &Destination) -> Result<TcpStream, Refusal
     let deadline = Instant::now() + OPEN_TIMEOUT;
     let mut failure = Reply::HostUnreachable;
     for address in candidates {
+        // Admission can take seconds; a bridge stopped or spent meanwhile dials nothing more.
+        if shared.over_budget() || shared.stopped() {
+            return Err(Refusal::Reply(Reply::GeneralFailure));
+        }
         let Some(left) = deadline
             .checked_duration_since(Instant::now())
             .filter(|left| !left.is_zero())
@@ -379,7 +405,7 @@ fn name_destination(name: &[u8]) -> Option<Destination> {
     }
     let labels = name.strip_suffix('.').unwrap_or(name);
     let valid = !labels.is_empty()
-        && name.len() <= 253
+        && labels.len() <= 253
         && labels.split('.').all(|label| {
             !label.is_empty()
                 && label.len() <= 63
@@ -420,8 +446,12 @@ fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
                 return;
             }
             Ok(count) => {
-                let total = shared.bytes.fetch_add(count as u64, Ordering::AcqRel) + count as u64;
-                if total > BYTE_BUDGET || to.write_all(&buffer[..count]).is_err() {
+                let allowed = usize::try_from(shared.reserve(count as u64)).unwrap_or(count);
+                if to.write_all(&buffer[..allowed]).is_err() {
+                    break;
+                }
+                if allowed < count {
+                    shared.close_all();
                     break;
                 }
             }

@@ -266,7 +266,9 @@ fn names_follow_dns_syntax() {
         );
     }
     let (long_label, long_name) = ("a".repeat(64), format!("{}b", "a.".repeat(127)));
+    // 253 octets, with or without the root dot.
     assert!(name_destination(format!("{}b", "a.".repeat(126)).as_bytes()).is_some());
+    assert!(name_destination(format!("{}b.", "a.".repeat(126)).as_bytes()).is_some());
     for invalid in ["", ".", "a..b", ".a", "-a.b", "a b", "a/b", "a:b", "a\0b"] {
         assert_eq!(name_destination(invalid.as_bytes()), None, "{invalid:?}");
     }
@@ -332,22 +334,31 @@ fn stopping_the_proxy_ends_open_relays() {
 }
 
 #[test]
-fn the_byte_budget_refuses_new_connections_and_ends_open_ones() {
+fn the_byte_budget_refuses_new_connections_and_ends_every_open_one() {
     let (echo, server) = echo_server();
+    let (other, other_server) = echo_server();
     let (proxy, _) = proxy(FixtureGate {
-        allowed: vec![echo],
+        allowed: vec![echo, other],
         ..FixtureGate::default()
     });
     let mut open = client(&proxy);
     greet(&mut open);
     open.write_all(&ipv4_request(echo)).unwrap();
     assert_eq!(reply(&mut open), 0);
-    proxy.shared.bytes.store(BYTE_BUDGET, Ordering::Release);
+    let mut idle = client(&proxy);
+    greet(&mut idle);
+    idle.write_all(&ipv4_request(other)).unwrap();
+    assert_eq!(reply(&mut idle), 0);
+    proxy.shared.bytes.store(BYTE_BUDGET - 2, Ordering::Release);
+    // Two bytes remain: they are relayed, then every relay ends.
+    open.write_all(b"more").unwrap();
+    assert!(closed(&mut open));
+    assert!(closed(&mut idle));
+    assert_eq!(proxy.counters().bytes, BYTE_BUDGET);
     let mut late = client(&proxy);
     greet(&mut late);
     late.write_all(&ipv4_request(echo)).unwrap();
     assert_eq!(reply(&mut late), Reply::GeneralFailure.code());
-    open.write_all(b"more").unwrap();
-    assert!(closed(&mut open));
     server.join().unwrap();
+    other_server.join().unwrap();
 }
