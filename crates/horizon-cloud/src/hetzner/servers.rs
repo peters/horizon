@@ -32,6 +32,9 @@ pub struct ServerRequest<'a> {
     /// The operation's registered key. Without one, Hetzner generates a root
     /// password and emails it.
     pub ssh_key: Option<&'a SshKey>,
+    /// The private network the server joins at creation, for companion
+    /// connections inside its network zone.
+    pub network: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -46,6 +49,13 @@ pub struct Server {
     pub labels: BTreeMap<String, String>,
     #[serde(default)]
     pub volumes: Vec<u64>,
+    #[serde(default)]
+    pub private_net: Vec<PrivateNet>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PrivateNet {
+    pub network: u64,
+    pub ip: Ipv4Addr,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct PublicNet {
@@ -67,6 +77,9 @@ pub struct ServerType {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Location {
     pub name: String,
+    /// Absent in older records; Hetzner reports it for every location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_zone: Option<String>,
 }
 
 impl Server {
@@ -435,6 +448,8 @@ fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<zer
         automount: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ssh_keys: Option<[u64; 1]>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        networks: Option<[u64; 1]>,
     }
     let body = Body {
         name: resource_name(request.operation_id)?,
@@ -446,6 +461,7 @@ fn create_body(request: &ServerRequest<'_>, placement: &Placement) -> Result<zer
         volumes: request.volume.map(|volume| [volume.id]),
         automount: request.volume.map(|_| false),
         ssh_keys: request.ssh_key.map(|key| [key.id]),
+        networks: request.network.map(|network| [network]),
     };
     // JSON escaping at most multiplies a character by six (`\u0000`).
     let capacity = request

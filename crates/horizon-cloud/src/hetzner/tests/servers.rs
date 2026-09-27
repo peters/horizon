@@ -31,6 +31,7 @@ fn request(placements: &[Placement]) -> ServerRequest<'_> {
         user_data: "#cloud-config\n",
         volume: None,
         ssh_key: None,
+        network: None,
     }
 }
 

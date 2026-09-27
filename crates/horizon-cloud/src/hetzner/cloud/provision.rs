@@ -263,6 +263,14 @@ fn place(
     let volume = ensured?;
     at.host.workspace_device.clone_from(&volume.linux_device);
     let user_data = at.host.cloud_config()?;
+    // A new server joins Horizon's private network for its zone, so companion
+    // connections to peers there stay off the public internet.
+    let network = if *operation == CreateState::Prepared {
+        let zone = client.network_zone(at.location, cancel)?;
+        Some(client.ensure_network(&zone, cancel)?.id)
+    } else {
+        None
+    };
     let server_request = ServerRequest {
         operation_id,
         placements: at.placements,
@@ -270,6 +278,7 @@ fn place(
         user_data: &user_data,
         volume: Some(&volume),
         ssh_key: Some(at.key),
+        network,
     };
     let server = client.ensure_server(
         &server_request,

@@ -17,6 +17,7 @@ use std::{
 pub mod catalog;
 pub mod cloud;
 pub mod keys;
+pub mod networks;
 pub mod servers;
 pub mod volumes;
 
