@@ -89,28 +89,11 @@ fn check_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation, scheme:
             match Challenge::parse(challenge) {
                 Some(Challenge::Basic) => basic.clone(),
                 Some(Challenge::Bearer { realm, service }) => {
-                    // Credentials go only to a token service reached over the same scheme.
-                    if !realm.starts_with(&format!("{scheme}://")) {
-                        return Ok(());
-                    }
-                    cancel.check()?;
                     let scope = format!("repository:{}:pull", reference.repository);
-                    let mut request = agent.get(&realm).query("scope", &scope);
-                    if let Some(service) = &service {
-                        request = request.query("service", service);
+                    match bearer(&agent, &realm, service.as_deref(), &scope, &basic, cancel, scheme)? {
+                        Some(authorization) => authorization,
+                        None => return Ok(()),
                     }
-                    let Ok(mut answer) = request.header("Authorization", basic.as_str()).call() else {
-                        return Ok(());
-                    };
-                    match answer.status().as_u16() {
-                        200 => {}
-                        401 | 403 => return Err(CloudError::Invalid(REFUSED)),
-                        _ => return Ok(()),
-                    }
-                    let Some(token) = granted(answer.body_mut()) else {
-                        return Ok(());
-                    };
-                    zeroize::Zeroizing::new(format!("Bearer {}", token.as_str()))
                 }
                 None => return Ok(()),
             }
@@ -133,6 +116,39 @@ fn check_pull(login: &RegistryLogin, image: &str, cancel: &Cancellation, scheme:
         404 => Err(CloudError::Invalid(MISSING)),
         _ => Ok(()),
     }
+}
+
+/// The Bearer authorization a token service grants the login, or `None` when its
+/// answer is indefinite.
+/// # Errors
+/// Refuses a login the token service rejects.
+fn bearer(
+    agent: &ureq::Agent,
+    realm: &str,
+    service: Option<&str>,
+    scope: &str,
+    basic: &str,
+    cancel: &Cancellation,
+    scheme: &str,
+) -> Result<Option<zeroize::Zeroizing<String>>, CloudError> {
+    // Credentials go only to a token service reached over the same scheme.
+    if !realm.starts_with(&format!("{scheme}://")) {
+        return Ok(None);
+    }
+    cancel.check()?;
+    let mut request = agent.get(realm).query("scope", scope);
+    if let Some(service) = service {
+        request = request.query("service", service);
+    }
+    let Ok(mut answer) = request.header("Authorization", basic).call() else {
+        return Ok(None);
+    };
+    match answer.status().as_u16() {
+        200 => {}
+        401 | 403 => return Err(CloudError::Invalid(REFUSED)),
+        _ => return Ok(None),
+    }
+    Ok(granted(answer.body_mut()).map(|token| zeroize::Zeroizing::new(format!("Bearer {}", token.as_str()))))
 }
 
 /// The registry API host a login or image names, lowercase, with Docker Hub's
