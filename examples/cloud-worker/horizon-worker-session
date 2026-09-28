@@ -72,11 +72,13 @@ lock_checkout() {
 prepare_shared() {
     local state="$shared_state"
     lock_checkout
+    # A recorded failure outranks `ready`: a failure after `ready` was written still fences.
+    [ ! -f "$state/failed" ] || refuse_failed
     if [ ! -f "$state/ready" ]; then
         start_preparation
         lock_checkout
+        [ ! -f "$state/failed" ] || refuse_failed
         if [ ! -f "$state/ready" ]; then
-            [ ! -f "$state/failed" ] || refuse_failed
             echo 'Shared checkout preparation was interrupted. Attach again to resume it; no files were reset.' >&2; exit 3
         fi
     fi
@@ -102,9 +104,7 @@ same_layout() {
 # interrupts it nor lets a second preparation start until it exits.
 start_preparation() {
     local state="$shared_state"
-    if [ -f "$state/failed" ]; then
-        refuse_failed
-    elif [ -e "$state" ]; then
+    if [ -e "$state" ]; then
         # Only a preparation killed without a recorded failure gets here; no session has entered it.
         [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
         same_layout "$state" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }

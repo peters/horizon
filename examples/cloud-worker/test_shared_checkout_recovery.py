@@ -157,6 +157,18 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def test_a_failure_recorded_after_ready_still_fences_attaches(self):
+        f = self.fixture
+        self.release.touch()
+        self.assertEqual(self.start('one').returncode, 0)
+        # The preparation wrote `ready`, then failed its final sync.
+        (self.state / 'failed').touch()
+        refused = self.start('two')
+        self.assertEqual(refused.returncode, 3)
+        self.assertIn('preparation failed', refused.stderr)
+        self.assert_no_session_state('two')
+        self.assertEqual(len(f.launches()), 1)
+
     def test_refused_attach_leaves_no_binding_for_its_session_id(self):
         f = self.fixture
         self.release.touch()

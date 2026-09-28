@@ -273,9 +273,11 @@ own process session on the worker, detached from the SSH client, and shows its
 progress from `/workspace/shared-checkout-state/prepare.log`. A client that
 disconnects, for example a laptop that sleeps, ends only its own attach: the
 preparation finishes, and later panels wait for it and then enter the checkout. Only
-one preparation runs at a time. An attach that is refused or disconnects before its
-process launches leaves no session state behind, so the same session identifier can
-attach again; a session that already existed is never removed.
+one preparation runs at a time. An attach that is refused or disconnects before it
+records its launch request (the `launch-requested` fence) leaves no session state behind,
+so the same session identifier can attach again; a session that already existed is never
+removed. Once the fence is recorded the session is kept, even if its process never
+started, so an uncertain launch is not replayed.
 
 #### Recovering a shared checkout preparation
 
