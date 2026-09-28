@@ -62,6 +62,17 @@ pub(super) fn connect(address: SocketAddr, timeout: Duration, cancel: &Cancellat
     }
 }
 
+/// Why a probe of `ports` on `host` is refused although the device itself is in scope.
+fn outside_ports(host: &str, ports: &[u16]) -> String {
+    let noun = if ports.len() == 1 { "Port" } else { "Ports" };
+    let ports: Vec<_> = ports.iter().map(u16::to_string).collect();
+    format!(
+        "{noun} {} on {host} {} outside the bridge's scope; the owner chooses what it reaches on the cloud card",
+        ports.join(", "),
+        if noun == "Port" { "is" } else { "are" }
+    )
+}
+
 /// The scope's decision on `destination`, abandoned as soon as the bridge stops: a name lookup
 /// can take seconds, so it runs on its own thread and its late result is dropped.
 fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) -> Result<Vec<SocketAddr>, String> {
@@ -70,7 +81,7 @@ fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) ->
     thread::Builder::new()
         .name("local-network-probe-admit".into())
         .spawn(move || {
-            let _ = sender.send(scope.admit(&destination));
+            let _ = sender.send(scope.admit_host(&destination));
         })
         .map_err(|error| error.to_string())?;
     loop {
@@ -140,6 +151,21 @@ impl Prober {
         let Some(address) = address else {
             return Answer::Refused(Reply::NotAllowed.message().into());
         };
+        // The owner may have narrowed the device to some ports: named ports outside them are
+        // refused, and the defaults are probed only where the scope reaches.
+        let mut chosen = Request::probe_ports(ports);
+        let outside: Vec<_> = chosen
+            .iter()
+            .copied()
+            .filter(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
+            .collect();
+        if !ports.is_empty() && !outside.is_empty() {
+            return Answer::Refused(outside_ports(host, &outside));
+        }
+        chosen.retain(|port| !outside.contains(port));
+        if chosen.is_empty() {
+            return Answer::Refused(outside_ports(host, &outside));
+        }
         let mut probe = Probe {
             // Validation bounds the host, so it is echoed as the agent named it.
             host: host.to_owned(),
@@ -148,7 +174,7 @@ impl Prober {
             closed: Vec::new(),
             silent: Vec::new(),
         };
-        for (index, batch) in Request::probe_ports(ports).chunks(AT_ONCE).enumerate() {
+        for (index, batch) in chosen.chunks(AT_ONCE).enumerate() {
             // A bridge switched off, or whose computer left the network, stops probing at once.
             if cancel.is_cancelled() {
                 return Answer::Refused(STOPPED.into());

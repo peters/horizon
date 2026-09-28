@@ -5,6 +5,7 @@
 //! the proxy's loopback port. Only the owner starts a [`Bridge`], from the cloud card, and
 //! nothing persists it; dropping it stops its SSH session and closes every relayed connection.
 mod discovery;
+mod rules;
 mod scope;
 mod session;
 mod socks;
@@ -15,6 +16,7 @@ use horizon_cloud_protocol::local_network::{
     Reply, Subnet,
     discovery::{Answer, Hello, Request},
 };
+pub use rules::{Device, MAX_DEVICES, MAX_PORTS, Rules, RulesError};
 pub use scope::ScopeError;
 pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS, Relay};
 use std::{
@@ -22,7 +24,7 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, PoisonError, RwLock,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -146,6 +148,8 @@ pub struct Bridge {
     cancel: Cancellation,
     supervisor: Option<JoinHandle<()>>,
     proxy: Proxy,
+    /// The owner's scope; absent only in session tests, which use a fixture gate.
+    scope: Option<Arc<Scope>>,
 }
 
 impl Bridge {
@@ -159,13 +163,10 @@ impl Bridge {
         // Switching the bridge off also stops a probe or browse an agent asked for.
         let cancel = Cancellation::default();
         let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));
-        let proxy = Proxy::with_gate(scope.subnet(), scope)?;
-        Ok(Self::with_answers(
-            proxy,
-            session::Ssh(connection.clone()),
-            answers,
-            cancel,
-        )?)
+        let proxy = Proxy::with_gate(scope.subnet(), Arc::clone(&scope) as Arc<dyn socks::Gate>)?;
+        let mut bridge = Self::with_answers(proxy, session::Ssh(connection.clone()), answers, cancel)?;
+        bridge.scope = Some(scope);
+        Ok(bridge)
     }
 
     /// A bridge whose helper hears that nothing is answered here, for the Unix-only session tests.
@@ -197,6 +198,7 @@ impl Bridge {
             cancel,
             supervisor: Some(supervisor),
             proxy,
+            scope: None,
         })
     }
 
@@ -212,6 +214,26 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// The owner's current narrowing of the scope.
+    #[must_use]
+    pub fn rules(&self) -> Rules {
+        self.scope.as_ref().map(|scope| scope.rules()).unwrap_or_default()
+    }
+
+    /// Applies new rules at once: later connections, discovery and probes follow them, and
+    /// every open connection they no longer allow is closed.
+    ///
+    /// # Errors
+    /// Refuses rules that name something the bridge cannot reach, leaving the old ones.
+    pub fn set_rules(&self, rules: Rules) -> Result<(), RulesError> {
+        let Some(scope) = &self.scope else {
+            return Ok(());
+        };
+        scope.set_rules(rules, self.proxy.port())?;
+        self.proxy.inner.close_unless(|address| scope.keeps(address));
+        Ok(())
+    }
+
     /// Revokes the bridge at once without waiting: the proxy refuses and closes every
     /// connection, a probe or browse in progress stops, and the SSH session is told to end. Dropping it afterwards only waits for
     /// that session to finish.
@@ -251,6 +273,7 @@ pub struct Scope {
     resolve: Resolve,
     host: ReadHost,
     source: Source,
+    rules: RwLock<Rules>,
 }
 
 impl Scope {
@@ -265,6 +288,7 @@ impl Scope {
             resolve: Box::new(move |name, port| resolve(&lookups, name, port)),
             host: Box::new(scope::Host::read),
             source: Box::new(scope::source_for),
+            rules: RwLock::default(),
         })
     }
 
@@ -280,22 +304,79 @@ impl Scope {
     /// destination once this computer has left the bridged network.
     pub fn admit(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply> {
         self.on_network()?;
+        // This computer's own loopback services, only on the ports the owner opened.
+        let local = match destination {
+            Destination::Address(address) => {
+                rules::LocalHost::of_address(address.ip()).map(|host| (host, address.port()))
+            }
+            Destination::Name(name, port) => rules::LocalHost::of_name(name).map(|host| (host, *port)),
+        };
+        if let Some((host, port)) = local {
+            return self.rules().local(host, port).ok_or(Reply::NotAllowed);
+        }
+        self.admit_device(destination, Rules::permits_device)
+    }
+
+    /// As [`Self::admit`] for a device on the bridged network whatever the port, never this
+    /// computer: what a probe dials, port by port, after [`Self::keeps`].
+    pub(super) fn admit_host(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply> {
+        self.on_network()?;
+        self.admit_device(destination, |rules, address, _| rules.permits_host(address))
+    }
+
+    fn admit_device(
+        &self,
+        destination: &Destination,
+        permits: impl Fn(&Rules, Ipv4Addr, u16) -> bool,
+    ) -> Result<Vec<SocketAddr>, Reply> {
         let candidates = match destination {
             Destination::Address(address) => vec![*address],
             Destination::Name(name, port) => (self.resolve)(name, *port)?,
         };
-        // A lookup takes time; decide on this computer as it is after it.
+        // A lookup takes time; decide on this computer, and on the rules, as they are after it.
         let host = self.on_network()?;
+        let rules = self.rules();
         let allowed: Vec<_> = candidates
             .into_iter()
             .map(|candidate| SocketAddr::new(candidate.ip().to_canonical(), candidate.port()))
-            .filter(|target| scope::admits(&self.network, &host, target.ip(), || (self.source)(*target)))
+            .filter(|target| {
+                matches!(target.ip(), IpAddr::V4(address) if permits(&rules, address, target.port()))
+                    && scope::admits(&self.network, &host, target.ip(), || (self.source)(*target))
+            })
             .take(MAX_ATTEMPTS)
             .collect();
         if allowed.is_empty() {
             return Err(Reply::NotAllowed);
         }
         Ok(allowed)
+    }
+
+    /// The owner's current rules.
+    #[must_use]
+    pub fn rules(&self) -> Rules {
+        self.rules.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Whether a relay to `address`, admitted earlier, may stay open under the current rules.
+    pub(super) fn keeps(&self, address: SocketAddr) -> bool {
+        self.rules.read().unwrap_or_else(PoisonError::into_inner).keeps(address)
+    }
+
+    /// Replaces the rules once they are known to apply to the bridged network.
+    fn set_rules(&self, rules: Rules, bridge_port: u16) -> Result<(), RulesError> {
+        let host = self.on_network().ok();
+        rules.validate(
+            |address| {
+                host.as_ref().is_some_and(|host| {
+                    scope::admits(&self.network, host, IpAddr::V4(address), || {
+                        (self.source)(SocketAddr::new(IpAddr::V4(address), 9))
+                    })
+                })
+            },
+            bridge_port,
+        )?;
+        *self.rules.write().unwrap_or_else(PoisonError::into_inner) = rules;
+        Ok(())
     }
 
     /// The addresses among `addresses` that a bridge may reach, judged against this computer
@@ -305,14 +386,16 @@ impl Scope {
     /// Refuses everything once this computer has left the bridged network.
     fn reachable(&self, addresses: &BTreeSet<Ipv4Addr>) -> Result<BTreeSet<Ipv4Addr>, Reply> {
         let host = self.on_network()?;
+        let rules = self.rules();
         Ok(addresses
             .iter()
             .copied()
             .filter(|address| {
-                scope::admits(&self.network, &host, IpAddr::V4(*address), || {
-                    // Any port routes the same; the discard port stands for all of them.
-                    (self.source)(SocketAddr::new(IpAddr::V4(*address), 9))
-                })
+                rules.permits_host(*address)
+                    && scope::admits(&self.network, &host, IpAddr::V4(*address), || {
+                        // Any port routes the same; the discard port stands for all of them.
+                        (self.source)(SocketAddr::new(IpAddr::V4(*address), 9))
+                    })
             })
             .collect())
     }

@@ -8,6 +8,8 @@ struct FixtureGate {
     allowed: Vec<SocketAddr>,
     names: HashMap<String, Vec<SocketAddr>>,
     asked: Mutex<Vec<Destination>>,
+    /// Admitted addresses whose relays the current rules no longer keep.
+    revoked: Mutex<Vec<SocketAddr>>,
 }
 
 impl Gate for FixtureGate {
@@ -30,6 +32,14 @@ impl Gate for FixtureGate {
                 .ok_or(Reply::HostUnreachable),
             Destination::Address(_) => Err(Reply::NotAllowed),
         }
+    }
+
+    fn keeps(&self, address: SocketAddr) -> bool {
+        !self
+            .revoked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&address)
     }
 }
 
@@ -355,7 +365,7 @@ fn stopping_the_proxy_ends_open_relays() {
     socket.write_all(&ipv4_request(echo)).unwrap();
     assert_eq!(reply(&mut socket), 0);
     let shared = Arc::clone(&proxy.shared);
-    wait_for(|| !shared.relays.lock().unwrap().is_empty());
+    wait_for(|| !shared.relays.is_empty());
     let started = Instant::now();
     drop(proxy);
     assert!(closed(&mut socket));
@@ -363,7 +373,7 @@ fn stopping_the_proxy_ends_open_relays() {
     server.join().unwrap();
     drop(socket);
     wait_for(|| shared.active.load(Ordering::Acquire) == 0);
-    assert!(shared.relays.lock().unwrap().is_empty());
+    assert!(shared.relays.is_empty());
 }
 
 #[test]
@@ -394,4 +404,54 @@ fn the_byte_budget_refuses_new_connections_and_ends_every_open_one() {
     assert_eq!(reply(&mut late), Reply::GeneralFailure.code());
     server.join().unwrap();
     other_server.join().unwrap();
+}
+
+#[test]
+fn narrowed_rules_close_the_relays_they_no_longer_allow_and_leave_the_rest() {
+    let (kept, kept_server) = echo_server();
+    let (dropped, dropped_server) = echo_server();
+    let (proxy, _) = proxy(FixtureGate {
+        allowed: vec![kept, dropped],
+        ..FixtureGate::default()
+    });
+    let open = |target| {
+        let mut socket = client(&proxy);
+        greet(&mut socket);
+        socket.write_all(&ipv4_request(target)).unwrap();
+        assert_eq!(reply(&mut socket), 0);
+        socket
+    };
+    let (mut stays, mut goes) = (open(kept), open(dropped));
+    wait_for(|| proxy.relays().len() == 2);
+    proxy.close_unless(|address| address == kept);
+    assert!(closed(&mut goes));
+    stays.write_all(b"still here").unwrap();
+    let mut echoed = [0; 10];
+    stays.read_exact(&mut echoed).unwrap();
+    assert_eq!(&echoed, b"still here");
+    wait_for(|| proxy.relays().iter().map(|relay| relay.address).eq([kept]));
+    drop((stays, goes));
+    kept_server.join().unwrap();
+    dropped_server.join().unwrap();
+}
+
+#[test]
+fn a_relay_the_rules_stopped_allowing_before_it_was_listed_is_closed_at_once() {
+    let (echo, server) = echo_server();
+    let (proxy, gate) = proxy(FixtureGate {
+        allowed: vec![echo],
+        ..FixtureGate::default()
+    });
+    // Admitted by the gate, then no longer kept: as if the owner narrowed the scope between
+    // the admission and the relay being listed, where a sweep cannot see it.
+    gate.revoked.lock().unwrap().push(echo);
+    let mut socket = client(&proxy);
+    greet(&mut socket);
+    socket.write_all(&ipv4_request(echo)).unwrap();
+    assert_eq!(reply(&mut socket), 0);
+    assert!(closed(&mut socket));
+    wait_for(|| proxy.counters().connections == 0);
+    assert!(proxy.relays().is_empty());
+    drop(socket);
+    server.join().unwrap();
 }

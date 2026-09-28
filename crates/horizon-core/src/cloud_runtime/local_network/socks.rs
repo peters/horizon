@@ -3,7 +3,7 @@
 use super::Destination;
 use horizon_cloud_protocol::local_network::Reply;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
@@ -35,11 +35,20 @@ pub(super) trait Gate: Send + Sync {
     /// The checked addresses to try in order, or why the destination is refused. The proxy
     /// connects only to returned addresses, so a name cannot resolve again to something else.
     fn admit(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply>;
+
+    /// Whether a relay to an address admitted earlier may stay open under the current rules.
+    fn keeps(&self, _address: SocketAddr) -> bool {
+        true
+    }
 }
 
 impl Gate for super::Scope {
     fn admit(&self, destination: &Destination) -> Result<Vec<SocketAddr>, Reply> {
         super::Scope::admit(self, destination)
+    }
+
+    fn keeps(&self, address: SocketAddr) -> bool {
+        super::Scope::keeps(self, address)
     }
 }
 
@@ -53,26 +62,6 @@ pub struct Counters {
     pub refused: u64,
 }
 
-/// One connection the proxy is relaying now.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Relay {
-    /// What the worker asked for: an address, or a name and port resolved here.
-    pub requested: Destination,
-    /// The admitted address the proxy dialled.
-    pub address: SocketAddr,
-    /// Bytes relayed in both directions so far.
-    pub bytes: u64,
-    pub opened: Instant,
-}
-
-/// A relay's record while it runs; its byte count grows as the relay copies.
-struct Entry {
-    requested: Destination,
-    address: SocketAddr,
-    bytes: AtomicU64,
-    opened: Instant,
-}
-
 struct Shared {
     gate: Arc<dyn Gate>,
     active: AtomicUsize,
@@ -81,8 +70,7 @@ struct Shared {
     /// Every open socket, so stopping the proxy ends relays that are blocked in reads.
     sockets: Mutex<Sockets>,
     next: AtomicU64,
-    /// Open relays, removed when they end.
-    relays: Mutex<BTreeMap<u64, Arc<Entry>>>,
+    relays: relays::Relays,
 }
 
 #[derive(Default)]
@@ -170,20 +158,9 @@ impl Slot {
 
     /// Lists the connection as relaying `requested` to `address` until the slot is released.
     fn relaying(&mut self, requested: Destination, address: SocketAddr) -> Arc<Entry> {
-        let entry = Arc::new(Entry {
-            requested,
-            address,
-            bytes: AtomicU64::new(0),
-            opened: Instant::now(),
-        });
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.shared
-            .relays
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, Arc::clone(&entry));
         self.relay = Some(id);
-        entry
+        self.shared.relays.insert(id, requested, address, self.ids.clone())
     }
 }
 
@@ -193,11 +170,7 @@ impl Drop for Slot {
             self.shared.release(id);
         }
         if let Some(id) = self.relay.take() {
-            self.shared
-                .relays
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&id);
+            self.shared.relays.remove(id);
         }
         self.shared.active.fetch_sub(1, Ordering::AcqRel);
     }
@@ -223,7 +196,7 @@ impl Proxy {
             refused: AtomicU64::new(0),
             sockets: Mutex::default(),
             next: AtomicU64::new(0),
-            relays: Mutex::default(),
+            relays: relays::Relays::default(),
         });
         let accept = {
             let shared = Arc::clone(&shared);
@@ -250,24 +223,20 @@ impl Proxy {
         }
     }
 
-    /// The connections relaying now, oldest first. Relays that start together may take their
-    /// keys in either order, so the list is ordered by when each opened.
+    /// The connections relaying now, oldest first.
     pub(super) fn relays(&self) -> Vec<Relay> {
-        let mut relays: Vec<_> = self
-            .shared
-            .relays
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .map(|entry| Relay {
-                requested: entry.requested.clone(),
-                address: entry.address,
-                bytes: entry.bytes.load(Ordering::Acquire),
-                opened: entry.opened,
-            })
-            .collect();
-        relays.sort_by_key(|relay| relay.opened);
-        relays
+        self.shared.relays.snapshot()
+    }
+
+    /// Closes every open relay whose dialled address `keep` no longer allows.
+    pub(super) fn close_unless(&self, keep: impl Fn(SocketAddr) -> bool) {
+        let rejected = self.shared.relays.rejected(keep);
+        let sockets = self.shared.sockets.lock().unwrap_or_else(PoisonError::into_inner);
+        for id in rejected {
+            if let Some(socket) = sockets.open.get(&id) {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+        }
     }
 
     /// Refuses everything from now on and closes every open connection, without waiting.
@@ -362,6 +331,11 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
     }
     let _ = upstream.set_nodelay(true);
     let entry = slot.relaying(requested, address);
+    // Rules that changed after admission but before the relay was listed are applied here: a
+    // change made after it was listed closes it through `close_unless`.
+    if !shared.gate.keeps(address) {
+        return;
+    }
     relay(&shared, &entry, client, upstream);
 }
 
@@ -578,6 +552,10 @@ fn copy(shared: &Shared, entry: &Entry, mut from: TcpStream, mut to: TcpStream) 
     let _ = from.shutdown(Shutdown::Both);
     let _ = to.shutdown(Shutdown::Both);
 }
+
+mod relays;
+use relays::Entry;
+pub use relays::Relay;
 
 #[cfg(test)]
 mod tests;

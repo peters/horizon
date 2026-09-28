@@ -48,6 +48,7 @@ fn gate(resolve: Resolve) -> Scope {
         resolve,
         host: Box::new(|| Ok(home())),
         source: Box::new(|_| Some(Ipv4Addr::new(192, 168, 1, 20))),
+        rules: std::sync::RwLock::default(),
     }
 }
 
@@ -557,3 +558,6 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
 /// run with `HORIZON_TEST_SSHD=/path/to/sshd cargo test -p horizon-core local_network -- --ignored`.
 #[cfg(unix)]
 mod end_to_end;
+
+/// The owner's narrowing and loopback opt-in, applied by [`Scope`].
+mod rules;
