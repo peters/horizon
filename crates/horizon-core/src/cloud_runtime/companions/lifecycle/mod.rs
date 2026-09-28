@@ -252,8 +252,9 @@ fn settle_access(store: &journal::Store, state: &mut journal::State, prior: &rec
 /// Confirming the same unstarted operation again, as the card's Retry does after a
 /// failed start, is idempotent: it records nothing new and never runs anything twice.
 /// # Errors
-/// Refuses anything but an unstarted Ensure Ready for a reserved binding whose target
-/// record is prepared, workerless and matches the binding.
+/// Refuses anything but an unstarted Ensure Ready whose target record, reserved or
+/// existing, is prepared with no worker ever requested and matches the binding's
+/// checkout, while the owner's selection covers it.
 pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     // Held through the write, in execution's lock order (source, execution, target),
     // so an uncheck cannot land between the checks and the recorded confirmation.
@@ -309,6 +310,18 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
         ));
     }
     receipt::confirm(&target, request.owner, id, &grant)
+}
+
+/// The checkout a companion is bound to, when it is bound. Reads only; lets the card
+/// offer a reservation again after Horizon closed before adding its cloud.
+/// # Errors
+/// Refuses changed ownership and corrupt durable state.
+pub fn bound_checkout(request: &Request<'_>) -> Result<Option<std::path::PathBuf>> {
+    let (_, state) = request.load()?;
+    Ok(state
+        .intents
+        .binding(request.alias)
+        .map(|binding| binding.checkout().to_owned()))
 }
 
 /// Read status only. No reconciliation, resume, deployment or grant refresh occurs.

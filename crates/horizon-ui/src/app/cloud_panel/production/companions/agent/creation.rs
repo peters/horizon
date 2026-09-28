@@ -33,10 +33,18 @@ pub(in crate::app::cloud_panel::production::companions) struct State {
     pending: Vec<Pending>,
     /// Operation IDs are scoped per source journal, so a decline names its source
     /// cloud and alias too.
-    declined: VecDeque<(String, String, OperationId)>,
+    /// The target cloud is kept when its card was already added and stays unstarted.
+    declined: VecDeque<Declined>,
     /// A source cloud and alias whose checkout the owner wants to choose.
     picker: Option<(String, String)>,
     actions: Vec<(String, String, Choice)>,
+}
+
+struct Declined {
+    source: String,
+    alias: String,
+    id: OperationId,
+    kept: Option<String>,
 }
 
 struct Pending {
@@ -99,21 +107,25 @@ impl State {
         match (action, pending) {
             // A declined request stays declined, whether polled or sent again.
             (None | Some(Action::EnsureReady), _)
-                if self
+                if let Some(declined) = self
                     .declined
                     .iter()
-                    .any(|(s, a, declined)| s == source && a == alias && *declined == id) =>
+                    .find(|d| d.source == source && d.alias == alias && d.id == id) =>
             {
                 Some(Ok(json!({
                     "operation_id": id,
                     "action": "ensure_ready",
                     "cloud": source,
                     "alias": alias,
-                    "target_cloud_id": null,
+                    "target_cloud_id": declined.kept,
                     "phase": "refused",
                     "done": true,
                     "resend": false,
-                    "message": "The owner declined creating this companion cloud; nothing was created",
+                    "message": if declined.kept.is_some() {
+                        "The owner declined starting this companion cloud; its card stays, unstarted, for the owner to start or remove"
+                    } else {
+                        "The owner declined creating this companion cloud; nothing was created"
+                    },
                 })))
             }
             (None, Some(pending)) if pending.id == id => Some(Ok(pending.describe())),
@@ -136,8 +148,12 @@ impl State {
         if self.declined.len() >= DECLINED {
             self.declined.pop_front();
         }
-        self.declined
-            .push_back((pending.source.clone(), pending.alias.clone(), pending.id));
+        self.declined.push_back(Declined {
+            source: pending.source.clone(),
+            alias: pending.alias.clone(),
+            id: pending.id,
+            kept: pending.card.and(pending.cloud_id.clone()),
+        });
         pending.cloud_id.is_some().then_some(pending)
     }
 }
@@ -203,89 +219,6 @@ impl HorizonApp {
             .pending
             .push(pending);
         answer
-    }
-
-    /// Asks the owner to start a checked companion whose cloud was created but never
-    /// started, as a creation whose card already exists. `None` when its card is not
-    /// open here, and the agent is told to have it started from its card.
-    pub(super) fn request_companion_start(
-        &mut self,
-        source: &str,
-        alias: &str,
-        operation: &lifecycle::Operation,
-        context: &Context,
-    ) -> Option<Value> {
-        let target = &operation.intent.target_cloud_id;
-        let group = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .find(|group| group.remote.as_ref().is_some_and(|launch| &launch.id == target))?;
-        let launch = group.remote.as_ref()?;
-        let owner = self
-            .cloud_prototype
-            .production
-            .companions
-            .entries
-            .get(source)?
-            .owner
-            .clone();
-        let declaration = context.declarations.get(alias)?.clone();
-        let creation = &mut self.cloud_prototype.production.companions.agent.creation;
-        if let Some(pending) = creation.find(source, alias) {
-            return Some(pending.describe());
-        }
-        let pending = Pending {
-            source: source.to_owned(),
-            alias: alias.to_owned(),
-            owner,
-            declaration,
-            id: operation.intent.operation_id,
-            checkouts: Vec::new(),
-            search: None,
-            chosen: Some(group.cwd.clone()),
-            error: None,
-            step: Step::Waiting,
-            cloud_id: Some(target.clone()),
-            checkout: Some(Checkout {
-                repository: group.cwd.clone(),
-                revision: launch.revision.clone(),
-                profile: launch.profile.clone(),
-            }),
-            card: Some(group.issue),
-            existing: true,
-        };
-        let answer = pending.describe();
-        creation.pending.push(pending);
-        Some(answer)
-    }
-
-    /// Directories in the workspace that may be checkouts: its own, its panels' and
-    /// its clouds'. Each is read off the UI thread.
-    fn checkout_candidates(&self, workspace: &str) -> Vec<PathBuf> {
-        let mut directories: Vec<PathBuf> = Vec::new();
-        let id = self.board.workspace_id_by_local_id(workspace);
-        let cwd = id.and_then(|id| self.board.workspace(id)).and_then(|w| w.cwd.clone());
-        let panels = self
-            .board
-            .panels
-            .iter()
-            .filter(|panel| Some(panel.workspace_id) == id)
-            .filter_map(|panel| panel.launch_cwd.clone());
-        let clouds = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .filter(|group| group.workspace == workspace)
-            .map(|group| group.cwd.clone());
-        for directory in cwd.into_iter().chain(panels).chain(clouds) {
-            if !directories.contains(&directory) && directories.len() < SEARCHED {
-                directories.push(directory);
-            }
-        }
-        directories
     }
 
     pub(in crate::app) fn choose_companion_checkout(&mut self, source: &str, alias: &str, path: &Path) {
@@ -548,109 +481,11 @@ impl HorizonApp {
     }
 }
 
-/// Idempotent for the same cloud ID, checkout and operation, so a retry after a
-/// partial failure records nothing twice.
-fn reserve(
-    root: &Path,
-    owner: &Owner,
-    groups: &CloudGroups,
-    (alias, declaration): (&str, &Declaration),
-    directory: &Path,
-    cloud_id: &str,
-    id: OperationId,
-) -> Result<Checkout, String> {
-    let cancel = Cancellation::default();
-    let checkout = inventory::checkout(directory, declaration, &cancel).map_err(|error| error.to_string())?;
-    let context = inventory::prepare(owner, groups, &cancel).map_err(|error| error.to_string())?;
-    if context.declarations.get(alias) != Some(declaration) {
-        return Err("The companion's declaration changed; the agent must ask again".into());
-    }
-    let request = lifecycle::Request {
-        root,
-        owner,
-        context: &context,
-        alias,
-    };
-    let target = Target {
-        scope: owner.scope.clone(),
-        cloud_id: cloud_id.to_owned(),
-        declaration: declaration.clone(),
-    };
-    let binding = Binding::new(owner, alias, target, checkout.repository.clone(), Origin::Reserved)
-        .map_err(|error| error.to_string())?;
-    // A retry finds the binding and operation already recorded: the target then has a
-    // claim, so binding again is refused while submitting again returns the operation.
-    let recorded = retry_busy(|| {
-        let bound = lifecycle::bind(&request, binding.clone());
-        lifecycle::submit(&request, Action::EnsureReady, id).or_else(|error| bound.and(Err(error)))
-    })
-    .map_err(|error| error.to_string())?;
-    if recorded.intent.target_cloud_id != cloud_id {
-        return Err("This companion is already bound to another cloud; nothing was reserved".into());
-    }
-    Ok(checkout)
-}
-
-fn select_and_confirm(
-    root: &Path,
-    owner: &Owner,
-    groups: &CloudGroups,
-    alias: &str,
-    target: &str,
-    id: OperationId,
-) -> Result<Context, String> {
-    let cancel = Cancellation::default();
-    let context = inventory::prepare(owner, groups, &cancel).map_err(|error| error.to_string())?;
-    let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
-    // The selection is saved before any SSH work; the new cloud has no worker to reach yet.
-    let selected = retry_busy(|| {
-        companions::refresh(
-            &companions::Request {
-                root: root.to_owned(),
-                owner: owner.clone(),
-                context: Some(context.clone()),
-                action: companions::Action::Select {
-                    alias: alias.to_owned(),
-                    target_cloud_id: target.to_owned(),
-                },
-                settings: settings.clone(),
-            },
-            &cancel,
-        )
-    });
-    if let Err(error) = selected {
-        tracing::info!(%error, "selected the new companion cloud before it has a worker");
-    }
-    retry_busy(|| {
-        lifecycle::confirm_creation(
-            &lifecycle::Request {
-                root,
-                owner,
-                context: &context,
-                alias,
-            },
-            id,
-        )
-    })
-    .map_err(|error| error.to_string())?;
-    Ok(context)
-}
-
-fn cancel(root: &Path, owner: &Owner, groups: &CloudGroups, alias: &str, id: OperationId) {
-    let Ok(context) = inventory::prepare(owner, groups, &Cancellation::default()) else {
-        return;
-    };
-    let request = lifecycle::Request {
-        root,
-        owner,
-        context: &context,
-        alias,
-    };
-    // Nothing to cancel when the failure came before the operation was recorded.
-    let _ = retry_busy(|| lifecycle::cancel_submission(&request, id));
-}
-
+mod offers;
+mod steps;
 mod view;
+
+use steps::{cancel, reserve, select_and_confirm};
 
 #[cfg(test)]
 mod tests;

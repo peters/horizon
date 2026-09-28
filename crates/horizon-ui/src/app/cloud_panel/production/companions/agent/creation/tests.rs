@@ -246,6 +246,24 @@ fn a_confirmed_request_reserves_a_fresh_cloud_bound_to_the_checkout_and_records_
     assert_eq!(operation.phase, lifecycle::Phase::Submitted);
     // Nothing exists for the reserved cloud until the card creates it.
     assert!(!root.join(&cloud_id).join("deployment.json").exists());
+    // Horizon closed before adding the card: the next request offers it again from
+    // the recorded checkout.
+    let (_app_temp, mut app) = crate::app::test_support::test_app();
+    app.cloud_prototype.root = Some(root.clone());
+    app.cloud_prototype.groups = groups.clone();
+    app.cloud_prototype.production.companions.sync(Some("session"), &groups);
+    let submitted = super::super::Submitted {
+        operation,
+        context,
+        alias: "consumer".into(),
+    };
+    let (answer, started) = app.continue_operation("source", submitted, &egui::Context::default());
+    assert!(!started);
+    assert_eq!(answer["phase"], "confirmation_required");
+    let pending = &creation(&mut app).pending[0];
+    assert_eq!(pending.cloud_id.as_deref(), Some(cloud_id.as_str()));
+    assert_eq!(pending.chosen, Some(checkout.canonicalize().unwrap()));
+    assert!(pending.waiting() && pending.card.is_none());
 }
 
 #[cfg(unix)]
@@ -350,4 +368,36 @@ fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
     assert_eq!(pending.card, Some(2));
     assert_eq!(pending.cloud_id.as_deref(), Some("target"));
     assert_eq!(pending.chosen.as_deref(), Some(Path::new("/checkouts/target")));
+}
+
+#[test]
+fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let id = OperationId::generate();
+    app.request_companion_creation(owner(), "consumer", declaration(), id);
+    let pending = &mut creation(&mut app).pending[0];
+    // A later step failed after the reservation and the card.
+    pending.cloud_id = Some("reserved".into());
+    pending.checkout = Some(Checkout {
+        repository: "/checkouts/consumer".into(),
+        revision: "a".repeat(40),
+        profile: serde_json::from_value(
+            json!({"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}),
+        )
+        .unwrap(),
+    });
+    pending.card = Some(7);
+    // Polls name the reserved cloud once the reservation is recorded.
+    assert_eq!(pending.describe()["target_cloud_id"], "reserved");
+    creation(&mut app)
+        .actions
+        .push(("source".into(), "consumer".into(), Choice::Decline));
+    app.poll_companion_creations(&ctx);
+    let refused = creation(&mut app)
+        .answer("source", "consumer", None, id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused["target_cloud_id"], "reserved");
+    assert!(refused["message"].as_str().unwrap().contains("card stays"));
 }

@@ -139,6 +139,17 @@ fn a_held_source_skips_its_periodic_refresh_until_every_request_releases_it() {
     let ctx = egui::Context::default();
     state.tick(temp.path(), &groups, &ctx);
     assert!(state.entries["source"].job.is_none());
+    // An owner's uncheck still runs, so it can withdraw a creation before allocation.
+    state
+        .entries
+        .get_mut("source")
+        .unwrap()
+        .clearing
+        .insert("consumer".into());
+    state.tick(temp.path(), &groups, &ctx);
+    assert!(state.entries["source"].job.is_some());
+    state.entries.get_mut("source").unwrap().job = None;
+    state.entries.get_mut("source").unwrap().clearing.clear();
     state.agent.release("source");
     assert!(state.agent.holds("source"));
     state.agent.release("source");

@@ -321,7 +321,14 @@ impl State {
         let mut ready = self
             .entries
             .iter()
-            .filter(|(id, e)| !e.blocked && e.job.is_none() && Instant::now() >= e.due && !self.agent.holds(id))
+            // An owner's uncheck runs even while an agent request holds the source, so
+            // it can withdraw a creation before allocation.
+            .filter(|(id, e)| {
+                !e.blocked
+                    && e.job.is_none()
+                    && Instant::now() >= e.due
+                    && (!self.agent.holds(id) || !e.clearing.is_empty())
+            })
             .map(|(id, e)| (e.clearing.is_empty(), e.pending.is_none(), e.due, id.clone()))
             .collect::<Vec<_>>();
         ready.sort();

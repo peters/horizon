@@ -35,7 +35,8 @@ impl Pending {
             "action": "ensure_ready",
             "cloud": self.source,
             "alias": self.alias,
-            "target_cloud_id": null,
+            // Known once the reservation is recorded or the cloud already exists.
+            "target_cloud_id": self.cloud_id.as_ref().filter(|_| self.checkout.is_some() || self.existing),
             "phase": phase,
             "done": false,
             // The owner's choice moves it forward, so polling is enough.
