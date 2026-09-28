@@ -1,0 +1,86 @@
+name: Worker images
+
+# Publishes ghcr.io/peters/horizon-worker-helpers: the worker helpers and scripts of
+# one main commit, for recipes to copy with COPY --from, pinned by digest. It runs
+# only for main, so no pull request or other branch can push an image.
+on:
+  push:
+    branches: [main]
+    # The three helper crates and every workspace crate they depend on.
+    paths:
+      - examples/cloud-worker/**
+      - crates/horizon-cloud-worker/**
+      - crates/horizon-device/**
+      - crates/horizon-browser-cli/**
+      - crates/horizon-browser/**
+      - crates/horizon-browser-control/**
+      - crates/horizon-browser-mcp/**
+      - crates/horizon-browser-protocol/**
+      - crates/horizon-cloud/**
+      - crates/horizon-cloud-protocol/**
+      - crates/horizon-process-time/**
+      - Cargo.toml
+      - Cargo.lock
+      # The image ships the license and the dependency notices this collector gathers.
+      - LICENSE
+      - .horizon/collect-helper-notices.py
+      - .github/workflows/worker-images.yml
+  workflow_dispatch:
+
+# A running publication always finishes; GitHub keeps only the newest waiting run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  helpers:
+    name: Publish worker helpers
+    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      IMAGE: ghcr.io/peters/horizon-worker-helpers
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build fetches this public commit itself, so it needs no context.
+      - name: Build helpers
+        run: |
+          docker build --pull --build-arg HORIZON_REVISION="$REVISION" --target helpers \
+            --tag "$IMAGE:sha-$REVISION" - < examples/cloud-worker/Dockerfile.helpers
+      # The probe copies the artifact over a contract base exactly as a recipe does,
+      # then runs its checker; nothing is pushed unless every current marker is present.
+      - name: Check contract markers
+        run: |
+          docker build --build-arg HORIZON_REVISION="$REVISION" --target probe \
+            --tag horizon-worker-helpers-probe - < examples/cloud-worker/Dockerfile.helpers
+          python3 -B examples/cloud-worker/check-markers.py horizon-worker-helpers-probe
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker tag "$IMAGE:sha-$REVISION" "$IMAGE:main"
+          docker push "$IMAGE:sha-$REVISION" | tee "$RUNNER_TEMP/push.log"
+          docker push "$IMAGE:main"
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
+          test -n "$digest"
+          {
+            echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:main\`."
+            echo
+            echo "Copy it into a worker recipe with:"
+            echo
+            echo "\`COPY --from=$IMAGE@$digest / /\`"
+          } >> "$GITHUB_STEP_SUMMARY"

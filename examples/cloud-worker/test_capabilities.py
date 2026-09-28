@@ -107,6 +107,15 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertIn('Worker contract requires Python', output)
             self.assertEqual(commands, [])
 
+    def test_a_base_without_bash_4_4_at_bin_bash_fails(self):
+        def run(command, **kwargs):
+            if command[0] == '/bin/bash':
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, stdout=b'')
+        status, output, _ = self.run_check(run=run)
+        self.assertEqual(status, 1)
+        self.assertIn('Worker contract requires Bash 4.4 or newer at /bin/bash', output)
+
     def test_native_contract_does_not_probe_browsers_or_unselected_agents(self):
         status, output, commands = self.run_check(missing=('grok', 'firefox', 'geckodriver', 'horizon-browser'))
         self.assertEqual(status, 0, output)
@@ -178,7 +187,9 @@ class CapabilitiesTests(unittest.TestCase):
         status, output, commands = self.run_check(missing=('codex', 'claude', 'grok', 'Xvfb', 'horizon-device', 'horizon-browser'))
         self.assertEqual(status, 0, output)
         self.assertEqual([call.args[0] for call in commands],
-                         [['horizon-worker-session-env', 'check'], ['git', 'lfs', 'version'],
+                         [['horizon-worker-session-env', 'check'],
+                          ['/bin/bash', '-c', '(( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404 ))'],
+                          ['git', 'lfs', 'version'],
                           ['horizon-worker-supervise', '--idle-stop-contract'],
                           ['horizon-worker-source', '--shallow-contract'],
                           ['horizon-worker-source', '--lfs-selection-contract']])
