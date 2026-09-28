@@ -1,17 +1,20 @@
 //! Production steps: Git, Docker and the registry build the image, the provider API
-//! switches the worker, and SSH releases hosted devices.
-use super::{Head, Provider, Recipe, Steps, pair};
+//! switches the worker or releases its server, and SSH releases hosted devices.
+use super::{Head, Provider, Recipe, Server, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
-    deployment::{Request, image, storage},
+    deployment::{Request, hetzner, image, storage},
     image::Images,
-    registry, repository, siblings,
+    registry, repository,
+    settings::Settings,
+    siblings,
     ssh::Connection,
     state::{Deployment, ReplacementImage, Store},
 };
 use horizon_cloud::{
     Cancellation, CloudConfig, CloudError, CreateState, WorkerSpec,
+    provider::{Description, Rebuild},
     runpod::{RunPod, replacement::Observed},
 };
 use std::{
@@ -76,11 +79,40 @@ impl Provider for Pod<'_> {
     }
 }
 
+/// Releases and reopens the server of a provider that rebuilds on a new server.
+pub(super) struct Released<'a> {
+    settings: &'a Settings,
+    cancel: &'a Cancellation,
+}
+
+impl<'a> Released<'a> {
+    pub(super) const fn new(settings: &'a Settings, cancel: &'a Cancellation) -> Self {
+        Self { settings, cancel }
+    }
+}
+
+impl Server for Released<'_> {
+    fn released(&self, store: &Store, state: &Deployment) -> Result<bool> {
+        hetzner::rebuild::released(store, state)
+    }
+
+    fn release(&self, store: &Store, state: &mut Deployment) -> Result<()> {
+        hetzner::rebuild::release(store, state, self.settings, self.cancel)
+    }
+
+    fn reopen(&self, store: &Store, state: &mut Deployment) -> Result<()> {
+        hetzner::rebuild::reopen(store, state)
+    }
+}
+
 /// Everything a rebuild does outside its record, for one locked cloud.
 pub(super) struct Live<'a> {
     request: &'a Request,
     store: &'a Store,
-    provider: RunPod,
+    /// The provider that switches the worker in place, for `Rebuild::InPlace`.
+    provider: Option<RunPod>,
+    /// The server a `Rebuild::NewServer` provider releases and reopens.
+    server: Option<Released<'a>>,
     runner: Runner<'a>,
     /// Holds the registry generation lock until the provider update is sent.
     registry: RefCell<Option<registry::Prepared>>,
@@ -112,10 +144,15 @@ impl<'a> Live<'a> {
         }
         let registry =
             registry::Prepared::for_image(settings, &state.profile.image, Some(&state.repository), building)?;
+        let (provider, server) = match Description::of(&state.profile).rebuild {
+            Rebuild::InPlace => (Some(RunPod::new(settings.credential()?)), None),
+            Rebuild::NewServer => (None, Some(Released::new(settings, cancel))),
+        };
         Ok(Self {
             request,
             store,
-            provider: RunPod::new(settings.credential()?),
+            provider,
+            server,
             runner: Runner {
                 cancel,
                 emit,
@@ -127,8 +164,11 @@ impl<'a> Live<'a> {
         })
     }
 
-    fn pod(&self) -> Pod<'_> {
-        Pod::new(&self.provider, self.store, self.runner.cancel)
+    fn pod(&self) -> Result<Pod<'_>> {
+        let provider = self.provider.as_ref().ok_or(Error::Invalid(
+            "This cloud's provider rebuilds on a new server, not in place",
+        ))?;
+        Ok(Pod::new(provider, self.store, self.runner.cancel))
     }
 
     fn images<'s>(&'s self, registry: Option<&'s registry::Prepared>, building: bool) -> Images<'s> {
@@ -175,10 +215,37 @@ impl<'a> Live<'a> {
             });
         };
         registry.verify_image(&digest, self.runner.cancel)?;
-        let registry_auth_id = Some(registry.ensure_provider(&self.provider, self.runner.cancel)?);
+        let Some(provider) = &self.provider else {
+            // A new server's host logs in to the registry itself (`registry_auth`), so
+            // the recorded credential is kept and the host's login is checked instead.
+            return self.hosted(state, digest);
+        };
+        let registry_auth_id = Some(registry.ensure_provider(provider, self.runner.cancel)?);
         Ok(ReplacementImage {
             digest,
             registry_auth_id,
+            registry_generation: self.generation.clone(),
+        })
+    }
+
+    /// For a provider whose host logs in to the registry: the image with the recorded
+    /// credential, once the host's pull login is shown to read it. Checked before the
+    /// server is released, so an image the new server could not pull never stops it.
+    fn hosted(&self, state: &Deployment, digest: String) -> Result<ReplacementImage> {
+        let settings = &self.request.settings;
+        let machine = settings.hetzner.as_ref().ok_or(Error::Invalid(
+            "Add a hetzner section to the cloud settings before rebuilding a Hetzner cloud",
+        ))?;
+        if let Some(login) = hetzner::pull_login(machine, settings.registries.as_ref(), &digest)? {
+            horizon_cloud::host::pull::verify_pull(&login, &digest, self.runner.cancel)?;
+        }
+        let spec = state
+            .spec
+            .as_ref()
+            .ok_or(Error::Invalid("Missing worker specification"))?;
+        Ok(ReplacementImage {
+            digest,
+            registry_auth_id: spec.registry_auth_id.clone(),
             registry_generation: self.generation.clone(),
         })
     }
@@ -186,15 +253,15 @@ impl<'a> Live<'a> {
 
 impl Provider for Live<'_> {
     fn replace(&self, worker_id: &str, from: &WorkerSpec, to: &WorkerSpec) -> Result<()> {
-        self.pod().replace(worker_id, from, to)
+        self.pod()?.replace(worker_id, from, to)
     }
 
     fn observe(&self, state: &Deployment, deadline: Option<Instant>) -> Result<Observed> {
-        self.pod().observe(state, deadline)
+        self.pod()?.observe(state, deadline)
     }
 
     fn pause(&self, deadline: Instant) -> Result<bool> {
-        self.pod().pause(deadline)
+        self.pod()?.pause(deadline)
     }
 }
 
@@ -226,12 +293,19 @@ impl Steps for Live<'_> {
         Ok(())
     }
 
+    fn server(&self) -> Option<&dyn Server> {
+        self.server.as_ref().map(|server| server as &dyn Server)
+    }
+
     fn release_devices(&self, state: &Deployment) -> Result<()> {
         let (CreateState::Bound { worker_id }, Some(spec)) = (&state.operation, &state.spec) else {
             return Err(Error::Invalid("Only a bound worker's image can be replaced"));
         };
-        let worker = self
+        let provider = self
             .provider
+            .as_ref()
+            .ok_or(Error::Invalid("This cloud's provider holds no hosted devices"))?;
+        let worker = provider
             .inspect(worker_id, self.runner.cancel)?
             .ok_or(CloudError::WorkerLost)?;
         worker.verify(spec)?;

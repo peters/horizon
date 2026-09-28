@@ -30,6 +30,18 @@ const PREPARED: &str = "An image rebuild was being prepared and did not finish; 
 const BUILT: &str = "A rebuilt image is ready, but the worker has not switched to it. Continue to restart the worker on it, or cancel to keep the current image.";
 const REQUESTED: &str = "The worker's image switch may be in progress. Continue to finish it, or cancel to switch the worker back to its previous image.";
 const CANCEL_REQUESTED: &str = "Cancel the image switch? The worker switches back to its previous image, which restarts it again. Running agent processes restart; files under /workspace are kept.";
+/// On a provider that rebuilds on a new server (`provider::Rebuild::NewServer`).
+const NEW_SERVER: &str =
+    " The server is released and a new one starts on the same workspace volume, with a new address.";
+const REQUESTED_NEW_SERVER: &str = "The rebuild may have released the server. Continue to start a new server on the rebuilt image, or cancel to start one on the previous image; before the release the cloud keeps its server.";
+const CANCEL_REQUESTED_NEW_SERVER: &str = "Cancel the rebuild? If the server was already released, a new one starts on the previous image on the same workspace volume. Running agent processes restart; files under /workspace are kept.";
+
+/// Whether the cloud's provider rebuilds on a new server rather than in place.
+fn new_server(runtime: &Runtime) -> bool {
+    runtime.state.as_ref().is_some_and(|state| {
+        cloud_runtime::provider::Description::of(&state.profile).rebuild == cloud_runtime::provider::Rebuild::NewServer
+    })
+}
 
 /// The stage rows the card lists: a rebuild's while one is shown, else the deployment's.
 pub(super) fn stages(runtime: &Runtime) -> &'static [Stage] {
@@ -107,7 +119,14 @@ pub(super) fn pending_notice(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option
             false
         }
         ReplacementPhase::Requested(_) => {
-            notice(ui, REQUESTED);
+            notice(
+                ui,
+                if new_server(runtime) {
+                    REQUESTED_NEW_SERVER
+                } else {
+                    REQUESTED
+                },
+            );
             true
         }
     };
@@ -144,8 +163,13 @@ fn continue_or_cancel(ui: &mut egui::Ui, runtime: &mut Runtime, requested: bool)
 }
 
 fn confirm_switch_back(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
-    ui.colored_label(egui::Color32::LIGHT_RED, CANCEL_REQUESTED);
-    if ui.add(danger_button("Switch back and restart")).clicked() {
+    let (text, button) = if new_server(runtime) {
+        (CANCEL_REQUESTED_NEW_SERVER, "Cancel and keep the previous image")
+    } else {
+        (CANCEL_REQUESTED, "Switch back and restart")
+    };
+    ui.colored_label(egui::Color32::LIGHT_RED, text);
+    if ui.add(danger_button(button)).clicked() {
         return Some(Action::CancelRebuild);
     }
     if ui.add(action_button("Keep the new image")).clicked() {
@@ -169,7 +193,11 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
         }
         return None;
     }
-    ui.label(CONFIRMATION);
+    if new_server(runtime) {
+        ui.label(format!("{CONFIRMATION}{NEW_SERVER}"));
+    } else {
+        ui.label(CONFIRMATION);
+    }
     if ui.add(danger_button("Rebuild and restart")).clicked() {
         return Some(Action::Rebuild);
     }

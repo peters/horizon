@@ -82,6 +82,19 @@ pub struct Description {
     /// Whether the provider pulls private images with a registry auth it stores
     /// (`registry_pull_auth_id`); otherwise the host logs in to the registry itself.
     pub registry_auth: bool,
+    /// How a ready worker moves onto a rebuilt image.
+    pub rebuild: Rebuild,
+}
+
+/// How a provider moves a ready worker onto a rebuilt image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rebuild {
+    /// The provider switches the same worker to the new image and reports which image
+    /// it runs, so the switch can be watched and undone.
+    InPlace,
+    /// The provider cannot report a server's image, so the server is released as a
+    /// stop releases it and a new one runs the new image on the same workspace volume.
+    NewServer,
 }
 
 /// Who stops an idle worker on a provider.
@@ -110,6 +123,7 @@ pub const RUNPOD: Description = Description {
     creatable: true,
     idle_stop: IdleStop::Worker,
     registry_auth: true,
+    rebuild: Rebuild::InPlace,
     site: "runpod.io",
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
@@ -132,6 +146,7 @@ pub const HETZNER: Description = Description {
     // The project token must never reach a worker, so Horizon stops it.
     idle_stop: IdleStop::Horizon,
     registry_auth: false,
+    rebuild: Rebuild::NewServer,
     site: "hetzner.com",
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),

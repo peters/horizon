@@ -104,6 +104,19 @@ impl Compute for RunPod {
 }
 
 impl Compute for hetzner::Compute {
+    /// Hetzner cannot report a server's image, so a rebuild whose release may have
+    /// begun is finished or cancelled only through the rebuild; a reconnect must not
+    /// place a server around it.
+    fn settle(
+        &self,
+        _store: &Store,
+        state: &mut Deployment,
+        _cancel: &Cancellation,
+        _observe: mutation::Observer<'_>,
+    ) -> Result<()> {
+        state.refuse_unsettled_replacement()
+    }
+
     fn provision_ready(
         &self,
         request: &Request,

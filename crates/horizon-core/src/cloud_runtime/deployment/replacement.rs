@@ -4,6 +4,7 @@
 //! tested offline. Only dedicated clouds have a `deployment.json` record; a migrated
 //! allocation does not load here.
 mod live;
+mod new_server;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -18,6 +19,7 @@ use super::{
 use crate::cloud_runtime::command::Runner;
 use horizon_cloud::{
     Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
+    provider::{Description, Rebuild},
     runpod::{
         RunPod,
         replacement::{Observed, may_have_applied},
@@ -49,6 +51,8 @@ enum Boundary {
     Observed,
     Rebound,
     Reverted,
+    /// A new-server rebuild released the worker's server; the volume stays.
+    Released,
 }
 
 /// The repository's committed HEAD and its `.horizon/cloud.yml`, if readable.
@@ -98,6 +102,28 @@ trait Steps: Provider {
     fn verify(&self, state: &Deployment, image: &ReplacementImage) -> Result<()>;
     /// Releases hosted devices before the container reset ends the worker's copies.
     fn release_devices(&self, state: &Deployment) -> Result<()>;
+    /// For a provider that rebuilds on a new server (`provider::Rebuild::NewServer`),
+    /// how its server is released and reopened; `None` when the provider switches the
+    /// worker in place.
+    fn server(&self) -> Option<&dyn Server> {
+        None
+    }
+}
+
+/// A provider that rebuilds on a new server (`provider::Rebuild::NewServer`): it
+/// cannot report a server's image, so the server is released and the next reconnect
+/// creates a new one on the rebuilt image and the same workspace volume.
+trait Server {
+    /// Whether the release of the bound server has begun; before it, the server is untouched.
+    fn released(&self, store: &Store, state: &Deployment) -> Result<bool>;
+    /// Releases the bound server and keeps the workspace volume and the `Replace` stage.
+    fn release(&self, store: &Store, state: &mut Deployment) -> Result<()>;
+    /// Saves `state` with the released server's fence cleared.
+    fn reopen(&self, store: &Store, state: &mut Deployment) -> Result<()>;
+    /// Runs after each durable write.
+    fn checkpoint(&self, _boundary: Boundary) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,8 +133,10 @@ enum Driven {
 }
 
 /// Rebuilds the image from the repository's latest committed `.horizon` recipe with the
-/// newest agent CLIs, switches the bound worker to it and relaunches its sessions. The
-/// worker ID and `/workspace` are kept; the container is reset.
+/// newest agent CLIs, moves the worker onto it and relaunches its sessions. A provider
+/// that rebuilds in place keeps the worker ID; one that rebuilds on a new server
+/// (`provider::Rebuild::NewServer`) releases its server and starts a new one with a new
+/// ID on the same workspace volume. `/workspace` is kept either way; the container is reset.
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` equals the bound one. After a failure the journal stays, so the
@@ -120,11 +148,6 @@ pub fn rebuild(
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
     emit(Event::stage(Stage::Validate));
-    if request.profile.provider == horizon_cloud::hetzner::PROVIDER {
-        return Err(Error::Invalid(
-            "Rebuilding a Hetzner cloud's image is not available yet",
-        ));
-    }
     let (store, mut state) = open(request)?;
     ready(&state)?;
     // Checked before credentials load, so a changed profile is refused with its reason.
@@ -156,8 +179,16 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
         .ok_or(Error::Invalid(NOTHING_PENDING))?;
     if journal.requested() {
         // Finishing a switch needs only the provider, not the checkout or registry.
-        let provider = RunPod::new(request.settings.credential()?);
-        resume(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
+        match Description::of(&state.profile).rebuild {
+            Rebuild::InPlace => {
+                let provider = RunPod::new(request.settings.credential()?);
+                resume(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
+            }
+            Rebuild::NewServer => {
+                let server = live::Released::new(&request.settings, cancel);
+                new_server::switch(&server, &store, &mut state, emit)?;
+            }
+        }
         drop(store);
         return finish(request, Driven::Committed, state, cancel, emit);
     }
@@ -189,8 +220,18 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
         drop(store);
         return tail(request, cancel, emit);
     }
-    let provider = RunPod::new(request.settings.credential()?);
-    revert(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
+    match Description::of(&state.profile).rebuild {
+        Rebuild::InPlace => {
+            let provider = RunPod::new(request.settings.credential()?);
+            revert(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
+        }
+        Rebuild::NewServer => {
+            let server = live::Released::new(&request.settings, cancel);
+            if new_server::cancel(&server, &store, &mut state, emit)? == new_server::Cancelled::Untouched {
+                return Ok(state);
+            }
+        }
+    }
     drop(store);
     tail(request, cancel, emit)
 }
@@ -422,7 +463,10 @@ fn drive(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn F
             steps.verify(state, &image)?;
         }
         ReplacementPhase::Requested(_) => {
-            resume(steps, store, state, emit)?;
+            match steps.server() {
+                Some(server) => new_server::switch(server, store, state, emit)?,
+                None => resume(steps, store, state, emit)?,
+            }
             return Ok(Driven::Committed);
         }
     }
@@ -441,6 +485,9 @@ fn request(steps: &impl Steps, store: &Store, state: &mut Deployment, emit: &dyn
     let previous = state.request_replacement()?;
     store.save(state)?;
     steps.checkpoint(Boundary::Requested)?;
+    if let Some(server) = steps.server() {
+        return new_server::switch(server, store, state, emit);
+    }
     emit(Event::stage(Stage::Replace));
     let (worker_id, current, next) = pair(state)?;
     if let Err(error) = send(steps, &worker_id, &current, &next, emit) {

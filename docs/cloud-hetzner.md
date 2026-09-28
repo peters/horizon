@@ -151,16 +151,35 @@ cannot stop it with `horizon-worker-stop`. The worker image must report
 `horizon-idle-report-contract=1`; rebuild older images from the current worker
 bootstrap.
 
+## Rebuilding the image
+
+**Rebuild image & restart** works as on RunPod (see [Cloud workspaces](cloud-workspaces.md#rebuilding-a-clouds-image)),
+except for the switch itself. Hetzner cannot report which image a server runs,
+so Horizon does not switch the server in place:
+
+1. It builds and verifies the new image as usual. When the image is private, it
+   also checks that the host's pull login (`registry_pull`) can read the new
+   digest, before anything happens to the server.
+2. It releases the server as **Stop** does. The workspace volume is kept.
+3. It records the new image and clears the server's fence in one save, then
+   reconnects. The reconnect creates a new server on the rebuilt image, attaches
+   the same volume and relaunches the sessions. The server gets a new address.
+
+Every step is recorded first, so after an interruption **Continue rebuild**
+finishes the release and starts the new server. **Cancel rebuild** leaves the
+cloud as it was when the release had not begun. Once the release has begun, it
+finishes the release and starts a new server on the previous image instead.
+
 ## Not available on Hetzner yet
 
-- Shared workers, hosted devices and image rebuilds.
+- Shared workers and hosted devices.
 - Cloud IDs must be lowercase letters, digits and hyphens, at most 48
   characters, and cannot start or end with a hyphen. Clouds created in the app
   already are.
 
 Horizon targets the Hetzner Cloud API `v1` as described by its OpenAPI spec,
 <https://docs.hetzner.cloud/cloud.spec.json>, and the changelog feed,
-<https://docs.hetzner.cloud/changelog/feed.json>. Last checked on 2026-09-26
+<https://docs.hetzner.cloud/changelog/feed.json>. Last checked on 2026-09-28
 against the spec published on 2026-09-23 (info.version 1.0.0; newest changelog
 entry 2026-09-23). `scripts/check-hetzner-api.py` checks every operation and
 field Horizon uses against the live spec; run it before changing the Hetzner

@@ -314,10 +314,11 @@ mod tests {
             root.path().into(),
             settings.clone(),
         );
+        // A Hetzner rebuild runs on a new server; this profile has no recipe to rebuild.
         let error = super::super::deployment::replacement::rebuild(&request, "cpu", &cancel, &|_| {}).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Rebuilding a Hetzner cloud's image is not available yet"
+            "This cloud's profile has no build section, so there is no recipe to rebuild its image from"
         );
         let store = Store::lock(root.path()).unwrap();
         assert_eq!(

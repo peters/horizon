@@ -537,3 +537,5 @@ mod deletion_points;
 /// Idle stop reads the worker's idle record and stops the cloud as Stop does.
 #[cfg(unix)]
 mod idle;
+#[cfg(unix)]
+mod rebuild;

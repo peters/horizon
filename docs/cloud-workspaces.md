@@ -592,8 +592,11 @@ new tag, validates the worker contract, pushes the image and verifies the
 worker's pull binding. An unchanged image digest is reported, and nothing restarts.
 
 Horizon then releases any hosted devices and switches the existing worker to the
-new image through the provider's pod update. The worker ID and `/workspace`
-(worktrees, agent logins, SSH host keys) survive; the container disk is reset and
+new image through the provider's pod update, which keeps the worker ID. A Hetzner
+cloud instead releases its server and starts a new one, with a new server ID and
+address, on the same workspace volume; see
+[Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
+(worktrees, agent logins, SSH host keys) survives; the container disk is reset and
 running processes end. After readiness, Horizon relaunches each session's process
 in its existing worktree without resetting it. Images without the relaunch
 contract report those sessions lost, as Stop and Resume do.
