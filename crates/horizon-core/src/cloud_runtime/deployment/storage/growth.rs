@@ -28,6 +28,17 @@ pub(in crate::cloud_runtime) fn require_settled(root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn pending(store: &Store) -> Result<Option<super::ResizeTarget>> {
+    read(store)?
+        .map(|intent| {
+            intent.verify(store)?;
+            let size_gb =
+                u16::try_from(intent.growth.requested_size()).map_err(|_| Error::Invalid("Invalid disk size"))?;
+            Ok(super::ResizeTarget::Workspace { size_gb })
+        })
+        .transpose()
+}
+
 /// Grow a dedicated CPU cloud's network workspace without replacing its worker.
 /// A failed operation retains its target and blocks competing lifecycle operations
 /// until this function reconciles that same target. No files are initialized.
@@ -36,6 +47,7 @@ pub(in crate::cloud_runtime) fn require_settled(root: &Path) -> Result<()> {
 pub fn grow_storage(root: &Path, settings: &Settings, size_gb: u16, cancel: &Cancellation) -> Result<Deployment> {
     cancel.check()?;
     let store = Store::lock(root)?;
+    super::resize::require_settled(root)?;
     let retained = read(&store)?;
     if retained.is_none() {
         settings.credential()?;

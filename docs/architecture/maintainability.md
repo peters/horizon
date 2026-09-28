@@ -585,7 +585,10 @@ barrier and preserved storage/trust companions; `state::transaction` commits and
 recovers the paired projections. Migration and updates hold a parent registry lock
 before allocation and project locks, with exclusive mutable handle access. These
 local APIs perform no provider I/O and are not called by runtime entry points yet;
-credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
+credential binding, runtime activation and sharing remain integration work. `deployment::storage::resize` journals CPU replacement and commits the worker and
+volume bindings together, then reconnects recorded sessions. Its pending target
+and the storage-growth target are exposed through `pending_resize`; ordinary
+loads and migration refuse either pending transaction. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
 Its `growth` leaf journals one absolute capacity increase across the provider and
 both local records. Other lifecycle loads remain fenced until the retained target

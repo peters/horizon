@@ -69,6 +69,22 @@ impl Replacement {
         Ok(())
     }
 
+    /// # Errors
+    /// Confirms a saved completion still names the replacement worker and retained workspace.
+    pub fn verify_result(&self, worker: &Worker) -> Result<()> {
+        self.validate()?;
+        if !self.completed()
+            || self.creation
+                != (CreateState::Bound {
+                    worker_id: worker.id.clone(),
+                })
+        {
+            return Err(CloudError::IdentityMismatch);
+        }
+        worker.verify(&self.next)?;
+        worker.verify_resources_with_volume(&self.next, Some(&self.volume))
+    }
+
     fn validate(&self) -> Result<()> {
         self.current.validate()?;
         self.next.validate_request()?;

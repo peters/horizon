@@ -21,6 +21,8 @@ use image::{prepare_image, validate_allocation_image};
 pub use reconnect::reconnect;
 use sizing::{assign_requested_size, refresh_allocation};
 pub use storage::growth::grow_storage;
+pub use storage::resize::resize_compute;
+pub use storage::{ResizeTarget, pending_resize};
 
 use super::{
     Error, Event, Result, Stage, WorkerContract,
