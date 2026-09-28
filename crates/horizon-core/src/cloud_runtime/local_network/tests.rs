@@ -374,7 +374,13 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
             log: root.path().join("log"),
         };
         let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
-        let bridge = Bridge::with_answers(proxy, script, Arc::new(SlowFirst(AtomicUsize::new(0)))).unwrap();
+        let bridge = Bridge::with_answers(
+            proxy,
+            script,
+            Arc::new(SlowFirst(AtomicUsize::new(0))),
+            Cancellation::default(),
+        )
+        .unwrap();
         wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
         let deadline = Instant::now() + Duration::from_secs(10);
         while !log(&root).contains(r#""id":1"#) {
@@ -385,6 +391,75 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
         let fast = log.find(r#"{"answer":{"id":2,"answer":{"refused":"fast"}}}"#);
         let slow = log.find(r#"{"answer":{"id":1,"answer":{"refused":"slow"}}}"#);
         assert!(fast.is_some() && fast < slow, "{log}");
+    }
+
+    /// Waits for `cancel`, at most ten seconds.
+    fn until_cancelled(cancel: &Cancellation) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cancel.is_cancelled() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn revoking_the_bridge_stops_a_probe_and_a_browse_in_progress() {
+        let cancel = Cancellation::default();
+        let (dials, browses) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let discoverer = {
+            let (dials, browses) = (Arc::clone(&dials), Arc::clone(&browses));
+            Arc::new(Discoverer::with_parts(
+                Arc::new(gate(Box::new(|_, _| Ok(Vec::new())))),
+                Box::new(move |_, _, cancel: &Cancellation| {
+                    browses.fetch_add(1, Ordering::SeqCst);
+                    until_cancelled(cancel);
+                    (Vec::new(), Vec::new())
+                }),
+                Box::new(move |_, _, cancel: &Cancellation| {
+                    dials.fetch_add(1, Ordering::SeqCst);
+                    until_cancelled(cancel);
+                    Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "stopped"))
+                }),
+                cancel.clone(),
+            ))
+        };
+        let root = tempfile::tempdir().unwrap();
+        let script = Script {
+            prepare: PREPARED.into(),
+            hold: HOLD.into(),
+            log: root.path().join("log"),
+        };
+        let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
+        let bridge = Bridge::with_answers(proxy, script, Arc::clone(&discoverer) as Arc<dyn Answers>, cancel).unwrap();
+        wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
+        let ask = |request: Request| {
+            let discoverer = Arc::clone(&discoverer);
+            std::thread::spawn(move || discoverer.answer(request))
+        };
+        // The default ports take four batches; the first is in flight when the bridge stops.
+        let probing = ask(Request::Probe {
+            host: "192.168.1.50".into(),
+            ports: Vec::new(),
+        });
+        let browsing = ask(Request::Discover);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while dials.load(Ordering::SeqCst) < 4 || browses.load(Ordering::SeqCst) < 1 {
+            assert!(Instant::now() < deadline, "the probe and the browse did not start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let started = Instant::now();
+        bridge.revoke();
+        let stopped = Answer::Refused(discovery::STOPPED.into());
+        assert_eq!(probing.join().unwrap(), stopped);
+        assert_eq!(browsing.join().unwrap(), stopped);
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert_eq!(
+            dials.load(Ordering::SeqCst),
+            4,
+            "no batch started after the bridge stopped"
+        );
+        // Later requests are refused without sending anything.
+        assert_eq!(discoverer.answer(Request::Discover), stopped);
+        assert_eq!(browses.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -297,7 +297,7 @@ fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
     let counted = Arc::clone(&browses);
     let discoverer = Discoverer::with_browse(
         scope(home),
-        Box::new(move |local, subnet| {
+        Box::new(move |local, subnet, _: &Cancellation| {
             counted.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
                 (local, subnet.to_string().as_str()),
@@ -334,7 +334,7 @@ fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
 
     let moved = Discoverer::with_browse(
         scope(|| Ok(scope::tests::host(&[("10.0.0.20", Some(24))], Some("10.0.0.20")))),
-        Box::new(|_, _| panic!("browsed a network that is not the bridged one")),
+        Box::new(|_, _, _: &Cancellation| panic!("browsed a network that is not the bridged one")),
     );
     assert_eq!(
         moved.discover(),
@@ -352,7 +352,7 @@ fn a_browse_of_this_computers_network_ends_within_its_window() {
         return;
     };
     let started = Instant::now();
-    let answer = Discoverer::new(Arc::new(current)).discover();
+    let answer = Discoverer::new(Arc::new(current), Cancellation::default()).discover();
     assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
     match answer {
         Answer::Discovery(discovery) => assert!(discovery.devices.len() <= 256),
@@ -417,7 +417,7 @@ fn an_mdns_browse_keeps_its_rounds_and_packet_limit_under_a_flood() {
     });
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let started = Instant::now();
-    let findings = mdns::exchange(&socket, group, &[]).unwrap();
+    let findings = mdns::exchange(&socket, group, &[], &Cancellation::default()).unwrap();
     let window: Duration = mdns::ROUNDS.iter().sum();
     assert!(
         started.elapsed() < window + Duration::from_millis(500),
@@ -438,7 +438,7 @@ fn an_ssdp_search_repeats_once_and_ends_with_its_window() {
     });
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let started = Instant::now();
-    let findings = ssdp::search(&socket, group).unwrap();
+    let findings = ssdp::search(&socket, group, &Cancellation::default()).unwrap();
     let elapsed = started.elapsed();
     assert!(
         elapsed >= ssdp::WINDOW && elapsed < ssdp::WINDOW + Duration::from_millis(500),
@@ -498,8 +498,8 @@ fn probes_connect_only_to_admitted_hosts_a_few_times_a_minute() {
     let seen = Arc::clone(&attempts);
     let discoverer = Discoverer::with_parts(
         probe_scope(),
-        Box::new(|_, _| (Vec::new(), Vec::new())),
-        Box::new(move |target: SocketAddr, _| {
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _, _: &Cancellation| {
             seen.lock().unwrap().push(target);
             match target.port() {
                 80 | 631 => Ok(()),
@@ -507,6 +507,7 @@ fn probes_connect_only_to_admitted_hosts_a_few_times_a_minute() {
                 _ => Err(io::ErrorKind::TimedOut.into()),
             }
         }),
+        Cancellation::default(),
     );
     let probe = |host: &str, ports: &[u16]| {
         discoverer.answer(Request::Probe {
@@ -571,17 +572,18 @@ fn probed_ports_join_advertised_ones_and_hosts_come_back_as_named() {
     let printer = v4("192.168.1.50");
     let discoverer = Discoverer::with_parts(
         probe_scope(),
-        Box::new(move |_, _| {
+        Box::new(move |_, _, _: &Cancellation| {
             let findings = vec![
                 Finding::Seen(printer, Source::Mdns),
                 Finding::Service(printer, service("_ipp._tcp", Some(631))),
             ];
             (findings, Vec::new())
         }),
-        Box::new(|target: SocketAddr, _| match target.port() {
+        Box::new(|target: SocketAddr, _, _: &Cancellation| match target.port() {
             80 | 631 => Ok(()),
             _ => Err(io::ErrorKind::ConnectionRefused.into()),
         }),
+        Cancellation::default(),
     );
     let Answer::Probe(_) = discoverer.answer(Request::Probe {
         host: "printer.local".into(),
@@ -622,14 +624,15 @@ fn a_probe_while_another_runs_is_refused_at_once_and_refusals_cost_no_slot() {
     let released = Mutex::new(released);
     let discoverer = Arc::new(Discoverer::with_parts(
         probe_scope(),
-        Box::new(|_, _| (Vec::new(), Vec::new())),
-        Box::new(move |target: SocketAddr, _| {
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _, _: &Cancellation| {
             if target.port() == 554 {
                 let _ = entered.send(());
                 let _ = released.lock().unwrap().recv_timeout(Duration::from_secs(10));
             }
             Ok(())
         }),
+        Cancellation::default(),
     ));
     let probe = |discoverer: &Discoverer, host: &str, port: u16| {
         discoverer.answer(Request::Probe {
@@ -661,4 +664,67 @@ fn a_probe_while_another_runs_is_refused_at_once_and_refusals_cost_no_slot() {
         assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Probe(_)));
     }
     assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Refused(limit) if limit.contains("a minute")));
+}
+
+#[test]
+fn the_real_connect_tells_open_from_refused_and_stops_with_the_bridge() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let idle = Cancellation::default();
+    assert!(probe::connect(listener.local_addr().unwrap(), Duration::from_secs(5), &idle).is_ok());
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let refused = probe::connect(closed, Duration::from_secs(5), &idle)
+        .unwrap_err()
+        .kind();
+    // Windows retries a refused loopback connection for about two seconds before it reports.
+    assert!(
+        refused == io::ErrorKind::ConnectionRefused || (cfg!(windows) && refused == io::ErrorKind::TimedOut),
+        "{refused:?}"
+    );
+    // A documentation address never answers; switching the bridge off ends the attempt.
+    let cancel = Cancellation::default();
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            cancel.cancel();
+        })
+    };
+    let started = Instant::now();
+    assert!(probe::connect("192.0.2.1:9".parse().unwrap(), Duration::from_secs(10), &cancel).is_err());
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    stopper.join().unwrap();
+}
+
+#[test]
+fn an_mdns_browse_and_an_ssdp_search_stop_soon_after_the_bridge_does() {
+    let (group, _) = responder(|_| Vec::new());
+    let stop_soon = || {
+        let cancel = Cancellation::default();
+        let stopper = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            stopper.cancel();
+        });
+        cancel
+    };
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let started = Instant::now();
+    let browse = mdns::exchange(&socket, group, &[], &stop_soon());
+    assert_eq!(browse.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        started.elapsed()
+    );
+    let started = Instant::now();
+    let search = ssdp::search(&socket, group, &stop_soon());
+    assert_eq!(search.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        started.elapsed()
+    );
 }

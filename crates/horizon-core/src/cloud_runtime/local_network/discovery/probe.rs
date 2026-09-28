@@ -1,12 +1,15 @@
 //! A port probe of one named host, only when an agent asks: TCP connects to a few ports, a few
 //! probes a minute, one at a time, and only to an address the bridge's scope admits. Nothing
 //! is sent to the device beyond the connection attempt, and nothing sweeps the subnet.
-use super::super::{Destination, Scope};
+use super::{
+    super::{Cancellation, Destination, Scope},
+    STOPPED,
+};
 use horizon_cloud_protocol::local_network::discovery::{Answer, Probe, Request};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Mutex, PoisonError, TryLockError},
     thread,
     time::{Duration, Instant},
@@ -18,14 +21,53 @@ const MINUTE: Duration = Duration::from_secs(60);
 /// Connection attempts in flight at once.
 const AT_ONCE: usize = 4;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// How often a connection attempt checks whether it finished or the bridge stopped.
+const CONNECT_POLL: Duration = Duration::from_millis(10);
 /// Addresses whose open ports are remembered for discovery answers.
 const MAX_REMEMBERED: usize = 256;
 
-/// Opens one TCP connection and closes it at once.
-pub(super) type Connect = Box<dyn Fn(SocketAddr, Duration) -> io::Result<()> + Send + Sync>;
+/// Opens one TCP connection and closes it at once, giving up when the bridge stops.
+pub(super) type Connect = Box<dyn Fn(SocketAddr, Duration, &Cancellation) -> io::Result<()> + Send + Sync>;
 
-pub(super) fn connect(address: SocketAddr, timeout: Duration) -> io::Result<()> {
-    TcpStream::connect_timeout(&address, timeout).map(drop)
+/// A non-blocking connect polled until it completes, fails, times out or the bridge stops;
+/// the socket closes when this returns, which abandons an attempt still in progress.
+///
+/// # Errors
+/// Returns the connection's own error, `TimedOut`, or `Interrupted` once `cancel` fires.
+pub(super) fn connect(address: SocketAddr, timeout: Duration, cancel: &Cancellation) -> io::Result<()> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_nonblocking(true)?;
+    match socket.connect(&address.into()) {
+        Ok(()) => return Ok(()),
+        Err(error) if in_progress(&error) => {}
+        Err(error) => return Err(error),
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(error) = socket.take_error()? {
+            return Err(error);
+        }
+        if socket.peer_addr().is_ok() {
+            return Ok(());
+        }
+        if cancel.is_cancelled() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        thread::sleep(CONNECT_POLL);
+    }
+}
+
+/// A non-blocking connect that has started: `EINPROGRESS` on Unix, `WSAEWOULDBLOCK` on Windows.
+fn in_progress(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::EINPROGRESS) {
+        return true;
+    }
+    error.kind() == io::ErrorKind::WouldBlock
 }
 
 pub(super) struct Prober {
@@ -47,7 +89,7 @@ impl Prober {
     }
 
     /// Tries `ports`, or the defaults, on `host`; the caller has validated both.
-    pub(super) fn probe(&self, scope: &Scope, host: &str, ports: &[u16]) -> Answer {
+    pub(super) fn probe(&self, scope: &Scope, host: &str, ports: &[u16], cancel: &Cancellation) -> Answer {
         // Never queued: a probe waiting behind another could start after the helper stopped
         // waiting for its answer.
         let mut started = match self.started.try_lock() {
@@ -97,12 +139,18 @@ impl Prober {
             silent: Vec::new(),
         };
         for batch in Request::probe_ports(ports).chunks(AT_ONCE) {
-            // A bridge whose computer left the network stops probing at once.
+            // A bridge switched off, or whose computer left the network, stops probing at once.
+            if cancel.is_cancelled() {
+                return Answer::Refused(STOPPED.into());
+            }
             if let Err(reply) = scope.on_network() {
                 return Answer::Refused(reply.message().into());
             }
-            for (port, result) in self.attempt(address, batch) {
+            for (port, result) in self.attempt(address, batch, cancel) {
                 match result {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        return Answer::Refused(STOPPED.into());
+                    }
                     Ok(()) => probe.open.push(port),
                     Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => probe.closed.push(port),
                     Err(_) => probe.silent.push(port),
@@ -114,7 +162,7 @@ impl Prober {
     }
 
     /// One batch of connection attempts side by side.
-    fn attempt(&self, address: Ipv4Addr, ports: &[u16]) -> Vec<(u16, io::Result<()>)> {
+    fn attempt(&self, address: Ipv4Addr, ports: &[u16], cancel: &Cancellation) -> Vec<(u16, io::Result<()>)> {
         thread::scope(|scope| {
             let attempts: Vec<_> = ports
                 .iter()
@@ -122,7 +170,7 @@ impl Prober {
                     let target = SocketAddr::new(address.into(), port);
                     let attempt = thread::Builder::new()
                         .name("local-network-probe".into())
-                        .spawn_scoped(scope, move || (self.connect)(target, CONNECT_TIMEOUT));
+                        .spawn_scoped(scope, move || (self.connect)(target, CONNECT_TIMEOUT, cancel));
                     (port, attempt)
                 })
                 .collect();

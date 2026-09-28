@@ -148,22 +148,34 @@ impl Bridge {
     /// Fails when there is no shareable network or the local proxy cannot start.
     pub fn start(connection: &Connection) -> Result<Self, StartError> {
         let scope = Arc::new(Scope::current()?);
-        let answers = Arc::new(Discoverer::new(Arc::clone(&scope)));
+        // Switching the bridge off also stops a probe or browse an agent asked for.
+        let cancel = Cancellation::default();
+        let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));
         let proxy = Proxy::with_gate(scope.subnet(), scope)?;
-        Ok(Self::with_answers(proxy, session::Ssh(connection.clone()), answers)?)
+        Ok(Self::with_answers(
+            proxy,
+            session::Ssh(connection.clone()),
+            answers,
+            cancel,
+        )?)
     }
 
     /// A bridge whose helper hears that nothing is answered here, for the Unix-only session tests.
     #[cfg(all(test, unix))]
     fn with_parts(proxy: Proxy, transport: impl session::Transport) -> io::Result<Self> {
-        Self::with_answers(proxy, transport, Arc::new(tests::Unanswered))
+        Self::with_answers(proxy, transport, Arc::new(tests::Unanswered), Cancellation::default())
     }
 
-    fn with_answers(proxy: Proxy, transport: impl session::Transport, answers: Arc<dyn Answers>) -> io::Result<Self> {
+    /// `cancel` is shared with `answers`, so revoking the bridge stops their work too.
+    fn with_answers(
+        proxy: Proxy,
+        transport: impl session::Transport,
+        answers: Arc<dyn Answers>,
+        cancel: Cancellation,
+    ) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::Starting),
         });
-        let cancel = Cancellation::default();
         let supervisor = {
             let shared = Arc::clone(&shared);
             let cancel = cancel.clone();
@@ -192,7 +204,7 @@ impl Bridge {
 
 impl Bridge {
     /// Revokes the bridge at once without waiting: the proxy refuses and closes every
-    /// connection, and the SSH session is told to end. Dropping it afterwards only waits for
+    /// connection, a probe or browse in progress stops, and the SSH session is told to end. Dropping it afterwards only waits for
     /// that session to finish.
     pub fn revoke(&self) {
         self.cancel.cancel();
