@@ -409,7 +409,17 @@ class SourceFormatTests(unittest.TestCase):
             refusals = [({'exclude': ['other/**'], 'skipped': skipped}, kept),  # git-lfs would smudge it
                         ({'exclude': ['fixtures/**'], 'skipped': skipped}, kept + [('fixtures/skip.bin', contents['fixtures/skip.bin'])]),
                         ({'exclude': ['fixtures/**,keep.bin'], 'skipped': skipped}, kept),
-                        ({'exclude': ['fixtures/**'], 'skipped': skipped, 'unknown': []}, kept)]
+                        ({'exclude': ['fixtures/**'], 'skipped': skipped, 'unknown': []}, kept),
+                        # Not lists: a string would be joined character by character.
+                        ({'exclude': 'fixtures/**', 'skipped': skipped}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': skipped[0]}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size='23')]}, kept),
+                        # DEL, a C1 control and a format character.
+                        ({'exclude': ['fixtures/**', 'a\x7fb'], 'skipped': skipped}, kept),
+                        ({'exclude': ['fixtures/**', 'a\x85b'], 'skipped': skipped}, kept),
+                        ({'exclude': ['fixtures/**', 'a\u200bb'], 'skipped': skipped}, kept),
+                        ({'exclude': [f'p{index}' for index in range(64)] + ['fixtures/**'], 'skipped': skipped}, kept),
+                        ([], kept)]
             for lfs, assets in refusals:
                 self.archive(root, workspace, [], [], assets, lfs=lfs)
                 refused = self.execute('horizon-worker-source', workspace, 'import', env=worker)

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 
 PRIMARY = Path('/workspace/source')
 AGENTS = Path('/workspace/agents')
@@ -29,9 +30,35 @@ def git(*args, **kwargs):
     subprocess.run(['git', *map(str, args)], check=True, **kwargs)
 
 
+def lfs_selection(value):
+    # The same rules as Horizon's source.lfs validation: lists of at most 64 patterns in
+    # all, each a non-empty string of at most 256 characters without commas (git-lfs
+    # joins them with commas) or Unicode control, format, private-use or unassigned
+    # characters; skipped entries name exactly one LFS object each.
+    selection = value.get('lfs', {})
+    if not isinstance(selection, dict) or set(selection) - {'include', 'exclude', 'skipped'}:
+        raise ValueError('Invalid LFS selection')
+    patterns = {key: selection.get(key, []) for key in ('include', 'exclude')}
+    if any(not isinstance(listed, list) for listed in patterns.values()) \
+            or len(patterns['include']) + len(patterns['exclude']) > 64:
+        raise ValueError('Invalid LFS selection')
+    for pattern in patterns['include'] + patterns['exclude']:
+        if not isinstance(pattern, str) or not pattern or len(pattern) > 256 \
+                or any(c == ',' or unicodedata.category(c).startswith('C') for c in pattern):
+            raise ValueError('Invalid LFS selection pattern')
+    skipped = selection.get('skipped', [])
+    if not isinstance(skipped, list) or any(
+            not isinstance(asset, dict) or set(asset) != {'path', 'oid', 'size'} or not isinstance(asset['path'], str)
+            or not isinstance(asset['oid'], str) or not re.fullmatch(r'[0-9a-f]{64}', asset['oid'])
+            or type(asset['size']) is not int or asset['size'] < 0 for asset in skipped):
+        raise ValueError('Invalid LFS selection')
+    return patterns, skipped
+
+
 def manifest(root):
     value = json.loads((root / 'manifest.json').read_text())
-    for item in value['modules'] + value['assets'] + value.get('lfs', {}).get('skipped', []):
+    _, skipped = lfs_selection(value)
+    for item in value['modules'] + value['assets'] + skipped:
         path = PurePosixPath(item['path'])
         if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts):
             raise ValueError('Invalid committed source path')
@@ -102,20 +129,9 @@ def select_lfs(repository, value):
     # A repository may leave LFS paths out of the transfer. They stay pointers: git-lfs
     # skips smudging paths outside lfs.fetchinclude/fetchexclude. Every path left out
     # must be one git-lfs itself excludes, so a checkout never tries the network.
-    selection = value.get('lfs', {})
-    if not selection and not repository.exists():
+    if 'lfs' not in value and not repository.exists():
         return
-    if set(selection) - {'include', 'exclude', 'skipped'}:
-        raise ValueError('Invalid LFS selection')
-    patterns = {key: selection.get(key, []) for key in ('include', 'exclude')}
-    for pattern in patterns['include'] + patterns['exclude']:
-        if not isinstance(pattern, str) or not pattern or len(pattern) > 256 \
-                or any(c == ',' or ord(c) < 32 for c in pattern):
-            raise ValueError('Invalid LFS selection pattern')
-    skipped = selection.get('skipped', [])
-    for asset in skipped:
-        if set(asset) != {'path', 'oid', 'size'}:
-            raise ValueError('Invalid LFS selection')
+    patterns, skipped = lfs_selection(value)
     if skipped:
         filters = []
         for key, flag in (('include', '-I'), ('exclude', '-X')):
