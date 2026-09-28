@@ -513,6 +513,8 @@ fn lfs_paths(
     for line in std::io::BufReader::new(std::fs::File::open(&listing)?).split(b'\n') {
         runner.cancel.check()?;
         let line = line?;
+        // The worker drops a trailing `\r` too, so a name that ends in one is never
+        // matched here and is always sent.
         let line = line.strip_suffix(b"\r").unwrap_or(&line);
         if !line.is_empty() {
             paths.insert(String::from_utf8_lossy(line).into_owned());
