@@ -181,6 +181,9 @@ Hetzner comes in `other_providers`, ranked on its own and never mixed with RunPo
 
 Workers receive the catalog through `horizon-cloud-worker cloud-offers publish-hetzner`,
 beside the price list, so older worker images keep taking RunPod prices unchanged.
+On a machine set up for Hetzner alone, Horizon also runs `cloud-offers clear-runpod`
+once on each ready worker, so RunPod prices sent before the key was removed are not
+offered for the rest of their 20 minutes.
 
 ## New cloud
 

@@ -34,3 +34,12 @@ pub fn publish_hetzner(
     let settings = Settings::load(&root.join("settings.json"))?;
     Live::new(root, &settings, cancel).send_hetzner_offers(cloud, snapshot)
 }
+
+/// Removes the `RunPod` prices the worker of `cloud` holds, when it is ready, so a
+/// machine that no longer has a `RunPod` key stops offering them there at once.
+/// # Errors
+/// As [`publish`], and for worker images without the command.
+pub fn clear_runpod(root: &Path, cloud: &str, cancel: &Cancellation) -> Result<Published> {
+    let settings = Settings::load(&root.join("settings.json"))?;
+    Live::new(root, &settings, cancel).clear_runpod_offers(cloud)
+}

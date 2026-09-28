@@ -313,6 +313,10 @@ While any cloud is ready, Horizon refreshes prices every 15 minutes and sends ea
 fresh list to every ready worker over the SSH connection companions use; a worker that misses one is asked again after five minutes. Only
 prices travel: the RunPod key stays on this computer. A worker without prices, or
 with prices older than 20 minutes, answers with an error instead of old prices.
+When this machine no longer has a RunPod key, Horizon tells each ready worker once
+to drop the RunPod prices it holds, so its agents stop being offered them at once;
+worker images built before this refuse it and keep the old prices until they are
+20 minutes old.
 
 When the allowed data centers span more than one region, New cloud also shows a
 **Region** row: **Any region** (the default, where Horizon picks a data center
