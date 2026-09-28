@@ -111,3 +111,19 @@ fn a_retry_is_diagnosed_from_its_own_output() {
     assert_eq!(status.numbers, "Uploading image failed; inspect deployment output");
     assert_eq!(runtime.logs.len(), 2, "the earlier output is still shown");
 }
+
+#[test]
+fn a_retry_of_the_same_image_keeps_the_earlier_attempts_layer_lines() {
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(Stage::Push),
+        ..Default::default()
+    };
+    runtime.push_log("5f70bf18a086: Pushing [==>      ]  10MB/80MB".into());
+    runtime.progress.reset();
+    runtime.push_log("5f70bf18a086: Pushed".into());
+    let texts: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["5f70bf18a086: Pushing [==>      ]  10MB/80MB", "5f70bf18a086: Pushed"]
+    );
+}

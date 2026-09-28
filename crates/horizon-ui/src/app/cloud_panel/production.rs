@@ -135,6 +135,12 @@ impl LogLine {
     }
 }
 
+/// Whether `previous` is an earlier update of `line`'s layer in the same step of the same
+/// attempt; a retry pushing the same image keeps the earlier attempt's lines.
+fn same_layer(previous: &LogLine, line: &LogLine, layer: &str) -> bool {
+    previous.attempt == line.attempt && previous.stage == line.stage && layer_id(&previous.text) == Some(layer)
+}
+
 /// The layer a Docker progress line such as `5f70bf18a086: Pushing [==>  ]` reports on.
 fn layer_id(line: &str) -> Option<&str> {
     let (id, rest) = line.split_once(": ")?;
@@ -224,7 +230,7 @@ impl Runtime {
                 .iter_mut()
                 .rev()
                 .take(Self::LAYER_WINDOW)
-                .find(|previous| previous.stage == line.stage && layer_id(&previous.text) == Some(layer))
+                .find(|previous| same_layer(previous, &line, layer))
         {
             *previous = line;
             return;
@@ -254,7 +260,7 @@ impl Runtime {
                     .iter_mut()
                     .rev()
                     .take(Self::LAYER_WINDOW)
-                    .find(|previous| previous.stage == line.stage && layer_id(&previous.text) == Some(layer))
+                    .find(|previous| same_layer(previous, &line, layer))
             {
                 *previous = line;
             } else {

@@ -8,6 +8,9 @@ use egui::{Color32, FontId, RichText, Stroke, Vec2};
 
 const LOG_BG: Color32 = Color32::from_rgb(9, 12, 19);
 const TEXT_SIZE: f32 = 13.0;
+/// The pinned root cause keeps this height; a longer cause scrolls inside it, so the
+/// view never grows past the height it was given.
+const ROOT_CAUSE_HEIGHT: f32 = 72.0;
 
 /// The log in `height`, with `failure` pinned under it. `place` keeps the scroll
 /// position of the body's log apart from the drawer's.
@@ -19,7 +22,7 @@ pub(super) fn show(
     height: f32,
     failure: Option<&Failure>,
 ) {
-    let pinned = failure.map_or(0.0, |_| 62.0);
+    let pinned = failure.map_or(0.0, |_| ROOT_CAUSE_HEIGHT + 6.0);
     let frame = egui::Frame::new()
         .fill(LOG_BG)
         .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -165,25 +168,73 @@ fn root_cause(ui: &mut egui::Ui, failure: &Failure) {
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new("Root cause")
-                        .monospace()
-                        .size(TEXT_SIZE)
-                        .color(theme::PALETTE_RED()),
-                );
-                ui.label(
-                    RichText::new(failure.headline())
-                        .monospace()
-                        .size(TEXT_SIZE)
-                        .color(theme::PALETTE_RED()),
-                );
-            });
-            let explanation = match (failure.meaning, &failure.cause) {
-                (Some(meaning), _) => meaning.to_owned(),
-                (None, Some(_)) => failure.summary.clone(),
-                (None, None) => "Horizon found no failure line in the output above.".to_owned(),
-            };
-            ui.label(RichText::new(explanation).size(12.5).color(theme::FG_SOFT()));
+            let inner = ROOT_CAUSE_HEIGHT - 16.0;
+            ui.set_min_height(inner);
+            ui.set_max_height(inner);
+            egui::ScrollArea::vertical()
+                .id_salt("cloud-root-cause")
+                .max_height(inner)
+                .auto_shrink([false, false])
+                .show(ui, |ui| root_cause_text(ui, failure));
         });
+}
+
+fn root_cause_text(ui: &mut egui::Ui, failure: &Failure) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("Root cause")
+                .monospace()
+                .size(TEXT_SIZE)
+                .color(theme::PALETTE_RED()),
+        );
+        ui.label(
+            RichText::new(failure.headline())
+                .monospace()
+                .size(TEXT_SIZE)
+                .color(theme::PALETTE_RED()),
+        );
+    });
+    let explanation = match (failure.meaning, &failure.cause) {
+        (Some(meaning), _) => meaning.to_owned(),
+        (None, Some(_)) => failure.summary.clone(),
+        (None, None) => "Horizon found no failure line in the output above.".to_owned(),
+    };
+    ui.label(RichText::new(explanation).size(12.5).color(theme::FG_SOFT()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::Stage;
+    use super::*;
+    use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn a_long_root_cause_stays_inside_the_height_it_was_given() {
+        let mut runtime = Runtime::default();
+        for index in 0..40 {
+            runtime
+                .logs
+                .push_back(LogLine::new(format!("line {index}"), Some(Stage::Push), None));
+        }
+        let failure = Failure {
+            summary: "Uploading image failed; inspect deployment output".into(),
+            cause: Some("error from registry: ".to_owned() + &"denied because of a very long reason ".repeat(20)),
+            meaning: Some(
+                "The registry refused the request. Its saved credentials have expired or lack push rights to this image.",
+            ),
+        };
+        let mut used = 0.0;
+        let _ = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(420.0);
+                let top = ui.cursor().top();
+                show(ui, 1, "test", &mut runtime, 300.0, Some(&failure));
+                used = ui.cursor().top() - top;
+            })
+            .discard_textures();
+        assert!(
+            used <= 300.0 + 12.0,
+            "the log and its pinned cause fit the given height: {used}"
+        );
+    }
 }
