@@ -129,3 +129,20 @@ fn existing_companions_and_stops_are_never_confirmed_for_creation() {
     save_reserved(&fixture, &prepared(&fixture));
     assert!(confirm_creation(&fixture.request(), stop).is_err());
 }
+
+#[test]
+fn unchecking_after_the_confirmation_withdraws_it_before_any_allocation() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.grants.get_mut("consumer").unwrap().selected = false;
+    store.save(&state).unwrap();
+    drop(store);
+    let mut backend = Fake::new(&fixture);
+    assert!(execute_with(&fixture.request(), id, &mut backend).is_err());
+    assert!(backend.decisions.is_empty());
+    assert_eq!(status(&fixture.request(), id).unwrap().intent.state, State::Submitted);
+}

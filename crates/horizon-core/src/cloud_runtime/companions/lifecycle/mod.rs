@@ -427,6 +427,18 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
     }
     let observed = target.load()?;
     let confirmed = claim.confirmed == Some(intent.operation_id);
+    if confirmed && binding.origin() == intent::Origin::Reserved {
+        // The source journal is still locked: an uncheck after the confirmation
+        // withdraws it before any paid allocation.
+        let declaration = request
+            .context
+            .declarations
+            .get(request.alias)
+            .ok_or(Error::Invalid("Companion declaration is missing"))?;
+        request
+            .require_selected(&journal, &binding, declaration)
+            .map_err(|_| Error::Invalid("The new companion cloud is no longer selected; nothing was created"))?;
+    }
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref(), confirmed)?;
     if decision == intent::Decision::Provision {
         receipt::save(&target, request.owner, intent.operation_id, Phase::ConfirmationRequired)?;
