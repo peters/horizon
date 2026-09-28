@@ -650,7 +650,9 @@ binding transitions and never decides credential policy. Publishing credentials
 stay in local temporary Docker configs; only verified pull material is transferred.
 Disconnecting presentation never terminates compute or remote processes.
 Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
-layout calculations. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
+layout calculations. `cloud_panel/group.rs` owns one group’s geometry, membership
+and reconciliation; the parent module owns persisted types and group collection
+placement. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
 channels, and removal rechecks durable resource ownership before discarding panels.
