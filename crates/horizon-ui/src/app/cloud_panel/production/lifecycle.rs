@@ -1,8 +1,9 @@
 use super::{Confirmation, Event, HorizonApp, Runtime, Settings, Stage, Store, channel, cloud_runtime, deployment};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Deploy,
+    Resize(deployment::ResizeTarget),
     Stop,
     Resume,
     Delete,
@@ -89,6 +90,7 @@ impl Runtime {
     /// Another operation owns the cloud's worker or record.
     pub(super) fn busy(&self) -> bool {
         self.remote_release.is_some()
+            || self.resize.busy()
             || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
@@ -180,6 +182,10 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 
 impl HorizonApp {
     pub(super) fn change_production_worker(&mut self, id: u32, action: Action, ctx: &egui::Context) {
+        if let Action::Resize(target) = action {
+            self.start_production_resize(id, target, ctx);
+            return;
+        }
         if let Some(kind) = super::rebuild::Kind::of(action) {
             self.start_production_rebuild(id, kind, ctx);
             return;
@@ -253,7 +259,8 @@ impl HorizonApp {
                 Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
                     .map(|state| Event::Snapshot(Box::new(state))),
                 Action::Delete => deployment::terminate(&root, &settings, &cancel, &emit).map(|()| Event::deleted()),
-                Action::Deploy
+                Action::Resize(_)
+                | Action::Deploy
                 | Action::Desktop
                 | Action::Remove
                 | Action::Reconcile

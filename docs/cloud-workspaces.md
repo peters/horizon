@@ -332,9 +332,10 @@ provider rejection, the cloud card offers vCPU and memory drop-downs for CPU
 profiles, listing only sizes RunPod offers with the profile's container disk.
 The next attempt reuses the built image and applies the new size and the current
 `cpu_flavors`, `gpu_types` and `data_centers` settings. Once a worker is
-requested the size is fixed: RunPod cannot change an existing pod's vCPU or
-memory, so create a new cloud for a different size. After confirmed deletion,
-the drop-downs return until the replacement worker is requested.
+requested these drop-downs are fixed. A ready CPU worker instead uses the
+confirmed resize operation described below, which replaces its compute while
+retaining its network workspace. After confirmed deletion, the pre-allocation
+drop-downs return until the replacement worker is requested.
 
 Add normal panels inside the cloud using the existing panel picker. Choose
 Default, Rows, Cols or Grid independently for each cloud. Cloud and workspace
@@ -370,6 +371,18 @@ worker images must be rebuilt before adding shared-checkout panels. Closing Hori
 the worker and tools continue. Reconnect inspects the same worker, restores SSH
 tunnels and attaches existing sessions. Reconnect also restores closed terminal
 views from their saved remote references.
+
+A ready RunPod CPU cloud can **Resize compute** or **Grow workspace** from its
+runtime card. Compute replacement retains the same network workspace but stops
+processes, discards temporary container files and reconnects recorded sessions on
+the new worker. The requested size must be available; charges change with it.
+Workspace growth keeps the worker, increases storage charges and cannot shrink
+again. Review and confirm each change before it starts. An interrupted transaction with a retained journal
+offers its exact target through **Retry resize** after restart; competing lifecycle
+operations remain blocked until recovery finishes. Once compute replacement commits,
+the journal is removed and startup resumes readiness and reconnection automatically. GPU pod-local
+storage and other providers do not offer compute replacement through these
+controls. The host transaction requires Unix directory durability.
 
 Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.

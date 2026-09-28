@@ -205,6 +205,12 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     progress_output(ui, id, runtime);
     ui.add_space(8.0);
+    if let Some(action) = super::resize::controls(ui, id, runtime) {
+        return Some(action);
+    }
+    if runtime.resize.pending.is_some() {
+        return super::local_network::show(ui, runtime);
+    }
     if runtime.remote_release.is_some() {
         ui.spinner();
         ui.label("Releasing remote devices…");

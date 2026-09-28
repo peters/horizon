@@ -920,9 +920,9 @@ fn deleted_cloud_can_redeploy_without_removing_the_card() {
     assert!(click(&mut runtime, "Keep removed").is_none());
     assert!(runtime.confirmation == Confirmation::None);
     assert!(click(&mut runtime, "Redeploy cloud…").is_none());
-    assert!(click(&mut runtime, "Redeploy cloud") == Some(Action::Deploy));
+    assert_eq!(click(&mut runtime, "Redeploy cloud"), Some(Action::Deploy));
     runtime.confirmation = Confirmation::None;
-    assert!(click(&mut runtime, "Remove cloud") == Some(Action::Remove));
+    assert_eq!(click(&mut runtime, "Remove cloud"), Some(Action::Remove));
 }
 
 #[test]
@@ -971,3 +971,5 @@ fn an_active_redeploy_keeps_the_selected_size_and_status() {
             .all(|text| !text.contains("Finish managed workspace storage cleanup"))
     );
 }
+
+mod resize;
