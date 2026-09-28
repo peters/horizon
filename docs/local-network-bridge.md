@@ -44,8 +44,9 @@ every connection on this computer, never on the worker:
 - Only host addresses inside that subnet are reachable, and only when this
   computer would send the connection from its own address on that network.
 - This computer itself is never reachable, through any of its addresses,
-  including `localhost`. Loopback, link-local, multicast and broadcast addresses,
-  and IPv6 addresses, are refused.
+  including `localhost`. Loopback, link-local, multicast and broadcast addresses
+  are refused, and so is IPv6, except an IPv4-mapped address such as
+  `::ffff:192.168.1.50`, which is judged as the IPv4 address it carries.
 - Names such as `printer.local` are resolved by this computer's resolver, and the
   connection goes to exactly the address that was checked.
 - When this computer moves to another network, every connection is refused until
