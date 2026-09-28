@@ -269,18 +269,23 @@ fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) -> 
         .default_open(false)
         .show(ui, |ui| {
             let row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
-            egui::ScrollArea::vertical()
-                .id_salt("local-network-connection-list")
-                .max_height(row * f32::from(LIST_ROWS))
-                .show(ui, |ui| {
-                    ui.set_min_height(row * f32::from(LIST_ROWS));
-                    if relays.is_empty() {
-                        ui.small("No connections open.");
-                    }
-                    for relay in relays.iter().rev() {
-                        ui.small(connection(relay, now));
-                    }
-                });
+            // A box of fixed size that the list fills: inside a scrolling card, a list sized by
+            // its content would shrink to whatever space is left in view.
+            let size = egui::vec2(ui.available_width(), row * f32::from(LIST_ROWS));
+            ui.allocate_ui(size, |ui| {
+                ui.set_min_size(size);
+                egui::ScrollArea::vertical()
+                    .id_salt("local-network-connection-list")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if relays.is_empty() {
+                            ui.small("No connections open.");
+                        }
+                        for relay in relays.iter().rev() {
+                            ui.small(connection(relay, now));
+                        }
+                    });
+            });
         })
         .header_response
         .rect
@@ -362,65 +367,121 @@ mod tests {
         );
     }
 
-    /// Where a control below the connection list lands, with `count` relays and the list
-    /// collapsed or open, once the header animation has settled.
-    fn control_below(count: usize, open: bool) -> f32 {
-        let ctx = egui::Context::default();
-        let now = std::time::Instant::now();
-        let relays: Vec<_> = (0..count)
-            .map(|index| Relay {
-                requested: Destination::Name(format!("device-{index}.local"), 80),
-                address: "192.168.1.216:80".parse().unwrap(),
-                bytes: u64::try_from(index).unwrap(),
-                opened: now,
-            })
-            .collect();
-        let mut top = 0.0;
-        let mut header = egui::Rect::NOTHING;
-        for frame in 0..10 {
-            // The owner opens the list by clicking its header, pressed and released in one frame.
-            let events = if open && frame == 1 {
-                [true, false]
-                    .map(|pressed| egui::Event::PointerButton {
-                        pos: header.center(),
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    })
-                    .into()
-            } else {
-                Vec::new()
-            };
-            let input = egui::RawInput {
-                time: Some(f64::from(frame)),
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                events,
-                ..Default::default()
-            };
-            let _ = ctx
-                .run_ui(input, |ui| {
-                    header = connections(ui, &relays, now);
-                    top = ui.button("Delete worker").rect.top();
-                })
-                .discard_textures();
+    /// A scrolling card with little room left in view below the list, as in the Manage window,
+    /// and the control that must not move below it.
+    struct Card {
+        ctx: egui::Context,
+        frame: u32,
+        header: egui::Rect,
+    }
+
+    /// Where the control below the list is, and whether the empty-list line is in view.
+    struct Frame {
+        below: f32,
+        empty_line_visible: bool,
+        /// One list row, in this style.
+        row: f32,
+    }
+
+    impl Card {
+        fn new() -> Self {
+            Self {
+                ctx: egui::Context::default(),
+                frame: 0,
+                header: egui::Rect::NOTHING,
+            }
         }
-        top
+
+        /// Renders frames with `count` relays until the header animation settles; `click`
+        /// presses and releases on the header in the first of them.
+        fn show(&mut self, count: usize, click: bool) -> Frame {
+            let now = std::time::Instant::now();
+            let relays: Vec<_> = (0..count)
+                .map(|index| Relay {
+                    requested: Destination::Name(format!("device-{index}.local"), 80),
+                    address: "192.168.1.216:80".parse().unwrap(),
+                    bytes: u64::try_from(index).unwrap(),
+                    opened: now,
+                })
+                .collect();
+            let mut result = Frame {
+                below: 0.0,
+                empty_line_visible: false,
+                row: 0.0,
+            };
+            for step in 0..10 {
+                self.frame += 1;
+                let events = if click && step == 0 {
+                    [true, false]
+                        .map(|pressed| egui::Event::PointerButton {
+                            pos: self.header.center(),
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into()
+                } else {
+                    Vec::new()
+                };
+                let input = egui::RawInput {
+                    time: Some(f64::from(self.frame)),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                };
+                let mut header = self.header;
+                let output = self
+                    .ctx
+                    .run_ui(input, |ui| {
+                        result.row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+                        egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                            ui.add_space(60.0);
+                            header = connections(ui, &relays, now);
+                            result.below = ui.button("Delete cloud resources…").rect.top();
+                        });
+                    })
+                    .discard_textures();
+                self.header = header;
+                result.empty_line_visible = output.shapes.iter().any(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "No connections open." => {
+                        clipped.clip_rect.contains(text.visual_bounding_rect().center())
+                    }
+                    _ => false,
+                });
+            }
+            result
+        }
     }
 
     #[test]
     fn connections_starting_and_ending_never_move_the_controls_below_the_list() {
         for open in [false, true] {
-            let empty = control_below(0, open);
-            for count in [1, usize::from(LIST_ROWS) + 1, 20] {
+            let mut card = Card::new();
+            card.show(0, false);
+            let empty = card.show(0, open).below;
+            for count in [1, usize::from(LIST_ROWS) + 1, 20, 0] {
                 assert!(
-                    (control_below(count, open) - empty).abs() < 0.5,
+                    (card.show(count, false).below - empty).abs() < 0.5,
                     "{count} relays, open: {open}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_open_list_keeps_room_for_its_rows_in_a_scrolling_card() {
+        let mut card = Card::new();
+        let collapsed = card.show(0, false).below;
+        let opened = card.show(0, true);
         assert!(
-            control_below(0, true) > control_below(0, false) + 20.0,
-            "the open list takes its fixed height"
+            opened.below - collapsed >= opened.row * f32::from(LIST_ROWS),
+            "the list keeps six rows although little of the card is in view"
+        );
+        assert!(opened.empty_line_visible);
+        card.show(20, false);
+        assert!(
+            card.show(0, false).empty_line_visible,
+            "a list that empties after scrolling shows its empty line"
         );
     }
 
