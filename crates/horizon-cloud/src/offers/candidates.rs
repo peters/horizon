@@ -120,9 +120,10 @@ fn runpod(profile: &Profile, (list, preferences): (&PriceList, &Preferences)) ->
         return Some(candidate(gpu.name.clone(), gpu.hourly, running));
     }
     // A CPU worker keeps its workspace on a network volume, so an allowed data center
-    // must be able to hold one of this size, as creation requires.
-    let hosts_workspace =
-        REQUEST_SIZE_GB.contains(&volume_gb) && list.data_centers.iter().any(|center| center.workspace_storage);
+    // must be able to hold one of this size, as creation requires. The price list
+    // records that for the standard tier only; other tiers are checked at creation.
+    let hosts_workspace = REQUEST_SIZE_GB.contains(&volume_gb)
+        && (!profile.storage.standard_tier() || list.data_centers.iter().any(|center| center.workspace_storage));
     if !hosts_workspace {
         return None;
     }

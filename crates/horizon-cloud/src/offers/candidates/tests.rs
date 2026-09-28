@@ -208,6 +208,10 @@ fn runpod_is_left_out_when_no_allowed_data_center_holds_the_workspace() {
         ranked.iter().map(|candidate| candidate.provider).collect::<Vec<_>>(),
         [&provider::HETZNER]
     );
+    // The list records standard-tier support only, so a premium profile is not held back.
+    let mut premium = profile("runpod", (8, 32));
+    premium.storage.volume_tier = crate::runpod::volumes::Tier::HighPerformance;
+    assert_eq!(candidates(&premium, &sources, None)[0].provider, &provider::RUNPOD);
 }
 
 #[test]
