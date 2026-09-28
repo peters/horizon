@@ -370,10 +370,11 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 }
 
 /// Prices and exact-size stock as if the provider had just answered, for the dialog
-/// tests, which never contact it and run on Unix only.
-#[cfg(all(test, unix))]
+/// tests, which never contact it.
+#[cfg(test)]
 impl State {
     /// As the dialog is while its first `RunPod` fetch runs.
+    #[cfg(unix)]
     pub fn runpod_checking(&mut self) {
         let (sender, receiver) = channel();
         std::mem::forget(sender);
@@ -381,6 +382,7 @@ impl State {
     }
 
     /// As a fetch finds it on a machine set up for Hetzner alone.
+    #[cfg(unix)]
     pub fn runpod_key_missing(&mut self) {
         self.runpod_missing = true;
         self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
