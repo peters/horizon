@@ -252,9 +252,10 @@ control, format, surrogate or private-use characters. The worker applies the sam
 own LFS paths the patterns exclude and sends every other object; the worker checks with
 its git-lfs that each path left out is excluded, then sets the same patterns in the
 repository's configuration, so worktrees keep those paths as pointer files and
-`git status` stays clean. Submodule LFS content is always sent. Objects the selection
-leaves out need not be fetched locally; every other object is verified before
-allocation. An image that cannot honor the selection receives every object, which
+`git status` stays clean. Submodule LFS content is always sent, and so are empty
+objects and paths containing a newline, which git-lfs's listing cannot identify.
+Objects the selection leaves out need not be fetched locally; every other object,
+including those exceptions, is verified before allocation. An image that cannot honor the selection receives every object, which
 then must all be local. For an application whose LFS content was 3.23 GB, 3.14 GB of it video
 fixtures, excluding the fixtures its tests do not read is the largest transfer
 saving. Images without `horizon-source-lfs-selection-contract=1` receive every LFS
