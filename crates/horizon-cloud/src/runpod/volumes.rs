@@ -1,4 +1,5 @@
 //! Dedicated workspace storage with a durable fence around every allocation.
+pub mod growth;
 use super::{RunPod, flavors::Flavor, json, wire};
 use crate::{Cancellation, CloudError, NetworkVolume, Progress, Worker, WorkerSpec, valid_id};
 use serde::{Deserialize, Serialize};
