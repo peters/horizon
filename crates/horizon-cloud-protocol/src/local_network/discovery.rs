@@ -14,7 +14,9 @@ pub const MAX_NAMES: usize = 4;
 pub const MAX_SERVICES: usize = 16;
 pub const MAX_ATTRIBUTES: usize = 8;
 pub const MAX_PORTS: usize = 32;
-/// Characters in any one name, type or attribute; devices choose these strings.
+/// Bytes of the message around an answer: its kind and number.
+const ENVELOPE: usize = 256;
+/// Characters in any one name, type, attribute or note; devices choose most of these strings.
 pub const MAX_TEXT: usize = 128;
 pub const MAX_NOTES: usize = 8;
 
@@ -132,14 +134,27 @@ impl Discovery {
         for device in &mut self.devices {
             self.truncated |= device.bound();
         }
-        self.notes.truncate(MAX_NOTES);
+        if self.notes.len() > MAX_NOTES {
+            self.notes.truncate(MAX_NOTES);
+            self.truncated = true;
+        }
+        for note in &mut self.notes {
+            let short = text(note);
+            self.truncated |= short != *note;
+            *note = short;
+        }
         self.devices.sort_by_key(|device| (!device.described(), device.address));
         if self.devices.len() > MAX_DEVICES {
             self.devices.truncate(MAX_DEVICES);
             self.truncated = true;
         }
-        // Room for the envelope, the notes and the flags around the devices.
-        let mut room = MAX_LINE.saturating_sub(4096);
+        // Room for everything around the devices, the message that carries the answer
+        // included; the flag is set in advance, since it only grows the envelope.
+        let devices = std::mem::take(&mut self.devices);
+        let truncated = std::mem::replace(&mut self.truncated, true);
+        let envelope = serde_json::to_vec(&self).map_or(MAX_LINE, |bytes| bytes.len());
+        (self.devices, self.truncated) = (devices, truncated);
+        let mut room = MAX_LINE.saturating_sub(envelope + ENVELOPE);
         let mut kept = 0;
         for device in &self.devices {
             let size = serde_json::to_vec(device).map_or(usize::MAX, |bytes| bytes.len() + 1);
@@ -229,6 +244,15 @@ mod tests {
         assert!(discovery.devices.is_sorted_by_key(|device| device.address));
         // Described devices win over bare addresses when room runs out.
         assert!(discovery.devices.iter().all(Device::described));
+
+        let noisy = Discovery {
+            notes: (0..12).map(|_| "e".repeat(10_000)).collect(),
+            ..Discovery::default()
+        }
+        .bounded();
+        assert!(noisy.truncated);
+        assert_eq!(noisy.notes.len(), MAX_NOTES);
+        assert!(noisy.notes.iter().all(|note| note.len() == MAX_TEXT));
 
         let small = Discovery {
             devices: vec![device(9, 1), device(3, 0)],

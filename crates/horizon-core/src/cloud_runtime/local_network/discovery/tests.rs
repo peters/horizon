@@ -338,9 +338,12 @@ fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
     );
 }
 
+/// Sends real mDNS and SSDP queries on this computer's network, so it only runs on request:
+/// `cargo test -p horizon-core a_browse_of_this -- --ignored`.
 #[test]
+#[ignore = "browses the network this computer is on"]
 fn a_browse_of_this_computers_network_ends_within_its_window() {
-    // Runners without a shareable network have nothing to browse.
+    // Computers without a shareable network have nothing to browse.
     let Ok(current) = Scope::current() else {
         return;
     };

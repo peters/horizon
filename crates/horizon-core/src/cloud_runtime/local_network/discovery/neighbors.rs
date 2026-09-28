@@ -47,7 +47,8 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
     }
 }
 
-/// Runs the system's `arp`, stopping it at [`TIMEOUT`] and reading at most [`MAX_OUTPUT`].
+/// Runs the system's `arp`, stopping it at [`TIMEOUT`]. Output past [`MAX_OUTPUT`] is read
+/// and discarded, so a long table still lets `arp` finish, and only its start is parsed.
 #[cfg(any(target_os = "macos", windows))]
 fn run(mut command: std::process::Command) -> io::Result<String> {
     use std::{io::Read, process::Stdio, time::Instant};
@@ -61,8 +62,9 @@ fn run(mut command: std::process::Command) -> io::Result<String> {
         .name("local-network-neighbors".into())
         .spawn(move || {
             let mut text = Vec::new();
-            if let Some(output) = output {
-                let _ = output.take(MAX_OUTPUT).read_to_end(&mut text);
+            if let Some(mut output) = output {
+                let _ = (&mut output).take(MAX_OUTPUT).read_to_end(&mut text);
+                let _ = io::copy(&mut output, &mut io::sink());
             }
             text
         });
@@ -75,13 +77,19 @@ fn run(mut command: std::process::Command) -> io::Result<String> {
         }
     };
     let deadline = Instant::now() + TIMEOUT;
-    while child.try_wait()?.is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             return Err(io::Error::other("the neighbor table took too long to read"));
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    if !status.success() {
+        return Err(io::Error::other(format!("arp ended with {status}")));
     }
     let text = reader
         .join()
