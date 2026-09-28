@@ -51,9 +51,10 @@ every connection on this computer, never on the worker:
 - Only host addresses inside that subnet are reachable, and only when this
   computer would send the connection from its own address on that network.
 - This computer itself is not reachable through any of its addresses, including
-  `localhost`, unless you open one of its ports in the scope (see below). Loopback,
-  link-local, multicast and broadcast addresses
-  are refused, and so is IPv6, except an IPv4-mapped address such as
+  `localhost`, unless you open one of its ports in the scope (see below). An opened
+  port is reachable as `localhost`, `127.0.0.1` or `::1`, and only those.
+- Other loopback, link-local, multicast and broadcast addresses are refused, and so
+  is IPv6, except `::1` for an opened port and an IPv4-mapped address such as
   `::ffff:192.168.1.50`, which is judged as the IPv4 address it carries.
 - Names such as `printer.local` are resolved by this computer's resolver, and the
   connection goes to exactly the address that was checked.
@@ -135,8 +136,8 @@ Tools and browsers that accept a SOCKS5 proxy can use the proxy address directly
 for example `curl --socks5-hostname 127.0.0.1:<port> http://192.168.1.1/`.
 
 Refusals read, for example, "Outside the bridged local network: only the devices
-the owner shares are reachable, and the Horizon computer only as localhost on
-ports the owner opened", "Device not
+the owner shares are reachable, on the ports shared for each, and the Horizon
+computer only on ports the owner opened, as localhost, 127.0.0.1 or ::1", "Device not
 reachable from the Horizon computer" or "The device refused the connection on
 that port". Forwards end when the bridge stops or reconnects; agents check the
 status and forward again.

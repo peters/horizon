@@ -85,7 +85,7 @@ impl Server {
 
     #[tool(
         name = "local_network_forward",
-        description = "Pin a device on the owner's local network to a TCP port on this worker's 127.0.0.1, so any TCP tool works unchanged (ffmpeg or GStreamer over RTSP/TCP, ssh, curl, database clients). Returns the worker port. The owner's Horizon checks the destination first: devices outside what the owner shares are refused, the owner's computer is reachable only as host localhost on ports the owner opened, and an unreachable device is reported. Forwards end when the bridge stops or reconnects."
+        description = "Pin a device on the owner's local network to a TCP port on this worker's 127.0.0.1, so any TCP tool works unchanged (ffmpeg or GStreamer over RTSP/TCP, ssh, curl, database clients). Returns the worker port. The owner's Horizon checks the destination first: devices and ports outside what the owner shares are refused (the owner may share a device on only some ports), the owner's computer is reachable only on ports the owner opened, as host localhost, 127.0.0.1 or ::1, and an unreachable device is reported. Forwards end when the bridge stops or reconnects."
     )]
     async fn forward(&self, Parameters(request): Parameters<Forward>) -> CallToolResult {
         let paths = self.paths.clone();

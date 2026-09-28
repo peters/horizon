@@ -230,7 +230,7 @@ impl Reply {
                 "The bridge refused the connection: its connection or data limit is reached, it is stopping, or it hit an internal error"
             }
             Self::NotAllowed => {
-                "Outside the bridged local network: only the devices the owner shares are reachable, and the Horizon computer only as localhost on ports the owner opened"
+                "Outside the bridged local network: only the devices the owner shares are reachable, on the ports shared for each, and the Horizon computer only on ports the owner opened, as localhost, 127.0.0.1 or ::1"
             }
             Self::NetworkUnreachable => {
                 "The Horizon computer is no longer on the bridged network; the owner must switch the bridge off and on"

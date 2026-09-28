@@ -31,8 +31,8 @@ connection, so no model key is placed on the worker.
 1. Switch on **Share local network**. Expect **Scope: the whole network**.
    `local-network forward 192.168.1.50 80` and a `curl` through the returned port
    succeed. `local-network forward localhost 8765` is refused with "Outside the
-   bridged local network: … the Horizon computer only as localhost on ports the
-   owner opened".
+   bridged local network: … the Horizon computer only on ports the owner opened,
+   as localhost, 127.0.0.1 or ::1".
 2. Hold a connection to `192.168.1.50:80` open (for example with the driver from
    the open connections smoke). Open **Scope**, enter `192.168.1.50:631` under
    Devices, and press **Apply scope**. Expect **Scope: 1 device**, and the held

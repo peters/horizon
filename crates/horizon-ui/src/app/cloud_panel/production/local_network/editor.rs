@@ -4,8 +4,9 @@
 use horizon_core::cloud_runtime::local_network::{Device, Rules};
 use std::net::Ipv4Addr;
 
-/// Characters either text field takes, well above what the rule limits allow.
-const TEXT_LIMIT: usize = 2048;
+/// Characters either text field takes: room for the largest scope the rules allow, 32 devices
+/// with 16 ports each (about 3,600 characters), with space to spare.
+const TEXT_LIMIT: usize = 8192;
 
 #[derive(Default)]
 pub(in super::super) struct Editor {
