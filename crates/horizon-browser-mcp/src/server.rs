@@ -100,6 +100,59 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_companions",
+        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready and cloud_companion_stop. Reading starts nothing."
+    )]
+    async fn cloud_companions(&self) -> Result<Json<serde_json::Value>, String> {
+        self.controller.cloud_companions().await.map(Json)
+    }
+
+    #[tool(
+        name = "cloud_companion_ensure_ready",
+        description = "Explicitly start a companion cloud the owner checked on the source cloud's card: reuse it when running, resume it when stopped (on Hetzner, resuming creates a new server on the retained workspace volume), and verify SSH access and its repository environment. Agents cannot create a companion that has no cloud yet: the owner creates it with New cloud and checks it first. A checked cloud that was never started answers confirmation_required; start it from its card. Returns an operation_id and phase at once; poll cloud_companion_operation with it and the same cloud and alias until done is true; when resend is true, nothing is running the operation, so send the same request again to continue it. Repeated or concurrent requests for the same companion share one operation and never start a second worker. Deleted, deleting, lost or changed companions are refused, and an uncertain earlier operation is reconciled, never repeated. The companion's own companions are not started. Requires the running Horizon that owns the source cloud; nothing starts without it."
+    )]
+    async fn cloud_companion_ensure_ready(
+        &self,
+        Parameters(input): Parameters<crate::controller::companion::CompanionInput>,
+    ) -> Result<Json<serde_json::Value>, String> {
+        self.controller
+            .cloud_companion(
+                horizon_browser_control::manifest::provider_usage::CompanionAction::EnsureReady,
+                input,
+            )
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        name = "cloud_companion_stop",
+        description = "Explicitly stop a companion cloud's worker. It stays stopped until an explicit cloud_companion_ensure_ready: checking its box or restarting Horizon does not start it again. Workspace storage and worktrees are kept. Returns an operation_id and phase at once; poll cloud_companion_operation with it and the same cloud and alias until done is true; when resend is true, nothing is running the operation, so send the same request again to continue it. Requires the running Horizon that owns the source cloud."
+    )]
+    async fn cloud_companion_stop(
+        &self,
+        Parameters(input): Parameters<crate::controller::companion::CompanionInput>,
+    ) -> Result<Json<serde_json::Value>, String> {
+        self.controller
+            .cloud_companion(
+                horizon_browser_control::manifest::provider_usage::CompanionAction::Stop,
+                input,
+            )
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        name = "cloud_companion_operation",
+        description = "Read an Ensure Ready or Stop operation's phase without changing anything, given the cloud and alias of the original request and its operation_id; polling never starts or continues an operation. Phases: submitted, running, inspecting, settling, verifying_access, confirmation_required, reconcile_required, retry_required, ready, stopped or refused, with done, resend (true when only the same Ensure Ready or Stop sent again continues it) and a message saying what to do next. Ready means SSH access and the repository environment were verified, not only that the provider reports the worker running."
+    )]
+    async fn cloud_companion_operation(
+        &self,
+        Parameters(input): Parameters<crate::controller::companion::CompanionOperationInput>,
+    ) -> Result<Json<serde_json::Value>, String> {
+        self.controller.cloud_companion_operation(input).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_provider_devices",
         description = "Discover any browser, OS and device combination currently offered by a configured remote provider account, without allocating a session. Pass provider and optional search words and offset. Returns at most 50 combinations and next_offset; pass a returned target to browser_create with backend omitted. No preconfigured device target is needed. Availability in this catalog is not account entitlement, live capacity or a reservation. The host uses only its configured or explicitly granted credentials; never supply credentials, endpoints or raw capabilities."
     )]
@@ -665,6 +718,10 @@ mod tests {
                 "browser_video",
                 "browser_visibility",
                 "browser_wait",
+                "cloud_companion_ensure_ready",
+                "cloud_companion_operation",
+                "cloud_companion_stop",
+                "cloud_companions",
                 "cloud_offers",
                 "device_panel",
             ]

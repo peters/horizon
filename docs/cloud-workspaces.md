@@ -612,8 +612,10 @@ ssh -o StrictHostKeyChecking=yes -o HostKeyAlias="$alias" \
   -o IdentitiesOnly=yes -i "$identity_file" -p "$port" "$user@$host"
 ```
 
-Cloud provisioning/reconciliation has no public MCP operation yet; the worker's
-browser/device MCP tools do not allocate or reconcile compute. This example is
+Cloud creation has no public MCP operation yet, and the worker's browser/device
+MCP tools do not allocate or reconcile compute. Agents in Horizon can start and
+stop a checked companion cloud; see
+[Starting and stopping companions from agents](#starting-and-stopping-companions-from-agents). This example is
 an integration harness, not an installed user command.
 
 ### Rebuilding a cloud's image
@@ -723,7 +725,7 @@ The read-only `cloud_companions_list` and `cloud_companion_inspect` tools expose
 the same catalog as `horizon-cloud-worker companions list` and `inspect <alias>`.
 Use the returned SSH alias and worktree with ordinary SSH, Git, and rsync. A
 stale catalog loses Ready status; inspection can verify an unchanged connection
-independently. M0 has no agent tool for starting or provisioning a cloud.
+independently. These worker tools do not start or stop clouds.
 The same server also offers `cloud_offers`, so agents on workers without browser
 tools can rank cloud offers from the prices the owning Horizon last sent the
 worker.
@@ -737,6 +739,63 @@ retiring their source cloud. Changing the workspace, declaration, target worker,
 or initial revision requires cleanup and explicit selection again. These clouds
 share trusted shell access; this is not credential isolation. Both workers need
 an image containing the updated companion helper and rsync.
+
+### Starting and stopping companions from agents
+
+An agent panel in Horizon can start or stop a companion cloud that the owner
+checked on the source cloud's card, through the browser MCP server:
+
+- `cloud_companions` lists the clouds in the agent's workspace with their declared
+  companions, whether each is checked, its status and its target cloud ID.
+- `cloud_companion_ensure_ready` takes the source `cloud` ID and the companion's
+  `alias`. It reuses a running companion, resumes a stopped one and verifies
+  source-to-target SSH access and the target's repository environment. On
+  Hetzner, resuming creates a new server on the retained workspace volume.
+- `cloud_companion_stop` stops the companion's worker and keeps its workspace
+  storage and worktrees. It stays stopped until an explicit Ensure Ready:
+  checking its box or restarting Horizon does not start it.
+- `cloud_companion_operation` reads an operation's phase from the original
+  request's `cloud` and `alias` and its `operation_id`, without changing
+  anything: polling never starts or continues an operation.
+
+Ensure Ready and Stop answer at once with an `operation_id` and a phase; poll
+`cloud_companion_operation` with the same `cloud` and `alias` until `done` is
+true. When `resend` is true, nothing is running the operation, for example after
+its card was busy or Horizon restarted mid-operation: send the same Ensure Ready
+or Stop again to continue it, which reconciles and never repeats a provider
+change. A caller may pass its own UUID
+as `operation_id`, so a lost answer is polled instead of sent again. Repeated or
+concurrent requests for the same companion share one operation and never start
+a second worker. The operation runs on the target cloud's card with its progress
+and log, as the card's own Resume or Stop would; a card busy with another
+operation leaves the request recorded, and the next request for it continues
+it. Ready means the source reached the target over SSH, not only that the
+provider reports the worker running.
+
+A deleted, deleting, lost or changed companion is refused, and a companion
+whose provider outcome is uncertain is reconciled on the next request, never
+repeated. Agents cannot create a companion that has no cloud yet: the owner creates it
+with **New cloud** and checks it on the source cloud's card first. A checked
+cloud whose first worker was never started answers `confirmation_required`;
+start it from its own card. Starting a companion never starts the companions it
+declares itself. The first request for a checked companion binds it to that
+cloud and its checkout; choosing another cloud for the same alias later needs
+the binding cleared first.
+
+These requests need the running Horizon that owns the source cloud, in a saved
+session; without it they fail with `cloud_companion_timed_out` or
+`cloud_companion_unavailable`, and nothing starts. An Ensure Ready or Stop that
+Horizon reaches only after the caller stopped waiting is refused with
+`cloud_companion_expired`, before anything is recorded. Existing SSH connections
+between workers keep working without Horizon. The CLI reaches the same tools
+through a plan, for example:
+
+```bash
+horizon-browser run - <<'PLAN'
+{"version":1,"steps":[{"id":"start","tool":"cloud_companion_ensure_ready",
+  "arguments":{"cloud":"<source cloud ID>","alias":"consumer"}}]}
+PLAN
+```
 
 When closing, Horizon waits for earlier companion jobs and durably saves queued
 unchecks locally. This save does not require provider settings or reachable

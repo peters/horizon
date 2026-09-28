@@ -109,7 +109,7 @@ impl HorizonApp {
                 } => {
                     let (answer, started) = match outcome {
                         Ok(submitted) => {
-                            let (answer, started) = self.continue_operation(&source, *submitted, ctx);
+                            let (answer, started) = self.answer_submitted(&request, &source, *submitted, ctx);
                             (Ok(answer), started)
                         }
                         Err(error) => (Err(error), false),
@@ -134,6 +134,34 @@ impl HorizonApp {
         if !self.cloud_prototype.production.companions.agent.held.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// The answer to a recorded request, continuing its operation unless it is a
+    /// status poll, which only reads. Returns whether an execution started.
+    fn answer_submitted(
+        &mut self,
+        request: &UsageRequest,
+        source: &str,
+        submitted: Submitted,
+        ctx: &egui::Context,
+    ) -> (Value, bool) {
+        if reads_only(request) {
+            let mut answer = describe(source, &submitted.alias, &submitted.operation);
+            let operation = &submitted.operation;
+            if answer["done"] == false
+                && !self
+                    .cloud_prototype
+                    .production
+                    .companions
+                    .agent
+                    .executing
+                    .contains(&operation.intent.target_cloud_id)
+            {
+                resend(&mut answer, RESEND);
+            }
+            return (answer, false);
+        }
+        self.continue_operation(source, submitted, ctx)
     }
 
     fn release_companion_source(&mut self, source: &str) {
@@ -181,6 +209,7 @@ impl HorizonApp {
             .ok_or("cloud_companion_unavailable: Horizon has no cloud state directory")?;
         let id = serde_json::from_value::<OperationId>(json!(companion.operation_id))
             .map_err(|_| "cloud_companion_invalid_request: operation_id must be a UUID")?;
+        expired(request)?;
         // A refresh holds the source journal while it reaches workers, and may carry
         // the owner's checkbox change, so it finishes; the job waits for its lock.
         let owner = entry.owner.clone();
@@ -189,9 +218,10 @@ impl HorizonApp {
         let groups = self.cloud_prototype.groups.clone();
         let request = Box::new(request.clone());
         let companion = companion.clone();
+        let deadline = request.deadline_at_millis;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let outcome = submit(&root, &owner, &groups, &companion, id).map(Box::new);
+            let outcome = submit(&root, &owner, &groups, (&companion, deadline), id).map(Box::new);
             let _ = sender.send(Message::Answered {
                 request,
                 source,
@@ -281,7 +311,7 @@ impl HorizonApp {
                 (answer, true)
             }
             Err(reason) => {
-                answer["message"] = json!(reason);
+                resend(&mut answer, &reason);
                 (answer, false)
             }
         }
@@ -424,7 +454,7 @@ fn submit(
     root: &Path,
     owner: &Owner,
     groups: &CloudGroups,
-    companion: &CompanionRequest,
+    (companion, deadline): (&CompanionRequest, i64),
     id: OperationId,
 ) -> Result<Submitted, String> {
     let context = inventory::prepare(owner, groups, &Cancellation::default()).map_err(|error| error.to_string())?;
@@ -438,6 +468,11 @@ fn submit(
     let operation = match companion.action {
         CompanionAction::Status => retry_busy(|| lifecycle::status(&request, id)),
         CompanionAction::EnsureReady | CompanionAction::Stop => retry_busy(|| {
+            // Reading the workspace may take a while; nothing is recorded after the
+            // caller has stopped waiting.
+            if manifest::now_millis() >= deadline {
+                return Err(cloud_runtime::Error::Invalid(EXPIRED));
+            }
             lifecycle::bind_selected(&request)?;
             let action = if companion.action == CompanionAction::Stop {
                 intent::Action::Stop
@@ -461,6 +496,29 @@ fn submit(
     })
 }
 
+const EXPIRED: &str =
+    "cloud_companion_expired: the request expired before Horizon recorded it; nothing was started or stopped";
+
+/// An Ensure Ready or Stop whose caller has stopped waiting is refused before it is
+/// recorded; a status poll is always answered.
+fn expired(request: &UsageRequest) -> Result<(), String> {
+    let lifecycle = request
+        .cloud_companion
+        .as_ref()
+        .is_some_and(|companion| matches!(companion.action, CompanionAction::EnsureReady | CompanionAction::Stop));
+    if lifecycle && manifest::now_millis() >= request.deadline_at_millis {
+        return Err(EXPIRED.into());
+    }
+    Ok(())
+}
+
+fn reads_only(request: &UsageRequest) -> bool {
+    request
+        .cloud_companion
+        .as_ref()
+        .is_none_or(|companion| companion.action == CompanionAction::Status)
+}
+
 fn retry_busy<T>(mut attempt: impl FnMut() -> cloud_runtime::Result<T>) -> cloud_runtime::Result<T> {
     let started = Instant::now();
     loop {
@@ -482,8 +540,18 @@ fn describe(source: &str, alias: &str, operation: &Operation) -> Value {
         "target_cloud_id": operation.intent.target_cloud_id,
         "phase": operation.phase,
         "done": !operation.intent.state.pending() || operation.phase == Phase::ConfirmationRequired,
+        "resend": false,
         "message": hint(operation.phase),
     })
+}
+
+const RESEND: &str = "Nothing is running this operation; send the same Ensure Ready or Stop again to continue it. It reconciles and never repeats a provider change";
+
+/// Marks a pending operation that polling alone cannot move forward: only the same
+/// Ensure Ready or Stop sent again continues it.
+fn resend(answer: &mut Value, reason: &str) {
+    answer["resend"] = json!(true);
+    answer["message"] = json!(reason);
 }
 
 fn hint(phase: Phase) -> &'static str {
@@ -491,7 +559,7 @@ fn hint(phase: Phase) -> &'static str {
         Phase::Submitted | Phase::Running | Phase::Inspecting | Phase::Settling | Phase::VerifyingAccess => {
             "In progress; poll its status with this operation_id"
         }
-        Phase::ConfirmationRequired => "Creating this cloud needs the owner's confirmation on the source cloud's card",
+        Phase::ConfirmationRequired => "This companion's cloud was never started; the owner starts it from its card",
         Phase::ReconcileRequired => {
             "The provider's outcome is uncertain; the next Ensure Ready or Stop reconciles it and never repeats it"
         }

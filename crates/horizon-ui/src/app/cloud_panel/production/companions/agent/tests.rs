@@ -228,3 +228,79 @@ fn a_busy_journal_is_retried_briefly() {
     });
     assert_eq!(result.unwrap(), 3);
 }
+
+#[test]
+fn a_status_poll_never_starts_a_recorded_operation() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let context = Context {
+        source: Target {
+            scope: Scope {
+                session_id: "session".into(),
+                workspace_id: "workspace".into(),
+            },
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "dev"),
+        },
+        declarations: std::collections::BTreeMap::new(),
+        inventory: Vec::new(),
+    };
+    let request = |action: &str| -> UsageRequest {
+        serde_json::from_value(json!({
+            "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+            "deadline_at_millis": i64::MAX, "claimed": true,
+            "cloud_companion": {"action": action, "cloud": "source", "alias": "consumer",
+                "operation_id": OperationId::generate()}
+        }))
+        .unwrap()
+    };
+    let submitted = || Submitted {
+        operation: operation(intent::Action::EnsureReady, intent::State::Submitted, Phase::Submitted),
+        context: context.clone(),
+        alias: "consumer".into(),
+    };
+    let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    assert!(!started);
+    assert_eq!(answer["phase"], "submitted");
+    // Nothing runs it, so polling alone would wait forever: the agent must resend.
+    assert_eq!(
+        (answer["done"].as_bool(), answer["resend"].as_bool()),
+        (Some(false), Some(true))
+    );
+    // While it runs on its card, polling is enough.
+    let agent = &mut app.cloud_prototype.production.companions.agent;
+    agent.executing.insert("target".into());
+    let (answer, _) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    assert_eq!(answer["resend"], false);
+    assert_eq!(answer["message"], hint(Phase::Submitted));
+    app.cloud_prototype.production.companions.agent.executing.clear();
+    // The same operation sent again as Ensure Ready tries to continue it on its card,
+    // which is not open here.
+    let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
+    assert!(!started);
+    assert_ne!(answer["message"], hint(Phase::Submitted));
+    assert_eq!(answer["resend"], true);
+}
+
+#[test]
+fn an_expired_ensure_ready_or_stop_is_refused_but_a_poll_is_answered() {
+    let request = |action: &str, deadline: i64| -> UsageRequest {
+        serde_json::from_value(json!({
+            "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+            "deadline_at_millis": deadline, "claimed": true,
+            "cloud_companion": {"action": action, "cloud": "source", "alias": "consumer",
+                "operation_id": OperationId::generate()}
+        }))
+        .unwrap()
+    };
+    let past = manifest::now_millis() - 1;
+    for action in ["ensure_ready", "stop"] {
+        assert!(
+            expired(&request(action, past))
+                .unwrap_err()
+                .starts_with("cloud_companion_expired")
+        );
+        assert!(expired(&request(action, i64::MAX)).is_ok());
+    }
+    assert!(expired(&request("status", past)).is_ok());
+}
