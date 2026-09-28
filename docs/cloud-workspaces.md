@@ -781,7 +781,9 @@ the binding cleared first.
 
 These requests need the running Horizon that owns the source cloud, in a saved
 session; without it they fail with `cloud_companion_timed_out` or
-`cloud_companion_unavailable`, and nothing starts. Existing SSH connections
+`cloud_companion_unavailable`, and nothing starts. An Ensure Ready or Stop that
+Horizon reaches only after the caller stopped waiting is refused with
+`cloud_companion_expired`, before anything is recorded. Existing SSH connections
 between workers keep working without Horizon. The CLI reaches the same tools
 through a plan, for example:
 

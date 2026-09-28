@@ -286,7 +286,7 @@ fn an_expired_ensure_ready_or_stop_is_refused_but_a_poll_is_answered() {
         assert!(
             expired(&request(action, past))
                 .unwrap_err()
-                .starts_with("cloud_companion_timed_out")
+                .starts_with("cloud_companion_expired")
         );
         assert!(expired(&request(action, i64::MAX)).is_ok());
     }

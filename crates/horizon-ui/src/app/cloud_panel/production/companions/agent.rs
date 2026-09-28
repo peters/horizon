@@ -484,7 +484,7 @@ fn submit(
 }
 
 const EXPIRED: &str =
-    "cloud_companion_timed_out: the request expired before Horizon recorded it; nothing was started or stopped";
+    "cloud_companion_expired: the request expired before Horizon recorded it; nothing was started or stopped";
 
 /// An Ensure Ready or Stop whose caller has stopped waiting is refused before it is
 /// recorded; a status poll is always answered.
