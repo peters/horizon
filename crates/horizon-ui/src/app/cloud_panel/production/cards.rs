@@ -121,7 +121,12 @@ fn runtime_frame(ui: &mut egui::Ui, id: u32, contents: impl FnOnce(&mut egui::Ui
     frame.show(ui, |ui| {
         ui.set_width(inner.x);
         super::super::runtime::readable_runtime_style(ui);
+        // A floating bar overlays the right edge of full-width buttons, so a
+        // press aimed at a button would drag the card instead. Reserve its width,
+        // always, so the bar never animates in and rewraps the content.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical()
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .id_salt(("cloud-runtime-body", id))
             .max_height(inner.y)
             .min_scrolled_height(inner.y)
