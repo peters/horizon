@@ -55,6 +55,20 @@ impl Flavor {
 pub fn offered((cpu, memory_gb): (u16, u16), container_gb: u16) -> bool {
     memory_gb > 0 && FLAVORS.iter().any(|flavor| flavor.fits(cpu, memory_gb, container_gb))
 }
+
+/// Largest container disk any supported CPU flavor can provide.
+#[must_use]
+pub fn max_container_gb() -> u16 {
+    VCPU_COUNTS
+        .into_iter()
+        .flat_map(|cpu| {
+            FLAVORS
+                .iter()
+                .map(move |flavor| cpu.saturating_mul(flavor.disk_per_vcpu))
+        })
+        .max()
+        .unwrap_or_default()
+}
 /// vCPU counts that some flavor offers with this container disk.
 pub fn vcpu_options(container_gb: u16) -> impl Iterator<Item = u16> {
     VCPU_COUNTS
@@ -182,6 +196,9 @@ mod tests {
     }
     #[test]
     fn options_list_only_offered_sizes() {
+        assert_eq!(max_container_gb(), 480);
+        assert!(offered((32, 64), max_container_gb()));
+        assert_eq!(vcpu_options(max_container_gb() + 1).count(), 0);
         assert_eq!(vcpu_options(20).collect::<Vec<_>>(), VCPU_COUNTS);
         assert_eq!(vcpu_options(50).collect::<Vec<_>>(), [4, 8, 16, 32]);
         assert_eq!(vcpu_options(481).count(), 0);
