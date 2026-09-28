@@ -422,8 +422,10 @@ class SourceFormatTests(unittest.TestCase):
                         ({'exclude': ['fixtures/**'], 'skipped': skipped[0]}, kept),
                         ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size='23')]}, kept),
                         # git-lfs never lists an empty object or reads a newline in a name.
-                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size=0)]}, kept),
-                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], path='fixtures/a\nb.bin')]}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size=0)]}, kept,
+                         b'An empty LFS object is always transferred; a selection cannot skip it'),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], path='fixtures/a\nb.bin')]}, kept,
+                         b'An LFS path with a newline is always transferred; a selection cannot skip it'),
                         # DEL, a C1 control and a format character.
                         ({'exclude': ['fixtures/**', 'a\x7fb'], 'skipped': skipped}, kept),
                         ({'exclude': ['fixtures/**', 'a\x85b'], 'skipped': skipped}, kept),
@@ -431,10 +433,12 @@ class SourceFormatTests(unittest.TestCase):
                         ({'exclude': ['fixtures/**', 'a\ue000b'], 'skipped': skipped}, kept),  # private use
                         ({'exclude': [f'p{index}' for index in range(64)] + ['fixtures/**'], 'skipped': skipped}, kept),
                         ([], kept)]
-            for lfs, assets in refusals:
+            for lfs, assets, *reason in refusals:
                 self.archive(root, workspace, [], [], assets, lfs=lfs)
                 refused = self.execute('horizon-worker-source', workspace, 'import', env=worker)
                 self.assertNotEqual(refused.returncode, 0, lfs)
+                for message in reason:
+                    self.assertIn(message, refused.stderr, lfs)
                 self.assertFalse((workspace / 'source' / 'manifest.json').exists(), lfs)
             # An unassigned code point depends on the Unicode version, so Horizon and the worker allow it.
             unassigned = 'x\U000e0080y'
