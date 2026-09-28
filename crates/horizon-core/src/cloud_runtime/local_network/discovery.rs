@@ -127,7 +127,9 @@ impl Discoverer {
                 discovery.devices.len() - 1
             };
             let device = &mut discovery.devices[index];
-            device.ports.extend(ports);
+            // A port the device already advertises is not news, and must not read as truncation.
+            let fresh: Vec<_> = ports.into_iter().filter(|port| !device.ports.contains(port)).collect();
+            device.ports.extend(fresh);
             if !device.sources.contains(&Source::Probe) {
                 device.sources.push(Source::Probe);
                 device.sources.sort_unstable();

@@ -2,7 +2,7 @@
 //! probes a minute, one at a time, and only to an address the bridge's scope admits. Nothing
 //! is sent to the device beyond the connection attempt, and nothing sweeps the subnet.
 use super::super::{Destination, Scope};
-use horizon_cloud_protocol::local_network::discovery::{Answer, Probe, Request, text};
+use horizon_cloud_protocol::local_network::discovery::{Answer, Probe, Request};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
@@ -82,7 +82,8 @@ impl Prober {
         };
         started.push_back(now);
         let mut probe = Probe {
-            host: text(host),
+            // Validation bounds the host, so it is echoed as the agent named it.
+            host: host.to_owned(),
             address,
             open: Vec::new(),
             closed: Vec::new(),

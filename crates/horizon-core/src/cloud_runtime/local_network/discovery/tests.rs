@@ -483,6 +483,8 @@ fn probe_scope() -> Arc<Scope> {
         resolve: Box::new(|name, port| match name {
             "printer.local" => Ok(vec![SocketAddr::new(v4("192.168.1.50").into(), port)]),
             "rebound.local" => Ok(vec![SocketAddr::new(v4("127.0.0.1").into(), port)]),
+            // A valid name longer than the text limit for device-chosen strings.
+            long if long.len() == 200 => Ok(vec![SocketAddr::new(v4("192.168.1.60").into(), port)]),
             _ => Err(Reply::HostUnreachable),
         }),
         host: Box::new(move || Ok(home())),
@@ -562,4 +564,53 @@ fn probes_connect_only_to_admitted_hosts_a_few_times_a_minute() {
         panic!("the rate limit held no probe back");
     };
     assert!(limit.contains("6 probes a minute"), "{limit}");
+}
+
+#[test]
+fn probed_ports_join_advertised_ones_and_hosts_come_back_as_named() {
+    let printer = v4("192.168.1.50");
+    let discoverer = Discoverer::with_parts(
+        probe_scope(),
+        Box::new(move |_, _| {
+            let findings = vec![
+                Finding::Seen(printer, Source::Mdns),
+                Finding::Service(printer, service("_ipp._tcp", Some(631))),
+            ];
+            (findings, Vec::new())
+        }),
+        Box::new(|target: SocketAddr, _| match target.port() {
+            80 | 631 => Ok(()),
+            _ => Err(io::ErrorKind::ConnectionRefused.into()),
+        }),
+    );
+    let Answer::Probe(_) = discoverer.answer(Request::Probe {
+        host: "printer.local".into(),
+        ports: vec![631, 80],
+    }) else {
+        panic!("probe");
+    };
+    let Answer::Discovery(found) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert!(
+        !found.truncated,
+        "an advertised port found open again is not a truncation"
+    );
+    assert_eq!(found.devices[0].ports, [80, 631]);
+    assert_eq!(found.devices[0].sources, [Source::Mdns, Source::Probe]);
+
+    // Names may be up to 253 characters, longer than device text, and come back whole.
+    let long = format!(
+        "{label}.{label}.{label}.{}.local",
+        "a".repeat(47),
+        label = "a".repeat(48)
+    );
+    assert_eq!(long.len(), 200);
+    let Answer::Probe(result) = discoverer.answer(Request::Probe {
+        host: long.clone(),
+        ports: vec![80],
+    }) else {
+        panic!("probe of a long name");
+    };
+    assert_eq!((result.host, result.address), (long, v4("192.168.1.60")));
 }
