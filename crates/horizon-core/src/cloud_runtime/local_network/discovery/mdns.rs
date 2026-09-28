@@ -7,7 +7,7 @@ use simple_dns::{CLASS, Name, Packet, PacketFlag, Question, TYPE, rdata::RData};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     time::{Duration, Instant},
 };
 
@@ -40,7 +40,7 @@ const COMMON_TYPES: [&str; 22] = [
     "_spotify-connect._tcp",
 ];
 /// How long each round listens: service types, then instances, then their hosts.
-const ROUNDS: [Duration; 3] = [
+pub(super) const ROUNDS: [Duration; 3] = [
     Duration::from_millis(1200),
     Duration::from_millis(1200),
     Duration::from_millis(600),
@@ -52,7 +52,7 @@ const MAX_INSTANCES: usize = 512;
 const MAX_HOSTS: usize = 512;
 /// Neighbors asked for their names by reverse lookup.
 pub(super) const MAX_REVERSE: usize = 64;
-const MAX_PACKETS: usize = 1024;
+pub(super) const MAX_PACKETS: usize = 1024;
 const MAX_ERRORS: usize = 16;
 /// mDNS allows up to 9000 bytes over UDP.
 const MAX_PACKET: usize = 9000;
@@ -300,7 +300,11 @@ impl Browse {
 
 /// Browses from `local` in a few short rounds, stopping early once nothing is left to ask.
 pub(super) fn browse(local: Ipv4Addr, neighbors: &[Ipv4Addr]) -> io::Result<Vec<Finding>> {
-    let socket = multicast_socket(local, 255)?;
+    exchange(&multicast_socket(local, 255)?, GROUP.into(), neighbors)
+}
+
+/// The browse's rounds over `socket`, with queries sent to `group`.
+pub(super) fn exchange(socket: &UdpSocket, group: SocketAddr, neighbors: &[Ipv4Addr]) -> io::Result<Vec<Finding>> {
     let mut browse = Browse::default();
     let mut queries = browse.first_queries(neighbors);
     let mut buffer = vec![0; MAX_PACKET];
@@ -310,7 +314,7 @@ pub(super) fn browse(local: Ipv4Addr, neighbors: &[Ipv4Addr]) -> io::Result<Vec<
             break;
         }
         for query in &queries {
-            socket.send_to(query, GROUP)?;
+            socket.send_to(query, group)?;
         }
         let until = Instant::now() + wait;
         while let Some(left) = until

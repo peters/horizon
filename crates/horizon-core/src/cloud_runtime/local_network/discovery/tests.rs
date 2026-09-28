@@ -4,7 +4,10 @@ use simple_dns::{
     CLASS, Label, Name, Packet, PacketFlag, ResourceRecord,
     rdata::{A, PTR, RData, SRV, TXT},
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    net::UdpSocket,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 fn v4(value: &str) -> Ipv4Addr {
     value.parse().unwrap()
@@ -355,4 +358,116 @@ fn a_browse_of_this_computers_network_ends_within_its_window() {
         // The runner's network can change while the test runs.
         Answer::Refused(_) => {}
     }
+}
+
+/// Stands in for the devices on the network: answers every datagram it receives with what
+/// `reply` returns, and counts the datagrams. It stops after a few quiet seconds.
+fn responder(reply: impl Fn(&[u8]) -> Vec<Vec<u8>> + Send + 'static) -> (SocketAddr, Arc<AtomicUsize>) {
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let address = socket.local_addr().unwrap();
+    let received = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&received);
+    thread::spawn(move || {
+        let mut buffer = [0; 9000];
+        while let Ok((count, from)) = socket.recv_from(&mut buffer) {
+            counted.fetch_add(1, Ordering::SeqCst);
+            for datagram in reply(&buffer[..count]) {
+                let _ = socket.send_to(&datagram, from);
+            }
+        }
+    });
+    (address, received)
+}
+
+#[test]
+fn an_mdns_browse_keeps_its_rounds_and_packet_limit_under_a_flood() {
+    let (group, queries) = responder(|bytes| {
+        let Ok(query) = Packet::parse(bytes) else {
+            return Vec::new();
+        };
+        let mut datagrams = Vec::new();
+        if query
+            .questions
+            .iter()
+            .any(|question| question.qname.to_string() == "_ipp._tcp.local")
+        {
+            let printer = instance("Office", "_ipp._tcp.local");
+            datagrams.push(response(
+                vec![record(name("_ipp._tcp.local"), RData::PTR(PTR(printer.clone())))],
+                vec![
+                    record(
+                        printer,
+                        RData::SRV(SRV {
+                            priority: 0,
+                            weight: 0,
+                            port: 631,
+                            target: name("brother.local"),
+                        }),
+                    ),
+                    record(name("brother.local"), RData::A(A::from(v4("192.168.1.50")))),
+                ],
+            ));
+        }
+        // More than a whole browse may read, after every query.
+        datagrams.extend((0..mdns::MAX_PACKETS).map(|_| b"junk".to_vec()));
+        datagrams
+    });
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let started = Instant::now();
+    let findings = mdns::exchange(&socket, group, &[]).unwrap();
+    let window: Duration = mdns::ROUNDS.iter().sum();
+    assert!(
+        started.elapsed() < window + Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(findings.contains(&Finding::Name(v4("192.168.1.50"), "brother.local".into())));
+    assert!(queries.load(Ordering::SeqCst) >= 2, "the first round spans two packets");
+}
+
+#[test]
+fn an_ssdp_search_repeats_once_and_ends_with_its_window() {
+    let (group, searches) = responder(|bytes| {
+        if !bytes.starts_with(b"M-SEARCH") {
+            return Vec::new();
+        }
+        vec![b"HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1:1400/description.xml\r\nST: urn:schemas-upnp-org:device:ZonePlayer:1\r\n\r\n".to_vec()]
+    });
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let started = Instant::now();
+    let findings = ssdp::search(&socket, group).unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= ssdp::WINDOW && elapsed < ssdp::WINDOW + Duration::from_millis(500),
+        "{elapsed:?}"
+    );
+    assert_eq!(searches.load(Ordering::SeqCst), 2);
+    assert!(findings.iter().any(|finding| matches!(
+        finding,
+        Finding::Service(address, service) if *address == v4("127.0.0.1") && service.port == Some(1400)
+    )));
+}
+
+/// `arp` on macOS and Windows runs through the same bounded runner.
+#[cfg(unix)]
+#[test]
+fn the_neighbor_command_reports_failures_and_bounds_its_output_and_time() {
+    let shell = |script: &str| {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command
+    };
+    assert_eq!(neighbors::run(shell("printf 'table\\n'")).unwrap(), "table\n");
+    let failed = neighbors::run(shell("printf 'arp: not permitted\\n' >&2; exit 2"))
+        .unwrap_err()
+        .to_string();
+    assert!(failed.contains("ended with"), "{failed}");
+    // A long table is cut, and the command still finishes.
+    let long = neighbors::run(shell("head -c 1000000 /dev/zero | tr '\\0' 'a'")).unwrap();
+    assert_eq!(long.len(), 256 * 1024);
+    let started = Instant::now();
+    let slow = neighbors::run(shell("exec sleep 10")).unwrap_err().to_string();
+    assert!(slow.contains("too long"), "{slow}");
+    assert!(started.elapsed() < Duration::from_secs(4));
 }

@@ -4,9 +4,9 @@
 use std::{io, net::Ipv4Addr};
 
 /// Output read from the system's `arp` command, at most.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(test, target_os = "macos", windows))]
 const MAX_OUTPUT: u64 = 256 * 1024;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(test, target_os = "macos", windows))]
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The neighbors' addresses, or why this system cannot list them.
@@ -49,8 +49,8 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
 
 /// Runs the system's `arp`, stopping it at [`TIMEOUT`]. Output past [`MAX_OUTPUT`] is read
 /// and discarded, so a long table still lets `arp` finish, and only its start is parsed.
-#[cfg(any(target_os = "macos", windows))]
-fn run(mut command: std::process::Command) -> io::Result<String> {
+#[cfg(any(test, target_os = "macos", windows))]
+pub(super) fn run(mut command: std::process::Command) -> io::Result<String> {
     use std::{io::Read, process::Stdio, time::Instant};
     let mut child = command
         .stdin(Stdio::null())

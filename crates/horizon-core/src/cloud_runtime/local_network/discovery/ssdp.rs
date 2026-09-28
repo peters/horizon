@@ -5,7 +5,7 @@ use horizon_cloud_protocol::local_network::discovery::{Service, Source, text};
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     time::{Duration, Instant},
 };
 
@@ -15,7 +15,7 @@ const SEARCH: &[u8] =
     b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n";
 /// UDP loses datagrams, so the search goes out twice.
 const REPEAT: Duration = Duration::from_millis(300);
-const WINDOW: Duration = Duration::from_millis(2600);
+pub(super) const WINDOW: Duration = Duration::from_millis(2600);
 /// The `UPnP` default; a search does not leave the local network.
 const TTL: u32 = 2;
 const MAX_PACKET: usize = 2048;
@@ -120,8 +120,12 @@ pub(super) fn findings(answers: impl IntoIterator<Item = (Ipv4Addr, Answer)>) ->
 
 /// Searches once from `local` and gathers answers for a few seconds.
 pub(super) fn browse(local: Ipv4Addr) -> io::Result<Vec<Finding>> {
-    let socket = multicast_socket(local, TTL)?;
-    socket.send_to(SEARCH, GROUP)?;
+    search(&multicast_socket(local, TTL)?, GROUP.into())
+}
+
+/// The search over `socket`, sent to `group`.
+pub(super) fn search(socket: &UdpSocket, group: SocketAddr) -> io::Result<Vec<Finding>> {
+    socket.send_to(SEARCH, group)?;
     let start = Instant::now();
     let (until, mut repeated) = (start + WINDOW, false);
     let mut buffer = vec![0; MAX_PACKET];
@@ -131,7 +135,7 @@ pub(super) fn browse(local: Ipv4Addr) -> io::Result<Vec<Finding>> {
         .filter(|left| !left.is_zero())
     {
         if !repeated && start.elapsed() >= REPEAT {
-            socket.send_to(SEARCH, GROUP)?;
+            socket.send_to(SEARCH, group)?;
             repeated = true;
         }
         let wait = if repeated {
