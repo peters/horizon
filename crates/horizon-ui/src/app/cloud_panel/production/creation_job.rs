@@ -196,6 +196,8 @@ impl HorizonApp {
                 revision: Some(sibling.revision),
             })
             .collect();
+        // Cleared first, so a failed save while adding the card stays visible.
+        self.cloud_prototype.error = None;
         let id = self.add_cloud_group(
             pending.title,
             pending.workspace,
@@ -206,7 +208,6 @@ impl HorizonApp {
         self.cloud_prototype.production.creating = false;
         // The next cloud authorizes its own siblings; a reopened form starts unchecked.
         self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
-        self.cloud_prototype.error = None;
         self.cloud_overview(ctx);
         if self.cloud_prototype.production.launch.workspace.is_some() {
             self.start_production_deployment(id, ctx);
