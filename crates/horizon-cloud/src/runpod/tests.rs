@@ -5,6 +5,7 @@ mod fresh;
 mod idle_stop;
 mod inspection;
 mod placement;
+mod power;
 mod prices;
 mod provenance;
 mod recovery;

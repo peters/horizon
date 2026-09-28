@@ -46,6 +46,16 @@ impl Hetzner {
         public_key: &str,
         cancel: &Cancellation,
     ) -> Result<SshKey, CloudError> {
+        self.ensure_ssh_key_observed(operation_id, public_key, cancel, || Ok(()))
+    }
+
+    pub(super) fn ensure_ssh_key_observed(
+        &self,
+        operation_id: &str,
+        public_key: &str,
+        cancel: &Cancellation,
+        mut before_mutation: impl FnMut() -> Result<(), CloudError>,
+    ) -> Result<SshKey, CloudError> {
         let name = resource_name(operation_id)?;
         if !valid_public_key(public_key) {
             return Err(CloudError::Invalid("Worker requires an Ed25519 public key"));
@@ -54,6 +64,7 @@ impl Hetzner {
             return same_material(key, public_key);
         }
         let body = json!({"name": name, "public_key": public_key, "labels": {OPERATION_LABEL: operation_id}});
+        before_mutation()?;
         match self.send(Method::Post, "/ssh_keys", Some(body), cancel) {
             Ok(value) => {
                 let single: Single = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;

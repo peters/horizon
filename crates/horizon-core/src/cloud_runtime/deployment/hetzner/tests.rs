@@ -295,14 +295,35 @@ mod failure_points {
             },
             registries: None,
         };
-        let error = provision(&compute, &store, &mut state, spec, &Cancellation::default(), &|_| {})
-            .unwrap_err()
-            .to_string();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let error = provision(
+            &compute,
+            &store,
+            &mut state,
+            spec,
+            &Cancellation::default(),
+            &|_| {},
+            &|phase| {
+                seen.borrow_mut().push(phase);
+                Ok(crate::cloud_runtime::mutation::State::Settled)
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        let expected = if *operation == CreateState::Requested {
+            vec![crate::cloud_runtime::mutation::State::Pending]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            *seen.borrow(),
+            expected,
+            "validation and read failures preserve existing evidence only"
+        );
         (error, store.load().unwrap().unwrap(), retained(root).unwrap())
     }
 
-    #[test]
-    fn a_verified_worker_is_saved_with_the_deployment() {
+    fn provisioning_responses() -> Vec<(u16, String)> {
         let listing = |key: &str, items: serde_json::Value| {
             let mut page = json!({"meta": {"pagination": {"next_page": null}}});
             page[key] = items;
@@ -318,7 +339,7 @@ mod failure_points {
         let server = json!({"id": 42, "name": name, "status": "initializing", "public_net": {"ipv4": null},
             "server_type": {"name": "cx33", "cores": 4, "memory": 8.0, "disk": 80},
             "location": {"name": "hel1"}, "labels": labels, "volumes": [9]});
-        let responses = vec![
+        vec![
             // No volume from an earlier attempt, so the cloud may move if sold out.
             (200, listing("volumes", json!([]))),
             (200, listing("server_types", json!([kind]))),
@@ -338,34 +359,83 @@ mod failure_points {
             (200, json!({"volume": free}).to_string()),
             (201, json!({"server": server, "action": {"id": 2, "status": "success"}, "next_actions": []}).to_string()),
             (200, json!({"volume": super::volume()}).to_string()),
-        ];
-        let root = tempfile::tempdir().unwrap();
-        let store = Store::lock(root.path()).unwrap();
-        let mut state: Deployment = serde_json::from_value(json!({
-            "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
-            "profile": spec().profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec(),
-            "worker": null, "sessions": []
-        }))
-        .unwrap();
-        store.save(&state).unwrap();
-        let (address, _, task) = super::provider::serve(responses);
-        let compute = Compute {
-            client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
-            settings: serde_json::from_value(
-                json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
-            )
-            .unwrap(),
-            allowed: Allowed {
-                locations: vec!["hel1".into()],
-                server_types: vec!["cx33".into()],
-            },
-            registries: None,
-        };
-        provision(&compute, &store, &mut state, &spec(), &Cancellation::default(), &|_| {}).unwrap();
-        task.join().unwrap();
-        let saved = store.load().unwrap().unwrap();
-        assert_eq!(saved.operation, CreateState::Bound { worker_id: "42".into() });
-        assert_eq!(saved.worker.unwrap().id, "42");
+        ]
+    }
+
+    #[test]
+    fn a_verified_worker_is_saved_with_the_deployment() {
+        use crate::cloud_runtime::mutation::State::{Pending, Settled};
+        for refuse in [None, Some(1), Some(2), Some(3)] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::lock(root.path()).unwrap();
+            let mut state: Deployment = serde_json::from_value(json!({
+                "version": 1, "cloud_id": spec().operation_id, "repository": "/fixture", "revision": "a".repeat(40),
+                "profile": spec().profile, "stage": "Provision", "operation": {"state": "prepared"}, "spec": spec(),
+                "worker": null, "sessions": []
+            }))
+            .unwrap();
+            store.save(&state).unwrap();
+            let (address, requests, task) = super::provider::serve(provisioning_responses());
+            let compute = Compute {
+                client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
+                settings: serde_json::from_value(
+                    json!({"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}),
+                )
+                .unwrap(),
+                allowed: Allowed {
+                    locations: vec!["hel1".into()],
+                    server_types: vec!["cx33".into()],
+                },
+                registries: None,
+            };
+            let seen = std::cell::RefCell::new(Vec::new());
+            let result = provision(
+                &compute,
+                &store,
+                &mut state,
+                &spec(),
+                &Cancellation::default(),
+                &|_| {},
+                &|phase| {
+                    use crate::cloud_runtime::mutation::State;
+                    seen.borrow_mut().push(phase);
+                    if refuse == Some(seen.borrow().len()) {
+                        return Err(crate::cloud_runtime::Error::Invalid("observer refused"));
+                    }
+                    if phase == State::Settled {
+                        assert!(store.load().unwrap().unwrap().worker.is_some());
+                    }
+                    Ok(State::Pending)
+                },
+            );
+            task.join().unwrap();
+            if let Some(boundary) = refuse {
+                assert!(matches!(
+                    result,
+                    Err(crate::cloud_runtime::Error::Invalid("observer refused"))
+                ));
+                assert_eq!(
+                    requests
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|r| r.starts_with("POST "))
+                        .count(),
+                    boundary - 1
+                );
+                assert!(
+                    seen.borrow()
+                        .iter()
+                        .all(|phase| *phase == crate::cloud_runtime::mutation::State::Pending)
+                );
+                continue;
+            }
+            result.unwrap();
+            assert_eq!(*seen.borrow(), [Pending, Pending, Pending, Settled]);
+            let saved = store.load().unwrap().unwrap();
+            assert_eq!(saved.operation, CreateState::Bound { worker_id: "42".into() });
+            assert_eq!(saved.worker.unwrap().id, "42");
+        }
     }
 
     #[test]

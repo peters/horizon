@@ -1,12 +1,17 @@
 //! Explicit worker power actions, independent of local presentation lifetime.
 use super::{
-    Cancellation, CreateState, Error, Result, Stage,
+    Cancellation, CreateState, Error, Result, Stage, mutation,
     settings::Settings,
     ssh::Connection,
     state::{Deployment, Store},
 };
 use horizon_cloud::WorkerStatus;
 use std::path::Path;
+
+mod power;
+#[cfg(all(test, unix))]
+use power::Announce;
+pub(in crate::cloud_runtime) use power::{request_resume, request_stop};
 
 pub use super::deployment::hetzner::idle::IdleCheck;
 
@@ -63,25 +68,34 @@ pub fn reconcile(
     cancel: &Cancellation,
 ) -> Result<ReconciledDeployment> {
     let store = Store::lock(root)?;
+    reconcile_locked(&store, settings, worker_hint, cancel)
+}
+
+pub(in crate::cloud_runtime) fn reconcile_locked(
+    store: &Store,
+    settings: &Settings,
+    worker_hint: Option<&str>,
+    cancel: &Cancellation,
+) -> Result<ReconciledDeployment> {
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     let spec = state.spec.as_ref().ok_or(Error::Invalid("No worker was requested"))?;
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
     let (report, operation) =
-        super::providers::lifecycle(&state, settings).check(&store, &mut state, worker_hint, cancel)?;
+        super::providers::lifecycle(&state, settings).check(store, &mut state, worker_hint, cancel)?;
     let changed = report.worker.is_some() || matches!(operation, CreateState::Terminated { .. });
     if let Some(worker) = &report.worker {
         state.worker = Some(worker.clone());
         record_stopped(&mut state);
     }
     if matches!(operation, CreateState::Terminated { .. }) {
-        if super::providers::retained(&store, &state)? {
+        if super::providers::retained(store, &state)? {
             return Err(Error::Invalid(
                 "Worker termination is confirmed, but workspace storage remains; explicitly delete the cloud to finish cleanup",
             ));
         }
-        super::deployment::drop_replacement(&store, &mut state)?;
+        super::deployment::drop_replacement(store, &mut state)?;
         state.worker = None;
         state.stage = Stage::Deleted;
     }
@@ -145,9 +159,18 @@ fn record_stopped(state: &mut Deployment) {
 /// Persists stop intent before provider I/O. A lost response never causes automatic resume.
 pub fn stop(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<Deployment> {
     let store = Store::lock(root)?;
+    stop_locked(&store, settings, cancel, mutation::IGNORE)
+}
+
+pub(in crate::cloud_runtime) fn stop_locked(
+    store: &Store,
+    settings: &Settings,
+    cancel: &Cancellation,
+    observe: mutation::Observer<'_>,
+) -> Result<Deployment> {
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
-    super::providers::lifecycle(&state, settings).stop(&store, &mut state, cancel)?;
+    super::providers::lifecycle(&state, settings).stop(store, &mut state, cancel, observe)?;
     Ok(state)
 }
 
@@ -166,12 +189,21 @@ pub fn idle_check(root: &Path, settings: &Settings, cancel: &Cancellation) -> Re
 /// Missing workers and sessions remain explicit losses.
 pub fn resume(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<()> {
     let store = Store::lock(root)?;
+    resume_locked(&store, settings, cancel, mutation::IGNORE)
+}
+
+pub(in crate::cloud_runtime) fn resume_locked(
+    store: &Store,
+    settings: &Settings,
+    cancel: &Cancellation,
+    observe: mutation::Observer<'_>,
+) -> Result<()> {
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
     state.refuse_pending_replacement()?;
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
-    super::providers::lifecycle(&state, settings).resume(&store, &mut state, cancel)
+    super::providers::lifecycle(&state, settings).resume(store, &mut state, cancel, observe)
 }
 
 /// # Errors
@@ -183,6 +215,9 @@ pub fn revoke_browserstack(root: &Path, settings: &Settings, cancel: &Cancellati
     super::providers::lifecycle(&state, settings).release_devices(&store, &mut state, cancel)?;
     Ok(state)
 }
+
+#[cfg(all(test, unix))]
+mod mutation_tests;
 
 #[cfg(all(test, unix))]
 mod tests {

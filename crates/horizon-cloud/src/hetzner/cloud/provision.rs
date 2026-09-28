@@ -18,6 +18,17 @@ use crate::{
 /// The records a caller keeps for a cloud. Each call returns only once the
 /// record is durable, because the provider request it guards follows at once.
 pub trait Records {
+    /// Called at a durable request boundary, before a provider mutation.
+    /// # Errors
+    /// A failure prevents the mutation; earlier mutations remain unresolved.
+    fn before_mutation(&mut self) -> Result<(), CloudError> {
+        Ok(())
+    }
+
+    /// Called when the request after the last boundary was refused outright, so
+    /// it changed nothing.
+    fn mutation_refused(&mut self) {}
+
     /// # Errors
     /// Reports a record that could not be made durable.
     fn journal(&mut self, journal: &Journal) -> Result<(), CloudError>;
@@ -150,7 +161,7 @@ pub fn provision(
         .key
         .clone()
         .ok_or(CloudError::Invalid("Missing Hetzner SSH key"))?;
-    let key = client.ensure_ssh_key(operation_id, &public_key, cancel)?;
+    let key = client.ensure_ssh_key_observed(operation_id, &public_key, cancel, || records.before_mutation())?;
     let mut sold_out = None;
     for (location, placements) in candidates {
         let placed = place(
@@ -252,6 +263,9 @@ fn place(
                 saved.unused = at.movable && created;
             }
             records.journal(&saved)?;
+            if *next == CreateState::Requested {
+                records.before_mutation()?;
+            }
             unused.set(saved.unused);
             Ok(())
         },
@@ -267,7 +281,11 @@ fn place(
     // connections to peers there stay off the public internet.
     let network = if *operation == CreateState::Prepared {
         let zone = client.network_zone(at.location, cancel)?;
-        Some(client.ensure_network(&zone, cancel)?.id)
+        Some(
+            client
+                .ensure_network_observed(&zone, cancel, || records.before_mutation())?
+                .id,
+        )
     } else {
         None
     };
@@ -294,7 +312,11 @@ fn place(
                 records.journal(&saved)?;
                 *journal = saved;
             }
-            records.operation(next)
+            records.operation(next)?;
+            if *next == CreateState::Requested {
+                records.before_mutation()?;
+            }
+            Ok(())
         },
         &mut *progress,
     )?;
@@ -314,7 +336,8 @@ fn release_empty_volume(
     debug_assert!(journal.unused, "only an unused volume is released");
     let mut fence = journal.volume.clone();
     let snapshot = journal.clone();
-    client.delete_volume(
+    let records = std::cell::RefCell::new(records);
+    client.delete_volume_observed(
         operation_id,
         &mut fence,
         cancel,
@@ -332,9 +355,10 @@ fn release_empty_volume(
                     ..snapshot.clone()
                 },
             };
-            records.journal(&saved)
+            records.borrow_mut().journal(&saved)
         },
         |_| {},
+        || records.borrow_mut().before_mutation(),
     )?;
     *journal = Journal {
         volume: CreateState::Prepared,

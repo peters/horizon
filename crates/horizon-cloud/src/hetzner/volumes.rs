@@ -238,8 +238,20 @@ impl Hetzner {
         operation_id: &str,
         state: &mut CreateState,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        progress: impl FnMut(Progress),
+    ) -> Result<(), CloudError> {
+        self.delete_volume_observed(operation_id, state, cancel, persist, progress, || Ok(()))
+    }
+
+    pub(super) fn delete_volume_observed(
+        &self,
+        operation_id: &str,
+        state: &mut CreateState,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
+        mut before_mutation: impl FnMut() -> Result<(), CloudError>,
     ) -> Result<(), CloudError> {
         let recorded = match state {
             CreateState::Bound { worker_id } | CreateState::Terminated { worker_id } => worker_id.clone(),
@@ -254,6 +266,7 @@ impl Hetzner {
                     "The volume is still attached; delete or detach its server first",
                 ));
             }
+            before_mutation()?;
             progress(Progress::DeletingVolume);
             match self.send(Method::Delete, &format!("/volumes/{id}"), None, cancel) {
                 Ok(_) => {}

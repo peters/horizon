@@ -267,23 +267,53 @@ impl RunPod {
     /// # Errors
     /// Stops an explicitly selected bound worker; storage may remain billable.
     pub fn stop(&self, spec: &WorkerSpec, id: &str, cancel: &Cancellation) -> Result<(), CloudError> {
-        self.inspect(id, cancel)?.ok_or(CloudError::WorkerLost)?.verify(spec)?;
-        self.request(
-            "POST",
-            &format!("/pods/{id}/action"),
-            Some(json!({"action":"stop"})),
-            cancel,
-        )?;
-        Ok(())
+        self.stop_announced(spec, id, cancel, || Ok(()))
+    }
+    /// As [`Self::stop`], calling `announce` after the identity check and immediately
+    /// before the request, so a caller records a pending stop only once one may be sent.
+    /// # Errors
+    /// As [`Self::stop`]; an `announce` failure sends nothing.
+    pub fn stop_announced(
+        &self,
+        spec: &WorkerSpec,
+        id: &str,
+        cancel: &Cancellation,
+        announce: impl FnOnce() -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
+        self.power(spec, id, "stop", cancel, announce)
     }
     /// # Errors
     /// Resumes only the same identity-checked worker. This does not restore processes.
     pub fn start(&self, spec: &WorkerSpec, id: &str, cancel: &Cancellation) -> Result<(), CloudError> {
+        self.start_announced(spec, id, cancel, || Ok(()))
+    }
+    /// As [`Self::start`], calling `announce` immediately before the request.
+    /// # Errors
+    /// As [`Self::start`]; an `announce` failure sends nothing.
+    pub fn start_announced(
+        &self,
+        spec: &WorkerSpec,
+        id: &str,
+        cancel: &Cancellation,
+        announce: impl FnOnce() -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
+        self.power(spec, id, "start", cancel, announce)
+    }
+    fn power(
+        &self,
+        spec: &WorkerSpec,
+        id: &str,
+        action: &str,
+        cancel: &Cancellation,
+        announce: impl FnOnce() -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
         self.inspect(id, cancel)?.ok_or(CloudError::WorkerLost)?.verify(spec)?;
+        cancel.check()?;
+        announce()?;
         self.request(
             "POST",
             &format!("/pods/{id}/action"),
-            Some(json!({"action":"start"})),
+            Some(json!({"action": action})),
             cancel,
         )?;
         Ok(())

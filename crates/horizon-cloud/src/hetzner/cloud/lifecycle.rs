@@ -4,6 +4,7 @@
 //! the next provisioning creates a new server in the volume's location that
 //! attaches the same volume.
 use super::{Journal, Policy, Records, admitted, holds, worker};
+use crate::hetzner::servers::Announcement;
 use crate::{
     Cancellation, CloudError, CreateState, Worker, WorkerSpec, WorkerStatus,
     hetzner::{Hetzner, volumes::Volume},
@@ -197,10 +198,18 @@ pub fn stop(
     }
     records.stop(Stop::Stopping)?;
     // A retried stop also shuts down a server that still runs before deleting it.
-    // Deleting proves the server gone.
-    settle_shutdown(client, operation_id, id, cancel)?;
+    // Deleting proves the server gone. Each request is announced only after its
+    // read-only checks, so a failed read leaves no mutation pending.
+    settle_shutdown(client, operation_id, id, cancel, records)?;
     let mut fence = operation.clone();
-    client.delete_server(operation_id, &mut fence, cancel, |_| Ok(()), |_| {})?;
+    client.delete_server_announced(
+        operation_id,
+        &mut fence,
+        cancel,
+        |_| Ok(()),
+        |_| {},
+        &mut |announcement| announced(records, announcement),
+    )?;
     records.stop(Stop::Stopped)
 }
 
@@ -360,7 +369,13 @@ fn unresolved<T>(
 
 /// Asks the operating system to shut down so the workspace is written out, and
 /// cuts power if it has not finished within the grace period.
-fn settle_shutdown(client: &Hetzner, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
+fn settle_shutdown(
+    client: &Hetzner,
+    operation_id: &str,
+    id: u64,
+    cancel: &Cancellation,
+    records: &mut impl Records,
+) -> Result<(), CloudError> {
     let off = |cancel: &Cancellation| -> Result<bool, CloudError> {
         Ok(client
             .inspect_server(id, cancel)?
@@ -369,7 +384,9 @@ fn settle_shutdown(client: &Hetzner, operation_id: &str, id: u64, cancel: &Cance
     if off(cancel)? {
         return Ok(());
     }
-    client.shutdown(operation_id, id, cancel)?;
+    client.shutdown_announced(operation_id, id, cancel, &mut |announcement| {
+        announced(records, announcement)
+    })?;
     let deadline = Instant::now() + SHUTDOWN_GRACE;
     while Instant::now() < deadline {
         if off(cancel)? {
@@ -378,7 +395,9 @@ fn settle_shutdown(client: &Hetzner, operation_id: &str, id: u64, cancel: &Cance
         std::thread::sleep(Duration::from_secs(2));
         cancel.check()?;
     }
-    client.power_off(operation_id, id, cancel)
+    client.power_off_announced(operation_id, id, cancel, &mut |announcement| {
+        announced(records, announcement)
+    })
 }
 
 /// The cloud's bound workspace volume, checked to be its own.
@@ -396,6 +415,17 @@ fn bound_volume(
         .ok_or(CloudError::WorkerLost)?;
     volume.verify(operation_id)?;
     Ok(volume)
+}
+
+/// Passes an announced request's boundary and outright refusal to `records`.
+fn announced(records: &mut impl Records, announcement: Announcement) -> Result<(), CloudError> {
+    match announcement {
+        Announcement::Before => records.before_mutation(),
+        Announcement::Refused => {
+            records.mutation_refused();
+            Ok(())
+        }
+    }
 }
 
 fn parse(id: &str) -> Result<u64, CloudError> {

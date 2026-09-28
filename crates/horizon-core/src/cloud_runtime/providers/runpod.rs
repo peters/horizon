@@ -2,7 +2,7 @@
 //! hosted devices and image replacements are settled around it.
 use super::{
     super::{Error, Stage, command::Runner, deployment, ssh::Connection},
-    Cancellation, CreateState, Deployment, Event, Lifecycle, Result, Settings, Store,
+    Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Settings, Store,
 };
 use horizon_cloud::{CloudError, WorkerStatus, runpod::recovery::Reconciliation};
 
@@ -75,7 +75,7 @@ impl Lifecycle for RunPod<'_> {
         Ok((report, operation))
     }
 
-    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
+    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, observe: Observer<'_>) -> Result<()> {
         let CreateState::Bound { worker_id } = &state.operation else {
             return Err(Error::Invalid("Reconcile a bound worker before stopping it"));
         };
@@ -99,22 +99,13 @@ impl Lifecycle for RunPod<'_> {
             state.browserstack_released = true;
             store.save(state)?;
         }
-        let previous = (state.stop_requested, state.stage);
-        state.stop_requested = true;
-        state.stage = Stage::Stopping;
-        store.save(state)?;
-        if worker.status() != WorkerStatus::Stopped
-            && let Err(error) = provider.stop(&spec, &id, cancel)
-        {
-            if matches!(
-                error,
-                CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled
-            ) {
-                (state.stop_requested, state.stage) = previous;
-                store.save(state)?;
-            }
-            return Err(error.into());
-        }
+        super::super::lifecycle::request_stop(
+            store,
+            state,
+            worker.status() != WorkerStatus::Stopped,
+            |announce| provider.stop_announced(&spec, &id, cancel, announce),
+            observe,
+        )?;
         state.worker = provider.inspect(&id, cancel)?;
         if !state
             .worker
@@ -127,29 +118,36 @@ impl Lifecycle for RunPod<'_> {
             ));
         }
         state.stage = Stage::Stopped;
-        store.save(state)
+        store.save(state)?;
+        observe(super::super::mutation::State::Settled)?;
+        Ok(())
     }
 
-    fn resume(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
+    fn resume(
+        &self,
+        store: &Store,
+        state: &mut Deployment,
+        cancel: &Cancellation,
+        observe: Observer<'_>,
+    ) -> Result<()> {
         let CreateState::Bound { worker_id } = &state.operation else {
             return Err(Error::Invalid("No existing worker to resume"));
         };
         let worker_id = worker_id.clone();
         let spec = state
             .spec
-            .as_ref()
+            .clone()
             .ok_or(Error::Invalid("Missing worker specification"))?;
         let provider = self.client()?;
         let worker = provider.inspect(&worker_id, cancel)?.ok_or(CloudError::WorkerLost)?;
-        worker.verify(spec)?;
-        let requested = std::time::SystemTime::now();
-        if worker.status() == WorkerStatus::Stopped {
-            provider.start(spec, &worker_id, cancel)?;
-        }
-        state.timeline = Some(super::super::timeline::Timeline::resume_requested(requested));
-        state.stop_requested = false;
-        state.stage = Stage::Readiness;
-        store.save(state)
+        worker.verify(&spec)?;
+        super::super::lifecycle::request_resume(
+            store,
+            state,
+            worker.status() == WorkerStatus::Stopped,
+            |announce| provider.start_announced(&spec, &worker_id, cancel, announce),
+            observe,
+        )
     }
 
     fn delete(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, emit: &dyn Fn(Event)) -> Result<()> {
