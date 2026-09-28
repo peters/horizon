@@ -262,12 +262,24 @@ fn a_status_poll_never_starts_a_recorded_operation() {
     let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
     assert!(!started);
     assert_eq!(answer["phase"], "submitted");
+    // Nothing runs it, so polling alone would wait forever: the agent must resend.
+    assert_eq!(
+        (answer["done"].as_bool(), answer["resend"].as_bool()),
+        (Some(false), Some(true))
+    );
+    // While it runs on its card, polling is enough.
+    let agent = &mut app.cloud_prototype.production.companions.agent;
+    agent.executing.insert("target".into());
+    let (answer, _) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    assert_eq!(answer["resend"], false);
     assert_eq!(answer["message"], hint(Phase::Submitted));
+    app.cloud_prototype.production.companions.agent.executing.clear();
     // The same operation sent again as Ensure Ready tries to continue it on its card,
     // which is not open here.
     let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
     assert!(!started);
     assert_ne!(answer["message"], hint(Phase::Submitted));
+    assert_eq!(answer["resend"], true);
 }
 
 #[test]

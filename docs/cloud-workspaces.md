@@ -760,7 +760,10 @@ checked on the source cloud's card, through the browser MCP server:
 
 Ensure Ready and Stop answer at once with an `operation_id` and a phase; poll
 `cloud_companion_operation` with the same `cloud` and `alias` until `done` is
-true. A caller may pass its own UUID
+true. When `resend` is true, nothing is running the operation, for example after
+its card was busy or Horizon restarted mid-operation: send the same Ensure Ready
+or Stop again to continue it, which reconciles and never repeats a provider
+change. A caller may pass its own UUID
 as `operation_id`, so a lost answer is polled instead of sent again. Repeated or
 concurrent requests for the same companion share one operation and never start
 a second worker. The operation runs on the target cloud's card with its progress

@@ -146,7 +146,20 @@ impl HorizonApp {
         ctx: &egui::Context,
     ) -> (Value, bool) {
         if reads_only(request) {
-            return (describe(source, &submitted.alias, &submitted.operation), false);
+            let mut answer = describe(source, &submitted.alias, &submitted.operation);
+            let operation = &submitted.operation;
+            if answer["done"] == false
+                && !self
+                    .cloud_prototype
+                    .production
+                    .companions
+                    .agent
+                    .executing
+                    .contains(&operation.intent.target_cloud_id)
+            {
+                resend(&mut answer, RESEND);
+            }
+            return (answer, false);
         }
         self.continue_operation(source, submitted, ctx)
     }
@@ -298,7 +311,7 @@ impl HorizonApp {
                 (answer, true)
             }
             Err(reason) => {
-                answer["message"] = json!(reason);
+                resend(&mut answer, &reason);
                 (answer, false)
             }
         }
@@ -527,8 +540,18 @@ fn describe(source: &str, alias: &str, operation: &Operation) -> Value {
         "target_cloud_id": operation.intent.target_cloud_id,
         "phase": operation.phase,
         "done": !operation.intent.state.pending() || operation.phase == Phase::ConfirmationRequired,
+        "resend": false,
         "message": hint(operation.phase),
     })
+}
+
+const RESEND: &str = "Nothing is running this operation; send the same Ensure Ready or Stop again to continue it. It reconciles and never repeats a provider change";
+
+/// Marks a pending operation that polling alone cannot move forward: only the same
+/// Ensure Ready or Stop sent again continues it.
+fn resend(answer: &mut Value, reason: &str) {
+    answer["resend"] = json!(true);
+    answer["message"] = json!(reason);
 }
 
 fn hint(phase: Phase) -> &'static str {
