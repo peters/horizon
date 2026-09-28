@@ -473,6 +473,53 @@ fn completed_replay_separates_same_batch_plain_clicks() {
 }
 
 #[test]
+fn deferred_click_is_isolated_from_preceding_plain_clicks() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    use crate::test_egui::DiscardTextures;
+    use eframe::App as _;
+    for same_frame in [false, true] {
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        let pos = Pos2::new(500.0, 400.0);
+        let plain: Vec<_> = [true, false]
+            .map(|pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .into();
+        let modified = vec![
+            button(pos, true),
+            button(pos, false),
+            Event::ModifiersChanged(egui::Modifiers::NONE),
+        ];
+        let batches = if same_frame {
+            vec![plain.into_iter().chain(modified).collect(), vec![]]
+        } else {
+            vec![plain, modified]
+        };
+        let mut clicks = 0;
+        for (events, index) in batches.into_iter().chain([vec![], vec![], vec![]]).zip(0_u32..) {
+            let mut raw = raw_input([1400.0, 900.0], None);
+            raw.time = Some(1.0 + f64::from(index) * 0.01);
+            raw.events = events;
+            app.raw_input_hook(&ctx, &mut raw);
+            let _ = ctx
+                .run_ui(raw, |ui| {
+                    ui.input(|input| {
+                        assert!(!input.pointer.button_double_clicked(PointerButton::Primary));
+                        clicks += usize::from(input.pointer.primary_clicked());
+                    });
+                })
+                .discard_textures();
+        }
+        assert_eq!(clicks, 2);
+    }
+}
+
+#[test]
 fn queued_clicks_keep_their_original_arrival_times() {
     let mut gesture = CanvasGesture::default();
     let pos = Pos2::new(300.0, 300.0);

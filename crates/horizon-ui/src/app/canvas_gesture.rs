@@ -160,7 +160,7 @@ impl CanvasGesture {
         let mut events = frame.events.into_iter();
         while let Some(event) = events.next() {
             if self.replayed_origin.is_some() || self.interrupts_completed(&event, frame.time, options, &eligible) {
-                if self.replayed_origin.is_none() {
+                if self.replayed_origin.is_none() && output.is_empty() {
                     self.flush(&mut output);
                 }
                 self.queued.push_front(Frame {
@@ -410,6 +410,14 @@ impl HorizonApp {
             enabled && canvas.contains(pos) && !exclusions.contains(pos)
         }) {
             ctx.request_repaint_after(delay);
+        }
+        if self.canvas_gesture.replayed_origin.is_some() {
+            ctx.input_mut(|input| {
+                if !input.pointer.any_down() {
+                    restore_pos = input.pointer.latest_pos();
+                    input.pointer = egui::PointerState::default();
+                }
+            });
         }
         if ending_replay || self.canvas_gesture.replayed_origin.is_some() {
             for state in self.panel_render_caches.browser_ui_state.values_mut() {
