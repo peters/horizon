@@ -131,6 +131,8 @@ pub(super) struct Runtime {
     resize: resize::State,
     idle_reports: Option<idle::Reports>,
     sharing: local_network::Sharing,
+    /// The owner's scope for that sharing, kept while it pauses.
+    scope: local_network::Editor,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;

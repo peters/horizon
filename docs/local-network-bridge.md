@@ -50,8 +50,9 @@ every connection on this computer, never on the worker:
 
 - Only host addresses inside that subnet are reachable, and only when this
   computer would send the connection from its own address on that network.
-- This computer itself is never reachable, through any of its addresses,
-  including `localhost`. Loopback, link-local, multicast and broadcast addresses
+- This computer itself is not reachable through any of its addresses, including
+  `localhost`, unless you open one of its ports in the scope (see below). Loopback,
+  link-local, multicast and broadcast addresses
   are refused, and so is IPv6, except an IPv4-mapped address such as
   `::ffff:192.168.1.50`, which is judged as the IPv4 address it carries.
 - Names such as `printer.local` are resolved by this computer's resolver, and the
@@ -65,6 +66,32 @@ use `192.168.1.0/24`, say) looks unchanged, and the route check compares source
 addresses, so a route that you set up yourself to send this network's traffic out
 of another interface with the same source address is not caught. Switch the bridge
 off when you change networks.
+
+## Narrowing the scope
+
+While sharing is on, the card's **Scope** section says what the bridge reaches,
+for example **Scope: the whole network** or **Scope: 1 device · 1 port on this
+computer**. Open it to change that:
+
+- **Devices**, one per line: an address on the bridged network, and optionally its
+  ports after a colon, for example `192.168.1.50` or `192.168.1.60:22,80`. Leave it
+  empty for every device on the network. With a list, only those devices are
+  reachable, each on its listed ports or on any port when none are listed.
+- **This computer's own ports**, for example `3000, 8080`, to let the worker reach
+  services on this computer's loopback, such as a dev server, as `localhost:3000`.
+  Leave it empty to keep this computer closed. Only the ports you list open; this
+  computer's other ports and its addresses on the network stay refused.
+
+Press **Apply scope**. The new scope applies at once. Connections it no longer
+allows close, discovery lists only the devices it reaches, and a probe skips ports
+outside it. An address that is not a device on the bridged network is refused, and
+the previous scope stays.
+
+The scope lives only in memory, like the switch, and only you set it. Nothing
+reads it from repository YAML or from an agent. It is kept while sharing is
+paused, so a resumed bridge starts no wider than you left it. If it no longer fits
+the network when sharing resumes, for example after a move to another Wi-Fi,
+sharing stops and says why instead of widening. Switching sharing off forgets it.
 
 ## Limits
 
@@ -107,8 +134,9 @@ operations as `horizon-cloud-worker local-network status|discover|probe|forward|
 Tools and browsers that accept a SOCKS5 proxy can use the proxy address directly,
 for example `curl --socks5-hostname 127.0.0.1:<port> http://192.168.1.1/`.
 
-Refusals read, for example, "Outside the bridged local network: only devices on
-the shared subnet are reachable, never the Horizon computer itself", "Device not
+Refusals read, for example, "Outside the bridged local network: only the devices
+the owner shares are reachable, and the Horizon computer only as localhost on
+ports the owner opened", "Device not
 reachable from the Horizon computer" or "The device refused the connection on
 that port". Forwards end when the bridge stops or reconnects; agents check the
 status and forward again.

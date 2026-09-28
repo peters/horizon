@@ -3,6 +3,8 @@
 //! When the cloud disconnects, sharing pauses; it resumes by itself once that cloud has been
 //! made ready again in this run of Horizon, until the owner switches it off.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
+mod editor;
+pub(super) use editor::Editor;
 use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, State, Status};
 use std::{
     sync::{
@@ -184,14 +186,18 @@ impl HorizonApp {
             return;
         };
         runtime.sharing.stop();
+        // A bridge that resumes starts with the owner's scope; one switched on starts whole.
         runtime.sharing = match connection {
             None => Sharing::Off,
             Some(Err(error)) => Sharing::Refused(error.to_string()),
-            Some(Ok(connection)) => match Bridge::start(&connection) {
+            Some(Ok(connection)) => match Bridge::start_with(&connection, runtime.scope.applied.clone()) {
                 Ok(bridge) => Sharing::On(Running::new(Some(bridge))),
                 Err(error) => Sharing::Refused(error.to_string()),
             },
         };
+        if !matches!(runtime.sharing, Sharing::On(_)) {
+            runtime.scope.reset();
+        }
     }
 
     fn cloud_connection(&self, id: u32) -> cloud_runtime::Result<Connection> {
@@ -223,7 +229,7 @@ impl HorizonApp {
 }
 
 /// The switch and, while it is on, what the bridge is doing.
-pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
+pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     // A disconnected card offers Reconnect instead; a paused switch stays so it can be turned off.
     let paused = matches!(runtime.sharing, Sharing::Paused { .. });
     if !runtime.connected_and_ready() && !paused {
@@ -262,6 +268,13 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
     }
     if let Some(status) = status.filter(|status| matches!(status.state, State::Active { .. })) {
         let _ = connections(ui, &status.relays, now);
+        if let Some(rules) = runtime.scope.show(ui)
+            && let Sharing::On(running) = &runtime.sharing
+            && let Some(bridge) = &running.bridge
+        {
+            let applied = bridge.set_rules(rules.clone()).map_err(|error| error.to_string());
+            runtime.scope.outcome(rules, applied);
+        }
     }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
