@@ -1,8 +1,24 @@
 #!/bin/bash
 # Attach:   horizon-worker-session SESSION AGENT REVISION
 # Relaunch: horizon-worker-session --relaunch OPERATION SESSION AGENT REVISION
+# Retry:    horizon-worker-session --retry-shared-checkout
 set -euo pipefail
 umask 077
+shared_state=/workspace/shared-checkout-state
+if [ "${1:-}" = --retry-shared-checkout ]; then
+    [ "$#" -eq 1 ] || exit 2
+    # Under the checkout lock no preparation is running, so the next attach resumes it.
+    exec 8>/workspace/shared-checkout.lock
+    flock 8
+    if [ -f "$shared_state/failed" ]; then
+        rm "$shared_state/failed"
+        sync -f "$shared_state"
+        echo 'Cleared the failed shared checkout preparation; the next attach resumes it without resetting files.'
+    else
+        echo 'No failed shared checkout preparation is recorded.'
+    fi
+    exit 0
+fi
 shared=false
 if [ "${1:-}" = --shared ]; then
     shared=true; shift
@@ -42,42 +58,87 @@ load_layout() {
     [ -n "$primary" ] && [ "${#siblings[@]}" -gt 0 ] || { echo 'Invalid session layout' >&2; exit 3; }
     worktree="$root/$primary"
 }
+# Holding fd 8 serializes every attach against the one preparation of the shared checkout.
+lock_checkout() {
+    exec 8>/workspace/shared-checkout.lock
+    flock -n 8 && return 0
+    if [ ! -f "$shared_state/ready" ]; then
+        echo "Waiting for another panel to finish preparing the shared checkout; progress is in $shared_state/prepare.log" >&2
+    fi
+    flock 8
+}
 # Publish a shared checkout once, before any session can enter it. After that,
 # another panel must never reset its edits or select a branch on the user's behalf.
 prepare_shared() {
-    local state=/workspace/shared-checkout-state
-    exec 8>/workspace/shared-checkout.lock
-    flock 8
-    if [ -f "$state/ready" ]; then
-        [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
-        if [ -f "$session/siblings.json" ]; then
-            cmp -s "$session/siblings.json" "$state/siblings.json" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }
-        elif [ -e "$state/siblings.json" ]; then
-            echo 'Shared checkout layout mismatch' >&2; exit 3
+    local state="$shared_state"
+    lock_checkout
+    if [ ! -f "$state/ready" ]; then
+        start_preparation
+        lock_checkout
+        if [ ! -f "$state/ready" ]; then
+            [ ! -f "$state/failed" ] || refuse_failed
+            echo 'Shared checkout preparation was interrupted. Attach again to resume it; no files were reset.' >&2; exit 3
         fi
-        all_present || { echo 'Shared checkout is missing or belongs to another repository. No process was started.' >&2; exit 3; }
+    fi
+    [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
+    same_layout "$state" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }
+    all_present || { echo 'Shared checkout is missing or belongs to another repository. No process was started.' >&2; exit 3; }
+    flock -u 8
+    exec 8>&-
+}
+refuse_failed() {
+    echo "Shared checkout preparation failed; see $shared_state/prepare.log. After fixing the cause, run 'horizon-worker-session --retry-shared-checkout' on the worker and attach again; no files were reset." >&2
+    exit 3
+}
+same_layout() {
+    if [ -f "$session/siblings.json" ]; then
+        cmp -s "$session/siblings.json" "$1/siblings.json"
     else
-        # An interrupted first preparation is uncertain; never reset a visible directory on retry.
-        if [ -e "$state" ] || [ -e "$root" ]; then
-            echo 'Shared checkout preparation was interrupted. Inspect it before retrying; no files were reset.' >&2; exit 3
-        fi
+        [ ! -e "$1/siblings.json" ]
+    fi
+}
+# Called holding the checkout lock. The preparation runs in its own session with the
+# lock's open file description, so an SSH disconnect that ends this attach neither
+# interrupts it nor lets a second preparation start until it exits.
+start_preparation() {
+    local state="$shared_state"
+    if [ -f "$state/failed" ]; then
+        refuse_failed
+    elif [ -e "$state" ]; then
+        # Only a preparation killed without a recorded failure gets here; no session has entered it.
+        [ "$(cat "$state/revision")" = "$revision" ] || { echo 'Shared checkout binding mismatch' >&2; exit 3; }
+        same_layout "$state" || { echo 'Shared checkout layout mismatch' >&2; exit 3; }
+        echo 'Resuming the interrupted shared checkout preparation.' >&2
+    elif [ -e "$root" ]; then
+        echo 'Shared checkout exists but was not prepared by Horizon. No files were reset.' >&2; exit 3
+    else
         mkdir "$state"
         printf '%s\n' "$revision" > "$state/revision"
         if [ -f "$session/siblings.json" ]; then cp "$session/siblings.json" "$state/siblings.json"; fi
         sync -f "$state"
-        if [ "$worktree" != "$root" ]; then mkdir "$root"; fi
-        prepare /workspace/repository.git "$worktree" "$revision"
-        local entry fields
-        for entry in "${siblings[@]}"; do
-            read -r -a fields <<< "$entry"
-            prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
-        done
-        sync -f "$root"
-        touch "$state/ready"
-        sync -f "$state/ready"
     fi
-    flock -u 8
+    : > "$state/prepare.log"
+    export -f prepare present prepare_checkout
+    export shared id root worktree revision state
+    # A signal (exit status above 128) leaves no failure record, so the next attach resumes.
+    setsid -w bash -c '(set -euo pipefail; prepare_checkout "$@"); status=$?
+        if [ "$status" -ne 0 ] && [ "$status" -lt 128 ]; then touch "$state/failed"; sync -f "$state"; fi
+        exit "$status"' horizon-worker-prepare "${siblings[@]}" < /dev/null >> "$state/prepare.log" 2>&1 9>&- &
+    local preparer=$!
     exec 8>&-
+    tail -n +1 -f --pid="$preparer" "$state/prepare.log" >&2 || true
+}
+prepare_checkout() {
+    if [ "$worktree" != "$root" ]; then mkdir -p "$root"; fi
+    prepare /workspace/repository.git "$worktree" "$revision"
+    local entry fields
+    for entry in "$@"; do
+        read -r -a fields <<< "$entry"
+        prepare "/workspace/siblings/${fields[0]}/repository.git" "$root/${fields[1]}" "${fields[2]}" "${fields[0]}"
+    done
+    sync -f "$root"
+    touch "$state/ready"
+    sync -f "$state/ready"
 }
 # A worktree counts only when it belongs to its own repository; another clone at that path does not.
 present() {
@@ -167,6 +228,15 @@ if [ -n "$operation" ]; then
     printf 'Session relaunched in its existing worktree: %s\n' "$id"
     exit 0
 fi
+# A shared attach that ends before its launch fence leaves no session state behind, so a
+# refusal never binds the session id. The shared checkout is never part of that state.
+staging=
+created=false
+roll_back() {
+    if [ -n "$staging" ]; then rm -rf "$staging"; fi
+    if "$created" && [ ! -f "$session/launch-requested" ]; then rm -rf "$session"; fi
+}
+trap roll_back EXIT
 mkdir -p /workspace/sessions
 exec 9>"/workspace/sessions/$id.lock"
 flock 9
@@ -189,6 +259,9 @@ else
     fi
     touch "$staging/preparing"
     mv "$staging" "$session"
+    # Only a directory this attach renamed into place is ever rolled back.
+    created="$shared"
+    staging=
 fi
 load_layout
 if ! running; then

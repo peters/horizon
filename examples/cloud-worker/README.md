@@ -266,8 +266,30 @@ The first panel prepares one shared checkout at `/workspace/checkout`, or a prim
 and its siblings beneath that directory. Later shell and agent panels enter that
 same checkout without creating a branch, checking out files again, or resetting
 committed, uncommitted or untracked work. Branches and additional worktrees remain
-manual. Concurrent first panels serialize preparation. An interrupted initial
-preparation is fenced for inspection rather than reset on retry.
+manual. Concurrent first panels serialize preparation.
+
+The first panel runs the preparation (worktrees, submodules and LFS content) in its
+own process session on the worker, detached from the SSH client, and shows its
+progress from `/workspace/shared-checkout-state/prepare.log`. A client that
+disconnects, for example a laptop that sleeps, ends only its own attach: the
+preparation finishes, and later panels wait for it and then enter the checkout. Only
+one preparation runs at a time. An attach that is refused or disconnects before its
+process launches leaves no session state behind, so the same session identifier can
+attach again; a session that already existed is never removed.
+
+#### Recovering a shared checkout preparation
+
+- **Interrupted without a failure**, for example by a container restart: the next
+  attach resumes the preparation under the same lock. It completes worktrees
+  already recorded for their own repository and refuses a path that holds another
+  repository, without resetting files.
+- **Failed**, for example a source import error: the worker records
+  `/workspace/shared-checkout-state/failed`, and every attach is refused with exit 3
+  and a pointer to `prepare.log` until the cause is fixed. Then run
+  `horizon-worker-session --retry-shared-checkout` on the worker over SSH (see
+  [connecting to a worker](../../docs/cloud-workspaces.md#sessions-and-lifecycle))
+  and attach again. The command clears the record while holding the checkout lock,
+  so it never races a running preparation, and it resets no files.
 
 The worker advertises `horizon-shared-checkout-contract=1`. Rebuild an older worker
 image before adding these panels. Previously recorded sessions retain their own
