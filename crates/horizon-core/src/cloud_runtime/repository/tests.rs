@@ -149,7 +149,7 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
     );
     let root = temp.path().join("transfer");
     std::fs::create_dir(&root).unwrap();
-    let archive = auxiliary(&repo, "HEAD", &root, &runner).unwrap();
+    let archive = auxiliary(&repo, "HEAD", &root, SubmoduleHistory::Full, &runner).unwrap();
     let entries = archive_entries(&archive);
     let lfs = format!("lfs/{oid}");
     assert_eq!(
@@ -235,7 +235,7 @@ fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeou
         };
         let root = temp.path().join(case);
         std::fs::create_dir(&root).unwrap();
-        let result = material::archive_within(&repo, "HEAD", &root, &runner, timeout);
+        let result = material::archive_within(&repo, "HEAD", &root, SubmoduleHistory::Full, &runner, timeout);
         assert!(archiving.get(), "{case} reaches the archive");
         match case {
             "damaged" => assert!(matches!(

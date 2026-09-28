@@ -216,6 +216,25 @@ Extended LFS pointer formats are rejected explicitly. Source repositories must u
 SHA-1 object IDs and UTF-8 paths; unsupported formats fail validation before
 compute allocation.
 
+Submodules carry their full history by default. A repository whose submodules are
+large third-party trees can send only each pinned commit and its tree instead:
+
+```yaml
+source:
+  submodule_history: pinned   # default: full
+```
+
+The worker records such a submodule as shallow, so `git log`, `git describe` and
+`git blame` inside it see a single commit. Build scripts that derive a version from
+submodule history break under `pinned`, which is why it is opt-in. For a native
+library with six third-party submodules, `pinned` cut their transfer from 1.19 GB
+to 0.19 GB. The primary repository and each same-worker sibling keep their full
+history either way. Each repository reads the setting from its own committed
+`.horizon/cloud.yml`; a sibling without one gets full history. Worker images older
+than this option report no `horizon-source-shallow-contract=1`, and Horizon sends
+them full history. Older Horizon builds refuse a `.horizon/cloud.yml` with a
+`source` block.
+
 A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
 `major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
 newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a

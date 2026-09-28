@@ -2,6 +2,7 @@
 use super::super::{Event, progress::Progress};
 use super::{Error, Result, Runner};
 use git2::{ObjectType, Repository, TreeWalkMode, TreeWalkResult};
+use horizon_cloud::SubmoduleHistory;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -407,8 +408,14 @@ impl Read for Verified<'_, '_> {
     }
 }
 
-pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
-    archive_within(repository, revision, root, runner, super::archive::TIMEOUT)
+pub(super) fn archive(
+    repository: &Path,
+    revision: &str,
+    root: &Path,
+    history: SubmoduleHistory,
+    runner: &Runner<'_>,
+) -> Result<PathBuf> {
+    archive_within(repository, revision, root, history, runner, super::archive::TIMEOUT)
 }
 
 /// Collects and stages without the archive's `timeout`, which starts when writing
@@ -417,6 +424,7 @@ pub(super) fn archive_within(
     repository: &Path,
     revision: &str,
     root: &Path,
+    history: SubmoduleHistory,
     runner: &Runner<'_>,
     timeout: Duration,
 ) -> Result<PathBuf> {
@@ -424,7 +432,11 @@ pub(super) fn archive_within(
     let packs = root.join("material");
     std::fs::create_dir(&packs)?;
     for (index, module) in material.modules.iter().enumerate() {
-        super::pack(
+        let pack = match history {
+            SubmoduleHistory::Full => super::pack,
+            SubmoduleHistory::Pinned => super::pack_pinned,
+        };
+        pack(
             &module.repository,
             &module.revision,
             &packs.join(format!("module-{index}.pack")),

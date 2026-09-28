@@ -179,7 +179,7 @@ fn run(
         "Requesting or reconciling worker capacity",
     )));
     let (connection, contract) = provider.provision_ready(request, &store, &runner, &mut state, &spec)?;
-    source::transfer(&connection, &store, &mut state, packed, &runner, emit)?;
+    source::transfer(&connection, &store, &mut state, packed, &contract, &runner, emit)?;
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
     configure_git_auth(git_auth, &connection, &runner)?;
