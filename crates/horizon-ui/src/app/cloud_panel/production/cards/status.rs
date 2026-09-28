@@ -188,18 +188,18 @@ impl Track {
 }
 
 pub(in crate::app::cloud_panel::production) struct Status {
-    pub tone: Tone,
+    pub(super) tone: Tone,
     /// "Pushing image", "Push failed", "Ready".
-    pub verb: String,
+    pub(super) verb: String,
     /// Measured numbers, the failure's cause, or the cloud's occupancy.
-    pub numbers: String,
+    pub(super) numbers: String,
     /// ETA, time since, or what a failure means.
-    pub tail: String,
+    pub(super) tail: String,
     /// The right end of the status line: stage position and elapsed time, or totals.
-    pub right: String,
-    pub failure: Option<Failure>,
-    pub track: Track,
-    pub primary: Option<Primary>,
+    pub(super) right: String,
+    pub(super) failure: Option<Failure>,
+    pub(super) track: Track,
+    pub(super) primary: Option<Primary>,
 }
 
 impl Status {
