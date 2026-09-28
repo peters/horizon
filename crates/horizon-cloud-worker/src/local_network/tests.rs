@@ -163,7 +163,16 @@ fn a_live_session_keeps_the_bridge_and_a_dead_one_makes_way() {
     assert_eq!(status(&paths).unwrap().proxy, Some(older.ready.proxy.to_string()));
     older.stop();
     assert!(!status(&paths).unwrap().active);
+    // Something that answers nothing on the control socket is not taken over.
+    let silent = UnixListener::bind(paths.control()).unwrap();
+    let hang_up = thread::spawn(move || drop(silent.accept()));
+    // Each refused session removed its bridge socket, as a real one would.
+    owner_proxy(&paths.bridge(&Nonce::parse(newer).unwrap()));
+    let unanswered = hold::run(&paths, newer, "192.168.1.0/24", io::empty(), io::sink()).unwrap_err();
+    assert!(unanswered.to_string().contains("did not answer"), "{unanswered}");
+    hang_up.join().unwrap();
     // A helper killed outright leaves its socket file behind; the next session takes it.
+    std::fs::remove_file(paths.control()).unwrap();
     drop(UnixListener::bind(paths.control()).unwrap());
     let mut next = Session::start(&paths, newer);
     assert_eq!(status(&paths).unwrap().proxy, Some(next.ready.proxy.to_string()));

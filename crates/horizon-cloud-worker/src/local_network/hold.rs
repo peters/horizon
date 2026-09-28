@@ -27,6 +27,7 @@ const MAX_REQUESTS: usize = 8;
 /// for a newer one; a helper heard from more recently refuses to.
 const RETIRE_AFTER: Duration = Duration::from_secs(2 * HEARTBEAT_INTERVAL.as_secs());
 const BUSY: &str = "The bridge is busy; try again";
+const RETIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker, including web pages open in its browsers, can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
 
 struct Pinned {
@@ -157,11 +158,8 @@ impl Control {
         let path = paths.control();
         let lock = paths.lock();
         let _guard = Locked::new(&lock)?;
-        // Otherwise the helper there retired, is absent or does not answer: the socket is free.
         // A retiring helper removes its socket only under this lock, after checking it is its own.
-        if let Ok(Answer::Error(error)) = super::exchange(paths, &Request::Retire) {
-            return Err(io::Error::other(error));
-        }
+        retire_running(&path)?;
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -188,6 +186,35 @@ impl Drop for Control {
         {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+}
+
+/// Succeeds only when no helper serves `path`, or the one there agreed to retire; an
+/// inconclusive answer keeps the running bridge.
+fn retire_running(path: &Path) -> io::Result<()> {
+    let mut stream = match UnixStream::connect(path) {
+        Ok(stream) => stream,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let answer = (|| -> io::Result<Option<String>> {
+        stream.set_read_timeout(Some(RETIRE_TIMEOUT))?;
+        stream.set_write_timeout(Some(RETIRE_TIMEOUT))?;
+        serde_json::to_writer(&mut stream, &Request::Retire)?;
+        stream.write_all(b"\n")?;
+        super::read_line(&mut BufReader::new(&stream))
+    })()
+    .ok()
+    .flatten()
+    .and_then(|line| serde_json::from_str(&line).ok());
+    match answer {
+        Some(Answer::Retired) => Ok(()),
+        Some(Answer::Error(error)) => Err(io::Error::other(error)),
+        _ => Err(io::Error::other(
+            "The bridge helper already on this worker did not answer; try again",
+        )),
     }
 }
 
