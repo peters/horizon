@@ -29,8 +29,19 @@ pub(super) struct Grant {
     pub revision: Option<String>,
     pub source_disconnected: bool,
     pub target_revoked: bool,
+    /// Whether the source dropped the grant's key after the target revoked it. A
+    /// grant from a journal before this field has not, so it passes through forget.
+    #[serde(default)]
+    pub source_forgotten: bool,
     #[serde(default)]
     pub access: Option<horizon_cloud_protocol::companion::Access>,
+}
+
+impl Grant {
+    /// Whether nothing of the grant is left on either worker.
+    pub(super) const fn cleaned_up(&self) -> bool {
+        self.source_disconnected && self.target_revoked && self.source_forgotten
+    }
 }
 
 pub(super) struct Store {

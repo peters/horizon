@@ -1,5 +1,5 @@
 use super::super::{
-    Cancellation, Stage,
+    Cancellation, Event, Stage,
     command::Runner,
     settings::Settings,
     ssh::Connection,
@@ -13,6 +13,52 @@ use std::{
     path::Path,
     time::Duration,
 };
+
+/// The worker rejected a request it cannot parse, as an image older than the request does.
+pub(super) const UNSUPPORTED_REQUEST: &str = "The worker image does not support this companion request";
+/// What a worker prints when it cannot parse a companion request.
+const UNPARSEABLE: &str = "Invalid companion request";
+
+/// Whether a worker's stderr said it cannot parse the request. Only the marker's
+/// length of output is kept between chunks, so a noisy command never grows it.
+#[derive(Default)]
+struct Marker {
+    tail: String,
+    seen: bool,
+}
+
+impl Marker {
+    fn observe(&mut self, chunk: &str) {
+        self.tail.push_str(chunk);
+        self.seen |= self.tail.contains(UNPARSEABLE);
+        let keep = self.tail.len().saturating_sub(UNPARSEABLE.len());
+        let cut = (keep..=self.tail.len())
+            .find(|index| self.tail.is_char_boundary(*index))
+            .unwrap_or(self.tail.len());
+        self.tail.drain(..cut);
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::Marker;
+
+    #[test]
+    fn the_unparseable_marker_is_found_across_chunks_in_bounded_memory() {
+        let mut marker = Marker::default();
+        for _ in 0..10_000 {
+            marker.observe("noise from a long command ");
+        }
+        assert!(!marker.seen);
+        assert!(marker.tail.len() <= super::UNPARSEABLE.len());
+        marker.observe("Cloud worker service: Invalid comp");
+        marker.observe("anion request");
+        assert!(marker.seen);
+        let mut unicode = Marker::default();
+        unicode.observe("ænd ø å ");
+        assert!(!unicode.seen);
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Worker {
@@ -167,14 +213,26 @@ impl<'a> Live<'a> {
         serde_json::to_writer(&mut file, payload).map_err(|_| Error::Json)?;
         file.flush()?;
         file.persist(&input).map_err(|error| error.error)?;
+        let unparseable = std::cell::RefCell::new(Marker::default());
         let runner = Runner {
             cancel: self.cancel,
-            emit: &|_| {},
+            emit: &|event| {
+                if let Event::Output(line) = event {
+                    unparseable.borrow_mut().observe(&line);
+                }
+            },
             secrets: Vec::new(),
         };
         runner
             .to_file("Companion SSH operation", &mut ssh, &input, &output, timeout)
-            .map_err(|_| Error::Invalid("Companion SSH command failed; check connectivity and worker image support"))?;
+            .map_err(|_| {
+                // A worker that cannot parse the request is an older image.
+                if unparseable.borrow().seen {
+                    Error::Invalid(UNSUPPORTED_REQUEST)
+                } else {
+                    Error::Invalid("Companion SSH command failed; check connectivity and worker image support")
+                }
+            })?;
         let mut response = String::new();
         std::fs::File::open(output)?
             .take(256 * 1024 + 1)

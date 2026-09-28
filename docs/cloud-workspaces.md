@@ -690,8 +690,10 @@ tools can rank cloud offers from the prices the owning Horizon last sent the
 worker.
 
 Uncheck to remove access. If either worker is offline, removal stays pending
-until that original worker can confirm cleanup. Dirty worktrees are preserved;
-existing shells and copied data cannot be recalled. Clear old selections before
+until that original worker can confirm cleanup. The target then removes the
+grant's worktree when it holds no changes and no untracked or ignored files, and
+keeps it otherwise; the source drops the grant's key once the target has revoked
+it. Existing shells and copied data cannot be recalled. Clear old selections before
 retiring their source cloud. Changing the workspace, declaration, target worker,
 or initial revision requires cleanup and explicit selection again. These clouds
 share trusted shell access; this is not credential isolation. Both workers need

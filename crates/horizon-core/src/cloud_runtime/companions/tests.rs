@@ -18,6 +18,10 @@ struct Fake {
     fail_source_lookup: bool,
     /// Another operation holds the target's lock, as one in the same Horizon can.
     busy_target: bool,
+    /// The source runs a worker image without the forget request.
+    old_source: bool,
+    /// The next forget fails as an unreachable source would.
+    forget_fails: bool,
     cancel_on_call: Option<Cancellation>,
     journal: PathBuf,
 }
@@ -82,6 +86,11 @@ impl Transport for Fake {
             }),
             WorkerRequest::Disconnect { .. } => Ok(Response::Disconnected),
             WorkerRequest::Revoke { .. } => Ok(Response::Revoked),
+            WorkerRequest::Forget { .. } if self.old_source => Err(Error::Invalid(transport::UNSUPPORTED_REQUEST)),
+            WorkerRequest::Forget { .. } if std::mem::take(&mut self.forget_fails) => {
+                Err(Error::Invalid("Companion SSH command failed"))
+            }
+            WorkerRequest::Forget { .. } => Ok(Response::Forgotten),
         }
     }
 }
@@ -134,6 +143,8 @@ impl Fixture {
             fail_authorize: false,
             fail_source_lookup: false,
             busy_target: false,
+            old_source: false,
+            forget_fails: false,
             cancel_on_call: None,
             journal: root.path().join("source/companions.json"),
         };
@@ -240,9 +251,10 @@ fn uncertain_authorization_is_revoked_and_offline_cleanup_remains_pending() {
         Status::Unselected
     );
     assert!(fixture.saved().grants.is_empty());
+    // Once the target revoked it, the source drops the key.
     assert_eq!(
-        fixture.transport.calls.last().unwrap(),
-        &("target".into(), "revoke".into())
+        fixture.transport.calls[fixture.transport.calls.len() - 2..],
+        [("target".into(), "revoke".into()), ("source".into(), "forget".into())]
     );
 }
 
@@ -276,7 +288,7 @@ fn changed_yaml_and_replaced_workers_cannot_redirect_a_selected_grant() {
             .iter()
             .map(|(_, operation)| operation.as_str())
             .collect::<Vec<_>>(),
-        ["disconnect", "revoke"]
+        ["disconnect", "revoke", "forget"]
     );
 
     let mut fixture = Fixture::new();
@@ -307,7 +319,7 @@ fn moving_source_to_another_workspace_cleans_old_grants_before_accepting_new_one
             .transport
             .calls
             .iter()
-            .all(|(_, operation)| operation == "disconnect" || operation == "revoke")
+            .all(|(_, operation)| matches!(operation.as_str(), "disconnect" | "revoke" | "forget"))
     );
 }
 
@@ -577,7 +589,7 @@ fn cloud_grants_persist_unchanged_and_same_worker_siblings_stay_out_of_selection
     assert_eq!(aliases(&changed), ["app"]);
     assert_eq!(changed.rows[0].companion.status, Status::Changed);
     assert!(changed.rows[0].companion.access.is_none());
-    assert_eq!(fixture.transport.calls.len(), 2);
+    assert_eq!(fixture.transport.calls.len(), 3, "disconnect, revoke and forget");
     let cleared = fixture.run(&Action::Clear { alias: "app".into() });
     assert!(cleared.catalog.companions.is_empty());
     assert!(fixture.saved().grants.is_empty());
@@ -654,4 +666,66 @@ fn a_busy_target_lock_is_not_reported_as_unreachable() {
     );
     fixture.transport.busy_target = false;
     assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Ready);
+}
+
+#[test]
+fn a_revoked_key_is_dropped_on_the_source_and_an_older_image_does_not_block_cleanup() {
+    for old_source in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.select();
+        fixture.transport.calls.clear();
+        fixture.transport.old_source = old_source;
+        let cleared = fixture.run(&Action::Clear { alias: "app".into() });
+        assert_eq!(cleared.rows[0].companion.status, Status::Unselected);
+        assert!(fixture.saved().grants.is_empty(), "revocation is complete either way");
+        let operations: Vec<_> = fixture
+            .transport
+            .calls
+            .iter()
+            .map(|(cloud, operation)| (cloud.as_str(), operation.as_str()))
+            .collect();
+        assert_eq!(
+            operations,
+            [("source", "disconnect"), ("target", "revoke"), ("source", "forget")]
+        );
+    }
+}
+
+#[test]
+fn a_failed_key_removal_keeps_the_grant_pending_and_is_retried() {
+    let mut fixture = Fixture::new();
+    fixture.select();
+    fixture.transport.calls.clear();
+    fixture.transport.forget_fails = true;
+    let cleared = fixture.run(&Action::Clear { alias: "app".into() });
+    assert_eq!(cleared.rows[0].companion.status, Status::RevocationPending);
+    let grant = &fixture.saved().grants["app"];
+    assert!(grant.source_disconnected && grant.target_revoked && !grant.source_forgotten);
+    // The next refresh retries only the key removal, then finishes the cleanup.
+    fixture.transport.calls.clear();
+    let refreshed = fixture.run(&Action::Refresh);
+    assert_eq!(refreshed.rows[0].companion.status, Status::Unselected);
+    assert!(fixture.saved().grants.is_empty());
+    assert_eq!(fixture.transport.calls, [("source".into(), "forget".into())]);
+}
+
+#[test]
+fn a_grant_from_a_journal_before_key_removal_still_drops_the_source_key() {
+    let mut fixture = Fixture::new();
+    fixture.select();
+    // As a journal written before `source_forgotten` existed.
+    let text = std::fs::read_to_string(&fixture.transport.journal).unwrap();
+    let mut journal: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for grant in journal["grants"].as_object_mut().unwrap().values_mut() {
+        grant.as_object_mut().unwrap().remove("source_forgotten");
+    }
+    std::fs::write(&fixture.transport.journal, journal.to_string()).unwrap();
+    fixture.transport.calls.clear();
+    fixture.run(&Action::Clear { alias: "app".into() });
+    assert!(fixture.saved().grants.is_empty());
+    assert!(
+        fixture.transport.calls.contains(&("source".into(), "forget".into())),
+        "{:?}",
+        fixture.transport.calls
+    );
 }

@@ -28,6 +28,11 @@ pub enum Request {
     Disconnect {
         grant: String,
     },
+    /// Drops a disconnected grant's key directory on the source once the target
+    /// has revoked it. Worker images before this request refuse it.
+    Forget {
+        grant: String,
+    },
 }
 
 impl Request {
@@ -38,7 +43,8 @@ impl Request {
             | Self::Authorize { grant, .. }
             | Self::Connect { grant, .. }
             | Self::Revoke { grant }
-            | Self::Disconnect { grant } => grant,
+            | Self::Disconnect { grant }
+            | Self::Forget { grant } => grant,
         }
     }
 }
@@ -51,6 +57,7 @@ pub enum Response {
     Connected { ssh_alias: String, worktree: String },
     Revoked,
     Disconnected,
+    Forgotten,
 }
 
 /// A safe discovery snapshot supplied by the owning controller; never an access grant.

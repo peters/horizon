@@ -13,8 +13,9 @@ typed JSON response. The protocol supports:
 | `identity` | Create or reuse a source-local Ed25519 identity for a grant; return only its public key. |
 | `authorize` | Prepare a separate target worktree at an imported revision and install the source public key. |
 | `connect` | Pin the supplied target host key, probe direct SSH access, then publish `companion-<alias>`. |
-| `revoke` | Remove only the grant's authorized key; preserve worktrees and other access. |
+| `revoke` | Remove the grant's authorized key, then its worktree and prepared record when the worktree has no changes and no untracked or ignored files; a dirty worktree and other access are preserved. |
 | `disconnect` | Remove the source alias; retain the identity for target revocation reconciliation. |
+| `forget` | After the target confirmed `revoke`, remove the disconnected grant's key directory on the source. Refused while the grant is still connected; older worker images refuse it, and their key stays until the container restarts. |
 
 Requests and responses are defined by `horizon-cloud-protocol::companion`.
 Grant identifiers must be portable path components. Requests are bounded and

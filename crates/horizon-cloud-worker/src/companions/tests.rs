@@ -104,10 +104,9 @@ fn generated_include_preserves_user_configuration_and_resets_host_scope() {
     assert!(output.contains("hostname example.invalid"));
 }
 
-#[test]
-fn authorizing_again_preserves_dirty_worktree_and_reuses_the_grant() {
-    let root = tempfile::tempdir().unwrap();
-    let runtime = runtime(root.path());
+/// A worker with the fixture repository and a grant `pair` ready to authorize.
+fn authorizable(root: &Path) -> (Runtime, Request) {
+    let runtime = runtime(root);
     files::directory(&runtime.workspace).unwrap();
     files::directory(&runtime.live.join("horizon-host-keys")).unwrap();
     std::fs::write(runtime.live.join("horizon-authorized-keys"), "owner-key\n").unwrap();
@@ -117,7 +116,7 @@ fn authorizing_again_preserves_dirty_worktree_and_reuses_the_grant() {
             .arg(runtime.live.join("horizon-host-keys/ed25519")),
     )
     .unwrap();
-    let seed = root.path().join("seed");
+    let seed = root.join("seed");
     ssh::checked(Command::new("git").args(["init", "-q"]).arg(&seed)).unwrap();
     std::fs::write(seed.join("input.txt"), "original").unwrap();
     ssh::checked(Command::new("git").arg("-C").arg(&seed).args(["add", "input.txt"])).unwrap();
@@ -149,6 +148,13 @@ fn authorizing_again_preserves_dirty_worktree_and_reuses_the_grant() {
         public_key,
         revision: revision.trim().into(),
     };
+    (runtime, request)
+}
+
+#[test]
+fn authorizing_again_preserves_dirty_worktree_and_reuses_the_grant() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, request) = authorizable(root.path());
     let first = runtime.apply(&request).unwrap();
     std::fs::write(runtime.worktree("pair").join("input.txt"), "dirty edit").unwrap();
     assert_eq!(runtime.apply(&request).unwrap(), first);
@@ -456,4 +462,60 @@ fn an_inspection_waits_out_brief_setup_and_reports_a_held_lock_as_busy() {
         .unwrap()
         .unwrap_err();
     assert!(is_busy(&busy));
+}
+
+#[test]
+fn revoking_removes_a_clean_worktree_and_its_prepared_record() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, request) = authorizable(root.path());
+    runtime.apply(&request).unwrap();
+    let worktree = runtime.worktree("pair");
+    let prepared = runtime.workspace.join("companions/prepared/pair");
+    assert!(worktree.exists() && prepared.exists());
+    // An ignored or untracked file would be lost, so it keeps the worktree.
+    std::fs::write(worktree.join("notes.txt"), "untracked").unwrap();
+    runtime.apply(&Request::Revoke { grant: "pair".into() }).unwrap();
+    assert!(worktree.exists() && prepared.exists(), "a dirty worktree is kept");
+    std::fs::remove_file(worktree.join("notes.txt")).unwrap();
+    runtime.apply(&request).unwrap();
+    runtime.apply(&Request::Revoke { grant: "pair".into() }).unwrap();
+    assert!(!worktree.exists() && !prepared.exists(), "a clean worktree is removed");
+    let listed = ssh::checked(
+        Command::new("git")
+            .arg(format!(
+                "--git-dir={}",
+                runtime.workspace.join("repository.git").display()
+            ))
+            .args(["worktree", "list"]),
+    )
+    .unwrap();
+    assert!(!listed.contains("companions/worktrees/pair"), "{listed}");
+    // Revoking again finds nothing left to remove.
+    runtime.apply(&Request::Revoke { grant: "pair".into() }).unwrap();
+}
+
+#[test]
+fn a_disconnected_grant_key_is_forgotten_only_after_disconnect() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    runtime.apply(&Request::Identity { grant: "pair".into() }).unwrap();
+    let directory = runtime.key_directory("pair");
+    assert!(directory.join("identity").exists());
+    files::write(&directory.join("config"), b"Host companion-app\n").unwrap();
+    assert!(
+        runtime.apply(&Request::Forget { grant: "pair".into() }).is_err(),
+        "still connected"
+    );
+    assert!(directory.join("identity").exists());
+    runtime.apply(&Request::Disconnect { grant: "pair".into() }).unwrap();
+    assert!(directory.join("identity").exists(), "kept until the target revoked it");
+    assert_eq!(
+        runtime.apply(&Request::Forget { grant: "pair".into() }).unwrap(),
+        Response::Forgotten
+    );
+    assert!(!directory.exists());
+    assert_eq!(
+        runtime.apply(&Request::Forget { grant: "pair".into() }).unwrap(),
+        Response::Forgotten
+    );
 }
