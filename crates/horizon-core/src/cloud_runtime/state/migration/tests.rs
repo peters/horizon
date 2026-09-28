@@ -347,6 +347,7 @@ fn storage_fixture(fixture: &Fixture) -> serde_json::Value {
     let volume = horizon_cloud::runpod::volumes::Spec {
         operation_id: "legacy-cloud".into(),
         size: 20,
+        tier: horizon_cloud::runpod::volumes::Tier::default(),
         data_center_id: "TEST-1".into(),
     };
     let record = json!({"version":1,"worker":state.spec,"spec":volume,"state":{"state":"requested"}});

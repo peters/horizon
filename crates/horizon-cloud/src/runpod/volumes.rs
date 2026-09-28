@@ -22,6 +22,8 @@ pub struct Spec {
     pub operation_id: String,
     pub size: u32,
     pub data_center_id: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tier: Tier,
 }
 impl Spec {
     #[must_use]
@@ -48,11 +50,15 @@ pub struct Volume {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Tier {
+    #[default]
     Standard,
     HighPerformance,
+}
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Purpose {
@@ -67,10 +73,10 @@ impl Volume {
         }
         Ok(volume)
     }
-    fn require_standard(&self) -> Result<()> {
-        if self.tier != Some(Tier::Standard) {
+    fn require_tier(&self, expected: Tier) -> Result<()> {
+        if self.tier != Some(expected) {
             return Err(CloudError::Invalid(
-                "New workspace storage requires the STANDARD volume tier",
+                "Workspace storage does not match the requested volume tier",
             ));
         }
         Ok(())
@@ -96,12 +102,13 @@ impl Volume {
     }
     pub(crate) fn verify_worker_spec(&self, spec: &WorkerSpec) -> Result<()> {
         if self.tier.is_some() {
-            self.require_standard()?;
+            self.require_tier(Tier::Standard)?;
         }
         let expected = Spec {
             operation_id: spec.operation_id.clone(),
             size: u32::from(spec.profile.storage.volume_gb),
             data_center_id: self.data_center_id.clone(),
+            tier: Tier::Standard,
         };
         self.verify(&expected)?;
         if spec.profile.gpu || (!spec.data_centers.is_empty() && !spec.data_centers.contains(&self.data_center_id)) {
@@ -207,6 +214,7 @@ impl RunPod {
             operation_id: worker.operation_id.clone(),
             size: u32::from(worker.profile.storage.volume_gb),
             data_center_id,
+            tier: Tier::Standard,
         };
         spec.validate()?;
         Ok(spec)
@@ -250,8 +258,8 @@ impl RunPod {
                 ))?;
                 current.verify(spec)?;
                 current.verify_recorded_tier(volume)?;
-                if purpose == Purpose::Workspace && volume.tier.is_some() {
-                    current.require_standard()?;
+                if purpose == Purpose::Workspace && (volume.tier.is_some() || spec.tier != Tier::Standard) {
+                    current.require_tier(spec.tier)?;
                 }
                 // Observing a legacy binding cannot rewrite its durable receipt.
                 current.tier = volume.tier;
@@ -290,7 +298,7 @@ impl RunPod {
                 &mut persist,
             )?;
             if purpose == Purpose::Workspace {
-                volume.require_standard()?;
+                volume.require_tier(spec.tier)?;
             }
             return Ok(volume);
         }
@@ -303,7 +311,7 @@ impl RunPod {
         let response = self.request(
             "POST",
             "/network-volumes",
-            Some(json!({"name":spec.name(),"size":spec.size,"dataCenter":spec.data_center_id,"type":"STANDARD"})),
+            Some(json!({"name":spec.name(),"size":spec.size,"dataCenter":spec.data_center_id,"type":spec.tier})),
             cancel,
         );
         let value = match response {
@@ -320,7 +328,7 @@ impl RunPod {
         };
         let volume = Volume::response(value).map_err(|_| CloudError::CreationUnresolved)?;
         volume.verify(spec)?;
-        let creation = (volume.tier == Some(Tier::Standard)).then(|| CreationReceipt {
+        let creation = (volume.tier == Some(spec.tier)).then(|| CreationReceipt {
             version: 1,
             spec: spec.clone(),
             volume: volume.clone(),
@@ -333,7 +341,7 @@ impl RunPod {
             },
             &mut persist,
         )?;
-        volume.require_standard()?;
+        volume.require_tier(spec.tier)?;
         Ok(volume)
     }
 

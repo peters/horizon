@@ -152,7 +152,7 @@ fn rejected_storage_keeps_allocation_bound_and_explicit_deletion_available() {
 
 mod volumes {
     use super::*;
-    use crate::runpod::volumes::{Spec, State, Volume};
+    use crate::runpod::volumes::{Spec, State, Tier, Volume};
 
     fn server(responses: Vec<(u16, String)>) -> (RunPod, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
         let (mut provider, requests, task) = super::server(responses);
@@ -350,6 +350,7 @@ mod volumes {
         Spec {
             operation_id: spec().operation_id,
             size: u32::from(spec().profile.storage.volume_gb),
+            tier: Tier::default(),
             data_center_id: "EU-TEST-1".into(),
         }
     }

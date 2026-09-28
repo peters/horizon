@@ -68,6 +68,7 @@ fn retained_creation_never_repeats_provider_io_and_changed_bindings_are_rejected
         volume_spec: volumes::Spec {
             operation_id: request.worker.operation_id.clone(),
             size: 10,
+            tier: horizon_cloud::runpod::volumes::Tier::default(),
             data_center_id: "EU-NL-1".into(),
         },
         volume: volumes::State::Requested,
@@ -123,6 +124,7 @@ fn native_fixture(directory: &std::path::Path) -> CoordinatorFixture {
     let volume_spec = volumes::Spec {
         operation_id: request.worker.operation_id.clone(),
         size: 10,
+        tier: horizon_cloud::runpod::volumes::Tier::default(),
         data_center_id: startup.data_center_id.clone(),
     };
     let volume = volumes::Volume {
@@ -339,6 +341,7 @@ fn pre_startup_cleanup_intent_and_completion_reopen_without_new_creation() {
             volume_spec: volumes::Spec {
                 operation_id: request.worker.operation_id.clone(),
                 size: 10,
+                tier: horizon_cloud::runpod::volumes::Tier::default(),
                 data_center_id: "EU-NL-1".into(),
             },
             volume: state,
@@ -394,6 +397,7 @@ impl CoordinatorFixture {
         let volume_spec = volumes::Spec {
             operation_id: request.worker.operation_id.clone(),
             size: 10,
+            tier: horizon_cloud::runpod::volumes::Tier::default(),
             data_center_id: startup.data_center_id.clone(),
         };
         let volume = volumes::Volume {
