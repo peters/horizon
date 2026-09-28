@@ -69,6 +69,9 @@ fn declining_forgets_the_request_and_answers_its_polls_as_refused() {
         .unwrap()
         .unwrap();
     assert_eq!(resent["phase"], "refused");
+    // The same ID from another source cloud or alias is a different request.
+    assert!(creation.answer("elsewhere", "consumer", None, id).is_none());
+    assert!(creation.answer("source", "other", None, id).is_none());
     // A fresh Ensure Ready after a decline asks the owner again.
     assert!(
         creation
@@ -93,6 +96,13 @@ fn the_owner_chooses_a_checkout_through_the_picker() {
     assert_eq!(pending.chosen.as_deref(), Some(Path::new("/checkouts/consumer")));
     // Choosing never starts the creation on its own.
     assert!(pending.waiting());
+    // A reservation that failed validation leaves the checkout open to correct.
+    creation(&mut app).pending[0].cloud_id = Some("minted".into());
+    app.choose_companion_checkout("source", "consumer", Path::new("/checkouts/fixed"));
+    assert_eq!(
+        creation(&mut app).pending[0].chosen.as_deref(),
+        Some(Path::new("/checkouts/fixed"))
+    );
 }
 
 #[test]

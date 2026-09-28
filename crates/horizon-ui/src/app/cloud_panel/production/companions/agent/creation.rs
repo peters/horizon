@@ -31,7 +31,9 @@ const DECLINED: usize = 256;
 #[derive(Default)]
 pub(in crate::app::cloud_panel::production::companions) struct State {
     pending: Vec<Pending>,
-    declined: VecDeque<OperationId>,
+    /// Operation IDs are scoped per source journal, so a decline names its source
+    /// cloud and alias too.
+    declined: VecDeque<(String, String, OperationId)>,
     /// A source cloud and alias whose checkout the owner wants to choose.
     picker: Option<(String, String)>,
     actions: Vec<(String, String, Choice)>,
@@ -96,17 +98,24 @@ impl State {
             .find(|pending| pending.source == source && pending.alias == alias);
         match (action, pending) {
             // A declined request stays declined, whether polled or sent again.
-            (None | Some(Action::EnsureReady), _) if self.declined.contains(&id) => Some(Ok(json!({
-                "operation_id": id,
-                "action": "ensure_ready",
-                "cloud": source,
-                "alias": alias,
-                "target_cloud_id": null,
-                "phase": "refused",
-                "done": true,
-                "resend": false,
-                "message": "The owner declined creating this companion cloud; nothing was created",
-            }))),
+            (None | Some(Action::EnsureReady), _)
+                if self
+                    .declined
+                    .iter()
+                    .any(|(s, a, declined)| s == source && a == alias && *declined == id) =>
+            {
+                Some(Ok(json!({
+                    "operation_id": id,
+                    "action": "ensure_ready",
+                    "cloud": source,
+                    "alias": alias,
+                    "target_cloud_id": null,
+                    "phase": "refused",
+                    "done": true,
+                    "resend": false,
+                    "message": "The owner declined creating this companion cloud; nothing was created",
+                })))
+            }
             (None, Some(pending)) if pending.id == id => Some(Ok(pending.describe())),
             (Some(Action::EnsureReady), Some(pending)) => Some(Ok(pending.describe())),
             (Some(Action::Stop), Some(_)) => Some(Err(
@@ -127,7 +136,8 @@ impl State {
         if self.declined.len() >= DECLINED {
             self.declined.pop_front();
         }
-        self.declined.push_back(pending.id);
+        self.declined
+            .push_back((pending.source.clone(), pending.alias.clone(), pending.id));
         pending.cloud_id.is_some().then_some(pending)
     }
 }
@@ -286,7 +296,7 @@ impl HorizonApp {
             .agent
             .creation
             .find(source, alias)
-            .filter(|pending| pending.waiting() && pending.cloud_id.is_none())
+            .filter(|pending| pending.waiting() && pending.checkout.is_none())
         {
             pending.chosen = Some(path.to_owned());
             pending.error = None;

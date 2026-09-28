@@ -67,7 +67,9 @@ impl Pending {
                     ui.small("Looking for a checkout in this workspace…");
                 });
             }
-            let locked = self.cloud_id.is_some();
+            // Only a recorded reservation fixes the checkout; a failed validation
+            // leaves it open to correct.
+            let locked = self.checkout.is_some();
             for path in &self.checkouts {
                 ui.add_enabled_ui(!locked, |ui| {
                     ui.radio_value(&mut self.chosen, Some(path.clone()), path.display().to_string());
