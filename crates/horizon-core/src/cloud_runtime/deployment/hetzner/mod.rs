@@ -7,6 +7,7 @@ pub(in crate::cloud_runtime) mod idle;
 pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
 mod readiness;
+pub(in crate::cloud_runtime) mod rebuild;
 #[cfg(test)]
 mod tests;
 
@@ -47,7 +48,7 @@ pub(in crate::cloud_runtime) fn admit(settings: &Settings, image: &str, operatio
 /// # Errors
 /// Refuses a private image without a login, a login for another registry and
 /// a spelling Docker would look up under a key the host does not write.
-pub(super) fn pull_login(
+pub(in crate::cloud_runtime) fn pull_login(
     hetzner: &crate::cloud_runtime::settings::Hetzner,
     registries: Option<&crate::cloud_runtime::registry::Config>,
     image: &str,

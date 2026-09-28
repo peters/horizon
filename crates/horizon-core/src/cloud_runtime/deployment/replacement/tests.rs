@@ -8,6 +8,8 @@ use std::{
     path::PathBuf,
 };
 
+mod new_server;
+
 const CRASH: &str = "simulated crash";
 
 fn digest(image: char) -> String {

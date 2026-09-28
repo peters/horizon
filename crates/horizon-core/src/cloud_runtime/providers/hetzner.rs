@@ -40,6 +40,8 @@ impl Lifecycle for Hetzner<'_> {
         _worker_hint: Option<&str>,
         cancel: &Cancellation,
     ) -> Result<(Reconciliation, CreateState)> {
+        // A rebuild's release would read as a stop; only the rebuild settles it.
+        state.refuse_unsettled_replacement()?;
         let report = deployment::lifecycle::reconcile(store, state, self.settings, cancel)?;
         Ok((report, state.operation.clone()))
     }

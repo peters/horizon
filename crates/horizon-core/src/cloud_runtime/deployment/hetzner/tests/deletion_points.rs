@@ -13,7 +13,7 @@ use crate::cloud_runtime::{
 use horizon_cloud::{Cancellation, CreateState, Credential, hetzner::Hetzner};
 use serde_json::json;
 
-fn gone() -> (u16, String) {
+pub(super) fn gone() -> (u16, String) {
     (
         404,
         json!({"error": {"code": "not_found", "message": "not found"}}).to_string(),
@@ -23,7 +23,7 @@ fn gone() -> (u16, String) {
 /// Runs `act` on a cloud whose record is `operation` and `journal`, stopping,
 /// against `responses`; returns the saved deployment, whether anything is
 /// retained and the requests served.
-fn act_on(
+pub(super) fn act_on(
     operation: &CreateState,
     journal: &Journal,
     responses: Vec<(u16, String)>,
@@ -59,7 +59,7 @@ fn act_on(
     (store.load().unwrap().unwrap(), retained(root.path()).unwrap(), requests)
 }
 
-fn journal(volume: CreateState) -> Journal {
+pub(super) fn journal(volume: CreateState) -> Journal {
     Journal {
         location: Some("hel1".into()),
         volume,

@@ -360,6 +360,35 @@ fn cancelling_a_requested_switch_needs_a_confirmation() {
     ));
 }
 
+/// As `ready`, on a provider that rebuilds on a new server.
+fn hetzner(build: bool, phase: Phase) -> Runtime {
+    let mut state = deployment(Path::new("/synthetic"), build, phase);
+    state.profile.provider = "hetzner".into();
+    if let Some(spec) = &mut state.spec {
+        spec.profile.provider = "hetzner".into();
+    }
+    runtime(state)
+}
+
+#[test]
+fn a_new_server_rebuild_says_that_the_server_is_replaced() {
+    let ctx = egui::Context::default();
+    let mut runtime = hetzner(true, Phase::None);
+    runtime.confirmation = Confirmation::Rebuild;
+    assert!(has(&texts(&ctx, &mut runtime), &format!("{CONFIRMATION}{NEW_SERVER}")));
+
+    let mut runtime = hetzner(true, Phase::Requested);
+    let pending = texts(&ctx, &mut runtime);
+    assert!(has(&pending, REQUESTED_NEW_SERVER));
+    assert!(!has(&pending, REQUESTED));
+    assert!(click(&ctx, &mut runtime, "Cancel rebuild…").is_none());
+    assert!(has(&texts(&ctx, &mut runtime), CANCEL_REQUESTED_NEW_SERVER));
+    assert!(matches!(
+        click(&ctx, &mut runtime, "Cancel and keep the previous image"),
+        Some(Action::CancelRebuild)
+    ));
+}
+
 #[test]
 fn rebuild_outcomes_stay_on_the_card() {
     let ctx = egui::Context::default();
