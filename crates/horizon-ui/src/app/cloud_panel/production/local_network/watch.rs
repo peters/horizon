@@ -5,7 +5,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// How far the wall clock may run ahead of the monotonic clock between two checks before it
 /// counts as sleep. The monotonic clock stops while the computer is suspended on Linux and
-/// macOS; the wall clock does not. Clock adjustments smaller than this are ignored.
+/// macOS; the wall clock does not. Clock adjustments smaller than this are ignored. On Windows
+/// the monotonic clock keeps running through suspend, so sleep is not noticed there; a move to
+/// another network after waking still is.
 const SLEEP_GAP: Duration = Duration::from_secs(15);
 /// How often a running bridge compares the current network with the one it shares.
 const NETWORK_CHECK: Duration = Duration::from_secs(2);
@@ -26,11 +28,17 @@ impl Clock {
     }
 }
 
-/// When a running bridge last looked at the clocks and at the network.
+/// When sharing last looked at the clocks and at the network.
 #[derive(Debug)]
-pub(super) struct Watch {
+pub(in super::super) struct Watch {
     seen: Clock,
     checked: Instant,
+}
+
+impl Default for Watch {
+    fn default() -> Self {
+        Self::new(Clock::now())
+    }
 }
 
 impl Watch {

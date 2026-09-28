@@ -17,7 +17,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use watch::{Clock, Watch};
+use watch::Clock;
+pub(super) use watch::Watch;
 
 #[derive(Default)]
 pub(super) enum Sharing {
@@ -85,7 +86,6 @@ enum Step {
 /// and never on the UI thread.
 pub(super) struct Running {
     bridge: Option<Bridge>,
-    watch: Watch,
     /// The bridge's last status and when it was read. A snapshot copies every open relay, so
     /// frames between refreshes reuse it instead of taking their own. Boxed, as it is most of
     /// a running bridge's size.
@@ -99,7 +99,6 @@ impl Running {
     fn new(bridge: Option<Bridge>) -> Self {
         Self {
             bridge,
-            watch: Watch::new(Clock::now()),
             status: Box::new(Mutex::new(None)),
         }
     }
@@ -211,18 +210,30 @@ impl Runtime {
             // Readiness seen before this disconnect says nothing about the next connection.
             self.sharing.await_ready();
         }
-        let (slept, check) = match &mut self.sharing {
-            Sharing::On(running) => (running.watch.slept(now), running.watch.check_due(now.monotonic)),
-            _ => (false, false),
-        };
+        // The clocks are read every frame, so a wake is measured from the last frame before it.
+        let slept = self.watch.slept(now) && matches!(self.sharing, Sharing::On(_));
+        let check = self.watch.check_due(now.monotonic);
         if slept {
             // Resumed below at once when the cloud is still ready, after the network check.
             self.sharing = Sharing::Paused { ready_again: connected };
         } else if check {
-            let on = current();
-            if !watch::same_network(self.shared.as_ref(), on.as_ref()) {
-                self.moved(on);
-                return false;
+            match &self.sharing {
+                // A paused bridge stops waiting as soon as this computer is elsewhere.
+                Sharing::On(_) | Sharing::Paused { .. } => {
+                    let on = current();
+                    if !watch::same_network(self.shared.as_ref(), on.as_ref()) {
+                        self.moved(on);
+                        return false;
+                    }
+                }
+                // The offer always names the network this computer is on now.
+                Sharing::Moved { to } => {
+                    let on = current().map(|network| network.subnet());
+                    if on != *to {
+                        self.sharing = Sharing::Moved { to: on };
+                    }
+                }
+                Sharing::Off | Sharing::Refused(_) => {}
             }
         }
         match self.sharing.step(connected) {
@@ -349,7 +360,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
         }
     }
     // Sharing a new network is the owner's decision, made here, never by resuming.
-    if let Sharing::Moved { to: Some(subnet) } = &runtime.sharing
+    if let Some(subnet) = move_offer(runtime)
         && ui.button(format!("Share {subnet}")).clicked()
     {
         return Some(Action::ShareLocalNetwork);
@@ -363,6 +374,15 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
 
 const PAUSED: &str = "Sharing paused: the cloud disconnected or this computer slept. It resumes when the cloud is \
      connected again, if this computer is still on the same network.";
+
+/// The network the card offers to share after a move: only once the cloud is connected and
+/// Ready, since a bridge needs its connection. The switch stays either way, to stop sharing.
+fn move_offer(runtime: &Runtime) -> Option<Subnet> {
+    match runtime.sharing {
+        Sharing::Moved { to: Some(subnet) } if runtime.connected_and_ready() => Some(subnet),
+        _ => None,
+    }
+}
 
 /// Why sharing stopped after a move to another network, and what the owner can do.
 fn moved(to: Option<Subnet>) -> String {
@@ -849,6 +869,43 @@ mod tests {
         assert!(
             matches!(runtime.sharing, Sharing::Moved { .. }),
             "woke on another network"
+        );
+    }
+
+    #[test]
+    fn a_paused_bridge_stops_waiting_when_this_computer_moves() {
+        let (mut runtime, _sender) = sharing_home();
+        runtime.receiver = None;
+        runtime.sharing = Sharing::Paused { ready_again: false };
+        assert!(!runtime.reconcile_sharing_with(later(1, 0), || Some(office())));
+        assert!(
+            matches!(runtime.sharing, Sharing::Paused { .. }),
+            "checked every few seconds"
+        );
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Some(office())));
+        assert!(
+            matches!(runtime.sharing, Sharing::Moved { to: Some(to) } if to == office().subnet()),
+            "moved while still disconnected"
+        );
+    }
+
+    #[test]
+    fn the_move_offer_follows_this_computer_and_waits_for_a_ready_cloud() {
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Some(office())));
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        let cafe = Network::new("172.20.0.0/24".parse().unwrap(), "172.20.0.9".parse().unwrap(), "wlan0");
+        assert!(!runtime.reconcile_sharing_with(later(6, 0), || Some(cafe.clone())));
+        assert_eq!(move_offer(&runtime), Some(cafe.subnet()), "moved again before sharing");
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), || None));
+        assert_eq!(move_offer(&runtime), None, "no network to offer");
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None }));
+        assert!(!runtime.reconcile_sharing_with(later(12, 0), || Some(cafe.clone())));
+        runtime.receiver = None;
+        assert_eq!(
+            move_offer(&runtime),
+            None,
+            "not offered while the cloud is disconnected"
         );
     }
 

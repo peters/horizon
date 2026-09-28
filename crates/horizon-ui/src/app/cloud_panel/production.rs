@@ -135,6 +135,8 @@ pub(super) struct Runtime {
     scope: local_network::Editor,
     /// The network that sharing started on; a paused bridge resumes only on it.
     shared: Option<horizon_core::cloud_runtime::local_network::Network>,
+    /// When sharing last looked at the clocks and at the network, running or not.
+    watch: local_network::Watch,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;

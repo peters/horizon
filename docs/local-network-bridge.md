@@ -41,11 +41,17 @@ Switch it off while paused to stop waiting. A paused switch never outlives
 Horizon: after a restart it is off.
 
 When this computer moves to another network, for example a new Wi-Fi, sharing
-stops within a few seconds, whether it was running or paused. The card says
+stops within a few seconds, whether it was running or paused; a paused bridge stops
+waiting for the cloud then. The card says
 **Sharing stopped: this computer moved to another network (10.0.0.0/24)**, and
 nothing is shared until you press **Share 10.0.0.0/24**, which starts again on the
-new network with the whole network in scope, or switch sharing off. The scope you
-set belonged to the old network and is forgotten.
+new network with the whole network in scope, or switch sharing off. The offer
+follows this computer if it moves again, and appears only while the cloud is
+connected and Ready. The scope you set belonged to the old network and is
+forgotten.
+
+On Windows, sleep is not noticed yet, because the clock Horizon compares with keeps
+running through suspend there; a move to another network after waking still is.
 
 The worker image must include the bridge helper. An image built before this
 feature makes the card say so; rebuild the cloud's image.

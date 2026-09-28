@@ -485,24 +485,20 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
         // Without an intent to keep, a cloud that is not connected and Ready offers no switch.
         runtime.sharing = Sharing::Off;
         assert!(!has(&texts(&ctx, runtime), "Share local network"), "{case}");
-        // After a move to another network, the owner is asked; nothing resumes by itself.
+        // After a move to another network the owner is asked, but the new network is offered only
+        // once the cloud is Ready again; the switch still stops sharing meanwhile.
         runtime.sharing = Sharing::Moved {
-            to: Some("10.0.0.0/24".parse().unwrap()),
+            to: Some("10.0.3.0/24".parse().unwrap()),
         };
+        let shown = texts(&ctx, runtime);
         assert!(
             has(
-                &texts(&ctx, runtime),
-                "Sharing stopped: this computer moved to another network (10.0.0.0/24)"
+                &shown,
+                "Sharing stopped: this computer moved to another network (10.0.3.0/24)"
             ),
             "{case}"
         );
-        assert!(
-            matches!(
-                click(&ctx, runtime, "Share 10.0.0.0/24"),
-                Some(Action::ShareLocalNetwork)
-            ),
-            "{case}"
-        );
+        assert!(!has(&shown, "Share 10.0.3.0/24"), "{case}");
         assert!(
             matches!(
                 click(&ctx, runtime, "Share local network"),
