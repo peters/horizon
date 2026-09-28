@@ -1,6 +1,6 @@
 //! Notices when this computer slept or moved to another network while it shared one, so the
 //! card can pause sharing and, on a new network, ask the owner again.
-use horizon_core::cloud_runtime::local_network::Network;
+use horizon_core::cloud_runtime::local_network::{Network, ScopeError, StartError};
 use std::time::{Duration, Instant, SystemTime};
 
 /// How far the wall clock may run ahead of the monotonic clock between two checks before it
@@ -68,6 +68,21 @@ impl Watch {
     }
 }
 
+/// The network this computer is on now, `None` when there is none it can share. Failing to
+/// read the interfaces is an error, not a move.
+pub(super) fn current() -> Result<Option<Network>, StartError> {
+    seen(Network::current())
+}
+
+/// As [`current`], from one read of the interfaces.
+fn seen(read: Result<Network, StartError>) -> Result<Option<Network>, StartError> {
+    match read {
+        Ok(network) => Ok(Some(network)),
+        Err(StartError::Scope(ScopeError::NoNetwork | ScopeError::PointToPoint)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Whether `current` is still the network sharing started on. Sharing without a recorded
 /// network, which only tests start, never counts as moved.
 pub(super) fn same_network(shared: Option<&Network>, current: Option<&Network>) -> bool {
@@ -126,5 +141,18 @@ mod tests {
         assert!(!same_network(Some(&home), Some(&office)));
         assert!(!same_network(Some(&home), None), "no shareable network now");
         assert!(same_network(None, None));
+    }
+
+    #[test]
+    fn only_no_shareable_network_reads_as_none() {
+        let office = Network::new("10.0.0.0/24".parse().unwrap(), "10.0.0.7".parse().unwrap(), "wlan0");
+        assert_eq!(seen(Ok(office.clone())).unwrap(), Some(office));
+        for gone in [ScopeError::NoNetwork, ScopeError::PointToPoint] {
+            assert_eq!(seen(Err(gone.into())).unwrap(), None);
+        }
+        assert!(matches!(
+            seen(Err(std::io::Error::other("unreadable").into())),
+            Err(StartError::Io(_))
+        ));
     }
 }
