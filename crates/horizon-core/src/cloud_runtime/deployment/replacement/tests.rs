@@ -20,6 +20,7 @@ fn config(profile: &Profile) -> CloudConfig {
         default: "dev".into(),
         profiles: [("dev".into(), profile.clone())].into(),
         companions: std::collections::BTreeMap::new(),
+        source: horizon_cloud::Source::default(),
     }
 }
 

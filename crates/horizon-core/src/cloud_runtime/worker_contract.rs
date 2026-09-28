@@ -8,6 +8,7 @@ const SESSION_RESTART_MARKER: &str = "horizon-session-restart-contract=1";
 const CONTAINER_STARTED_MARKER: &str = "horizon-container-started=";
 const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
 const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
+const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
@@ -57,6 +58,9 @@ pub struct WorkerContract {
     pub last_self_stop: Option<SelfStop>,
     /// The image supports agent stops, so a missing `last_self_stop` means none was recorded.
     pub self_stop_reported: bool,
+    /// The source importer records a submodule packed without its ancestors as shallow.
+    /// Older images need full submodule history.
+    pub pinned_submodules: bool,
 }
 
 impl WorkerContract {
@@ -75,6 +79,7 @@ impl WorkerContract {
                 .and_then(|json| serde_json::from_str::<SelfStop>(json).ok())
                 .and_then(SelfStop::well_formed),
             self_stop_reported: reports(output, SELF_STOP_MARKER),
+            pinned_submodules: reports(output, PINNED_SUBMODULES_MARKER),
         }
     }
 }

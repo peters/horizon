@@ -4,7 +4,7 @@ use super::{
     sizing::{cpu_flavors, data_centers},
 };
 use crate::cloud_runtime::{
-    git_auth,
+    WorkerContract, git_auth,
     image::{Images, Layer, default_tag},
     siblings,
 };
@@ -18,7 +18,7 @@ pub(super) fn validate_allocation_image(
     git_auth: bool,
     runner: &Runner<'_>,
     registry: Option<&crate::cloud_runtime::registry::Prepared>,
-) -> Result<()> {
+) -> Result<Option<WorkerContract>> {
     if state.operation == CreateState::Prepared {
         let images = Images {
             docker_host: request.settings.docker_host.as_deref(),
@@ -28,17 +28,18 @@ pub(super) fn validate_allocation_image(
             }),
             runner,
         };
-        match &state.siblings {
-            None => images.validate_contract(&spec.image_digest, &state.cloud_id, &state.profile, git_auth)?,
+        return match &state.siblings {
+            None => images.validate_contract(&spec.image_digest, &state.cloud_id, &state.profile, git_auth),
             Some(set) => images.validate_siblings_contract(
                 &spec.image_digest,
                 &state.cloud_id,
                 &state.profile,
                 sibling_grants(request, state, set)?,
-            )?,
+            ),
         }
+        .map(Some);
     }
-    Ok(())
+    Ok(None)
 }
 
 /// A cloud with siblings receives version 2 Git grants when any repository of the set

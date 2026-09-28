@@ -14,6 +14,37 @@ pub struct CloudConfig {
     /// Portable declarations only; selecting and authorizing a target is machine-local.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub companions: BTreeMap<String, crate::companions::Declaration>,
+    /// How the committed source is packaged for a worker.
+    #[serde(default, skip_serializing_if = "Source::is_default")]
+    pub source: Source,
+}
+
+/// The optional `source` block of `.horizon/cloud.yml`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    #[serde(default)]
+    pub submodule_history: SubmoduleHistory,
+}
+
+impl Source {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// How much of each pinned submodule's history a worker receives.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmoduleHistory {
+    /// Every commit reachable from the pinned one, so `git log`, `describe` and
+    /// `blame` inside a submodule behave as they do locally.
+    #[default]
+    Full,
+    /// Only the pinned commit and its tree. The worker records the submodule as
+    /// shallow; history-reading build steps inside it see a single commit.
+    Pinned,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -290,6 +321,26 @@ pub const DESIGN_EXAMPLE: &str = include_str!("../examples/design-fixtures.yml")
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submodule_history_defaults_to_full_and_rejects_unknown_values() {
+        let parse = |yaml: &str| serde_yaml::from_str::<Source>(yaml);
+        assert_eq!(parse("{}").unwrap().submodule_history, SubmoduleHistory::Full);
+        assert_eq!(
+            parse("submodule_history: pinned").unwrap().submodule_history,
+            SubmoduleHistory::Pinned
+        );
+        assert!(parse("submodule_history: shallow").is_err());
+        assert!(parse("lfs: {}").is_err());
+        // A Windows checkout gives the included example CRLF line endings.
+        let documented = EXAMPLE.replace("\r\n", "\n");
+        let (head, tail) = documented.split_once("# source:\n").unwrap();
+        let (block, rest) = tail.split_once("\n\n").unwrap();
+        let example = format!("{head}source:\n{}\n\n{rest}", block.replace("#   ", "  "));
+        let config = CloudConfig::parse(&example).unwrap();
+        assert_eq!(config.source.submodule_history, SubmoduleHistory::Pinned);
+        assert!(CloudConfig::parse(&documented).unwrap().source.is_default());
+    }
 
     #[test]
     fn storage_tier_preserves_legacy_encoding_and_requires_cpu_network_storage() {

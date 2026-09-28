@@ -4,6 +4,7 @@ mod attributes;
 pub mod launch;
 mod material;
 use super::{Error, Result, command::Runner};
+use horizon_cloud::SubmoduleHistory;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -124,6 +125,35 @@ pub fn pack(repository: &Path, revision: &str, output: &Path, runner: &Runner<'_
     )
 }
 
+/// Packs only the selected commit and its tree, with no ancestors; the worker records
+/// the commit as shallow.
+fn pack_pinned(repository: &Path, revision: &str, output: &Path, runner: &Runner<'_>) -> Result<()> {
+    let sha = resolve_with_runner(repository, revision, runner)?;
+    let scratch = tempfile::tempdir()?;
+    let (empty, objects) = (scratch.path().join("empty"), scratch.path().join("objects"));
+    std::fs::File::create_new(&empty)?;
+    runner.to_file(
+        "List pinned submodule objects",
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["rev-list", "--objects", "--no-walk", &sha]),
+        &empty,
+        &objects,
+        Duration::from_secs(300),
+    )?;
+    runner.to_file(
+        "Git object transfer",
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["pack-objects", "--stdout"]),
+        &objects,
+        output,
+        Duration::from_secs(300),
+    )
+}
+
 /// # Errors
 /// Requires every selected submodule commit and LFS object to be available locally.
 pub fn validate_tree(repository: &Path, revision: &str, runner: &Runner<'_>) -> Result<()> {
@@ -131,8 +161,14 @@ pub fn validate_tree(repository: &Path, revision: &str, runner: &Runner<'_>) -> 
 }
 /// # Errors
 /// Packages verified LFS content and pinned submodule history without local configuration.
-pub fn auxiliary(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
-    material::archive(repository, revision, root, runner)
+pub fn auxiliary(
+    repository: &Path,
+    revision: &str,
+    root: &Path,
+    history: SubmoduleHistory,
+    runner: &Runner<'_>,
+) -> Result<PathBuf> {
+    material::archive(repository, revision, root, history, runner)
 }
 
 /// Reserves the transfer frame while counting retained output and disposable material.

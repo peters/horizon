@@ -60,6 +60,11 @@ profiles:
         provider: browserstack
         local_ports: [8080]
 
+# Optional: how committed source is packaged for a worker.
+# source:
+#   # full (default) or pinned: only each submodule's pinned commit and its tree.
+#   submodule_history: pinned
+
 # Optional companion repositories. Declarations never start a cloud or grant access.
 # companions:
 #   service:

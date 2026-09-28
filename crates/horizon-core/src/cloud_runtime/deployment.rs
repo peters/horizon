@@ -160,7 +160,7 @@ fn run(
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
     refresh_allocation(request, &store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;
-    let packed = source::pack(&state, pack_root.path(), &runner)?;
+    let mut packed = source::pack(&state, pack_root.path(), &runner)?;
     if state.spec.is_none() {
         prepare_image(request, &store, &runner, &mut state, registry.as_ref())?;
     }
@@ -171,7 +171,11 @@ fn run(
         .ok_or(Error::Invalid("Deployment has no worker specification"))?;
     // Opt-in may be added after a definite provisioning rejection saved a spec.
     // Validate that exact digest on every path that can still allocate a worker.
-    validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner, registry.as_ref())?;
+    if let Some(image) =
+        validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner, registry.as_ref())?
+    {
+        packed.settle(&image, &runner)?;
+    }
     state.stage = Stage::Provision;
     store.save(&state)?;
     emit(Event::stage(state.stage));
@@ -179,7 +183,7 @@ fn run(
         "Requesting or reconciling worker capacity",
     )));
     let (connection, contract) = provider.provision_ready(request, &store, &runner, &mut state, &spec)?;
-    source::transfer(&connection, &store, &mut state, packed, &runner, emit)?;
+    source::transfer(&connection, &store, &mut state, packed, &contract, &runner, emit)?;
     begin_sessions(&mut state, &store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
     configure_git_auth(git_auth, &connection, &runner)?;
