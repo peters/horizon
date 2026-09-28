@@ -843,3 +843,18 @@ Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, befor
 
 - `horizon-cloud/runpod/resize.rs` journals CPU replacement across old-worker termination and new-worker allocation while retaining an identity-verified network workspace. It has no workspace initialization authority.
 - `cloud_panel/production/cards/sizing.rs` owns runtime profile details and pre-allocation size choices; `cards.rs` orchestrates the card and lifecycle actions. The production `resize` leaf owns resource-edit confirmation, background core calls, retained-target recovery and presentation synchronization.
+
+### Companion lifecycle service
+
+`horizon-core::cloud_runtime::companions::lifecycle` owns explicit submission,
+status and background execution. The source journal retains bindings and retry
+IDs; a target receipt fences conflicting source operations, and an execution
+lock distinguishes a live executor from crash recovery. Provider guards and
+mutations share the existing deployment lock through crate-private locked
+lifecycle entry points. SSH grant verification follows provider readiness before
+an operation reports Ready. Polling never reconciles or starts a worker.
+
+This service has no UI, CLI or MCP caller yet. Missing or merely prepared clouds
+return a creation-confirmation phase without allocation; the form-independent
+creation adapter and interface wiring remain later M2 steps. Cross-source
+pending requests return Busy and require an explicit retry after reconciliation.
