@@ -37,12 +37,13 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         provider.cpu_volume_gb
     };
     ui.horizontal(|ui| {
-        ui.label("Workspace size");
+        let label = ui.label("Workspace size");
         ui.add(
             DragValue::new(&mut profile.storage.volume_gb)
                 .range(f64::from(min)..=f64::from(max))
                 .suffix(" GB"),
-        );
+        )
+        .labelled_by(label.id);
     });
     ui.small(if profile.gpu {
         "Files survive a stop, but are deleted with the pod."
@@ -50,7 +51,7 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         "Your workspace is retained when the worker stops."
     });
     ui.horizontal(|ui| {
-        ui.label(if provider.kind == Kind::Hetzner {
+        let label = ui.label(if provider.kind == Kind::Hetzner {
             "System disk requirement"
         } else {
             "Container disk"
@@ -59,7 +60,8 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
             DragValue::new(&mut profile.storage.container_gb)
                 .range(1..=u16::MAX)
                 .suffix(" GB"),
-        );
+        )
+        .labelled_by(label.id);
     });
     ui.small(if provider.kind == Kind::Hetzner {
         "Choose a server type with at least this much system disk."
