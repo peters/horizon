@@ -40,7 +40,7 @@ impl Source {
         if patterns.clone().count() > Lfs::MAX_PATTERNS || patterns.clone().any(|pattern| !Lfs::valid_pattern(pattern))
         {
             return Err(ProfileError::Invalid(
-                "source.lfs allows at most 64 patterns, each non-empty, at most 256 characters, without commas or control characters",
+                "source.lfs allows at most 64 patterns, each non-empty, at most 256 characters, without commas or Unicode control, format, surrogate or private-use characters",
             ));
         }
         Ok(())
@@ -66,15 +66,21 @@ impl Lfs {
     const MAX_PATTERN_CHARS: usize = 256;
 
     /// As the worker's check: git-lfs joins patterns with commas, and no Unicode
-    /// control, format, private-use or unassigned character belongs in a path pattern.
+    /// control, format, surrogate or private-use character belongs in a path pattern.
+    /// Unassigned code points depend on the Unicode version, so neither end rejects them.
     fn valid_pattern(pattern: &str) -> bool {
+        use unicode_general_category::{GeneralCategory, get_general_category};
         !pattern.is_empty()
             && pattern.chars().count() <= Self::MAX_PATTERN_CHARS
             && !pattern.chars().any(|c| {
                 c == ','
-                    || unicode_general_category::get_general_category(c)
-                        .abbreviation()
-                        .starts_with('C')
+                    || matches!(
+                        get_general_category(c),
+                        GeneralCategory::Control
+                            | GeneralCategory::Format
+                            | GeneralCategory::Surrogate
+                            | GeneralCategory::PrivateUse
+                    )
             })
     }
 
@@ -395,6 +401,10 @@ mod tests {
             config(&format!("{{exclude: ['{}']}}", "é".repeat(256))).is_ok(),
             "characters, not bytes"
         );
+        assert!(
+            config("{exclude: [\"a\\U000e0080b\"]}").is_ok(),
+            "unassigned is version-dependent"
+        );
         for invalid in [
             "{exclude: ['a,b']}",
             "{exclude: ['']}",
@@ -402,6 +412,7 @@ mod tests {
             "{exclude: [\"a\\x7fb\"]}",
             "{exclude: [\"a\\x85b\"]}",
             "{exclude: [\"a\\u200bb\"]}",
+            "{exclude: [\"a\\ue000b\"]}",
         ] {
             assert!(matches!(config(invalid), Err(ProfileError::Invalid(_))), "{invalid}");
         }

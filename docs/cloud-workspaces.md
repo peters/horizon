@@ -248,7 +248,7 @@ source:
 
 Patterns are git-lfs fetch patterns (`lfs.fetchinclude`/`lfs.fetchexclude`): at most
 64 in all, each non-empty, at most 256 characters, without commas and without Unicode
-control, format, private-use or unassigned characters. The worker applies the same rules. Horizon asks the local git-lfs which of the repository's
+control, format, surrogate or private-use characters. The worker applies the same rules. Horizon asks the local git-lfs which of the repository's
 own LFS paths the patterns exclude and sends every other object; the worker checks with
 its git-lfs that each path left out is excluded, then sets the same patterns in the
 repository's configuration, so worktrees keep those paths as pointer files and
