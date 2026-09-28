@@ -187,7 +187,7 @@ impl Track {
     }
 }
 
-pub(super) struct Status {
+pub(in crate::app::cloud_panel::production) struct Status {
     pub tone: Tone,
     /// "Pushing image", "Push failed", "Ready".
     pub verb: String,
@@ -284,6 +284,19 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
         track: track(runtime),
         ..base
     })
+}
+
+/// This frame's status of `runtime`: computed by whichever of the header and the card
+/// asks first, then reused. Put it back with [`keep`] after use.
+pub(super) fn for_frame(runtime: &mut Runtime, occupancy: Occupancy, now: SystemTime, frame: u64) -> Status {
+    match runtime.frame_status.take() {
+        Some((computed, status)) if computed == frame => status,
+        _ => of(runtime, occupancy, now),
+    }
+}
+
+pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
+    runtime.frame_status = Some((frame, status));
 }
 
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {

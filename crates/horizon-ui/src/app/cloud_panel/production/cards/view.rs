@@ -109,7 +109,8 @@ impl Production {
             .map_or(0, |launch| self.companions.selected(&launch.id));
         let runtime = self.runtimes.entry(group.issue).or_default();
         let occupancy = occupancy(group, board);
-        let status = status::of(runtime, occupancy, now);
+        let frame = ui.ctx().cumulative_frame_nr();
+        let status = status::for_frame(runtime, occupancy, now, frame);
         let desktop = runtime
             .state
             .as_ref()
@@ -127,6 +128,7 @@ impl Production {
         let spend = super::cost::spend(runtime, now);
         let mut strip = strip::show(ui, header, &status, &indicators, &spend, runtime.drawer.is_some());
         strip.subtitle = subtitle(group, runtime);
+        status::keep(runtime, status, frame);
         strip
     }
 }
@@ -254,7 +256,8 @@ impl HorizonApp {
             }
             super::output::begin_frame(runtime);
             let occupancy = occupancy(group, &self.board);
-            let status = status::of(runtime, occupancy, now);
+            let frame = ctx.cumulative_frame_nr();
+            let status = status::for_frame(runtime, occupancy, now, frame);
             let body = body_visible(group);
             if body && let Some(action) = body_area(ctx, &layer, group, runtime, &status) {
                 chosen.actions.push((group.issue, action));
@@ -275,6 +278,7 @@ impl HorizonApp {
                 let response = drawer_area(ctx, &layer, group, runtime, context);
                 chosen.record(group.issue, &response);
             }
+            status::keep(runtime, status, frame);
         }
         self.apply_chosen(chosen, ctx);
     }

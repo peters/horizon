@@ -22,7 +22,7 @@ mod view;
 pub(super) mod wording;
 pub(super) use drawer::Tab;
 use sizing::profile_details;
-pub(super) use status::{DiagnosisKey, Failure};
+pub(super) use status::{DiagnosisKey, Failure, Status};
 
 /// Terminal liveness for the Connections tab. A running process alone does not
 /// confirm the remote connection; browser and desktop connections are on their panels.

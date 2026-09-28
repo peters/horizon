@@ -157,6 +157,8 @@ pub(super) struct Runtime {
     unpinned_views: u8,
     /// The header asked for a confirmation; Manage scrolls it into view once.
     reveal_confirmation: bool,
+    /// The status the header computed this frame, reused by the body and drawer.
+    frame_status: Option<(u64, cards::Status)>,
     /// Counts every change to the output, including lines replaced in place.
     log_generation: u64,
     /// The last failure diagnosis and the output it was read from.
