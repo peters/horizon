@@ -110,6 +110,7 @@ fn migrate_with(
     let registry_lock = transaction::lock_named(parent, ".migration.lock")?;
     let mut pair = LockedPair::acquire(&root, discovered.allocation, discovered.identity.clone(), controller)?;
     crate::cloud_runtime::deployment::storage::growth::require_settled(&root)?;
+    crate::cloud_runtime::deployment::storage::resize::require_settled(&root)?;
     let mut intent = read_intent(&root)?.ok_or(Error::Invalid("Missing migration intent"))?;
     validate_context(&intent, &root, session, workspace, cloud, controller)?;
     if intent.allocation != discovered.allocation || intent.identity != discovered.identity {
@@ -173,6 +174,7 @@ fn discover(root: &Path, session: &str, workspace: &str, cloud: &str, controller
     // Release the old lock before acquiring allocation then project locks.
     let _project_lock = transaction::lock_file(root)?;
     crate::cloud_runtime::deployment::storage::growth::require_settled(root)?;
+    crate::cloud_runtime::deployment::storage::resize::require_settled(root)?;
     if let Some(intent) = read_intent(root)? {
         validate_context(&intent, root, session, workspace, cloud, controller)?;
         return Ok(intent);

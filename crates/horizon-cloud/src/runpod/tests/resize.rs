@@ -110,6 +110,130 @@ fn resizing_retains_the_exact_volume_and_fences_delete_and_create() {
 }
 
 #[test]
+fn completed_journal_recovers_without_replacing_again_when_the_observation_was_lost() {
+    let old = observed(&current(), "worker1");
+    let replacement = observed(&next(), "worker2");
+    let mut rows = prefix(&old);
+    rows.extend(termination(&old));
+    rows.extend(creation());
+    rows.extend([
+        (200, serde_json::to_string(&volume()).unwrap()),
+        (200, replacement.to_string()),
+        (200, replacement.to_string()),
+    ]);
+    rows.extend(empty_attachments());
+    let (provider, requests, task) = provider(rows);
+    let mut journal = Vec::new();
+    let mut intent = intent();
+    // The caller crashes after Completed was persisted, before storing the returned worker.
+    drop(
+        provider
+            .resize_cpu(
+                &mut intent,
+                &Cancellation::default(),
+                |next| {
+                    journal = serde_json::to_vec(next).unwrap();
+                    Ok(())
+                },
+                |_| {},
+            )
+            .unwrap(),
+    );
+    drop(intent);
+    let before_retry = requests.lock().unwrap().len();
+    let mut recovered: Replacement = serde_json::from_slice(&journal).unwrap();
+    assert!(recovered.completed());
+    let worker = provider
+        .resize_cpu(&mut recovered, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(worker.id, "worker2");
+    recovered.verify_result(&worker).unwrap();
+    assert!(recovered.completed());
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len() - before_retry, 5);
+    assert!(
+        requests[before_retry..]
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+    assert_eq!(
+        requests.iter().filter(|request| request.starts_with("DELETE ")).count(),
+        1
+    );
+    assert_eq!(
+        requests.iter().filter(|request| request.starts_with("POST ")).count(),
+        1
+    );
+}
+
+#[test]
+fn legacy_standard_volume_can_resize_only_after_live_tier_confirmation() {
+    let mut legacy = volume();
+    legacy.tier = None;
+    let old = observed(&current(), "worker1");
+    let mut rows = prefix(&old);
+    rows.extend(termination(&old));
+    rows.extend(creation());
+    let (provider, _, task) = provider(rows);
+    let mut intent = Replacement::new(current(), next(), "worker1".into(), legacy.clone()).unwrap();
+    let worker = provider
+        .resize_cpu(&mut intent, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    intent.verify_origin(&current(), "worker1", &legacy).unwrap();
+    intent.verify_result(&worker).unwrap();
+
+    let mut premium = volume();
+    premium.tier = Some(Tier::HighPerformance);
+    let (provider, requests, task) = self::provider(vec![(200, serde_json::to_string(&premium).unwrap())]);
+    let mut intent = Replacement::new(current(), next(), "worker1".into(), legacy).unwrap();
+    assert!(matches!(
+        provider.resize_cpu(
+            &mut intent,
+            &Cancellation::default(),
+            |_| panic!("No mutation authority"),
+            |_| {}
+        ),
+        Err(CloudError::IdentityMismatch)
+    ));
+    task.join().unwrap();
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[test]
+fn stopped_original_refuses_before_authorizing_a_prepared_replacement() {
+    let mut old = observed(&current(), "worker1");
+    old["status"] = json!("EXITED");
+    let (provider, requests, task) = provider(prefix(&old));
+    let mut intent = intent();
+    assert!(matches!(
+        provider.resize_cpu(
+            &mut intent,
+            &Cancellation::default(),
+            |_| panic!("No mutation authority"),
+            |_| {}
+        ),
+        Err(CloudError::Invalid("The original worker is not running"))
+    ));
+    task.join().unwrap();
+    assert!(intent.unstarted());
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[test]
 fn persisted_termination_can_finish_after_the_original_worker_stops() {
     let mut old = observed(&current(), "worker1");
     old["status"] = json!("EXITED");
@@ -303,4 +427,60 @@ fn failing_creation_journal_never_allocates_after_termination() {
     ));
     task.join().unwrap();
     assert!(requests.lock().unwrap().iter().all(|r| !r.starts_with("POST ")));
+}
+
+#[test]
+fn stale_original_list_result_never_persists_a_binding_and_retries_safely() {
+    for requested in [false, true] {
+        let mut saved = serde_json::to_value(intent()).unwrap();
+        saved["phase"] = json!("creating");
+        saved["creation"] = serde_json::to_value(if requested {
+            CreateState::Requested
+        } else {
+            CreateState::Prepared
+        })
+        .unwrap();
+        let journal = serde_json::to_vec(&saved).unwrap();
+        let mut intent: Replacement = serde_json::from_slice(&journal).unwrap();
+        let mut rows = vec![(200, serde_json::to_string(&volume()).unwrap())];
+        if !requested {
+            rows.extend(empty_attachments());
+        }
+        rows.push((200, pods(&json!([observed(&current(), "worker1")]))));
+        rows.push((200, serde_json::to_string(&volume()).unwrap()));
+        if !requested {
+            rows.extend(empty_attachments());
+        }
+        let replacement = observed(&next(), "worker2");
+        rows.extend([
+            (200, pods(&json!([replacement.clone()]))),
+            (200, replacement.to_string()),
+        ]);
+        rows.extend(empty_attachments());
+        let (provider, requests, task) = provider(rows);
+        assert!(matches!(
+            provider.resize_cpu(
+                &mut intent,
+                &Cancellation::default(),
+                |_| panic!("The original ID must be rejected before persistence"),
+                |_| {}
+            ),
+            Err(CloudError::IdentityMismatch)
+        ));
+        assert_eq!(serde_json::to_value(&intent).unwrap(), saved);
+        let mut recovered: Replacement = serde_json::from_slice(&journal).unwrap();
+        let worker = provider
+            .resize_cpu(&mut recovered, &Cancellation::default(), |_| Ok(()), |_| {})
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(worker.id, "worker2");
+        recovered.verify_result(&worker).unwrap();
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.starts_with("GET "))
+        );
+    }
 }

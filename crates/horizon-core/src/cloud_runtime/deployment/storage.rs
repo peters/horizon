@@ -11,6 +11,25 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 
 pub(in crate::cloud_runtime) mod growth;
+pub(in crate::cloud_runtime) mod resize;
+
+/// A durably selected resource change that must finish before another lifecycle operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeTarget {
+    Compute { cpu: u16, memory_gb: u16 },
+    Workspace { size_gb: u16 },
+}
+
+/// # Errors
+/// Refuses a busy cloud or conflicting/corrupt recovery journals. Reads no provider state.
+pub fn pending_resize(root: &std::path::Path) -> Result<Option<ResizeTarget>> {
+    let store = Store::lock(root)?;
+    match (resize::pending(&store)?, growth::pending(&store)?) {
+        (Some(_), Some(_)) => Err(Error::Invalid("Conflicting resource resize journals")),
+        (Some(target), None) | (None, Some(target)) => Ok(Some(target)),
+        (None, None) => Ok(None),
+    }
+}
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct Record {

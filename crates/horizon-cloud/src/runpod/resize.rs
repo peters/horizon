@@ -59,6 +59,12 @@ impl Replacement {
         self.phase == Phase::Completed
     }
 
+    /// No provider mutation is authorized until the terminating phase is persisted.
+    #[must_use]
+    pub fn unstarted(&self) -> bool {
+        self.phase == Phase::Prepared
+    }
+
     /// # Errors
     /// Confirms the journal still names the caller's original worker and storage.
     pub fn verify_origin(&self, spec: &WorkerSpec, worker_id: &str, volume: &Volume) -> Result<()> {
@@ -67,6 +73,22 @@ impl Replacement {
             return Err(CloudError::IdentityMismatch);
         }
         Ok(())
+    }
+
+    /// # Errors
+    /// Confirms a saved completion still names the replacement worker and retained workspace.
+    pub fn verify_result(&self, worker: &Worker) -> Result<()> {
+        self.validate()?;
+        if !self.completed()
+            || self.creation
+                != (CreateState::Bound {
+                    worker_id: worker.id.clone(),
+                })
+        {
+            return Err(CloudError::IdentityMismatch);
+        }
+        worker.verify(&self.next)?;
+        worker.verify_resources_with_volume(&self.next, Some(&self.volume))
     }
 
     fn validate(&self) -> Result<()> {
@@ -81,7 +103,6 @@ impl Replacement {
             || (self.current.profile.cpu, self.current.profile.memory_gb)
                 == (self.next.profile.cpu, self.next.profile.memory_gb)
             || !valid_id(&self.original_worker)
-            || self.volume.tier.is_none()
             || matches!(self.creation, CreateState::Terminated { .. })
             || (matches!(self.phase, Phase::Prepared | Phase::Terminating) && self.creation != CreateState::Prepared)
             || (self.phase == Phase::Completed && !matches!(self.creation, CreateState::Bound { .. }))
@@ -182,7 +203,10 @@ impl RunPod {
     }
 
     fn verify_resize_volume(&self, volume: &Volume, cancel: &Cancellation) -> Result<()> {
-        if self.inspect_volume(&volume.id, cancel)?.as_ref() != Some(volume) {
+        let mut expected = volume.clone();
+        // Legacy bindings omitted the standard tier; the live response must confirm it.
+        expected.tier.get_or_insert(super::volumes::Tier::Standard);
+        if self.inspect_volume(&volume.id, cancel)?.as_ref() != Some(&expected) {
             return Err(CloudError::IdentityMismatch);
         }
         Ok(())
