@@ -212,3 +212,20 @@ fn migration_cannot_capture_an_incomplete_growth() {
     assert!(!root.path().join("migration.json").exists());
     assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), before);
 }
+
+#[test]
+fn provider_confirmation_recovers_the_gap_before_observation_without_credentials() {
+    let (root, store) = fixture();
+    let mut intent = confirmed(&store);
+    intent.observed = None;
+    write(&store, &intent).unwrap();
+    drop(store);
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file":root.path().join("missing-key"),"ssh_identity_file":"unused",
+        "docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+    }))
+    .unwrap();
+    let state = grow_storage(root.path(), &settings, 40, &Cancellation::default()).unwrap();
+    assert_eq!(state.profile.storage.volume_gb, 40);
+    assert!(!root.path().join(JOURNAL).exists());
+}

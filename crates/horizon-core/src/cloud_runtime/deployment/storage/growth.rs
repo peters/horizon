@@ -48,6 +48,9 @@ pub fn grow_storage(root: &Path, settings: &Settings, size_gb: u16, cancel: &Can
         return Err(Error::Invalid(PENDING));
     }
     intent.verify(&store)?;
+    if intent.recover_confirmation()? {
+        write(&store, &intent)?;
+    }
     if intent.observed.is_none() {
         let provider = RunPod::new(settings.credential()?);
         let mut growth = intent.growth.clone();
@@ -88,6 +91,19 @@ fn prepare(store: &Store, size: u16) -> Result<Intent> {
 }
 
 impl Intent {
+    fn recover_confirmation(&mut self) -> Result<bool> {
+        if self.observed.is_some() || !self.growth.confirmed() {
+            return Ok(false);
+        }
+        let State::Bound { volume, .. } = &self.storage.state else {
+            return Err(Error::Invalid("Disk growth has no bound storage"));
+        };
+        let mut volume = volume.clone();
+        volume.size = self.growth.requested_size();
+        self.observed = Some(volume);
+        Ok(true)
+    }
+
     fn original(&self) -> Result<Deployment> {
         serde_json::from_value(self.deployment.clone()).map_err(|_| Error::Json)
     }
