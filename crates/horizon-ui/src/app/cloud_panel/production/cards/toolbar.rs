@@ -73,7 +73,7 @@ pub(super) fn show(
     } else {
         let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
         let label = worker.map_or_else(
-            || "Worker: no allocation confirmed".to_owned(),
+            || "Worker: awaiting details".to_owned(),
             |worker| format!("Worker: {} (last observed)", worker.desired_status),
         );
         let profile = runtime
@@ -164,6 +164,9 @@ fn spending(ui: &mut egui::Ui, runtime: &super::super::Runtime) {
             (if total.excludes_before.is_some() { "Past 12 months" } else { "Since creation" },
              horizon_core::format_cost(total.total()),
              runtime.billing.explanation(&total, std::time::Instant::now()))
+        } else if runtime.billing.sample().is_some() && runtime.billing.error().is_none() {
+            ("Since creation", "Awaiting billing".into(),
+             "No billed periods have been reported. The current-run estimate does not establish a lifetime total.".into())
         } else {
             ("Since creation", "Unavailable".into(), runtime.billing.error().map_or_else(
                 || "Provider billing has not been read yet.".into(), |error| format!("Provider billing unavailable: {error}")))
@@ -186,11 +189,64 @@ fn metric(ui: &mut egui::Ui, title: &str, value: &str, note: &str) {
         .on_hover_text(note);
 }
 
-#[cfg(all(test, unix))] // Exercises the actual PTY lifecycle with a disposable Unix shell.
+#[cfg(test)]
 mod tests {
     use super::super::super::Runtime;
     use super::*;
     #[test]
+    fn unreported_billing_does_not_become_a_zero_lifetime_total_after_stop() {
+        use cloud_runtime::billing::{BillingBucket, BucketSize, History};
+        use std::time::{Instant, SystemTime};
+        let mut runtime = Runtime {
+            stage: Some(Stage::Ready),
+            state: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version":1,"cloud_id":"billing-fixture","repository":"/synthetic","revision":"a",
+                    "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"gpu":false},
+                    "stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+                    "spec":null,"sessions":[],"worker":{"id":"worker1","name":"billing fixture","imageName":"registry.example/worker","desiredStatus":"RUNNING",
+                        "costPerHr":0.69,"lastStartedAt":"2024-07-12T19:14:40Z"}
+                }))
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        runtime.billing.record(
+            "worker1",
+            Ok(History {
+                buckets: Vec::new(),
+                from: SystemTime::UNIX_EPOCH,
+            }),
+            Instant::now(),
+        );
+        let now = SystemTime::now();
+        assert!(runtime.total_cost(now).is_none());
+        assert!(runtime.current_run_cost(now).is_some());
+        assert!(!runtime.cost_badge(now).unwrap().contains("total"));
+        runtime.stage = Some(Stage::Stopped);
+        let state = runtime.state.as_mut().unwrap();
+        state.stage = Stage::Stopped;
+        state.worker.as_mut().unwrap().desired_status = "EXITED".into();
+        assert!(runtime.total_cost(now).is_none());
+        assert!(runtime.cost_badge(now).is_none());
+        runtime.billing.record(
+            "worker1",
+            Ok(History {
+                buckets: vec![BillingBucket {
+                    time: "2024-07-12T19:00:00Z".into(),
+                    size: BucketSize::Hour,
+                    amount: 0.0,
+                    time_billed_ms: 0,
+                }],
+                from: SystemTime::UNIX_EPOCH,
+            }),
+            Instant::now(),
+        );
+        assert_eq!(runtime.cost_badge(now).as_deref(), Some("$0.00 total"));
+    }
+
+    #[test]
+    #[cfg(unix)] // Exercises the actual PTY lifecycle with a disposable Unix shell.
     fn cloud_terminal_summary_distinguishes_process_liveness_from_ssh_panel_status() {
         let mut board = horizon_core::Board::new();
         let workspace = board.create_workspace("cloud fixture");

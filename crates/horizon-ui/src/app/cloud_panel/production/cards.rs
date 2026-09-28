@@ -290,9 +290,11 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
 }
 
 impl super::Runtime {
-    /// The bound worker's cost since creation once its billing has been read.
+    /// A lifetime total requires a reported billing period, not just an empty response.
     fn total_cost(&self, now: std::time::SystemTime) -> Option<cloud_runtime::cost::TotalCost> {
-        self.billing.total(self.state.as_ref()?.worker.as_ref()?, now)
+        self.billing
+            .total(self.state.as_ref()?.worker.as_ref()?, now)
+            .filter(|total| total.billed_through.is_some())
     }
 
     /// Frame header text, for example `$0.83 run · $4.20 total`.
@@ -329,6 +331,8 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
             .on_hover_text("RunPod billing could not be read. Horizon tries again every few minutes.");
     } else if runtime.billing.refreshing() {
         ui.small("Since creation · reading RunPod billing…");
+    } else if runtime.billing.sample().is_some() {
+        ui.small("Since creation · awaiting provider billing");
     }
 }
 
