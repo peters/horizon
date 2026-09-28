@@ -10,6 +10,7 @@ mod creation_tests;
 mod idle;
 mod launch;
 mod lifecycle;
+mod local_network;
 mod machine_size;
 mod offer_publication;
 mod offers;
@@ -125,6 +126,7 @@ pub(super) struct Runtime {
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
     idle_reports: Option<idle::Reports>,
+    sharing: local_network::Sharing,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
@@ -330,6 +332,7 @@ impl HorizonApp {
                 }
             }
             runtime.poll_release_and_repaint(ctx);
+            runtime.stop_sharing_when_disconnected();
         }
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);

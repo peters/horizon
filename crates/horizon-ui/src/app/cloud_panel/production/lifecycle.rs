@@ -13,6 +13,8 @@ pub(super) enum Action {
     Rebuild,
     ContinueRebuild,
     CancelRebuild,
+    ShareLocalNetwork,
+    StopSharingLocalNetwork,
 }
 
 #[cfg(test)]
@@ -257,7 +259,9 @@ impl HorizonApp {
                 | Action::Reconcile
                 | Action::Rebuild
                 | Action::ContinueRebuild
-                | Action::CancelRebuild => return,
+                | Action::CancelRebuild
+                | Action::ShareLocalNetwork
+                | Action::StopSharingLocalNetwork => return,
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()

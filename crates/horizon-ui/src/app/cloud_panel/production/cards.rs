@@ -88,6 +88,8 @@ impl HorizonApp {
                 Action::Deploy => self.start_production_deployment(id, ctx),
                 Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),
                 Action::Remove => self.remove_deleted_cloud(id, ctx),
+                Action::ShareLocalNetwork => self.share_local_network(id, true),
+                Action::StopSharingLocalNetwork => self.share_local_network(id, false),
                 _ => self.change_production_worker(id, action, ctx),
             }
         }
@@ -465,7 +467,8 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     } else if stoppable && ui.add(danger_button("Stop worker…")).clicked() {
         runtime.confirmation = Confirmation::Stop;
     }
-    rebuild::offer(ui, runtime).or(action)
+    let sharing = super::local_network::show(ui, runtime);
+    rebuild::offer(ui, runtime).or(sharing).or(action)
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
