@@ -310,6 +310,17 @@ impl Prepared {
     /// # Errors
     /// Sends only the verified pull secret, with durable reconciliation after uncertain responses.
     pub fn ensure_provider(&mut self, provider: &RunPod, cancel: &Cancellation) -> Result<String> {
+        self.ensure_provider_observed(provider, cancel, super::mutation::IGNORE)
+    }
+
+    pub(in crate::cloud_runtime) fn ensure_provider_observed(
+        &mut self,
+        provider: &RunPod,
+        cancel: &Cancellation,
+        observe: super::mutation::Observer<'_>,
+    ) -> Result<String> {
+        use super::mutation::State as Mutation;
+        self.observe_pending(observe)?;
         if !self.verified {
             return Err(Error::Invalid(
                 "Validate immutable image access before transferring a pull credential",
@@ -323,8 +334,29 @@ impl Prepared {
             credential: &credential,
         };
         let mut state = self.journal.state().clone();
-        let binding = provider.ensure_registry_binding(&input, &mut state, cancel, |next| self.journal.save(next))?;
+        let mut failure = None;
+        let binding = provider.ensure_registry_binding(&input, &mut state, cancel, |next| {
+            self.journal.save(next)?;
+            if matches!(next, State::Requested { .. }) {
+                observe(Mutation::Pending).map_err(|error| {
+                    failure = Some(error);
+                    horizon_cloud::CloudError::Persistence
+                })?;
+            }
+            Ok(())
+        });
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        let binding = binding?;
         Ok(binding.id)
+    }
+
+    pub(in crate::cloud_runtime) fn observe_pending(&self, observe: super::mutation::Observer<'_>) -> Result<()> {
+        if matches!(self.journal.state(), State::Requested { .. }) {
+            observe(super::mutation::State::Pending)?;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -402,4 +434,56 @@ pub(super) fn parse_expiry(value: &str) -> Result<i64> {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
         .map(time::OffsetDateTime::unix_timestamp)
         .map_err(|_| Error::Invalid("Registry expiry must use RFC3339, for example 2027-01-01T00:00:00Z"))
+}
+
+#[cfg(all(test, unix))]
+mod mutation_tests {
+    use super::*;
+    use crate::cloud_runtime::mutation::{self, State as Mutation};
+
+    #[test]
+    fn local_registry_failures_only_report_existing_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        std::fs::write(secret.path(), "synthetic-pull").unwrap();
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":secret.path(),"ssh_identity_file":"unused","docker_config":"unused",
+            "cpu_flavors":[],"gpu_types":[],
+            "registries":{"root":root.path().join("registry"),"bindings":[{
+                "repository":"registry.example/worker","generation":"generation1","read_only_confirmed":true,
+                "pull":{"username":"reader","secret_file":secret.path()},"publish":null
+            }]}
+        }))
+        .unwrap();
+        let mut prepared = Prepared::for_image(&settings, "registry.example/worker:latest", None, false)
+            .unwrap()
+            .unwrap();
+        let provider = RunPod::new(horizon_cloud::Credential::new("synthetic-compute".into()).unwrap());
+        for requested in [false, true] {
+            prepared
+                .journal
+                .save(&if requested {
+                    State::Requested {
+                        name: "horizon-pull-generation1".into(),
+                    }
+                } else {
+                    State::Prepared
+                })
+                .unwrap();
+            for failure in ["unverified", "expired", "cancelled"] {
+                prepared.verified = failure != "unverified";
+                prepared.binding.pull.expires_at = (failure == "expired").then(|| "2000-01-01T00:00:00Z".into());
+                let cancel = Cancellation::default();
+                cancel.cancel();
+                let seen = std::cell::RefCell::new(Vec::new());
+                let observe: mutation::Observer<'_> = &|phase| {
+                    seen.borrow_mut().push(phase);
+                    Ok(Mutation::Settled)
+                };
+                assert!(prepared.ensure_provider_observed(&provider, &cancel, observe).is_err());
+                assert_eq!(seen.borrow().len(), usize::from(requested));
+                assert!(seen.borrow().iter().all(|phase| *phase == Mutation::Pending));
+            }
+        }
+    }
 }

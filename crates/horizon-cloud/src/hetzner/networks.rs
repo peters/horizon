@@ -57,6 +57,20 @@ impl Hetzner {
     /// Refuses invalid zones, several labelled networks and a labelled network
     /// without a subnet in the zone.
     pub fn ensure_network(&self, zone: &str, cancel: &Cancellation) -> Result<Network, CloudError> {
+        self.ensure_network_observed(zone, cancel, || Ok(()))
+    }
+
+    /// As [`Self::ensure_network`], calling `before_mutation` after the lookup and
+    /// immediately before the create request, so a caller records a pending
+    /// mutation only once one may be sent.
+    /// # Errors
+    /// As [`Self::ensure_network`]; a `before_mutation` failure sends nothing.
+    pub(super) fn ensure_network_observed(
+        &self,
+        zone: &str,
+        cancel: &Cancellation,
+        before_mutation: impl FnOnce() -> Result<(), CloudError>,
+    ) -> Result<Network, CloudError> {
         if !valid_name(zone) {
             return Err(CloudError::Invalid("Invalid Hetzner network zone"));
         }
@@ -69,6 +83,7 @@ impl Hetzner {
             "subnets": [{"type": "cloud", "ip_range": SUBNET_RANGE, "network_zone": zone}],
             "labels": {NETWORK_LABEL: zone},
         });
+        before_mutation()?;
         match self.send(Method::Post, "/networks", Some(body), cancel) {
             Ok(value) => {
                 let single: Single = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;

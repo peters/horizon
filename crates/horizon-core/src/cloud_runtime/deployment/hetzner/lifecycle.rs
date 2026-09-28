@@ -5,6 +5,7 @@
 use super::{Compute, Journal, JournalFile as _, provision::Saved};
 use crate::cloud_runtime::{
     Result, Stage,
+    mutation::{self, State as Mutation},
     settings::Settings,
     state::{Deployment, Store},
 };
@@ -92,30 +93,51 @@ pub(super) fn reconcile_with(
 }
 
 /// Releases the server and keeps the workspace volume.
-pub(in crate::cloud_runtime) fn stop(
+pub(in crate::cloud_runtime) fn stop_observed(
     store: &Store,
     state: &mut Deployment,
     settings: &Settings,
     cancel: &Cancellation,
+    observe: mutation::Observer<'_>,
 ) -> Result<()> {
-    stop_with(&Compute::cleanup(settings)?, store, state, cancel)
+    stop_with_observer(&Compute::cleanup(settings)?, store, state, cancel, observe)
 }
 
-/// As `stop`, with the Hetzner client given.
+/// As `stop_observed`, without an observer and with the client given.
 pub(super) fn stop_with(compute: &Compute, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
+    stop_with_observer(compute, store, state, cancel, mutation::IGNORE)
+}
+
+pub(super) fn stop_with_observer(
+    compute: &Compute,
+    store: &Store,
+    state: &mut Deployment,
+    cancel: &Cancellation,
+    observe: mutation::Observer<'_>,
+) -> Result<()> {
     let mut journal = Journal::load(store.root())?;
     let operation_id = state.cloud_id.clone();
     let operation = state.operation.clone();
     let mut saved = Saved::new(store, state);
     // A stop records its stage before each provider request, even on a retry.
     saved.resave = true;
+    saved.observe = observe;
     let stopped = cloud::stop(
         compute.cloud(&operation_id, cancel),
         &operation,
         &mut journal,
         &mut saved,
     );
-    saved.finish(stopped)?;
+    // An outright refusal of the only request sent leaves nothing uncertain, so a
+    // retried Stop is not fenced; the stop stays recorded and can be retried. A
+    // failure while a sent request's action is awaited stays pending.
+    let settled = stopped.is_err() && saved.sole_mutation_refused();
+    saved.finish(stopped).or_else(|error| {
+        if settled {
+            observe(Mutation::Settled)?;
+        }
+        Err(error)
+    })?;
     Ok(())
 }
 
@@ -187,6 +209,11 @@ impl StopRecords for Saved<'_> {
         self.state.stop_requested = true;
         self.state.stage = stage;
         let saved = self.store.save(self.state);
-        self.keep(saved)
+        self.keep(saved)?;
+        // Pending is recorded by `before_mutation`, just before each request.
+        if stop == Stop::Stopped {
+            self.keep((self.observe)(Mutation::Settled).map(|_| ()))?;
+        }
+        Ok(())
     }
 }

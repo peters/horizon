@@ -4,6 +4,7 @@
 use super::{Compute, Journal, JournalFile as _};
 use crate::cloud_runtime::{
     Error, Event, Result,
+    mutation::{self, State as Mutation},
     state::{Deployment, Store},
 };
 use horizon_cloud::{
@@ -18,12 +19,19 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     spec: &WorkerSpec,
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
+    observe: mutation::Observer<'_>,
 ) -> Result<()> {
+    let mut journal = Journal::load(store.root())?;
+    if state.operation == CreateState::Requested || journal.volume == CreateState::Requested {
+        observe(Mutation::Pending)?;
+    }
     // Resources are named after the deployment, and user data and verification
     // follow the spec, so the two must describe the same cloud before any request.
     if spec.operation_id != state.cloud_id || spec.profile != state.profile {
         return Err(Error::Invalid("Deployment and worker identities differ"));
     }
+    spec.validate()?;
+    cloud::supported(spec)?;
     // Only a request that can still create a server needs the pull login.
     let login = if state.operation == CreateState::Prepared {
         super::pull_login(&compute.settings, compute.registries.as_ref(), &spec.profile.image)?
@@ -37,9 +45,9 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         // A redeploy resets the source the deployment claims for its workspace.
         fresh: !state.source_ready,
     };
-    let mut journal = Journal::load(store.root())?;
     let mut operation = state.operation.clone();
     let mut saved = Saved::new(store, state);
+    saved.observe = observe;
     let worker = cloud::provision(
         &compute.client,
         request,
@@ -51,7 +59,9 @@ pub(in crate::cloud_runtime::deployment) fn provision(
     );
     let worker = saved.finish(worker)?;
     state.worker = Some(worker);
-    store.save(state)
+    store.save(state)?;
+    observe(Mutation::Settled)?;
+    Ok(())
 }
 
 /// The deployment record and `hetzner.json`, each saved durably. A save that
@@ -64,6 +74,11 @@ pub(super) struct Saved<'a> {
     /// Whether a stop's stage is saved again even when it is already recorded, as
     /// a stop does before each provider request; a check saves only a change.
     pub(super) resave: bool,
+    pub(super) observe: mutation::Observer<'a>,
+    /// The mutations announced through these records, and the evidence before the first.
+    announced: (u32, Option<Mutation>),
+    /// Whether the request after the last boundary was refused outright.
+    refused: bool,
 }
 
 impl<'a> Saved<'a> {
@@ -73,7 +88,16 @@ impl<'a> Saved<'a> {
             state,
             failed: None,
             resave: false,
+            observe: mutation::IGNORE,
+            announced: (0, None),
+            refused: false,
         }
+    }
+
+    /// Whether only one mutation was announced, nothing was pending before it, and
+    /// that request itself was refused outright, so nothing changed.
+    pub(super) fn sole_mutation_refused(&self) -> bool {
+        self.refused && self.announced == (1, Some(Mutation::Settled))
     }
 
     /// The result of a provider call made with these records, with a failed
@@ -94,6 +118,21 @@ impl<'a> Saved<'a> {
 }
 
 impl Records for Saved<'_> {
+    fn before_mutation(&mut self) -> std::result::Result<(), CloudError> {
+        let prior = match (self.observe)(Mutation::Pending) {
+            Ok(prior) => prior,
+            Err(error) => return self.keep(Err(error)),
+        };
+        let (count, first) = self.announced;
+        self.announced = (count + 1, first.or(Some(prior)));
+        self.refused = false;
+        Ok(())
+    }
+
+    fn mutation_refused(&mut self) {
+        self.refused = true;
+    }
+
     fn journal(&mut self, journal: &Journal) -> std::result::Result<(), CloudError> {
         let saved = journal.save(self.store.root());
         self.keep(saved)

@@ -8,6 +8,7 @@ mod runpod;
 
 use super::{
     Cancellation, CreateState, Event, Result,
+    mutation::Observer,
     settings::Settings,
     state::{Deployment, Store},
 };
@@ -25,10 +26,13 @@ pub(super) trait Lifecycle {
         worker_hint: Option<&str>,
         cancel: &Cancellation,
     ) -> Result<(Reconciliation, CreateState)>;
-    /// Stops the cloud's worker as the provider stops it (`provider::StoppedCost`).
-    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()>;
-    /// Resumes a stopped cloud; the reconnect that follows finishes it.
-    fn resume(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()>;
+    /// Stops the cloud's worker as the provider stops it (`provider::StoppedCost`),
+    /// telling `observe` just before each provider mutation and once it is settled.
+    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, observe: Observer<'_>) -> Result<()>;
+    /// Resumes a stopped cloud; the reconnect that follows finishes it. `observe` is
+    /// told as for [`Lifecycle::stop`].
+    fn resume(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, observe: Observer<'_>)
+    -> Result<()>;
     /// Releases the worker's hosted devices and removes their credentials from it.
     fn release_devices(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()>;
     /// Deletes everything the cloud created on the provider, each proven absent, and

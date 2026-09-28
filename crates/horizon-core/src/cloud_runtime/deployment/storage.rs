@@ -1,5 +1,6 @@
 //! Storage journal shares the deployment lock but retains its own allocation fence.
 use super::{Deployment, Error, Event, Result, Store};
+use crate::cloud_runtime::mutation::{self, State as Mutation};
 use horizon_cloud::{
     Cancellation, CreateState, WorkerSpec,
     runpod::{
@@ -45,6 +46,7 @@ pub(super) fn prepare(
     deployment: &Deployment,
     worker: &WorkerSpec,
     cancel: &Cancellation,
+    observe: mutation::Observer<'_>,
 ) -> Result<Option<Volume>> {
     let mut record = match load(store, worker)? {
         Some(record) => record,
@@ -61,11 +63,29 @@ pub(super) fn prepare(
         }
     };
     let mut operation = record.state.clone();
+    let mut failure = None;
     let volume = provider.ensure_volume(&record.spec.clone(), &mut operation, cancel, |next| {
         record.state = next.clone();
-        save(store, &record).map_err(|_| horizon_cloud::CloudError::Persistence)
-    })?;
-    Ok(Some(volume))
+        save(store, &record).map_err(|_| horizon_cloud::CloudError::Persistence)?;
+        if matches!(next, State::Requested) {
+            observe(Mutation::Pending).map_err(|error| {
+                failure = Some(error);
+                horizon_cloud::CloudError::Persistence
+            })?;
+        }
+        Ok(())
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(Some(volume?))
+}
+
+pub(super) fn observe_pending(store: &Store, worker: &WorkerSpec, observe: mutation::Observer<'_>) -> Result<()> {
+    if load(store, worker)?.is_some_and(|record| matches!(record.state, State::Requested)) {
+        observe(Mutation::Pending)?;
+    }
+    Ok(())
 }
 
 pub(super) fn expected(store: &Store, worker: &WorkerSpec) -> Result<Option<Volume>> {

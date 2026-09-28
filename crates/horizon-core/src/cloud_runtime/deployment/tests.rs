@@ -71,8 +71,13 @@ fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
         store.load().unwrap().unwrap().registry_generation.as_deref(),
         Some("generation2")
     );
-    request.settings.registries = None;
     state.operation = CreateState::Requested;
+    assert!(
+        prepare_registry(&request, &store, &mut state).unwrap().is_none(),
+        "an existing registry cannot settle a requested worker"
+    );
+    assert_requested_worker_stays_pending_without_storage(&store, &mut state);
+    request.settings.registries = None;
     assert!(
         prepare_registry(&request, &store, &mut state).unwrap().is_none(),
         "reconciliation must not require a removed local grant"
@@ -82,6 +87,64 @@ fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
     assert!(
         prepare_registry(&request, &store, &mut state).unwrap().is_none(),
         "legacy unbound images retain their behavior"
+    );
+}
+
+fn assert_requested_worker_stays_pending_without_storage(store: &Store, state: &mut Deployment) {
+    let mut spec = state.spec.clone().unwrap();
+    spec.public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f".into();
+    spec.cpu_flavors = vec!["cpu3c".into()];
+    spec.validate().unwrap();
+    let provider = RunPod::new(horizon_cloud::Credential::new("synthetic".into()).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let observe = |phase| {
+        let previous = seen.borrow().last().copied().unwrap_or(Mutation::Settled);
+        seen.borrow_mut().push(phase);
+        Ok(previous)
+    };
+    assert!(
+        provision(
+            &provider,
+            store,
+            state,
+            &spec,
+            &Cancellation::default(),
+            &|_| {},
+            &observe
+        )
+        .is_err()
+    );
+    assert_eq!(
+        *seen.borrow(),
+        [Mutation::Pending],
+        "missing storage cannot clear worker uncertainty"
+    );
+    assert_registry_retry_keeps_storage_pending(store, state, spec);
+}
+
+fn assert_registry_retry_keeps_storage_pending(store: &Store, state: &Deployment, mut spec: WorkerSpec) {
+    let mut state = state.clone();
+    spec.registry_auth_id = Some("pull1".into());
+    state.operation = CreateState::Prepared;
+    state.spec = Some(spec.clone());
+    store.save(&state).unwrap();
+    std::fs::write(store.root().join("workspace-volume.json"), serde_json::to_vec(&serde_json::json!({
+        "version":1,"worker":spec,"spec":{"operation_id":spec.operation_id,"size":spec.profile.storage.volume_gb,"data_center_id":"dc1"},
+        "state":{"state":"requested"}
+    })).unwrap()).unwrap();
+    let seen = std::cell::RefCell::new(vec![Mutation::Pending]);
+    let observe = |phase| {
+        let previous = *seen.borrow().last().unwrap();
+        seen.borrow_mut().push(phase);
+        Ok(previous)
+    };
+    bind_registry(store, &mut state, || Ok("pull1".into())).unwrap();
+    storage::observe_pending(store, &spec, &observe).unwrap();
+    assert!(matches!(storage::expected(store, &spec), Err(Error::Invalid(_))));
+    assert_eq!(
+        *seen.borrow(),
+        [Mutation::Pending, Mutation::Pending],
+        "registry reconciliation must not settle the earlier volume allocation"
     );
 }
 
@@ -395,4 +458,84 @@ fn a_reconnect_arms_resume_for_every_recorded_session() {
     empty.session_restart = None;
     empty.sessions.clear();
     assert!(!arm_recorded_session_resume(&mut empty));
+}
+
+#[test]
+fn local_preparation_and_unsent_replacements_preserve_mutation_evidence() {
+    for failure in ["source", "auth", "prepared", "built"] {
+        let root = tempfile::tempdir().unwrap();
+        let key = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        std::fs::write(key.path(), "synthetic-key").unwrap();
+        let store = Store::lock(&root.path().join("cloud")).unwrap();
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"local-failure","repository":root.path(),"revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,"capabilities":{"agents":["codex"]}},
+            "stage":"Readiness","operation":{"state":"bound","worker_id":"worker1"},"spec":null,"worker":null,"sessions":[]
+        })).unwrap();
+        if matches!(failure, "prepared" | "built") {
+            state.stage = Stage::Ready;
+            state.spec = Some(WorkerSpec {
+                operation_id: state.cloud_id.clone(),
+                image_digest: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+                profile: state.profile.clone(),
+                public_key: "fixture".into(),
+                registry_auth_id: None,
+                gpu_types: vec![],
+                cpu_flavors: vec!["cpu3c".into()],
+                data_centers: vec![],
+                startup_metadata: None,
+            });
+            state
+                .begin_replacement(OperationId::generate(), "c".repeat(40))
+                .unwrap();
+            if failure == "built" {
+                state
+                    .replacement_built(crate::cloud_runtime::state::ReplacementImage {
+                        digest: format!("registry.example/worker@sha256:{}", "b".repeat(64)),
+                        registry_auth_id: None,
+                        registry_generation: None,
+                    })
+                    .unwrap();
+            }
+        }
+        store.save(&state).unwrap();
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":key.path(),"ssh_identity_file":key.path(),"docker_config":"/missing",
+            "cpu_flavors":[],"gpu_types":[],"openai_api_key_file":(failure == "auth").then(|| root.path().join("missing-auth"))
+        }))
+        .unwrap();
+        let request = Request::new(
+            state.cloud_id,
+            state.repository,
+            state.revision,
+            state.profile,
+            store.root().into(),
+            settings,
+        );
+        let seen = std::cell::RefCell::new(Vec::new());
+        let observe = |phase| {
+            let previous = seen.borrow().last().copied().unwrap_or(Mutation::Settled);
+            seen.borrow_mut().push(phase);
+            Ok(previous)
+        };
+        let error = deploy_locked(
+            &request,
+            &[],
+            &store,
+            |_, _| Ok(()),
+            &Cancellation::default(),
+            &|_| {},
+            &observe,
+        )
+        .unwrap_err();
+        if failure == "auth" {
+            assert!(matches!(error, Error::Io(_)));
+        } else {
+            assert!(matches!(error, Error::Command(_)));
+        }
+        assert!(
+            seen.borrow().is_empty(),
+            "preparation cannot clear prior evidence or invent a mutation"
+        );
+    }
 }

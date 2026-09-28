@@ -1,5 +1,7 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod agent_credentials;
+mod compute;
+pub(in crate::cloud_runtime) use compute::Compute;
 pub(in crate::cloud_runtime) mod deletion;
 mod git_credentials;
 pub(super) mod hetzner;
@@ -27,6 +29,7 @@ pub use storage::{ResizeTarget, pending_resize};
 use super::{
     Error, Event, Result, Stage, WorkerContract,
     command::Runner,
+    mutation::{self, State as Mutation},
     repository,
     settings::Settings,
     siblings,
@@ -106,6 +109,38 @@ fn run(
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> Result<Deployment> {
+    deploy_with(request, bindings, None, admit, cancel, emit, mutation::IGNORE)
+}
+
+/// As [`deploy_with_siblings`] under the held `store`, telling `observe` before each
+/// provider mutation and once the provider's work is settled.
+#[cfg_attr(
+    not(all(test, unix)),
+    allow(dead_code, reason = "the companion lifecycle service calls it under its own lock")
+)]
+pub(in crate::cloud_runtime) fn deploy_locked(
+    request: &Request,
+    bindings: &[siblings::Binding],
+    store: &Store,
+    admit: fn(&Store, &Deployment) -> Result<()>,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+    observe: mutation::Observer<'_>,
+) -> Result<Deployment> {
+    deploy_with(request, bindings, Some(store), admit, cancel, emit, observe)
+}
+
+/// Deploys under `held`, or under the deployment lock taken once the request passes
+/// its checks, so a refused request never contends for the lock.
+fn deploy_with(
+    request: &Request,
+    bindings: &[siblings::Binding],
+    held: Option<&Store>,
+    admit: fn(&Store, &Deployment) -> Result<()>,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+    observe: mutation::Observer<'_>,
+) -> Result<Deployment> {
     let started = Instant::now();
     let timeline = super::timeline::Recorder::default();
     let recorded = |event: Event| {
@@ -114,26 +149,33 @@ fn run(
     };
     let emit: &dyn Fn(Event) = &recorded;
     emit(Event::stage(Stage::Validate));
-    if !horizon_cloud::valid_id(&request.cloud_id) {
-        return Err(Error::Invalid("Invalid cloud identity"));
-    }
-    super::providers::preflight(&request.cloud_id, &request.profile, &request.settings)?;
-    let store = Store::lock(&request.state_root)?;
+    connection_preflight(
+        &request.cloud_id,
+        &request.revision,
+        &request.profile,
+        &request.settings,
+    )?;
+    let taken;
+    let store = if let Some(store) = held {
+        store
+    } else {
+        taken = Store::lock(&request.state_root)?;
+        &taken
+    };
     let provider = super::providers::compute(request)?;
-    super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
-    let mut state = initial_state(request, &store)?;
-    admit(&store, &state)?;
+    let mut state = initial_state(request, store)?;
+    admit(store, &state)?;
     let reconnected = super::timeline::reconnects(&state);
     if state.stage == Stage::Deleted {
         let public_key = current_public_key(&request.settings.ssh_identity_file)?;
-        redeploy::reopen(&store, &mut state, &public_key)?;
+        redeploy::reopen(store, &mut state, &public_key)?;
     }
     if assign_requested_size(request, &mut state)? {
         store.save(&state)?;
     }
-    provider.settle(&store, &mut state, cancel)?;
+    provider.settle(store, &mut state, cancel, observe)?;
     let started = attempt_started(&state, started);
-    let mut registry = prepare_registry(request, &store, &mut state)?;
+    let mut registry = prepare_registry(request, store, &mut state)?;
     let runner = Runner {
         cancel,
         emit,
@@ -158,13 +200,15 @@ fn run(
     // Only after binding: the first deploy of a cloud with siblings sends their grants too.
     let git_auth = siblings::git_grants(&request.settings.git_credentials, &state)?;
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
-    refresh_allocation(request, &store, &mut state)?;
+    refresh_allocation(request, store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;
     let mut packed = source::pack(&state, pack_root.path(), &runner)?;
     if state.spec.is_none() {
-        prepare_image(request, &store, &runner, &mut state, registry.as_ref())?;
+        prepare_image(request, store, &runner, &mut state, registry.as_ref())?;
     }
-    verify_registry(provider.as_ref(), &store, &mut state, registry.as_mut(), cancel)?;
+    if let Some(registry) = registry.as_mut() {
+        provider.verify_registry(store, &mut state, registry, cancel, observe)?;
+    }
     let spec = state
         .spec
         .clone()
@@ -182,9 +226,9 @@ fn run(
     emit(Event::Progress(super::progress::Progress::activity(
         "Requesting or reconciling worker capacity",
     )));
-    let (connection, contract) = provider.provision_ready(request, &store, &runner, &mut state, &spec)?;
-    source::transfer(&connection, &store, &mut state, packed, &contract, &runner, emit)?;
-    begin_sessions(&mut state, &store, emit)?;
+    let (connection, contract) = provider.provision_ready(request, store, &runner, &mut state, &spec, observe)?;
+    source::transfer(&connection, store, &mut state, packed, &contract, &runner, emit)?;
+    begin_sessions(&mut state, store, emit)?;
     configure_agent_auth(&connection, &request.settings, &state.profile.capabilities, &runner)?;
     configure_git_auth(git_auth, &connection, &runner)?;
     if let Some(browser_auth) = browser_auth {
@@ -198,9 +242,9 @@ fn run(
         store.save(&state)?;
     }
     let relaunch = |command: &str| runner.run("Session relaunch", &mut connection.command(command), RELAUNCH);
-    replacement::relaunch_sessions(&store, &mut state, &contract, emit, relaunch)?;
+    replacement::relaunch_sessions(store, &mut state, &contract, emit, relaunch)?;
     state.timeline = Some(timeline.complete(&state, reconnected, contract.container_started));
-    finish_ready(state, &store, started, emit)
+    finish_ready(state, store, started, emit)
 }
 
 fn prepare_registry(
@@ -236,95 +280,33 @@ fn prepare_registry(
     )
 }
 
-/// What a provider does to deploy a cloud's worker; `providers::compute` picks it
-/// from the cloud's provider description.
-pub(in crate::cloud_runtime) trait Compute {
-    /// Settles what an earlier attempt left with the provider, before this one.
-    /// # Errors
-    /// Reports provider and persistence failures.
-    fn settle(&self, _store: &Store, _state: &mut Deployment, _cancel: &Cancellation) -> Result<()> {
-        Ok(())
-    }
-    /// The registry auth the provider pulls the image with, when it stores one; a
-    /// provider whose host logs in to the registry itself stores none.
-    /// # Errors
-    /// Reports provider failures.
-    fn registry_auth(
-        &self,
-        _registry: &mut super::registry::Prepared,
-        _cancel: &Cancellation,
-    ) -> Result<Option<String>> {
-        Ok(None)
-    }
-    /// Provisions the worker, or reconnects to the one it has, and waits until it is ready.
-    /// # Errors
-    /// Reports provider, persistence and readiness failures.
-    fn provision_ready(
-        &self,
-        request: &Request,
-        store: &Store,
-        runner: &Runner<'_>,
-        state: &mut Deployment,
-        spec: &WorkerSpec,
-    ) -> Result<(Connection, WorkerContract)>;
-}
-
-impl Compute for RunPod {
-    fn settle(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
-        replacement::settle(self, store, state, cancel)
-    }
-
-    fn registry_auth(&self, registry: &mut super::registry::Prepared, cancel: &Cancellation) -> Result<Option<String>> {
-        Ok(Some(registry.ensure_provider(self, cancel)?))
-    }
-
-    fn provision_ready(
-        &self,
-        request: &Request,
-        store: &Store,
-        runner: &Runner<'_>,
-        state: &mut Deployment,
-        spec: &WorkerSpec,
-    ) -> Result<(Connection, WorkerContract)> {
-        provision(self, store, state, spec, runner.cancel, runner.emit)?;
-        readiness::wait(request, self, store, runner, state, spec)
-    }
-}
-
-impl Compute for hetzner::Compute {
-    fn provision_ready(
-        &self,
-        request: &Request,
-        store: &Store,
-        runner: &Runner<'_>,
-        state: &mut Deployment,
-        spec: &WorkerSpec,
-    ) -> Result<(Connection, WorkerContract)> {
-        hetzner::provision(self, store, state, spec, runner.cancel, runner.emit)?;
-        hetzner::wait(request, self, store, runner, state, spec)
-    }
-}
-
-fn verify_registry(
-    provider: &dyn Compute,
-    store: &Store,
-    state: &mut Deployment,
-    registry: Option<&mut super::registry::Prepared>,
-    cancel: &Cancellation,
+pub(in crate::cloud_runtime) fn connection_preflight(
+    cloud_id: &str,
+    revision: &str,
+    profile: &horizon_cloud::Profile,
+    settings: &Settings,
 ) -> Result<()> {
-    if let Some(registry) = registry {
-        let spec = state
-            .spec
-            .as_mut()
-            .ok_or(Error::Invalid("Deployment has no image to validate"))?;
-        registry.verify_image(&spec.image_digest, cancel)?;
-        // A provider whose host logs in with its own pull credential stores none.
-        if let Some(auth) = provider.registry_auth(registry, cancel)? {
-            spec.registry_auth_id = Some(auth);
-        }
-        store.save(state)?;
+    if !horizon_cloud::valid_id(cloud_id) {
+        return Err(Error::Invalid("Invalid cloud identity"));
     }
-    Ok(())
+    if !repository::is_commit_id(revision) {
+        return Err(Error::Invalid(
+            "Resolve a committed revision before preparing deployment",
+        ));
+    }
+    super::providers::preflight(cloud_id, profile, settings)?;
+    super::settings::validate_ssh_identity(&settings.ssh_identity_file)
+}
+
+fn bind_registry(store: &Store, state: &mut Deployment, ensure: impl FnOnce() -> Result<String>) -> Result<()> {
+    let spec = state
+        .spec
+        .as_mut()
+        .ok_or(Error::Invalid("Deployment has no worker specification"))?;
+    spec.registry_auth_id = Some(ensure()?);
+    // Credentials, storage and worker creation are one composite operation. A
+    // registry retry cannot settle an earlier uncertain volume allocation.
+    store.save(state)
 }
 
 fn provision(
@@ -334,9 +316,20 @@ fn provision(
     spec: &WorkerSpec,
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
+    observe: mutation::Observer<'_>,
 ) -> Result<()> {
+    if state.operation == CreateState::Requested {
+        observe(Mutation::Pending)?;
+    }
+    storage::observe_pending(store, spec, observe)?;
+    spec.validate()?;
+    if state.operation != CreateState::Prepared {
+        // Existing workers cannot allocate replacement storage while reconnecting.
+        storage::expected(store, spec)?;
+    }
     let mut operation = state.operation.clone();
-    let volume = storage::prepare(provider, store, state, spec, cancel)?;
+    let volume = storage::prepare(provider, store, state, spec, cancel, observe)?;
+    let mut failure = None;
     let worker = provider.ensure_with_volume(
         spec,
         &mut operation,
@@ -344,11 +337,23 @@ fn provision(
         cancel,
         |next| {
             state.operation = next.clone();
-            store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)
+            store.save(state).map_err(|_| horizon_cloud::CloudError::Persistence)?;
+            if *next == CreateState::Requested {
+                observe(Mutation::Pending).map_err(|error| {
+                    failure = Some(error);
+                    horizon_cloud::CloudError::Persistence
+                })?;
+            }
+            Ok(())
         },
         |progress| emit(Event::Output(format!("{progress:?}"))),
-    )?;
-    state.worker = Some(worker);
+    );
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    state.worker = Some(worker?);
+    store.save(state)?;
+    observe(Mutation::Settled)?;
     Ok(())
 }
 

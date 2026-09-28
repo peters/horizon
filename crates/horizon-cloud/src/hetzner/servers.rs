@@ -262,7 +262,7 @@ impl Hetzner {
     /// # Errors
     /// Refuses other operations' servers and reports provider failures.
     pub fn power_on(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
-        self.act(operation_id, id, "poweron", cancel)
+        self.act(operation_id, id, "poweron", cancel, &mut |_| Ok(()))
     }
 
     /// Asks the operating system to shut down. The provider confirms only that it
@@ -271,14 +271,37 @@ impl Hetzner {
     /// # Errors
     /// As `power_on`.
     pub fn shutdown(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
-        self.act(operation_id, id, "shutdown", cancel)
+        self.act(operation_id, id, "shutdown", cancel, &mut |_| Ok(()))
+    }
+
+    /// As [`Self::shutdown`], calling `announce` after the identity check and
+    /// immediately before the request.
+    pub(super) fn shutdown_announced(
+        &self,
+        operation_id: &str,
+        id: u64,
+        cancel: &Cancellation,
+        announce: &mut dyn FnMut(Announcement) -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
+        self.act(operation_id, id, "shutdown", cancel, announce)
     }
 
     /// Cuts power immediately, like pulling the plug; unsynced writes can be lost.
     /// # Errors
     /// As `power_on`.
     pub fn power_off(&self, operation_id: &str, id: u64, cancel: &Cancellation) -> Result<(), CloudError> {
-        self.act(operation_id, id, "poweroff", cancel)
+        self.act(operation_id, id, "poweroff", cancel, &mut |_| Ok(()))
+    }
+
+    /// As [`Self::power_off`], calling `announce` immediately before the request.
+    pub(super) fn power_off_announced(
+        &self,
+        operation_id: &str,
+        id: u64,
+        cancel: &Cancellation,
+        announce: &mut dyn FnMut(Announcement) -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
+        self.act(operation_id, id, "poweroff", cancel, announce)
     }
 
     /// Deletes only the server recorded for this operation and proves it is gone.
@@ -290,8 +313,23 @@ impl Hetzner {
         operation_id: &str,
         state: &mut CreateState,
         cancel: &Cancellation,
+        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        progress: impl FnMut(Progress),
+    ) -> Result<(), CloudError> {
+        self.delete_server_announced(operation_id, state, cancel, persist, progress, &mut |_| Ok(()))
+    }
+
+    /// As [`Self::delete_server`], calling `announce` after the identity check and
+    /// immediately before the delete request; nothing is announced for a server
+    /// already gone.
+    pub(super) fn delete_server_announced(
+        &self,
+        operation_id: &str,
+        state: &mut CreateState,
+        cancel: &Cancellation,
         mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
         mut progress: impl FnMut(Progress),
+        announce: &mut dyn FnMut(Announcement) -> Result<(), CloudError>,
     ) -> Result<(), CloudError> {
         let recorded = match state {
             CreateState::Bound { worker_id } | CreateState::Terminated { worker_id } => worker_id.clone(),
@@ -302,13 +340,14 @@ impl Hetzner {
         if let Some(server) = self.inspect_server(id, cancel)? {
             server.verify(operation_id)?;
             progress(Progress::Terminating);
+            announce(Announcement::Before)?;
             match self.send(Method::Delete, &format!("/servers/{id}"), None, cancel) {
                 Ok(value) => {
                     let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
                     self.wait_until(&acted.action, cancel, || Ok(self.inspect_server(id, cancel)?.is_none()))?;
                 }
                 Err(failure) if failure.not_found() => {}
-                Err(failure) => return Err(failure.into()),
+                Err(failure) => return Err(refused(failure.into(), announce)),
             }
             progress(Progress::ConfirmingTermination);
             if self.inspect_server(id, cancel)?.is_some() {
@@ -321,11 +360,21 @@ impl Hetzner {
         Ok(())
     }
 
-    fn act(&self, operation_id: &str, id: u64, action: &str, cancel: &Cancellation) -> Result<(), CloudError> {
+    fn act(
+        &self,
+        operation_id: &str,
+        id: u64,
+        action: &str,
+        cancel: &Cancellation,
+        announce: &mut dyn FnMut(Announcement) -> Result<(), CloudError>,
+    ) -> Result<(), CloudError> {
         self.inspect_server(id, cancel)?
             .ok_or(CloudError::WorkerLost)?
             .verify(operation_id)?;
-        let value = self.send(Method::Post, &format!("/servers/{id}/actions/{action}"), None, cancel)?;
+        announce(Announcement::Before)?;
+        let value = self
+            .send(Method::Post, &format!("/servers/{id}/actions/{action}"), None, cancel)
+            .map_err(|failure| refused(failure.into(), announce))?;
         let acted: Acted = serde_json::from_value(value).map_err(|_| CloudError::InvalidResponse)?;
         self.wait(&acted.action, cancel)
     }
@@ -484,4 +533,26 @@ fn bind(
     persist(&next)?;
     *state = next;
     Ok(())
+}
+
+/// What an announced request tells its caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Announcement {
+    /// The request is about to be sent.
+    Before,
+    /// The request itself was refused outright, so it changed nothing. Failures
+    /// while its action is awaited afterwards are never reported this way.
+    Refused,
+}
+
+/// Reports a definite refusal of the request itself before returning `error`.
+fn refused(error: CloudError, announce: &mut dyn FnMut(Announcement) -> Result<(), CloudError>) -> CloudError {
+    if matches!(
+        error,
+        CloudError::Unauthorized | CloudError::Rejected(_) | CloudError::Cancelled
+    ) && let Err(failed) = announce(Announcement::Refused)
+    {
+        return failed;
+    }
+    error
 }

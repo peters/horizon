@@ -115,3 +115,34 @@ fn a_labelled_network_with_other_address_ranges_is_refused_rather_than_joined() 
     }
     task.join().unwrap();
 }
+
+#[test]
+fn only_a_network_create_is_announced_and_a_refused_announcement_sends_nothing() {
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("networks", json!([network("eu-central", "eu-central")]))),
+        (200, listing("networks", json!([]))),
+        (201, json!({ "network": network("eu-central", "eu-central") })),
+        (200, listing("networks", json!([]))),
+    ]);
+    let cancel = Cancellation::default();
+    let announced = std::cell::Cell::new(0);
+    let announce = || {
+        announced.set(announced.get() + 1);
+        Ok(())
+    };
+    // Found by its label: nothing is created, so nothing is announced.
+    hetzner
+        .ensure_network_observed("eu-central", &cancel, announce)
+        .unwrap();
+    assert_eq!(announced.get(), 0);
+    hetzner
+        .ensure_network_observed("eu-central", &cancel, announce)
+        .unwrap();
+    assert_eq!(announced.get(), 1);
+    let refused = hetzner.ensure_network_observed("eu-central", &cancel, || Err(CloudError::Persistence));
+    assert!(matches!(refused, Err(CloudError::Persistence)));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4, "no create after a refused announcement");
+    assert!(requests[2].starts_with("POST /networks "));
+}

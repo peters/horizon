@@ -2,7 +2,7 @@
 //! with the cloud's records beside the deployment.
 use super::{
     super::{Error, deployment::hetzner as deployment},
-    Cancellation, CreateState, Deployment, Event, Lifecycle, Result, Settings, Store,
+    Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Settings, Store,
 };
 use horizon_cloud::runpod::recovery::Reconciliation;
 
@@ -44,15 +44,26 @@ impl Lifecycle for Hetzner<'_> {
         Ok((report, state.operation.clone()))
     }
 
-    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
-        deployment::lifecycle::stop(store, state, self.settings, cancel)
+    fn stop(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation, observe: Observer<'_>) -> Result<()> {
+        deployment::lifecycle::stop_observed(store, state, self.settings, cancel, observe)
     }
 
-    fn resume(&self, store: &Store, state: &mut Deployment, cancel: &Cancellation) -> Result<()> {
+    /// Resuming only clears the released server's fence, so there is no provider
+    /// mutation to observe; the reconnect that follows creates the server.
+    fn resume(
+        &self,
+        store: &Store,
+        state: &mut Deployment,
+        cancel: &Cancellation,
+        observe: Observer<'_>,
+    ) -> Result<()> {
         // No provider call follows here, so a cancelled Resume must stop before the
         // fence is cleared: the reconnect it leads to creates a billed server.
         cancel.check()?;
-        deployment::lifecycle::resume(store, state)
+        deployment::lifecycle::resume(store, state)?;
+        // The released server is proven gone and the resumed records are saved, so
+        // an earlier pending stop is settled.
+        observe(super::super::mutation::State::Settled).map(drop)
     }
 
     /// Hetzner profiles cannot request hosted devices, so a Hetzner cloud has none to

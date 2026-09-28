@@ -670,6 +670,21 @@ from GPU host CPU and memory minimums before either interface requests a worker.
 catalog. Creation's `watch` leaf owns only the dialog's explicit, transient opt-in;
 it submits the ordinary launch once and drops the watch on cancellation or change.
 
+The internal `mutation` observer lets durable controllers distinguish local or
+read-only preparation from potentially pending provider changes. Deployment and
+power actions report a fallible boundary before mutations and settlement only
+after provider confirmation and required state persistence. Existing public
+entry points use a no-op observer. Composite provisioning errors remain pending;
+callers must not infer settlement from the final error alone.
+The mutation observer atomically returns the previous durable evidence after saving
+its replacement. A rejected power retry cannot clear a previous pending outcome.
+Registry credentials, storage and worker allocation settle as one composite after
+the worker is saved; an intervening local failure conservatively remains pending.
+Provisioning callbacks follow durable Requested transitions, or the final read-only
+checks for key creation and empty-volume deletion. Validation and catalog reads
+before those boundaries do not invent pending mutations. Cancellation or local
+serialization after a boundary remains conservative.
+
 `horizon-cloud-worker` hosts the existing browser runtime and public MCP queues
 inside one container. The device CLI owns serialized native input and attribution.
 SSH carries presentation; agent tools and tmux remain on the worker. Image build
