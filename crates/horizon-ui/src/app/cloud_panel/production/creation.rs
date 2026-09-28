@@ -18,6 +18,7 @@ mod pricing;
 mod profiles;
 pub(super) mod provider;
 pub(super) mod siblings;
+mod storage;
 mod watch;
 
 #[derive(Default)]
@@ -330,10 +331,10 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
         ui.small(&form.repository);
-        let Some(config) = &form.profiles else {
+        let Some(config) = &mut form.profiles else {
             return RepositoryAction::None;
         };
-        if let Some(profile) = config.profiles.get(&form.selected_profile) {
+        if let Some(profile) = config.profiles.get_mut(&form.selected_profile) {
             // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
             if !profile.gpu {
                 form.placement.gpu_types.clear();
@@ -365,6 +366,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 form.placement = Placement::default();
                 form.size = None;
             }
+            storage::field(ui, profile, provider);
             // Providers that price flavors offer their flavor sizes with prices; others
             // offer the sizes of their configured server types.
             let size = if provider.pricing == Pricing::Flavors {

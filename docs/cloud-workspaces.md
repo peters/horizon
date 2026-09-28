@@ -253,6 +253,12 @@ computer online until image/source upload and readiness complete. Expand verbose
 output for build and push progress. Failures retain a retryable card and the
 persisted operation identity.
 
+New cloud's **Storage** fields edit workspace and container-disk sizes for this
+launch without changing the repository profile. CPU profiles offer Standard or
+High-performance network storage. GPU profiles use a pod volume; Hetzner profiles
+use persistent block storage and show the minimum system-disk requirement. Prices,
+stock checks and launch use the edited values.
+
 While you choose a size, New cloud shows RunPod's current prices and stock: each
 vCPU and memory choice carries its hourly price, and a price card shows the
 chosen size's price, whether it is in stock in the allowed data centers, 8 and 24
@@ -313,9 +319,9 @@ When the allowed data centers span more than one region, New cloud also shows a
 with stock) and each region with how many of its data centers have the chosen
 size, or one of the GPU types the cloud requests (a type chosen for it, or else
 the preferred ones), in stock. A region known to be sold
-out stays visible but cannot be chosen. CPU clouds only count data centers with
-standard network volumes, since their workspace lives on one. **Advanced** lists
-the individual data centers with stock for choosing exactly one. The machine's
+out stays visible and selectable as a wish. CPU stock checks require network
+storage of the selected tier. **Advanced** lists individual data centers,
+including sold-out locations, for choosing exactly one. The machine's
 `data_centers` setting still limits what is offered.
 
 The choice is saved with the cloud: every attempt, retry and redeploy asks the

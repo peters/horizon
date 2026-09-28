@@ -354,9 +354,17 @@ fn gpu_dialog(preferred: &[&str]) -> (tempfile::TempDir, egui::Context, HorizonA
 
 /// A tall window keeps the price card inside the dialog's scroll area.
 fn tall_frame(ctx: &egui::Context, app: &mut HorizonApp) -> egui::FullOutput {
-    let input = raw_input([1000.0, 1600.0], None);
-    ctx.run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
-        .discard_textures()
+    for _ in 0..3 {
+        let _ = ctx
+            .run_ui(raw_input([1000.0, 2400.0], None), |ui| {
+                app.render_cloud_creation(ui.ctx());
+            })
+            .discard_textures();
+    }
+    ctx.run_ui(raw_input([1000.0, 2400.0], None), |ui| {
+        app.render_cloud_creation(ui.ctx());
+    })
+    .discard_textures()
 }
 
 #[test]
@@ -547,4 +555,83 @@ fn finish_creation(ctx: &egui::Context, app: &mut HorizonApp) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
+}
+
+#[test]
+fn disk_edits_preserve_gpu_placement_and_survive_launch_capture() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .gpu = true;
+    let selected = horizon_core::cloud_panel::Placement {
+        region: Some("Chosen region".into()),
+        data_centers: vec!["chosen-dc".into()],
+        gpu_types: vec!["chosen-gpu".into()],
+    };
+    app.cloud_prototype.production.placement = selected.clone();
+    let mut render = |events: Vec<Event>| {
+        let mut input = raw_input([1200.0, 1200.0], None);
+        input.events = events;
+        ctx.run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
+            .discard_textures()
+    };
+    let mut output = render(Vec::new());
+    for _ in 0..3 {
+        output = render(Vec::new());
+    }
+    let at = label_rect(&output, "20").center();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            render(vec![
+                Event::PointerMoved(at),
+                Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+        }
+    }
+    render(vec![Event::Key {
+        key: Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    render(vec![Event::Text("160".into())]);
+    render(vec![Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    assert_eq!(
+        app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["development"]
+            .storage
+            .volume_gb,
+        160
+    );
+    assert_eq!(app.cloud_prototype.production.placement, selected);
+    app.cloud_prototype.production.prices.refresh();
+    app.create_production_cloud(&ctx).unwrap();
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.storage.volume_gb, 160);
+    assert_eq!(launch.placement, selected);
+    let encoded = serde_json::to_vec(launch).unwrap();
+    let restored: horizon_core::cloud_panel::CloudLaunch = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(restored.profile.storage, launch.profile.storage);
+    assert_eq!(restored.placement, selected);
 }

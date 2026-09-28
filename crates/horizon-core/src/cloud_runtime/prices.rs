@@ -4,12 +4,14 @@ use super::{Cancellation, Result, settings::Settings};
 pub use horizon_cloud::hetzner::catalog::Catalog as HetznerCatalog;
 pub use horizon_cloud::runpod::prices::STORAGE as RUNPOD_STORAGE;
 pub use horizon_cloud::{
-    Profile,
+    Profile, Storage,
     prices::{
         Availability, CpuFlavorPrice, DataCenter, GpuPrice, Preferences, PriceList, SizeAvailability, StoragePrices,
     },
 };
 use horizon_cloud::{hetzner::Hetzner, runpod::RunPod};
+
+pub use horizon_cloud::runpod::volumes::Tier as StorageTier;
 
 pub mod watch;
 

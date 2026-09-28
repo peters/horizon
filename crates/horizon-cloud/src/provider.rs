@@ -106,7 +106,7 @@ pub const RUNPOD: Description = Description {
     placement: Placement::DataCenters,
     pricing: Pricing::Flavors,
     stopped: StoppedCost::WorkerKept,
-    choices: &[Choice::GpuType, Choice::Region],
+    choices: &[Choice::GpuType, Choice::Region, Choice::VolumeTiers],
     creatable: true,
     idle_stop: IdleStop::Worker,
     registry_auth: true,
@@ -223,13 +223,11 @@ mod tests {
         );
         assert_eq!(HETZNER.creatable, crate::offers::HETZNER_DEPLOYABLE);
         // Choices that are one provider's own concepts never apply to the other.
-        for choice in [Choice::GpuType, Choice::Region] {
+        for choice in [Choice::GpuType, Choice::Region, Choice::VolumeTiers] {
             assert!(RUNPOD.offers(choice) && !HETZNER.offers(choice), "{choice:?}");
         }
         // Choices the code cannot honor yet are offered by no provider.
-        for choice in [Choice::CommunityHosts, Choice::VolumeTiers] {
-            assert!(ALL.iter().all(|provider| !provider.offers(choice)), "{choice:?}");
-        }
+        assert!(ALL.iter().all(|provider| !provider.offers(Choice::CommunityHosts)));
         assert!(HETZNER.offers(Choice::ServerTypeFallback) && !RUNPOD.offers(Choice::ServerTypeFallback));
     }
 

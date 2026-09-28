@@ -647,7 +647,10 @@ it checks the targeted cloud's current runtime before offering panel creation.
 UI modules render controls, consume progress and attach the
 ordinary panel types; worker/provider operations run outside the render thread.
 Creation's `profiles` leaf groups CPU and GPU profiles; `gpu_choice` presents
-available GPU types. Shared flavor validation distinguishes exact CPU sizes
+available GPU types. The `storage` leaf edits the dialog-local storage choices;
+price checks, stock watches and launch capture read the same selected profile,
+without changing the repository file or broadening its explicit placement.
+Shared flavor validation distinguishes exact CPU sizes
 from GPU host CPU and memory minimums before either interface requests a worker.
 `cloud_runtime/prices/watch` validates a fixed size/location against a current
 catalog. Creation's `watch` leaf owns only the dialog's explicit, transient opt-in;
