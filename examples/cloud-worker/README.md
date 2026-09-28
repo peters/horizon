@@ -153,8 +153,9 @@ The publishing run's summary prints this line with the digest, and
 `docker buildx imagetools inspect ghcr.io/peters/horizon-worker-helpers:main`
 shows the newest one. Keep tags out of recipes, so a rebuild copies the same
 helpers. The copy replaces older helpers and scripts in the base. The base still
-supplies the rest of the contract: Python 3.12 or newer and glibc 2.36 or newer
-(Ubuntu 24.04 has both), SSH, tmux, Git with LFS, `gh`, util-linux,
+supplies the rest of the contract: Python 3.12 or newer, Bash 4.4 or newer at
+`/bin/bash` and glibc 2.36 or newer (Ubuntu 24.04 has all three), SSH, tmux, Git
+with LFS, `gh`, util-linux,
 `/etc/horizon-worker/capabilities.json`, the worker entrypoint (the example runs
 `horizon-worker-start` under tini) and the selected agents, browsers and desktop
 packages. Run `horizon-worker-check --git-auth` after the copy so a missing
@@ -722,7 +723,9 @@ The source-import contract requires Python's `hashlib.file_digest` and safe
 `tarfile.data_filter` extraction APIs. Python 3.12+ provides both; older
 distribution images must supply compatible APIs before use. The worker check
 rejects missing APIs during local image validation, before allocating compute.
-A pinned GPU base does not by itself satisfy this runtime contract.
+The shell helpers run as `#!/bin/bash` and need Bash 4.4 or newer, which the
+worker check also verifies. A pinned GPU base does not by itself satisfy this
+runtime contract.
 
 ### Experimental allocation bootstrap recovery
 

@@ -183,6 +183,12 @@ try:
         sys.exit(0)
     for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
         require(binary)
+    # The shell scripts run as #!/bin/bash and read NUL-separated lists with mapfile -d (Bash 4.4).
+    try:
+        probe(['/bin/bash', '-c', '(( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404 ))'])
+    except (OSError, subprocess.SubprocessError):
+        print('Worker contract requires Bash 4.4 or newer at /bin/bash', file=sys.stderr)
+        raise ValueError('Bash is missing or too old') from None
     probe(['git', 'lfs', 'version'])
     # A layer may record only the agent it installs, replacing the base image's record.
     # An agent the record omits is still probed, just without a pinned version.
