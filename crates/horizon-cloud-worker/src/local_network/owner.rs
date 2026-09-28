@@ -253,18 +253,24 @@ mod tests {
             })
             .unwrap()
         );
-        // The line takes far longer to arrive than the gap between its chunks, and the owner
-        // stays heard throughout: `last` moves with every chunk, not only with whole lines.
-        for chunk in line.as_bytes().chunks(line.len() / 8 + 1) {
-            thread::sleep(Duration::from_millis(150));
+        // Every chunk of the unfinished line is heard on its own: `last` moves after each one,
+        // not only once the whole line has arrived, and the owner is never taken for silent.
+        let chunks: Vec<_> = line.as_bytes().chunks(line.len() / 8 + 1).collect();
+        let heard = || *owner.last.lock().unwrap_or_else(PoisonError::into_inner);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let before = heard();
+            // Instants taken later compare greater even on coarse clocks.
+            thread::sleep(Duration::from_millis(2));
             owner_side.write_all(chunk).unwrap();
-            thread::sleep(Duration::from_millis(20));
-            assert!(
-                owner.silent_for() < Duration::from_millis(100),
-                "{:?}",
-                owner.silent_for()
-            );
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while heard() <= before {
+                assert!(Instant::now() < deadline, "chunk {index} was not heard");
+                thread::sleep(Duration::from_millis(1));
+            }
             assert!(owner.alive());
+            if index + 1 < chunks.len() {
+                assert!(!asking.is_finished(), "answered before the line was complete");
+            }
         }
         assert_eq!(asking.join().unwrap().unwrap(), answer);
     }
