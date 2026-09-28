@@ -208,6 +208,7 @@ impl Runtime {
         self.desktop = None;
         self.progress.reset();
         self.rebuild = None;
+        self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
         self.cancel = Some(cancel.clone());

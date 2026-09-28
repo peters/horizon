@@ -37,6 +37,13 @@ impl Sharing {
         }
     }
 
+    /// Forgets earlier readiness, so only the readiness of the connection that follows counts.
+    pub(super) fn await_ready(&mut self) {
+        if let Self::Paused { ready_again } = self {
+            *ready_again = false;
+        }
+    }
+
     fn step(&self, connected: bool) -> Step {
         match self {
             Self::On(_) if !connected => Step::Pause,
@@ -123,7 +130,12 @@ impl Runtime {
     /// Pauses a running bridge whose cloud left Connected+Ready, which revokes it at once, and
     /// says whether a paused one should restart now.
     fn reconcile_sharing(&mut self) -> bool {
-        match self.sharing.step(self.connected_and_ready()) {
+        let connected = self.connected_and_ready();
+        if !connected {
+            // Readiness seen before this disconnect says nothing about the next connection.
+            self.sharing.await_ready();
+        }
+        match self.sharing.step(connected) {
             Step::Pause => {
                 self.sharing = Sharing::Paused { ready_again: false };
                 false
@@ -355,6 +367,27 @@ mod tests {
         assert!(runtime.reconcile_sharing());
         runtime.stage = Some(Stage::Stopped);
         assert!(!runtime.reconcile_sharing());
+    }
+
+    #[test]
+    fn readiness_before_a_disconnect_never_resumes_the_next_reconnect_early() {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Ready),
+            sharing: Sharing::Paused { ready_again: false },
+            ..Default::default()
+        };
+        // Ready arrives, then the presentation fails in the same frame: the receiver is gone.
+        runtime.sharing.ready_again();
+        assert!(!runtime.reconcile_sharing());
+        assert!(matches!(runtime.sharing, Sharing::Paused { ready_again: false }));
+        // A reconnect starts: a new receiver while the stage still says Ready.
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        runtime.sharing.await_ready();
+        assert!(!runtime.reconcile_sharing(), "resumed before the reconnect was ready");
+        // That reconnect's own Ready resumes sharing.
+        runtime.sharing.ready_again();
+        assert!(runtime.reconcile_sharing());
     }
 
     #[test]
