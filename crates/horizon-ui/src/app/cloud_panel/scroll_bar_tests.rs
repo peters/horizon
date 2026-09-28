@@ -149,6 +149,15 @@ fn demo_card_press_on_a_lower_control_reaches_it() {
                 .discard_textures();
         },
     );
+    // The bar takes its width from the card's content, not from beyond the card's reserved width,
+    // which the frame's 1 px stroke on each side already exceeds.
+    let card = ctx
+        .memory(|memory| memory.area_rect(layer.id))
+        .expect("the demo card is shown");
+    assert!(
+        card.width() < horizon_core::cloud_panel::RUNTIME_WIDTH + 3.0,
+        "the demo card grew to {card:?}"
+    );
 }
 
 #[test]

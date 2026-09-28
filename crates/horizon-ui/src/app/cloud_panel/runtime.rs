@@ -207,11 +207,14 @@ impl HorizonApp {
 
 /// A vertical scroll area whose solid bar always reserves its width. A floating bar reserves none,
 /// so it overlays the right end of full-width controls and takes presses aimed at them, which can
-/// then scroll the content. Always visible, the bar never animates in and rewraps the content.
-/// Scroll areas nested in `ui` inherit the solid bar.
+/// then scroll the content. Always visible, the bar never animates in and rewraps the content,
+/// and it keeps to the right edge beside narrow content. Scroll areas nested in `ui` inherit the
+/// solid bar.
 pub(super) fn solid_scroll_area(ui: &mut egui::Ui) -> egui::ScrollArea {
     ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-    egui::ScrollArea::vertical().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+    egui::ScrollArea::vertical()
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .auto_shrink([false, true])
 }
 
 /// Local card typography also applies to nested companion, progress and action rows.
@@ -363,7 +366,8 @@ fn runtime_options(
     });
     if ui
         .add(
-            action_button(if fullscreen { "Exit full screen" } else { "Full screen" }).min_size(Vec2::new(264.0, 30.0)),
+            action_button(if fullscreen { "Exit full screen" } else { "Full screen" })
+                .min_size(Vec2::new(ui.available_width(), 30.0)),
         )
         .on_hover_text("Show only this cloud; Escape returns to the overview")
         .clicked()
