@@ -9,7 +9,11 @@ pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
     let busy = entry.job.is_some() || entry.pending.is_some() || !entry.clearing.is_empty();
     if busy {
         ui.spinner();
-    } else if !entry.blocked && ui.small_button("Refresh").clicked() {
+    } else if !entry.blocked
+        && ui
+            .add(crate::app::cloud_panel::runtime::action_button("Refresh"))
+            .clicked()
+    {
         entry.queue(Action::Refresh);
     }
     if let Some(error) = &entry.error {

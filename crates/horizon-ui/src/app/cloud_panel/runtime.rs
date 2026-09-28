@@ -234,12 +234,7 @@ fn deployment_button(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeploymen
         "Deploy cloud"
     };
     if ui
-        .add_enabled(
-            !running,
-            egui::Button::new(label)
-                .min_size(Vec2::new(264.0, 34.0))
-                .fill(theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.20)),
-        )
+        .add_enabled(!running, action_button(label).min_size(Vec2::new(264.0, 34.0)))
         .clicked()
     {
         *action = Some(Action::Deploy(group.issue));
@@ -359,8 +354,7 @@ fn runtime_options(
     });
     if ui
         .add(
-            egui::Button::new(if fullscreen { "Exit full screen" } else { "Full screen" })
-                .min_size(Vec2::new(264.0, 30.0)),
+            action_button(if fullscreen { "Exit full screen" } else { "Full screen" }).min_size(Vec2::new(264.0, 30.0)),
         )
         .on_hover_text("Show only this cloud; Escape returns to the overview")
         .clicked()
@@ -422,4 +416,23 @@ fn deployment_steps(ui: &mut egui::Ui, group: &CloudGroup, demo: &DemoDeployment
         });
         ui.add_space(10.0);
     }
+}
+
+pub(in crate::app::cloud_panel) fn action_button(label: &str) -> egui::Button<'_> {
+    styled_action(label, theme::ACCENT(), theme::FG_SOFT())
+}
+
+pub(in crate::app::cloud_panel) fn danger_button(label: &str) -> egui::Button<'_> {
+    styled_action(label, theme::PALETTE_RED(), theme::PALETTE_RED())
+}
+
+fn styled_action(label: &str, color: egui::Color32, text: egui::Color32) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(label).color(text))
+        .min_size(Vec2::new(0.0, 30.0))
+        .fill(theme::alpha(theme::blend(theme::PANEL_BG_ALT(), color, 0.05), 220))
+        .stroke(Stroke::new(
+            1.0,
+            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), color, 0.24), 216),
+        ))
+        .corner_radius(8)
 }

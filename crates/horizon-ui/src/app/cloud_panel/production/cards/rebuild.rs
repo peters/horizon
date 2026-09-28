@@ -2,6 +2,7 @@
 //! running rebuild, and the notice for a replacement left pending.
 use super::super::{Confirmation, Runtime, Stage, rebuild::Kind};
 use super::Action;
+use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::theme;
 use egui::RichText;
 use horizon_core::cloud_runtime::{
@@ -81,7 +82,7 @@ fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
         if cancel.is_cancelled() {
             ui.label("Cancelling…");
         } else if ui
-            .button("Cancel rebuild")
+            .add(danger_button("Cancel rebuild"))
             .on_hover_text(
                 "Stops before the worker's image is switched. Cancelled while the committed recipe is read, the rebuild leaves nothing pending and the card offers Reconnect; later, it stays pending to be continued or discarded.",
             )
@@ -124,15 +125,15 @@ pub(super) fn pending_notice(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option
 fn continue_or_cancel(ui: &mut egui::Ui, runtime: &mut Runtime, requested: bool) -> Option<Action> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Continue rebuild").clicked() {
+        if ui.add(action_button("Continue rebuild")).clicked() {
             action = Some(Action::ContinueRebuild);
         }
         if requested {
-            if ui.button("Cancel rebuild…").clicked() {
+            if ui.add(danger_button("Cancel rebuild…")).clicked() {
                 runtime.confirmation = Confirmation::CancelRebuild;
             }
         } else if ui
-            .button("Cancel rebuild")
+            .add(danger_button("Cancel rebuild"))
             .on_hover_text("Discards the rebuilt image; the worker keeps its current image.")
             .clicked()
         {
@@ -144,10 +145,10 @@ fn continue_or_cancel(ui: &mut egui::Ui, runtime: &mut Runtime, requested: bool)
 
 fn confirm_switch_back(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     ui.colored_label(egui::Color32::LIGHT_RED, CANCEL_REQUESTED);
-    if ui.button("Switch back and restart").clicked() {
+    if ui.add(danger_button("Switch back and restart")).clicked() {
         return Some(Action::CancelRebuild);
     }
-    if ui.button("Keep the new image").clicked() {
+    if ui.add(action_button("Keep the new image")).clicked() {
         runtime.confirmation = Confirmation::None;
     }
     None
@@ -160,7 +161,7 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
     }
     if runtime.confirmation != Confirmation::Rebuild {
         if ui
-            .button("Rebuild image & restart…")
+            .add(danger_button("Rebuild image & restart…"))
             .on_hover_text("Rebuild this cloud's image from its committed recipe and restart the worker on it.")
             .clicked()
         {
@@ -169,10 +170,10 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
         return None;
     }
     ui.label(CONFIRMATION);
-    if ui.button("Rebuild and restart").clicked() {
+    if ui.add(danger_button("Rebuild and restart")).clicked() {
         return Some(Action::Rebuild);
     }
-    if ui.button("Keep current image").clicked() {
+    if ui.add(action_button("Keep current image")).clicked() {
         runtime.confirmation = Confirmation::None;
     }
     None

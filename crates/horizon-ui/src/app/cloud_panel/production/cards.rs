@@ -1,4 +1,5 @@
 use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, Store, cloud_runtime, lifecycle::Action};
+use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::{app::view::canvas_scene_transform, theme};
 use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
 use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
@@ -62,17 +63,17 @@ impl HorizonApp {
                             layout = Some((group.issue, selected));
                         }
                         if ui
-                            .button(if self.cloud_prototype.fullscreen.is_some() {
+                            .add(action_button(if self.cloud_prototype.fullscreen.is_some() {
                                 "Exit full screen"
                             } else {
                                 "Full screen"
-                            })
+                            }))
                             .clicked()
                         {
                             fullscreen = Some(group.issue);
                         }
                         if runtime.can_release_remote_devices()
-                            && ui.button("Release devices and remove remote credentials").on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.").clicked()
+                            && ui.add(danger_button("Release devices and remove remote credentials")).on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.").clicked()
                         {
                             action = Some((group.issue, Action::RevokeBrowserstack));
                         }
@@ -272,9 +273,7 @@ fn machine_size(
 }
 
 fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
-    egui::Button::new(label)
-        .min_size(Vec2::new(ui.available_width(), 34.0))
-        .fill(theme::blend(theme::PANEL_BG(), theme::ACCENT(), 0.20))
+    action_button(label).min_size(Vec2::new(ui.available_width(), 34.0))
 }
 
 fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
@@ -300,7 +299,7 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
             .add(accent_button(ui, "Redeploy cloud"))
             .clicked()
             .then_some(Action::Deploy);
-        if ui.button("Keep removed").clicked() {
+        if ui.add(action_button("Keep removed")).clicked() {
             runtime.confirmation = Confirmation::None;
         }
         return action;
@@ -308,7 +307,9 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
     if ui.add(accent_button(ui, "Redeploy cloud…")).clicked() {
         runtime.confirmation = Confirmation::Redeploy;
     }
-    ui.button("Remove cloud").clicked().then_some(Action::Remove)
+    ui.add(danger_button("Remove cloud"))
+        .clicked()
+        .then_some(Action::Remove)
 }
 
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
@@ -361,24 +362,24 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
             .state
             .as_ref()
             .is_none_or(|state| state.operation == horizon_core::cloud_runtime::CreateState::Prepared)
-        && ui.button("Remove cloud").clicked()
+        && ui.add(danger_button("Remove cloud")).clicked()
     {
         return Some(Action::Remove);
     }
     if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
-        if ui.button("Cancel operation").clicked()
+        if ui.add(danger_button("Cancel operation")).clicked()
             && let Some(cancel) = &runtime.cancel
         {
             cancel.cancel();
         }
     } else if runtime.stage == Some(Stage::Stopping) {
         ui.label("Stop requested; provider confirmation is pending.");
-        if ui.button("Reconcile stop").clicked() {
+        if ui.add(action_button("Reconcile stop")).clicked() {
             action = Some(Action::Stop);
         }
     } else if runtime.stage == Some(Stage::Stopped) {
         ui.label(wording::stopped_note(runtime));
-        if ui.button("Resume worker").clicked() {
+        if ui.add(action_button("Resume worker")).clicked() {
             action = Some(Action::Resume);
         }
     } else if ui
@@ -455,13 +456,13 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     let stoppable = !rebuild::blocks_stop(runtime);
     if stoppable && runtime.confirmation == Confirmation::Stop {
         ui.label(wording::stop_confirmation(runtime));
-        if ui.button("Stop worker").clicked() {
+        if ui.add(danger_button("Stop worker")).clicked() {
             action = Some(Action::Stop);
         }
-        if ui.button("Keep running").clicked() {
+        if ui.add(action_button("Keep running")).clicked() {
             runtime.confirmation = Confirmation::None;
         }
-    } else if stoppable && ui.button("Stop worker…").clicked() {
+    } else if stoppable && ui.add(danger_button("Stop worker…")).clicked() {
         runtime.confirmation = Confirmation::Stop;
     }
     rebuild::offer(ui, runtime).or(action)
@@ -474,7 +475,10 @@ fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<A
             .as_ref()
             .is_some_and(|state| matches!(state.operation, horizon_core::cloud_runtime::CreateState::Bound { .. }))
     {
-        return ui.button("Check provider").clicked().then_some(Action::Reconcile);
+        return ui
+            .add(action_button("Check provider"))
+            .clicked()
+            .then_some(Action::Reconcile);
     }
     None
 }
@@ -483,13 +487,13 @@ fn deletion_action(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Ac
     if runtime.state.is_some() {
         if runtime.confirmation == Confirmation::Delete {
             ui.colored_label(egui::Color32::LIGHT_RED, wording::delete_confirmation(runtime));
-            if ui.button("Delete resources permanently").clicked() {
+            if ui.add(danger_button("Delete resources permanently")).clicked() {
                 return Some(Action::Delete);
             }
-            if ui.button("Keep resources").clicked() {
+            if ui.add(action_button("Keep resources")).clicked() {
                 runtime.confirmation = Confirmation::None;
             }
-        } else if ui.button("Delete cloud resources…").clicked() {
+        } else if ui.add(danger_button("Delete cloud resources…")).clicked() {
             runtime.confirmation = Confirmation::Delete;
         }
     }
@@ -508,7 +512,10 @@ fn recovery_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<A
         ui.label("Checking provider…");
         None
     } else {
-        let action = ui.button("Check provider").clicked().then_some(Action::Reconcile);
+        let action = ui
+            .add(action_button("Check provider"))
+            .clicked()
+            .then_some(Action::Reconcile);
         if runtime
             .state
             .as_ref()
@@ -528,7 +535,7 @@ fn desktop_button(ui: &mut egui::Ui, runtime: &super::Runtime) -> bool {
         .is_some_and(|state| state.profile.capabilities.desktop);
     ui.add_enabled(
         enabled && runtime.desktop.is_some(),
-        egui::Button::new("Add desktop viewer"),
+        action_button("Add desktop viewer"),
     )
     .on_disabled_hover_text(if enabled {
         "Desktop tunnel is not connected"
@@ -574,7 +581,7 @@ fn deletion_progress(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
     }
     ui.add_space(8.0);
     if runtime.stage == Some(Stage::ReleaseDevices)
-        && ui.button("Cancel operation").clicked()
+        && ui.add(danger_button("Cancel operation")).clicked()
         && let Some(cancel) = &runtime.cancel
     {
         cancel.cancel();
