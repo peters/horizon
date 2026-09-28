@@ -95,11 +95,12 @@ impl HorizonApp {
             let accent = cloud_accent(group.issue);
             frame_background(ctx, group.issue, rect, transform, clip, accent);
             let editing = self.cloud_prototype.renaming == Some(group.issue);
-            let cost = self
-                .cloud_prototype
-                .production
-                .runtimes
-                .get(&group.issue)
+            // A production cloud shows its spend in the status strip instead.
+            let cost = group
+                .remote
+                .is_none()
+                .then(|| self.cloud_prototype.production.runtimes.get(&group.issue))
+                .flatten()
                 .and_then(|runtime| runtime.cost_badge(now));
             let response = egui::Area::new(Id::new(("cloud-header", group.issue)))
                 .order(Order::Middle)

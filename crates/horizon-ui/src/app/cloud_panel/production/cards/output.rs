@@ -1,11 +1,10 @@
 //! A cloud operation's output as a first-class view: grouped by step, timed, with
 //! failures highlighted and the decisive line pinned below the log.
-use super::super::{LogLine, Runtime, Stage};
+use super::super::{LineKind, LogLine, Runtime, Stage};
 use super::status::Failure;
 use super::strip::stage_color;
 use crate::theme;
 use egui::{Color32, FontId, RichText, Stroke, Vec2};
-use horizon_core::cloud_runtime::diagnosis;
 
 const LOG_BG: Color32 = Color32::from_rgb(9, 12, 19);
 const TEXT_SIZE: f32 = 13.0;
@@ -43,11 +42,29 @@ pub(super) fn show(
             .stick_to_bottom(true)
             .show(ui, |ui| lines(ui, runtime));
         let max_offset = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
-        runtime.verbose_unpinned = scroll.state.offset.y + 1.0 < max_offset;
+        if scroll.state.offset.y + 1.0 < max_offset {
+            runtime.unpinned_views |= view_bit(place);
+            runtime.verbose_unpinned = true;
+        }
     });
     if let Some(failure) = failure {
         root_cause(ui, failure);
     }
+}
+
+/// Each place a log is shown keeps its own follow state.
+fn view_bit(place: &str) -> u8 {
+    match place {
+        "body" => 1,
+        "drawer" => 2,
+        _ => 4,
+    }
+}
+
+/// Called once per cloud per frame before its output views are drawn: lines are held
+/// aside only while a view shown last frame was scrolled up.
+pub(super) fn begin_frame(runtime: &mut Runtime) {
+    runtime.verbose_unpinned = std::mem::take(&mut runtime.unpinned_views) != 0;
 }
 
 fn lines(ui: &mut egui::Ui, runtime: &Runtime) {
@@ -97,8 +114,8 @@ fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage) {
 }
 
 fn row(ui: &mut egui::Ui, line: &LogLine) {
-    let failure = diagnosis::is_failure(&line.text);
-    let warning = line.text.trim_start().to_ascii_lowercase().starts_with("warning");
+    let failure = line.kind == LineKind::Failure;
+    let warning = line.kind == LineKind::Warning;
     let color = if failure {
         theme::PALETTE_RED()
     } else if warning {

@@ -31,7 +31,7 @@ pub(super) fn show(
                 .allocate_ui_with_layout(
                     Vec2::new(STEPS_WIDTH, size.y),
                     egui::Layout::top_down(egui::Align::Min),
-                    |ui| steps_card(ui, launch, runtime, status, size.y),
+                    |ui| steps_card(ui, id, launch, runtime, status, size.y),
                 )
                 .inner;
             ui.vertical(|ui| {
@@ -43,7 +43,7 @@ pub(super) fn show(
         .inner
     } else {
         let steps_height = (size.y * 0.55).max(250.0).min(size.y - 160.0);
-        let action = steps_card(ui, launch, runtime, status, steps_height);
+        let action = steps_card(ui, id, launch, runtime, status, steps_height);
         ui.add_space(GAP);
         output_column(ui, id, runtime, status, size.y - steps_height - GAP - hint_height);
         hint(ui, status);
@@ -53,6 +53,7 @@ pub(super) fn show(
 
 fn steps_card(
     ui: &mut egui::Ui,
+    id: u32,
     launch: &CloudLaunch,
     runtime: &Runtime,
     status: &Status,
@@ -88,7 +89,15 @@ fn steps_card(
                 .id_salt("cloud-steps")
                 .max_height((ui.available_height() - footer).max(60.0))
                 .auto_shrink([false, true])
-                .show(ui, |ui| steps::vertical(ui, runtime, status))
+                .show(ui, |ui| {
+                    let action = steps::vertical(ui, runtime, status);
+                    // Without panels the drawer offers no Overview; the ready timeline is here.
+                    if status.tone == super::status::Tone::Ready {
+                        ui.add_space(12.0);
+                        super::timeline::show(ui, id, runtime);
+                    }
+                    action
+                })
                 .inner;
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 ui.label(RichText::new(worker(runtime)).size(12.5).color(theme::FG_DIM()));

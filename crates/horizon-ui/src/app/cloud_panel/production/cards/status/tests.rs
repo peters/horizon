@@ -1,5 +1,6 @@
 use super::super::super::{LogLine, Runtime, Stage};
 use super::*;
+use horizon_core::cloud_runtime;
 use horizon_core::cloud_runtime::progress::{Progress, Unit};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
@@ -42,11 +43,7 @@ fn live(stage: Stage) -> (Runtime, Sender<cloud_runtime::Event>) {
 }
 
 fn line(text: &str, stage: Stage) -> LogLine {
-    LogLine {
-        text: text.into(),
-        stage: Some(stage),
-        at: None,
-    }
+    LogLine::new(text.into(), Some(stage), None)
 }
 
 fn now() -> SystemTime {
@@ -300,6 +297,96 @@ fn a_rebuild_uses_its_own_steps() {
     assert_eq!(status.track.stages.len(), 7);
     assert_eq!(status.verb, "Replacing image");
     assert_eq!(status.track.position().as_deref(), Some("Stage 4/7"));
+    assert_eq!(
+        status.primary, None,
+        "the image switch cannot be cancelled, as Manage says"
+    );
+    runtime.stage = Some(Stage::Build);
+    assert_eq!(of(&runtime, Occupancy::default(), now()).primary, Some(Primary::Cancel));
+    runtime.rebuild.as_mut().unwrap().kind = super::super::super::rebuild::Kind::Cancel;
+    assert_eq!(
+        of(&runtime, Occupancy::default(), now()).primary,
+        None,
+        "a cancelling attempt is not cancelled again"
+    );
+}
+
+#[test]
+fn operations_manage_holds_come_before_a_generic_failure() {
+    use horizon_core::cloud_runtime::deployment::ResizeTarget;
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        error: Some("Resize failed".into()),
+        state: Some(deployment("Ready", &bound(), &running_worker())),
+        ..Runtime::default()
+    };
+    runtime.resize.pending = Some(ResizeTarget::Workspace { size_gb: 120 });
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(
+        (status.verb.as_str(), status.primary),
+        ("Resize pending", Some(Primary::Manage))
+    );
+    runtime.resize.pending = None;
+    runtime.error = None;
+    runtime.remote_release_error = Some("BrowserStack refused the release".into());
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Device release failed");
+    assert_eq!(status.primary, Some(Primary::Manage), "not a deploy retry");
+    assert_eq!(status.failure.unwrap().cause, None, "deploy output is not its cause");
+    runtime.remote_release_error = None;
+    let requested = Runtime {
+        stage: Some(Stage::Provision),
+        error: Some("Provider request timed out".into()),
+        state: Some(deployment(
+            "Provision",
+            &serde_json::json!({"state": "requested"}),
+            &serde_json::Value::Null,
+        )),
+        ..Runtime::default()
+    };
+    let status = of(&requested, Occupancy::default(), now());
+    assert_eq!(
+        status.primary,
+        Some(Primary::CheckProvider),
+        "Manage only offers the check"
+    );
+    assert_eq!(status.numbers, "Provider request timed out");
+}
+
+#[test]
+fn a_connected_ready_cloud_stays_ready_when_a_follow_up_fails() {
+    let (mut runtime, _sender) = live(Stage::Ready);
+    runtime.state = Some(deployment("Ready", &bound(), &running_worker()));
+    runtime.error = Some("Cloud settings could not be read".into());
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Ready");
+    assert_eq!(status.primary, Some(Primary::Stop));
+    assert_eq!(status.tail, "Cloud settings could not be read");
+}
+
+#[test]
+fn the_cause_is_found_among_lines_held_while_a_reader_scrolled_up() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Push),
+        error: Some("Uploading image failed; inspect deployment output".into()),
+        ..Runtime::default()
+    };
+    runtime
+        .logs
+        .push_back(line("docker push registry.example/worker", Stage::Push));
+    runtime
+        .pending_logs
+        .push_back(line("error from registry: denied", Stage::Push));
+    let first = of(&runtime, Occupancy::default(), now());
+    assert_eq!(first.numbers, "error from registry: denied");
+    // A cached diagnosis is refreshed when the output changes.
+    runtime
+        .pending_logs
+        .push_back(line("fatal: disk quota exceeded", Stage::Push));
+    assert_eq!(
+        of(&runtime, Occupancy::default(), now()).numbers,
+        "fatal: disk quota exceeded"
+    );
 }
 
 #[test]
@@ -348,4 +435,21 @@ fn a_detail_that_repeats_the_verb_is_not_said_twice() {
     let status = of(&runtime, Occupancy::default(), now());
     assert_eq!(status.verb, "Building image");
     assert_eq!(status.numbers, "1/3 reported steps complete");
+}
+
+#[test]
+fn a_reconnected_cloud_says_how_long_the_reconnect_took() {
+    let (mut runtime, _sender) = live(Stage::Ready);
+    let mut state = deployment("Ready", &bound(), &running_worker());
+    state.timeline = Some(cloud_runtime::timeline::Timeline {
+        reconnected: true,
+        spans: vec![cloud_runtime::timeline::Span {
+            phase: cloud_runtime::timeline::Phase::Readiness,
+            millis: 7_000,
+        }],
+        resume_requested: None,
+    });
+    runtime.state = Some(state);
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.right, "Reconnected in 0m 07s · No panels");
 }

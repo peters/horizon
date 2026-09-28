@@ -45,10 +45,13 @@ impl Tab {
     }
 
     /// The drawer's height for this tab; content taller than this scrolls.
+    /// The tallest tab; the drawer may reach below a short cloud to fit it.
+    const TALLEST: f32 = 580.0;
+
     pub(super) fn height(self) -> f32 {
         match self {
             Self::Overview => 360.0,
-            Self::Output => 580.0,
+            Self::Output => Self::TALLEST,
             Self::Machine | Self::Manage => 420.0,
             Self::Cost => 340.0,
             Self::Connections => 460.0,
@@ -149,17 +152,56 @@ pub(super) fn show(ui: &mut egui::Ui, rect: Rect, runtime: &mut Runtime, mut con
     response
 }
 
+const TAB_HEIGHT: f32 = 32.0;
+const TAB_GAP: f32 = 6.0;
+
+/// Where each tab goes in `width`: with teasers when all fit on one row, else without,
+/// wrapping onto more rows when even the names do not fit.
+fn tab_layout(ui: &egui::Ui, tabs: &[Tab], teasers: &[String; 6], width: f32) -> (bool, Vec<Rect>) {
+    let measure = |text: &str, size: f32| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), FontId::proportional(size), theme::FG())
+            .size()
+            .x
+    };
+    let widths = |teased: bool| -> Vec<f32> {
+        tabs.iter()
+            .map(|tab| {
+                let teaser = &teasers[*tab as usize];
+                measure(tab.label(), 14.0)
+                    + if teased && !teaser.is_empty() {
+                        measure(teaser, 12.0) + 8.0
+                    } else {
+                        0.0
+                    }
+                    + 24.0
+            })
+            .collect()
+    };
+    let fits =
+        |widths: &[f32]| widths.iter().sum::<f32>() + TAB_GAP * crate::app::util::usize_to_f32(widths.len()) <= width;
+    let teased = fits(&widths(true));
+    let mut rects = Vec::with_capacity(tabs.len());
+    let (mut x, mut y) = (0.0, 0.0);
+    for tab_width in widths(teased) {
+        if x > 0.0 && x + tab_width > width {
+            x = 0.0;
+            y += TAB_HEIGHT + 4.0;
+        }
+        rects.push(Rect::from_min_size(pos2(x, y), vec2(tab_width, TAB_HEIGHT)));
+        x += tab_width + TAB_GAP;
+    }
+    (teased, rects)
+}
+
 fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
     let mut chosen = None;
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-    let mut x = row.left();
-    for &tab in Tab::shown(context.body) {
-        let teaser = &context.teasers[tab as usize];
-        let painter = ui.painter();
-        let name = painter.layout_no_wrap(tab.label().to_owned(), FontId::proportional(14.0), theme::FG());
-        let small = painter.layout_no_wrap(teaser.clone(), FontId::proportional(12.0), theme::FG_DIM());
-        let width = name.size().x + if teaser.is_empty() { 0.0 } else { small.size().x + 8.0 } + 24.0;
-        let rect = Rect::from_min_size(pos2(x, row.top()), vec2(width, 32.0));
+    let shown = Tab::shown(context.body);
+    let (teased, layout) = tab_layout(ui, shown, &context.teasers, ui.available_width());
+    let height = layout.last().map_or(TAB_HEIGHT, |rect| rect.bottom()) + 2.0;
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    for (&tab, local) in shown.iter().zip(layout) {
+        let rect = local.translate(row.min.to_vec2());
         let response = ui.interact(rect, ui.id().with(("drawer-tab", tab as u8)), Sense::click());
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, tab == active, tab.label()));
         if tab == active {
@@ -174,7 +216,8 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
             FontId::proportional(14.0),
             if tab == active { theme::FG() } else { theme::FG_SOFT() },
         );
-        if !teaser.is_empty() {
+        let teaser = &context.teasers[tab as usize];
+        if teased && !teaser.is_empty() {
             let color = if tab == Tab::Output && context.status.failure.is_some() {
                 theme::PALETTE_RED()
             } else {
@@ -191,7 +234,6 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
         if response.clicked() {
             chosen = Some(tab);
         }
-        x += width + 6.0;
     }
     ui.painter().line_segment(
         [
@@ -218,9 +260,17 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(
-                    RichText::new(format!("{} {} · {}", status.verb, status.tail, failure.summary))
-                        .size(13.0)
-                        .color(theme::FG_DIM()),
+                    RichText::new(
+                        [status.verb.as_str(), status.tail.as_str()]
+                            .into_iter()
+                            .filter(|part| !part.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            + " · "
+                            + &failure.summary,
+                    )
+                    .size(13.0)
+                    .color(theme::FG_DIM()),
                 );
                 ui.label(
                     RichText::new(failure.headline())
@@ -233,7 +283,9 @@ fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if status.primary.is_some() && ui.add(action_button("Retry deploy")).clicked() {
+                    if let Some(label) = status.primary.and_then(super::status::Primary::retry_label)
+                        && ui.add(action_button(label)).clicked()
+                    {
                         response.action = Some(Action::Deploy);
                     }
                     if ui.add(action_button("Copy error")).clicked() {
@@ -301,10 +353,19 @@ fn connections(ui: &mut egui::Ui, runtime: &mut Runtime, context: &mut Context<'
         .on_hover_text("Local terminal processes are counted separately from deployment. A running process alone does not confirm the remote connection; check the terminal output.");
     if let Some(state) = &runtime.state {
         for session in &state.sessions {
-            ui.small(format!(
-                "{} · {} · {} · tmux {}",
-                session.agent, session.branch, session.worktree, session.tmux
-            ));
+            let tmux = format!("tmux {}", session.tmux);
+            ui.small(
+                [
+                    session.agent.as_str(),
+                    session.branch.as_str(),
+                    session.worktree.as_str(),
+                    tmux.as_str(),
+                ]
+                .into_iter()
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            );
         }
     }
     ui.small("Sessions continue while disconnected.");
@@ -363,12 +424,51 @@ pub(super) fn step_action(action: StepAction, status: &Status, ctx: &egui::Conte
     }
 }
 
-/// Places the drawer under the header, inset from the frame, and no lower than the frame.
+/// Places the drawer under the header, inset from the frame.
 pub(super) fn placement(group: &CloudGroup) -> Rect {
     let (min, max) = group.bounds();
     let top = min[1] + group.header_height() + 6.0;
-    Rect::from_min_max(
-        pos2(min[0] + 12.0, top),
-        pos2(max[0] - 12.0, max[1].max(top + 240.0) - 12.0),
-    )
+    // An overlay: on a short cloud it reaches below the frame rather than squeezing a tab.
+    Rect::from_min_max(pos2(min[0] + 12.0, top), pos2(max[0] - 12.0, top + Tab::TALLEST))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn tabs_stay_inside_the_drawer_at_every_width() {
+        let teasers = [
+            "8/8".to_owned(),
+            "150 lines".to_owned(),
+            "8 vCPU".to_owned(),
+            "$0.32/h".to_owned(),
+            "1/1".to_owned(),
+            String::new(),
+        ];
+        let mut checked = 0;
+        let _ = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                for width in [300.0, 524.0, 760.0, 1400.0] {
+                    for body in [false, true] {
+                        let shown = Tab::shown(body);
+                        let (teased, rects) = tab_layout(ui, shown, &teasers, width);
+                        assert_eq!(rects.len(), shown.len());
+                        assert!(
+                            rects.iter().all(|rect| rect.right() <= width + 0.5),
+                            "{width}: {rects:?}"
+                        );
+                        assert!(rects.windows(2).all(|pair| !pair[0].intersects(pair[1])));
+                        if width >= 1400.0 {
+                            assert!(teased, "a wide drawer shows the teasers");
+                            assert!(rects.iter().all(|rect| rect.top() == 0.0), "one row");
+                        }
+                        checked += 1;
+                    }
+                }
+            })
+            .discard_textures();
+        assert_eq!(checked, 8);
+    }
 }

@@ -138,6 +138,18 @@ impl HorizonApp {
         action: StripAction,
         ctx: &egui::Context,
     ) {
+        // The drawer opens over the cloud's body, so a collapsed cloud expands for it.
+        let opens_drawer = matches!(
+            action,
+            StripAction::ToggleDrawer | StripAction::Primary(Primary::Stop | Primary::Redeploy | Primary::Manage)
+        );
+        if opens_drawer
+            && let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id)
+            && self.cloud_prototype.groups.0[index].collapsed
+        {
+            self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
+            self.save_cloud_prototype();
+        }
         let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
             return;
         };
@@ -157,11 +169,14 @@ impl HorizonApp {
             StripAction::Primary(Primary::Stop) => {
                 runtime.confirmation = Confirmation::Stop;
                 runtime.drawer = Some(Tab::Manage);
+                runtime.reveal_confirmation = true;
             }
             StripAction::Primary(Primary::Redeploy) => {
                 runtime.confirmation = Confirmation::Redeploy;
                 runtime.drawer = Some(Tab::Manage);
+                runtime.reveal_confirmation = true;
             }
+            StripAction::Primary(Primary::Manage) => runtime.drawer = Some(Tab::Manage),
             StripAction::Primary(Primary::Deploy | Primary::Reconnect | Primary::Retry) => {
                 self.apply_card_action(id, Action::Deploy, ctx);
             }
@@ -237,6 +252,7 @@ impl HorizonApp {
             if group.collapsed {
                 runtime.drawer = None;
             }
+            super::output::begin_frame(runtime);
             let occupancy = occupancy(group, &self.board);
             let status = status::of(runtime, occupancy, now);
             let body = body_visible(group);

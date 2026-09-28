@@ -22,6 +22,7 @@ mod view;
 pub(super) mod wording;
 pub(super) use drawer::Tab;
 use sizing::profile_details;
+pub(super) use status::{DiagnosisKey, Failure};
 
 /// Terminal liveness for the Connections tab. A running process alone does not
 /// confirm the remote connection; browser and desktop connections are on their panels.
@@ -38,6 +39,13 @@ pub(super) fn attachment_summary(group: &CloudGroup, runtime: &super::Runtime, b
         return "Terminals: none attached".into();
     }
     format!("Terminals: {}/{} running", occupancy.running, occupancy.terminals)
+}
+
+/// A confirmation asked for from the header opens Manage with its button in view.
+fn reveal_confirmation(runtime: &mut super::Runtime, button: &egui::Response) {
+    if std::mem::take(&mut runtime.reveal_confirmation) {
+        button.scroll_to_me(Some(egui::Align::Center));
+    }
 }
 
 fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
@@ -63,10 +71,9 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
     }
     if runtime.confirmation == Confirmation::Redeploy {
         ui.label("Redeploy this cloud? A new worker and managed workspace storage will be allocated. Files from the deleted worker are gone.");
-        let action = ui
-            .add(accent_button(ui, "Redeploy cloud"))
-            .clicked()
-            .then_some(Action::Deploy);
+        let redeploy = ui.add(accent_button(ui, "Redeploy cloud"));
+        reveal_confirmation(runtime, &redeploy);
+        let action = redeploy.clicked().then_some(Action::Deploy);
         if ui.add(action_button("Keep removed")).clicked() {
             runtime.confirmation = Confirmation::None;
         }
@@ -240,7 +247,9 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     let stoppable = !rebuild::blocks_stop(runtime);
     if stoppable && runtime.confirmation == Confirmation::Stop {
         ui.label(wording::stop_confirmation(runtime));
-        if ui.add(danger_button("Stop worker")).clicked() {
+        let stop = ui.add(danger_button("Stop worker"));
+        reveal_confirmation(runtime, &stop);
+        if stop.clicked() {
             action = Some(Action::Stop);
         }
         if ui.add(action_button("Keep running")).clicked() {

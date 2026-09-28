@@ -99,6 +99,32 @@ pub(super) struct LogLine {
     pub stage: Option<Stage>,
     /// Time into the attempt; `None` for lines outside one, such as idle reports.
     pub at: Option<std::time::Duration>,
+    /// Classified once on arrival, so drawing the log does not re-scan each line.
+    pub kind: LineKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineKind {
+    Plain,
+    Warning,
+    Failure,
+}
+
+impl LogLine {
+    pub(super) fn new(text: String, stage: Option<Stage>, at: Option<std::time::Duration>) -> Self {
+        let kind = if cloud_runtime::diagnosis::is_failure(&text) {
+            LineKind::Failure
+        } else if text
+            .trim_start()
+            .get(..7)
+            .is_some_and(|start| start.eq_ignore_ascii_case("warning"))
+        {
+            LineKind::Warning
+        } else {
+            LineKind::Plain
+        };
+        Self { text, stage, at, kind }
+    }
 }
 
 #[derive(Default)]
@@ -118,8 +144,15 @@ pub(super) struct Runtime {
     /// Lines that arrived after the reader scrolled up. They join `logs` when
     /// follow mode resumes, so the visible history does not shift.
     pending_logs: std::collections::VecDeque<LogLine>,
-    /// The reader scrolled away from the latest line.
+    /// A reader scrolled away from the latest line in an output view last frame.
     verbose_unpinned: bool,
+    /// Output views scrolled up this frame, one bit per place; folded into
+    /// `verbose_unpinned` at the next frame, so a view no longer shown stops holding lines.
+    unpinned_views: u8,
+    /// The header asked for a confirmation; Manage scrolls it into view once.
+    reveal_confirmation: bool,
+    /// The last failure diagnosis and the output it was read from.
+    diagnosis: std::cell::RefCell<Option<(cards::DiagnosisKey, cards::Failure)>>,
     state: Option<Deployment>,
     error: Option<String>,
     confirmation: Confirmation,
@@ -156,11 +189,7 @@ impl Runtime {
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
     /// lines wait aside so the lines on screen are neither dropped nor shifted.
     fn push_log(&mut self, text: String) {
-        let line = LogLine {
-            text,
-            stage: self.stage,
-            at: self.progress.elapsed(),
-        };
+        let line = LogLine::new(text, self.stage, self.progress.elapsed());
         if self.verbose_unpinned {
             self.pending_logs.push_back(line);
             while self.pending_logs.len() > Self::PENDING_LOG_LINES {

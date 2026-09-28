@@ -113,16 +113,13 @@ pub(super) fn show(
     let room = |left: f32, width: f32| left - width - (header.left() + TITLE_LEFT) >= TITLE_MIN;
     if let Some(primary) = status.primary {
         let width = button_width(ui, primary.label());
-        if room(left, width)
-            && primary_button(
-                ui,
-                Rect::from_min_max(pos2(left - width, y - 15.0), pos2(left, y + 15.0)),
-                primary,
-            )
-        {
-            action = Some(StripAction::Primary(primary));
+        if room(left, width) {
+            let rect = Rect::from_min_max(pos2(left - width, y - 15.0), pos2(left, y + 15.0));
+            if primary_button(ui, rect, primary) {
+                action = Some(StripAction::Primary(primary));
+            }
+            left -= width + 22.0;
         }
-        left -= width + 22.0;
     }
     let width = indicators_width(ui, indicators);
     if room(left, width) {
@@ -171,49 +168,69 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
     }
     painter.circle_filled(dot, 4.0, color);
-    let right_left = if status.right.is_empty() {
-        header.right() - 26.0
-    } else {
-        let right = painter.layout_no_wrap(status.right.clone(), FontId::proportional(13.0), theme::FG_DIM());
-        let left = header.right() - 26.0 - right.size().x;
-        painter.galley(pos2(left, y - right.size().y / 2.0), right, theme::FG_DIM());
-        left
-    };
-    let clip = painter.with_clip_rect(Rect::from_min_max(
-        pos2(header.left(), header.bottom() - TRACK_HEIGHT - 32.0),
-        pos2(right_left - 20.0, header.bottom() - TRACK_HEIGHT),
-    ));
-    let mut x = header.left() + 40.0;
     let failed = status.tone == Tone::Failed;
-    for (text, size, color, mono) in [
-        (status.verb.as_str(), 15.5, color, false),
+    let meaning = status
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.meaning)
+        .map(|meaning| format!("—  {meaning}"));
+    let parts = [
+        (status.verb.as_str(), 15.5, color),
         (
             status.numbers.as_str(),
             14.5,
             if failed { theme::FG() } else { theme::FG_SOFT() },
-            false,
         ),
-        (status.tail.as_str(), 13.5, theme::FG_DIM(), false),
-    ] {
+        (status.tail.as_str(), 13.5, theme::FG_DIM()),
+        (meaning.as_deref().unwrap_or_default(), 13.0, theme::FG_SOFT()),
+    ];
+    let start = header.left() + 40.0;
+    let end = header.right() - 26.0;
+    let width = |text: &str, size: f32| {
+        painter
+            .layout_no_wrap(text.to_owned(), FontId::proportional(size), theme::FG())
+            .size()
+            .x
+    };
+    // The sentence comes first: the right-hand summary shows only beside its verb and numbers.
+    let lead = parts[..2]
+        .iter()
+        .filter(|(text, ..)| !text.is_empty())
+        .map(|(text, size, _)| width(text, *size) + 12.0)
+        .sum::<f32>();
+    let right_width = if status.right.is_empty() {
+        0.0
+    } else {
+        width(&status.right, 13.0)
+    };
+    let limit = if right_width > 0.0 && start + lead + 20.0 + right_width <= end {
+        painter.text(
+            pos2(end, y),
+            Align2::RIGHT_CENTER,
+            &status.right,
+            FontId::proportional(13.0),
+            theme::FG_DIM(),
+        );
+        end - right_width - 20.0
+    } else {
+        end
+    };
+    let mut x = start;
+    for (text, size, color) in parts {
+        let room = limit - x;
         if text.is_empty() {
             continue;
         }
-        let font = if mono {
-            FontId::monospace(size)
-        } else {
-            FontId::proportional(size)
-        };
-        let rect = clip.text(pos2(x, y), Align2::LEFT_CENTER, text, font, color);
-        x = rect.right() + 12.0;
-    }
-    if let Some(meaning) = status.failure.as_ref().and_then(|failure| failure.meaning) {
-        clip.text(
-            pos2(x + 2.0, y),
-            Align2::LEFT_CENTER,
-            format!("—  {meaning}"),
-            FontId::proportional(13.0),
-            theme::FG_SOFT(),
-        );
+        if room < 28.0 {
+            break;
+        }
+        // Too long for the room left: end with an ellipsis rather than a cut.
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(size), color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        let galley = painter.layout_job(job);
+        let size = galley.size();
+        painter.galley(pos2(x, y - size.y / 2.0), galley, color);
+        x += size.x + 12.0;
     }
 }
 
@@ -482,7 +499,7 @@ fn indicators_width(ui: &egui::Ui, indicators: &Indicators) -> f32 {
 
 fn paint_indicators(ui: &egui::Ui, left_center: Pos2, indicators: &Indicators) {
     let mut x = left_center.x;
-    for item in items(indicators) {
+    for (index, item) in items(indicators).into_iter().enumerate() {
         let width = item_width(ui, &item);
         let color = item.color.unwrap_or(if item.active {
             theme::FG_SOFT()
@@ -500,7 +517,7 @@ fn paint_indicators(ui: &egui::Ui, left_center: Pos2, indicators: &Indicators) {
             );
         }
         let rect = Rect::from_min_size(pos2(x, left_center.y - 11.0), vec2(width, 22.0));
-        ui.interact(rect, ui.id().with(("indicator", x.to_bits())), Sense::hover())
+        ui.interact(rect, ui.id().with(("indicator", index)), Sense::hover())
             .on_hover_text(item.tip);
         x += width;
     }

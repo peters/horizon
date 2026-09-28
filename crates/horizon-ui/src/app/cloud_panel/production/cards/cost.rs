@@ -21,6 +21,23 @@ fn compute_idle(runtime: &Runtime) -> bool {
         .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
 }
 
+/// Whether a worker was requested, so the provider may bill it even before Horizon
+/// has read its record.
+fn worker_requested(runtime: &Runtime) -> bool {
+    runtime.state.as_ref().is_some_and(|state| {
+        matches!(
+            state.operation,
+            cloud_runtime::CreateState::Requested | cloud_runtime::CreateState::Bound { .. }
+        )
+    }) || runtime.stage.is_some_and(|stage| {
+        use super::super::Stage;
+        matches!(
+            stage,
+            Stage::Provision | Stage::Readiness | Stage::Worktrees | Stage::Sessions
+        )
+    })
+}
+
 /// The Cost tab's one-word summary.
 pub(super) fn teaser(runtime: &Runtime) -> String {
     let rate = runtime
@@ -66,8 +83,11 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         None => {}
     }
     let line = if parts.is_empty() {
-        if worker.is_some() {
-            "Reading costs…".to_owned()
+        if runtime.stage == Some(super::super::Stage::Deleted) {
+            "Nothing billing now".to_owned()
+        } else if worker.is_some() || worker_requested(runtime) {
+            // Billing starts with the request, before the provider describes the worker.
+            "Worker billing · rate pending".to_owned()
         } else {
             "No charges yet".to_owned()
         }
@@ -78,7 +98,9 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         Some(total) => runtime.billing.explanation(total, Instant::now()),
         None => match runtime.billing.error() {
             Some(error) => format!("Provider billing unavailable: {error}. Horizon tries again every few minutes."),
-            None if worker.is_some() => "The provider has not reported billing for this worker yet.".into(),
+            None if worker.is_some() || worker_requested(runtime) => {
+                "A worker was requested; the provider has not reported its rate or billing yet.".into()
+            }
             None => "Nothing is billed until a worker is requested.".into(),
         },
     };
@@ -147,7 +169,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
             None => (
                 "Since creation",
                 "—".into(),
-                if worker.is_some() { "billing not read yet" } else { "nothing billed yet" },
+                if worker.is_some() || worker_requested(runtime) { "billing not read yet" } else { "nothing billed yet" },
                 "Provider billing has not been read yet.".into(),
             ),
         };
@@ -328,5 +350,23 @@ mod tests {
         assert!(shown.iter().any(|text| text == "not running"));
         assert!(shown.iter().any(|text| text == "nothing billed yet"));
         assert!(!shown.iter().any(|text| text.contains("Unavailable")), "{shown:?}");
+    }
+
+    #[test]
+    fn a_requested_worker_is_never_called_free() {
+        let runtime = Runtime {
+            stage: Some(Stage::Readiness),
+            ..Runtime::default()
+        };
+        assert_eq!(spend(&runtime, SystemTime::now()).line, "Worker billing · rate pending");
+    }
+
+    #[test]
+    fn a_deleted_cloud_does_not_claim_it_was_never_billed() {
+        let runtime = Runtime {
+            stage: Some(Stage::Deleted),
+            ..Runtime::default()
+        };
+        assert_eq!(spend(&runtime, SystemTime::now()).line, "Nothing billing now");
     }
 }

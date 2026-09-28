@@ -153,17 +153,18 @@ impl CloudGroup {
 
     /// Runtime status or prototype card geometry shared by rendering and input routing.
     /// A production cloud without panels shows its steps and output in the body, so
-    /// the body belongs to the runtime until the first panel arrives.
+    /// the body belongs to the runtime until the first panel arrives. Otherwise its
+    /// status is part of the header, which pans like the rest of it, and the bounds are
+    /// an empty band along the header's bottom edge.
     #[must_use]
     pub fn runtime_bounds(&self) -> ([f32; 2], [f32; 2]) {
         if self.remote.is_some() {
-            let min = [self.position[0], self.position[1] + HEADER];
-            let bottom = if self.panels.is_empty() && !self.collapsed {
-                self.position[1] + self.size[1]
-            } else {
-                min[1] + STATUS_HEIGHT
-            };
-            return (min, [self.position[0] + self.size[0], bottom]);
+            let top = self.position[1] + self.header_height();
+            let left_right = [self.position[0], self.position[0] + self.size[0]];
+            if self.panels.is_empty() && !self.collapsed {
+                return ([left_right[0], top], [left_right[1], self.position[1] + self.size[1]]);
+            }
+            return ([left_right[0], top], [left_right[1], top]);
         }
         let min = [self.position[0] + self.size[0] + PAD, self.position[1]];
         (min, [min[0] + RUNTIME_WIDTH, min[1] + RUNTIME_HEIGHT])

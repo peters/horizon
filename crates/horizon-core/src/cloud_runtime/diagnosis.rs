@@ -42,6 +42,8 @@ const MEANINGS: [(&[&str], &str); 9] = [
         &[
             "from registry: denied",
             "unauthorized",
+            "unauthenticated",
+            "cannot be authenticated",
             "authentication required",
             "requested access to the resource is denied",
         ],
@@ -184,6 +186,10 @@ mod tests {
                 "Docker is not running",
             ),
             ("dial tcp: lookup registry.invalid: no such host", "does not resolve"),
+            (
+                "error from registry: unauthenticated: User cannot be authenticated with the token provided.",
+                "registry refused",
+            ),
         ] {
             assert!(meaning(line).is_some_and(|text| text.contains(wanted)), "{line}");
         }

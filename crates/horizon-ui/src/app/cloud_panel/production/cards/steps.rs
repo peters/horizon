@@ -168,10 +168,8 @@ fn opened(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) -> Option<StepA
         ui.add_space(4.0);
         let mut action = None;
         ui.horizontal(|ui| {
-            if status.primary.is_some()
-                && ui
-                    .add(crate::app::cloud_panel::runtime::action_button("Retry deploy"))
-                    .clicked()
+            if let Some(label) = status.primary.and_then(super::status::Primary::retry_label)
+                && ui.add(crate::app::cloud_panel::runtime::action_button(label)).clicked()
             {
                 action = Some(StepAction::Retry);
             }
@@ -232,6 +230,45 @@ pub(super) fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
     }
 }
 
+/// A step's name that fits `room`: its label, else its short name; when neither fits,
+/// only the first, last and running or failed steps are named.
+fn label_for(ui: &egui::Ui, stage: Stage, room: f32, index: usize, count: usize, mark: &Mark) -> Option<&'static str> {
+    let fits = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), FontId::proportional(13.0), theme::FG())
+            .size()
+            .x
+            <= room
+    };
+    if fits(stage.label()) {
+        return Some(stage.label());
+    }
+    let short = short_label(stage);
+    let named = index == 0 || index + 1 == count || matches!(mark, Mark::Running | Mark::Failed);
+    (fits(short) || named).then_some(short)
+}
+
+/// One word per step for narrow steppers.
+pub(super) fn short_label(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Validate => "Validate",
+        Stage::Build => "Build",
+        Stage::Push => "Push",
+        Stage::Replace => "Replace",
+        Stage::Provision => "Provision",
+        Stage::Readiness => "Readiness",
+        Stage::Worktrees => "Worktrees",
+        Stage::Sessions => "Sessions",
+        Stage::Ready => "Ready",
+        Stage::Stopped => "Stopped",
+        Stage::Stopping => "Stopping",
+        Stage::Deleted => "Deleted",
+        Stage::ReleaseDevices => "Devices",
+        Stage::DeleteWorker => "Worker",
+        Stage::DeleteStorage => "Storage",
+    }
+}
+
 /// Nodes across the drawer with each step's name and time.
 pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) {
     let stages = status.track.stages;
@@ -264,13 +301,15 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
         let clip = ui
             .painter()
             .with_clip_rect(Rect::from_center_size(center + vec2(0.0, 30.0), vec2(step - 4.0, 44.0)));
-        clip.text(
-            center + vec2(0.0, 20.0),
-            Align2::CENTER_TOP,
-            stage.label(),
-            FontId::proportional(13.0),
-            color,
-        );
+        if let Some(label) = label_for(ui, *stage, step - 6.0, index, stages.len(), &mark) {
+            clip.text(
+                center + vec2(0.0, 20.0),
+                Align2::CENTER_TOP,
+                label,
+                FontId::proportional(13.0),
+                color,
+            );
+        }
         if let Some(elapsed) = runtime.progress.stage_duration(*stage) {
             clip.text(
                 center + vec2(0.0, 38.0),

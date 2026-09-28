@@ -297,7 +297,11 @@ mod tests {
             groups.0[0].reconcile(&mut board);
             assert!(groups.resize_frame(&mut board, 1, [820.0, 900.0], [180.0, 180.0]));
             let group = &groups.0[0];
-            let (_, toolbar_max) = group.runtime_bounds();
+            let (toolbar_min, toolbar_max) = group.runtime_bounds();
+            assert!(
+                (toolbar_max[1] - toolbar_min[1]).abs() < f32::EPSILON,
+                "with panels the status is part of the header, not a routed runtime area"
+            );
             let (min, max) = group.bounds();
             assert_eq!(group.overview_bounds(), (min, max));
             for id in &ids {

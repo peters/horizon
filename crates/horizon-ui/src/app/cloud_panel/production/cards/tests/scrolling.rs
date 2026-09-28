@@ -152,11 +152,7 @@ fn the_body_output_scrolls_back_to_its_first_line_and_the_heading() {
     {
         let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
         runtime.logs = (0..80)
-            .map(|index| super::super::super::LogLine {
-                text: format!("LOG-LINE-{index:03}"),
-                stage: Some(Stage::Build),
-                at: None,
-            })
+            .map(|index| super::super::super::LogLine::new(format!("LOG-LINE-{index:03}"), Some(Stage::Build), None))
             .collect();
     }
     let (header, opened) = open_verbose(&ctx, &mut app);
@@ -206,11 +202,7 @@ fn scrolled_up_output_keeps_its_first_line_while_more_lines_arrive() {
     {
         let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
         runtime.logs = (0..80)
-            .map(|index| super::super::super::LogLine {
-                text: format!("LOG-LINE-{index:03}"),
-                stage: Some(Stage::Build),
-                at: None,
-            })
+            .map(|index| super::super::super::LogLine::new(format!("LOG-LINE-{index:03}"), Some(Stage::Build), None))
             .collect();
     }
     let (header, opened) = open_verbose(&ctx, &mut app);

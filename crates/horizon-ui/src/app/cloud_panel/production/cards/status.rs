@@ -2,7 +2,7 @@
 //! header, the steps in its body and the drawer's Overview all read this.
 use super::super::{Runtime, Stage};
 use super::{deleted_or_redeploying, deleting, rebuild};
-use horizon_core::cloud_runtime::{self, CreateState, diagnosis, progress};
+use horizon_core::cloud_runtime::{CreateState, diagnosis, progress};
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +31,8 @@ pub(in crate::app::cloud_panel) enum Primary {
     CheckProvider,
     /// Opens Manage on the redeploy confirmation.
     Redeploy,
+    /// Opens Manage, where a held operation is finished.
+    Manage,
 }
 
 impl Primary {
@@ -45,7 +47,13 @@ impl Primary {
             Self::ReconcileStop => "Reconcile stop",
             Self::CheckProvider => "Check provider",
             Self::Redeploy => "Redeploy…",
+            Self::Manage => "Manage…",
         }
+    }
+
+    /// The label of a retry offered beside a failure, when this action retries it.
+    pub(super) fn retry_label(self) -> Option<&'static str> {
+        matches!(self, Self::Retry | Self::Reconnect).then(|| self.label())
     }
 
     /// Filled for the step forward, outlined for the rest.
@@ -63,23 +71,43 @@ impl Primary {
 
 /// Why an attempt failed: Horizon's summary, the decisive output line and its meaning.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Failure {
+pub(in crate::app::cloud_panel::production) struct Failure {
     pub summary: String,
     pub cause: Option<String>,
     pub meaning: Option<&'static str>,
 }
 
 impl Failure {
+    /// Read from the output once per change: every frame asks, the output rarely moves.
     fn of(runtime: &Runtime, summary: &str) -> Self {
-        let found = diagnosis::diagnose(runtime.logs.iter().map(|line| line.text.as_str()), summary);
-        Self {
+        let key = DiagnosisKey {
+            summary: summary.to_owned(),
+            lines: runtime.logs.len(),
+            held: runtime.pending_logs.len(),
+            last: runtime
+                .pending_logs
+                .back()
+                .or(runtime.logs.back())
+                .map_or(0, |line| line.text.len()),
+        };
+        if let Some((cached, failure)) = runtime.diagnosis.borrow().as_ref()
+            && *cached == key
+        {
+            return failure.clone();
+        }
+        // Lines held aside while a reader is scrolled up are output too.
+        let lines = runtime.logs.iter().chain(&runtime.pending_logs);
+        let found = diagnosis::diagnose(lines.map(|line| line.text.as_str()), summary);
+        let failure = Self {
             summary: summary.to_owned(),
             meaning: found
                 .as_ref()
                 .and_then(|found| found.meaning)
                 .or_else(|| diagnosis::meaning(summary)),
             cause: found.map(|found| found.cause),
-        }
+        };
+        *runtime.diagnosis.borrow_mut() = Some((key, failure.clone()));
+        failure
     }
 
     /// The line the header leads with: the cause when found, else the summary.
@@ -94,6 +122,15 @@ impl Failure {
             None => self.summary.clone(),
         }
     }
+}
+
+/// What a cached diagnosis was read from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app::cloud_panel::production) struct DiagnosisKey {
+    summary: String,
+    lines: usize,
+    held: usize,
+    last: usize,
 }
 
 /// The stage track along the header's bottom edge.
@@ -253,19 +290,14 @@ pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> St
     if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
         return running(runtime, base);
     }
-    if let Some(error) = runtime.error.as_ref().or(runtime.remote_release_error.as_ref()) {
-        return failed(runtime, error);
+    if let Some(status) = held(runtime) {
+        return status;
     }
-    if runtime.state.as_ref().is_some_and(Runtime::needs_provider_check) {
-        return Status {
-            tone: Tone::Attention,
-            verb: "Needs provider check".into(),
-            numbers: "The worker's status is not confirmed".into(),
-            tail: "The check cannot start or delete a worker".into(),
-            track: track(runtime),
-            primary: Some(Primary::CheckProvider),
-            ..base
-        };
+    if runtime.receiver.is_some() && runtime.stage == Some(Stage::Ready) {
+        return ready(runtime, occupancy, now, base);
+    }
+    if let Some(error) = &runtime.error {
+        return failed(runtime, error);
     }
     match runtime.stage {
         Some(Stage::Stopping) => Status {
@@ -286,7 +318,6 @@ pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> St
             primary: Some(Primary::Resume),
             ..base
         },
-        Some(Stage::Ready) if runtime.receiver.is_some() => ready(runtime, occupancy, now, base),
         _ if runtime.state.is_some() => Status {
             tone: Tone::Idle,
             verb: "Disconnected".into(),
@@ -308,6 +339,72 @@ pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> St
             ..base
         },
     }
+}
+
+/// Operations Manage holds before anything else, in its order: a pending resize,
+/// a device release, a pending rebuild and an unconfirmed worker.
+fn held(runtime: &Runtime) -> Option<Status> {
+    let base = blank();
+    if runtime.resize.pending.is_some() {
+        return Some(Status {
+            tone: Tone::Attention,
+            verb: "Resize pending".into(),
+            numbers: "Finish or retry the resize before other operations".into(),
+            track: track(runtime),
+            primary: Some(Primary::Manage),
+            ..base
+        });
+    }
+    if runtime.remote_release.is_some() {
+        return Some(Status {
+            tone: Tone::Live,
+            verb: "Releasing remote devices".into(),
+            numbers: "Stopping hosted browser sessions and removing copied credentials".into(),
+            track: track(runtime),
+            ..base
+        });
+    }
+    if let Some(error) = &runtime.remote_release_error {
+        return Some(Status {
+            tone: Tone::Failed,
+            verb: "Device release failed".into(),
+            numbers: error.clone(),
+            failure: Some(Failure {
+                summary: error.clone(),
+                cause: None,
+                meaning: diagnosis::meaning(error),
+            }),
+            track: track(runtime),
+            primary: Some(Primary::Manage),
+            ..base
+        });
+    }
+    if rebuild::has_pending(runtime) {
+        return Some(Status {
+            tone: Tone::Attention,
+            verb: "Image rebuild pending".into(),
+            numbers: "Continue or cancel it in Manage".into(),
+            track: track(runtime),
+            primary: Some(Primary::Manage),
+            ..base
+        });
+    }
+    runtime
+        .state
+        .as_ref()
+        .is_some_and(Runtime::needs_provider_check)
+        .then(|| Status {
+            tone: Tone::Attention,
+            verb: "Needs provider check".into(),
+            numbers: runtime
+                .error
+                .clone()
+                .unwrap_or_else(|| "The worker's status is not confirmed".into()),
+            tail: "The check cannot start or delete a worker".into(),
+            track: track(runtime),
+            primary: Some(Primary::CheckProvider),
+            ..base
+        })
 }
 
 fn panels(count: usize) -> String {
@@ -436,7 +533,12 @@ fn running(runtime: &Runtime, base: Status) -> Status {
         tail: tail.unwrap_or_default(),
         right: with_position(&track, elapsed(runtime)),
         track,
-        primary: runtime.cancel.is_some().then_some(Primary::Cancel),
+        // A rebuild cancels only before the worker's image switch, as Manage offers it.
+        primary: if runtime.rebuild.is_some() {
+            rebuild::cancellable(runtime).then_some(Primary::Cancel)
+        } else {
+            runtime.cancel.is_some().then_some(Primary::Cancel)
+        },
         ..base
     }
 }
@@ -523,21 +625,29 @@ fn ready(runtime: &Runtime, occupancy: Occupancy, now: SystemTime, base: Status)
     let uptime = runtime
         .current_run_cost(now)
         .map(|run| format!("up {}", progress::duration(run.elapsed)));
-    let took = runtime
+    let timeline = runtime
         .state
         .as_ref()
         .and_then(|state| state.timeline.as_ref())
-        .map(cloud_runtime::timeline::Timeline::total)
-        .filter(|total| !total.is_zero())
-        .or_else(|| {
+        .filter(|timeline| !timeline.total().is_zero());
+    // Records from before timelines keep their single total.
+    let took = timeline.map_or_else(
+        || {
             runtime
                 .state
                 .as_ref()
                 .and_then(|state| state.ready_after_seconds)
-                .map(Duration::from_secs)
-        });
+                .map(|seconds| ("Ready", Duration::from_secs(seconds)))
+        },
+        |timeline| {
+            Some((
+                if timeline.reconnected { "Reconnected" } else { "Ready" },
+                timeline.total(),
+            ))
+        },
+    );
     let right = [
-        took.map(|took| format!("Ready in {}", progress::duration(took))),
+        took.map(|(verb, took)| format!("{verb} in {}", progress::duration(took))),
         Some(panels(occupancy.panels)),
     ]
     .into_iter()
@@ -548,7 +658,8 @@ fn ready(runtime: &Runtime, occupancy: Occupancy, now: SystemTime, base: Status)
         tone: Tone::Ready,
         verb: "Ready".into(),
         numbers,
-        tail: uptime.unwrap_or_default(),
+        // A failed follow-up operation on a connected cloud leaves it Ready; say what failed.
+        tail: runtime.error.clone().or(uptime).unwrap_or_default(),
         right,
         track: Track::complete(stages(runtime), false),
         primary: (!rebuild::blocks_stop(runtime)).then_some(Primary::Stop),
