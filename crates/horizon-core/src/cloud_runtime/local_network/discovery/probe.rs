@@ -210,7 +210,16 @@ impl Prober {
             if index == 0 {
                 started.push_back(Instant::now());
             }
-            for (port, result) in self.attempt(address, batch, cancel) {
+            let results = self.attempt(address, batch, cancel);
+            // Rules narrowed while the batch ran: its results are not reported, so no answer
+            // outside the scope reaches the worker once the narrowing has returned.
+            if batch
+                .iter()
+                .any(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
+            {
+                return Answer::Refused(NARROWED.into());
+            }
+            for (port, result) in results {
                 match result {
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                         return Answer::Refused(STOPPED.into());

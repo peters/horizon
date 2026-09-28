@@ -136,6 +136,13 @@ fn a_probe_stops_before_dialling_ports_the_owner_closed_while_it_ran() {
             Cancellation::default(),
         )
     };
+    // One batch only: what it found while the owner narrowed is not reported either.
+    let Answer::Refused(refusal) = probe(&discoverer, "printer.local", &[8000, 8001]) else {
+        panic!("a batch that raced the narrowing was reported");
+    };
+    assert_eq!(refusal, probe::NARROWED);
+    *scope.rules.write().unwrap() = Rules::default();
+    dials.lock().unwrap().clear();
     let ports: Vec<u16> = (8000..8008).collect();
     let Answer::Refused(refusal) = probe(&discoverer, "printer.local", &ports) else {
         panic!("the probe went on after the scope changed");
@@ -145,18 +152,21 @@ fn a_probe_stops_before_dialling_ports_the_owner_closed_while_it_ran() {
     assert!(dialled.iter().all(|port| (8000..8004).contains(port)), "{dialled:?}");
 }
 
-#[test]
-fn devices_out_of_scope_never_crowd_an_allowed_one_out_of_the_answer() {
-    // A /16 network, which has room for more devices than one answer lists.
+/// A scope on a /16 network, which has room for more devices than one answer lists.
+fn wide_scope() -> Arc<Scope> {
     let home = || scope::tests::host(&[("10.0.0.20", Some(16))], Some("10.0.0.20"));
-    let scope = Arc::new(Scope {
+    Arc::new(Scope {
         network: home().current_network().unwrap(),
         resolve: Box::new(|_, _| Err(Reply::HostUnreachable)),
         host: Box::new(move || Ok(home())),
         source: Box::new(|_| Some(v4("10.0.0.20"))),
         rules: std::sync::RwLock::default(),
-    });
-    // More named devices than an answer holds; named devices are listed first.
+    })
+}
+
+/// A discoverer whose browse finds 300 named devices, 10.0.1.0 to 10.0.2.43: more than an
+/// answer holds. Named devices are listed first, lowest address first.
+fn crowded(scope: &Arc<Scope>) -> Discoverer {
     let crowd = |_: Ipv4Addr, _: Subnet, _: &Cancellation| {
         let findings = (0..300u16)
             .map(|index| {
@@ -166,12 +176,49 @@ fn devices_out_of_scope_never_crowd_an_allowed_one_out_of_the_answer() {
             .collect();
         (findings, Vec::new())
     };
-    let discoverer = Discoverer::with_parts(
-        Arc::clone(&scope),
+    Discoverer::with_parts(
+        Arc::clone(scope),
         Box::new(crowd),
         Box::new(|_, _, _: &Cancellation| Ok(())),
         Cancellation::default(),
+    )
+}
+
+fn only(address: Ipv4Addr) -> Rules {
+    Rules {
+        devices: vec![Device {
+            address,
+            ports: Vec::new(),
+        }],
+        local_ports: Vec::new(),
+    }
+}
+
+#[test]
+fn a_browsed_device_beyond_the_bound_of_a_wide_answer_appears_once_the_scope_is_narrowed_to_it() {
+    let scope = wide_scope();
+    let discoverer = crowded(&scope);
+    let last = Ipv4Addr::new(10, 0, 2, 43);
+    let Answer::Discovery(wide) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert!(wide.truncated && !wide.devices.iter().any(|device| device.address == last));
+    scope.set_rules(only(last), 41234).unwrap();
+    // The reused browse still knows it.
+    let Answer::Discovery(narrowed) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(
+        narrowed.devices.iter().map(|device| device.address).collect::<Vec<_>>(),
+        [last]
     );
+    assert_eq!(narrowed.devices[0].names, ["device-299.local"]);
+}
+
+#[test]
+fn devices_out_of_scope_never_crowd_an_allowed_one_out_of_the_answer() {
+    let scope = wide_scope();
+    let discoverer = crowded(&scope);
     // Known only from a probe, so it is listed after every named device.
     assert!(matches!(probe(&discoverer, "10.0.200.5", &[22]), Answer::Probe(_)));
     let Answer::Discovery(crowded) = discoverer.discover() else {
@@ -179,18 +226,7 @@ fn devices_out_of_scope_never_crowd_an_allowed_one_out_of_the_answer() {
     };
     assert!(crowded.truncated);
     assert!(!crowded.devices.iter().any(|device| device.address == v4("10.0.200.5")));
-    scope
-        .set_rules(
-            Rules {
-                devices: vec![Device {
-                    address: v4("10.0.200.5"),
-                    ports: Vec::new(),
-                }],
-                local_ports: Vec::new(),
-            },
-            41234,
-        )
-        .unwrap();
+    scope.set_rules(only(v4("10.0.200.5")), 41234).unwrap();
     let Answer::Discovery(narrowed) = discoverer.discover() else {
         panic!("discovery");
     };

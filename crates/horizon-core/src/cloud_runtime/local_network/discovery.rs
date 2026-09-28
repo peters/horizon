@@ -112,8 +112,9 @@ impl Discoverer {
             devices,
             truncated: false,
             notes,
-        }
-        .bounded();
+        };
+        // Kept whole: each answer is filtered by the scope first and bounded after, so a device
+        // a narrower scope reaches is never lost to the bound of a wider one.
         *last = Some((Instant::now(), discovery.clone()));
         Answer::Discovery(self.with_probes(self.in_scope(discovery)))
     }
@@ -132,7 +133,7 @@ impl Discoverer {
     fn with_probes(&self, mut discovery: Discovery) -> Discovery {
         let open = self.prober.open();
         if open.is_empty() {
-            return discovery;
+            return discovery.bounded();
         }
         // A device probed before the owner narrowed the scope stays out of the answer.
         for (address, ports) in open
