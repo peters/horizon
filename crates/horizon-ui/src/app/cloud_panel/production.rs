@@ -292,6 +292,8 @@ impl HorizonApp {
                         runtime.error = None;
                         runtime.receiver = None;
                         runtime.cancel = None;
+                        // A stop can end a rebuild that met it; its steps no longer apply.
+                        runtime.rebuild = None;
                     }
                     Event::Resumed => {
                         runtime.receiver = None;
@@ -729,16 +731,36 @@ fn run_deployment_with_siblings(
             idle::watch(&state, &settings, &root, cancel, idle, ctx);
             presentation::watch(&state, &settings, &root, cancel, tx, ctx);
         }
-        Err(error) => report_failure(&root, &error, &emit),
+        Err(error) => {
+            report_failure(&root, &error, &emit);
+        }
     }
 }
 
-/// Reports the saved record with the failure, so the card shows what was kept.
-fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) {
-    if let Ok(store) = Store::lock(root)
-        && let Ok(Some(state)) = store.load()
-    {
+/// Reports the saved record with the failure, so the card shows what was kept. A
+/// record found busy is read once its lock is released, since that may be an idle
+/// stop finishing, which the card then shows instead of the failure. Returns
+/// whether the record could be read, after that wait.
+fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) -> bool {
+    let load = || Store::lock(root).and_then(|store| store.load());
+    let (read, saved) = if matches!(error, cloud_runtime::Error::Busy) {
+        match idle::after_busy(load, std::time::Duration::from_secs(1)).map(idle::stopped_while_busy) {
+            Some(Ok(events)) => {
+                for event in events {
+                    emit(event);
+                }
+                return true;
+            }
+            Some(Err(state)) => (true, Some(*state)),
+            None => (false, None),
+        }
+    } else {
+        let loaded = load();
+        (loaded.is_ok(), loaded.ok().flatten())
+    };
+    if let Some(state) = saved {
         emit(Event::Snapshot(Box::new(state)));
     }
     emit(Event::failed(error.to_string()));
+    read
 }

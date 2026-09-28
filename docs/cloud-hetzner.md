@@ -139,6 +139,9 @@ record over SSH every two minutes and, once the worker has been idle for the
 whole period, stops the cloud exactly as **Stop** does: the server is released
 and the volume kept. The card then shows the cloud stopped, and **Resume**
 creates a new server on the same volume; nothing resumes it automatically.
+Choosing **Reconnect cloud** during the few seconds the stop takes waits for it
+to finish and then shows the cloud stopped, or offers **Reconcile stop** when the
+stop did not finish, rather than reporting that another operation holds the cloud.
 
 This works only while Horizon is running and the cloud's card is connected. A
 cloud left running while this computer is off or asleep keeps its server and is

@@ -333,7 +333,7 @@ fn complete(
 ) -> Completion {
     let pending = deployment::pending_resize(root);
     let loaded = Store::lock(root).and_then(|store| store.load());
-    let unavailable = loaded.is_err();
+    let mut unavailable = loaded.is_err();
     let mut notice = None;
     let ready = match result {
         Ok(state) => Some(state),
@@ -349,7 +349,8 @@ fn complete(
                 notice = Some(message);
                 Some(state)
             } else {
-                super::report_failure(root, &error, emit);
+                // A failure on a busy record waits for its lock, so its read is the current one.
+                unavailable = !super::report_failure(root, &error, emit);
                 None
             }
         }
