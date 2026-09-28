@@ -197,6 +197,7 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
         Ok(scope) => assert!(scope.subnet().prefix() >= 16),
         // No shareable network, or interfaces a sandbox does not let the test read.
         Err(StartError::Scope(_) | StartError::Io(_)) => {}
+        Err(StartError::Rules(_)) => panic!("no rules were given"),
     }
     let lookups = Arc::new(AtomicUsize::new(0));
     assert!(

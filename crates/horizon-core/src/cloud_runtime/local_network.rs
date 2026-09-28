@@ -42,6 +42,8 @@ const MAX_LOOKUPS: usize = 8;
 pub enum StartError {
     #[error(transparent)]
     Scope(#[from] ScopeError),
+    #[error("The saved scope does not fit the current network: {0}")]
+    Rules(#[from] RulesError),
     #[error("Local Network Bridge could not start: {0}")]
     Io(#[from] io::Error),
 }
@@ -159,11 +161,23 @@ impl Bridge {
     /// # Errors
     /// Fails when there is no shareable network or the local proxy cannot start.
     pub fn start(connection: &Connection) -> Result<Self, StartError> {
+        Self::start_with(connection, Rules::default())
+    }
+
+    /// As [`Self::start`], narrowed by `rules` before the worker can reach the proxy: a bridge
+    /// that resumes never starts wider than the owner left it.
+    ///
+    /// # Errors
+    /// Also fails when `rules` do not fit the current network, for example after a move to
+    /// another Wi-Fi.
+    pub fn start_with(connection: &Connection, rules: Rules) -> Result<Self, StartError> {
         let scope = Arc::new(Scope::current()?);
         // Switching the bridge off also stops a probe or browse an agent asked for.
         let cancel = Cancellation::default();
         let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));
         let proxy = Proxy::with_gate(scope.subnet(), Arc::clone(&scope) as Arc<dyn socks::Gate>)?;
+        // Only the SSH session started below lets the worker reach the proxy.
+        scope.set_rules(rules, proxy.port())?;
         let mut bridge = Self::with_answers(proxy, session::Ssh(connection.clone()), answers, cancel)?;
         bridge.scope = Some(scope);
         Ok(bridge)
