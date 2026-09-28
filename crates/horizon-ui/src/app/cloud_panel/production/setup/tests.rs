@@ -130,7 +130,7 @@ fn account_form_never_renders_the_secret_value() {
     *draft.runpod_key = "synthetic-secret-marker".into();
     let ctx = Context::default();
     for _ in 0..2 {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| fields::render(ui, &mut draft));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| fields::accounts(ui, &mut draft));
         output.textures_delta.clear();
         for shape in output.shapes {
             if let egui::epaint::Shape::Text(text) = shape.shape {

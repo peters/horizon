@@ -12,6 +12,15 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 const SAVED_SECRET_HINT: &str = "••••••••  Saved credential";
 
+#[derive(Default, PartialEq)]
+enum Section {
+    #[default]
+    Accounts,
+    Placement,
+    Agents,
+    Images,
+}
+
 enum Completion {
     Loaded(Box<Draft>, bool),
     Saved(Vec<horizon_core::cloud_runtime::setup::Agent>),
@@ -24,6 +33,7 @@ enum Completion {
 pub(in crate::app::cloud_panel) struct State {
     pub(in crate::app::cloud_panel) open: bool,
     continue_creation: bool,
+    section: Section,
     required_agents: Option<Vec<horizon_core::cloud_runtime::setup::Agent>>,
     receiver: Option<Receiver<Completion>>,
     draft: Option<Box<Draft>>,
@@ -33,6 +43,25 @@ pub(in crate::app::cloud_panel) struct State {
 }
 
 impl State {
+    fn render_navigation(&mut self, ui: &mut egui::Ui) -> f32 {
+        let navigation_top = ui.cursor().top();
+        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (section, label) in [
+                    (Section::Accounts, "Accounts"),
+                    (Section::Placement, "Placement"),
+                    (Section::Agents, "Agents"),
+                    (Section::Images, "Images & advanced"),
+                ] {
+                    ui.selectable_value(&mut self.section, section, label);
+                }
+            });
+            ui.separator();
+            ui.add_space(8.0);
+        });
+        ui.cursor().top() - navigation_top
+    }
+
     /// Whether these settings resume a cloud creation once they are saved.
     pub(in crate::app::cloud_panel) fn resumes_creation(&self) -> bool {
         self.open && self.continue_creation
@@ -42,13 +71,15 @@ impl State {
         let state = self;
         let mut registry_action = None;
         if let Some(draft) = &mut state.draft {
-            ui.add_enabled_ui(state.receiver.is_none(), |ui| {
-                if state.required_agents.is_some() {
-                    fields::render_profile(ui, draft, true);
-                } else {
-                    fields::render(ui, draft);
+            ui.add_enabled_ui(state.receiver.is_none(), |ui| match state.section {
+                Section::Accounts => fields::accounts(ui, draft),
+                Section::Placement => fields::placement(ui, draft),
+                Section::Agents => fields::agents(ui, draft, state.required_agents.is_some()),
+                Section::Images => {
+                    registry_action = registry::render(ui, draft);
+                    ui.add_space(12.0);
+                    fields::advanced(ui, draft);
                 }
-                registry_action = registry::render(ui, draft);
             });
         }
         if let Some(status) = &state.registry_status {
@@ -251,8 +282,15 @@ impl HorizonApp {
                 );
                 ui.label(RichText::new("Connect your account. Choose who you work with.").color(theme::FG_SOFT()));
                 ui.add_space(16.0);
+                let navigation_height = state.render_navigation(ui);
                 egui::ScrollArea::vertical()
-                    .max_height((ctx.content_rect().height() - 240.0).max(100.0))
+                    .id_salt(match state.section {
+                        Section::Accounts => "cloud-settings-accounts",
+                        Section::Placement => "cloud-settings-placement",
+                        Section::Agents => "cloud-settings-agents",
+                        Section::Images => "cloud-settings-images",
+                    })
+                    .max_height((ctx.content_rect().height() - 240.0 - navigation_height).max(100.0))
                     .show(ui, |ui| {
                         registry_action = state.render_fields(ui);
                     });
