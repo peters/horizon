@@ -10,6 +10,9 @@ import unittest
 
 import test_session_relaunch as fixtures
 
+# Generous upper bounds: a loaded machine can be slow, and a bound only costs time when a test fails.
+BOUND = 120
+
 # Records each call, then holds the preparation open until the test releases it.
 BLOCKING_SOURCE = '''import os, sys, time
 from pathlib import Path
@@ -17,14 +20,14 @@ with open(os.environ['SOURCE_LOG'], 'a') as log:
     log.write(' '.join(sys.argv[1:]) + '\\n')
 Path(os.environ['SOURCE_PID']).write_text(str(os.getpid()))
 release = Path(os.environ['SOURCE_RELEASE'])
-deadline = time.monotonic() + 30
+deadline = time.monotonic() + {bound}
 while not release.exists() and time.monotonic() < deadline:
     time.sleep(0.05)
 sys.exit(0 if release.exists() else 9)
-'''
+'''.replace('{bound}', str(BOUND))
 
 
-def wait_for(condition, timeout=15):
+def wait_for(condition, timeout=BOUND):
     deadline = time.monotonic() + timeout
     while not condition():
         if time.monotonic() > deadline:
@@ -55,7 +58,7 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
 
     def start(self, identity, revision=None):
         return subprocess.run(self.command(identity, revision), env=self.fixture.env,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, timeout=BOUND)
 
     def begin(self, identity):
         # Its own process group stands in for the SSH session that a disconnect hangs up.
@@ -84,12 +87,12 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         client = self.begin('one')
         wait_for(self.source_pid.exists)
         os.killpg(client.pid, signal.SIGHUP)
-        client.communicate(timeout=15)
+        client.communicate(timeout=BOUND)
         self.assertNotEqual(client.returncode, 0)
         self.assertFalse((self.state / 'ready').exists())
         waiting, progress = self.begin_waiting('two')
         self.release.touch()
-        waiting.wait(timeout=30)
+        waiting.wait(timeout=BOUND)
         self.assertEqual(waiting.returncode, 0, progress.read_text())
         self.assertTrue((self.state / 'ready').exists())
         self.assertFalse((self.state / 'failed').exists())
@@ -107,9 +110,9 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertIsNone(first.poll())
         self.assertEqual(f.launches(), [])
         self.release.touch()
-        _, error = first.communicate(timeout=30)
+        _, error = first.communicate(timeout=BOUND)
         self.assertEqual(first.returncode, 0, error)
-        waiting.wait(timeout=30)
+        waiting.wait(timeout=BOUND)
         self.assertEqual(waiting.returncode, 0, progress.read_text())
         self.assertEqual(len(self.source_calls()), 1)
         self.assertEqual(sorted(entry['session'] for entry in f.launches()), ['one', 'two'])
@@ -120,7 +123,7 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         wait_for(self.source_pid.exists)
         # A container restart kills the preparation without recording a failure.
         os.killpg(os.getpgid(int(self.source_pid.read_text())), signal.SIGKILL)
-        _, error = client.communicate(timeout=15)
+        _, error = client.communicate(timeout=BOUND)
         self.assertEqual(client.returncode, 3, error)
         self.assertIn('Attach again to resume', error)
         self.assert_no_session_state('one')
@@ -149,7 +152,7 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertIn("run 'horizon-worker-session --retry-shared-checkout'", fenced.stderr)
         self.assert_no_session_state('one')
         retry = subprocess.run(['bash', str(f.script), '--retry-shared-checkout'], env=f.env,
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, timeout=BOUND)
         self.assertEqual(retry.returncode, 0, retry.stderr)
         self.assertIn('Cleared', retry.stdout)
         self.assertFalse((self.state / 'failed').exists())
