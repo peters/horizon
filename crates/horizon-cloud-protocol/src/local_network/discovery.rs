@@ -19,7 +19,7 @@ pub const MAX_TEXT: usize = 128;
 pub const MAX_NOTES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum Answer {
     Discovery(Discovery),
     /// Why the owner's Horizon did not run the request, for example a rate limit.
@@ -36,10 +36,12 @@ pub enum Source {
     Ssdp,
     /// The owner's computer recently exchanged traffic with the device.
     Neighbors,
+    /// A source added after this build.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Discovery {
     /// Seconds since the browse behind these results; requests close together share one.
     pub age_seconds: u64,
@@ -53,7 +55,6 @@ pub struct Discovery {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Device {
     pub address: Ipv4Addr,
     /// Host names the device announces, such as `printer.local`.
@@ -68,7 +69,6 @@ pub struct Device {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Service {
     pub source: Source,
     /// A DNS-SD type such as `_ipp._tcp`, or a `UPnP` device type.
@@ -181,12 +181,18 @@ mod tests {
     }
 
     #[test]
-    fn answers_are_strict_json() {
+    fn answers_round_trip_and_older_workers_read_newer_ones() {
         let answer = Answer::Refused("busy".into());
         let line = serde_json::to_string(&answer).unwrap();
         assert_eq!(line, r#"{"refused":"busy"}"#);
         assert_eq!(serde_json::from_str::<Answer>(&line).unwrap(), answer);
-        assert!(serde_json::from_str::<Answer>(r#"{"refused":"busy","extra":1}"#).is_err());
+        // Worker images lag behind Horizon, so fields a newer Horizon adds are skipped.
+        let newer = r#"{"discovery":{"age_seconds":1,"devices":[{"address":"192.168.1.5","sources":["mdns","sonar"],"model":"x"}],"later":true}}"#;
+        let Answer::Discovery(discovery) = serde_json::from_str(newer).unwrap() else {
+            panic!("discovery");
+        };
+        assert_eq!(discovery.devices[0].address, Ipv4Addr::new(192, 168, 1, 5));
+        assert_eq!(discovery.devices[0].sources, [Source::Mdns, Source::Other]);
     }
 
     #[test]
