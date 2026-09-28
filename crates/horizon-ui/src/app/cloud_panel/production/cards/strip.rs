@@ -121,9 +121,10 @@ pub(super) fn show(
             left -= width + 22.0;
         }
     }
-    let width = indicators_width(ui, indicators);
+    let placed = place(ui, indicators);
+    let width = placed.iter().map(|placed| placed.width).sum::<f32>();
     if room(left, width) {
-        paint_indicators(ui, pos2(left - width, y), indicators);
+        paint_indicators(ui, pos2(left - width, y), placed);
         left -= width + 22.0;
     }
     let spend_galley = ui
@@ -481,45 +482,50 @@ fn items(indicators: &Indicators) -> Vec<Item> {
     items
 }
 
-fn item_width(ui: &egui::Ui, item: &Item) -> f32 {
-    20.0 + if item.label.is_empty() {
-        8.0
-    } else {
-        ui.painter()
-            .layout_no_wrap(item.label.clone(), FontId::proportional(12.5), theme::FG())
-            .size()
-            .x
-            + 12.0
-    }
+/// An indicator laid out once per frame: measured and painted from the same galley.
+struct Placed {
+    item: Item,
+    color: Color32,
+    label: Option<std::sync::Arc<egui::Galley>>,
+    width: f32,
 }
 
-fn indicators_width(ui: &egui::Ui, indicators: &Indicators) -> f32 {
-    items(indicators).iter().map(|item| item_width(ui, item)).sum()
-}
-
-fn paint_indicators(ui: &egui::Ui, left_center: Pos2, indicators: &Indicators) {
-    let mut x = left_center.x;
-    for (index, item) in items(indicators).into_iter().enumerate() {
-        let width = item_width(ui, &item);
-        let color = item.color.unwrap_or(if item.active {
-            theme::FG_SOFT()
-        } else {
-            theme::alpha(theme::FG_DIM(), 150)
-        });
-        (item.glyph)(ui.painter(), pos2(x + 8.0, left_center.y), color);
-        if !item.label.is_empty() {
-            ui.painter().text(
-                pos2(x + 20.0, left_center.y),
-                Align2::LEFT_CENTER,
-                &item.label,
-                FontId::proportional(12.5),
+fn place(ui: &egui::Ui, indicators: &Indicators) -> Vec<Placed> {
+    items(indicators)
+        .into_iter()
+        .map(|item| {
+            let color = item.color.unwrap_or(if item.active {
+                theme::FG_SOFT()
+            } else {
+                theme::alpha(theme::FG_DIM(), 150)
+            });
+            let label = (!item.label.is_empty()).then(|| {
+                ui.painter()
+                    .layout_no_wrap(item.label.clone(), FontId::proportional(12.5), color)
+            });
+            let width = 20.0 + label.as_ref().map_or(8.0, |galley| galley.size().x + 12.0);
+            Placed {
+                item,
                 color,
-            );
+                label,
+                width,
+            }
+        })
+        .collect()
+}
+
+fn paint_indicators(ui: &egui::Ui, left_center: Pos2, placed: Vec<Placed>) {
+    let mut x = left_center.x;
+    for (index, placed) in placed.into_iter().enumerate() {
+        (placed.item.glyph)(ui.painter(), pos2(x + 8.0, left_center.y), placed.color);
+        if let Some(galley) = placed.label {
+            let top = left_center.y - galley.size().y / 2.0;
+            ui.painter().galley(pos2(x + 20.0, top), galley, placed.color);
         }
-        let rect = Rect::from_min_size(pos2(x, left_center.y - 11.0), vec2(width, 22.0));
+        let rect = Rect::from_min_size(pos2(x, left_center.y - 11.0), vec2(placed.width, 22.0));
         ui.interact(rect, ui.id().with(("indicator", index)), Sense::hover())
-            .on_hover_text(item.tip);
-        x += width;
+            .on_hover_text(placed.item.tip);
+        x += placed.width;
     }
 }
 

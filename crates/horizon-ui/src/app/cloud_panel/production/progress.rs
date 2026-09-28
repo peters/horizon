@@ -67,18 +67,29 @@ pub(super) struct Timeline {
     /// Set when a deletion starts, so a deletion that fails before its first step
     /// still presents as one.
     deletion: bool,
+    /// Which operation this is; output lines carry it so a failure is read from its own.
+    attempt: u64,
 }
 
 impl Timeline {
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            attempt: self.attempt + 1,
+            ..Self::default()
+        };
     }
 
     pub fn begin_deletion(&mut self) {
         *self = Self {
             deletion: true,
+            attempt: self.attempt + 1,
             ..Self::default()
         };
+    }
+
+    /// Advances with every reset, so each operation's output is told apart.
+    pub fn attempt(&self) -> u64 {
+        self.attempt
     }
 
     pub fn stage(&mut self, stage: Stage, observed_at: Instant) {

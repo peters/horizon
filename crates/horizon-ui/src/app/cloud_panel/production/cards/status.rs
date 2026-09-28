@@ -90,14 +90,21 @@ impl Failure {
                 .or(runtime.logs.back())
                 .map_or(0, |line| line.text.len()),
             generation: runtime.log_generation,
+            attempt: runtime.progress.attempt(),
         };
         if let Some((cached, failure)) = runtime.diagnosis.borrow().as_ref()
             && *cached == key
         {
             return failure.clone();
         }
-        // Lines held aside while a reader is scrolled up are output too.
-        let lines = runtime.logs.iter().chain(&runtime.pending_logs);
+        // Lines held aside while a reader is scrolled up are output too; an earlier
+        // attempt's lines are not this failure's.
+        let attempt = runtime.progress.attempt();
+        let lines = runtime
+            .logs
+            .iter()
+            .chain(&runtime.pending_logs)
+            .filter(|line| line.attempt == attempt);
         let found = diagnosis::diagnose(lines.map(|line| line.text.as_str()), summary);
         let failure = Self {
             summary: summary.to_owned(),
@@ -135,6 +142,7 @@ pub(in crate::app::cloud_panel::production) struct DiagnosisKey {
     last: usize,
     /// Output replaced or added through `push_log`.
     generation: u64,
+    attempt: u64,
 }
 
 /// The stage track along the header's bottom edge.

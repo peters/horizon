@@ -101,6 +101,8 @@ pub(super) struct LogLine {
     pub at: Option<std::time::Duration>,
     /// Classified once on arrival, so drawing the log does not re-scan each line.
     pub kind: LineKind,
+    /// The operation that printed it (`progress::Timeline::attempt`).
+    pub attempt: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +125,13 @@ impl LogLine {
         } else {
             LineKind::Plain
         };
-        Self { text, stage, at, kind }
+        Self {
+            text,
+            stage,
+            at,
+            kind,
+            attempt: 0,
+        }
     }
 }
 
@@ -203,7 +211,8 @@ impl Runtime {
     const LAYER_WINDOW: usize = 48;
 
     fn push_log(&mut self, text: String) {
-        let line = LogLine::new(text, self.stage, self.progress.elapsed());
+        let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
+        line.attempt = self.progress.attempt();
         self.log_generation += 1;
         let target = if self.verbose_unpinned {
             &mut self.pending_logs
@@ -237,7 +246,21 @@ impl Runtime {
             return;
         }
         let pending = std::mem::take(&mut self.pending_logs);
-        self.logs.extend(pending);
+        for line in pending {
+            // A layer updated while the reader was scrolled up replaces its visible line.
+            if let Some(layer) = layer_id(&line.text)
+                && let Some(previous) = self
+                    .logs
+                    .iter_mut()
+                    .rev()
+                    .take(Self::LAYER_WINDOW)
+                    .find(|previous| previous.stage == line.stage && layer_id(&previous.text) == Some(layer))
+            {
+                *previous = line;
+            } else {
+                self.logs.push_back(line);
+            }
+        }
         self.trim_followed_logs();
     }
 

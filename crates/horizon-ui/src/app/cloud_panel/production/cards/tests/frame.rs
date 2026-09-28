@@ -75,3 +75,39 @@ fn a_layer_keeps_one_updating_progress_line() {
     runtime.push_log("5f70bf18a086: Pull complete".into());
     assert_eq!(runtime.logs.len(), 5);
 }
+
+#[test]
+fn a_layer_updated_while_scrolled_up_replaces_its_visible_line() {
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(Stage::Push),
+        ..Default::default()
+    };
+    runtime.push_log("5f70bf18a086: Pushing [==>      ]  10MB/80MB".into());
+    runtime.verbose_unpinned = true;
+    for _ in 0..3 {
+        runtime.push_log("5f70bf18a086: Pushing [=====>   ]  40MB/80MB".into());
+    }
+    runtime.push_log("5f70bf18a086: Pushed".into());
+    runtime.verbose_unpinned = false;
+    runtime.accept_followed_logs();
+    let texts: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(texts, ["5f70bf18a086: Pushed"]);
+}
+
+#[test]
+fn a_retry_is_diagnosed_from_its_own_output() {
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(Stage::Push),
+        ..Default::default()
+    };
+    runtime.push_log("error from registry: denied".into());
+    // A new attempt that fails without printing its own failure line.
+    runtime.progress.reset();
+    runtime.push_log("docker push registry.example/worker:tag".into());
+    runtime.error = Some("Uploading image failed; inspect deployment output".into());
+    let status = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+    let failure = status.failure.unwrap();
+    assert_eq!(failure.cause, None, "the earlier attempt's denial is not this failure");
+    assert_eq!(status.numbers, "Uploading image failed; inspect deployment output");
+    assert_eq!(runtime.logs.len(), 2, "the earlier output is still shown");
+}

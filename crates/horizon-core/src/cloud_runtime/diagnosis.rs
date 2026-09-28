@@ -26,7 +26,7 @@ const FAILURE_MARKERS: [&str; 10] = [
 ];
 
 /// Lines that mention a failure while the operation keeps going.
-const TRANSIENT_MARKERS: [&str; 3] = ["retrying", "will retry", "0 errors"];
+const TRANSIENT_MARKERS: [&str; 2] = ["retrying", "will retry"];
 
 /// Well-known causes, first match wins. Keep patterns lowercase.
 const MEANINGS: [(&[&str], &str); 9] = [
@@ -113,9 +113,36 @@ pub fn meaning(line: &str) -> Option<&'static str> {
 /// Whether a line reports a failure rather than progress or a retry.
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
+    let lower = without_zero_counts(&line.to_ascii_lowercase());
     FAILURE_MARKERS.iter().any(|marker| lower.contains(marker))
         && !TRANSIENT_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Counts of nothing, such as `0 failed` in `test result: ok. 214 passed; 0 failed`,
+/// report success; drop them before looking for failure words. `10 failed` stays.
+fn without_zero_counts(lower: &str) -> String {
+    let mut kept = String::with_capacity(lower.len());
+    let mut rest = lower;
+    while let Some(index) = rest.find("0 ") {
+        let after = &rest[index + 2..];
+        let counted = ["failed", "failures", "failure", "errors", "error", "warnings"]
+            .iter()
+            .find(|word| after.starts_with(*word));
+        let preceded_by_digit = rest[..index].ends_with(|c: char| c.is_ascii_digit())
+            || (index == 0 && kept.ends_with(|c: char| c.is_ascii_digit()));
+        match counted {
+            Some(word) if !preceded_by_digit => {
+                kept.push_str(&rest[..index]);
+                rest = &after[word.len()..];
+            }
+            _ => {
+                kept.push_str(&rest[..index + 2]);
+                rest = after;
+            }
+        }
+    }
+    kept.push_str(rest);
+    kept
 }
 
 #[cfg(test)]
@@ -136,6 +163,30 @@ mod tests {
         let found = diagnose(lines.into_iter(), SUMMARY).unwrap();
         assert_eq!(found.cause, "error from registry: denied");
         assert!(found.meaning.unwrap().contains("registry refused"));
+    }
+
+    #[test]
+    fn a_count_of_nothing_is_success_and_a_count_of_ten_is_not() {
+        for success in [
+            "test result: ok. 214 passed; 0 failed; 0 ignored",
+            "Finished with 0 errors and 0 warnings",
+            "build: 0 failures",
+        ] {
+            assert!(!is_failure(success), "{success}");
+        }
+        for failure in [
+            "test result: FAILED. 3 passed; 10 failed",
+            "20 errors generated",
+            "error: 0 bytes written",
+        ] {
+            assert!(is_failure(failure), "{failure}");
+        }
+        let lines = ["error: could not connect", "test result: ok. 5 passed; 0 failed"];
+        assert_eq!(
+            diagnose(lines.into_iter(), "Build failed").unwrap().cause,
+            "error: could not connect",
+            "a later success summary is not picked as the cause"
+        );
     }
 
     #[test]
