@@ -29,6 +29,7 @@ fn request(root: &std::path::Path) -> Request {
                 storage: Storage {
                     container_gb: 10,
                     volume_gb: 10,
+                    ..Storage::default()
                 },
                 provider: "runpod".into(),
                 image: "test/worker".into(),
