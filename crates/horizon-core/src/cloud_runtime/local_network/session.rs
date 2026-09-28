@@ -10,7 +10,11 @@ use horizon_cloud_protocol::local_network::{
 use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{Arc, Mutex, PoisonError, TryLockError, mpsc},
+    sync::{
+        Arc, Mutex, PoisonError, TryLockError,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -22,8 +26,9 @@ const FIRST_RETRY: Duration = Duration::from_secs(1);
 const LAST_RETRY: Duration = Duration::from_secs(30);
 /// A session that stayed up this long starts the next retry from [`FIRST_RETRY`] again.
 const STABLE: Duration = Duration::from_secs(60);
-/// Calls waiting for an answer; the helper never has more in flight.
+/// Calls waiting for or being answered; the helper never has more in flight.
 const MAX_QUEUED: usize = 8;
+const BUSY: &str = "The owner's Horizon is answering too many requests; try again";
 pub(super) const UNSUPPORTED: &str =
     "This cloud's worker image does not support Local Network Bridge yet; rebuild the image";
 const CLOSED: &str = "The bridge connection to the worker closed";
@@ -273,6 +278,39 @@ fn call(line: &str) -> Option<(u64, Result<Request, String>)> {
     ))
 }
 
+/// Answers each call on its own thread, so a slow answer never delays the next call past the
+/// helper's deadline; at most [`MAX_QUEUED`] are answered at once, and more are refused.
+fn answer_calls(queue: &mpsc::Receiver<(u64, Result<Request, String>)>, answers: &Arc<dyn Answers>, input: &Input) {
+    let running = Arc::new(AtomicUsize::new(0));
+    for (id, request) in queue {
+        let admitted = running
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_QUEUED).then_some(count + 1)
+            })
+            .is_ok();
+        let (answers, input, slot) = (Arc::clone(answers), Arc::clone(input), Arc::clone(&running));
+        let answer = move || {
+            let answer = match request {
+                Ok(_) if !admitted => Answer::Refused(BUSY.into()),
+                Ok(request) => answers.answer(request),
+                Err(refusal) => Answer::Refused(refusal),
+            };
+            let _ = send(&input, &message(&Message::Answer { id, answer }), true);
+            if admitted {
+                slot.fetch_sub(1, Ordering::AcqRel);
+            }
+        };
+        if !admitted {
+            answer();
+            continue;
+        }
+        if let Err(error) = thread::Builder::new().name("local-network-answer".into()).spawn(answer) {
+            tracing::debug!(%error, "local network answer thread did not start");
+            running.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
 impl Hold {
     fn spawn(mut command: Command, answers: &Arc<dyn Answers>) -> std::io::Result<Self> {
         let mut child = command.spawn()?;
@@ -306,17 +344,7 @@ impl Hold {
             let (answers, input) = (Arc::clone(answers), Arc::clone(&hold.input));
             thread::Builder::new()
                 .name("local-network-calls".into())
-                .spawn(move || {
-                    for (id, request) in queue {
-                        let answer = match request {
-                            Ok(request) => answers.answer(request),
-                            Err(refusal) => Answer::Refused(refusal),
-                        };
-                        if send(&input, &message(&Message::Answer { id, answer }), true).is_err() {
-                            return;
-                        }
-                    }
-                })?;
+                .spawn(move || answer_calls(&queue, &answers, &input))?;
         }
         if let Some(errors) = hold.child.stderr.take() {
             let last = Arc::clone(&hold.last_error);

@@ -614,3 +614,51 @@ fn probed_ports_join_advertised_ones_and_hosts_come_back_as_named() {
     };
     assert_eq!((result.host, result.address), (long, v4("192.168.1.60")));
 }
+
+#[test]
+fn a_probe_while_another_runs_is_refused_at_once_and_refusals_cost_no_slot() {
+    let (entered, first_dialled) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let discoverer = Arc::new(Discoverer::with_parts(
+        probe_scope(),
+        Box::new(|_, _| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _| {
+            if target.port() == 554 {
+                let _ = entered.send(());
+                let _ = released.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            }
+            Ok(())
+        }),
+    ));
+    let probe = |discoverer: &Discoverer, host: &str, port: u16| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![port],
+        })
+    };
+    let first = {
+        let discoverer = Arc::clone(&discoverer);
+        thread::spawn(move || probe(&discoverer, "printer.local", 554))
+    };
+    first_dialled.recv_timeout(Duration::from_secs(10)).unwrap();
+    // The second probe is not queued behind the first: it is refused at once.
+    let started = Instant::now();
+    assert_eq!(
+        probe(&discoverer, "192.168.1.50", 80),
+        Answer::Refused(probe::RUNNING.into())
+    );
+    assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    release.send(()).unwrap();
+    assert!(matches!(first.join().unwrap(), Answer::Probe(result) if result.open == [554]));
+
+    // Probes refused before they connect use no slot of the rate limit.
+    for _ in 0..5 {
+        assert!(matches!(probe(&discoverer, "10.0.0.5", 80), Answer::Refused(_)));
+        assert!(matches!(probe(&discoverer, "missing.local", 80), Answer::Refused(_)));
+    }
+    for _ in 1..probe::PER_MINUTE {
+        assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Probe(_)));
+    }
+    assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Refused(limit) if limit.contains("a minute")));
+}

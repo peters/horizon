@@ -160,7 +160,10 @@ before it forwards port 554:
   5000, 8000, 8080, 8123, 8443, 8554 and 9100.
 - A plain TCP connect per port, closed at once; nothing else is sent. Four ports at
   a time, 1.5 seconds each.
-- At most 6 probes a minute per bridge, one at a time.
+- At most 6 probes a minute per bridge, one at a time: a probe asked for while
+  another runs is refused at once, and the agent tries again a few seconds later.
+  Probes refused before they connect, for example for a host outside the scope,
+  do not count.
 
 The answer lists open, refused and silent ports, and later discovery answers include
 the open ports. Horizon never walks the subnet on its own.

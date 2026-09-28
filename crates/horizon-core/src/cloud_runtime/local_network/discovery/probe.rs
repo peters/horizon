@@ -7,12 +7,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
-    sync::{Mutex, PoisonError},
+    sync::{Mutex, PoisonError, TryLockError},
     thread,
     time::{Duration, Instant},
 };
 
 pub(super) const PER_MINUTE: usize = 6;
+pub(super) const RUNNING: &str = "A probe is already running; try again in a few seconds";
 const MINUTE: Duration = Duration::from_secs(60);
 /// Connection attempts in flight at once.
 const AT_ONCE: usize = 4;
@@ -29,8 +30,8 @@ pub(super) fn connect(address: SocketAddr, timeout: Duration) -> io::Result<()> 
 
 pub(super) struct Prober {
     connect: Connect,
-    /// When recent probes started, oldest first. It stays locked for a whole probe, so probes
-    /// run one at a time.
+    /// When recent probes started to connect, oldest first; refused probes are not counted.
+    /// It stays locked for a whole probe, so probes run one at a time.
     started: Mutex<VecDeque<Instant>>,
     /// The ports found open, per address.
     open: Mutex<BTreeMap<Ipv4Addr, BTreeSet<u16>>>,
@@ -47,7 +48,13 @@ impl Prober {
 
     /// Tries `ports`, or the defaults, on `host`; the caller has validated both.
     pub(super) fn probe(&self, scope: &Scope, host: &str, ports: &[u16]) -> Answer {
-        let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        // Never queued: a probe waiting behind another could start after the helper stopped
+        // waiting for its answer.
+        let mut started = match self.started.try_lock() {
+            Ok(started) => started,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return Answer::Refused(RUNNING.into()),
+        };
         let now = Instant::now();
         while started.front().is_some_and(|at| now.duration_since(*at) >= MINUTE) {
             started.pop_front();

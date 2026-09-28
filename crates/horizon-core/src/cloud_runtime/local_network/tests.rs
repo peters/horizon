@@ -345,6 +345,48 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
         assert!(matches!(bridge.status().state, State::Active { .. }));
     }
 
+    /// Answers the first call slowly and every later one at once.
+    struct SlowFirst(AtomicUsize);
+
+    impl Answers for SlowFirst {
+        fn hello(&self) -> Hello {
+            Unanswered.hello()
+        }
+
+        fn answer(&self, _: Request) -> Answer {
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::thread::sleep(Duration::from_millis(1500));
+                return Answer::Refused("slow".into());
+            }
+            Answer::Refused("fast".into())
+        }
+    }
+
+    #[test]
+    fn a_slow_answer_does_not_hold_back_the_next_call() {
+        let root = tempfile::tempdir().unwrap();
+        let script = Script {
+            prepare: PREPARED.into(),
+            hold: r#"printf '{"proxy":"127.0.0.1:41234"}\n'
+printf '{"id":1,"request":"discover"}\n{"id":2,"request":"discover"}\n'
+while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
+                .into(),
+            log: root.path().join("log"),
+        };
+        let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
+        let bridge = Bridge::with_answers(proxy, script, Arc::new(SlowFirst(AtomicUsize::new(0)))).unwrap();
+        wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !log(&root).contains(r#""id":1"#) {
+            assert!(Instant::now() < deadline, "no answer: {}", log(&root));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let log = log(&root);
+        let fast = log.find(r#"{"answer":{"id":2,"answer":{"refused":"fast"}}}"#);
+        let slow = log.find(r#"{"answer":{"id":1,"answer":{"refused":"slow"}}}"#);
+        assert!(fast.is_some() && fast < slow, "{log}");
+    }
+
     #[test]
     fn an_image_without_the_helper_fails_without_retrying() {
         for old in [

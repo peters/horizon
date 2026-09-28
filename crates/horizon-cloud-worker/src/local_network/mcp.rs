@@ -76,7 +76,7 @@ impl Server {
 
     #[tool(
         name = "local_network_probe",
-        description = "Check which of a few TCP ports one device on the owner's local network accepts connections on, for example to see whether a camera serves RTSP or a board runs SSH before forwarding to it. The owner's Horizon tries each port with a plain TCP connect and sends nothing else. One device per call, at most 16 ports, at most 6 probes a minute, and only devices on the bridged subnet; it never scans the network. Open ports also appear in later local_network_discover answers."
+        description = "Check which of a few TCP ports one device on the owner's local network accepts connections on, for example to see whether a camera serves RTSP or a board runs SSH before forwarding to it. The owner's Horizon tries each port with a plain TCP connect and sends nothing else. One device per call, at most 16 ports, one probe at a time (retry after a few seconds if one is running), at most 6 probes a minute, and only devices on the bridged subnet; it never scans the network. Open ports also appear in later local_network_discover answers."
     )]
     async fn probe(&self, Parameters(request): Parameters<Probe>) -> CallToolResult {
         let paths = self.paths.clone();
