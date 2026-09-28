@@ -7,7 +7,7 @@ use crate::{
     hetzner::catalog::Catalog,
     prices::{Availability, Preferences, PriceList},
     provider::{self, Description},
-    runpod::flavors,
+    runpod::{flavors, volumes::REQUEST_SIZE_GB},
 };
 
 /// US dollars per euro, from a reference rate, so prices billed in either currency
@@ -110,6 +110,13 @@ fn runpod(profile: &Profile, (list, preferences): (&PriceList, &Preferences)) ->
             .filter(|gpu| list.gpu_availability(&gpu.id, &[]) != Availability::None)
             .min_by(|a, b| a.hourly.total_cmp(&b.hourly))?;
         return Some(candidate(gpu.name.clone(), gpu.hourly, running));
+    }
+    // A CPU worker keeps its workspace on a network volume, so an allowed data center
+    // must be able to hold one of this size, as creation requires.
+    let hosts_workspace =
+        REQUEST_SIZE_GB.contains(&volume_gb) && list.data_centers.iter().any(|center| center.workspace_storage);
+    if !hosts_workspace {
+        return None;
     }
     let requested = flavors::for_profile(profile, &preferences.cpu_flavors).ok()?;
     let (_, highest) = list.cpu_hourly(&requested, profile.cpu)?;

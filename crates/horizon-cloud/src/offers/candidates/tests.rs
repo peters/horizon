@@ -190,6 +190,27 @@ fn a_provider_without_a_worker_of_this_size_is_left_out() {
 }
 
 #[test]
+fn runpod_is_left_out_when_no_allowed_data_center_holds_the_workspace() {
+    let (mut list, preferences, catalog) = (list(), preferences(), catalog());
+    list.data_centers[0].workspace_storage = false;
+    let types = ["cx53".to_owned()];
+    let sources = configured(
+        &list,
+        &preferences,
+        HetznerSource {
+            catalog: &catalog,
+            server_types: &types,
+            locations: &[],
+        },
+    );
+    let ranked = candidates(&profile("runpod", (8, 32)), &sources, None);
+    assert_eq!(
+        ranked.iter().map(|candidate| candidate.provider).collect::<Vec<_>>(),
+        [&provider::HETZNER]
+    );
+}
+
+#[test]
 fn a_profile_hetzner_cannot_run_is_ranked_on_runpod_alone() {
     let (list, preferences, catalog) = (list(), preferences(), catalog());
     let types = ["cx53".to_owned()];
