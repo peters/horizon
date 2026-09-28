@@ -72,6 +72,8 @@ pub(super) struct Production {
     placement: horizon_core::cloud_panel::Placement,
     /// The provider chosen for the selected profile; `None` keeps the profile's own.
     provider: Option<&'static horizon_core::cloud_runtime::provider::Description>,
+    /// Whether the person picks the provider, or Horizon picks whichever ranks first.
+    provider_mode: creation::any_provider::Mode,
     /// Provider prices and stock shown while choosing the size.
     prices: prices::State,
     setup_agent: Option<PanelKind>,

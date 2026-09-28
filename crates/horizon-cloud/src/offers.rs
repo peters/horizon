@@ -363,7 +363,9 @@ fn level(availability: Availability) -> &'static str {
     }
 }
 
+mod candidates;
 mod hetzner;
+pub use candidates::{Candidate, ExchangeRate, HetznerSource, Sources, candidates};
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_section};
 
 #[cfg(test)]

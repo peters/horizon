@@ -2,6 +2,7 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 use egui::{PointerButton, Pos2, Rect, epaint::Shape};
 
+mod any_provider;
 mod providers;
 
 fn dialog_frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>) -> egui::FullOutput {

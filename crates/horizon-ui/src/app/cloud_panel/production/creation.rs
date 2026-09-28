@@ -11,6 +11,7 @@ use horizon_core::{
 };
 use std::path::Path;
 
+pub(super) mod any_provider;
 mod costs;
 mod gpu_choice;
 mod placement;
@@ -348,6 +349,24 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 form.provider = None;
                 form.placement = Placement::default();
             }
+            let any = any_provider::field(
+                ui,
+                &mut form.provider_mode,
+                &form.prices,
+                &horizon_core::cloud_runtime::prices::Profile {
+                    cpu,
+                    memory_gb,
+                    ..profile.clone()
+                },
+                &choices,
+            );
+            if let any_provider::Outcome::Top(top) = any
+                && form.provider != Some(top)
+            {
+                // The size stays: it is what every provider was ranked for.
+                form.provider = Some(top);
+                form.placement = Placement::default();
+            }
             let provider = provider::current(form.provider, profile);
             // A profile naming a provider this machine cannot use is never moved on its
             // own: the person picks one it can, even when there is only one.
@@ -358,7 +377,8 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                     provider.label
                 ));
             }
-            if (choices.len() > 1 || unusable)
+            if matches!(any, any_provider::Outcome::Off)
+                && (choices.len() > 1 || unusable)
                 && let Some(chosen) = provider::choice(ui, &choices, provider)
             {
                 form.provider = Some(chosen);
@@ -387,29 +407,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             {
                 form.placement = placement;
             }
-            match provider.placement {
-                ProviderPlacement::Locations => {
-                    ui.add_space(4.0);
-                    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
-                        form.placement = placement;
-                    }
-                }
-                ProviderPlacement::DataCenters => {
-                    if provider.offers(Choice::Region)
-                        && let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement)
-                    {
-                        form.placement = placement;
-                    }
-                    ui.add_space(4.0);
-                    match pricing::card(ui, &form.prices, &sized, &form.placement) {
-                        Some(pricing::CardAction::Refresh) => form.prices.refresh(),
-                        Some(pricing::CardAction::UseGpu(gpu)) if provider.offers(Choice::GpuType) => {
-                            form.placement.gpu_types = vec![gpu];
-                        }
-                        Some(pricing::CardAction::UseGpu(_)) | None => {}
-                    }
-                }
-            }
+            placement_fields(ui, &mut form.prices, &mut form.placement, (provider, &sized));
         }
     }
     let mut action = RepositoryAction::None;
@@ -427,6 +425,41 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             chosen => action = chosen,
         });
     action
+}
+
+/// Where a new cloud may go, as `provider` names places, with its price card.
+fn placement_fields(
+    ui: &mut Ui,
+    prices: &mut super::prices::State,
+    placement: &mut Placement,
+    (provider, sized): (
+        &horizon_core::cloud_runtime::provider::Description,
+        &horizon_core::cloud_runtime::prices::Profile,
+    ),
+) {
+    match provider.placement {
+        ProviderPlacement::Locations => {
+            ui.add_space(4.0);
+            if let Some(chosen) = provider::card(ui, prices, (provider, sized), placement) {
+                *placement = chosen;
+            }
+        }
+        ProviderPlacement::DataCenters => {
+            if provider.offers(Choice::Region)
+                && let Some(chosen) = placement::region_field(ui, prices, sized, placement)
+            {
+                *placement = chosen;
+            }
+            ui.add_space(4.0);
+            match pricing::card(ui, prices, sized, placement) {
+                Some(pricing::CardAction::Refresh) => prices.refresh(),
+                Some(pricing::CardAction::UseGpu(gpu)) if provider.offers(Choice::GpuType) => {
+                    placement.gpu_types = vec![gpu];
+                }
+                Some(pricing::CardAction::UseGpu(_)) | None => {}
+            }
+        }
+    }
 }
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool) -> RepositoryAction {
