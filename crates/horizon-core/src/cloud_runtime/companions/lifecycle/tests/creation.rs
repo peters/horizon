@@ -190,7 +190,61 @@ fn a_confirmation_never_carries_over_to_another_owners_claim() {
     receipt::save(&target, &other, id, Phase::Submitted).unwrap();
     assert_eq!(receipt::load(target.root()).unwrap().unwrap().confirmed, None);
     // The same owner's claim keeps its confirmation across phase updates.
-    receipt::confirm(&target, &fixture.owner, id).unwrap();
+    receipt::confirm(&target, &fixture.owner, id, "grant").unwrap();
     receipt::save(&target, &fixture.owner, id, Phase::Running).unwrap();
     assert_eq!(receipt::load(target.root()).unwrap().unwrap().confirmed, Some(id));
+}
+
+#[test]
+fn checking_the_companion_again_after_an_uncheck_needs_a_fresh_confirmation() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    // Unchecked and checked again with no execution in between: a new grant.
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.grants.get_mut("consumer").unwrap().id = "grant-2".into();
+    store.save(&state).unwrap();
+    drop(store);
+    {
+        let mut backend = Fake::new(&fixture);
+        assert!(execute_with(&fixture.request(), id, &mut backend).is_err());
+        assert!(backend.decisions.is_empty());
+    }
+    let mut backend = Fake::new(&fixture);
+    assert_eq!(
+        execute_with(&fixture.request(), id, &mut backend).unwrap().phase,
+        Phase::ConfirmationRequired
+    );
+    confirm_creation(&fixture.request(), id).unwrap();
+    execute_with(&fixture.request(), id, &mut backend).unwrap();
+    assert_eq!(backend.decisions, [Decision::Reconnect]);
+}
+
+#[test]
+fn a_creation_that_failed_before_allocating_can_be_confirmed_again() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    {
+        // A definite local failure: nothing reached the provider.
+        let mut backend = Fake::new(&fixture);
+        backend.fail = true;
+        backend.uncertain = false;
+        assert!(execute_with(&fixture.request(), id, &mut backend).is_err());
+    }
+    assert_eq!(status(&fixture.request(), id).unwrap().phase, Phase::RetryRequired);
+    // The binding now counts as existing, and its record is still unallocated.
+    let retry = fixture.submit(Action::EnsureReady).intent.operation_id;
+    let mut backend = Fake::new(&fixture);
+    assert_eq!(
+        execute_with(&fixture.request(), retry, &mut backend).unwrap().phase,
+        Phase::ConfirmationRequired
+    );
+    assert!(backend.decisions.is_empty());
+    confirm_creation(&fixture.request(), retry).unwrap();
+    execute_with(&fixture.request(), retry, &mut backend).unwrap();
+    assert_eq!(backend.decisions, [Decision::Reconnect]);
 }

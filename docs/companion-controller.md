@@ -60,11 +60,14 @@ operation lock. `status` only reads. A missing target stops at
 are refused before any deployment call.
 
 `confirm_creation` records the owner's confirmation, given on the source
-cloud's card, that one Ensure Ready may create its reserved companion: only
-once the card has created that cloud with the reserved ID and the bound
-checkout, prepared its record, and the owner's selection covers it. Execution
-checks that selection again under the source journal lock, so an uncheck after
-the confirmation withdraws it before any allocation.
+cloud's card, that one Ensure Ready may create its companion's first worker:
+only once that cloud's record is prepared with no worker ever requested,
+matches the bound checkout, and the owner's selection covers it. That covers a
+reserved cloud the card has just created and one whose confirmed start failed
+before allocating. The confirmation names the checkbox grant it was given for.
+Execution checks that grant again under the source journal lock, so an uncheck
+after the confirmation, even one followed by checking again, withdraws it
+before any allocation.
 
 Horizon claims agent requests from the browser MCP tools through its private
 request queue, scoped to the calling agent panel's workspace and the source

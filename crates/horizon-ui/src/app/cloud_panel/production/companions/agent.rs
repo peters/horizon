@@ -317,6 +317,11 @@ impl HorizonApp {
         } = submitted;
         let target = operation.intent.target_cloud_id.clone();
         let mut answer = describe(source, &alias, &operation);
+        if operation.phase == Phase::ConfirmationRequired
+            && let Some(asked) = self.request_companion_start(source, &alias, &operation, &context)
+        {
+            return (asked, false);
+        }
         if !operation.intent.state.pending() || operation.phase == Phase::ConfirmationRequired {
             return (answer, false);
         }

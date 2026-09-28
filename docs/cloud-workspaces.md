@@ -815,10 +815,13 @@ checkout, checks the companion for the source cloud and starts its first
 worker, paid like any new cloud; the agent's operation continues on the new
 card until Ready. **Decline** answers the agent's polls as `refused`. If a step
 fails, the card keeps what was already created and **Retry** continues from
-there. A checked cloud whose first worker was never started also answers
-`confirmation_required`; start it from its own card. The first request for a checked companion binds it to that
-cloud and its checkout; choosing another cloud for the same alias later needs
-the binding cleared first.
+there. A checked cloud whose first worker was never started, including one whose
+confirmed start failed before a worker was requested, is offered the same way
+with **Start cloud**. The confirmation holds only for the checkbox it was given
+with: unchecking the companion, even to check it again, needs a fresh
+confirmation before anything is created. The first request for a checked
+companion binds it to that cloud and its checkout; choosing another cloud for
+the same alias later needs the binding cleared first.
 
 These requests need the running Horizon that owns the source cloud, in a saved
 session; without it they fail with `cloud_companion_timed_out` or

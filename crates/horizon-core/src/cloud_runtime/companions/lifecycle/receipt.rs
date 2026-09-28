@@ -18,6 +18,9 @@ pub(super) struct Receipt {
     /// operation may allocate the target's first worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmed: Option<OperationId>,
+    /// The owner's checkbox grant the confirmation was given for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_grant: Option<String>,
 }
 
 pub(super) fn load(root: &Path) -> Result<Option<Receipt>> {
@@ -52,17 +55,19 @@ pub(super) fn save(store: &Store, owner: &Owner, id: OperationId, phase: Phase) 
     let previous = load(store.root())?;
     // A confirmation authorizes one owner's operation, never another source's claim
     // that happens to reuse its ID.
-    let confirmed = previous
+    let (confirmed, confirmed_grant) = previous
         .as_ref()
-        .filter(|record| record.owner == *owner && record.id == id)
-        .and_then(|record| record.confirmed)
-        .filter(|confirmed| *confirmed == id);
+        .filter(|record| record.owner == *owner && record.id == id && record.confirmed == Some(id))
+        .map_or((None, None), |record| {
+            (record.confirmed, record.confirmed_grant.clone())
+        });
     let record = Receipt {
         owner: owner.clone(),
         id,
         phase,
         released_workers: previous.map_or_else(Default::default, |record| record.released_workers),
         confirmed,
+        confirmed_grant,
     };
     write(store, &record)
 }
@@ -73,17 +78,20 @@ pub(super) fn withdraw(store: &Store, owner: &Owner, id: OperationId) -> Result<
         return Ok(());
     };
     record.confirmed = None;
+    record.confirmed_grant = None;
     write(store, &record)
 }
 
-/// Records the owner's confirmation that `id` may create the target's first worker.
-pub(super) fn confirm(store: &Store, owner: &Owner, id: OperationId) -> Result<()> {
+/// Records the owner's confirmation, given for checkbox `grant`, that `id` may create
+/// the target's first worker.
+pub(super) fn confirm(store: &Store, owner: &Owner, id: OperationId, grant: &str) -> Result<()> {
     let record = Receipt {
         owner: owner.clone(),
         id,
         phase: Phase::Submitted,
         released_workers: load(store.root())?.map_or_else(Default::default, |record| record.released_workers),
         confirmed: Some(id),
+        confirmed_grant: Some(grant.to_owned()),
     };
     write(store, &record)
 }

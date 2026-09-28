@@ -262,3 +262,65 @@ fn a_matching_checkout_in_the_workspace_is_found_and_chosen() {
     assert_eq!(pending.chosen, Some(found));
     assert!(pending.waiting());
 }
+
+#[test]
+fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let launch = |id: &str| -> horizon_core::cloud_panel::CloudLaunch {
+        serde_json::from_value(json!({
+            "id": id, "revision": "a".repeat(40), "profile_name": "cpu",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
+        }))
+        .unwrap()
+    };
+    for (issue, id) in [(1, "source"), (2, "target")] {
+        let mut group = horizon_core::cloud_panel::CloudGroup::new(
+            issue,
+            id.into(),
+            "workspace".into(),
+            format!("/checkouts/{id}").into(),
+            [0.0, 0.0],
+        );
+        group.remote = Some(launch(id));
+        app.cloud_prototype.groups.0.push(group);
+    }
+    let groups = app.cloud_prototype.groups.clone();
+    app.cloud_prototype.production.companions.sync(Some("session"), &groups);
+    let context = Context {
+        source: Target {
+            scope: owner().scope,
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "cpu"),
+        },
+        declarations: [("consumer".into(), declaration())].into(),
+        inventory: Vec::new(),
+    };
+    let operation = lifecycle::Operation {
+        intent: horizon_core::cloud_runtime::companions::intent::Intent {
+            operation_id: OperationId::generate(),
+            action: Action::EnsureReady,
+            target_cloud_id: "target".into(),
+            state: horizon_core::cloud_runtime::companions::intent::State::Submitted,
+        },
+        phase: lifecycle::Phase::ConfirmationRequired,
+    };
+    let id = operation.intent.operation_id;
+    let submitted = super::super::Submitted {
+        operation,
+        context,
+        alias: "consumer".into(),
+    };
+    let (answer, started) = app.continue_operation("source", submitted, &ctx);
+    assert!(!started);
+    assert_eq!(answer["phase"], "confirmation_required");
+    assert_eq!(
+        (answer["done"].as_bool(), answer["operation_id"].clone()),
+        (Some(false), json!(id))
+    );
+    let pending = &creation(&mut app).pending[0];
+    assert!(pending.existing && pending.waiting());
+    assert_eq!(pending.card, Some(2));
+    assert_eq!(pending.cloud_id.as_deref(), Some("target"));
+    assert_eq!(pending.chosen.as_deref(), Some(Path::new("/checkouts/target")));
+}

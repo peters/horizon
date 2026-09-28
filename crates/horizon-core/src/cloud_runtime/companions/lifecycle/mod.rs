@@ -259,9 +259,6 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     // so an uncheck cannot land between the checks and the recorded confirmation.
     let (_source, state) = request.load()?;
     let binding = request.authorize(&state)?;
-    if binding.origin() != intent::Origin::Reserved {
-        return Err(Error::Invalid("Only a reserved companion is created on confirmation"));
-    }
     // Access is verified once the worker is ready, so the owner's selection must
     // already cover the new cloud; otherwise the paid worker could never become Ready.
     let declaration = request
@@ -272,6 +269,11 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     request
         .require_selected(&state, &binding, declaration)
         .map_err(|_| Error::Invalid("Select the new companion cloud before confirming it"))?;
+    let grant = state
+        .grants
+        .get(request.alias)
+        .map(|grant| grant.id.clone())
+        .ok_or(Error::Invalid("Select the new companion cloud before confirming it"))?;
     state
         .intents
         .operation(id)
@@ -291,6 +293,8 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     }) {
         return Err(Error::Invalid("The operation no longer owns the companion target"));
     }
+    // A reserved cloud, or one whose confirmed first start failed before allocating:
+    // either way its record is still prepared and no worker was ever requested.
     let prepared = target
         .load()?
         .ok_or(Error::Invalid("Create the companion cloud before confirming it"))?;
@@ -301,10 +305,10 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
         || prepared.stop_requested
     {
         return Err(Error::Invalid(
-            "The companion cloud does not match its reserved binding",
+            "The companion cloud does not match its binding or already has a worker",
         ));
     }
-    receipt::confirm(&target, request.owner, id)
+    receipt::confirm(&target, request.owner, id, &grant)
 }
 
 /// Read status only. No reconciliation, resume, deployment or grant refresh occurs.
@@ -503,21 +507,27 @@ fn confirmed(
     intent: &Intent,
     (target, claim): (&Store, &receipt::Receipt),
 ) -> Result<bool> {
-    let confirmed = claim.confirmed == Some(intent.operation_id);
-    if confirmed && binding.origin() == intent::Origin::Reserved {
-        let declaration = request
-            .context
-            .declarations
-            .get(request.alias)
-            .ok_or(Error::Invalid("Companion declaration is missing"))?;
-        if request.require_selected(journal, binding, declaration).is_err() {
-            receipt::withdraw(target, request.owner, intent.operation_id)?;
-            return Err(Error::Invalid(
-                "The new companion cloud is no longer selected; its creation needs confirming again and nothing was created",
-            ));
-        }
+    if claim.confirmed != Some(intent.operation_id) {
+        return Ok(false);
     }
-    Ok(confirmed)
+    let declaration = request
+        .context
+        .declarations
+        .get(request.alias)
+        .ok_or(Error::Invalid("Companion declaration is missing"))?;
+    // The confirmation names the owner's checkbox grant it was given for: an uncheck,
+    // even one followed by checking the companion again, needs a fresh confirmation.
+    let same_grant = journal
+        .grants
+        .get(request.alias)
+        .is_some_and(|grant| claim.confirmed_grant.as_deref() == Some(grant.id.as_str()));
+    if !same_grant || request.require_selected(journal, binding, declaration).is_err() {
+        receipt::withdraw(target, request.owner, intent.operation_id)?;
+        return Err(Error::Invalid(
+            "The new companion cloud is no longer selected as it was when confirmed; its creation needs confirming again and nothing was created",
+        ));
+    }
+    Ok(true)
 }
 
 /// Runs the provider work under the held target and records what the target must

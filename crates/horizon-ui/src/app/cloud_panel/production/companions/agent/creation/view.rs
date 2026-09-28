@@ -46,12 +46,19 @@ impl Pending {
 
     pub(super) fn render(&mut self, ui: &mut egui::Ui) -> Option<Choice> {
         ui.separator();
-        ui.label(format!("An agent asked to create companion {}", self.alias));
+        ui.label(if self.existing {
+            format!(
+                "An agent asked to start companion {}, whose cloud was never started",
+                self.alias
+            )
+        } else {
+            format!("An agent asked to create companion {}", self.alias)
+        });
         ui.small(format!(
             "{} · {}",
             self.declaration.repository, self.declaration.profile
         ));
-        ui.small("Creating starts a paid cloud from the checkout's committed profile.");
+        ui.small("Starting it runs a paid cloud from the checkout's committed profile.");
         let mut choice = None;
         if self.waiting() {
             if self.search.is_some() {
@@ -79,7 +86,11 @@ impl Pending {
                 {
                     choice = Some(Choice::Browse);
                 }
-                let create = if locked { "Retry" } else { "Create cloud" };
+                let create = match (self.existing, locked) {
+                    (true, _) => "Start cloud",
+                    (false, true) => "Retry",
+                    (false, false) => "Create cloud",
+                };
                 if ui
                     .add_enabled(
                         self.chosen.is_some(),

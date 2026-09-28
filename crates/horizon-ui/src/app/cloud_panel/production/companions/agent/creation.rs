@@ -54,6 +54,8 @@ struct Pending {
     checkout: Option<Checkout>,
     /// The new cloud's card, once added.
     card: Option<u32>,
+    /// A cloud already created but never started, rather than a missing one.
+    existing: bool,
 }
 
 enum Step {
@@ -179,6 +181,7 @@ impl HorizonApp {
             cloud_id: None,
             checkout: None,
             card: None,
+            existing: false,
         };
         let answer = pending.describe();
         self.cloud_prototype
@@ -189,6 +192,62 @@ impl HorizonApp {
             .pending
             .push(pending);
         answer
+    }
+
+    /// Asks the owner to start a checked companion whose cloud was created but never
+    /// started, as a creation whose card already exists. `None` when its card is not
+    /// open here, and the agent is told to have it started from its card.
+    pub(super) fn request_companion_start(
+        &mut self,
+        source: &str,
+        alias: &str,
+        operation: &lifecycle::Operation,
+        context: &Context,
+    ) -> Option<Value> {
+        let target = &operation.intent.target_cloud_id;
+        let group = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.remote.as_ref().is_some_and(|launch| &launch.id == target))?;
+        let launch = group.remote.as_ref()?;
+        let owner = self
+            .cloud_prototype
+            .production
+            .companions
+            .entries
+            .get(source)?
+            .owner
+            .clone();
+        let declaration = context.declarations.get(alias)?.clone();
+        let creation = &mut self.cloud_prototype.production.companions.agent.creation;
+        if let Some(pending) = creation.find(source, alias) {
+            return Some(pending.describe());
+        }
+        let pending = Pending {
+            source: source.to_owned(),
+            alias: alias.to_owned(),
+            owner,
+            declaration,
+            id: operation.intent.operation_id,
+            checkouts: Vec::new(),
+            search: None,
+            chosen: Some(group.cwd.clone()),
+            error: None,
+            step: Step::Waiting,
+            cloud_id: Some(target.clone()),
+            checkout: Some(Checkout {
+                repository: group.cwd.clone(),
+                revision: launch.revision.clone(),
+                profile: launch.profile.clone(),
+            }),
+            card: Some(group.issue),
+            existing: true,
+        };
+        let answer = pending.describe();
+        creation.pending.push(pending);
+        Some(answer)
     }
 
     /// Directories in the workspace that may be checkouts: its own, its panels' and
