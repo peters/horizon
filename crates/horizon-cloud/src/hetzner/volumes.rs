@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, time::Instant};
 
+pub mod growth;
+
 /// Hetzner's volume size limits in GB.
 pub const SIZE_GB: std::ops::RangeInclusive<u32> = 10..=10_240;
 
