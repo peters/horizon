@@ -14,6 +14,7 @@ mod local_network;
 mod machine_size;
 mod offer_publication;
 mod offers;
+mod preparation;
 mod presentation;
 mod prices;
 mod progress;
@@ -480,103 +481,14 @@ impl HorizonApp {
         }
     }
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
-        if self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(|runtime| runtime.recovery_receiver.is_some())
-        {
-            return;
+        if let Some((request, siblings)) = self.prepare_production_deployment(id) {
+            self.cloud_prototype
+                .production
+                .runtimes
+                .entry(id)
+                .or_default()
+                .start_deployment(request, siblings, ctx);
         }
-        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.confirmation = Confirmation::None;
-        }
-        let Some(group) = self.cloud_prototype.groups.0.iter().find(|g| g.issue == id) else {
-            return;
-        };
-        let Some(launch) = group.remote.clone() else { return };
-        let repository = group.cwd.clone();
-        let siblings = group.siblings.clone();
-        let Some(root) = self.cloud_prototype.root.clone() else {
-            return;
-        };
-        if !launch.deployment_started {
-            self.save_cloud_prototype();
-            if !self.persist_cloud_before_allocation(id) {
-                return;
-            }
-        }
-        let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
-            Ok(path) => path,
-            Err(error) => {
-                let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-                runtime.state_unavailable = true;
-                runtime.error = Some(error.to_string());
-                return;
-            }
-        };
-        let loaded = Store::lock(&state_root).and_then(|store| store.load());
-        let (existing, pinned) = match loaded {
-            Ok(Some(state)) => (
-                matches!(
-                    state.operation,
-                    cloud_runtime::CreateState::Bound { .. } | cloud_runtime::CreateState::Requested
-                ),
-                state.siblings.is_some(),
-            ),
-            Ok(None) if !launch.deployment_started => (false, false),
-            other => {
-                let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-                runtime.state_unavailable = true;
-                runtime.error = Some(other.err().map_or_else(
-                    || "Deployment record is missing; reconcile its worker before continuing".into(),
-                    |error| error.to_string(),
-                ));
-                return;
-            }
-        };
-        let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.cloud_prototype.production.runtimes.entry(id).or_default().error =
-                    Some(format!("{error}. Configure {}", root.join("settings.json").display()));
-                return;
-            }
-        };
-        let request = Request::new(
-            launch.id.clone(),
-            repository,
-            launch.revision,
-            launch.profile,
-            state_root,
-            settings,
-        );
-        if let Err(error) = deployment::prepare(&request) {
-            self.cloud_prototype.error = Some(error.to_string());
-            return;
-        }
-        if let Some(launch) = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter_mut()
-            .find(|g| g.issue == id)
-            .and_then(|g| g.remote.as_mut())
-        {
-            launch.deployment_started = true;
-        }
-        self.save_cloud_prototype();
-        if !existing && !self.persist_cloud_before_allocation(id) {
-            return;
-        }
-        self.cloud_prototype
-            .production
-            .runtimes
-            .entry(id)
-            .or_default()
-            // A reconnect keeps the pinned siblings even when a checkout has since moved.
-            .start_deployment(request, if pinned { Vec::new() } else { siblings }, ctx);
     }
 
     fn persist_cloud_before_allocation(&mut self, id: u32) -> bool {

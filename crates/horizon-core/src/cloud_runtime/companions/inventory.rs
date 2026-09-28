@@ -54,6 +54,45 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
     })
 }
 
+/// A local checkout of a declared companion repository, read to create its cloud.
+#[derive(Clone, Debug)]
+pub struct Checkout {
+    pub repository: std::path::PathBuf,
+    pub revision: String,
+    pub profile: super::super::prices::Profile,
+}
+
+/// Reads `directory` as a checkout of `declaration`: its GitHub origin must be the
+/// declared repository, and its committed `.horizon/cloud.yml` must define the
+/// declared profile on a provider Horizon creates clouds on.
+/// # Errors
+/// Another repository, a missing or invalid configuration, or cancellation.
+pub fn checkout(directory: &Path, declaration: &Declaration, cancel: &Cancellation) -> Result<Checkout> {
+    let runner = Runner {
+        cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let prepared = repository::launch::prepare(&directory.to_string_lossy(), "HEAD", &runner)?;
+    let found = Declaration::new(identity(&prepared.repository, &runner)?, declaration.profile.clone());
+    if !found.matches(declaration) {
+        return Err(Error::Invalid("This checkout is not the companion's repository"));
+    }
+    let profile = prepared
+        .config
+        .profiles
+        .get(&declaration.profile)
+        .cloned()
+        .ok_or(Error::Invalid(
+            "The checkout's committed .horizon/cloud.yml has no creatable profile with the companion's profile name",
+        ))?;
+    Ok(Checkout {
+        repository: prepared.repository,
+        revision: prepared.revision,
+        profile,
+    })
+}
+
 /// The GitHub `owner/name` of a checkout's origin. The origin URL is never emitted, since
 /// it may embed a credential that is refused only after it is read.
 /// # Errors
@@ -121,6 +160,58 @@ mod tests {
             prepare(&owner, &groups, &Cancellation::default()),
             Err(Error::Invalid("Cloud identity is ambiguous"))
         ));
+    }
+
+    #[test]
+    fn a_checkout_must_be_the_declared_repository_with_the_declared_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(temp.path())
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["remote", "add", "origin", "https://github.com/example/consumer.git"]);
+        std::fs::create_dir_all(temp.path().join(".horizon")).unwrap();
+        std::fs::write(
+            temp.path().join(".horizon/cloud.yml"),
+            "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "Fixture",
+        ]);
+        let cancel = Cancellation::default();
+        // A directory inside the checkout resolves to its root.
+        let found = checkout(
+            &temp.path().join(".horizon"),
+            &Declaration::new("example/consumer", "cpu"),
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(found.repository, temp.path().canonicalize().unwrap());
+        assert_eq!(found.revision.len(), 40);
+        assert_eq!(found.profile.cpu, 4);
+        for declaration in [
+            Declaration::new("example/other", "cpu"),
+            Declaration::new("example/consumer", "gpu"),
+        ] {
+            assert!(checkout(temp.path(), &declaration, &cancel).is_err());
+        }
     }
 
     #[test]

@@ -184,11 +184,54 @@ impl HorizonApp {
         mut pending: Pending,
         resolved: Resolved,
     ) -> cloud_runtime::Result<()> {
-        let workspace = self
+        pending.launch.revision = resolved.revision;
+        let siblings = pending
+            .siblings
+            .into_iter()
+            .map(|sibling| cloud_runtime::siblings::Binding {
+                alias: sibling.alias,
+                local_repository: sibling.local_repository,
+                // Deployment pins exactly the reviewed commit and refuses a checkout that
+                // moved on, including on a retry.
+                revision: Some(sibling.revision),
+            })
+            .collect();
+        // Cleared first, so a failed save while adding the card stays visible.
+        self.cloud_prototype.error = None;
+        let id = self.add_cloud_group(
+            pending.title,
+            pending.workspace,
+            resolved.repository,
+            pending.launch,
+            siblings,
+        )?;
+        self.cloud_prototype.production.creating = false;
+        // The next cloud authorizes its own siblings; a reopened form starts unchecked.
+        self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
+        self.cloud_overview(ctx);
+        if self.cloud_prototype.production.launch.workspace.is_some() {
+            self.start_production_deployment(id, ctx);
+        }
+        Ok(())
+    }
+
+    /// Adds and saves a new cloud panel in `workspace` without starting it, and returns
+    /// its card ID.
+    /// # Errors
+    /// The workspace was removed or detached, or there are too many clouds.
+    pub(super) fn add_cloud_group(
+        &mut self,
+        title: String,
+        workspace: String,
+        repository: PathBuf,
+        launch: CloudLaunch,
+        siblings: Vec<cloud_runtime::siblings::Binding>,
+    ) -> cloud_runtime::Result<u32> {
+        let workspace_id = self
             .board
-            .workspace_id_by_local_id(&pending.workspace)
+            .workspace_id_by_local_id(&workspace)
             .ok_or(cloud_runtime::Error::Invalid("The selected workspace was removed"))?;
-        if self.workspace_is_detached(workspace) {
+        if self.workspace_is_detached(workspace_id) {
             return Err(cloud_runtime::Error::Invalid("The selected workspace is now detached"));
         }
         let id = self
@@ -201,41 +244,19 @@ impl HorizonApp {
             .unwrap_or(100)
             .checked_add(1)
             .ok_or(cloud_runtime::Error::Invalid("Too many clouds"))?;
-        pending.launch.revision = resolved.revision;
-        let position = self
-            .cloud_prototype
-            .groups
-            .next_position(&pending.workspace, &self.board);
-        let mut group = CloudGroup::new(id, pending.title, pending.workspace, resolved.repository, position);
-        group.environment.id.clone_from(&pending.launch.id);
+        let position = self.cloud_prototype.groups.next_position(&workspace, &self.board);
+        let mut group = CloudGroup::new(id, title, workspace, repository, position);
+        group.environment.id.clone_from(&launch.id);
         group.environment.connection = horizon_core::cloud_panel::CloudConnection::ManagedWorker;
-        group.environment.provider = Some(pending.launch.profile.provider.clone());
-        group.environment.profile = Some(pending.launch.profile_name.clone());
-        group.environment.image.clone_from(&pending.launch.profile.image);
-        group.remote = Some(pending.launch);
-        group.siblings = pending
-            .siblings
-            .into_iter()
-            .map(|sibling| cloud_runtime::siblings::Binding {
-                alias: sibling.alias,
-                local_repository: sibling.local_repository,
-                // Deployment pins exactly the reviewed commit and refuses a checkout that
-                // moved on, including on a retry.
-                revision: Some(sibling.revision),
-            })
-            .collect();
+        group.environment.provider = Some(launch.profile.provider.clone());
+        group.environment.profile = Some(launch.profile_name.clone());
+        group.environment.image.clone_from(&launch.profile.image);
+        group.remote = Some(launch);
+        group.siblings = siblings;
         group.reconcile(&mut self.board);
         self.cloud_prototype.groups.0.push(group);
-        self.cloud_prototype.production.creating = false;
-        // The next cloud authorizes its own siblings; a reopened form starts unchecked.
-        self.cloud_prototype.production.launch.siblings = super::creation::siblings::State::default();
-        self.cloud_prototype.error = None;
         self.save_cloud_prototype();
-        self.cloud_overview(ctx);
-        if self.cloud_prototype.production.launch.workspace.is_some() {
-            self.start_production_deployment(id, ctx);
-        }
-        Ok(())
+        Ok(id)
     }
 }
 
