@@ -413,7 +413,11 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             {
                 form.placement = placement;
             }
-            placement_fields(ui, &mut form.prices, &mut form.placement, (provider, &sized));
+            // With Any provider, every allowed place stays open: the chosen offer was
+            // ranked for any of them.
+            ui.add_enabled_ui(matches!(any, any_provider::Outcome::Off), |ui| {
+                placement_fields(ui, &mut form.prices, &mut form.placement, (provider, &sized));
+            });
         }
     }
     let mut action = RepositoryAction::None;

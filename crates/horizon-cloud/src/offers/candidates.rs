@@ -151,27 +151,32 @@ fn hetzner(profile: &Profile, source: HetznerSource<'_>) -> Option<Candidate> {
     let mut seen = std::collections::BTreeSet::new();
     locations.retain(|location| seen.insert(*location));
     let volume_month = catalog.volume_gb_month_eur * f64::from(profile.storage.volume_gb);
-    locations.into_iter().find_map(|location| {
-        let offer = source.server_types.iter().find_map(|server_type| {
-            catalog.offers.iter().find(|offer| {
-                &offer.server_type == server_type
-                    && offer.location == location
-                    && offer.cores >= u32::from(profile.cpu)
-                    && offer.memory_gb >= f64::from(profile.memory_gb)
-                    && offer.disk_gb >= u32::from(profile.storage.container_gb)
+    let (location, offer) = locations.into_iter().find_map(|location| {
+        source
+            .server_types
+            .iter()
+            .find_map(|server_type| {
+                catalog.offers.iter().find(|offer| {
+                    &offer.server_type == server_type
+                        && offer.location == location
+                        && offer.cores >= u32::from(profile.cpu)
+                        && offer.memory_gb >= f64::from(profile.memory_gb)
+                        && offer.disk_gb >= u32::from(profile.storage.container_gb)
+                })
             })
-        })?;
-        // Every server has an IPv4 address; a location that cannot price it is skipped
-        // rather than ranked as cheaper than it is.
-        let ipv4_hour = catalog.ipv4_hour_eur.get(location)?;
-        Some(Candidate {
-            provider: &provider::HETZNER,
-            name: offer.server_type.clone(),
-            location: Some(location.to_owned()),
-            hourly: offer.hourly_eur,
-            running_hourly: offer.hourly_eur + volume_month / MONTH_HOURS + ipv4_hour,
-            currency: provider::HETZNER.currency,
-        })
+            .map(|offer| (location, offer))
+    })?;
+    // Every server has an IPv4 address. When the worker creation asks for first cannot
+    // be priced, Hetzner is left out rather than ranked as cheaper than it is or named
+    // by a location creation does not try first.
+    let ipv4_hour = catalog.ipv4_hour_eur.get(location)?;
+    Some(Candidate {
+        provider: &provider::HETZNER,
+        name: offer.server_type.clone(),
+        location: Some(location.to_owned()),
+        hourly: offer.hourly_eur,
+        running_hourly: offer.hourly_eur + volume_month / MONTH_HOURS + ipv4_hour,
+        currency: provider::HETZNER.currency,
     })
 }
 

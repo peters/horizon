@@ -224,7 +224,14 @@ fn turning_it_on_reopens_every_allowed_location() {
     let output = tall_frame(&ctx, &mut app);
     // Hetzner ranks first, the provider already in use.
     click(&ctx, &mut app, label_rect(&output, CHECKBOX).center());
-    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.placement.is_any());
+    // While it is on, the location choice cannot narrow the place again.
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    );
     assert!(app.cloud_prototype.production.placement.is_any());
 }
 

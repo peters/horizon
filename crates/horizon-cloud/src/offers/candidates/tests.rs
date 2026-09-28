@@ -162,6 +162,24 @@ fn without_a_rate_the_profiles_own_provider_comes_first() {
     let ranked = candidates(&profile("hetzner", (8, 32)), &sources, None);
     assert_eq!(ranked[0].provider, &provider::HETZNER);
     assert_eq!(ranked.len(), 2);
+    // Creation asks in nbg1 first, so without its address price Hetzner is left out
+    // rather than named by hel1.
+    let mut unpriced = catalog.clone();
+    unpriced.ipv4_hour_eur.remove("nbg1");
+    let sources = configured(
+        &list,
+        &preferences,
+        HetznerSource {
+            catalog: &unpriced,
+            server_types: &types,
+            locations: &locations,
+        },
+    );
+    let ranked = candidates(&profile("hetzner", (8, 32)), &sources, None);
+    assert_eq!(
+        ranked.iter().map(|candidate| candidate.provider).collect::<Vec<_>>(),
+        [&provider::RUNPOD]
+    );
 }
 
 #[test]
