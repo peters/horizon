@@ -109,7 +109,7 @@ impl HorizonApp {
                 } => {
                     let (answer, started) = match outcome {
                         Ok(submitted) => {
-                            let (answer, started) = self.continue_operation(&source, *submitted, ctx);
+                            let (answer, started) = self.answer_submitted(&request, &source, *submitted, ctx);
                             (Ok(answer), started)
                         }
                         Err(error) => (Err(error), false),
@@ -134,6 +134,21 @@ impl HorizonApp {
         if !self.cloud_prototype.production.companions.agent.held.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// The answer to a recorded request, continuing its operation unless it is a
+    /// status poll, which only reads. Returns whether an execution started.
+    fn answer_submitted(
+        &mut self,
+        request: &UsageRequest,
+        source: &str,
+        submitted: Submitted,
+        ctx: &egui::Context,
+    ) -> (Value, bool) {
+        if reads_only(request) {
+            return (describe(source, &submitted.alias, &submitted.operation), false);
+        }
+        self.continue_operation(source, submitted, ctx)
     }
 
     fn release_companion_source(&mut self, source: &str) {
@@ -459,6 +474,13 @@ fn submit(
         context,
         alias,
     })
+}
+
+fn reads_only(request: &UsageRequest) -> bool {
+    request
+        .cloud_companion
+        .as_ref()
+        .is_none_or(|companion| companion.action == CompanionAction::Status)
 }
 
 fn retry_busy<T>(mut attempt: impl FnMut() -> cloud_runtime::Result<T>) -> cloud_runtime::Result<T> {

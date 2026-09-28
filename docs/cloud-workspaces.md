@@ -754,11 +754,13 @@ checked on the source cloud's card, through the browser MCP server:
 - `cloud_companion_stop` stops the companion's worker and keeps its workspace
   storage and worktrees. It stays stopped until an explicit Ensure Ready:
   checking its box or restarting Horizon does not start it.
-- `cloud_companion_operation` reads an operation's phase by its `operation_id`
-  without changing anything.
+- `cloud_companion_operation` reads an operation's phase from the original
+  request's `cloud` and `alias` and its `operation_id`, without changing
+  anything: polling never starts or continues an operation.
 
 Ensure Ready and Stop answer at once with an `operation_id` and a phase; poll
-`cloud_companion_operation` until `done` is true. A caller may pass its own UUID
+`cloud_companion_operation` with the same `cloud` and `alias` until `done` is
+true. A caller may pass its own UUID
 as `operation_id`, so a lost answer is polled instead of sent again. Repeated or
 concurrent requests for the same companion share one operation and never start
 a second worker. The operation runs on the target cloud's card with its progress

@@ -228,3 +228,44 @@ fn a_busy_journal_is_retried_briefly() {
     });
     assert_eq!(result.unwrap(), 3);
 }
+
+#[test]
+fn a_status_poll_never_starts_a_recorded_operation() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let context = Context {
+        source: Target {
+            scope: Scope {
+                session_id: "session".into(),
+                workspace_id: "workspace".into(),
+            },
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "dev"),
+        },
+        declarations: std::collections::BTreeMap::new(),
+        inventory: Vec::new(),
+    };
+    let request = |action: &str| -> UsageRequest {
+        serde_json::from_value(json!({
+            "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+            "deadline_at_millis": i64::MAX, "claimed": true,
+            "cloud_companion": {"action": action, "cloud": "source", "alias": "consumer",
+                "operation_id": OperationId::generate()}
+        }))
+        .unwrap()
+    };
+    let submitted = || Submitted {
+        operation: operation(intent::Action::EnsureReady, intent::State::Submitted, Phase::Submitted),
+        context: context.clone(),
+        alias: "consumer".into(),
+    };
+    let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    assert!(!started);
+    assert_eq!(answer["phase"], "submitted");
+    assert_eq!(answer["message"], hint(Phase::Submitted));
+    // The same operation sent again as Ensure Ready tries to continue it on its card,
+    // which is not open here.
+    let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
+    assert!(!started);
+    assert_ne!(answer["message"], hint(Phase::Submitted));
+}

@@ -1,5 +1,6 @@
 //! Companion cloud requests for the running Horizon. Ensure Ready and Stop answer once
-//! Horizon has recorded the operation; callers poll it by operation ID.
+//! Horizon has recorded the operation; callers poll it with the same cloud and alias
+//! and its operation ID.
 use super::BrowserController;
 use horizon_browser_control::manifest::provider_usage::{
     self, CompanionAction, CompanionRequest, REQUEST_DEADLINE_MILLIS, new_operation_id,
@@ -61,7 +62,7 @@ impl BrowserController {
         .map_err(|error| {
             if error.starts_with("cloud_companion_timed_out") {
                 // Horizon may have recorded it; the ID lets the caller find out.
-                format!("{error}; poll cloud_companion_operation with operation_id {operation_id}")
+                format!("{error}; poll cloud_companion_operation with the same cloud and alias and operation_id {operation_id}")
             } else {
                 error
             }
