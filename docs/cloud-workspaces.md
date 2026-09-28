@@ -177,8 +177,10 @@ for #966 found was refused by REST and accepted by GraphQL. This migration chang
 the shared account-credential adapter; it does not put account credentials inside
 workers or remove that independently qualified idle-stop path.
 
-CPU workspaces require standard network storage and an account with no Serverless
-endpoints. The v2 API does not expose complete mounts for stale or scaled-down
+CPU workspaces use network storage and require an account with no Serverless
+endpoints. Profiles select `storage.volume_tier: STANDARD` (the default) or
+`HIGH_PERFORMANCE`. Placement and allocation require that exact tier; Horizon
+never silently substitutes another tier. The v2 API does not expose complete mounts for stale or scaled-down
 Serverless workers. Horizon therefore refuses new CPU storage allocations, initial
 attachment and storage deletion while any Serverless endpoint exists. This includes
 unrelated endpoints with no currently configured volumes. Use a separate account
@@ -258,8 +260,11 @@ hour compute estimates, and what the cloud costs per month running all month and
 stopped all month. Below that it lists every kind of storage the cloud is billed
 for, with its size and monthly price while running and while stopped:
 
-- the network volume of a CPU cloud: $0.07 per GB for the first TB and $0.05
-  beyond it, billed whether the cloud runs or not;
+- a standard network volume of a CPU cloud: $0.07 per GB for the first TB and
+  $0.05 beyond it, billed whether the cloud runs or not;
+- a high-performance CPU network volume: **Price unavailable** until a supported
+  quote exists. Its running and stopped monthly totals are also unavailable;
+  compute and container-disk estimates remain visible;
 - the pod volume of a GPU cloud: $0.10 per GB while running and $0.20 while
   stopped;
 - the container disk: $0.10 per GB, billed only while running and cleared when
@@ -369,8 +374,8 @@ views from their saved remote references.
 Before readiness, Horizon verifies the provider's assigned container disk and
 persistent volume sizes and the `/workspace` mount path against the profile.
 Missing, undersized or differently mounted storage blocks source and agent-credential
-transfer. New CPU clouds allocate an owned standard network volume in a data center
-that has the cloud's exact CPU size in stock, honoring configured location
+transfer. New CPU clouds allocate an owned network volume of the profile's selected
+tier in a data center that has the cloud's exact CPU size and tier in stock, honoring configured location
 preferences, and attach it at worker creation. The provider catalog rates only CPU
 flavor families, so Horizon confirms stock for the requested vCPU and memory size
 before allocating storage; when no configured data center has it, no volume is
