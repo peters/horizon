@@ -2,7 +2,7 @@
 //! it and recording the confirmation. Each is idempotent for a retry.
 use super::{
     Action, Binding, Cancellation, Checkout, CloudGroups, Context, Declaration, OperationId, Origin, Owner, Path,
-    Settings, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
+    Settings, Snapshot, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
 };
 
 /// Idempotent for the same cloud ID, checkout and operation, so a retry after a
@@ -56,6 +56,10 @@ pub(super) fn reserve(
     Ok(checkout)
 }
 
+/// The context a confirmed creation runs with, and the source's companions as the
+/// selection left them when it returned them.
+pub(super) type Selected = Box<(Context, Option<Snapshot>)>;
+
 pub(super) fn select_and_confirm(
     root: &Path,
     owner: &Owner,
@@ -63,7 +67,7 @@ pub(super) fn select_and_confirm(
     alias: &str,
     target: &str,
     id: OperationId,
-) -> Result<Context, String> {
+) -> Result<Selected, String> {
     let cancel = Cancellation::default();
     let context = inventory::prepare(owner, groups, &cancel).map_err(|error| error.to_string())?;
     let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
@@ -83,9 +87,13 @@ pub(super) fn select_and_confirm(
             &cancel,
         )
     });
-    if let Err(error) = selected {
-        tracing::info!(%error, "selected the new companion cloud before it has a worker");
-    }
+    let snapshot = match selected {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            tracing::info!(%error, "selected the new companion cloud before it has a worker");
+            None
+        }
+    };
     retry_busy(|| {
         lifecycle::confirm_creation(
             &lifecycle::Request {
@@ -98,7 +106,7 @@ pub(super) fn select_and_confirm(
         )
     })
     .map_err(|error| error.to_string())?;
-    Ok(context)
+    Ok(Box::new((context, snapshot)))
 }
 
 /// Cancels a recorded, unstarted operation for a decline. Nothing recorded is nothing

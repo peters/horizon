@@ -181,8 +181,16 @@ impl HorizonApp {
         ctx: &egui::Context,
     ) -> (Value, bool) {
         if reads_only(request) {
-            let mut answer = describe(source, &submitted.alias, &submitted.operation);
             let operation = &submitted.operation;
+            // A never-started card learns that it needs the owner's Start only when the
+            // run sent to it ends, so a poll puts that offer on the card. It starts nothing.
+            if operation.phase == Phase::ConfirmationRequired
+                && let Some(asked) =
+                    self.request_companion_start(source, &submitted.alias, operation, &submitted.context)
+            {
+                return (asked, false);
+            }
+            let mut answer = describe(source, &submitted.alias, operation);
             if answer["done"] == false
                 && !self
                     .cloud_prototype

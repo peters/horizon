@@ -98,6 +98,22 @@ impl Entry {
         self.due = Instant::now();
     }
 
+    /// Shows a selection a creation saved outside the periodic refresh: the snapshot
+    /// that selection returned, or else the row marked checked for the new cloud.
+    fn show_selected(&mut self, alias: &str, target: &str, snapshot: Option<Snapshot>) {
+        if let Some(snapshot) = snapshot {
+            self.snapshot = Some(snapshot);
+            self.error = None;
+        } else if let Some(row) = self
+            .snapshot
+            .as_mut()
+            .and_then(|snapshot| snapshot.rows.iter_mut().find(|row| row.companion.alias == alias))
+        {
+            row.companion.selected = true;
+            row.companion.target_cloud_id = Some(target.to_owned());
+        }
+    }
+
     fn discard_pending(&mut self) {
         if let Some(Action::Select { alias, .. }) = self.pending.take() {
             self.selecting.remove(&alias);

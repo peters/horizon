@@ -7,7 +7,7 @@ use horizon_core::{
     cloud_runtime::{
         self, Cancellation,
         companions::{
-            self, Context, Declaration, Target,
+            self, Context, Declaration, Snapshot, Target,
             intent::{Action, Binding, Origin},
             inventory::{self, Checkout},
             lifecycle,
@@ -73,7 +73,7 @@ enum Step {
     Reserving(Receiver<Result<Checkout, String>>),
     Selecting {
         target: String,
-        receiver: Receiver<Result<Context, String>>,
+        receiver: Receiver<Result<Selected, String>>,
     },
     /// Confirmed; starts once no uncheck of the source is still being saved, so a
     /// clicked uncheck always reaches the journal before any allocation.
@@ -86,8 +86,8 @@ enum Step {
 }
 
 enum Progress {
-    Reserved(Result<Checkout, String>),
-    Selected(Result<Context, String>),
+    Reserved(Result<Box<Checkout>, String>),
+    Selected(Result<Selected, String>),
     Declined(Result<(), String>),
     Start,
 }
@@ -171,6 +171,8 @@ impl State {
     pub(in crate::app::cloud_panel::production::companions::agent) fn discard(&mut self) -> Vec<String> {
         self.actions.clear();
         self.picker = None;
+        // A declined operation ID is only final within its session's journal.
+        self.declined.clear();
         self.pending
             .drain(..)
             .filter(|pending| {
@@ -304,7 +306,10 @@ impl HorizonApp {
         {
             let progress = match &pending.step {
                 Step::Waiting => None,
-                Step::Reserving(receiver) => receiver.try_recv().ok().map(Progress::Reserved),
+                Step::Reserving(receiver) => receiver
+                    .try_recv()
+                    .ok()
+                    .map(|reserved| Progress::Reserved(reserved.map(Box::new))),
                 Step::Selecting { receiver, .. } => receiver.try_recv().ok().map(Progress::Selected),
                 Step::Declining(receiver) => receiver.try_recv().ok().map(Progress::Declined),
                 Step::Starting { .. } => (!clearing(&pending.source)).then_some(Progress::Start),
@@ -316,16 +321,24 @@ impl HorizonApp {
             let creation = &mut self.cloud_prototype.production.companions.agent.creation;
             match progress {
                 Progress::Reserved(Ok(checkout)) => {
-                    creation.pending[index].checkout = Some(checkout);
+                    creation.pending[index].checkout = Some(*checkout);
                     self.add_companion_cloud(index, ctx);
                 }
-                Progress::Selected(Ok(context)) => {
+                Progress::Selected(Ok(selected)) => {
+                    let (context, snapshot) = *selected;
                     let pending = &mut creation.pending[index];
                     if let Step::Selecting { target, .. } = &pending.step {
+                        let target = target.clone();
+                        let (source, alias) = (pending.source.clone(), pending.alias.clone());
                         pending.step = Step::Starting {
                             target: target.clone(),
                             context: Box::new(context),
                         };
+                        // Show the checked box now: the source's refresh stays held until
+                        // the start, and the owner can still uncheck before allocation.
+                        if let Some(entry) = self.cloud_prototype.production.companions.entries.get_mut(&source) {
+                            entry.show_selected(&alias, &target, snapshot);
+                        }
                     }
                 }
                 Progress::Start => self.run_companion_creation(index, ctx),
@@ -544,7 +557,7 @@ mod offers;
 mod steps;
 mod view;
 
-use steps::{cancel, reserve, select_and_confirm};
+use steps::{Selected, cancel, reserve, select_and_confirm};
 
 #[cfg(test)]
 mod tests;

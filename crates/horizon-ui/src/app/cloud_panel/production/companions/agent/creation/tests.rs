@@ -351,18 +351,31 @@ fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
         phase: lifecycle::Phase::ConfirmationRequired,
     };
     let id = operation.intent.operation_id;
-    let submitted = super::super::Submitted {
-        operation,
-        context,
+    let submitted = || super::super::Submitted {
+        operation: operation.clone(),
+        context: context.clone(),
         alias: "consumer".into(),
     };
-    let (answer, started) = app.continue_operation("source", submitted, &ctx);
+    // The run that found the card never started ended on its own; the agent's next
+    // status poll is what puts the offer on the card.
+    let status: super::super::UsageRequest = serde_json::from_value(json!({
+        "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+        "deadline_at_millis": i64::MAX, "claimed": true,
+        "cloud_companion": {"action": "status", "cloud": "source", "alias": "consumer", "operation_id": id}
+    }))
+    .unwrap();
+    let (answer, started) = app.answer_submitted(&status, "source", submitted(), &ctx);
     assert!(!started);
     assert_eq!(answer["phase"], "confirmation_required");
     assert_eq!(
         (answer["done"].as_bool(), answer["operation_id"].clone()),
         (Some(false), json!(id))
     );
+    // Ensure Ready sent again shows the same offer.
+    let (answer, started) = app.continue_operation("source", submitted(), &ctx);
+    assert!(!started);
+    assert_eq!(answer["operation_id"], json!(id));
+    assert_eq!(creation(&mut app).pending.len(), 1);
     let pending = &creation(&mut app).pending[0];
     assert!(pending.existing && pending.waiting());
     assert_eq!(pending.card, Some(2));
@@ -420,8 +433,36 @@ fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
     assert!(refused["message"].as_str().unwrap().contains("card stays"));
 }
 
+/// The source's companions with `consumer` not yet checked.
+fn unchecked() -> companions::Snapshot {
+    let companion = companions::Companion {
+        alias: "consumer".into(),
+        repository: "example/consumer".into(),
+        profile: "cpu".into(),
+        target_cloud_id: None,
+        selected: false,
+        status: companions::Status::Stopped,
+        access: None,
+    };
+    companions::Snapshot {
+        catalog: companions::Catalog {
+            version: 1,
+            source_cloud_id: "source".into(),
+            observed_at: 0,
+            companions: vec![companion.clone()],
+        },
+        rows: vec![companions::Row {
+            companion,
+            candidates: Vec::new(),
+            error: None,
+        }],
+        publication_error: None,
+        notice: None,
+    }
+}
+
 #[test]
-fn a_confirmed_creation_waits_for_a_queued_uncheck_and_a_session_change_discards_it() {
+fn a_confirmed_creation_shows_its_checkbox_waits_for_an_uncheck_and_ends_with_its_session() {
     let (_temp, mut app) = crate::app::test_support::test_app();
     let ctx = egui::Context::default();
     let mut group = horizon_core::cloud_panel::CloudGroup::new(
@@ -451,12 +492,30 @@ fn a_confirmed_creation_waits_for_a_queued_uncheck_and_a_session_change_discards
         declarations: std::collections::BTreeMap::new(),
         inventory: Vec::new(),
     };
-    creation(&mut app).pending[0].step = Step::Starting {
+    // The source's companions as its last refresh saw them: not yet checked.
+    app.cloud_prototype
+        .production
+        .companions
+        .entries
+        .get_mut("source")
+        .unwrap()
+        .snapshot = Some(unchecked());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    creation(&mut app).pending[0].step = Step::Selecting {
         target: "target".into(),
-        context: Box::new(context),
+        receiver,
     };
+    sender.send(Ok(Box::new((context, None)))).unwrap();
     let companions = &mut app.cloud_prototype.production.companions;
     companions.agent.hold("source");
+    // Once confirmed, the card shows the new cloud checked while its refresh is held,
+    // so the owner can still uncheck it.
+    app.poll_companion_creations(&ctx);
+    assert!(matches!(creation(&mut app).pending[0].step, Step::Starting { .. }));
+    let companions = &mut app.cloud_prototype.production.companions;
+    let row = &companions.entries["source"].snapshot.as_ref().unwrap().rows[0].companion;
+    assert!(row.selected);
+    assert_eq!(row.target_cloud_id.as_deref(), Some("target"));
     companions
         .entries
         .get_mut("source")
@@ -478,12 +537,20 @@ fn a_confirmed_creation_waits_for_a_queued_uncheck_and_a_session_change_discards
     app.poll_companion_creations(&ctx);
     let pending = &creation(&mut app).pending[0];
     assert!(pending.waiting() && pending.error.is_some());
-    // A creation in progress in the previous session is discarded, releasing its hold.
+    // A creation in progress in the previous session is discarded, releasing its hold,
+    // and that session's declines no longer answer polls.
     let companions = &mut app.cloud_prototype.production.companions;
     let (_sender, receiver) = std::sync::mpsc::channel();
     companions.agent.creation.pending[0].step = Step::Reserving(receiver);
     companions.agent.hold("source");
+    companions.agent.creation.declined.push_back(Declined {
+        source: "source".into(),
+        alias: "other".into(),
+        id: OperationId::generate(),
+        kept: None,
+    });
     companions.set_session(Some("other"));
     assert!(companions.agent.creation.pending.is_empty());
+    assert!(companions.agent.creation.declined.is_empty());
     assert!(!companions.agent.holds("source"));
 }
