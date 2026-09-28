@@ -605,7 +605,7 @@ pub(super) struct Center {
     #[serde(default)]
     pub(super) network_volume_types: Vec<String>,
     #[serde(default)]
-    cpu_availability: Vec<Capacity>,
+    pub(super) cpu_availability: Vec<Capacity>,
     #[serde(default)]
     pub(super) gpu_availability: Vec<Capacity>,
 }

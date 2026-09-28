@@ -133,6 +133,9 @@ pub struct Profile {
     /// Lowest CUDA version, as `major.minor`, a GPU host must offer to run the image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_cuda_version: Option<String>,
+    /// Least GPU memory, in GB, a GPU type must have to be offered for this profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_gpu_memory_gb: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -321,6 +324,14 @@ impl Profile {
                 return Err(ProfileError::Invalid("min_cuda_version requires gpu: true"));
             }
         }
+        if let Some(memory) = self.min_gpu_memory_gb {
+            if !self.gpu {
+                return Err(ProfileError::Invalid("min_gpu_memory_gb requires gpu: true"));
+            }
+            if !(1..=MAX_GPU_MEMORY_GB).contains(&memory) {
+                return Err(ProfileError::Invalid("min_gpu_memory_gb must be between 1 and 1024"));
+            }
+        }
         if !valid_image(&self.image) {
             return Err(ProfileError::Invalid("Invalid registry image reference"));
         }
@@ -340,6 +351,8 @@ impl Profile {
 pub const IDLE_STOP_ENVIRONMENT_KEY: &str = "HORIZON_IDLE_STOP_MINUTES";
 /// Accepted idle periods: long enough to outlast a quiet build, at most one day.
 pub const IDLE_STOP_MINUTES: std::ops::RangeInclusive<u16> = 10..=1440;
+/// The most GPU memory a profile can ask for: more than any single GPU offers.
+const MAX_GPU_MEMORY_GB: u16 = 1024;
 /// A CUDA version written `major.minor`, as numbers so that 12.11 is above 12.2.
 #[must_use]
 pub(crate) fn cuda_version(value: &str) -> Option<(u16, u16)> {
@@ -666,6 +679,22 @@ mod tests {
         );
         assert!(cuda_version("12.11") > cuda_version("12.2"));
         assert!(cuda_version("13.0") > cuda_version("12.11"));
+    }
+    #[test]
+    fn a_gpu_memory_floor_is_optional_bounded_and_only_for_gpu_profiles() {
+        let config = CloudConfig::parse(EXAMPLE).unwrap();
+        let yaml = EXAMPLE.replace("    # min_gpu_memory_gb: 24", "    min_gpu_memory_gb: 24");
+        assert_eq!(CloudConfig::parse(&yaml).unwrap().profiles["gpu"].min_gpu_memory_gb, Some(24));
+        let mut profile = config.profiles["gpu"].clone();
+        let saved = serde_json::to_value(&profile).unwrap();
+        assert!(saved.get("min_gpu_memory_gb").is_none());
+        for (memory, accepted) in [(1, true), (80, true), (1024, true), (0, false), (1025, false)] {
+            profile.min_gpu_memory_gb = Some(memory);
+            assert_eq!(profile.validate(false).is_ok(), accepted, "{memory} GB");
+        }
+        let mut cpu = config.profiles["development"].clone();
+        cpu.min_gpu_memory_gb = Some(24);
+        assert!(cpu.validate(false).is_err());
     }
     #[test]
     fn rejects_unsupported_and_secret_bearing_input_without_echoing() {

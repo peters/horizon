@@ -6,6 +6,8 @@ fn list() -> PriceList {
         id: id.into(),
         region: region.into(),
         workspace_storage: true,
+        high_performance_storage: false,
+        cpus: Vec::new(),
         gpus: gpus.iter().map(|&(gpu, level)| (gpu.into(), level)).collect(),
     };
     let gpu = |id: &str, name: &str, memory_gb, hourly| GpuPrice {
@@ -352,4 +354,24 @@ fn runpod_lists_no_cpu_offers_for_a_workspace_it_cannot_hold() {
         !offers(&list(), &Preferences::default(), &gpu).is_empty(),
         "GPU workers keep a pod volume"
     );
+}
+
+#[test]
+fn high_performance_workspaces_need_a_data_center_that_holds_them_and_are_not_priced() {
+    let requirements = Requirements {
+        storage_gb: Some(100),
+        ..Requirements::default()
+    };
+    let mut list = list();
+    let standard = offers(&list, &Preferences::default(), &requirements);
+    assert!(standard.iter().all(|offer| offer.stopped_monthly > 0.0));
+    // No data center holds a high-performance volume yet.
+    let preferences = Preferences::default();
+    assert!(offers_with_storage(&list, &preferences, &requirements, Tier::HighPerformance).is_empty());
+    list.data_centers[1].high_performance_storage = true;
+    let fast = offers_with_storage(&list, &preferences, &requirements, Tier::HighPerformance);
+    assert_eq!(fast.len(), standard.len());
+    // Its price is not published, so only compute is estimated.
+    assert!(fast.iter().all(|offer| offer.stopped_monthly == 0.0));
+    assert!(fast.iter().all(|offer| (offer.estimated_total - offer.hourly).abs() < 1e-9));
 }

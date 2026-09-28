@@ -4,7 +4,7 @@
 use crate::prices::{Availability, DataCenter, Preferences, PriceList};
 use crate::runpod::{
     flavors::{self, Flavor, VCPU_COUNTS},
-    volumes::REQUEST_SIZE_GB,
+    volumes::{REQUEST_SIZE_GB, Tier},
 };
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +159,18 @@ pub struct Offer {
 /// request the flavors `preferences` choose, as a deployment would.
 #[must_use]
 pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
+    offers_with_storage(list, preferences, requirements, Tier::Standard)
+}
+
+/// [`offers`] for CPU workers keeping a workspace volume of `tier`, so only data
+/// centers that hold that kind of volume count.
+#[must_use]
+pub fn offers_with_storage(
+    list: &PriceList,
+    preferences: &Preferences,
+    requirements: &Requirements,
+    tier: Tier,
+) -> Vec<Offer> {
     let hours = requirements.hours.unwrap_or(1.0);
     let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
     // Data centers in the requested region, or none (meaning every allowed one) without
@@ -178,7 +190,7 @@ pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requir
             &preferences.cpu_flavors,
             requirements,
             &within,
-            (hours, storage_gb),
+            (hours, storage_gb, tier),
         )
     };
     offers.retain(|offer| requirements.max_hourly.is_none_or(|max| offer.hourly <= max));
@@ -196,7 +208,7 @@ fn cpu_offers(
     preferred: &[String],
     requirements: &Requirements,
     within: &[String],
-    (hours, storage_gb): (f64, u32),
+    (hours, storage_gb, tier): (f64, u32, Tier),
 ) -> Vec<Offer> {
     // A CPU worker keeps its workspace on a network volume, so the region needs a data
     // center that can hold one of this size. Exact CPU stock is checked when the cloud
@@ -207,12 +219,18 @@ fn cpu_offers(
     let hosts_workspace = list
         .data_centers
         .iter()
-        .any(|center| center.workspace_storage && (within.is_empty() || within.contains(&center.id)));
+        .any(|center| center.holds(tier) && (within.is_empty() || within.contains(&center.id)));
     if !hosts_workspace {
         return Vec::new();
     }
-    // The network volume is billed whether the worker runs or not.
-    let storage = list.storage.network_month(storage_gb) * hours / MONTH_HOURS;
+    // The network volume is billed whether the worker runs or not. High-performance
+    // volumes have no published price, so estimates include only compute for them.
+    let volume_month = if tier == Tier::Standard {
+        list.storage.network_month(storage_gb)
+    } else {
+        0.0
+    };
+    let storage = volume_month * hours / MONTH_HOURS;
     let mut offers: Vec<Offer> = Vec::new();
     for vcpu in VCPU_COUNTS {
         for (size_memory, _) in flavors::memory_options(vcpu, 0) {
@@ -259,7 +277,7 @@ fn cpu_offers(
                 flavors: requested,
                 estimated_total: hourly * hours + storage,
                 monthly: None,
-                stopped_monthly: list.storage.network_month(storage_gb),
+                stopped_monthly: volume_month,
                 location: None,
                 availability: "checked_at_creation",
                 regions_in_stock: Vec::new(),
@@ -364,7 +382,9 @@ fn level(availability: Availability) -> &'static str {
 }
 
 mod hetzner;
+mod picks;
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_section};
+pub use picks::{Picks, Place, picks, places};
 
 #[cfg(test)]
 mod tests;

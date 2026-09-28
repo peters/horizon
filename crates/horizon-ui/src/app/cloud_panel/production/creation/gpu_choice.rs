@@ -87,6 +87,8 @@ mod tests {
             id: id.into(),
             region: "EUROPE".into(),
             workspace_storage: false,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: gpus.iter().map(|&(gpu, level)| (gpu.into(), level)).collect(),
         };
         let list = PriceList {

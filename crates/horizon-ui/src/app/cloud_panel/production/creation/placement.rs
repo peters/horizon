@@ -326,6 +326,8 @@ mod tests {
             id: id.into(),
             region: region.into(),
             workspace_storage: storage,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: vec![("l4".into(), Availability::High)],
         }
     }

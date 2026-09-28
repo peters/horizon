@@ -242,6 +242,8 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable()
         id: id.into(),
         region: region.into(),
         workspace_storage: true,
+        high_performance_storage: false,
+        cpus: Vec::new(),
         gpus: Vec::new(),
     };
     let list = PriceList {
@@ -340,6 +342,8 @@ fn gpu_dialog(preferred: &[&str]) -> (tempfile::TempDir, egui::Context, HorizonA
             id: "EU-RO-1".into(),
             region: "EUROPE".into(),
             workspace_storage: true,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
         }],
         regions: std::collections::BTreeMap::new(),

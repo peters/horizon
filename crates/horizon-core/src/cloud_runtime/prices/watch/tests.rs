@@ -32,6 +32,8 @@ fn catalog() -> PriceList {
             id: "EU-1".into(),
             region: "EUROPE".into(),
             workspace_storage: true,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: vec![("gpu-a".into(), Availability::Low)],
         }],
         regions: std::collections::BTreeMap::default(),
@@ -86,4 +88,45 @@ fn cpu_watch_waits_for_exact_size_stock_and_compatible_storage() {
     assert!(!chosen.available(&list, Some(&size)));
     list.data_centers.clear();
     assert!(!chosen.available(&list, Some(&size)));
+}
+
+#[test]
+fn a_high_performance_watch_needs_a_data_center_that_holds_that_volume() {
+    let mut chosen = selection(false);
+    chosen.profile.storage.volume_tier = crate::cloud_runtime::prices::StorageTier::HighPerformance;
+    let mut list = catalog();
+    let size = SizeAvailability {
+        centers: vec![("EU-1".into(), Availability::High)],
+    };
+    assert!(!chosen.available(&list, Some(&size)));
+    list.data_centers[0].high_performance_storage = true;
+    assert!(chosen.available(&list, Some(&size)));
+}
+
+#[test]
+fn the_watched_price_is_the_gpu_price_or_the_dearest_requested_flavor() {
+    let list = catalog();
+    let preferences = Preferences::default();
+    assert_eq!(selection(true).hourly(&list, &preferences), Some(0.5));
+    let mut list = list;
+    list.cpu = vec![
+        crate::cloud_runtime::prices::CpuFlavorPrice {
+            id: "cpu3c".into(),
+            name: "Compute-Optimized".into(),
+            per_vcpu_hour: 0.03,
+        },
+        crate::cloud_runtime::prices::CpuFlavorPrice {
+            id: "cpu5c".into(),
+            name: "Compute-Optimized".into(),
+            per_vcpu_hour: 0.035,
+        },
+    ];
+    let preferences = Preferences {
+        cpu_flavors: vec!["cpu3c".into(), "cpu5c".into()],
+        gpu_types: Vec::new(),
+    };
+    let hourly = selection(false).hourly(&list, &preferences).unwrap();
+    assert!((hourly - 0.14).abs() < 1e-9, "{hourly}");
+    list.cpu.clear();
+    assert_eq!(selection(false).hourly(&list, &preferences), None);
 }

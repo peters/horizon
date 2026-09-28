@@ -31,6 +31,8 @@ fn answer(form: &mut Production, availability: Availability) {
                 id: "EU-1".into(),
                 region: "EUROPE".into(),
                 workspace_storage: true,
+                high_performance_storage: false,
+                cpus: Vec::new(),
                 gpus: Vec::new(),
             }],
             regions: std::collections::BTreeMap::default(),
