@@ -89,6 +89,7 @@ impl Failure {
                 .back()
                 .or(runtime.logs.back())
                 .map_or(0, |line| line.text.len()),
+            generation: runtime.log_generation,
         };
         if let Some((cached, failure)) = runtime.diagnosis.borrow().as_ref()
             && *cached == key
@@ -130,7 +131,10 @@ pub(in crate::app::cloud_panel::production) struct DiagnosisKey {
     summary: String,
     lines: usize,
     held: usize,
+    /// The newest line's length, for output set without `push_log`.
     last: usize,
+    /// Output replaced or added through `push_log`.
+    generation: u64,
 }
 
 /// The stage track along the header's bottom edge.

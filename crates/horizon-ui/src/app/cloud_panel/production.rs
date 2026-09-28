@@ -127,6 +127,12 @@ impl LogLine {
     }
 }
 
+/// The layer a Docker progress line such as `5f70bf18a086: Pushing [==>  ]` reports on.
+fn layer_id(line: &str) -> Option<&str> {
+    let (id, rest) = line.split_once(": ")?;
+    (id.len() == 12 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) && !rest.starts_with("digest")).then_some(id)
+}
+
 #[derive(Default)]
 pub(super) struct Runtime {
     drawer: Option<cards::Tab>,
@@ -151,6 +157,8 @@ pub(super) struct Runtime {
     unpinned_views: u8,
     /// The header asked for a confirmation; Manage scrolls it into view once.
     reveal_confirmation: bool,
+    /// Counts every change to the output, including lines replaced in place.
+    log_generation: u64,
     /// The last failure diagnosis and the output it was read from.
     diagnosis: std::cell::RefCell<Option<(cards::DiagnosisKey, cards::Failure)>>,
     state: Option<Deployment>,
@@ -188,8 +196,28 @@ impl Runtime {
 
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
     /// lines wait aside so the lines on screen are neither dropped nor shifted.
+    /// Recent lines a layer's newer progress line replaces, so a push or pull keeps one
+    /// updating line per layer instead of one per update.
+    const LAYER_WINDOW: usize = 48;
+
     fn push_log(&mut self, text: String) {
         let line = LogLine::new(text, self.stage, self.progress.elapsed());
+        self.log_generation += 1;
+        let target = if self.verbose_unpinned {
+            &mut self.pending_logs
+        } else {
+            &mut self.logs
+        };
+        if let Some(layer) = layer_id(&line.text)
+            && let Some(previous) = target
+                .iter_mut()
+                .rev()
+                .take(Self::LAYER_WINDOW)
+                .find(|previous| previous.stage == line.stage && layer_id(&previous.text) == Some(layer))
+        {
+            *previous = line;
+            return;
+        }
         if self.verbose_unpinned {
             self.pending_logs.push_back(line);
             while self.pending_logs.len() > Self::PENDING_LOG_LINES {

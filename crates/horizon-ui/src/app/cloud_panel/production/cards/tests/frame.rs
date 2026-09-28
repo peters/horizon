@@ -41,3 +41,37 @@ fn opening_the_drawer_of_a_collapsed_cloud_expands_it() {
     assert_eq!(runtime.drawer, Some(Tab::Manage));
     assert!(runtime.confirmation == Confirmation::Stop);
 }
+
+#[test]
+fn a_layer_keeps_one_updating_progress_line() {
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(Stage::Push),
+        ..Default::default()
+    };
+    for line in [
+        "docker push registry.example/worker:tag",
+        "5f70bf18a086: Preparing",
+        "e1a4ac3b0b25: Preparing",
+        "5f70bf18a086: Pushing [==>      ]  10MB/80MB",
+        "5f70bf18a086: Pushing [=====>   ]  40MB/80MB",
+        "e1a4ac3b0b25: Pushed",
+        "5f70bf18a086: Pushed",
+        "tag: digest: sha256:b41c size: 4096",
+    ] {
+        runtime.push_log(line.into());
+    }
+    let texts: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "docker push registry.example/worker:tag",
+            "5f70bf18a086: Pushed",
+            "e1a4ac3b0b25: Pushed",
+            "tag: digest: sha256:b41c size: 4096",
+        ]
+    );
+    // Another step's lines for the same layer are its own.
+    runtime.stage = Some(Stage::Readiness);
+    runtime.push_log("5f70bf18a086: Pull complete".into());
+    assert_eq!(runtime.logs.len(), 5);
+}
