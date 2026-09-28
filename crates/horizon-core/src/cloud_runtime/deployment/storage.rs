@@ -114,6 +114,20 @@ pub(in crate::cloud_runtime) fn retained(store: &Store, deployment: &Deployment)
     Ok(load_owned(store.root(), deployment)?.is_some_and(|record| record.state != State::Deleted))
 }
 
+/// Inspect the same validated storage journal while holding the deployment lock.
+pub(in crate::cloud_runtime) fn deletion_pending(store: &Store, state: &Deployment) -> Result<bool> {
+    if state.spec.is_none() {
+        if store.root().join("workspace-volume.json").try_exists()?
+            || store.root().join("workspace-volume.required").try_exists()?
+        {
+            return Err(Error::Invalid("Storage exists without a worker specification"));
+        }
+        return Ok(false);
+    }
+    Ok(load_owned(store.root(), state)?
+        .is_some_and(|record| matches!(record.state, State::Deleting { .. } | State::Deleted)))
+}
+
 /// Drops a journal only after this worker's storage is confirmed deleted.
 /// Identity checks match cleanup, so a mismatched journal is left in place.
 /// The marker is removed first so a crash cannot look like a missing journal.

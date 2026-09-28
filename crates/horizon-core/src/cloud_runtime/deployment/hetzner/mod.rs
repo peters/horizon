@@ -70,6 +70,14 @@ pub(in crate::cloud_runtime) fn pull_login(
 pub(in crate::cloud_runtime) fn retained(root: &Path) -> Result<bool> {
     Ok(Journal::load(root)?.retains())
 }
+
+/// Whether a server of this cloud has held its workspace volume, as after a stop
+/// released it and Resume cleared its fence: the cloud was created before, so
+/// placing its next server is a resume, not a new cloud.
+pub(in crate::cloud_runtime) fn held_by_a_server(root: &Path) -> Result<bool> {
+    let journal = Journal::load(root)?;
+    Ok(matches!(journal.volume, CreateState::Bound { .. }) && !journal.unused)
+}
 pub(super) use readiness::wait;
 
 use super::{Error, Result, Settings};

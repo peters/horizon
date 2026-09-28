@@ -1,7 +1,8 @@
-//! Local companion authorization and SSH reconciliation. No provider lifecycle operations.
+//! Companion authorization, SSH reconciliation and explicit lifecycle operations.
 pub mod intent;
 pub mod inventory;
 mod journal;
+pub mod lifecycle;
 mod reconcile;
 #[cfg(all(test, unix))]
 mod tests;

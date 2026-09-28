@@ -1,4 +1,4 @@
-//! Passive lifecycle intent model. No submission path or provider execution is wired yet.
+//! Durable companion bindings and lifecycle intents, separate from execution.
 mod decision;
 pub use decision::{Decision, Observation, Refusal, decide, refuses_deployment};
 
@@ -95,6 +95,8 @@ pub enum State {
     Executing,
     Uncertain,
     Succeeded,
+    /// No provider mutation remains uncertain; completion needs a new explicit request.
+    RetryRequired,
     /// Use only when failure is definite; an unknown outcome stays Uncertain.
     Failed,
 }
@@ -196,6 +198,12 @@ impl Journal {
             .or_else(|| self.history.get(&id))
     }
 
+    /// Terminal IDs remain available to target-claim recovery after owner migration.
+    pub(super) fn settled(&self, id: OperationId) -> bool {
+        self.operation(id).is_some_and(|intent| !intent.state.pending())
+            || self.retired.iter().any(|retired| retired.journal.settled(id))
+    }
+
     /// # Errors
     /// Refuses rebinding, malformed ownership and excessive aliases. Selection is passive.
     pub fn bind(&mut self, owner: &Owner, alias: &str, binding: Binding) -> Result<()> {
@@ -295,8 +303,14 @@ impl Journal {
             || matches!(
                 (intent.state, next),
                 (State::Submitted, State::Executing | State::Failed)
-                    | (State::Executing, State::Uncertain | State::Succeeded | State::Failed)
-                    | (State::Uncertain, State::Succeeded | State::Failed)
+                    | (
+                        State::Executing,
+                        State::Uncertain | State::Succeeded | State::Failed | State::RetryRequired
+                    )
+                    | (
+                        State::Uncertain,
+                        State::Succeeded | State::Failed | State::RetryRequired
+                    )
             );
         if !allowed {
             return Err(Error::Invalid("Invalid companion operation transition"));
