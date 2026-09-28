@@ -1,4 +1,5 @@
 //! Bounded host-scoped, read-only requests for shared provider usage.
+pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 use super::{AgentIdentity, ManifestLock};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
@@ -29,6 +30,9 @@ pub struct UsageRequest {
     /// Requirements for ranked cloud compute offers, validated by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_offers: Option<serde_json::Value>,
+    /// An explicit companion cloud request, validated and executed by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_companion: Option<CompanionRequest>,
     claimed: bool,
 }
 
@@ -43,6 +47,9 @@ pub struct UsageResult {
     /// Ranked cloud compute offers with the time the host observed their prices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offers: Option<serde_json::Value>,
+    /// The host's answer to a companion cloud request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
@@ -56,6 +63,7 @@ impl UsageRequest {
             providers,
             catalog: None,
             offers: None,
+            companion: None,
             error,
         }
     }
@@ -145,7 +153,29 @@ fn enqueue_offers_at(
             "Invalid cloud offer requirements",
         ));
     }
-    enqueue_request_at(root, identity, None, None, Some(requirements))
+    enqueue_request_at(root, identity, None, None, Some(requirements), None)
+}
+
+/// Queues a companion cloud request for the live host. Ensure Ready and Stop return
+/// once the host has recorded the operation; poll `status` with the same ID after that.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_companion(identity: AgentIdentity<'_>, request: CompanionRequest) -> std::io::Result<String> {
+    enqueue_companion_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_companion_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CompanionRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud companion request",
+        ));
+    }
+    enqueue_request_at(root, identity, None, None, None, Some(request))
 }
 
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
@@ -158,7 +188,7 @@ fn enqueue_query_at(
     provider: Option<String>,
     catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
 ) -> std::io::Result<String> {
-    enqueue_request_at(root, identity, provider, catalog, None)
+    enqueue_request_at(root, identity, provider, catalog, None, None)
 }
 
 fn enqueue_request_at(
@@ -167,6 +197,7 @@ fn enqueue_request_at(
     provider: Option<String>,
     catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
     cloud_offers: Option<serde_json::Value>,
+    cloud_companion: Option<CompanionRequest>,
 ) -> std::io::Result<String> {
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
@@ -210,6 +241,7 @@ fn enqueue_request_at(
         claimed: false,
         catalog,
         cloud_offers,
+        cloud_companion,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
@@ -389,6 +421,57 @@ mod tests {
             assert!(enqueue_offers_at(root.path(), identity, invalid).is_err());
         }
         assert!(enqueue_offers_at(root.path(), AgentIdentity::new("horizon:agent", None), requirements).is_err());
+    }
+
+    #[test]
+    fn companion_requests_need_their_fields_and_stay_actor_scoped() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let request = CompanionRequest {
+            action: CompanionAction::EnsureReady,
+            cloud: Some("cloud-1".into()),
+            alias: Some("consumer".into()),
+            operation_id: Some(new_operation_id()),
+        };
+        let id = enqueue_companion_at(root.path(), identity, request.clone()).unwrap();
+        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(claimed.cloud_companion.as_ref(), Some(&request));
+        let mut result = claimed.result(Vec::new(), None);
+        result.companion = Some(serde_json::json!({"phase": "submitted"}));
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id).unwrap().unwrap().companion,
+            Some(serde_json::json!({"phase": "submitted"}))
+        );
+        let list = CompanionRequest {
+            action: CompanionAction::List,
+            cloud: None,
+            alias: None,
+            operation_id: None,
+        };
+        assert!(enqueue_companion_at(root.path(), identity, list.clone()).is_ok());
+        for invalid in [
+            CompanionRequest {
+                alias: Some("../consumer".into()),
+                ..request.clone()
+            },
+            CompanionRequest {
+                operation_id: Some("not-an-id".into()),
+                ..request.clone()
+            },
+            CompanionRequest {
+                operation_id: None,
+                ..request.clone()
+            },
+            CompanionRequest {
+                cloud: Some("cloud-1".into()),
+                ..list
+            },
+        ] {
+            assert!(enqueue_companion_at(root.path(), identity, invalid).is_err());
+        }
+        assert!(enqueue_companion_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
     }
 
     #[test]

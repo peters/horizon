@@ -130,6 +130,43 @@ pub fn bind(request: &Request<'_>, binding: Binding) -> Result<()> {
     store.save(&state)
 }
 
+/// Bind a companion the owner checked on the source cloud's card to its existing
+/// cloud, using the checkout that cloud's deployment records. Already-bound aliases
+/// are left unchanged, so a request never rebinds a target the owner selected.
+/// # Errors
+/// Refuses an unchecked companion, and one without a deployment record: creating a
+/// cloud needs the owner's confirmation on the card.
+pub fn bind_selected(request: &Request<'_>) -> Result<()> {
+    let (_, state) = request.load()?;
+    if state.intents.binding(request.alias).is_some() {
+        return Ok(());
+    }
+    let target = state
+        .grants
+        .get(request.alias)
+        .filter(|grant| grant.selected)
+        .map(|grant| grant.target.clone())
+        .ok_or(Error::Invalid("Check this companion on the source cloud's card first"))?;
+    let deployed = Store::lock(&crate::cloud_runtime::state::cloud_directory(
+        request.root,
+        &target.cloud_id,
+    )?)?
+    .load()?
+    .ok_or(Error::Invalid(
+        "The companion cloud has not been created; start it from its card",
+    ))?;
+    bind(
+        request,
+        Binding::new(
+            request.owner,
+            request.alias,
+            target,
+            deployed.repository,
+            intent::Origin::Existing,
+        )?,
+    )
+}
+
 /// Durably submit an explicit request, without provider or SSH calls. Run `execute`
 /// on a background worker after returning this ID to the caller; poll `status`.
 /// # Errors

@@ -34,6 +34,10 @@ impl HorizonApp {
             }
         };
         for request in requests {
+            if request.cloud_companion.is_some() {
+                self.queue_cloud_companion(request);
+                continue;
+            }
             if request.cloud_offers.is_some() {
                 self.browser_create_host.cloud_offers.push(request);
                 continue;
@@ -123,6 +127,25 @@ fn usage_summary(name: &str, profile: &RemoteProviderProfile, monitor: &Provider
             manifest::now_millis().saturating_sub(i64::try_from(at.elapsed().as_millis()).unwrap_or(i64::MAX))
         }),
         error: monitor.error.map(|error| error.to_string()),
+    }
+}
+
+impl HorizonApp {
+    #[cfg(feature = "cloud-workspaces")]
+    fn queue_cloud_companion(&mut self, request: UsageRequest) {
+        self.queue_cloud_companion_request(request);
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    fn queue_cloud_companion(&mut self, request: UsageRequest) {
+        let result = request.result(
+            Vec::new(),
+            Some("cloud_companion_unavailable: this Horizon build has no cloud support".into()),
+        );
+        if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+            tracing::warn!(kind = ?error.kind(), "could not answer a cloud companion request");
+        }
     }
 }
 
