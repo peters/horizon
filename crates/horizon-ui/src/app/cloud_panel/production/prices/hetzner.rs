@@ -116,9 +116,9 @@ impl State {
         }
     }
 
-    /// A catalog that could not be refreshed is no longer offered as current.
+    /// A catalog that could not be refreshed is kept, but it is never offered as
+    /// current: a refresh starts only once it has gone stale.
     fn fail(&mut self, error: String) {
-        self.fetched = None;
         self.error = Some(error);
         self.failed_at = Some(Instant::now());
     }

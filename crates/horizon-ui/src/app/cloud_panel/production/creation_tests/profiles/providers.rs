@@ -258,7 +258,7 @@ fn hetzner_fields_stay_consistent_as_its_catalog_and_the_profile_change() {
         label_rect(&output, "RunPod\nUS dollars · CPU and GPU").center(),
     );
     tall_frame(&ctx, &mut app);
-    assert!(painted(&tall_frame(&ctx, &mut app)).contains("RunPod offers no CPU worker"));
+    assert!(painted(&tall_frame(&ctx, &mut app)).contains("No worker the provider lists meets this profile's minimums"));
     // A binding whose catalog could not be fetched still offers the choice, with the reason.
     app.cloud_prototype
         .production
@@ -454,9 +454,9 @@ fn runpod_shows_only_its_own_fields_and_hetzner_terms_never_appear() {
     // with RunPod, the profile's own provider, selected.
     assert!(has_label(&output, "Provider"));
     assert!(has_label(&output, "RunPod"), "the heading names RunPod");
-    assert!(has_label(&output, "Region"), "RunPod's region picker");
+    assert!(has_label(&output, "Data center"), "RunPod's data center picker");
     assert!(
-        painted(&output).contains("8 GB · compute-optimized"),
+        painted(&output).contains("Compute-Optimized"),
         "RunPod's flavor families"
     );
     assert_absent(
@@ -464,16 +464,7 @@ fn runpod_shows_only_its_own_fields_and_hetzner_terms_never_appear() {
         &["Location", "€", "server type", "If it is sold out"],
         "euros, net of VAT",
     );
-    // Advanced offers RunPod's data centers only while RunPod is chosen.
-    // The expanded section is reached by scrolling the dialog, as a person would.
-    scroll(&ctx, &mut app, -2000.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    click(&ctx, &mut app, label_rect(&output, "Advanced").center());
-    scroll(&ctx, &mut app, -2000.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "Data center"), "{}", painted(&output));
-    scroll(&ctx, &mut app, 4000.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
+    // RunPod's data centers are offered only while RunPod is chosen.
     click(
         &ctx,
         &mut app,
@@ -483,9 +474,8 @@ fn runpod_shows_only_its_own_fields_and_hetzner_terms_never_appear() {
         app.cloud_prototype.production.provider.map(|provider| provider.id),
         Some("hetzner")
     );
-    scroll(&ctx, &mut app, -2000.0);
-    let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "Advanced"), "{}", painted(&output));
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
     assert!(!has_label(&output, "Data center") && !has_label(&output, "EU-RO-1"));
 }
 

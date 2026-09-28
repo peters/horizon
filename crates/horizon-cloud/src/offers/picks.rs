@@ -41,7 +41,8 @@ pub struct Place {
 
 /// Allowed data centers where `offer` can run, best stock first and then by name.
 ///
-/// A GPU offer lists each data center that reports its type. A CPU offer needs a data
+/// A GPU offer can run in every allowed data center, sold out where its type is not
+/// listed. A CPU offer needs a data
 /// center that holds a `tier` workspace volume and reports one of its flavor families,
 /// and shows the best of their stock: the family, not the exact size, which is checked
 /// on its own before a launch.
@@ -51,12 +52,14 @@ pub fn places(list: &PriceList, offer: &Offer, tier: Tier) -> Vec<Place> {
         .data_centers
         .iter()
         .filter_map(|center| {
+            // A data center reports only the GPU types it has capacity for, so one it
+            // does not list is sold out there.
             let availability = if offer.kind == "gpu" {
                 center
                     .gpus
                     .iter()
                     .find(|(id, _)| *id == offer.id)
-                    .map(|&(_, level)| level)?
+                    .map_or(Availability::None, |&(_, level)| level)
             } else if center.holds(tier) {
                 center
                     .cpus
@@ -279,7 +282,9 @@ mod tests {
             ids(places(&list, &gpu, Tier::Standard)),
             [
                 ("US-KS-2".to_owned(), Availability::High),
-                ("EU-RO-1".to_owned(), Availability::None)
+                ("CA-MTL-3".to_owned(), Availability::None),
+                ("EU-RO-1".to_owned(), Availability::None),
+                ("EU-SE-1".to_owned(), Availability::None)
             ]
         );
     }

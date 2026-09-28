@@ -27,6 +27,25 @@ pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     .then_some("Choose a CPU and memory size that supports this container disk before starting.")
 }
 
+/// The container disk alone, for providers whose workspace volume the summary sets.
+pub(super) fn container_field(ui: &mut Ui, profile: &mut Profile, provider: &Description) {
+    let container_max = if provider.kind == Kind::RunPod && !profile.gpu {
+        flavors::max_container_gb()
+    } else {
+        u16::MAX
+    };
+    ui.horizontal(|ui| {
+        let label = ui.label("Container disk");
+        ui.add(
+            DragValue::new(&mut profile.storage.container_gb)
+                .range(1..=container_max)
+                .suffix(" GB"),
+        )
+        .labelled_by(label.id);
+    });
+    ui.small("Temporary storage for the image and installed tools; cleared when the worker stops.");
+}
+
 pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) -> bool {
     let before = profile.storage.clone();
     ui.add_space(6.0);

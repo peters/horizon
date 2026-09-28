@@ -17,6 +17,9 @@ pub(super) mod hetzner;
 
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_secs(15);
+/// A catalog older than this can no longer start a cloud: prices and stock may have
+/// changed too much since.
+pub(super) const START_LIMIT: Duration = Duration::from_secs(60 * 60);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
 
@@ -130,6 +133,11 @@ impl State {
         !stale(at) && self.refreshed_after.is_none_or(|refresh| at >= refresh)
     }
 
+    /// Whether the catalog shown is older than [`START_LIMIT`], so it cannot start a cloud.
+    pub fn too_old(&self) -> bool {
+        self.list.as_ref().is_some_and(|list| list.at.elapsed() >= START_LIMIT)
+    }
+
     /// The region of `data_center` as people say it, once a price list has been fetched.
     pub fn region_of(&self, data_center: &str) -> Option<&str> {
         self.regions.get(data_center).map(String::as_str)
@@ -212,10 +220,11 @@ impl State {
                     self.list_failed_at = None;
                     self.runpod_missing = false;
                 }
-                // Prices that could not be refreshed are no longer shown as current.
+                // The last good catalog stays on show with its age; only current
+                // prices are ever treated as current.
                 Err(error) => {
                     self.runpod_missing |= error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
-                    self.list = None;
+                    self.refreshed_after = Some(Instant::now());
                     self.list_error = Some(error);
                     self.list_failed_at = Some(Instant::now());
                 }
@@ -620,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_refresh_hides_old_prices_and_refresh_keeps_checks_in_flight() {
+    fn a_failed_refresh_keeps_old_prices_but_never_as_current_and_refresh_keeps_checks_in_flight() {
         let mut state = State {
             list: Some(Fetched {
                 value: (list(), Preferences::default()),
@@ -632,7 +641,8 @@ mod tests {
         state.list_job = Some(rx);
         tx.send(Err("RunPod is unreachable".into())).unwrap();
         state.poll();
-        assert!(state.list.is_none());
+        assert!(state.list.is_some(), "the last good catalog stays on show");
+        assert!(state.fresh_list().is_none());
         assert_eq!(state.list_error.as_deref(), Some("RunPod is unreachable"));
 
         let (list_tx, rx) = channel();
