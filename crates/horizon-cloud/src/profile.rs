@@ -60,12 +60,18 @@ fn default_platform() -> String {
 pub struct Storage {
     pub container_gb: u16,
     pub volume_gb: u16,
+    #[serde(skip_serializing_if = "is_default")]
+    pub volume_tier: crate::runpod::volumes::Tier,
+}
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 impl Default for Storage {
     fn default() -> Self {
         Self {
             container_gb: 20,
             volume_gb: 20,
+            volume_tier: crate::runpod::volumes::Tier::default(),
         }
     }
 }
@@ -163,6 +169,11 @@ impl Profile {
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
         self.capabilities.validate()?;
+        if self.storage.volume_tier != crate::runpod::volumes::Tier::Standard {
+            return Err(ProfileError::Invalid(
+                "Only standard workspace storage is available for cloud profiles yet",
+            ));
+        }
         let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
         let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
         if !(supported || fixture) {
@@ -273,6 +284,29 @@ pub const DESIGN_EXAMPLE: &str = include_str!("../examples/design-fixtures.yml")
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_tier_preserves_legacy_profile_encoding_and_refuses_unwired_launches() {
+        let legacy = r#"{"container_gb":20,"volume_gb":20}"#;
+        let storage: Storage = serde_json::from_str(legacy).unwrap();
+        assert_eq!(storage, Storage::default());
+        assert_eq!(serde_json::to_string(&storage).unwrap(), legacy);
+        let mut profile = CloudConfig::parse(EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("image-only")
+            .unwrap();
+        let legacy = serde_json::to_vec(&profile).unwrap();
+        profile.storage.volume_tier = crate::runpod::volumes::Tier::Standard;
+        assert_eq!(serde_json::to_vec(&profile).unwrap(), legacy);
+        profile.storage.volume_tier = crate::runpod::volumes::Tier::HighPerformance;
+        let encoded = serde_json::to_string(&profile).unwrap();
+        assert!(encoded.contains("HIGH_PERFORMANCE"));
+        assert_eq!(serde_json::from_str::<Profile>(&encoded).unwrap(), profile);
+        assert!(profile.validate(false).is_err());
+        assert!(profile.validate(true).is_err());
+    }
+
     #[test]
     fn new_cpu_profiles_enforce_network_volume_limits_without_changing_gpu_storage() {
         for size in [1, 9, 10, 4000, 4001] {
