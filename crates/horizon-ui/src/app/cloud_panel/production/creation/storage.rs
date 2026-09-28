@@ -10,6 +10,14 @@ use horizon_core::cloud_runtime::{
 pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
     let provider = super::provider::current(form.provider, profile);
+    if provider.kind == Kind::Hetzner {
+        form.prices.hetzner.fresh()?.value.as_ref()?;
+        let sized = super::provider::sized(provider, profile, form.size).ok()?;
+        return (!super::provider::location_offers(&form.prices, &sized)
+            .iter()
+            .any(|offer| form.placement.is_any() || form.placement.data_centers.contains(&offer.location)))
+        .then_some("Choose a system disk and CPU size supported by a server in the selected location.");
+    }
     (provider.kind == Kind::RunPod
         && !profile.gpu
         && !flavors::offered(

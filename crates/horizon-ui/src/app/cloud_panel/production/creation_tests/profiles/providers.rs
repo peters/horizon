@@ -556,3 +556,49 @@ fn assert_absent(output: &egui::FullOutput, terms: &[&str], allowed: &str) {
         assert!(!shown, "{term} appears:\n{text}");
     }
 }
+
+#[test]
+fn incompatible_hetzner_system_disk_blocks_launch_until_corrected() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let form = &mut app.cloud_prototype.production;
+    form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
+    form.placement.data_centers = vec!["hel1".into()];
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .storage
+        .container_gb = 81;
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(
+        &output,
+        "Choose a system disk and CPU size supported by a server in the selected location."
+    ));
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    assert!(app.cloud_creation_open());
+    assert!(!app.cloud_prototype.production.launch.submitted);
+    let form = &mut app.cloud_prototype.production;
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .storage
+        .container_gb = 80;
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!has_label(
+        &output,
+        "Choose a system disk and CPU size supported by a server in the selected location."
+    ));
+    assert!(app.cloud_prototype.production.placement.is_any());
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    assert!(!app.cloud_creation_open());
+}
