@@ -86,6 +86,8 @@ fn this_computer_is_reachable_only_on_the_loopback_ports_the_owner_opened() {
         local(22),
         Destination::Address("127.0.0.1:22".parse().unwrap()),
         Destination::Address("127.0.0.2:3000".parse().unwrap()),
+        // Only the exact loopback literals open a port, not their IPv4-mapped form.
+        Destination::Address("[::ffff:127.0.0.1]:3000".parse().unwrap()),
         // This computer's address on the network, and a name that resolves to its loopback,
         // stay refused: only the loopback itself is opened, port by port.
         Destination::Address("192.168.1.20:3000".parse().unwrap()),

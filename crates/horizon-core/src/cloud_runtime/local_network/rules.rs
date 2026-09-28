@@ -32,7 +32,9 @@ pub enum RulesError {
     Duplicate(String),
     #[error("Port 0 is not a port")]
     PortZero,
-    #[error("At most {MAX_DEVICES} devices, each with at most {MAX_PORTS} ports")]
+    #[error(
+        "At most {MAX_DEVICES} devices, each with at most {MAX_PORTS} ports, and at most {MAX_PORTS} ports on this computer"
+    )]
     TooMany,
     #[error("Port {0} on this computer is the bridge itself")]
     BridgePort(u16),
@@ -128,8 +130,8 @@ impl LocalHost {
             .then_some(Self::Name)
     }
 
+    /// Only the exact literals: an IPv4-mapped form such as `::ffff:127.0.0.1` is not one.
     pub(super) fn of_address(address: IpAddr) -> Option<Self> {
-        let address = address.to_canonical();
         (address == IpAddr::V4(Ipv4Addr::LOCALHOST) || address == IpAddr::V6(Ipv6Addr::LOCALHOST))
             .then_some(Self::Address(address))
     }
@@ -193,7 +195,8 @@ mod tests {
         assert_eq!(LocalHost::of_address(v4), Some(LocalHost::Address(v4)));
         assert_eq!(
             LocalHost::of_address(IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped())),
-            Some(LocalHost::Address(v4))
+            None,
+            "only the exact loopback literals open a port"
         );
         assert_eq!(LocalHost::of_address(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))), None);
         assert_eq!(LocalHost::of_address(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))), None);
