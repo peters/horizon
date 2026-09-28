@@ -68,6 +68,10 @@ fn view_bit(place: &str) -> u8 {
 /// aside only while a view shown last frame was scrolled up.
 pub(super) fn begin_frame(runtime: &mut Runtime) {
     runtime.verbose_unpinned = std::mem::take(&mut runtime.unpinned_views) != 0;
+    if !runtime.verbose_unpinned {
+        // Held lines join now, before newer ones, so the output stays in order.
+        runtime.accept_followed_logs();
+    }
 }
 
 fn lines(ui: &mut egui::Ui, runtime: &Runtime) {
@@ -76,23 +80,34 @@ fn lines(ui: &mut egui::Ui, runtime: &Runtime) {
         ui.label(RichText::new("No output yet.").size(TEXT_SIZE).color(theme::FG_DIM()));
         return;
     }
-    let mut previous: Option<Option<Stage>> = None;
+    // A heading per step of each attempt: a retry of the same step starts its own.
+    let mut previous: Option<(Option<Stage>, u64)> = None;
     // Tools print blank separator lines; they only spread the log out.
     for line in runtime.logs.iter().filter(|line| !line.text.trim().is_empty()) {
-        if previous != Some(line.stage) {
+        if previous != Some((line.stage, line.attempt)) {
             if let Some(stage) = line.stage {
-                stage_heading(ui, runtime, stage);
+                stage_heading(ui, runtime, stage, line.attempt);
             }
-            previous = Some(line.stage);
+            previous = Some((line.stage, line.attempt));
         }
         row(ui, line);
     }
 }
 
-fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage) {
+/// Only the current attempt's step is timed from the timeline; an earlier attempt's is
+/// labelled as such rather than given the current attempt's time.
+fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage, attempt: u64) {
     let color = stage_color(stage);
-    let label = runtime.progress.stage_duration(stage).map_or_else(
-        || stage.label().to_owned(),
+    let current = attempt == runtime.progress.attempt();
+    let duration = runtime.progress.stage_duration(stage).filter(|_| current);
+    let label = duration.map_or_else(
+        || {
+            if current {
+                stage.label().to_owned()
+            } else {
+                format!("{} · earlier attempt", stage.label())
+            }
+        },
         |elapsed| {
             format!(
                 "{} · {}",
@@ -236,5 +251,39 @@ mod tests {
             used <= 300.0 + 12.0,
             "the log and its pinned cause fit the given height: {used}"
         );
+    }
+
+    fn headings(runtime: &mut Runtime) -> Vec<String> {
+        let mut shown = Vec::new();
+        let output = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                show(ui, 1, "test", runtime, 400.0, None);
+            })
+            .discard_textures();
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape
+                && text.galley.text().contains("Push image")
+            {
+                shown.push(text.galley.text().to_owned());
+            }
+        }
+        shown
+    }
+
+    #[test]
+    fn a_retried_step_gets_its_own_heading_and_the_old_one_no_current_time() {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Push),
+            ..Runtime::default()
+        };
+        runtime.progress.stage(Stage::Push, std::time::Instant::now());
+        runtime.push_log("error from registry: denied".into());
+        runtime.progress.reset();
+        runtime.progress.stage(Stage::Push, std::time::Instant::now());
+        runtime.push_log("docker push registry.example/worker:tag".into());
+        let shown = headings(&mut runtime);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        assert_eq!(shown[0], "Push image · earlier attempt");
+        assert!(shown[1].starts_with("Push image · 0m"), "{shown:?}");
     }
 }

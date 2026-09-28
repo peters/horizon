@@ -369,9 +369,8 @@ impl HorizonApp {
                 runtime.desktop = None;
                 runtime.confirmation = super::super::Confirmation::None;
                 runtime.rebuild = None;
-                if runtime.progress.is_deletion() {
-                    runtime.progress.reset();
-                }
+                // Like the card's own operations: timed and diagnosed from its own start.
+                runtime.progress.reset();
                 runtime.error = None;
                 runtime.stage = Some(if stop { Stage::Stopping } else { Stage::Provision });
                 let (tx, rx) = channel();

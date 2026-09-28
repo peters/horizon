@@ -154,3 +154,18 @@ fn an_open_drawer_blocks_canvas_gestures_only_where_it_is() {
         "gestures do not reach through the drawer"
     );
 }
+
+#[test]
+fn held_lines_join_in_order_when_no_view_is_scrolled_up_any_more() {
+    let mut runtime = super::super::super::Runtime {
+        verbose_unpinned: true,
+        ..Default::default()
+    };
+    runtime.push_log("first".into());
+    // The scrolled-up view closed: the next frame reports no unpinned view.
+    output::begin_frame(&mut runtime);
+    runtime.push_log("second".into());
+    let texts: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(texts, ["first", "second"]);
+    assert!(runtime.pending_logs.is_empty());
+}
