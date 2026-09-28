@@ -2,7 +2,7 @@
 //! it and recording the confirmation. Each is idempotent for a retry.
 use super::{
     Action, Binding, Cancellation, Checkout, CloudGroups, Context, Declaration, OperationId, Origin, Owner, Path,
-    Settings, Target, companions, inventory, lifecycle, retry_busy,
+    Settings, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
 };
 
 /// Idempotent for the same cloud ID, checkout and operation, so a retry after a
@@ -101,16 +101,31 @@ pub(super) fn select_and_confirm(
     Ok(context)
 }
 
-pub(super) fn cancel(root: &Path, owner: &Owner, groups: &CloudGroups, alias: &str, id: OperationId) {
-    let Ok(context) = inventory::prepare(owner, groups, &Cancellation::default()) else {
-        return;
-    };
+/// Cancels a recorded, unstarted operation for a decline. Nothing recorded is nothing
+/// to cancel; an operation that already started cannot be declined.
+pub(super) fn cancel(
+    root: &Path,
+    owner: &Owner,
+    groups: &CloudGroups,
+    alias: &str,
+    id: OperationId,
+) -> Result<(), String> {
+    let context = inventory::prepare(owner, groups, &Cancellation::default()).map_err(|error| error.to_string())?;
     let request = lifecycle::Request {
         root,
         owner,
         context: &context,
         alias,
     };
-    // Nothing to cancel when the failure came before the operation was recorded.
-    let _ = retry_busy(|| lifecycle::cancel_submission(&request, id));
+    match retry_busy(|| lifecycle::status(&request, id)) {
+        Err(cloud_runtime::Error::Invalid("Companion is not bound" | "Unknown companion operation")) => Ok(()),
+        Err(error) => Err(error.to_string()),
+        Ok(operation) if operation.intent.state == companions::intent::State::Submitted => {
+            retry_busy(|| lifecycle::cancel_submission(&request, id)).map_err(|error| error.to_string())
+        }
+        Ok(operation) if operation.intent.state.pending() => {
+            Err("The companion cloud is already starting; it can no longer be declined".into())
+        }
+        Ok(_) => Ok(()),
+    }
 }

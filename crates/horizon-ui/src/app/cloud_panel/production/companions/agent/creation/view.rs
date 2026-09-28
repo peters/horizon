@@ -1,6 +1,6 @@
 //! What the owner sees of an agent's request to create a companion cloud, on the
 //! source cloud's card, and what the agent's polls answer while it waits.
-use super::{Choice, Pending, State};
+use super::{Choice, Pending, State, Step};
 use serde_json::{Value, json};
 
 impl State {
@@ -22,13 +22,13 @@ impl State {
 
 impl Pending {
     pub(super) fn describe(&self) -> Value {
-        let (phase, message) = if self.waiting() {
-            (
+        let (phase, message) = match self.step {
+            Step::Waiting => (
                 "confirmation_required",
                 "Waiting for the owner to confirm creating this companion cloud on the source cloud's card",
-            )
-        } else {
-            ("submitted", "The owner confirmed; the companion cloud is being created")
+            ),
+            Step::Declining(_) => ("confirmation_required", "The owner is declining this companion cloud"),
+            _ => ("submitted", "The owner confirmed; the companion cloud is being created"),
         };
         json!({
             "operation_id": self.id,
@@ -113,7 +113,11 @@ impl Pending {
         } else {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.small("Creating the companion cloud…");
+                ui.small(if matches!(self.step, Step::Declining(_)) {
+                    "Declining…"
+                } else {
+                    "Creating the companion cloud…"
+                });
             });
         }
         if let Some(error) = &self.error {

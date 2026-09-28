@@ -75,6 +75,21 @@ enum Step {
         target: String,
         receiver: Receiver<Result<Context, String>>,
     },
+    /// Confirmed; starts once no uncheck of the source is still being saved, so a
+    /// clicked uncheck always reaches the journal before any allocation.
+    Starting {
+        target: String,
+        context: Box<Context>,
+    },
+    /// The recorded operation is being cancelled; the decline is final once it is.
+    Declining(Receiver<Result<(), String>>),
+}
+
+enum Progress {
+    Reserved(Result<Checkout, String>),
+    Selected(Result<Context, String>),
+    Declined(Result<(), String>),
+    Start,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,24 +152,35 @@ impl State {
         }
     }
 
-    /// Forgets a declined request. Returns it when its operation was already recorded,
-    /// so the caller cancels that unstarted operation.
-    fn decline(&mut self, source: &str, alias: &str) -> Option<Pending> {
-        let index = self
-            .pending
-            .iter()
-            .position(|pending| pending.source == source && pending.alias == alias && pending.waiting())?;
+    /// Makes a decline final: the request leaves the card and its polls answer refused.
+    fn finish_decline(&mut self, index: usize) {
         let pending = self.pending.remove(index);
         if self.declined.len() >= DECLINED {
             self.declined.pop_front();
         }
         self.declined.push_back(Declined {
-            source: pending.source.clone(),
-            alias: pending.alias.clone(),
+            source: pending.source,
+            alias: pending.alias,
             id: pending.id,
-            kept: pending.card.and(pending.cloud_id.clone()),
+            kept: pending.card.and(pending.cloud_id),
         });
-        pending.cloud_id.is_some().then_some(pending)
+    }
+
+    /// Discards every pending creation, as a session change does. Returns the sources
+    /// whose refresh a creation in progress was holding.
+    pub(in crate::app::cloud_panel::production::companions::agent) fn discard(&mut self) -> Vec<String> {
+        self.actions.clear();
+        self.picker = None;
+        self.pending
+            .drain(..)
+            .filter(|pending| {
+                matches!(
+                    pending.step,
+                    Step::Reserving(_) | Step::Selecting { .. } | Step::Starting { .. }
+                )
+            })
+            .map(|pending| pending.source)
+            .collect()
     }
 }
 
@@ -251,19 +277,20 @@ impl HorizonApp {
         for (source, alias, choice) in std::mem::take(&mut creation.actions) {
             let creation = &mut self.cloud_prototype.production.companions.agent.creation;
             match choice {
-                Choice::Decline => {
-                    if let (Some(pending), Some(root)) =
-                        (creation.decline(&source, &alias), self.cloud_prototype.root.clone())
-                    {
-                        let groups = self.cloud_prototype.groups.clone();
-                        std::thread::spawn(move || cancel(&root, &pending.owner, &groups, &pending.alias, pending.id));
-                    }
-                }
+                Choice::Decline => self.decline_companion(&source, &alias),
                 Choice::Browse => creation.picker = Some((source, alias)),
                 Choice::Create => self.reserve_companion(&source, &alias, ctx),
             }
         }
         self.open_companion_checkout_picker();
+        let clearing = |source: &str| {
+            self.cloud_prototype
+                .production
+                .companions
+                .entries
+                .get(source)
+                .is_some_and(|entry| !entry.clearing.is_empty() || entry.job.is_some())
+        };
         let mut steps = Vec::new();
         for (index, pending) in self
             .cloud_prototype
@@ -275,33 +302,42 @@ impl HorizonApp {
             .iter()
             .enumerate()
         {
-            match &pending.step {
-                Step::Waiting => {}
-                Step::Reserving(receiver) => {
-                    if let Ok(result) = receiver.try_recv() {
-                        steps.push((index, Some(result), None));
-                    }
-                }
-                Step::Selecting { receiver, .. } => {
-                    if let Ok(result) = receiver.try_recv() {
-                        steps.push((index, None, Some(result)));
-                    }
-                }
-            }
+            let progress = match &pending.step {
+                Step::Waiting => None,
+                Step::Reserving(receiver) => receiver.try_recv().ok().map(Progress::Reserved),
+                Step::Selecting { receiver, .. } => receiver.try_recv().ok().map(Progress::Selected),
+                Step::Declining(receiver) => receiver.try_recv().ok().map(Progress::Declined),
+                Step::Starting { .. } => (!clearing(&pending.source)).then_some(Progress::Start),
+            };
+            steps.extend(progress.map(|progress| (index, progress)));
         }
         // Later indexes first, so removing one leaves the earlier indexes valid.
-        for (index, reserved, selected) in steps.into_iter().rev() {
-            if let Some(result) = reserved {
-                match result {
-                    Ok(checkout) => {
-                        self.cloud_prototype.production.companions.agent.creation.pending[index].checkout =
-                            Some(checkout);
-                        self.add_companion_cloud(index, ctx);
-                    }
-                    Err(error) => self.fail_companion_creation(index, error),
+        for (index, progress) in steps.into_iter().rev() {
+            let creation = &mut self.cloud_prototype.production.companions.agent.creation;
+            match progress {
+                Progress::Reserved(Ok(checkout)) => {
+                    creation.pending[index].checkout = Some(checkout);
+                    self.add_companion_cloud(index, ctx);
                 }
-            } else if let Some(result) = selected {
-                self.run_companion_creation(index, result, ctx);
+                Progress::Selected(Ok(context)) => {
+                    let pending = &mut creation.pending[index];
+                    if let Step::Selecting { target, .. } = &pending.step {
+                        pending.step = Step::Starting {
+                            target: target.clone(),
+                            context: Box::new(context),
+                        };
+                    }
+                }
+                Progress::Start => self.run_companion_creation(index, ctx),
+                Progress::Declined(Ok(())) => creation.finish_decline(index),
+                Progress::Declined(Err(error)) => {
+                    let pending = &mut creation.pending[index];
+                    pending.step = Step::Waiting;
+                    pending.error = Some(format!("The decline was not saved: {error}; decline again"));
+                }
+                Progress::Reserved(Err(error)) | Progress::Selected(Err(error)) => {
+                    self.fail_companion_creation(index, error);
+                }
             }
         }
         if self
@@ -316,6 +352,36 @@ impl HorizonApp {
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
+    }
+
+    /// Declines a waiting request. Nothing recorded yet: final at once. Otherwise the
+    /// recorded operation is cancelled first, and the decline is final only once that
+    /// is saved, so a restart cannot offer a declined request again.
+    fn decline_companion(&mut self, source: &str, alias: &str) {
+        let creation = &mut self.cloud_prototype.production.companions.agent.creation;
+        let Some(index) = creation
+            .pending
+            .iter()
+            .position(|pending| pending.source == source && pending.alias == alias && pending.waiting())
+        else {
+            return;
+        };
+        if creation.pending[index].cloud_id.is_none() {
+            creation.finish_decline(index);
+            return;
+        }
+        let Some(root) = self.cloud_prototype.root.clone() else {
+            return;
+        };
+        let groups = self.cloud_prototype.groups.clone();
+        let pending = &mut creation.pending[index];
+        let (owner, alias, id) = (pending.owner.clone(), pending.alias.clone(), pending.id);
+        let (sender, receiver) = channel();
+        pending.error = None;
+        pending.step = Step::Declining(receiver);
+        std::thread::spawn(move || {
+            let _ = sender.send(cancel(&root, &owner, &groups, &alias, id));
+        });
     }
 
     fn open_companion_checkout_picker(&mut self) {
@@ -441,20 +507,13 @@ impl HorizonApp {
     }
 
     /// Runs the confirmed operation on the new cloud's card, which allocates its first worker.
-    fn run_companion_creation(&mut self, index: usize, result: Result<Context, String>, ctx: &egui::Context) {
-        let pending = &self.cloud_prototype.production.companions.agent.creation.pending[index];
-        let Step::Selecting { target, .. } = &pending.step else {
+    fn run_companion_creation(&mut self, index: usize, ctx: &egui::Context) {
+        let pending = &mut self.cloud_prototype.production.companions.agent.creation.pending[index];
+        let Step::Starting { target, context } = std::mem::replace(&mut pending.step, Step::Waiting) else {
             return;
         };
-        let (source, alias, id, target) = (
-            pending.source.clone(),
-            pending.alias.clone(),
-            pending.id,
-            target.clone(),
-        );
-        let started =
-            result.and_then(|context| self.execute_on_card(&source, &target, (&alias, false), id, context, ctx));
-        match started {
+        let (source, alias, id) = (pending.source.clone(), pending.alias.clone(), pending.id);
+        match self.execute_on_card(&source, &target, (&alias, false), id, *context, ctx) {
             // The execution keeps the source's hold until it reports back.
             Ok(()) => {
                 self.cloud_prototype

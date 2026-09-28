@@ -222,6 +222,8 @@ impl State {
             self.retiring
                 .extend(self.entries.drain().filter_map(|(_, mut entry)| entry.retire()));
             self.inventory.clear();
+            // Creations started for the previous session never finish on the new board.
+            self.agent.discard_creations();
             self.session = session.map(str::to_owned);
         }
         changed

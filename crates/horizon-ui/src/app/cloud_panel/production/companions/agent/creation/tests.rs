@@ -372,7 +372,8 @@ fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
 
 #[test]
 fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
+    let (temp, mut app) = crate::app::test_support::test_app();
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
     let ctx = egui::Context::default();
     let id = OperationId::generate();
     app.request_companion_creation(owner(), "consumer", declaration(), id);
@@ -393,11 +394,96 @@ fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
     creation(&mut app)
         .actions
         .push(("source".into(), "consumer".into(), Choice::Decline));
+    // Its recorded operation must be cancelled first. Here that cannot be saved (the
+    // source is not open), so the decline is not final and the card shows why.
     app.poll_companion_creations(&ctx);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !creation(&mut app).pending[0].waiting() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.poll_companion_creations(&ctx);
+    }
+    let pending = &creation(&mut app).pending[0];
+    assert!(pending.waiting());
+    assert!(pending.error.as_deref().unwrap().contains("decline again"));
+    let answer = creation(&mut app)
+        .answer("source", "consumer", None, id)
+        .unwrap()
+        .unwrap();
+    assert_ne!(answer["phase"], "refused");
+    // Once the cancellation is saved, the refusal names the kept cloud.
+    creation(&mut app).finish_decline(0);
     let refused = creation(&mut app)
         .answer("source", "consumer", None, id)
         .unwrap()
         .unwrap();
     assert_eq!(refused["target_cloud_id"], "reserved");
     assert!(refused["message"].as_str().unwrap().contains("card stays"));
+}
+
+#[test]
+fn a_confirmed_creation_waits_for_a_queued_uncheck_and_a_session_change_discards_it() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        1,
+        "source".into(),
+        "workspace".into(),
+        "/checkouts/source".into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(
+        serde_json::from_value(json!({
+            "id": "source", "revision": "a".repeat(40), "profile_name": "cpu",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
+        }))
+        .unwrap(),
+    );
+    app.cloud_prototype.groups.0.push(group);
+    let groups = app.cloud_prototype.groups.clone();
+    app.cloud_prototype.production.companions.sync(Some("session"), &groups);
+    app.request_companion_creation(owner(), "consumer", declaration(), OperationId::generate());
+    let context = Context {
+        source: Target {
+            scope: owner().scope,
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "cpu"),
+        },
+        declarations: std::collections::BTreeMap::new(),
+        inventory: Vec::new(),
+    };
+    creation(&mut app).pending[0].step = Step::Starting {
+        target: "target".into(),
+        context: Box::new(context),
+    };
+    let companions = &mut app.cloud_prototype.production.companions;
+    companions.agent.hold("source");
+    companions
+        .entries
+        .get_mut("source")
+        .unwrap()
+        .clearing
+        .insert("consumer".into());
+    // The uncheck is still being saved: nothing starts.
+    app.poll_companion_creations(&ctx);
+    assert!(matches!(creation(&mut app).pending[0].step, Step::Starting { .. }));
+    app.cloud_prototype
+        .production
+        .companions
+        .entries
+        .get_mut("source")
+        .unwrap()
+        .clearing
+        .clear();
+    // Once saved, the start runs; its card is not open here, so it pauses with an error.
+    app.poll_companion_creations(&ctx);
+    let pending = &creation(&mut app).pending[0];
+    assert!(pending.waiting() && pending.error.is_some());
+    // A creation in progress in the previous session is discarded, releasing its hold.
+    let companions = &mut app.cloud_prototype.production.companions;
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    companions.agent.creation.pending[0].step = Step::Reserving(receiver);
+    companions.agent.hold("source");
+    companions.set_session(Some("other"));
+    assert!(companions.agent.creation.pending.is_empty());
+    assert!(!companions.agent.holds("source"));
 }

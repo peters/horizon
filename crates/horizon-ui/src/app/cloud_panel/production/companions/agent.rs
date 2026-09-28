@@ -96,6 +96,13 @@ impl State {
         }
     }
 
+    /// Drops creations waiting on a card of the previous session, releasing their holds.
+    pub(super) fn discard_creations(&mut self) {
+        for source in self.creation.discard() {
+            self.release(&source);
+        }
+    }
+
     pub(super) fn holds(&self, source: &str) -> bool {
         self.held.contains_key(source)
     }
