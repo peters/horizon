@@ -161,10 +161,9 @@ fn begin_operation(runtime: &mut Runtime, action: Action) {
         runtime.remote_release_error = None;
         runtime.stage = Some(first_deletion_step(runtime.state.as_ref()));
     } else {
-        // A failed deletion's frozen steps must not stand in for another operation.
-        if runtime.progress.is_deletion() {
-            runtime.progress.reset();
-        }
+        // Every operation times and diagnoses its own output: a failed deletion's
+        // frozen steps and an earlier deployment's clock do not carry over.
+        runtime.progress.reset();
         runtime.stage = Some(Stage::Provision);
     }
 }

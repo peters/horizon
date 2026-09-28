@@ -199,25 +199,28 @@ impl HorizonApp {
         }
     }
 
-    /// Whether any production cloud shows its drawer, which takes keyboard and file chooser focus.
-    pub(in crate::app) fn cloud_details_open(&self) -> bool {
-        self.cloud_prototype.groups.0.iter().any(|group| {
-            self.cloud_prototype
-                .fullscreen
-                .as_ref()
-                .is_none_or(|view| view.id == group.issue)
-                && !group.collapsed
-                && self
-                    .cloud_prototype
-                    .production
-                    .runtimes
-                    .get(&group.issue)
-                    .is_some_and(|runtime| runtime.drawer.is_some())
-        })
+    /// Open drawers on screen: canvas gestures such as Ctrl-double-click do not reach
+    /// through them, while the rest of the canvas and its panels stay interactive.
+    pub(in crate::app) fn cloud_drawer_screen_rects(&self, ctx: &egui::Context) -> Vec<Rect> {
+        let canvas = self.canvas_rect(ctx);
+        let transform = canvas_scene_transform(canvas, self.canvas_view);
+        self.cloud_prototype
+            .groups
+            .0
+            .iter()
+            .filter(|group| {
+                self.cloud_prototype
+                    .fullscreen
+                    .as_ref()
+                    .is_none_or(|view| view.id == group.issue)
+            })
+            .filter_map(|group| self.cloud_drawer_rect(group))
+            .map(|rect| transform * rect)
+            .collect()
     }
 
     /// The drawer's canvas rectangle when it is open, for input routing.
-    pub(in crate::app::cloud_panel) fn cloud_drawer_rect(&self, group: &CloudGroup) -> Option<Rect> {
+    pub(in crate::app) fn cloud_drawer_rect(&self, group: &CloudGroup) -> Option<Rect> {
         let runtime = self.cloud_prototype.production.runtimes.get(&group.issue)?;
         let tab = Tab::resolve(runtime.drawer?, body_visible(group));
         (!group.collapsed).then(|| {
@@ -259,10 +262,15 @@ impl HorizonApp {
             let frame = ctx.cumulative_frame_nr();
             let status = status::for_frame(runtime, occupancy, now, frame);
             let body = body_visible(group);
-            if body && let Some(action) = body_area(ctx, &layer, group, runtime, &status) {
+            // Nothing is laid out for a cloud whose body and drawer are both off screen.
+            let on_screen = |rect: Rect| rect.intersects(layer.clip);
+            if body
+                && on_screen(body_rect(group))
+                && let Some(action) = body_area(ctx, &layer, group, runtime, &status)
+            {
                 chosen.actions.push((group.issue, action));
             }
-            if runtime.drawer.is_some() {
+            if runtime.drawer.is_some() && on_screen(drawer::placement(group)) {
                 let teasers = teasers(group, runtime, &status, occupancy);
                 let context = drawer::Context {
                     group,

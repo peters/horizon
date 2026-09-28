@@ -123,14 +123,16 @@ pub(super) fn show(
     }
     let placed = place(ui, indicators);
     let width = placed.iter().map(|placed| placed.width).sum::<f32>();
-    if room(left, width) {
+    // Spend is dropped first: it shows only once the indicators have their room.
+    let indicators_fit = room(left, width);
+    if indicators_fit {
         paint_indicators(ui, pos2(left - width, y), placed);
         left -= width + 22.0;
     }
     let spend_galley = ui
         .painter()
         .layout_no_wrap(spend.line.clone(), FontId::proportional(14.0), theme::FG_SOFT());
-    if room(left, spend_galley.size().x) {
+    if indicators_fit && room(left, spend_galley.size().x) {
         let rect = Rect::from_min_size(
             pos2(left - spend_galley.size().x, y - spend_galley.size().y / 2.0),
             spend_galley.size(),

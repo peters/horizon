@@ -87,6 +87,12 @@ fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
                 width >= 900.0,
                 "spend is the first thing a narrow header drops ({width})"
             );
+            if has("$0.320/h · $1.02 run · $8.86 total") {
+                assert!(
+                    has("2/3"),
+                    "spend never shows without the connection indicators ({width})"
+                );
+            }
         }
     }
 }

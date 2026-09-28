@@ -13,7 +13,7 @@ impl HorizonApp {
 
     pub(super) fn host_dialog_open(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_close_confirmation_open() || self.cloud_details_open() {
+        if self.cloud_close_confirmation_open() {
             return true;
         }
         self.cloud_creation_open() || self.browser_file_chooser_open()

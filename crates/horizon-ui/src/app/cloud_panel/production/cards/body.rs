@@ -159,7 +159,20 @@ fn worker(runtime: &Runtime) -> String {
         .as_ref()
         .and_then(|state| state.worker.as_ref())
         .map_or_else(
-            || "Worker: not requested yet".to_owned(),
+            || {
+                let requested = runtime.state.as_ref().is_some_and(|state| {
+                    matches!(
+                        state.operation,
+                        horizon_core::cloud_runtime::CreateState::Requested
+                            | horizon_core::cloud_runtime::CreateState::Bound { .. }
+                    )
+                });
+                if requested {
+                    "Worker: requested · awaiting its details".to_owned()
+                } else {
+                    "Worker: not requested yet".to_owned()
+                }
+            },
             |worker| format!("Worker: {} (last observed)", worker.desired_status),
         )
 }
@@ -283,5 +296,22 @@ mod tests {
                 assert!(output.top() > find("Ready").bottom(), "output under the steps");
             }
         }
+    }
+
+    #[test]
+    fn a_sent_worker_request_is_not_called_unrequested() {
+        let mut runtime = Runtime::default();
+        assert_eq!(worker(&runtime), "Worker: not requested yet");
+        runtime.state = Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,"cloud_id":"requested","repository":"/synthetic","revision":"a",
+                "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+                "stage":"Provision","operation":{"state":"requested"},"spec":null,"sessions":[],"worker":null
+            }))
+            .unwrap(),
+        );
+        assert_eq!(worker(&runtime), "Worker: requested · awaiting its details");
+        runtime.state_unavailable = true;
+        assert_eq!(worker(&runtime), "Worker: unknown (record unavailable)");
     }
 }

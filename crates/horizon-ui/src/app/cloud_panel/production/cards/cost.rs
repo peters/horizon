@@ -65,11 +65,17 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let run = runtime.current_run_cost(now);
     let total = runtime.total_cost(now);
     let idle = compute_idle(runtime);
+    let deleted = runtime.stage == Some(super::super::Stage::Deleted);
     let mut parts = Vec::new();
-    match rate {
-        Some(_) if idle => parts.push("compute stopped".to_owned()),
-        Some(rate) => parts.push(cloud_runtime::cost::format_rate(rate)),
-        None => {}
+    // A deleted worker bills nothing now; its history can still follow.
+    if deleted {
+        parts.push("Nothing billing now".to_owned());
+    } else {
+        match rate {
+            Some(_) if idle => parts.push("compute stopped".to_owned()),
+            Some(rate) => parts.push(cloud_runtime::cost::format_rate(rate)),
+            None => {}
+        }
     }
     if let Some(run) = &run {
         parts.push(format!("{} run", horizon_core::format_cost(run.amount)));
@@ -82,17 +88,16 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         None if runtime.billing.error().is_some() => parts.push("total unavailable".into()),
         None => {}
     }
-    let line = if parts.is_empty() {
-        if runtime.stage == Some(super::super::Stage::Deleted) {
-            "Nothing billing now".to_owned()
-        } else if worker.is_some() || worker_requested(runtime) {
-            // Billing starts with the request, before the provider describes the worker.
-            "Worker billing · rate pending".to_owned()
-        } else {
-            "No charges yet".to_owned()
-        }
-    } else {
+    let line = if !parts.is_empty() {
         parts.join(" · ")
+    } else if idle {
+        // Known stopped: missing rate data does not make the worker billable again.
+        "compute stopped".to_owned()
+    } else if worker.is_some() || worker_requested(runtime) {
+        // Billing starts with the request, before the provider describes the worker.
+        "Worker billing · rate pending".to_owned()
+    } else {
+        "No charges yet".to_owned()
     };
     let explanation = match &total {
         Some(total) => runtime.billing.explanation(total, Instant::now()),
@@ -368,5 +373,27 @@ mod tests {
             ..Runtime::default()
         };
         assert_eq!(spend(&runtime, SystemTime::now()).line, "Nothing billing now");
+    }
+
+    #[test]
+    fn deleted_and_stopped_workers_never_read_as_billing_compute() {
+        let mut deleted = runtime();
+        deleted.stage = Some(Stage::Deleted);
+        let line = spend(&deleted, SystemTime::now()).line;
+        assert!(line.starts_with("Nothing billing now"), "{line}");
+        assert!(!line.contains("/h"), "no rate for a deleted worker: {line}");
+        let stopped = Runtime {
+            stage: Some(Stage::Stopped),
+            state: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version":1,"cloud_id":"stopped","repository":"/synthetic","revision":"a",
+                    "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+                    "stage":"Stopped","operation":{"state":"bound","worker_id":"w"},"spec":null,"sessions":[],"worker":null
+                }))
+                .unwrap(),
+            ),
+            ..Runtime::default()
+        };
+        assert_eq!(spend(&stopped, SystemTime::now()).line, "compute stopped");
     }
 }

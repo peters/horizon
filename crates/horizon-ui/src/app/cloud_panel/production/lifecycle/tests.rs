@@ -677,3 +677,26 @@ fn deletion_time_ends_when_the_worker_finished_not_when_the_ui_caught_up() {
     assert_eq!(runtime.stage, Some(Stage::Deleted));
     assert_eq!(runtime.progress.ended_in(Stage::Deleted), Some(Duration::from_secs(12)));
 }
+
+#[test]
+fn every_worker_operation_starts_its_own_attempt() {
+    let mut runtime = Runtime::default();
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_hours(3))
+        .unwrap();
+    runtime.progress.stage(Stage::Validate, long_ago);
+    let before = runtime.progress.attempt();
+    for action in [Action::Resume, Action::Stop] {
+        let previous = runtime.progress.attempt();
+        begin_operation(&mut runtime, action);
+        assert_eq!(runtime.progress.attempt(), previous + 1, "{action:?}");
+        assert_eq!(
+            runtime.progress.elapsed(),
+            None,
+            "{action:?} does not time from the deployment"
+        );
+    }
+    begin_operation(&mut runtime, Action::Delete);
+    assert!(runtime.progress.attempt() > before + 2);
+    assert!(runtime.progress.is_deletion());
+}

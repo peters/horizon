@@ -127,3 +127,30 @@ fn a_retry_of_the_same_image_keeps_the_earlier_attempts_layer_lines() {
         ["5f70bf18a086: Pushing [==>      ]  10MB/80MB", "5f70bf18a086: Pushed"]
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn an_open_drawer_blocks_canvas_gestures_only_where_it_is() {
+    let (temp, mut app) = crate::app::test_support::test_app();
+    let workspace = app.board.create_workspace("cloud fixture");
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        8,
+        "Drawer".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        temp.path().into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(super::size_launch());
+    app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype.production.runtimes.entry(8).or_default().drawer = Some(Tab::Machine);
+    let ctx = egui::Context::default();
+    let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+    assert!(!app.host_dialog_open(), "a drawer is not a dialog for the whole canvas");
+    let rects = app.cloud_drawer_screen_rects(&ctx);
+    assert_eq!(rects.len(), 1);
+    let zones = app.overlay_exclusion_zones(&ctx);
+    assert!(
+        zones.contains(rects[0].center()),
+        "gestures do not reach through the drawer"
+    );
+}

@@ -212,10 +212,6 @@ impl Runtime {
 
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
     /// lines wait aside so the lines on screen are neither dropped nor shifted.
-    /// Recent lines a layer's newer progress line replaces, so a push or pull keeps one
-    /// updating line per layer instead of one per update.
-    const LAYER_WINDOW: usize = 48;
-
     fn push_log(&mut self, text: String) {
         let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
         line.attempt = self.progress.attempt();
@@ -229,7 +225,6 @@ impl Runtime {
             && let Some(previous) = target
                 .iter_mut()
                 .rev()
-                .take(Self::LAYER_WINDOW)
                 .find(|previous| same_layer(previous, &line, layer))
         {
             *previous = line;
@@ -259,7 +254,6 @@ impl Runtime {
                     .logs
                     .iter_mut()
                     .rev()
-                    .take(Self::LAYER_WINDOW)
                     .find(|previous| same_layer(previous, &line, layer))
             {
                 *previous = line;
