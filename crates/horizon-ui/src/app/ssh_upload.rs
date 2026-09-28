@@ -65,6 +65,10 @@ enum UploadUiAction {
 }
 
 impl SshUploadFlow {
+    pub(super) fn targets_viewport(&self, viewport: ViewportId) -> bool {
+        self.target_viewport_id == viewport
+    }
+
     fn new(
         target_viewport_id: ViewportId,
         connection: SshConnection,
@@ -558,6 +562,34 @@ mod tests {
             assert!(app.board.unresolved_attention_for_panel(panel_id).is_some());
             assert!(app.board.restart_panel(panel_id).is_err());
             assert!(!marker.exists());
+        }
+    }
+
+    #[test]
+    fn upload_modal_blocks_gestures_only_in_its_target_viewport() {
+        use super::*;
+        use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+        let (_temp, mut app) = test_app();
+        let ctx = egui::Context::default();
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+        for viewport in [ViewportId::ROOT, ViewportId::from_hash_of("detached-test")] {
+            app.ssh_upload_flow = Some(SshUploadFlow {
+                target_viewport_id: viewport,
+                host_label: "Synthetic".into(),
+                connection: SshConnection::default(),
+                files: Vec::new(),
+                destination_input: String::new(),
+                ssh_upload_error: None,
+                taildrop_target: None,
+                transport_choice: UploadTransportChoice::Ssh,
+                mode: UploadMode::Failed("Synthetic".into()),
+                destination_picker: None,
+                preparation_rx: None,
+                upload_handle: None,
+                upload_snapshot: None,
+                upload_started_at: None,
+            });
+            assert_eq!(app.canvas_gesture_enabled(), viewport != ViewportId::ROOT);
         }
     }
 

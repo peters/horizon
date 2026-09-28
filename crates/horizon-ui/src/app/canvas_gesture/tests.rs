@@ -488,10 +488,10 @@ fn queued_clicks_keep_their_original_arrival_times() {
     ]);
     assert!(feed(&mut gesture, 2.0, vec![]).events.is_empty());
     assert_eq!(
-        feed(&mut gesture, 2.01, vec![]).events,
+        feed(&mut gesture, 2.5, vec![]).events,
         vec![button(pos, true), button(pos, false)]
     );
-    assert!(feed(&mut gesture, 2.02, vec![]).events.is_empty());
+    assert!(feed(&mut gesture, 2.51, vec![]).events.is_empty());
     assert_eq!(gesture.take_completed(), None);
 }
 
@@ -561,7 +561,8 @@ fn later_secondary_click_replays_completed_primary_first() {
         vec![button(pos, true), button(pos, false)]
     );
     assert_eq!(feed(&mut gesture, 1.15, vec![]).events, vec![secondary]);
-    let primary = feed(&mut gesture, 1.2, vec![button(pos, true)]);
+    assert!(feed(&mut gesture, 1.2, vec![button(pos, true)]).events.is_empty());
+    let primary = feed(&mut gesture, 1.25, vec![]);
     assert_eq!(primary.events, vec![button(pos, true)]);
     assert!(gesture.pending.is_none());
 }
@@ -616,4 +617,132 @@ fn same_frame_secondary_press_then_focus_loss_does_not_block_future_gestures() {
     feed(&mut gesture, 1.25, vec![button(pos, false)]);
     feed(&mut gesture, 1.3, vec![button(pos, true)]);
     assert_eq!(gesture.take_completed(), Some(pos));
+}
+
+#[test]
+fn paced_queued_plain_clicks_preserve_egui_classification_and_wall_time() {
+    for (gap, second_delivery, expected_double) in [(0.5, 2.5, false), (0.1, 2.1, true)] {
+        let mut gesture = CanvasGesture::default();
+        let pos = Pos2::new(300.0, 300.0);
+        let click = || {
+            [true, false]
+                .map(|pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                })
+                .to_vec()
+        };
+        gesture.queued.extend([
+            Frame {
+                time: 1.0,
+                events: click(),
+            },
+            Frame {
+                time: 1.0 + gap,
+                events: click(),
+            },
+        ]);
+        let ctx = egui::Context::default();
+        for (time, expected_click) in [(2.0, true), (2.01, false), (second_delivery, true)] {
+            let raw = feed(&mut gesture, time, vec![]);
+            assert_eq!(raw.time, Some(time));
+            ctx.begin_pass(raw);
+            ctx.input(|input| {
+                assert!((input.time - time).abs() < f64::EPSILON);
+                assert_eq!(input.pointer.any_click(), expected_click);
+                assert_eq!(
+                    input.pointer.button_double_clicked(PointerButton::Primary),
+                    expected_click && time > 2.0 && expected_double
+                );
+            });
+            ctx.end_pass().textures_delta.clear();
+        }
+    }
+}
+
+#[test]
+fn a_second_stall_does_not_compress_the_remaining_queue() {
+    let mut gesture = CanvasGesture::default();
+    gesture.queued.extend([1.0, 1.5, 2.0].map(|time| Frame {
+        time,
+        events: vec![Event::Text(time.to_string())],
+    }));
+    assert_eq!(feed(&mut gesture, 3.0, vec![]).events, vec![Event::Text("1".into())]);
+    assert_eq!(feed(&mut gesture, 4.0, vec![]).events, vec![Event::Text("1.5".into())]);
+    assert!(feed(&mut gesture, 4.01, vec![]).events.is_empty());
+    assert_eq!(feed(&mut gesture, 4.5, vec![]).events, vec![Event::Text("2".into())]);
+}
+
+#[test]
+fn remote_host_modal_does_not_reserve_clicks_or_consume_completed_gestures() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    app.remote_hosts_overlay = Some(crate::remote_hosts_overlay::RemoteHostsOverlay::new());
+    assert!(!app.canvas_gesture_enabled());
+    let pos = Pos2::new(500.0, 400.0);
+    let mut raw = raw_input([1400.0, 900.0], None);
+    raw.events = vec![button(pos, true)];
+    app.filter_canvas_gesture(&ctx, &mut raw);
+    assert_eq!(raw.events, vec![button(pos, true)]);
+    app.canvas_gesture.completed = Some(pos);
+    app.handle_canvas_double_click(&ctx);
+    assert!(app.pending_preset_pick.is_none());
+}
+
+#[test]
+fn drained_backlog_expires_without_manufacturing_delayed_empty_frames() {
+    let mut gesture = CanvasGesture::default();
+    gesture.queued.push_back(Frame {
+        time: 1.0,
+        events: vec![Event::Text("queued".into())],
+    });
+    assert_eq!(
+        feed(&mut gesture, 2.0, vec![]).events,
+        vec![Event::Text("queued".into())]
+    );
+    for time in [2.01, 2.1, 3.0] {
+        assert!(feed(&mut gesture, time, vec![]).events.is_empty());
+        assert!(gesture.queued.is_empty());
+    }
+    assert!(gesture.delivery.is_none());
+    assert_eq!(
+        feed(&mut gesture, 3.01, vec![Event::Text("live".into())]).events,
+        vec![Event::Text("live".into())]
+    );
+}
+
+#[test]
+fn focus_loss_discards_inherited_replay_pacing() {
+    let mut gesture = CanvasGesture {
+        delivery: Some(Delivery {
+            source_time: 1.0,
+            delivered_at: 2.0,
+        }),
+        ..CanvasGesture::default()
+    };
+    gesture.queued.push_back(Frame {
+        time: 1.1,
+        events: vec![button(Pos2::new(300.0, 300.0), true)],
+    });
+    gesture.queued.push_back(Frame {
+        time: 1.2,
+        events: vec![Event::Text("preserved".into())],
+    });
+    let mut raw = RawInput {
+        time: Some(2.01),
+        focused: false,
+        events: vec![Event::WindowFocused(false)],
+        ..RawInput::default()
+    };
+    gesture.filter(&mut raw, &InputOptions::default(), |_| false);
+    assert!(gesture.delivery.is_none());
+    assert!(gesture.queued.is_empty());
+    assert_eq!(
+        raw.events,
+        vec![Event::Text("preserved".into()), Event::WindowFocused(false)]
+    );
 }

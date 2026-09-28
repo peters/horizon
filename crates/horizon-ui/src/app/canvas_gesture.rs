@@ -18,6 +18,12 @@ pub(super) struct CanvasGesture {
     queued: VecDeque<Frame>,
     cancelled_down: bool,
     other_buttons: [bool; 5],
+    delivery: Option<Delivery>,
+}
+
+struct Delivery {
+    source_time: f64,
+    delivered_at: f64,
 }
 
 struct Frame {
@@ -45,6 +51,7 @@ impl Default for CanvasGesture {
             queued: VecDeque::new(),
             cancelled_down: false,
             other_buttons: [false; 5],
+            delivery: None,
         }
     }
 }
@@ -100,31 +107,48 @@ impl CanvasGesture {
             }
         }
         if lost_focus {
+            let mut carried: Vec<_> = self.queued.drain(..).flat_map(|frame| frame.events).collect();
+            carried.append(&mut raw.events);
+            raw.events = carried;
+            self.delivery = None;
             self.other_buttons.fill(false);
         }
-        if self.pending.is_none()
-            && !self.forwarded_down
-            && !self.cancelled_down
-            && self.queued.is_empty()
-            && self.replayed_origin.is_none()
-            && !raw.events.iter().any(|event| {
-                matches!(event,
-                Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers }
-                    if (modifiers.ctrl || modifiers.command) && eligible(*pos))
-            })
+        let eligible = |pos| !lost_focus && eligible(pos);
+        let pacing_limit = options.max_click_duration.max(options.max_double_click_delay) + 0.001;
+        if self.queued.is_empty()
+            && self
+                .delivery
+                .as_ref()
+                .is_some_and(|delivery| now - delivery.delivered_at >= pacing_limit)
         {
+            self.delivery = None;
+        }
+        if self.can_pass_through(raw, &eligible) {
             for event in &raw.events {
                 self.track_other_button(event);
             }
             return None;
         }
-        if !raw.events.is_empty() || self.queued.is_empty() {
+        if !raw.events.is_empty() || (self.queued.is_empty() && self.pending.is_some()) {
             self.queued.push_back(Frame {
                 time: now,
                 events: std::mem::take(&mut raw.events),
             });
         }
+        if let (Some(delivery), Some(frame)) = (&self.delivery, self.queued.front()) {
+            // Keep queued clicks apart even after a second render stall. Capping
+            // idle gaps preserves click classification without replaying long pauses.
+            let interval = (frame.time - delivery.source_time).clamp(0.0, pacing_limit);
+            let wait = delivery.delivered_at + interval - now;
+            if wait > 0.000_001 {
+                return Some(Duration::from_secs_f64(wait));
+            }
+        }
         let frame = self.queued.pop_front()?;
+        self.delivery = (now > frame.time || !self.queued.is_empty()).then_some(Delivery {
+            source_time: frame.time,
+            delivered_at: now,
+        });
         let mut output = Vec::with_capacity(frame.events.len());
         if let Some(pending) = &self.pending {
             if lost_focus || !eligible(pending.origin) {
@@ -154,6 +178,20 @@ impl CanvasGesture {
         self.pending
             .as_ref()
             .map(|pending| Duration::from_secs_f64((Self::deadline(pending, options) - now).max(0.0)))
+    }
+
+    fn can_pass_through(&self, raw: &RawInput, eligible: &impl Fn(Pos2) -> bool) -> bool {
+        self.pending.is_none()
+            && !self.forwarded_down
+            && !self.cancelled_down
+            && self.queued.is_empty()
+            && self.delivery.is_none()
+            && self.replayed_origin.is_none()
+            && !raw.events.iter().any(|event| {
+                matches!(event,
+                Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers }
+                    if (modifiers.ctrl || modifiers.command) && eligible(*pos))
+            })
     }
 
     fn deadline(pending: &Pending, options: &InputOptions) -> f64 {
@@ -317,6 +355,11 @@ impl HorizonApp {
             && self.session_manager.is_none()
             && self.startup_chooser.is_none()
             && self.command_palette.is_none()
+            && self.remote_hosts_overlay.is_none()
+            && !self
+                .ssh_upload_flow
+                .as_ref()
+                .is_some_and(|flow| flow.targets_viewport(ViewportId::ROOT))
             && !self
                 .search_overlay
                 .as_ref()
@@ -334,6 +377,7 @@ impl HorizonApp {
         if self.canvas_gesture.session_id.as_deref() != session_id {
             self.canvas_gesture.cancel();
             self.canvas_gesture.queued.clear();
+            self.canvas_gesture.delivery = None;
             self.canvas_gesture.session_id = session_id.map(str::to_owned);
         }
         let enabled = raw.focused && self.canvas_gesture_enabled();
@@ -348,6 +392,7 @@ impl HorizonApp {
             if !enabled || !canvas.contains(origin) || exclusions.contains(origin) {
                 self.canvas_gesture.cancel();
                 self.canvas_gesture.queued.clear();
+                self.canvas_gesture.delivery = None;
             }
             ctx.input_mut(|input| {
                 let pos = input.pointer.latest_pos();
