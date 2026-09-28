@@ -334,11 +334,13 @@ there, such as a package cache that must not be shared with another session on t
 same worker. Horizon sets no ecosystem-specific variables; a repository's own scripts
 choose what to place in the directory.
 
-Only `HORIZON_SESSION_DIR` is per session. Sessions in the shared checkout share every
-file in `/workspace/checkout`, including build output such as `bin/`, `obj/`, `target/`
-and native build directories, so two sessions that build at the same time write the
-same files. Serialize such builds, for example under the [GPU lock](#gpu-lock) for GPU
-builds, or point a repository's build output at `HORIZON_SESSION_DIR`.
+In the shared checkout, only `HORIZON_SESSION_DIR` is per session. Sessions that use
+the shared checkout share every file in `/workspace/checkout`, including build output
+such as `bin/`, `obj/`, `target/` and native build directories, so two sessions that
+build at the same time write the same files. Serialize such builds, for example under
+the [GPU lock](#gpu-lock) for GPU builds, or point a repository's build output at
+`HORIZON_SESSION_DIR`. Legacy sessions keep their build output in their own worktree
+under `/workspace/agents/SESSION`.
 
 ## Session environment from image layers
 

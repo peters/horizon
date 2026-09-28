@@ -79,31 +79,54 @@ class SourceFormatTests(unittest.TestCase):
                 self.assertEqual((agent / 'nested/module/file.txt').read_text(), 'selected committed content\n')
                 self.assertEqual(self.git('-C', agent / 'nested/module', 'rev-parse', 'HEAD').decode().strip(), revision)
 
-    def test_shared_checkout_reports_its_submodules_as_initialized(self):
+    def commit_all(self, repository, message):
+        self.git('-C', repository, 'add', '-A')
+        self.git('-C', repository, '-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', 'commit', '-m', message)
+        return self.git('-C', repository, 'rev-parse', 'HEAD').decode().strip()
+
+    def add_submodule(self, superproject, name, source, path):
+        # A name unlike the path, so registration must read it from .gitmodules.
+        self.git('-C', superproject, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet',
+                 '--name', name, source, path)
+
+    def test_shared_checkout_registers_nested_submodules_by_name_and_stays_offline(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            child_revision, child_pack, workspace = self.fixture(root, 'sha1')
+            leaf_revision, leaf_pack, workspace = self.fixture(root, 'sha1')
+            middle = root / 'middle'
+            self.git('init', middle)
+            self.add_submodule(middle, 'leaf-lib', root / 'local', 'deps/leaf')
+            middle_revision = self.commit_all(middle, 'Add leaf')
+            middle_pack = self.git('-C', middle, 'pack-objects', '--stdout', '--revs', input=(middle_revision + '\n').encode())
             superproject = root / 'superproject'
             self.git('init', superproject)
-            self.git('-C', superproject, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet',
-                     root / 'local', 'nested/module')
-            self.git('-C', superproject, '-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid',
-                     'commit', '-m', 'Add submodule')
+            self.add_submodule(superproject, 'middle-lib', middle, 'nested/module')
+            self.commit_all(superproject, 'Add middle')
             self.git('clone', '--bare', superproject, workspace / 'repository.git')
             checkout = workspace / 'checkout'
             self.git('--git-dir', workspace / 'repository.git', 'worktree', 'add', '--detach', checkout, 'HEAD')
-            self.archive(root, workspace, [{'path': 'nested/module', 'revision': child_revision}], [child_pack])
+            self.archive(root, workspace, [{'path': 'nested/module', 'revision': middle_revision},
+                                           {'path': 'nested/module/deps/leaf', 'revision': leaf_revision}],
+                         [middle_pack, leaf_pack])
             self.assertEqual(self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT).returncode, 0)
-            shutil.rmtree(root / 'local')
+            # Every original remote is gone, so any clone or fetch below would fail.
+            for original in ['local', 'middle', 'superproject']:
+                shutil.rmtree(root / original)
             for _ in range(2):
                 checked = self.execute('horizon-worker-source', workspace, 'checkout', str(checkout))
                 self.assertEqual(checked.returncode, 0, checked.stderr.decode())
-            status = self.git('-C', checkout, 'submodule', 'status').decode()
-            self.assertEqual(status.strip().split()[:2], [child_revision, 'nested/module'])
-            self.assertTrue(status.startswith(' '), status)
-            # Already initialized at its pin: no clone from the recorded (now missing) remote.
-            self.git('-C', checkout, 'submodule', 'update', '--init')
-            self.assertEqual((checkout / 'nested/module/file.txt').read_text(), 'selected committed content\n')
+            config = lambda repository, key: self.git('-C', repository, 'config', '--get', key).decode().strip()
+            material = workspace / 'source'
+            self.assertEqual(config(checkout, 'submodule.middle-lib.url'), str(material / 'module-0.git'))
+            self.assertEqual(config(checkout / 'nested/module', 'submodule.leaf-lib.url'), str(material / 'module-1.git'))
+            # The child registers in its enclosing module, never in the top-level superproject.
+            self.assertNotIn(b'leaf-lib', self.git('--git-dir', workspace / 'repository.git', 'config', '--list'))
+            status = self.git('-C', checkout, 'submodule', 'status', '--recursive').decode().splitlines()
+            self.assertEqual([line.split()[:2] for line in status],
+                             [[middle_revision, 'nested/module'], [leaf_revision, 'nested/module/deps/leaf']])
+            self.assertTrue(all(line.startswith(' ') for line in status), status)
+            self.git('-C', checkout, 'submodule', 'update', '--init', '--recursive')
+            self.assertEqual((checkout / 'nested/module/deps/leaf/file.txt').read_text(), 'selected committed content\n')
 
     def import_sibling(self, workspace, alias, revision, pack, env=None):
         (workspace / 'siblings' / alias).mkdir(parents=True, exist_ok=True)
