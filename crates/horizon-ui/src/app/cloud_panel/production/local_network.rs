@@ -3,7 +3,7 @@
 //! When the cloud disconnects, sharing pauses; it resumes by itself once that cloud has been
 //! made ready again in this run of Horizon, until the owner switches it off.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
-use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, State, Status};
+use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, State, Status};
 use std::sync::{
     Mutex, OnceLock, PoisonError,
     mpsc::{Sender, channel},
@@ -211,18 +211,25 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
              restarts. While it is on, every process on the worker can use it.",
         )
         .changed();
+    let status = match &runtime.sharing {
+        Sharing::On(bridge) => {
+            // The state, counters and connections change without other repaints.
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+            bridge.status()
+        }
+        _ => None,
+    };
     let line = match &runtime.sharing {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
         Sharing::Paused { .. } => Some(PAUSED.to_owned()),
-        Sharing::On(bridge) => {
-            // The state and counters change without other repaints.
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
-            bridge.status().as_ref().map(describe)
-        }
+        Sharing::On(_) => status.as_ref().map(describe),
     };
     if let Some(line) = line {
         ui.small(line);
+    }
+    if let Some(status) = status.filter(|status| matches!(status.state, State::Active { .. })) {
+        connections(ui, &status.relays, std::time::Instant::now());
     }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
@@ -248,6 +255,48 @@ fn describe(status: &Status) -> String {
         State::Reconnecting { error } => format!("Reconnecting: {error}"),
         State::Failed { error } => error.clone(),
     }
+}
+
+/// Rows the open connection list keeps room for before it scrolls.
+const LIST_ROWS: f32 = 6.0;
+
+/// The open connections, newest first, collapsed by default. The header stays while the bridge
+/// is active and the open list keeps one height, so connections that start and end never move
+/// the controls below it.
+fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) {
+    egui::CollapsingHeader::new(format!("Open connections ({})", relays.len()))
+        .id_salt("local-network-connections")
+        .default_open(false)
+        .show(ui, |ui| {
+            let row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+            egui::ScrollArea::vertical()
+                .id_salt("local-network-connection-list")
+                .max_height(row * LIST_ROWS)
+                .show(ui, |ui| {
+                    ui.set_min_height(row * LIST_ROWS);
+                    if relays.is_empty() {
+                        ui.small("No connections open.");
+                    }
+                    for relay in relays.iter().rev() {
+                        ui.small(connection(relay, now));
+                    }
+                });
+        });
+}
+
+/// One open connection: where it goes, what it relayed and for how long it has been open.
+fn connection(relay: &Relay, now: std::time::Instant) -> String {
+    let target = match &relay.requested {
+        Destination::Name(name, port) => format!("{name}:{port} ({})", relay.address.ip()),
+        Destination::Address(_) => relay.address.to_string(),
+    };
+    let open = now.saturating_duration_since(relay.opened).as_secs();
+    let age = match open {
+        0..60 => format!("{open} s"),
+        60..3600 => format!("{} min", open / 60),
+        _ => format!("{} h {} min", open / 3600, open % 3600 / 60),
+    };
+    format!("{target} · {} · {age}", amount(relay.bytes))
 }
 
 fn amount(bytes: u64) -> String {
@@ -278,7 +327,36 @@ mod tests {
                 bytes,
                 refused: 0,
             },
+            relays: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_connection_names_its_destination_bytes_and_age() {
+        let opened = std::time::Instant::now();
+        let relay = |requested| Relay {
+            requested,
+            address: "192.168.1.216:80".parse().unwrap(),
+            bytes: 12_400,
+            opened,
+        };
+        let after = |seconds| opened + std::time::Duration::from_secs(seconds);
+        assert_eq!(
+            connection(
+                &relay(Destination::Address("192.168.1.216:80".parse().unwrap())),
+                after(42)
+            ),
+            "192.168.1.216:80 · 12.4 KB · 42 s"
+        );
+        let named = relay(Destination::Name("printer.local".into(), 80));
+        assert_eq!(
+            connection(&named, after(185)),
+            "printer.local:80 (192.168.1.216) · 12.4 KB · 3 min"
+        );
+        assert_eq!(
+            connection(&named, after(7_380)),
+            "printer.local:80 (192.168.1.216) · 12.4 KB · 2 h 3 min"
+        );
     }
 
     #[test]

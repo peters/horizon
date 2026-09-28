@@ -127,10 +127,19 @@ fn an_admitted_address_relays_both_directions_and_counts_bytes() {
     socket.read_exact(&mut echoed).unwrap();
     assert_eq!(&echoed, b"camera frame");
     assert_eq!(proxy.counters().connections, 1);
+    // The echo can arrive before its bytes are added to the relay's count.
+    wait_for(|| proxy.relays().first().is_some_and(|relay| relay.bytes == 24));
+    let relays = proxy.relays();
+    assert_eq!(relays.len(), 1);
+    assert_eq!(
+        (&relays[0].requested, relays[0].address),
+        (&Destination::Address(echo), echo)
+    );
     socket.shutdown(Shutdown::Write).unwrap();
     assert!(closed(&mut socket));
     server.join().unwrap();
     wait_for(|| proxy.counters().connections == 0);
+    assert!(proxy.relays().is_empty(), "an ended relay is no longer listed");
     assert_eq!(
         proxy.counters(),
         Counters {
@@ -155,6 +164,12 @@ fn names_go_to_the_gate_and_only_its_addresses_are_dialled() {
     socket.write_all(b"x").unwrap();
     let mut echoed = [0; 1];
     socket.read_exact(&mut echoed).unwrap();
+    let relays = proxy.relays();
+    assert_eq!(
+        (&relays[0].requested, relays[0].address),
+        (&Destination::Name("camera.local".into(), echo.port()), echo),
+        "a name is listed as asked, with the address it was dialled at"
+    );
     drop(socket);
     server.join().unwrap();
     assert_eq!(
@@ -340,6 +355,7 @@ fn stopping_the_proxy_ends_open_relays() {
     socket.write_all(&ipv4_request(echo)).unwrap();
     assert_eq!(reply(&mut socket), 0);
     let shared = Arc::clone(&proxy.shared);
+    wait_for(|| !shared.relays.lock().unwrap().is_empty());
     let started = Instant::now();
     drop(proxy);
     assert!(closed(&mut socket));
@@ -347,6 +363,7 @@ fn stopping_the_proxy_ends_open_relays() {
     server.join().unwrap();
     drop(socket);
     wait_for(|| shared.active.load(Ordering::Acquire) == 0);
+    assert!(shared.relays.lock().unwrap().is_empty());
 }
 
 #[test]

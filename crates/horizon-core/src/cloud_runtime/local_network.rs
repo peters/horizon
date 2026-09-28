@@ -16,7 +16,7 @@ use horizon_cloud_protocol::local_network::{
     discovery::{Answer, Hello, Request},
 };
 pub use scope::ScopeError;
-pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS};
+pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS, Relay};
 use std::{
     collections::BTreeSet,
     io,
@@ -92,6 +92,12 @@ impl Proxy {
         self.inner.counters()
     }
 
+    /// The connections relaying now, oldest first.
+    #[must_use]
+    pub fn relays(&self) -> Vec<Relay> {
+        self.inner.relays()
+    }
+
     fn close(&self) {
         self.inner.close();
     }
@@ -119,6 +125,8 @@ pub struct Status {
     pub subnet: Subnet,
     pub state: State,
     pub counters: Counters,
+    /// Open relays, oldest first; the counters also include connections still negotiating.
+    pub relays: Vec<Relay>,
 }
 
 struct Shared {
@@ -198,6 +206,7 @@ impl Bridge {
             subnet: self.proxy.subnet(),
             state: self.shared.state.lock().unwrap_or_else(PoisonError::into_inner).clone(),
             counters: self.proxy.counters(),
+            relays: self.proxy.relays(),
         }
     }
 }

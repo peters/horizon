@@ -18,6 +18,13 @@ While it is on, the card shows what the bridge is doing:
 - **Connecting to share 192.168.1.0/24…** while the worker end starts.
 - **Sharing 192.168.1.0/24 · 2 open · 12.4 MB**: the bridged subnet, the
   connections open now and the data relayed since it started.
+- **Open connections (2)**, collapsed until you open it: each relayed connection,
+  newest first, with where it goes, the data it relayed and how long it has been
+  open, for example `printer.local:80 (192.168.1.216) · 12.4 KB · 3 min`. A name
+  the agent asked for is shown with the address it reached. Pinned forwards
+  appear here too, because they travel through the same proxy. The list keeps
+  one height and scrolls, so connections starting and ending do not move the
+  controls below it.
 - **Reconnecting: …** with the reason, when the SSH session to the worker
   dropped. Horizon retries on its own while the switch stays on.
 - A message instead of the switch staying on when there is nothing to share, for
