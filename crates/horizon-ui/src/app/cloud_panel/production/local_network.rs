@@ -2,27 +2,66 @@
 //! memory only, so it is never read from configuration or an agent and is off after a restart.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, State, Status};
+use std::sync::{
+    Mutex, OnceLock, PoisonError,
+    mpsc::{Sender, channel},
+};
 
 #[derive(Default)]
 pub(super) enum Sharing {
     #[default]
     Off,
-    On(Bridge),
+    On(Running),
     /// Why the bridge could not start, shown until the owner tries again.
     Refused(String),
 }
 
 impl Sharing {
-    /// Stops a running bridge without waiting on the UI thread for its SSH session to end.
     fn stop(&mut self) {
-        if !matches!(self, Self::On(_)) {
-            return;
+        if matches!(self, Self::On(_)) {
+            *self = Self::Off;
         }
-        if let Self::On(bridge) = std::mem::take(self) {
-            let _ = std::thread::Builder::new()
-                .name("local-network-stop".into())
-                .spawn(move || drop(bridge));
+    }
+}
+
+/// A running bridge. However it is dropped (switched off, cloud disconnected, runtimes
+/// cleared), its teardown, which waits for the SSH session to end, runs on a shutdown thread
+/// and never on the UI thread.
+pub(super) struct Running(Option<Bridge>);
+
+impl Running {
+    fn status(&self) -> Option<Status> {
+        self.0.as_ref().map(Bridge::status)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(bridge) = self.0.take() {
+            retire(bridge);
         }
+    }
+}
+
+/// Hands `bridge` to one long-lived shutdown thread, started on first use. Only if that thread
+/// cannot be started at all is the bridge dropped here.
+fn retire(bridge: Bridge) {
+    static SHUTDOWN: OnceLock<Option<Mutex<Sender<Bridge>>>> = OnceLock::new();
+    let shutdown = SHUTDOWN.get_or_init(|| {
+        let (sender, receiver) = channel::<Bridge>();
+        std::thread::Builder::new()
+            .name("local-network-stop".into())
+            .spawn(move || receiver.into_iter().for_each(drop))
+            .ok()
+            .map(|_| Mutex::new(sender))
+    });
+    if let Some(sender) = shutdown {
+        let sender = sender.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(returned) = sender.send(bridge) {
+            drop(returned.0);
+        }
+    } else {
+        drop(bridge);
     }
 }
 
@@ -46,7 +85,7 @@ impl HorizonApp {
             None => Sharing::Off,
             Some(Err(error)) => Sharing::Refused(error.to_string()),
             Some(Ok(connection)) => match Bridge::start(&connection) {
-                Ok(bridge) => Sharing::On(bridge),
+                Ok(bridge) => Sharing::On(Running(Some(bridge))),
                 Err(error) => Sharing::Refused(error.to_string()),
             },
         };
@@ -97,7 +136,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
         Sharing::On(bridge) => {
             // The state and counters change without other repaints.
             ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
-            Some(describe(&bridge.status()))
+            bridge.status().as_ref().map(describe)
         }
     };
     if let Some(line) = line {

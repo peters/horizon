@@ -2,8 +2,8 @@
 
 Local Network Bridge lets a cloud's agents reach devices on the network this
 computer is on: a camera, a dev board, a printer or a router's web page. Horizon
-relays the traffic through its existing SSH connection to the worker, so no VPN,
-router change or extra hardware is needed. It is part of
+relays the traffic through its own SSH connection to the worker, opened with the
+cloud's pinned host key, so no VPN, router change or extra hardware is needed. It is part of
 [Cloud workspaces](cloud-workspaces.md).
 
 ## Turning it on
@@ -60,7 +60,7 @@ off when you change networks.
   RTSP over UDP, no ping. Use RTSP over TCP (for example `ffmpeg -rtsp_transport tcp`).
 - **Bandwidth.** Traffic crosses this computer's uplink twice, so a video stream is
   limited by its upload speed.
-- **Bounds.** At most 64 connections at once and 64 GB relayed per bridge; switch
+- **Bounds.** At most 64 connections at once and 64 GiB relayed per bridge; switch
   it off and on to start counting again.
 - **Everything on the worker can use it.** While the bridge is on, every process on
   a dedicated worker can use its proxy and forwards, and so can web pages open in
