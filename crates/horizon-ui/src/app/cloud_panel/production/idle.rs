@@ -187,7 +187,7 @@ pub(super) fn stopped_while_busy(state: Deployment) -> Result<Vec<cloud_runtime:
     match state.stage {
         Stage::Stopped => Ok(vec![
             Event::Output(
-                "This cloud was stopped while Horizon was reconnecting it, as by its idle stop. \
+                "This cloud was stopped, as by its idle stop, while this operation waited for it. \
                  Choose Resume worker to start it again."
                     .into(),
             ),
@@ -195,7 +195,7 @@ pub(super) fn stopped_while_busy(state: Deployment) -> Result<Vec<cloud_runtime:
         ]),
         Stage::Stopping => Ok(vec![
             Event::Snapshot(Box::new(state)),
-            Event::failed("Horizon's idle stop did not finish; choose Reconcile stop to finish it.".into()),
+            Event::failed("A stop of this cloud did not finish; choose Reconcile stop to finish it.".into()),
         ]),
         _ => Err(Box::new(state)),
     }

@@ -340,6 +340,8 @@ fn a_reconnect_that_met_an_idle_stop_shows_the_stop_instead_of_the_busy_failure(
     );
 }
 
+// Cloud records need a Unix host's durable directory updates.
+#[cfg(unix)]
 #[test]
 fn a_busy_failure_waits_for_the_idle_stop_and_reports_the_stopped_cloud() {
     use cloud_runtime::{Event, state::Store};
