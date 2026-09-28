@@ -287,6 +287,7 @@ fn scope(host: impl Fn() -> io::Result<scope::Host> + Send + Sync + 'static) -> 
         resolve: Box::new(|_, _| Err(Reply::HostUnreachable)),
         host: Box::new(host),
         source: Box::new(|_| Some(v4("192.168.1.20"))),
+        rules: std::sync::RwLock::default(),
     })
 }
 
@@ -515,6 +516,7 @@ fn probe_scope() -> Arc<Scope> {
         }),
         host: Box::new(move || Ok(home())),
         source: Box::new(|_| Some(v4("192.168.1.20"))),
+        rules: std::sync::RwLock::default(),
     })
 }
 
@@ -775,6 +777,7 @@ fn scope_with(away: Arc<AtomicUsize>) -> Arc<Scope> {
             Ok(home())
         }),
         source: Box::new(|_| Some(v4("192.168.1.20"))),
+        rules: std::sync::RwLock::default(),
     })
 }
 
@@ -881,3 +884,6 @@ fn a_probe_takes_its_rate_slot_when_it_dials_not_when_it_was_asked() {
     assert!(sixth.elapsed() < Duration::from_secs(60));
     assert_eq!(dials.load(Ordering::SeqCst), probe::PER_MINUTE);
 }
+
+/// Probes and discovery under the owner's narrowed scope.
+mod narrowed;

@@ -48,6 +48,7 @@ fn gate(resolve: Resolve) -> Scope {
         resolve,
         host: Box::new(|| Ok(home())),
         source: Box::new(|_| Some(Ipv4Addr::new(192, 168, 1, 20))),
+        rules: std::sync::RwLock::default(),
     }
 }
 
@@ -196,6 +197,7 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
         Ok(scope) => assert!(scope.subnet().prefix() >= 16),
         // No shareable network, or interfaces a sandbox does not let the test read.
         Err(StartError::Scope(_) | StartError::Io(_)) => {}
+        Err(StartError::Rules(_)) => panic!("no rules were given"),
     }
     let lookups = Arc::new(AtomicUsize::new(0));
     assert!(
@@ -557,3 +559,6 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
 /// run with `HORIZON_TEST_SSHD=/path/to/sshd cargo test -p horizon-core local_network -- --ignored`.
 #[cfg(unix)]
 mod end_to_end;
+
+/// The owner's narrowing and loopback opt-in, applied by [`Scope`].
+mod rules;

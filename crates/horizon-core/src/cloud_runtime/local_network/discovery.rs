@@ -6,7 +6,7 @@ mod neighbors;
 mod probe;
 mod ssdp;
 
-use super::{Answers, Cancellation, Scope};
+use super::{Answers, Cancellation, Rules, Scope};
 use horizon_cloud_protocol::local_network::{
     Reply, Subnet,
     discovery::{Answer, Device, Discovery, Hello, MAX_NAMES, MAX_SERVICES, Request, Service, Source, VERSION},
@@ -89,10 +89,13 @@ impl Discoverer {
         if let Some((at, discovery)) = last.as_ref()
             && at.elapsed() < REUSE_FOR
         {
-            return Answer::Discovery(self.with_probes(Discovery {
+            // One reading of the rules for the whole answer, so a change during it cannot mix two.
+            let rules = self.scope.rules();
+            let discovery = Discovery {
                 age_seconds: at.elapsed().as_secs(),
                 ..discovery.clone()
-            }));
+            };
+            return Answer::Discovery(self.with_probes(in_scope(discovery, &rules), &rules));
         }
         // Nothing is sent on a network other than the bridged one.
         if let Err(reply) = self.scope.on_network() {
@@ -112,19 +115,22 @@ impl Discoverer {
             devices,
             truncated: false,
             notes,
-        }
-        .bounded();
+        };
+        // Kept whole: each answer is filtered by the scope first and bounded after, so a device
+        // a narrower scope reaches is never lost to the bound of a wider one.
         *last = Some((Instant::now(), discovery.clone()));
-        Answer::Discovery(self.with_probes(discovery))
+        let rules = self.scope.rules();
+        Answer::Discovery(self.with_probes(in_scope(discovery, &rules), &rules))
     }
 
     /// Adds the ports that probes found open, so later answers list them as known ports.
-    fn with_probes(&self, mut discovery: Discovery) -> Discovery {
+    fn with_probes(&self, mut discovery: Discovery, rules: &Rules) -> Discovery {
         let open = self.prober.open();
         if open.is_empty() {
-            return discovery;
+            return discovery.bounded();
         }
-        for (address, ports) in open {
+        // A device probed before the owner narrowed the scope stays out of the answer.
+        for (address, ports) in open.into_iter().filter(|(address, _)| rules.permits_host(*address)) {
             let index = if let Some(index) = discovery.devices.iter().position(|device| device.address == address) {
                 index
             } else {
@@ -179,6 +185,14 @@ impl Answers for Discoverer {
             Request::Probe { host, ports } => self.prober.probe(&self.scope, &host, &ports, &self.cancel),
         }
     }
+}
+
+/// Only the devices `rules` reach: a browse from before the owner narrowed the scope must not
+/// list the rest. It runs before [`Discoverer::with_probes`] bounds the answer, so devices out
+/// of scope never take the room of devices in it.
+fn in_scope(mut discovery: Discovery, rules: &Rules) -> Discovery {
+    discovery.devices.retain(|device| rules.permits_host(device.address));
+    discovery
 }
 
 /// Combines what the sources found per address, keeping only the addresses `reachable`

@@ -20,6 +20,7 @@ use std::{
 
 pub(super) const PER_MINUTE: usize = 6;
 pub(super) const RUNNING: &str = "A probe is already running; try again in a few seconds";
+pub(super) const NARROWED: &str = "The owner changed the bridge's scope during the probe; probe again";
 const MINUTE: Duration = Duration::from_secs(60);
 /// Connection attempts in flight at once.
 const AT_ONCE: usize = 4;
@@ -62,6 +63,17 @@ pub(super) fn connect(address: SocketAddr, timeout: Duration, cancel: &Cancellat
     }
 }
 
+/// Why a probe of `ports` on `host` is refused although the device itself is in scope.
+fn outside_ports(host: &str, ports: &[u16]) -> String {
+    let noun = if ports.len() == 1 { "Port" } else { "Ports" };
+    let ports: Vec<_> = ports.iter().map(u16::to_string).collect();
+    format!(
+        "{noun} {} on {host} {} outside the bridge's scope; the owner chooses what it reaches on the cloud card",
+        ports.join(", "),
+        if noun == "Port" { "is" } else { "are" }
+    )
+}
+
 /// The scope's decision on `destination`, abandoned as soon as the bridge stops: a name lookup
 /// can take seconds, so it runs on its own thread and its late result is dropped.
 fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) -> Result<Vec<SocketAddr>, String> {
@@ -70,7 +82,7 @@ fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) ->
     thread::Builder::new()
         .name("local-network-probe-admit".into())
         .spawn(move || {
-            let _ = sender.send(scope.admit(&destination));
+            let _ = sender.send(scope.admit_host(&destination));
         })
         .map_err(|error| error.to_string())?;
     loop {
@@ -130,15 +142,44 @@ impl Prober {
             Ok(address) => Destination::Address(SocketAddr::new(address.into(), 1)),
             Err(_) => Destination::Name(host.to_owned(), 1),
         };
-        let address = match admit(scope, destination, cancel) {
-            Ok(admitted) => admitted.iter().find_map(|candidate| match candidate.ip() {
-                IpAddr::V4(address) => Some(address),
-                IpAddr::V6(_) => None,
-            }),
+        let candidates: Vec<Ipv4Addr> = match admit(scope, destination, cancel) {
+            Ok(admitted) => admitted
+                .iter()
+                .filter_map(|candidate| match candidate.ip() {
+                    IpAddr::V4(address) => Some(address),
+                    IpAddr::V6(_) => None,
+                })
+                .collect(),
             Err(refusal) => return Answer::Refused(refusal),
         };
-        let Some(address) = address else {
-            return Answer::Refused(Reply::NotAllowed.message().into());
+        // The owner may have narrowed a device to some ports. A name with several addresses
+        // probes the first that allows every named port, or, for the defaults, the first that
+        // allows any; the defaults are then probed only where the scope reaches.
+        let requested = Request::probe_ports(ports);
+        let allowed = |address: Ipv4Addr| -> Vec<u16> {
+            requested
+                .iter()
+                .copied()
+                .filter(|port| scope.keeps(SocketAddr::new(address.into(), *port)))
+                .collect()
+        };
+        let picked = candidates
+            .iter()
+            .map(|address| (*address, allowed(*address)))
+            .find(|(_, allowed)| {
+                if ports.is_empty() {
+                    !allowed.is_empty()
+                } else {
+                    allowed.len() == requested.len()
+                }
+            });
+        let Some((address, chosen)) = picked else {
+            let Some(first) = candidates.first() else {
+                return Answer::Refused(Reply::NotAllowed.message().into());
+            };
+            let open = allowed(*first);
+            let outside: Vec<_> = requested.iter().copied().filter(|port| !open.contains(port)).collect();
+            return Answer::Refused(outside_ports(host, &outside));
         };
         let mut probe = Probe {
             // Validation bounds the host, so it is echoed as the agent named it.
@@ -148,7 +189,7 @@ impl Prober {
             closed: Vec::new(),
             silent: Vec::new(),
         };
-        for (index, batch) in Request::probe_ports(ports).chunks(AT_ONCE).enumerate() {
+        for (index, batch) in chosen.chunks(AT_ONCE).enumerate() {
             // A bridge switched off, or whose computer left the network, stops probing at once.
             if cancel.is_cancelled() {
                 return Answer::Refused(STOPPED.into());
@@ -156,12 +197,29 @@ impl Prober {
             if let Err(reply) = scope.on_network() {
                 return Answer::Refused(reply.message().into());
             }
+            // The owner may narrow the scope while a probe runs: no port it no longer allows is
+            // dialled, so the probe ends instead.
+            if batch
+                .iter()
+                .any(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
+            {
+                return Answer::Refused(NARROWED.into());
+            }
             // Only a probe about to dial takes a slot of the rate limit, stamped now: a slow
             // lookup before it must not backdate the slot.
             if index == 0 {
                 started.push_back(Instant::now());
             }
-            for (port, result) in self.attempt(address, batch, cancel) {
+            let results = self.attempt(address, batch, cancel);
+            // Rules narrowed while the batch ran: its results are not reported, so no answer
+            // outside the scope reaches the worker once the narrowing has returned.
+            if batch
+                .iter()
+                .any(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
+            {
+                return Answer::Refused(NARROWED.into());
+            }
+            for (port, result) in results {
                 match result {
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                         return Answer::Refused(STOPPED.into());
