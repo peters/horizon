@@ -7,7 +7,7 @@ use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::{
     offers::{self, Candidate, HetznerSource, Sources},
     prices::Profile,
-    provider::{Description, HETZNER},
+    provider::{Description, HETZNER, Kind},
 };
 
 /// Who picks the provider of a new cloud.
@@ -49,10 +49,15 @@ pub(super) fn field(
     if !checked {
         return Outcome::Off;
     }
+    let note = |ui: &mut Ui, text: &str| ui.label(RichText::new(text).size(12.0).color(theme::FG_SOFT()));
+    // A provider whose prices have not arrived could rank first once they do.
+    if pending(prices, choices) {
+        note(ui, "Checking which providers have this size…");
+        return Outcome::Waiting;
+    }
     // No exchange rate is fetched yet, so prices in different currencies are not
     // compared.
     let ranked = offers::candidates(profile, &sources(prices), None);
-    let note = |ui: &mut Ui, text: &str| ui.label(RichText::new(text).size(12.0).color(theme::FG_SOFT()));
     let Some(top) = ranked.first() else {
         note(
             ui,
@@ -72,11 +77,20 @@ pub(super) fn field(
     Outcome::Top(top.provider)
 }
 
-/// Why New cloud cannot start yet while the checkbox is checked: no configured
-/// provider ranks for the chosen size, so there is nowhere to create the cloud.
-pub(super) fn reason(form: &super::super::Production, profile: &Profile) -> Option<&'static str> {
-    if form.provider_mode != Mode::AnyProvider || super::provider::choices(&form.prices, profile).len() < 2 {
+/// Why New cloud cannot start yet while the checkbox is checked: a provider's prices
+/// have not arrived, so the first one is not known, or no configured provider has a
+/// worker of the chosen size.
+pub(super) fn reason(form: &super::super::Production) -> Option<&'static str> {
+    if form.provider_mode != Mode::AnyProvider {
         return None;
+    }
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    let choices = super::provider::choices(&form.prices, profile);
+    if choices.len() < 2 {
+        return None;
+    }
+    if pending(&form.prices, &choices) {
+        return Some("Checking which providers have this size before starting.");
     }
     let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
     let sized = Profile {
@@ -89,6 +103,14 @@ pub(super) fn reason(form: &super::super::Production, profile: &Profile) -> Opti
         .then_some("No configured provider has a worker of this size yet. Choose another size, or clear Any provider.")
 }
 
+/// Whether a provider in `choices` has neither answered nor failed yet.
+fn pending(prices: &State, choices: &[&Description]) -> bool {
+    choices.iter().any(|provider| match provider.kind {
+        Kind::RunPod => prices.runpod_pending(),
+        Kind::Hetzner => prices.hetzner.latest().is_none() && prices.hetzner.error().is_none(),
+    })
+}
+
 /// Each configured provider's current prices.
 fn sources(prices: &State) -> Sources<'_> {
     let runpod = prices
@@ -97,9 +119,10 @@ fn sources(prices: &State) -> Sources<'_> {
         .flatten()
         .map(|fetched| (&fetched.value.0, &fetched.value.1));
     let hetzner = &prices.hetzner;
+    // The last catalog, so a refresh never changes the order while it runs.
     let catalog = hetzner
         .bound()
-        .then(|| hetzner.fresh())
+        .then(|| hetzner.latest())
         .flatten()
         .and_then(|fetched| fetched.value.as_ref());
     Sources {

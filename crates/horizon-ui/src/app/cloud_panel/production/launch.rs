@@ -66,6 +66,7 @@ impl HorizonApp {
         form.size = None;
         form.placement = Placement::default();
         form.provider = None;
+        form.provider_mode = super::creation::any_provider::Mode::default();
         form.creating = true;
         form.focus_title_on_open = true;
         self.read_cloud_profiles(ctx);

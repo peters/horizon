@@ -349,6 +349,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 form.provider = None;
                 form.placement = Placement::default();
             }
+            let mode = form.provider_mode;
             let any = any_provider::field(
                 ui,
                 &mut form.provider_mode,
@@ -360,10 +361,15 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
                 },
                 &choices,
             );
+            // Turning it on or off, or a new first provider, drops a place chosen before,
+            // so every allowed one stays open. The size stays: every provider was ranked
+            // for it.
+            if form.provider_mode != mode {
+                form.placement = Placement::default();
+            }
             if let any_provider::Outcome::Top(top) = any
                 && form.provider != Some(top)
             {
-                // The size stays: it is what every provider was ranked for.
                 form.provider = Some(top);
                 form.placement = Placement::default();
             }
@@ -588,7 +594,7 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
-        (false, false) => storage::size_reason(form),
+        (false, false) => any_provider::reason(form).or_else(|| storage::size_reason(form)),
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
         (true, true) => Some("Enter a cloud title and read the repository profile."),
@@ -602,5 +608,6 @@ fn can_submit(form: &Production) -> bool {
         && !form.launch.submitted
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
+        && any_provider::reason(form).is_none()
         && storage::size_reason(form).is_none()
 }

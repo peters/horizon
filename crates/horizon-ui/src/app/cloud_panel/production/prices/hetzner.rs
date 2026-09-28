@@ -160,6 +160,12 @@ impl State {
         self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH)
     }
 
+    /// The last catalog fetched, however old, for choices that must not change while it
+    /// is refreshed.
+    pub fn latest(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
+        self.fetched.as_ref()
+    }
+
     /// Time until this provider's current catalog needs another fetch.
     pub fn refresh_in(&self) -> Option<Duration> {
         self.fresh().map(|fetched| FRESH.saturating_sub(fetched.at.elapsed()))

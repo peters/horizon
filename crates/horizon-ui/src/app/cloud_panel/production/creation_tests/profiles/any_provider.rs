@@ -161,3 +161,81 @@ fn another_provider_is_used_when_the_profiles_own_has_no_worker_of_this_size() {
     assert_eq!(launch.profile.provider, "runpod");
     assert_eq!((launch.profile.cpu, launch.profile.memory_gb), (8, 16));
 }
+
+#[test]
+fn nothing_is_chosen_while_a_providers_prices_are_still_arriving() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // Hetzner has answered; RunPod has not yet.
+    app.cloud_prototype.production.prices.list = None;
+    let catalog = serde_json::from_value(serde_json::json!({
+        "offers": [{"server_type": "cx33", "location": "hel1", "cores": 4, "memory_gb": 8.0, "disk_gb": 80,
+            "dedicated": false, "hourly_eur": 0.0136, "monthly_eur": 8.49, "available": true, "recommended": true}],
+        "volume_gb_month_eur": 0.0572, "ipv4_month_eur": {"hel1": 0.5}, "ipv4_hour_eur": {"hel1": 0.0008},
+        "regions": {"hel1": "EUROPE"},
+    }))
+    .unwrap();
+    app.cloud_prototype
+        .production
+        .prices
+        .hetzner
+        .answered_with_types(Some(catalog), &["cx33"]);
+    assert!(app.cloud_prototype.production.prices.runpod_pending());
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, CHECKBOX).center());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Checking which providers have this size…"));
+    assert!(
+        !painted(&output).contains("Hetzner cx33"),
+        "no order before every provider answers"
+    );
+    assert_eq!(app.cloud_prototype.production.provider, None);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    assert!(app.cloud_prototype.production.pending_creation.is_none());
+    // Once RunPod answers, the profile's own provider comes first.
+    both_providers(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(
+        &output,
+        "RunPod 4 vCPU · 8 GB at $0.12/h, then Hetzner cx33 in hel1 at €0.0136/h"
+    ));
+}
+
+#[test]
+fn turning_it_on_reopens_every_allowed_location() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    set_profile(&mut app, |profile| profile.provider = "hetzner".into());
+    both_providers(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "hel1 · Europe\ncx33 · €0.0136/h").center(),
+    );
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["hel1"]);
+    let output = tall_frame(&ctx, &mut app);
+    // Hetzner ranks first, the provider already in use.
+    click(&ctx, &mut app, label_rect(&output, CHECKBOX).center());
+    tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.placement.is_any());
+}
+
+#[test]
+fn a_new_cloud_starts_with_the_person_choosing_the_provider() {
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    let workspace = app.board.create_workspace("another cloud");
+    app.cloud_prototype.production.provider_mode =
+        crate::app::cloud_panel::production::creation::any_provider::Mode::AnyProvider;
+    app.open_workspace_cloud(&ctx, workspace);
+    assert_eq!(
+        app.cloud_prototype.production.provider_mode,
+        crate::app::cloud_panel::production::creation::any_provider::Mode::Chosen
+    );
+}
