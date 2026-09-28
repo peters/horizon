@@ -17,6 +17,7 @@ pub(super) struct CanvasGesture {
     replayed_origin: Option<Pos2>,
     queued: VecDeque<Frame>,
     cancelled_down: bool,
+    other_buttons: [bool; 5],
 }
 
 struct Frame {
@@ -43,6 +44,7 @@ impl Default for CanvasGesture {
             replayed_origin: None,
             queued: VecDeque::new(),
             cancelled_down: false,
+            other_buttons: [false; 5],
         }
     }
 }
@@ -96,6 +98,25 @@ impl CanvasGesture {
                     )
                 });
             }
+        }
+        if lost_focus {
+            self.other_buttons.fill(false);
+        }
+        if self.pending.is_none()
+            && !self.forwarded_down
+            && !self.cancelled_down
+            && self.queued.is_empty()
+            && self.replayed_origin.is_none()
+            && !raw.events.iter().any(|event| {
+                matches!(event,
+                Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers }
+                    if (modifiers.ctrl || modifiers.command) && eligible(*pos))
+            })
+        {
+            for event in &raw.events {
+                self.track_other_button(event);
+            }
+            return None;
         }
         if !raw.events.is_empty() || self.queued.is_empty() {
             self.queued.push_back(Frame {
@@ -175,6 +196,17 @@ impl CanvasGesture {
         }
     }
 
+    fn track_other_button(&mut self, event: &Event) {
+        if matches!(event, Event::WindowFocused(false)) {
+            self.other_buttons.fill(false);
+        }
+        if let Event::PointerButton { button, pressed, .. } = event
+            && *button != PointerButton::Primary
+        {
+            self.other_buttons[*button as usize] = *pressed;
+        }
+    }
+
     fn event(
         &mut self,
         event: Event,
@@ -183,6 +215,7 @@ impl CanvasGesture {
         eligible: &impl Fn(Pos2) -> bool,
         output: &mut Vec<Event>,
     ) {
+        self.track_other_button(&event);
         match &event {
             Event::PointerButton {
                 pos,
@@ -202,7 +235,11 @@ impl CanvasGesture {
                     output.push(event);
                     return;
                 }
-                if *pressed && (modifiers.ctrl || modifiers.command) && eligible(*pos) {
+                if *pressed
+                    && (modifiers.ctrl || modifiers.command)
+                    && eligible(*pos)
+                    && !self.other_buttons.iter().any(|down| *down)
+                {
                     if let Some(pending) = &mut self.pending
                         && pending
                             .released_at
@@ -299,20 +336,7 @@ impl HorizonApp {
             self.canvas_gesture.queued.clear();
             self.canvas_gesture.session_id = session_id.map(str::to_owned);
         }
-        let other_button_active = ctx.input(|input| {
-            [
-                PointerButton::Secondary,
-                PointerButton::Middle,
-                PointerButton::Extra1,
-                PointerButton::Extra2,
-            ]
-            .into_iter()
-            .any(|button| input.pointer.button_down(button))
-        }) || raw
-            .events
-            .iter()
-            .any(|event| matches!(event, Event::PointerButton { button, .. } if *button != PointerButton::Primary));
-        let enabled = raw.focused && !other_button_active && self.canvas_gesture_enabled();
+        let enabled = raw.focused && self.canvas_gesture_enabled();
         let canvas = self.canvas_rect(ctx);
         let exclusions = self.overlay_exclusion_zones(ctx);
         let options = ctx.options(|options| options.input_options);

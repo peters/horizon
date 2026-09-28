@@ -543,3 +543,77 @@ fn focus_loss_after_a_forwarded_drag_allows_the_next_modified_double_click() {
     }
     assert_eq!(gesture.take_completed(), Some(pos));
 }
+
+#[test]
+fn later_secondary_click_replays_completed_primary_first() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    feed(&mut gesture, 1.0, vec![button(pos, true)]);
+    feed(&mut gesture, 1.05, vec![button(pos, false)]);
+    let secondary = Event::PointerButton {
+        pos,
+        button: PointerButton::Secondary,
+        pressed: true,
+        modifiers: egui::Modifiers::CTRL,
+    };
+    assert_eq!(
+        feed(&mut gesture, 1.1, vec![secondary.clone()]).events,
+        vec![button(pos, true), button(pos, false)]
+    );
+    assert_eq!(feed(&mut gesture, 1.15, vec![]).events, vec![secondary]);
+    let primary = feed(&mut gesture, 1.2, vec![button(pos, true)]);
+    assert_eq!(primary.events, vec![button(pos, true)]);
+    assert!(gesture.pending.is_none());
+}
+
+#[test]
+fn ordinary_input_keeps_its_existing_buffer_and_tracks_other_buttons() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    let mut raw = RawInput {
+        time: Some(1.0),
+        events: vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Middle,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        ..RawInput::default()
+    };
+    let allocation = raw.events.as_ptr();
+    assert!(gesture.filter(&mut raw, &InputOptions::default(), |_| true).is_none());
+    assert_eq!(raw.events.as_ptr(), allocation);
+    assert!(gesture.queued.is_empty());
+    assert_eq!(
+        feed(&mut gesture, 1.1, vec![button(pos, true)]).events,
+        vec![button(pos, true)]
+    );
+    assert!(gesture.pending.is_none());
+}
+
+#[test]
+fn same_frame_secondary_press_then_focus_loss_does_not_block_future_gestures() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    feed(
+        &mut gesture,
+        1.0,
+        vec![
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            Event::WindowFocused(false),
+        ],
+    );
+    feed(&mut gesture, 1.1, vec![Event::WindowFocused(true)]);
+    feed(&mut gesture, 1.2, vec![button(pos, true)]);
+    feed(&mut gesture, 1.25, vec![button(pos, false)]);
+    feed(&mut gesture, 1.3, vec![button(pos, true)]);
+    assert_eq!(gesture.take_completed(), Some(pos));
+}
