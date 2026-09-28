@@ -3,7 +3,7 @@ use horizon_core::cloud_runtime::companions::Scope;
 #[cfg(unix)]
 use std::process::Command;
 
-fn owner() -> Owner {
+pub(super) fn owner() -> Owner {
     Owner {
         scope: Scope {
             session_id: "session".into(),
@@ -13,11 +13,11 @@ fn owner() -> Owner {
     }
 }
 
-fn declaration() -> Declaration {
+pub(super) fn declaration() -> Declaration {
     Declaration::new("example/consumer", "cpu")
 }
 
-fn creation(app: &mut HorizonApp) -> &mut State {
+pub(super) fn creation(app: &mut HorizonApp) -> &mut State {
     &mut app.cloud_prototype.production.companions.agent.creation
 }
 
@@ -309,81 +309,6 @@ fn a_matching_checkout_in_the_workspace_is_found_and_chosen() {
 }
 
 #[test]
-fn a_checked_cloud_that_never_started_is_offered_to_the_owner_to_start() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
-    let ctx = egui::Context::default();
-    let launch = |id: &str| -> horizon_core::cloud_panel::CloudLaunch {
-        serde_json::from_value(json!({
-            "id": id, "revision": "a".repeat(40), "profile_name": "cpu",
-            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
-        }))
-        .unwrap()
-    };
-    for (issue, id) in [(1, "source"), (2, "target")] {
-        let mut group = horizon_core::cloud_panel::CloudGroup::new(
-            issue,
-            id.into(),
-            "workspace".into(),
-            format!("/checkouts/{id}").into(),
-            [0.0, 0.0],
-        );
-        group.remote = Some(launch(id));
-        app.cloud_prototype.groups.0.push(group);
-    }
-    let groups = app.cloud_prototype.groups.clone();
-    app.cloud_prototype.production.companions.sync(Some("session"), &groups);
-    let context = Context {
-        source: Target {
-            scope: owner().scope,
-            cloud_id: "source".into(),
-            declaration: Declaration::new("example/source", "cpu"),
-        },
-        declarations: [("consumer".into(), declaration())].into(),
-        inventory: Vec::new(),
-    };
-    let operation = lifecycle::Operation {
-        intent: horizon_core::cloud_runtime::companions::intent::Intent {
-            operation_id: OperationId::generate(),
-            action: Action::EnsureReady,
-            target_cloud_id: "target".into(),
-            state: horizon_core::cloud_runtime::companions::intent::State::Submitted,
-        },
-        phase: lifecycle::Phase::ConfirmationRequired,
-    };
-    let id = operation.intent.operation_id;
-    let submitted = || super::super::Submitted {
-        operation: operation.clone(),
-        context: context.clone(),
-        alias: "consumer".into(),
-    };
-    // The run that found the card never started ended on its own; the agent's next
-    // status poll is what puts the offer on the card.
-    let status: super::super::UsageRequest = serde_json::from_value(json!({
-        "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
-        "deadline_at_millis": i64::MAX, "claimed": true,
-        "cloud_companion": {"action": "status", "cloud": "source", "alias": "consumer", "operation_id": id}
-    }))
-    .unwrap();
-    let (answer, started) = app.answer_submitted(&status, "source", submitted(), &ctx);
-    assert!(!started);
-    assert_eq!(answer["phase"], "confirmation_required");
-    assert_eq!(
-        (answer["done"].as_bool(), answer["operation_id"].clone()),
-        (Some(false), json!(id))
-    );
-    // Ensure Ready sent again shows the same offer.
-    let (answer, started) = app.continue_operation("source", submitted(), &ctx);
-    assert!(!started);
-    assert_eq!(answer["operation_id"], json!(id));
-    assert_eq!(creation(&mut app).pending.len(), 1);
-    let pending = &creation(&mut app).pending[0];
-    assert!(pending.existing && pending.waiting());
-    assert_eq!(pending.card, Some(2));
-    assert_eq!(pending.cloud_id.as_deref(), Some("target"));
-    assert_eq!(pending.chosen.as_deref(), Some(Path::new("/checkouts/target")));
-}
-
-#[test]
 fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
     let (temp, mut app) = crate::app::test_support::test_app();
     app.cloud_prototype.root = Some(temp.path().join("clouds"));
@@ -402,8 +327,13 @@ fn a_decline_after_the_card_was_added_names_the_kept_cloud() {
         .unwrap(),
     });
     pending.card = Some(7);
-    // Polls name the reserved cloud once the reservation is recorded.
+    // A minted ID is never named; polls name it once the reservation is recorded,
+    // also for a recovered one whose checkout is not loaded yet.
+    assert!(pending.describe()["target_cloud_id"].is_null());
+    let checkout = pending.checkout.take();
+    pending.recorded = true;
     assert_eq!(pending.describe()["target_cloud_id"], "reserved");
+    pending.checkout = checkout;
     creation(&mut app)
         .actions
         .push(("source".into(), "consumer".into(), Choice::Decline));

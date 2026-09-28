@@ -53,6 +53,7 @@ impl HorizonApp {
             }),
             card: Some(group.issue),
             existing: true,
+            recorded: true,
         };
         let answer = pending.describe();
         creation.pending.push(pending);
@@ -128,6 +129,7 @@ impl HorizonApp {
             checkout: None,
             card: None,
             existing: false,
+            recorded: true,
         };
         let answer = pending.describe();
         self.cloud_prototype

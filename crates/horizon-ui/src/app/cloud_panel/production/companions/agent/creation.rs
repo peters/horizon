@@ -62,6 +62,8 @@ struct Pending {
     cloud_id: Option<String>,
     /// The checkout, once the reservation is recorded.
     checkout: Option<Checkout>,
+    /// Whether `cloud_id` is recorded in the source's journal, so polls may name it.
+    recorded: bool,
     /// The new cloud's card, once added.
     card: Option<u32>,
     /// A cloud already created but never started, rather than a missing one.
@@ -235,6 +237,7 @@ impl HorizonApp {
             step: Step::Waiting,
             cloud_id: None,
             checkout: None,
+            recorded: false,
             card: None,
             existing: false,
         };
@@ -321,7 +324,9 @@ impl HorizonApp {
             let creation = &mut self.cloud_prototype.production.companions.agent.creation;
             match progress {
                 Progress::Reserved(Ok(checkout)) => {
-                    creation.pending[index].checkout = Some(*checkout);
+                    let pending = &mut creation.pending[index];
+                    pending.checkout = Some(*checkout);
+                    pending.recorded = true;
                     self.add_companion_cloud(index, ctx);
                 }
                 Progress::Selected(Ok(selected)) => {
@@ -467,9 +472,18 @@ impl HorizonApp {
         let (Some(cloud_id), Some(checkout)) = (pending.cloud_id.clone(), pending.checkout.clone()) else {
             return;
         };
-        let (card, profile_name) = (pending.card, pending.declaration.profile.clone());
+        let profile_name = pending.declaration.profile.clone();
+        // The card is found by its cloud ID: a remembered card number may have been
+        // removed, or reused by another card, while the request waited.
+        let open = self
+            .cloud_prototype
+            .groups
+            .0
+            .iter()
+            .find(|group| group.remote.as_ref().is_some_and(|launch| launch.id == cloud_id))
+            .map(|group| group.issue);
         let added = (|| {
-            let card = if let Some(card) = card {
+            let card = if let Some(card) = open {
                 card
             } else {
                 let launch = CloudLaunch {
@@ -480,18 +494,16 @@ impl HorizonApp {
                     placement: Placement::default().for_profile(checkout.profile.gpu),
                     profile: checkout.profile,
                 };
-                let card = self
-                    .add_cloud_group(
-                        alias.clone(),
-                        owner.scope.workspace_id.clone(),
-                        checkout.repository,
-                        launch,
-                        Vec::new(),
-                    )
-                    .map_err(|error| error.to_string())?;
-                self.cloud_prototype.production.companions.agent.creation.pending[index].card = Some(card);
-                card
+                self.add_cloud_group(
+                    alias.clone(),
+                    owner.scope.workspace_id.clone(),
+                    checkout.repository,
+                    launch,
+                    Vec::new(),
+                )
+                .map_err(|error| error.to_string())?
             };
+            self.cloud_prototype.production.companions.agent.creation.pending[index].card = Some(card);
             self.prepare_production_deployment(card)
                 .ok_or("The new companion cloud could not be saved; its card shows why")?;
             Ok::<_, String>(cloud_id)
@@ -559,5 +571,7 @@ mod view;
 
 use steps::{Selected, cancel, reserve, select_and_confirm};
 
+#[cfg(test)]
+mod card_tests;
 #[cfg(test)]
 mod tests;
