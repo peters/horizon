@@ -1,7 +1,7 @@
 //! One short DNS-SD browse over mDNS. Queries leave from an ephemeral port on the bridged
 //! address, so responders answer this computer directly (RFC 6762 section 6.7, "legacy
 //! unicast"): nothing binds port 5353, joins a multicast group or answers for this computer.
-use super::{Finding, multicast_socket};
+use super::{Cancellation, Finding, multicast_socket, stopped};
 use horizon_cloud_protocol::local_network::discovery::{MAX_ATTRIBUTES, MAX_NAMES, Service, Source, text};
 use simple_dns::{CLASS, Name, Packet, PacketFlag, Question, TYPE, rdata::RData};
 use std::{
@@ -54,6 +54,8 @@ const MAX_HOSTS: usize = 512;
 pub(super) const MAX_REVERSE: usize = 64;
 pub(super) const MAX_PACKETS: usize = 1024;
 const MAX_ERRORS: usize = 16;
+/// How often a browse waiting for answers checks whether the bridge stopped.
+const POLL: Duration = Duration::from_millis(100);
 /// mDNS allows up to 9000 bytes over UDP.
 const MAX_PACKET: usize = 9000;
 
@@ -299,12 +301,18 @@ impl Browse {
 }
 
 /// Browses from `local` in a few short rounds, stopping early once nothing is left to ask.
-pub(super) fn browse(local: Ipv4Addr, neighbors: &[Ipv4Addr]) -> io::Result<Vec<Finding>> {
-    exchange(&multicast_socket(local, 255)?, GROUP.into(), neighbors)
+pub(super) fn browse(local: Ipv4Addr, neighbors: &[Ipv4Addr], cancel: &Cancellation) -> io::Result<Vec<Finding>> {
+    exchange(&multicast_socket(local, 255)?, GROUP.into(), neighbors, cancel)
 }
 
-/// The browse's rounds over `socket`, with queries sent to `group`.
-pub(super) fn exchange(socket: &UdpSocket, group: SocketAddr, neighbors: &[Ipv4Addr]) -> io::Result<Vec<Finding>> {
+/// The browse's rounds over `socket`, with queries sent to `group`, until they end or the
+/// bridge stops.
+pub(super) fn exchange(
+    socket: &UdpSocket,
+    group: SocketAddr,
+    neighbors: &[Ipv4Addr],
+    cancel: &Cancellation,
+) -> io::Result<Vec<Finding>> {
     let mut browse = Browse::default();
     let mut queries = browse.first_queries(neighbors);
     let mut buffer = vec![0; MAX_PACKET];
@@ -314,6 +322,7 @@ pub(super) fn exchange(socket: &UdpSocket, group: SocketAddr, neighbors: &[Ipv4A
             break;
         }
         for query in &queries {
+            stopped(cancel)?;
             socket.send_to(query, group)?;
         }
         let until = Instant::now() + wait;
@@ -321,14 +330,15 @@ pub(super) fn exchange(socket: &UdpSocket, group: SocketAddr, neighbors: &[Ipv4A
             .checked_duration_since(Instant::now())
             .filter(|left| !left.is_zero())
         {
-            socket.set_read_timeout(Some(left))?;
+            stopped(cancel)?;
+            socket.set_read_timeout(Some(left.min(POLL)))?;
             match socket.recv_from(&mut buffer) {
                 Ok((count, _)) if packets < MAX_PACKETS => {
                     packets += 1;
                     browse.absorb(&buffer[..count]);
                 }
                 Ok(_) => {}
-                Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => break,
+                Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
                 // An ICMP error from an earlier datagram must not end the browse, but a
                 // socket that keeps failing must not spin until the round ends.
                 Err(_) if errors < MAX_ERRORS => errors += 1,

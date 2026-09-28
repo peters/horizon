@@ -80,7 +80,7 @@ off when you change networks.
 ## What the agent sees
 
 Agents on the worker get a `horizon-local-network` MCP server, and the same
-operations as `horizon-cloud-worker local-network status|discover|forward|unforward`:
+operations as `horizon-cloud-worker local-network status|discover|probe|forward|unforward`:
 
 - `local_network_status`: whether the bridge is on, the bridged subnet, the SOCKS5
   proxy address on the worker's `127.0.0.1`, the pinned forwards, and whether
@@ -88,6 +88,8 @@ operations as `horizon-cloud-worker local-network status|discover|forward|unforw
   that only you can turn it on.
 - `local_network_discover`: the devices on your network, found by this computer.
   See [Finding devices](#finding-devices).
+- `local_network_probe` with a host and optionally up to 16 ports: which of those
+  ports the device accepts connections on. See [Checking a device's ports](#checking-a-devices-ports).
 - `local_network_forward` with a host and port: pins that device to a port on the
   worker's `127.0.0.1`, so any TCP tool works unchanged, for example
   `ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:<port>/stream`. Horizon checks
@@ -145,12 +147,36 @@ that fails adds a note to the answer instead of failing the whole request.
 A worker helper whose owner's Horizon is older than discovery reports that
 discovery is unavailable; update Horizon on this computer.
 
+## Checking a device's ports
+
+Devices do not always announce what they serve. An agent can ask which of a few TCP
+ports one device accepts connections on, for example whether a camera serves RTSP
+before it forwards port 554:
+
+- One device per request, named by its address or host name. Horizon resolves the
+  name on this computer and probes only a device the bridge could reach anyway:
+  never this computer, never outside the bridged subnet.
+- At most 16 ports. Without a list, Horizon tries 22, 80, 443, 554, 631, 1883, 3000,
+  5000, 8000, 8080, 8123, 8443, 8554 and 9100.
+- A plain TCP connect per port, closed at once; nothing else is sent. Four ports at
+  a time, 1.5 seconds each.
+- At most 6 probes a minute per bridge, one at a time: a probe asked for while
+  another runs is refused at once, and the agent tries again a few seconds later.
+  Probes refused before they connect, for example for a host outside the scope,
+  do not count.
+
+The answer lists open, refused and silent ports, and later discovery answers include
+the open ports. Switching the bridge off stops a probe or a browse at once: no new
+connection attempt starts, and one already under way may finish within its 1.5
+seconds, when its connection is closed without use. Horizon never walks the subnet on its own.
+
 ## How it works
 
 Switching the bridge on starts a SOCKS5 proxy on this computer's loopback and one
 SSH process to the worker, with the cloud's own pinned host key and no agent or X11
 forwarding. That SSH process forwards a private socket on the worker to the proxy
 and runs a small helper that serves the proxy address, the forwards and the status
-on the worker's `127.0.0.1`. The helper passes discovery requests to this computer
-over the same SSH session, and this computer checks each one before it answers. The helper stops, and removes its sockets and forwards,
+on the worker's `127.0.0.1`. The helper passes discovery and probe requests to this
+computer over the same SSH session, and this computer checks each one before it
+answers. The helper stops, and removes its sockets and forwards,
 when the SSH session ends or stops sending its heartbeat for a minute.

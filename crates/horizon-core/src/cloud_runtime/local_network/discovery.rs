@@ -3,9 +3,10 @@
 //! only on request. Every address passes the bridge's [`Scope`] before an agent sees it.
 mod mdns;
 mod neighbors;
+mod probe;
 mod ssdp;
 
-use super::{Answers, Scope};
+use super::{Answers, Cancellation, Scope};
 use horizon_cloud_protocol::local_network::{
     Reply, Subnet,
     discovery::{Answer, Device, Discovery, Hello, MAX_NAMES, MAX_SERVICES, Request, Service, Source, VERSION},
@@ -42,7 +43,10 @@ impl Finding {
 }
 
 /// Browses from this computer's bridged address: what was found, and notes on what failed.
-type Browse = Box<dyn Fn(Ipv4Addr, Subnet) -> (Vec<Finding>, Vec<String>) + Send + Sync>;
+type Browse = Box<dyn Fn(Ipv4Addr, Subnet, &Cancellation) -> (Vec<Finding>, Vec<String>) + Send + Sync>;
+
+/// The answer to requests that arrive, or are still running, once the bridge is switched off.
+pub(super) const STOPPED: &str = "Local Network Bridge was switched off";
 
 /// Answers one bridge's discovery requests: at most one browse at a time, and none while
 /// recent results can answer instead.
@@ -52,19 +56,29 @@ pub struct Discoverer {
     /// The last results and when their browse ended. It stays locked for a whole browse, so
     /// requests that arrive meanwhile wait and then share its results.
     last: Mutex<Option<(Instant, Discovery)>>,
+    prober: probe::Prober,
+    /// The bridge's own cancellation: switching it off stops a browse or probe in progress.
+    cancel: Cancellation,
 }
 
 impl Discoverer {
     #[must_use]
-    pub fn new(scope: Arc<Scope>) -> Self {
-        Self::with_browse(scope, Box::new(browse))
+    pub fn new(scope: Arc<Scope>, cancel: Cancellation) -> Self {
+        Self::with_parts(scope, Box::new(browse), Box::new(probe::connect), cancel)
     }
 
+    #[cfg(test)]
     fn with_browse(scope: Arc<Scope>, browse: Browse) -> Self {
+        Self::with_parts(scope, browse, Box::new(probe::connect), Cancellation::default())
+    }
+
+    pub(super) fn with_parts(scope: Arc<Scope>, browse: Browse, connect: probe::Connect, cancel: Cancellation) -> Self {
         Self {
             scope,
             browse,
             last: Mutex::new(None),
+            prober: probe::Prober::new(connect),
+            cancel,
         }
     }
 
@@ -75,16 +89,20 @@ impl Discoverer {
         if let Some((at, discovery)) = last.as_ref()
             && at.elapsed() < REUSE_FOR
         {
-            return Answer::Discovery(Discovery {
+            return Answer::Discovery(self.with_probes(Discovery {
                 age_seconds: at.elapsed().as_secs(),
                 ..discovery.clone()
-            });
+            }));
         }
         // Nothing is sent on a network other than the bridged one.
         if let Err(reply) = self.scope.on_network() {
             return Answer::Refused(reply.message().into());
         }
-        let (findings, notes) = (self.browse)(self.scope.network.address, self.scope.subnet());
+        let (findings, notes) = (self.browse)(self.scope.network.address, self.scope.subnet(), &self.cancel);
+        // Results of a browse cut short are neither answered nor kept.
+        if self.cancel.is_cancelled() {
+            return Answer::Refused(STOPPED.into());
+        }
         let devices = match merge(findings, |addresses| self.scope.reachable(addresses)) {
             Ok(devices) => devices,
             Err(reply) => return Answer::Refused(reply.message().into()),
@@ -97,7 +115,38 @@ impl Discoverer {
         }
         .bounded();
         *last = Some((Instant::now(), discovery.clone()));
-        Answer::Discovery(discovery)
+        Answer::Discovery(self.with_probes(discovery))
+    }
+
+    /// Adds the ports that probes found open, so later answers list them as known ports.
+    fn with_probes(&self, mut discovery: Discovery) -> Discovery {
+        let open = self.prober.open();
+        if open.is_empty() {
+            return discovery;
+        }
+        for (address, ports) in open {
+            let index = if let Some(index) = discovery.devices.iter().position(|device| device.address == address) {
+                index
+            } else {
+                discovery.devices.push(Device {
+                    address,
+                    names: Vec::new(),
+                    services: Vec::new(),
+                    ports: Vec::new(),
+                    sources: Vec::new(),
+                });
+                discovery.devices.len() - 1
+            };
+            let device = &mut discovery.devices[index];
+            // A port the device already advertises is not news, and must not read as truncation.
+            let fresh: Vec<_> = ports.into_iter().filter(|port| !device.ports.contains(port)).collect();
+            device.ports.extend(fresh);
+            if !device.sources.contains(&Source::Probe) {
+                device.sources.push(Source::Probe);
+                device.sources.sort_unstable();
+            }
+        }
+        discovery.bounded()
     }
 }
 
@@ -107,6 +156,7 @@ impl Answers for Discoverer {
         if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
             sources.push(Source::Neighbors);
         }
+        sources.push(Source::Probe);
         Hello {
             discovery: VERSION,
             sources,
@@ -116,9 +166,17 @@ impl Answers for Discoverer {
         }
     }
 
+    /// Every request is checked here first: the helper that sent it is not trusted.
     fn answer(&self, request: Request) -> Answer {
+        if let Err(refusal) = request.validate() {
+            return Answer::Refused(refusal);
+        }
+        if self.cancel.is_cancelled() {
+            return Answer::Refused(STOPPED.into());
+        }
         match request {
             Request::Discover => self.discover(),
+            Request::Probe { host, ports } => self.prober.probe(&self.scope, &host, &ports, &self.cancel),
         }
     }
 }
@@ -183,6 +241,14 @@ fn merge(
         .collect())
 }
 
+/// Ends a browse once the bridge is switched off.
+fn stopped(cancel: &Cancellation) -> io::Result<()> {
+    if cancel.is_cancelled() {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED));
+    }
+    Ok(())
+}
+
 /// A datagram socket on this computer's bridged address that sends multicast out of the
 /// bridged interface only, and receives the answers sent back to it.
 fn multicast_socket(local: Ipv4Addr, ttl: u32) -> io::Result<UdpSocket> {
@@ -197,10 +263,10 @@ fn multicast_socket(local: Ipv4Addr, ttl: u32) -> io::Result<UdpSocket> {
 
 /// The neighbor table first, so mDNS can ask those neighbors their names, then mDNS and SSDP
 /// side by side for about three seconds.
-fn browse(local: Ipv4Addr, subnet: Subnet) -> (Vec<Finding>, Vec<String>) {
+fn browse(local: Ipv4Addr, subnet: Subnet, cancel: &Cancellation) -> (Vec<Finding>, Vec<String>) {
     let mut notes = Vec::new();
     let mut findings = Vec::new();
-    let neighbors = neighbors::read().unwrap_or_else(|error| {
+    let neighbors = neighbors::read(cancel).unwrap_or_else(|error| {
         notes.push(format!(
             "The neighbor table could not be read on the owner's computer: {error}"
         ));
@@ -215,11 +281,12 @@ fn browse(local: Ipv4Addr, subnet: Subnet) -> (Vec<Finding>, Vec<String>) {
             .iter()
             .map(|address| Finding::Seen(*address, Source::Neighbors)),
     );
-    let upnp = thread::Builder::new()
-        .name("local-network-ssdp".into())
-        .spawn(move || ssdp::browse(local));
+    let upnp = thread::Builder::new().name("local-network-ssdp".into()).spawn({
+        let cancel = cancel.clone();
+        move || ssdp::browse(local, &cancel)
+    });
     let reverse: Vec<_> = neighbors.into_iter().take(mdns::MAX_REVERSE).collect();
-    match mdns::browse(local, &reverse) {
+    match mdns::browse(local, &reverse, cancel) {
         Ok(found) => findings.extend(found),
         Err(error) => notes.push(format!("mDNS browsing failed on the owner's computer: {error}")),
     }

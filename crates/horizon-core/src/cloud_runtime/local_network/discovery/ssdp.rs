@@ -1,6 +1,6 @@
 //! One SSDP search (`UPnP`): devices answer this computer directly with their type, server and
 //! the address of their description, which an agent can fetch through the bridge.
-use super::{Finding, multicast_socket};
+use super::{Cancellation, Finding, multicast_socket, stopped};
 use horizon_cloud_protocol::local_network::discovery::{Service, Source, text};
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -21,6 +21,8 @@ const TTL: u32 = 2;
 const MAX_PACKET: usize = 2048;
 const MAX_RESPONSES: usize = 1024;
 const MAX_ERRORS: usize = 16;
+/// How often a search waiting for answers checks whether the bridge stopped.
+const POLL: Duration = Duration::from_millis(100);
 
 /// One device's answer to the search.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,12 +121,13 @@ pub(super) fn findings(answers: impl IntoIterator<Item = (Ipv4Addr, Answer)>) ->
 }
 
 /// Searches once from `local` and gathers answers for a few seconds.
-pub(super) fn browse(local: Ipv4Addr) -> io::Result<Vec<Finding>> {
-    search(&multicast_socket(local, TTL)?, GROUP.into())
+pub(super) fn browse(local: Ipv4Addr, cancel: &Cancellation) -> io::Result<Vec<Finding>> {
+    search(&multicast_socket(local, TTL)?, GROUP.into(), cancel)
 }
 
-/// The search over `socket`, sent to `group`.
-pub(super) fn search(socket: &UdpSocket, group: SocketAddr) -> io::Result<Vec<Finding>> {
+/// The search over `socket`, sent to `group`, until its window ends or the bridge stops.
+pub(super) fn search(socket: &UdpSocket, group: SocketAddr, cancel: &Cancellation) -> io::Result<Vec<Finding>> {
+    stopped(cancel)?;
     socket.send_to(SEARCH, group)?;
     let start = Instant::now();
     let (until, mut repeated) = (start + WINDOW, false);
@@ -134,6 +137,7 @@ pub(super) fn search(socket: &UdpSocket, group: SocketAddr) -> io::Result<Vec<Fi
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
     {
+        stopped(cancel)?;
         if !repeated && start.elapsed() >= REPEAT {
             socket.send_to(SEARCH, group)?;
             repeated = true;
@@ -143,7 +147,7 @@ pub(super) fn search(socket: &UdpSocket, group: SocketAddr) -> io::Result<Vec<Fi
         } else {
             REPEAT.saturating_sub(start.elapsed()).max(Duration::from_millis(1))
         };
-        socket.set_read_timeout(Some(wait))?;
+        socket.set_read_timeout(Some(wait.min(POLL)))?;
         match socket.recv_from(&mut buffer) {
             Ok((count, SocketAddr::V4(from))) if answers.len() < MAX_RESPONSES => {
                 if let Some(answer) = parse(*from.ip(), &buffer[..count]) {

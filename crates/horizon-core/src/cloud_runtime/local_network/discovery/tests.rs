@@ -1,11 +1,12 @@
 use super::*;
 use crate::cloud_runtime::local_network::scope;
+use horizon_cloud_protocol::local_network::discovery::DEFAULT_PROBE_PORTS;
 use simple_dns::{
     CLASS, Label, Name, Packet, PacketFlag, ResourceRecord,
     rdata::{A, PTR, RData, SRV, TXT},
 };
 use std::{
-    net::UdpSocket,
+    net::{IpAddr, UdpSocket},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -296,7 +297,7 @@ fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
     let counted = Arc::clone(&browses);
     let discoverer = Discoverer::with_browse(
         scope(home),
-        Box::new(move |local, subnet| {
+        Box::new(move |local, subnet, _: &Cancellation| {
             counted.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
                 (local, subnet.to_string().as_str()),
@@ -333,7 +334,7 @@ fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
 
     let moved = Discoverer::with_browse(
         scope(|| Ok(scope::tests::host(&[("10.0.0.20", Some(24))], Some("10.0.0.20")))),
-        Box::new(|_, _| panic!("browsed a network that is not the bridged one")),
+        Box::new(|_, _, _: &Cancellation| panic!("browsed a network that is not the bridged one")),
     );
     assert_eq!(
         moved.discover(),
@@ -351,12 +352,13 @@ fn a_browse_of_this_computers_network_ends_within_its_window() {
         return;
     };
     let started = Instant::now();
-    let answer = Discoverer::new(Arc::new(current)).discover();
+    let answer = Discoverer::new(Arc::new(current), Cancellation::default()).discover();
     assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
     match answer {
         Answer::Discovery(discovery) => assert!(discovery.devices.len() <= 256),
         // The runner's network can change while the test runs.
         Answer::Refused(_) => {}
+        Answer::Probe(_) => panic!("a discovery answered with a probe"),
     }
 }
 
@@ -415,7 +417,7 @@ fn an_mdns_browse_keeps_its_rounds_and_packet_limit_under_a_flood() {
     });
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let started = Instant::now();
-    let findings = mdns::exchange(&socket, group, &[]).unwrap();
+    let findings = mdns::exchange(&socket, group, &[], &Cancellation::default()).unwrap();
     let window: Duration = mdns::ROUNDS.iter().sum();
     assert!(
         started.elapsed() < window + Duration::from_millis(500),
@@ -436,7 +438,7 @@ fn an_ssdp_search_repeats_once_and_ends_with_its_window() {
     });
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let started = Instant::now();
-    let findings = ssdp::search(&socket, group).unwrap();
+    let findings = ssdp::search(&socket, group, &Cancellation::default()).unwrap();
     let elapsed = started.elapsed();
     assert!(
         elapsed >= ssdp::WINDOW && elapsed < ssdp::WINDOW + Duration::from_millis(500),
@@ -458,16 +460,424 @@ fn the_neighbor_command_reports_failures_and_bounds_its_output_and_time() {
         command.args(["-c", script]);
         command
     };
-    assert_eq!(neighbors::run(shell("printf 'table\\n'")).unwrap(), "table\n");
-    let failed = neighbors::run(shell("printf 'arp: not permitted\\n' >&2; exit 2"))
+    let idle = Cancellation::default();
+    assert_eq!(neighbors::run(shell("printf 'table\\n'"), &idle).unwrap(), "table\n");
+    let failed = neighbors::run(shell("printf 'arp: not permitted\\n' >&2; exit 2"), &idle)
         .unwrap_err()
         .to_string();
     assert!(failed.contains("ended with"), "{failed}");
     // A long table is cut, and the command still finishes.
-    let long = neighbors::run(shell("head -c 1000000 /dev/zero | tr '\\0' 'a'")).unwrap();
+    let long = neighbors::run(shell("head -c 1000000 /dev/zero | tr '\\0' 'a'"), &idle).unwrap();
     assert_eq!(long.len(), 256 * 1024);
     let started = Instant::now();
-    let slow = neighbors::run(shell("exec sleep 10")).unwrap_err().to_string();
+    let slow = neighbors::run(shell("exec sleep 10"), &idle).unwrap_err().to_string();
     assert!(slow.contains("too long"), "{slow}");
     assert!(started.elapsed() < Duration::from_secs(4));
+    // Switching the bridge off stops and reaps the command at once.
+    let root = tempfile::tempdir().unwrap();
+    let pid_file = root.path().join("pid");
+    let cancel = Cancellation::default();
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            cancel.cancel();
+        })
+    };
+    let started = Instant::now();
+    let script = format!("echo $$ > '{}'; exec sleep 10", pid_file.display());
+    let interrupted = neighbors::run(shell(&script), &cancel).unwrap_err();
+    assert_eq!(interrupted.kind(), io::ErrorKind::Interrupted);
+    assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    stopper.join().unwrap();
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "arp stand-in {pid} survived the switch-off");
+}
+
+/// The home network, where `printer.local` resolves to a device and `rebound.local` to this
+/// computer's loopback.
+fn probe_scope() -> Arc<Scope> {
+    let home = || scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Arc::new(Scope {
+        network: home().current_network().unwrap(),
+        resolve: Box::new(|name, port| match name {
+            "printer.local" => Ok(vec![SocketAddr::new(v4("192.168.1.50").into(), port)]),
+            "rebound.local" => Ok(vec![SocketAddr::new(v4("127.0.0.1").into(), port)]),
+            // A valid name longer than the text limit for device-chosen strings.
+            long if long.len() == 200 => Ok(vec![SocketAddr::new(v4("192.168.1.60").into(), port)]),
+            _ => Err(Reply::HostUnreachable),
+        }),
+        host: Box::new(move || Ok(home())),
+        source: Box::new(|_| Some(v4("192.168.1.20"))),
+    })
+}
+
+#[test]
+fn probes_connect_only_to_admitted_hosts_a_few_times_a_minute() {
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&attempts);
+    let discoverer = Discoverer::with_parts(
+        probe_scope(),
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _, _: &Cancellation| {
+            seen.lock().unwrap().push(target);
+            match target.port() {
+                80 | 631 => Ok(()),
+                22 => Err(io::ErrorKind::ConnectionRefused.into()),
+                _ => Err(io::ErrorKind::TimedOut.into()),
+            }
+        }),
+        Cancellation::default(),
+    );
+    let probe = |host: &str, ports: &[u16]| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: ports.to_vec(),
+        })
+    };
+    // Malformed requests and hosts outside the scope are refused before anything is sent,
+    // and do not count towards the rate.
+    let many: Vec<u16> = (1..=17).collect();
+    for (host, ports) in [
+        ("", &[][..]),
+        ("printer.local", &[0][..]),
+        ("printer.local", &many[..]),
+        ("10.0.0.5", &[][..]),
+        ("192.168.1.20", &[][..]),
+        ("192.168.1.255", &[][..]),
+        ("127.0.0.1", &[][..]),
+        ("rebound.local", &[][..]),
+        ("missing.local", &[][..]),
+    ] {
+        assert!(matches!(probe(host, ports), Answer::Refused(_)), "{host} {ports:?}");
+    }
+    assert!(attempts.lock().unwrap().is_empty());
+
+    let Answer::Probe(result) = probe("printer.local", &[22, 80, 631, 9100, 80]) else {
+        panic!("probe");
+    };
+    assert_eq!(result.address, v4("192.168.1.50"));
+    assert_eq!(
+        (result.open, result.closed, result.silent),
+        (vec![80, 631], vec![22], vec![9100])
+    );
+    assert!(matches!(probe("192.168.1.50", &[]), Answer::Probe(_)));
+    let attempted = attempts.lock().unwrap().clone();
+    assert_eq!(attempted.len(), 4 + DEFAULT_PROBE_PORTS.len());
+    assert!(
+        attempted
+            .iter()
+            .all(|target| target.ip() == IpAddr::from(v4("192.168.1.50")))
+    );
+
+    // Later discovery answers list the ports probes found open.
+    let Answer::Discovery(found) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(found.devices.len(), 1);
+    assert_eq!(found.devices[0].ports, [80, 631]);
+    assert_eq!(found.devices[0].sources, [Source::Probe]);
+
+    for _ in 2..probe::PER_MINUTE {
+        assert!(matches!(probe("192.168.1.50", &[80]), Answer::Probe(_)));
+    }
+    let Answer::Refused(limit) = probe("192.168.1.50", &[80]) else {
+        panic!("the rate limit held no probe back");
+    };
+    assert!(limit.contains("6 probes a minute"), "{limit}");
+}
+
+#[test]
+fn probed_ports_join_advertised_ones_and_hosts_come_back_as_named() {
+    let printer = v4("192.168.1.50");
+    let discoverer = Discoverer::with_parts(
+        probe_scope(),
+        Box::new(move |_, _, _: &Cancellation| {
+            let findings = vec![
+                Finding::Seen(printer, Source::Mdns),
+                Finding::Service(printer, service("_ipp._tcp", Some(631))),
+            ];
+            (findings, Vec::new())
+        }),
+        Box::new(|target: SocketAddr, _, _: &Cancellation| match target.port() {
+            80 | 631 => Ok(()),
+            _ => Err(io::ErrorKind::ConnectionRefused.into()),
+        }),
+        Cancellation::default(),
+    );
+    let Answer::Probe(_) = discoverer.answer(Request::Probe {
+        host: "printer.local".into(),
+        ports: vec![631, 80],
+    }) else {
+        panic!("probe");
+    };
+    let Answer::Discovery(found) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert!(
+        !found.truncated,
+        "an advertised port found open again is not a truncation"
+    );
+    assert_eq!(found.devices[0].ports, [80, 631]);
+    assert_eq!(found.devices[0].sources, [Source::Mdns, Source::Probe]);
+
+    // Names may be up to 253 characters, longer than device text, and come back whole.
+    let long = format!(
+        "{label}.{label}.{label}.{}.local",
+        "a".repeat(47),
+        label = "a".repeat(48)
+    );
+    assert_eq!(long.len(), 200);
+    let Answer::Probe(result) = discoverer.answer(Request::Probe {
+        host: long.clone(),
+        ports: vec![80],
+    }) else {
+        panic!("probe of a long name");
+    };
+    assert_eq!((result.host, result.address), (long, v4("192.168.1.60")));
+}
+
+#[test]
+fn a_probe_while_another_runs_is_refused_at_once_and_refusals_cost_no_slot() {
+    let (entered, first_dialled) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let discoverer = Arc::new(Discoverer::with_parts(
+        probe_scope(),
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _, _: &Cancellation| {
+            if target.port() == 554 {
+                let _ = entered.send(());
+                let _ = released.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            }
+            Ok(())
+        }),
+        Cancellation::default(),
+    ));
+    let probe = |discoverer: &Discoverer, host: &str, port: u16| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![port],
+        })
+    };
+    let first = {
+        let discoverer = Arc::clone(&discoverer);
+        thread::spawn(move || probe(&discoverer, "printer.local", 554))
+    };
+    first_dialled.recv_timeout(Duration::from_secs(10)).unwrap();
+    // The second probe is not queued behind the first: it is refused at once.
+    let started = Instant::now();
+    assert_eq!(
+        probe(&discoverer, "192.168.1.50", 80),
+        Answer::Refused(probe::RUNNING.into())
+    );
+    assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    release.send(()).unwrap();
+    assert!(matches!(first.join().unwrap(), Answer::Probe(result) if result.open == [554]));
+
+    // Probes refused before they connect use no slot of the rate limit.
+    for _ in 0..5 {
+        assert!(matches!(probe(&discoverer, "10.0.0.5", 80), Answer::Refused(_)));
+        assert!(matches!(probe(&discoverer, "missing.local", 80), Answer::Refused(_)));
+    }
+    for _ in 1..probe::PER_MINUTE {
+        assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Probe(_)));
+    }
+    assert!(matches!(probe(&discoverer, "192.168.1.50", 80), Answer::Refused(limit) if limit.contains("a minute")));
+}
+
+#[test]
+fn the_real_connect_tells_open_from_refused_and_stops_with_the_bridge() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let idle = Cancellation::default();
+    assert!(probe::connect(listener.local_addr().unwrap(), Duration::from_secs(5), &idle).is_ok());
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let refused = probe::connect(closed, Duration::from_secs(5), &idle)
+        .unwrap_err()
+        .kind();
+    // Windows retries a refused loopback connection for about two seconds before it reports.
+    assert!(
+        refused == io::ErrorKind::ConnectionRefused || (cfg!(windows) && refused == io::ErrorKind::TimedOut),
+        "{refused:?}"
+    );
+    // A documentation address never answers; switching the bridge off ends the attempt.
+    let cancel = Cancellation::default();
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            cancel.cancel();
+        })
+    };
+    let started = Instant::now();
+    assert!(probe::connect("192.0.2.1:9".parse().unwrap(), Duration::from_secs(10), &cancel).is_err());
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    stopper.join().unwrap();
+}
+
+#[test]
+fn an_mdns_browse_and_an_ssdp_search_stop_soon_after_the_bridge_does() {
+    let (group, _) = responder(|_| Vec::new());
+    let stop_soon = || {
+        let cancel = Cancellation::default();
+        let stopper = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            stopper.cancel();
+        });
+        cancel
+    };
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let started = Instant::now();
+    let browse = mdns::exchange(&socket, group, &[], &stop_soon());
+    assert_eq!(browse.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        started.elapsed()
+    );
+    let started = Instant::now();
+    let search = ssdp::search(&socket, group, &stop_soon());
+    assert_eq!(search.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A scope on the home network whose resolver takes three seconds for `slow.local`, and whose
+/// computer reports another network on the on-network check numbered `away`.
+fn scope_with(away: Arc<AtomicUsize>) -> Arc<Scope> {
+    let checks = AtomicUsize::new(0);
+    let home = || scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Arc::new(Scope {
+        network: home().current_network().unwrap(),
+        resolve: Box::new(|name, port| {
+            if name == "slow.local" {
+                thread::sleep(Duration::from_secs(3));
+            }
+            Ok(vec![SocketAddr::new(v4("192.168.1.50").into(), port)])
+        }),
+        host: Box::new(move || {
+            if checks.fetch_add(1, Ordering::SeqCst) + 1 == away.load(Ordering::SeqCst) {
+                return Ok(scope::tests::host(&[("10.0.0.20", Some(24))], Some("10.0.0.20")));
+            }
+            Ok(home())
+        }),
+        source: Box::new(|_| Some(v4("192.168.1.20"))),
+    })
+}
+
+#[test]
+fn a_slow_lookup_is_abandoned_at_switch_off_and_preflight_refusals_cost_no_slot() {
+    let away = Arc::new(AtomicUsize::new(usize::MAX));
+    let dials = Arc::new(AtomicUsize::new(0));
+    let cancel = Cancellation::default();
+    let discoverer = {
+        let dials = Arc::clone(&dials);
+        Arc::new(Discoverer::with_parts(
+            scope_with(Arc::clone(&away)),
+            Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+            Box::new(move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            cancel.clone(),
+        ))
+    };
+    let probe = |discoverer: &Discoverer, host: &str| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![80],
+        })
+    };
+    // The bridge's computer leaves the network between admission and the first batch: the
+    // third on-network check is the preflight, after the two the admission makes.
+    away.store(3, Ordering::SeqCst);
+    assert_eq!(
+        probe(&discoverer, "192.168.1.50"),
+        Answer::Refused(Reply::NetworkUnreachable.message().into())
+    );
+    away.store(usize::MAX, Ordering::SeqCst);
+    assert_eq!(dials.load(Ordering::SeqCst), 0);
+    // That refusal took no slot: the whole minute's allowance is still there.
+    for _ in 0..probe::PER_MINUTE {
+        assert!(matches!(probe(&discoverer, "192.168.1.50"), Answer::Probe(_)));
+    }
+    assert!(matches!(probe(&discoverer, "192.168.1.50"), Answer::Refused(limit) if limit.contains("a minute")));
+
+    // A probe waiting on a slow lookup ends as soon as the bridge stops, and dials nothing.
+    let dialled = dials.load(Ordering::SeqCst);
+    let fresh = Arc::new(Discoverer::with_parts(
+        scope_with(Arc::new(AtomicUsize::new(usize::MAX))),
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new({
+            let dials = Arc::clone(&dials);
+            move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }),
+        cancel.clone(),
+    ));
+    let waiting = {
+        let fresh = Arc::clone(&fresh);
+        thread::spawn(move || probe(&fresh, "slow.local"))
+    };
+    thread::sleep(Duration::from_millis(200));
+    let started = Instant::now();
+    cancel.cancel();
+    assert_eq!(waiting.join().unwrap(), Answer::Refused(STOPPED.into()));
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(dials.load(Ordering::SeqCst), dialled);
+}
+
+#[test]
+fn a_probe_takes_its_rate_slot_when_it_dials_not_when_it_was_asked() {
+    let dials = Arc::new(AtomicUsize::new(0));
+    let discoverer = {
+        let dials = Arc::clone(&dials);
+        Discoverer::with_parts(
+            scope_with(Arc::new(AtomicUsize::new(usize::MAX))),
+            Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+            Box::new(move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            Cancellation::default(),
+        )
+    };
+    let probe = |host: &str| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![80],
+        })
+    };
+    // The lookup takes three seconds; the slot is stamped after it, when the first batch dials.
+    let asked = Instant::now();
+    assert!(matches!(probe("slow.local"), Answer::Probe(_)));
+    let stamped = discoverer.prober.last_start().unwrap();
+    assert!(stamped >= asked + Duration::from_secs(3), "{:?}", stamped - asked);
+    for _ in 1..probe::PER_MINUTE {
+        assert!(matches!(probe("192.168.1.50"), Answer::Probe(_)));
+    }
+    assert_eq!(dials.load(Ordering::SeqCst), probe::PER_MINUTE);
+    let sixth = discoverer.prober.last_start().unwrap();
+    assert!(matches!(probe("192.168.1.50"), Answer::Refused(limit) if limit.contains("a minute")));
+    assert!(sixth.elapsed() < Duration::from_secs(60));
+    assert_eq!(dials.load(Ordering::SeqCst), probe::PER_MINUTE);
 }
