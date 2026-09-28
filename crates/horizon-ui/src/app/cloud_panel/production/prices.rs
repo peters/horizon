@@ -264,6 +264,12 @@ impl State {
         !self.runpod_missing && self.list.is_none() && (self.list_job.is_some() || self.list_error.is_some())
     }
 
+    /// Whether `RunPod` has neither answered nor failed yet: no fetch was asked for,
+    /// or the first one is still running.
+    pub fn runpod_pending(&self) -> bool {
+        !self.runpod_missing && self.list.is_none() && self.list_error.is_none()
+    }
+
     pub fn loading(&self) -> bool {
         self.list_job.is_some() || !self.size_jobs.is_empty()
     }
@@ -386,6 +392,21 @@ impl State {
     pub fn runpod_key_missing(&mut self) {
         self.runpod_missing = true;
         self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
+    }
+
+    /// As `RunPod` answers the first fetch with nothing on offer, so a `RunPod` cloud
+    /// can be submitted.
+    #[cfg(unix)]
+    pub fn runpod_answered(&mut self) {
+        let list = PriceList {
+            provider: "RunPod",
+            cpu: Vec::new(),
+            gpus: Vec::new(),
+            data_centers: Vec::new(),
+            regions: std::collections::BTreeMap::new(),
+            storage: prices::RUNPOD_STORAGE,
+        };
+        self.answered(list, Preferences::default(), Vec::new());
     }
 
     pub fn answered(&mut self, list: PriceList, preferences: Preferences, sizes: Vec<(Profile, SizeAvailability)>) {

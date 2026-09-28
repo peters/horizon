@@ -262,6 +262,19 @@ fn runpod_usable(
     Ok(())
 }
 
+/// Whether a queued submission for a `RunPod` cloud waits for `RunPod`'s first answer.
+/// The price fetch starts only once the profile has loaded, so processing the
+/// submission in that same frame would record a cloud this machine may have no key for.
+pub(super) fn awaits_runpod(form: &super::Production) -> bool {
+    form.profiles
+        .as_ref()
+        .and_then(|config| config.profiles.get(&form.selected_profile))
+        .is_some_and(|profile| {
+            super::creation::provider::current(form.provider, profile) == &cloud_runtime::provider::RUNPOD
+                && form.prices.runpod_pending()
+        })
+}
+
 /// `profile` on the chosen provider at the chosen size, as the new cloud records it.
 /// Refused before anything is recorded while Horizon cannot create clouds there.
 pub(super) fn launch_profile(

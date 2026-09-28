@@ -161,12 +161,15 @@ impl HorizonApp {
             }
         }
         if form.launch.submitted && form.pending_creation.is_none() && form.profiles.is_some() {
-            form.launch.submitted = false;
             if !form.launch.accounts_checked && !form.launch.ready_profiles.contains(&form.selected_profile) {
+                form.launch.submitted = false;
                 self.open_cloud_accounts(ctx, true);
                 self.cloud_prototype.production.launch.submitted = true;
-            } else if let Err(error) = self.create_production_cloud(ctx) {
-                self.cloud_prototype.error = Some(error.to_string());
+            } else if !super::creation_job::awaits_runpod(form) {
+                form.launch.submitted = false;
+                if let Err(error) = self.create_production_cloud(ctx) {
+                    self.cloud_prototype.error = Some(error.to_string());
+                }
             }
         }
     }
@@ -297,6 +300,11 @@ mod tests {
         let _ = app.board.create_workspace("Other");
         sender.send(Ok(loaded(temp.path()))).unwrap();
         app.poll_cloud_launch(&ctx);
+        // The RunPod key check starts only now that the profile is known.
+        assert!(app.cloud_prototype.production.launch.submitted);
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        app.cloud_prototype.production.prices.runpod_answered();
+        app.poll_cloud_launch(&ctx);
         assert!(app.cloud_prototype.production.pending_creation.is_some());
         assert!(!app.cloud_prototype.production.setup.open);
         assert_eq!(
@@ -310,6 +318,42 @@ mod tests {
             std::ptr::from_ref(app.cloud_prototype.production.pending_creation.as_ref().unwrap())
         );
     }
+    #[test]
+    fn a_queued_runpod_submission_waits_for_the_key_check_on_a_hetzner_only_machine() {
+        let (temp, mut app) = test_app();
+        let session = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .unwrap();
+        app.activate_persistent_session(&session);
+        let ctx = Context::default();
+        let workspace = app.board.ensure_workspace();
+        app.open_workspace_cloud(&ctx, workspace);
+        let (sender, receiver) = channel();
+        let form = &mut app.cloud_prototype.production;
+        form.launch.receiver = Some(receiver);
+        form.title = "My cloud".into();
+        form.launch.submitted = true;
+        sender.send(Ok(loaded(temp.path()))).unwrap();
+        app.poll_cloud_launch(&ctx);
+        app.cloud_prototype.production.prices.runpod_checking();
+        app.poll_cloud_launch(&ctx);
+        assert!(
+            app.cloud_prototype.production.launch.submitted,
+            "still waiting for RunPod"
+        );
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        app.cloud_prototype.production.prices.runpod_key_missing();
+        app.poll_cloud_launch(&ctx);
+        assert!(!app.cloud_prototype.production.launch.submitted);
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        assert!(app.cloud_prototype.groups.0.is_empty(), "no RunPod cloud is recorded");
+        assert_eq!(
+            app.cloud_prototype.error.as_deref(),
+            Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING)
+        );
+    }
+
     #[test]
     fn revision_reload_retains_an_explicit_profile() {
         let (temp, mut app) = test_app();
@@ -375,6 +419,7 @@ mod tests {
         app.open_workspace_cloud(&ctx, workspace);
         let (sender, receiver) = channel();
         app.cloud_prototype.production.launch.receiver = Some(receiver);
+        app.cloud_prototype.production.prices.runpod_answered();
         sender.send(Ok(loaded(temp.path()))).unwrap();
         let input = || egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
@@ -489,6 +534,7 @@ mod tests {
         form.launch.receiver = Some(receiver);
         form.title = "Keep this title".into();
         form.launch.submitted = true;
+        form.prices.runpod_answered();
         sender.send(Ok(loaded(temp.path()))).unwrap();
         app.poll_cloud_launch(&ctx);
         assert!(app.cloud_prototype.error.as_ref().unwrap().contains("saved session"));
