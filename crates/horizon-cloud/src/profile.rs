@@ -37,10 +37,12 @@ impl Source {
 
     fn validate(&self) -> Result<(), ProfileError> {
         let patterns = self.lfs.include.iter().chain(&self.lfs.exclude);
-        if patterns.clone().count() > Lfs::MAX_PATTERNS || patterns.clone().any(|pattern| !Lfs::valid_pattern(pattern))
+        if patterns.clone().count() > Lfs::MAX_PATTERNS
+            || patterns.clone().map(|pattern| pattern.chars().count()).sum::<usize>() > Lfs::MAX_TOTAL_CHARS
+            || patterns.clone().any(|pattern| !Lfs::valid_pattern(pattern))
         {
             return Err(ProfileError::Invalid(
-                "source.lfs allows at most 64 patterns, each non-empty, at most 256 characters, without commas or Unicode control, format, surrogate or private-use characters",
+                "source.lfs allows at most 64 patterns and 8,192 characters in all, each non-empty, at most 256 characters, without commas or Unicode control, format, surrogate or private-use characters",
             ));
         }
         Ok(())
@@ -64,6 +66,9 @@ pub struct Lfs {
 impl Lfs {
     const MAX_PATTERNS: usize = 64;
     const MAX_PATTERN_CHARS: usize = 256;
+    /// Horizon passes the joined patterns to `git lfs ls-files`; at two UTF-16 units per
+    /// character this keeps the call well within Windows' 32,767-unit command line.
+    const MAX_TOTAL_CHARS: usize = 8192;
 
     /// As the worker's check: git-lfs joins patterns with commas, and no Unicode
     /// control, format, surrogate or private-use character belongs in a path pattern.
@@ -426,6 +431,18 @@ mod tests {
             .collect::<Vec<_>>()
             .join(", ");
         assert!(config(&format!("{{exclude: [{many}]}}")).is_err());
+        let long = |count: usize| {
+            let pattern = format!("'{}'", "\u{10000}".repeat(Lfs::MAX_PATTERN_CHARS));
+            config(&format!("{{exclude: [{}]}}", vec![pattern; count].join(", ")))
+        };
+        assert!(long(Lfs::MAX_TOTAL_CHARS / Lfs::MAX_PATTERN_CHARS).is_ok());
+        assert!(
+            matches!(
+                long(Lfs::MAX_TOTAL_CHARS / Lfs::MAX_PATTERN_CHARS + 1),
+                Err(ProfileError::Invalid(_))
+            ),
+            "the joined patterns fit a Windows command line"
+        );
         // A Windows checkout gives the included example CRLF line endings.
         let documented = EXAMPLE.replace("\r\n", "\n");
         let (head, tail) = documented.split_once("# source:\n").unwrap();
