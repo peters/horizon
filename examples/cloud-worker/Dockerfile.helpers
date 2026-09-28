@@ -46,4 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=helpers / /
 RUN mkdir -p /etc/horizon-worker \
     && printf '%s\n' '{"agents":[],"browsers":[],"desktop":true}' > /etc/horizon-worker/capabilities.json \
-    && horizon-browser --version && horizon-worker-check --git-auth
+    && horizon-browser --version && horizon-device --help > /dev/null \
+    # With no command the worker prints its usage and exits 1; the exact line proves it loaded.
+    && { horizon-cloud-worker 2>&1 || true; } | grep -q '^Cloud worker service: Usage: horizon-cloud-worker ' \
+    && horizon-worker-check --git-auth
