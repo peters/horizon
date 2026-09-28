@@ -21,7 +21,7 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
     #[cfg(target_os = "macos")]
     {
         let mut command = std::process::Command::new("/usr/sbin/arp");
-        command.arg("-an");
+        command.arg("-an").env_clear();
         Ok(bsd(&run(command)?))
     }
     #[cfg(windows)]
@@ -29,12 +29,16 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
         use std::os::windows::process::CommandExt;
         /// Keeps a console window from flashing up behind Horizon.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let system = std::env::var_os("SystemRoot").map_or_else(
-            || std::path::PathBuf::from("arp.exe"),
-            |root| std::path::PathBuf::from(root).join("System32").join("ARP.EXE"),
-        );
-        let mut command = std::process::Command::new(system);
-        command.arg("-a").creation_flags(CREATE_NO_WINDOW);
+        // Winsock needs `SystemRoot`, the only variable the cleared environment keeps.
+        let root = std::env::var_os("SystemRoot")
+            .filter(|root| std::path::Path::new(root).is_absolute())
+            .unwrap_or_else(|| r"C:\Windows".into());
+        let mut command = std::process::Command::new(std::path::Path::new(&root).join(r"System32\ARP.EXE"));
+        command
+            .arg("-a")
+            .env_clear()
+            .env("SystemRoot", &root)
+            .creation_flags(CREATE_NO_WINDOW);
         Ok(windows(&run(command)?))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
