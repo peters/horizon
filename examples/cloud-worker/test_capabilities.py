@@ -205,9 +205,22 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(status, 1, claude)
             self.assertIn('claude does not report its recorded version 2.1.281', output)
 
-    def test_recorded_versions_must_cover_selected_agents_and_be_plain_versions(self):
+    def test_a_layer_record_naming_only_its_own_agent_pins_that_agent(self):
         reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
-        for record in [{'codex': '0.156.1'}, [], {'claude': '2.1.281', 'codex': '$(id)'},
+        self.write('/etc/horizon-worker/agent-versions.json', {'codex': '0.156.1'})
+        status, output, commands = self.run_check(reported=reported)
+        self.assertEqual(status, 0, output)
+        self.assertIn(mock.call(['codex', '--version'], check=True, timeout=20,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL), commands)
+        self.assertIn(mock.call(['claude', '--version'], check=True, timeout=20,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), commands)
+        status, output, _ = self.run_check(reported=dict(reported, codex=b'codex-cli 0.156.2\n'))
+        self.assertEqual(status, 1)
+        self.assertIn('codex does not report its recorded version 0.156.1', output)
+
+    def test_recorded_versions_must_be_plain_versions_of_known_agents(self):
+        reported = {'codex': b'codex-cli 0.156.1\n', 'claude': b'2.1.281 (Claude Code)\n'}
+        for record in [[], {'claude': '2.1.281', 'codex': '$(id)'},
                        {'claude': '2.1.281', 'codex': '0.156.1', 'other': '1.0.0'},
                        {'claude': '2.1.281', 'codex': '0.156.1-'}, {'claude': '2.1.281', 'codex': 156},
                        {'claude': '2.1.281', 'codex': '01.2.3'}, {'claude': '2.1.281', 'codex': '1.2.3-01'},

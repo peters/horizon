@@ -174,15 +174,15 @@ try:
     for binary in ['sshd', 'ssh', 'tmux', 'git', 'flock', 'python3', 'horizon-cloud-worker', 'horizon-worker-session', 'horizon-worker-import', 'horizon-worker-source', 'horizon-worker-supervise']:
         require(binary)
     probe(['git', 'lfs', 'version'])
-    versions = recorded_versions()
+    # A layer may record only the agent it installs, replacing the base image's record.
+    # An agent the record omits is still probed, just without a pinned version.
+    versions = recorded_versions() or {}
     for agent in selected['agents']:
         require(agent)
-        if versions is None:
-            probe([agent, '--version'])
-        elif agent in versions:
+        if agent in versions:
             require_version(agent, versions[agent])
         else:
-            raise ValueError('Selected agent has no recorded version')
+            probe([agent, '--version'])
     if selected['browsers'] or 'browserstack' in selected:
         require('horizon-browser')
     if 'browserstack' in selected:

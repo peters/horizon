@@ -240,9 +240,12 @@ A newer release then rebuilds only that step and the steps after it, so place ag
 installs after heavier toolchain steps. An install step without a version stays
 cached at the first release it installed. Record the installed versions in
 `/etc/horizon-worker/agent-versions.json`, for example `{"claude": "2.1.281"}`.
-When that file exists, `horizon-worker-check` requires each enabled agent to have
-an entry and to report that version from `--version`; Horizon runs the check
-before pushing the image. The [example worker Dockerfile](../examples/cloud-worker/Dockerfile)
+`horizon-worker-check` requires each enabled agent that has an entry to report
+that version from `--version`, and probes an enabled agent without one with
+`--version` alone; Horizon runs the check before pushing the image. A layer, such
+as a same-worker sibling's recipe, that installs one agent should merge its entry
+into the existing file rather than replace it, so the base image's agents stay
+pinned; a layer that writes only its own entry still passes the check. The [example worker Dockerfile](../examples/cloud-worker/Dockerfile)
 follows this pattern. Existing clouds keep the image they were built with; new
 clouds receive the latest agents.
 

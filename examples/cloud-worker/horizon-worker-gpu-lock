@@ -5,7 +5,7 @@
 # once. Exit status: COMMAND's own, 2 for invalid usage, 75 when the lock was not acquired in
 # time, 126 when COMMAND is not executable, 127 when it is not found, and flock's own status
 # when the lock file cannot be used. Sessions get the same file as HORIZON_GPU_LOCK, so a
-# script can also use flock on it directly.
+# script can also lock it directly with `flock -o`.
 set -euo pipefail
 lock=/workspace/locks/gpu.lock
 usage() { echo 'Usage: horizon-worker-gpu-lock [--wait SECONDS] -- COMMAND [ARGUMENT...]' >&2; exit 2; }

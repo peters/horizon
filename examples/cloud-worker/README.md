@@ -316,7 +316,12 @@ keeps the single layout.
 Legacy worktrees are on branch `agent/SESSION` of their own repository: the primary at the
 session's revision, each sibling at its manifest revision. Submodules and LFS content
 are prepared from each repository's own material before the launch fence, so relative
-paths such as `../native-lib` in the repositories' scripts work unchanged. Relaunch
+paths such as `../native-lib` in the repositories' scripts work unchanged. Each submodule
+is registered in its superproject's configuration with the imported material as its URL,
+so `git submodule status` reports it at its pin and `git submodule update --init` does not
+clone it again. That needs exactly one `.gitmodules` entry for the path: a raw gitlink
+without one is still checked out at its pin but stays unregistered, and the checkout log
+names it. Relaunch
 refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
 its own repository, and never recreates it. Attach refuses the same way when a path it
 would complete after an interrupted preparation holds another repository.
@@ -330,6 +335,14 @@ again by relaunch when missing. `horizon-worker-run` exports it to the agent as
 there, such as a package cache that must not be shared with another session on the
 same worker. Horizon sets no ecosystem-specific variables; a repository's own scripts
 choose what to place in the directory.
+
+In the shared checkout, only `HORIZON_SESSION_DIR` is per session. Sessions that use
+the shared checkout share every file in `/workspace/checkout`, including build output
+such as `bin/`, `obj/`, `target/` and native build directories, so two sessions that
+build at the same time write the same files. Serialize such builds, for example under
+the [GPU lock](#gpu-lock) for GPU builds, or point a repository's build output at
+`HORIZON_SESSION_DIR`. Legacy sessions keep their build output in their own worktree
+under `/workspace/agents/SESSION`.
 
 ## Session environment from image layers
 
@@ -392,8 +405,15 @@ It runs `COMMAND` while holding an exclusive `flock` on `/workspace/locks/gpu.lo
 waiting as long as another holder has it unless `--wait` bounds the wait (`--wait 0`
 tries once). Only the lock command holds the lock, so a background process that
 `COMMAND` leaves behind does not keep it. Every agent session gets the same file as
-`HORIZON_GPU_LOCK`, so a repository script can also call `flock "$HORIZON_GPU_LOCK" ...`
-directly.
+`HORIZON_GPU_LOCK`, so a repository script can also lock it directly with
+`flock -o "$HORIZON_GPU_LOCK" COMMAND`, which likewise keeps the lock out of the processes
+`COMMAND` starts.
+
+Avoid holding the lock on an open descriptor, as in `exec 9>"$HORIZON_GPU_LOCK"; flock 9`.
+Every process the script starts inherits descriptor 9, and a long-lived one, such as a
+compiler server or a reusable build node, then holds the GPU lock for minutes after the
+script ends, stalling every other session's GPU work. To hold the lock across several steps,
+run them as one command: `horizon-worker-gpu-lock -- ./gpu-tests.sh`.
 
 | Exit | Meaning |
 |------|---------|
