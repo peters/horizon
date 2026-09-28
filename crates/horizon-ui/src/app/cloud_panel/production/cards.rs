@@ -402,6 +402,8 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if runtime.stage == Some(Stage::Ready) {
         action = ready_actions(ui, runtime).or(action);
     }
+    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
+    action = super::local_network::show(ui, runtime).or(action);
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
         .or(action)
@@ -467,8 +469,7 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     } else if stoppable && ui.add(danger_button("Stop worker…")).clicked() {
         runtime.confirmation = Confirmation::Stop;
     }
-    let sharing = super::local_network::show(ui, runtime);
-    rebuild::offer(ui, runtime).or(sharing).or(action)
+    rebuild::offer(ui, runtime).or(action)
 }
 
 fn bound_provider_check(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {

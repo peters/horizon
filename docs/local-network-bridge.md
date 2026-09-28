@@ -24,9 +24,13 @@ While it is on, the card shows what the bridge is doing:
   example when this computer is not on an IPv4 network, the network is wider than
   `/16`, or the default route is a VPN's point-to-point link.
 
-Switch it off to stop the bridge at once. It also stops when the cloud is no
-longer connected and Ready: disconnected, stopped, rebuilding or deleted. Turn it
-on again afterwards if you still want it.
+Switch it off to stop the bridge at once. When the cloud stops being connected
+and Ready (it disconnects, stops or rebuilds), the bridge stops too and the card
+shows **Sharing paused: cloud disconnected** with the switch still on. Once you
+reconnect or resume that cloud and it is Ready again, sharing restarts by itself
+with a new session; agents check the status and forward again. Switch it off while
+paused to stop waiting. A paused switch never outlives Horizon: after a restart it
+is off.
 
 The worker image must include the bridge helper. An image built before this
 feature makes the card say so; rebuild the cloud's image.

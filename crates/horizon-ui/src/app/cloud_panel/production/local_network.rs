@@ -1,5 +1,7 @@
 //! "Share local network": the owner's switch for one cloud's Local Network Bridge. It is held in
 //! memory only, so it is never read from configuration or an agent and is off after a restart.
+//! When the cloud disconnects, sharing pauses; it resumes by itself once that cloud has been
+//! made ready again in this run of Horizon, until the owner switches it off.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, State, Status};
 use std::sync::{
@@ -12,6 +14,11 @@ pub(super) enum Sharing {
     #[default]
     Off,
     On(Running),
+    /// The owner switched sharing on but the cloud left Connected+Ready; the bridge is stopped.
+    /// `ready_again` is set once the cloud has completed readiness again.
+    Paused {
+        ready_again: bool,
+    },
     /// Why the bridge could not start, shown until the owner tries again.
     Refused(String),
 }
@@ -22,6 +29,33 @@ impl Sharing {
             *self = Self::Off;
         }
     }
+
+    /// The cloud completed readiness (after a reconnect, resume or rebuild).
+    pub(super) fn ready_again(&mut self) {
+        if let Self::Paused { ready_again } = self {
+            *ready_again = true;
+        }
+    }
+
+    fn step(&self, connected: bool) -> Step {
+        match self {
+            Self::On(_) if !connected => Step::Pause,
+            // A reconnect that has not finished yet still looks connected and Ready.
+            Self::Paused { ready_again: true } if connected => Step::Resume,
+            _ => Step::Keep,
+        }
+    }
+
+    fn intended(&self) -> bool {
+        matches!(self, Self::On(_) | Self::Paused { .. })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    Keep,
+    Pause,
+    Resume,
 }
 
 /// A running bridge. However it is dropped (switched off, cloud disconnected, runtimes
@@ -68,19 +102,34 @@ fn retire(bridge: Bridge) {
 }
 
 impl HorizonApp {
-    /// A bridge lives only while this Horizon is connected to the Ready cloud. Runs after failed
+    /// A bridge lives only while this Horizon is connected to the Ready cloud: it pauses when the
+    /// cloud disconnects and restarts once the cloud is ready again. Runs after failed
     /// operations dropped their receivers, so a disconnect in this frame counts.
-    pub(super) fn stop_disconnected_sharing(&mut self) {
-        for runtime in self.cloud_prototype.production.runtimes.values_mut() {
-            runtime.stop_sharing_when_disconnected();
+    pub(super) fn reconcile_sharing(&mut self) {
+        let resume: Vec<_> = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .iter_mut()
+            .filter_map(|(&id, runtime)| runtime.reconcile_sharing().then_some(id))
+            .collect();
+        for id in resume {
+            self.share_local_network(id, true);
         }
     }
 }
 
 impl Runtime {
-    fn stop_sharing_when_disconnected(&mut self) {
-        if !self.connected_and_ready() {
-            self.sharing.stop();
+    /// Pauses a running bridge whose cloud left Connected+Ready, which revokes it at once, and
+    /// says whether a paused one should restart now.
+    fn reconcile_sharing(&mut self) -> bool {
+        match self.sharing.step(self.connected_and_ready()) {
+            Step::Pause => {
+                self.sharing = Sharing::Paused { ready_again: false };
+                false
+            }
+            Step::Resume => true,
+            Step::Keep => false,
         }
     }
 
@@ -136,11 +185,12 @@ impl HorizonApp {
 
 /// The switch and, while it is on, what the bridge is doing.
 pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
-    // A disconnected card still shows Ready; it offers Reconnect instead.
-    if !runtime.connected_and_ready() {
+    // A disconnected card offers Reconnect instead; a paused switch stays so it can be turned off.
+    let paused = matches!(runtime.sharing, Sharing::Paused { .. });
+    if !runtime.connected_and_ready() && !paused {
         return None;
     }
-    let mut sharing = matches!(runtime.sharing, Sharing::On(_));
+    let mut sharing = runtime.sharing.intended();
     let changed = ui
         .checkbox(&mut sharing, "Share local network")
         .on_hover_text(
@@ -152,6 +202,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
     let line = match &runtime.sharing {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
+        Sharing::Paused { .. } => Some(PAUSED.to_owned()),
         Sharing::On(bridge) => {
             // The state and counters change without other repaints.
             ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
@@ -167,6 +218,8 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
         Action::StopSharingLocalNetwork
     })
 }
+
+const PAUSED: &str = "Sharing paused: cloud disconnected. It resumes when the cloud is connected again.";
 
 fn describe(status: &Status) -> String {
     match &status.state {
@@ -265,12 +318,57 @@ mod tests {
     }
 
     #[test]
-    fn sharing_starts_off_and_stops_when_the_cloud_is_not_connected_and_ready() {
+    fn sharing_pauses_on_disconnect_and_resumes_only_after_the_cloud_is_ready_again() {
+        let mut sharing = Sharing::On(Running(None));
+        assert_eq!(sharing.step(true), Step::Keep);
+        assert_eq!(sharing.step(false), Step::Pause);
+        sharing = Sharing::Paused { ready_again: false };
+        assert!(sharing.intended());
+        // Still disconnected, or reconnecting with only the old Ready stage: stay paused.
+        assert_eq!(sharing.step(false), Step::Keep);
+        assert_eq!(sharing.step(true), Step::Keep);
+        sharing.ready_again();
+        assert!(matches!(sharing, Sharing::Paused { ready_again: true }));
+        assert_eq!(sharing.step(false), Step::Keep);
+        assert_eq!(sharing.step(true), Step::Resume);
+    }
+
+    #[test]
+    fn a_runtime_pauses_a_running_bridge_when_its_cloud_disconnects_and_resumes_after_ready() {
         let mut runtime = Runtime::default();
-        assert!(matches!(runtime.sharing, Sharing::Off));
-        runtime.sharing = Sharing::Refused("No network".into());
-        runtime.stop_sharing_when_disconnected();
-        // A refusal stays visible; only a running bridge is stopped.
-        assert!(matches!(runtime.sharing, Sharing::Refused(_)));
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        runtime.stage = Some(Stage::Ready);
+        runtime.sharing = Sharing::On(Running(None));
+        assert!(!runtime.reconcile_sharing());
+        assert!(matches!(runtime.sharing, Sharing::On(_)));
+        // The presentation watch failed: the receiver is gone while the stage still says Ready.
+        runtime.receiver = None;
+        assert!(!runtime.reconcile_sharing());
+        assert!(matches!(runtime.sharing, Sharing::Paused { ready_again: false }));
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        assert!(!runtime.reconcile_sharing(), "a reconnect in progress does not resume");
+        runtime.observe(&horizon_core::cloud_runtime::Event::Resumed);
+        assert!(!runtime.reconcile_sharing());
+        runtime.sharing.ready_again();
+        assert!(runtime.reconcile_sharing());
+        runtime.stage = Some(Stage::Stopped);
+        assert!(!runtime.reconcile_sharing());
+    }
+
+    #[test]
+    fn switching_off_while_paused_clears_the_intent_and_nothing_else_starts_sharing() {
+        // The switch's off action replaces a paused intent with Off.
+        let mut sharing = Sharing::Off;
+        assert!(!sharing.intended());
+        sharing.ready_again();
+        assert_eq!(sharing.step(true), Step::Keep);
+        assert!(matches!(Runtime::default().sharing, Sharing::Off));
+        let mut refused = Sharing::Refused("No network".into());
+        refused.ready_again();
+        refused.stop();
+        assert!(matches!(refused, Sharing::Refused(_)));
+        assert_eq!(refused.step(true), Step::Keep);
     }
 }

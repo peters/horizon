@@ -34,7 +34,9 @@ evidence out of the PR.
 | A5 | Switch it off | The status line disappears at once; the UI does not stall |
 | A6 | Switch it on again | A new "Sharing" line; the worker reports a new proxy port |
 | A7 | Resize the window, then Fit | Card text stays inside the card; screenshot after launch and after resize/Fit |
-| A8 | Disconnect the cloud (stop the worker or break its SSH) | The switch turns off by itself when the card leaves Ready |
+| A8 | With sharing on and a pinned forward open, force the cloud out of Ready: on the worker run `for i in $(seq 1 20); do pkill -f 'horizon-cloud-worker connect'; sleep 0.2; done`, which fails the card's presentation poll | The card offers Reconnect cloud; the switch stays on with "Sharing paused: cloud disconnected"; worker `status` reports `active: false` within about a minute (heartbeat) or at once if the session closed; the old forward port refuses |
+| A8b | Click **Reconnect cloud** and wait for Ready | The line returns to "Connecting…" and then "Sharing <subnet>…" with no click on the switch; `status` shows a new proxy; a fresh `forward <device> 80` works and the old worker port stays closed |
+| A8c | Repeat A8, then switch sharing off while paused, then Reconnect cloud | The switch is off and stays off after Ready; `status` reports `active: false` |
 | A9 | Quit and relaunch Horizon with the same state | The switch is off; nothing starts on its own |
 | A10 | Switch it on while this computer's default route is a VPN point-to-point link, or with no network | The switch stays off and the card explains why |
 | A11 | Worker image without the helper (older image) | The card says to rebuild the image; it does not keep retrying |
