@@ -1,18 +1,35 @@
 use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, cloud_runtime, lifecycle::Action};
 use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::{app::view::canvas_scene_transform, theme};
-use egui::{Id, Order, Pos2, RichText, Stroke, Vec2};
-use horizon_core::cloud_panel::{RUNTIME_HEIGHT, RUNTIME_WIDTH};
+use egui::{Id, Order, Pos2, RichText, Vec2};
+mod details;
 mod placement;
 mod rebuild;
 mod self_stop;
 mod sizing;
+mod toolbar;
 use sizing::profile_details;
+pub(super) use toolbar::View as DetailView;
 #[cfg(test)]
 mod tests;
 mod timeline;
 pub(super) mod wording;
 impl HorizonApp {
+    pub(in crate::app) fn cloud_details_open(&self) -> bool {
+        self.cloud_prototype.groups.0.iter().any(|group| {
+            self.cloud_prototype
+                .fullscreen
+                .as_ref()
+                .is_none_or(|view| view.id == group.issue)
+                && self
+                    .cloud_prototype
+                    .production
+                    .runtimes
+                    .get(&group.issue)
+                    .is_some_and(|runtime| runtime.detail_view != DetailView::Closed)
+        })
+    }
+
     pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
         self.ensure_cloud_provider_logo(ctx);
         let canvas = self.canvas_rect(ctx);
@@ -21,6 +38,7 @@ impl HorizonApp {
         let mut action = None;
         let mut fullscreen = None;
         let mut layout = None;
+        let mut expanded = None;
         let mut resize = None;
         self.request_landed_regions(ctx);
         let prices = &self.cloud_prototype.production.prices;
@@ -43,47 +61,39 @@ impl HorizonApp {
                 .show(ctx, |ui| {
                     ctx.set_transform_layer(ui.layer_id(), transform);
                     ui.set_clip_rect(clip);
-                    runtime_frame(ui, group.issue, |ui| {
-                        super::super::runtime::runtime_heading(ui, group, self.cloud_prototype.provider_logo.as_ref());
-                        if let Some(size) = profile_details(ui, group.issue, launch, runtime, &region_of) {
-                            resize = Some((group.issue, size));
-                        }
-                        self.cloud_prototype.production.companions.render(ui, &launch.id);
-                        ui.add_space(10.0);
-                        ui.label("Panel layout");
-                        let mut selected = group.layout;
-                        if ui
-                            .horizontal(|ui| {
-                                crate::app::workspace::workspace_layout_buttons(
-                                    ui,
-                                    &mut selected,
-                                    theme::workspace_accent(group.issue.saturating_sub(101) as usize),
-                                )
-                            })
-                            .inner
-                        {
+                    runtime_frame(ui, group, |ui| {
+                        let result = toolbar::show(
+                            ui,
+                            group,
+                            runtime,
+                            &self.board,
+                            self.cloud_prototype.fullscreen.is_some(),
+                        );
+                        if let toolbar::LayoutChange::Set(selected) = result.layout {
                             layout = Some((group.issue, selected));
                         }
-                        if ui
-                            .add(action_button(if self.cloud_prototype.fullscreen.is_some() {
-                                "Exit full screen"
-                            } else {
-                                "Full screen"
-                            }))
-                            .clicked()
-                        {
+                        if result.fullscreen {
                             fullscreen = Some(group.issue);
                         }
-                        if runtime.can_release_remote_devices()
-                            && ui.add(danger_button("Release devices and remove remote credentials")).on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.").clicked()
-                        {
-                            action = Some((group.issue, Action::RevokeBrowserstack));
-                        }
-                        if let Some(next) = runtime_actions(ui, group.issue, runtime) {
-                            action = Some((group.issue, next));
+                        if result.toggle_controls {
+                            expanded = Some((group.issue, !group.toolbar_expanded));
                         }
                     });
                 });
+            let result = details::show(
+                ctx,
+                group,
+                launch,
+                runtime,
+                &mut self.cloud_prototype.production.companions,
+                &region_of,
+            );
+            if let Some(next) = result.action {
+                action = Some((group.issue, next));
+            }
+            if let Some(size) = result.resize {
+                resize = Some((group.issue, size));
+            }
         }
         if let Some((id, action)) = action {
             match action {
@@ -94,6 +104,13 @@ impl HorizonApp {
                 Action::StopSharingLocalNetwork => self.share_local_network(id, false),
                 _ => self.change_production_worker(id, action, ctx),
             }
+        }
+        if let Some((id, expanded)) = expanded
+            && let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id)
+        {
+            self.cloud_prototype.groups.0[index].set_toolbar_expanded(&mut self.board, expanded);
+            self.cloud_prototype.groups.make_room(&mut self.board, index);
+            self.save_cloud_prototype();
         }
         if let Some(id) = fullscreen {
             self.toggle_cloud_fullscreen(ctx, id);
@@ -111,22 +128,21 @@ impl HorizonApp {
     }
 }
 
-fn runtime_frame(ui: &mut egui::Ui, id: u32, contents: impl FnOnce(&mut egui::Ui)) -> egui::InnerResponse<()> {
+fn runtime_frame(
+    ui: &mut egui::Ui,
+    group: &horizon_core::cloud_panel::CloudGroup,
+    contents: impl FnOnce(&mut egui::Ui),
+) -> egui::InnerResponse<()> {
+    let (min, max) = group.runtime_bounds();
     let frame = egui::Frame::new()
         .fill(theme::BG_ELEVATED())
-        .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
-        .corner_radius(14)
-        .inner_margin(18);
-    let inner = Vec2::new(RUNTIME_WIDTH, RUNTIME_HEIGHT) - frame.total_margin().sum();
+        .corner_radius(10)
+        .inner_margin(14);
+    let inner = Vec2::new(max[0] - min[0], max[1] - min[1]) - frame.total_margin().sum();
     frame.show(ui, |ui| {
         ui.set_width(inner.x);
-        super::super::runtime::readable_runtime_style(ui);
-        super::super::runtime::solid_scroll_area(ui)
-            .id_salt(("cloud-runtime-body", id))
-            .max_height(inner.y)
-            .min_scrolled_height(inner.y)
-            .auto_shrink([false, false])
-            .show(ui, contents);
+        ui.set_min_height(inner.y);
+        contents(ui);
     })
 }
 
@@ -260,6 +276,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         action = Some(Action::Deploy);
     }
+
     worker_cost(ui, runtime, std::time::SystemTime::now());
     ui.small("Sessions continue while disconnected.");
     if runtime.stage == Some(Stage::Ready) {
@@ -273,9 +290,11 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
 }
 
 impl super::Runtime {
-    /// The bound worker's cost since creation once its billing has been read.
+    /// A lifetime total requires a reported billing period, not just an empty response.
     fn total_cost(&self, now: std::time::SystemTime) -> Option<cloud_runtime::cost::TotalCost> {
-        self.billing.total(self.state.as_ref()?.worker.as_ref()?, now)
+        self.billing
+            .total(self.state.as_ref()?.worker.as_ref()?, now)
+            .filter(|total| total.billed_through.is_some())
     }
 
     /// Frame header text, for example `$0.83 run · $4.20 total`.
@@ -312,6 +331,8 @@ fn total_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syste
             .on_hover_text("RunPod billing could not be read. Horizon tries again every few minutes.");
     } else if runtime.billing.refreshing() {
         ui.small("Since creation · reading RunPod billing…");
+    } else if runtime.billing.sample().is_some() {
+        ui.small("Since creation · awaiting provider billing");
     }
 }
 

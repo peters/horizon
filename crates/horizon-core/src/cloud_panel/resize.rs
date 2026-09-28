@@ -43,11 +43,13 @@ impl CloudGroups {
 
 impl CloudGroup {
     fn apply_frame_size(&mut self, board: &mut Board, requested: [f32; 2], min_member: [f32; 2]) {
+        let requested = [requested[0].max(self.minimum_width()), requested[1]];
         let visible = visible_members(self, board);
         if let Some(layout) = self.layout
             && !visible.is_empty()
         {
-            let cell = cell_filling(layout, visible.len(), requested);
+            let content_frame = [requested[0], requested[1] - (self.header_height() - HEADER)];
+            let cell = cell_filling(layout, visible.len(), content_frame);
             let cell = [cell[0].max(min_member[0]), cell[1].max(min_member[1])];
             for local in &visible {
                 if let Some(panel) = board.panels.iter_mut().find(|panel| &panel.local_id == local) {
@@ -58,7 +60,9 @@ impl CloudGroup {
             return;
         }
         let floor = if visible.is_empty() {
-            default_frame()
+            let mut frame = default_frame();
+            frame[1] += self.header_height() - HEADER;
+            frame
         } else {
             manual_floor(self, board)
         };
@@ -81,7 +85,7 @@ fn visible_members(group: &CloudGroup, board: &Board) -> Vec<String> {
 }
 
 fn manual_floor(group: &CloudGroup, board: &Board) -> [f32; 2] {
-    let mut floor = [PAD * 2.0, HEADER + PAD];
+    let mut floor = [group.minimum_width(), group.header_height() + PAD];
     for local in &group.panels {
         let Some(panel) = board
             .panels
@@ -271,5 +275,128 @@ mod tests {
         let size = groups.0[0].size;
         assert!(!groups.resize_frame(&mut board, 1, [f32::NAN, 400.0], [320.0, 220.0]));
         assert_eq!(groups.0[0].size.map(f32::to_bits), size.map(f32::to_bits));
+    }
+
+    fn production_launch() -> crate::cloud_panel::CloudLaunch {
+        let config = crate::cloud_panel::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+        crate::cloud_panel::CloudLaunch {
+            deployment_started: false,
+            id: "toolbar-fixture".into(),
+            revision: "a".repeat(40),
+            profile_name: "dev".into(),
+            profile: config.profiles["dev"].clone(),
+            placement: crate::cloud_panel::Placement::default(),
+        }
+    }
+
+    #[test]
+    fn production_resize_keeps_sessions_below_the_toolbar_and_inside_fit_bounds() {
+        for layout in WorkspaceLayout::ALL {
+            let (mut board, mut groups, ids) = cloud_with_members(layout, 2);
+            groups.0[0].remote = Some(production_launch());
+            groups.0[0].reconcile(&mut board);
+            assert!(groups.resize_frame(&mut board, 1, [820.0, 900.0], [180.0, 180.0]));
+            let group = &groups.0[0];
+            let (_, toolbar_max) = group.runtime_bounds();
+            let (min, max) = group.bounds();
+            assert_eq!(group.overview_bounds(), (min, max));
+            for id in &ids {
+                let panel = board.panel(*id).unwrap();
+                assert!(panel.layout.position[1] >= toolbar_max[1]);
+                assert!(panel.layout.position[0] + panel.layout.size[0] <= max[0]);
+                assert!(panel.layout.position[1] + panel.layout.size[1] <= max[1]);
+            }
+            groups.0[0].set_collapsed(&mut board, true);
+            assert!(groups.0[0].bounds().1[1] >= toolbar_max[1]);
+            assert!(ids.iter().all(|id| !board.panel(*id).unwrap().visible));
+            groups.0[0].set_collapsed(&mut board, false);
+            assert!(ids.iter().all(|id| board.panel(*id).unwrap().visible));
+        }
+    }
+
+    #[test]
+    fn toolbar_disclosure_preserves_visible_sessions_and_manual_spacing() {
+        let (mut board, mut groups, ids) = cloud_with_members(WorkspaceLayout::Rows, 2);
+        let group = &mut groups.0[0];
+        group.remote = Some(production_launch());
+        group.reconcile(&mut board);
+        group.layout = None;
+        assert!(!group.toolbar_expanded);
+        let original_size = group.size;
+        let positions: Vec<_> = ids.iter().map(|id| board.panel(*id).unwrap().layout.position).collect();
+        for expanded in [true, false, true, false] {
+            group.set_toolbar_expanded(&mut board, expanded);
+            group.reconcile(&mut board);
+            let shift = if expanded {
+                crate::cloud_panel::TOOLBAR_CONTROLS_HEIGHT
+            } else {
+                0.0
+            };
+            assert!((group.size[1] - original_size[1] - shift).abs() < 0.01);
+            for (id, position) in ids.iter().zip(&positions) {
+                let panel = board.panel(*id).unwrap();
+                assert!(panel.visible);
+                assert!(near(panel.layout.position, [position[0], position[1] + shift]));
+            }
+        }
+    }
+
+    #[test]
+    fn restoring_manual_cloud_moves_members_together_once_even_when_collapsed() {
+        for collapsed in [false, true] {
+            let (mut board, mut groups, ids) = cloud_with_members(WorkspaceLayout::Rows, 2);
+            let group = &mut groups.0[0];
+            group.remote = Some(production_launch());
+            group.layout = None;
+            group.size = [548.0, 700.0];
+            for (index, id) in ids.iter().enumerate() {
+                let panel = board.panel_mut(*id).unwrap();
+                panel.layout.position = [
+                    group.position[0] + 14.0,
+                    group.position[1] + 84.0 + f32::from(u16::try_from(index).unwrap()) * 200.0,
+                ];
+                panel.layout.size = [400.0, 180.0];
+            }
+            group.set_collapsed(&mut board, collapsed);
+            let saved = serde_json::to_string(group).unwrap();
+            let mut restored: CloudGroup = serde_json::from_str(&saved).unwrap();
+            restored.reconcile(&mut board);
+            let positions: Vec<_> = ids.iter().map(|id| board.panel(*id).unwrap().layout.position).collect();
+            assert!((positions[0][1] - restored.position[1] - restored.header_height()).abs() < 0.01);
+            assert!((positions[1][1] - positions[0][1] - 200.0).abs() < 0.01);
+            let size = restored.size;
+            restored.reconcile(&mut board);
+            assert!(near(restored.size, size));
+            restored.set_collapsed(&mut board, false);
+            restored.reconcile(&mut board);
+            for (id, position) in ids.iter().zip(positions) {
+                let panel = board.panel(*id).unwrap();
+                assert!(near(panel.layout.position, position));
+                assert!(panel.visible);
+                assert!(position[1] + panel.layout.size[1] <= restored.bounds().1[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn restored_narrow_empty_cloud_reserves_a_readable_toolbar_and_waiting_area() {
+        let mut board = Board::new();
+        let mut group = CloudGroup::new(
+            1,
+            "Cloud".into(),
+            "workspace".into(),
+            std::path::PathBuf::new(),
+            [20.0, 40.0],
+        );
+        group.remote = Some(production_launch());
+        group.layout = None;
+        group.size = [200.0, 300.0];
+        let encoded = serde_json::to_string(&group).unwrap();
+        let mut restored: CloudGroup = serde_json::from_str(&encoded).unwrap();
+        restored.reconcile(&mut board);
+        let (toolbar_min, toolbar_max) = restored.runtime_bounds();
+        assert!(toolbar_max[0] - toolbar_min[0] >= 520.0);
+        assert!(restored.bounds().1[1] - toolbar_max[1] >= 500.0);
+        assert_eq!(restored.overview_bounds(), restored.bounds());
     }
 }

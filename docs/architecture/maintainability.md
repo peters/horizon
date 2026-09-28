@@ -842,7 +842,8 @@ are colocated under the bootstrap initialization source tests' `setup/` tree.
 Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, before egui routes pointer events. It reserves the first modified click, opens the panel picker on the second press, and replays single-click/drag input while preventing deferred timestamps from creating native multi-clicks. Completed deferred clicks occupy isolated replay frames; later input stays queued while idle pointer and browser click histories are cleared at the replay boundary.
 
 - `horizon-cloud/runpod/resize.rs` journals CPU replacement across old-worker termination and new-worker allocation while retaining an identity-verified network workspace. It has no workspace initialization authority.
-- `cloud_panel/production/cards/sizing.rs` owns runtime profile details and pre-allocation size choices; `cards.rs` orchestrates the card and lifecycle actions. The production `resize` leaf owns resource-edit confirmation, background core calls, retained-target recovery and presentation synchronization.
+- `cloud_panel/production/cards/toolbar.rs` renders the persistent state, spending and layout summary; `details.rs` renders configuration, activity and management windows. `sizing.rs` owns profile details and pre-allocation size choices; `cards.rs` orchestrates presentation and lifecycle actions. Shared cloud geometry reserves toolbar space and restores older manual layouts without overlapping members. The production `resize` leaf owns resource-edit confirmation, background core calls, retained-target recovery and presentation synchronization.
+
 
 ### Companion lifecycle service
 

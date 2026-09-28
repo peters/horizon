@@ -117,7 +117,7 @@ fn overlap_fixture(focused: bool, overlaps: bool) -> (tempfile::TempDir, egui::C
         },
     )
     .expect("snapshot terminal");
-    panel.layout.position = if overlaps { runtime_min } else { [0.0, 0.0] };
+    panel.layout.position = if overlaps { runtime_min } else { [800.0, 0.0] };
     panel.layout.size = [250.0, 300.0];
     assert_eq!(panel.terminal().expect("terminal").scrollback(), 0);
     app.board.panels = vec![panel];

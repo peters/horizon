@@ -39,70 +39,31 @@ fn phased_frame(
 }
 
 #[test]
-fn overflowing_runtime_scrolls_without_panning_at_normal_and_scaled_zoom() {
+fn toolbar_controls_stay_visible_without_scrolling_or_panning_at_scaled_zoom() {
     for zoom in [1.0, 1.797] {
-        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-            runtime_state: Box::new(RuntimeState::default()),
-        });
-        app.cloud_prototype.ready = true;
+        let (_temp, ctx, mut app) = verbose_card();
+        app.cloud_prototype
+            .production
+            .runtimes
+            .entry(901)
+            .or_default()
+            .detail_view = toolbar::View::Closed;
         app.canvas_view = CanvasViewState::new([0.0, 0.0], zoom);
-        let profile = super::super::super::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap().profiles["dev"].clone();
-        let mut group = CloudGroup::new(
-            901,
-            "Scroll fixture".into(),
-            "workspace".into(),
-            "/synthetic".into(),
-            [10.0, 10.0],
-        );
-        group.remote = Some(CloudLaunch {
-            deployment_started: false,
-            id: "scroll-fixture".into(),
-            revision: "a".repeat(40),
-            profile_name: "long profile ".repeat(50),
-            profile,
-            placement: horizon_core::cloud_panel::Placement::default(),
-        });
-        app.cloud_prototype.groups.0.push(group);
         for step in 0..3 {
             frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
         }
-        let group = &app.cloud_prototype.groups.0[0];
-        let (min, _) = group.runtime_bounds();
         let transform = canvas_scene_transform(app.canvas_rect(&ctx), app.canvas_view);
-        let point = transform * (Pos2::from(min) + Vec2::new(100.0, 300.0));
+        let (min, _) = app.cloud_prototype.groups.0[0].runtime_bounds();
+        let point = transform * (Pos2::from(min) + Vec2::new(100.0, 100.0));
         assert!(app.pointer_over_cloud_runtime(&ctx, point));
+        let before = frame(&ctx, &mut app, 0.5, point, 0.0);
+        let control = label_pos(&before, "▸  Show controls").expect("disclosure remains visible");
         let pan = app.canvas_view.pan_offset;
-        let before = frame(&ctx, &mut app, 0.9, point, 0.0);
-        assert!(!visible_label(&before, "Deploy cloud"));
-        frame(&ctx, &mut app, 1.0, point, -4000.0);
-        let output = frame(&ctx, &mut app, 1.02, point, 0.0);
-        assert!((Vec2::from(app.canvas_view.pan_offset) - Vec2::from(pan)).length() < 0.001);
-        assert!(!app.canvas_pan_input_claimed);
-        assert!(
-            visible_label(&output, "Deploy cloud"),
-            "scroll must reveal the deployment action at zoom {zoom}"
-        );
-        let outside = app.canvas_rect(&ctx).min + Vec2::new(10.0, 10.0);
-        frame(&ctx, &mut app, 2.0, outside, -5.0);
-        assert!(app.canvas_pan_input_claimed);
-        let moved = app.canvas_view.pan_offset;
-        assert!(moved[1] < pan[1]);
-        frame(&ctx, &mut app, 2.02, point, -5.0);
-        assert!(
-            app.canvas_pan_input_claimed,
-            "canvas gesture keeps ownership when crossing a card"
-        );
-        assert!(app.canvas_view.pan_offset[1] < moved[1]);
-        app.cloud_prototype.groups.0[0].remote = None;
-        assert!(
-            !app.pointer_over_cloud_runtime(&ctx, point),
-            "invisible runtime must not consume scrolling"
-        );
+        phased_frame(&ctx, &mut app, 0.6, point, -800.0, TouchPhase::Start);
+        let after = frame(&ctx, &mut app, 0.7, point, 0.0);
+        assert_eq!(label_pos(&after, "▸  Show controls"), Some(control));
+        assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
     }
-}
-
-fn visible_label(output: &egui::FullOutput, label: &str) -> bool {
-    label_pos(output, label).is_some()
 }
 
 fn label_pos(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
@@ -119,66 +80,38 @@ fn label_center(output: &egui::FullOutput, label: &str) -> Option<(Pos2, egui::R
 }
 
 #[test]
-fn a_runtime_contact_cannot_scroll_another_runtime_card() {
-    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(RuntimeState::default()),
-    });
-    app.cloud_prototype.ready = true;
-    app.canvas_view = CanvasViewState::new([0.0, 0.0], 1.0);
-    let profile = super::super::super::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap().profiles["dev"].clone();
-    for (id, x) in [(901, 10.0), (902, 900.0)] {
-        let mut group = CloudGroup::new(
-            id,
-            "Scroll fixture".into(),
-            "workspace".into(),
-            "/synthetic".into(),
-            [x, 10.0],
-        );
-        group.remote = Some(CloudLaunch {
-            deployment_started: false,
-            id: format!("scroll-fixture-{id}"),
-            revision: "a".repeat(40),
-            profile_name: "long profile ".repeat(50),
-            profile: profile.clone(),
-            placement: horizon_core::cloud_panel::Placement::default(),
-        });
-        app.cloud_prototype.groups.0.push(group);
-    }
+fn moving_a_scroll_contact_between_toolbars_does_not_move_either_cloud() {
+    let (_temp, ctx, mut app) = verbose_card();
+    app.cloud_prototype
+        .production
+        .runtimes
+        .entry(901)
+        .or_default()
+        .detail_view = toolbar::View::Closed;
+    let mut second = app.cloud_prototype.groups.0[0].clone();
+    second.issue = 902;
+    second.position[0] += 900.0;
+    app.cloud_prototype.groups.0.push(second);
     for step in 0..3 {
         frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
     }
     let transform = canvas_scene_transform(app.canvas_rect(&ctx), app.canvas_view);
-    let bounds = |group: &CloudGroup| {
-        let (min, max) = group.runtime_bounds();
-        transform * egui::Rect::from_min_max(Pos2::from(min), Pos2::from(max))
-    };
-    let first = bounds(&app.cloud_prototype.groups.0[0]);
-    let second = bounds(&app.cloud_prototype.groups.0[1]);
-    let a = first.min + Vec2::new(100.0, 300.0);
-    let b = second.min + Vec2::new(100.0, 300.0);
-    assert_eq!(app.cloud_runtime_under_pointer(&ctx, a), Some(901));
-    assert_eq!(app.cloud_runtime_under_pointer(&ctx, b), Some(902));
-    let visible_in_second = |output: &egui::FullOutput| {
-        output.shapes.iter().any(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text() == "Deploy cloud" => {
-                let center = text.pos + text.galley.size() * 0.5;
-                second.contains(center) && shape.clip_rect.contains(center)
-            }
-            _ => false,
-        })
-    };
-    let baseline = frame(&ctx, &mut app, 0.9, b, 0.0);
-    assert!(!visible_in_second(&baseline));
+    let points: Vec<_> = app
+        .cloud_prototype
+        .groups
+        .0
+        .iter()
+        .map(|group| transform * (Pos2::from(group.runtime_bounds().0) + Vec2::new(100.0, 100.0)))
+        .collect();
+    assert_eq!(app.cloud_runtime_under_pointer(&ctx, points[0]), Some(901));
+    assert_eq!(app.cloud_runtime_under_pointer(&ctx, points[1]), Some(902));
     let pan = app.canvas_view.pan_offset;
-    phased_frame(&ctx, &mut app, 1.0, a, 0.0, TouchPhase::Start);
-    frame(&ctx, &mut app, 1.016, b, -4000.0);
-    let drifted = frame(&ctx, &mut app, 1.032, b, 0.0);
-    assert!(!visible_in_second(&drifted), "card B must not receive card A's contact");
-    assert!((Vec2::from(app.canvas_view.pan_offset) - Vec2::from(pan)).length() < 0.001);
-    phased_frame(&ctx, &mut app, 1.048, b, 0.0, TouchPhase::Start);
-    frame(&ctx, &mut app, 1.064, b, -4000.0);
-    let fresh = frame(&ctx, &mut app, 1.080, b, 0.0);
-    assert!(visible_in_second(&fresh), "card B receives its own new contact");
+    phased_frame(&ctx, &mut app, 1.0, points[0], 0.0, TouchPhase::Start);
+    frame(&ctx, &mut app, 1.016, points[1], -4000.0);
+    assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
+    phased_frame(&ctx, &mut app, 1.048, points[1], 0.0, TouchPhase::Start);
+    frame(&ctx, &mut app, 1.064, points[1], -4000.0);
+    assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
 }
 
 fn click_frame(ctx: &Context, app: &mut HorizonApp, time: f64, position: Pos2, pressed: bool) -> egui::FullOutput {
@@ -233,6 +166,12 @@ fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
         placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype
+        .production
+        .runtimes
+        .entry(901)
+        .or_default()
+        .detail_view = toolbar::View::Activity;
     (temp, ctx, app)
 }
 
@@ -262,7 +201,7 @@ fn expanded_verbose_output_scrolls_back_to_its_first_line_and_the_heading() {
     }
     let (header, opened) = open_verbose(&ctx, &mut app);
     assert!(
-        label_pos(&opened, "CLOUD RUNTIME").is_some(),
+        label_pos(&opened, "Scroll fixture — Activity").is_some(),
         "expanding the log keeps the heading"
     );
     assert!(
@@ -299,7 +238,7 @@ fn expanded_verbose_output_scrolls_back_to_its_first_line_and_the_heading() {
         "scrolling up through verbose output returns to its first line"
     );
     assert!(
-        label_pos(&latest, "CLOUD RUNTIME").is_some(),
+        label_pos(&latest, "Scroll fixture — Activity").is_some(),
         "scrolling the log back up does not lose the card heading"
     );
 }
@@ -350,5 +289,5 @@ fn scrolled_up_verbose_output_keeps_its_first_line_while_more_lines_arrive() {
         label_pos(&latest, "LOG-LINE-000").is_some(),
         "new verbose lines must not pull a scrolled-up log back to the end or drop its first line"
     );
-    assert!(label_pos(&latest, "CLOUD RUNTIME").is_some());
+    assert!(label_pos(&latest, "Scroll fixture — Activity").is_some());
 }

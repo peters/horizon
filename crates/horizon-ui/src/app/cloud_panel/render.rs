@@ -427,7 +427,7 @@ fn empty_group(
 ) {
     egui::Area::new(Id::new(("cloud-empty", group.issue)))
         .order(Order::Middle)
-        .fixed_pos(rect.min + Vec2::new(36.0, HEADER + 56.0))
+        .fixed_pos(rect.min + Vec2::new(36.0, group.header_height() + 56.0))
         .constrain(false)
         .interactable(false)
         .show(ctx, |ui| {

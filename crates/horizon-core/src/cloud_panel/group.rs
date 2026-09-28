@@ -1,5 +1,8 @@
 //! Geometry, membership and reconciliation of one cloud group.
-use super::{CHILD_SIZE, CloudGeometry, CloudGroup, Environment, HEADER, PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH, resize};
+use super::{
+    CHILD_SIZE, CloudGeometry, CloudGroup, Environment, HEADER, PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH,
+    TOOLBAR_CONTROLS_HEIGHT, TOOLBAR_HEIGHT, resize,
+};
 use crate::{Board, PanelId, WorkspaceLayout};
 use std::path::PathBuf;
 
@@ -18,6 +21,7 @@ impl CloudGroup {
             environment: Environment::prototype(format!("issue-{issue}")),
             size: [CHILD_SIZE[0] + PAD * 2.0, CHILD_SIZE[1] + HEADER + PAD],
             collapsed: false,
+            toolbar_expanded: false,
             layout: Some(WorkspaceLayout::default()),
             panels: Vec::new(),
             hidden: Vec::new(),
@@ -26,11 +30,59 @@ impl CloudGroup {
 
     #[must_use]
     pub fn bounds(&self) -> ([f32; 2], [f32; 2]) {
-        let height = if self.collapsed { HEADER } else { self.size[1] };
+        let height = if self.collapsed {
+            self.header_height()
+        } else {
+            self.size[1]
+        };
         (
             self.position,
             [self.position[0] + self.size[0], self.position[1] + height],
         )
+    }
+
+    /// Space reserved for identity and the production toolbar before session panels.
+    #[must_use]
+    pub fn header_height(&self) -> f32 {
+        HEADER
+            + if self.remote.is_some() {
+                self.toolbar_height() + PAD
+            } else {
+                0.0
+            }
+    }
+
+    fn toolbar_height(&self) -> f32 {
+        TOOLBAR_HEIGHT
+            + if self.toolbar_expanded {
+                TOOLBAR_CONTROLS_HEIGHT
+            } else {
+                0.0
+            }
+    }
+
+    pub fn set_toolbar_expanded(&mut self, board: &mut Board, expanded: bool) {
+        if self.toolbar_expanded == expanded || self.remote.is_none() {
+            return;
+        }
+        let before = self.header_height();
+        self.toolbar_expanded = expanded;
+        let shift = self.header_height() - before;
+        for panel in &mut board.panels {
+            if self.panels.contains(&panel.local_id) {
+                panel.layout.position[1] += shift;
+            }
+        }
+        self.size[1] += shift;
+        self.publish(board, true);
+    }
+
+    pub(super) fn minimum_width(&self) -> f32 {
+        if self.remote.is_some() {
+            CHILD_SIZE[0] + PAD * 2.0
+        } else {
+            PAD * 2.0
+        }
     }
 
     pub fn attach(&mut self, board: &mut Board, id: PanelId) {
@@ -71,7 +123,7 @@ impl CloudGroup {
             .filter(|p| self.panels.contains(&p.local_id))
             .map(|p| p.layout.position[0] + p.layout.size[0] + PAD)
             .fold(self.position[0] + PAD, f32::max);
-        [x, self.position[1] + HEADER]
+        [x, self.position[1] + self.header_height()]
     }
 
     /// Move the cloud by the same delta as its workspace, including the
@@ -129,19 +181,26 @@ impl CloudGroup {
         }
     }
 
-    /// Adjacent runtime card geometry shared by rendering and input routing.
+    /// Runtime toolbar or prototype card geometry shared by rendering and input routing.
     #[must_use]
     pub fn runtime_bounds(&self) -> ([f32; 2], [f32; 2]) {
+        if self.remote.is_some() {
+            let min = [self.position[0] + PAD, self.position[1] + HEADER];
+            return (
+                min,
+                [self.position[0] + self.size[0] - PAD, min[1] + self.toolbar_height()],
+            );
+        }
         let min = [self.position[0] + self.size[0] + PAD, self.position[1]];
         (min, [min[0] + RUNTIME_WIDTH, min[1] + RUNTIME_HEIGHT])
     }
 
-    /// Bounds include the adjacent runtime card for overview and collision spacing.
+    /// Bounds include runtime controls for overview and collision spacing.
     #[must_use]
     pub fn overview_bounds(&self) -> ([f32; 2], [f32; 2]) {
         let (min, mut max) = self.bounds();
         let (_, runtime_max) = self.runtime_bounds();
-        max[0] = runtime_max[0];
+        max[0] = max[0].max(runtime_max[0]);
         max[1] = max[1].max(runtime_max[1]);
         (min, max)
     }
@@ -186,18 +245,19 @@ impl CloudGroup {
         let count = usize::from(first.is_some()) + members.count();
         let origin = [
             self.position[0] + PAD - crate::layout::WS_INNER_PAD,
-            self.position[1] + HEADER - crate::layout::WS_INNER_PAD,
+            self.position[1] + self.header_height() - crate::layout::WS_INNER_PAD,
         ];
         // An empty cloud keeps at least the default frame, including a larger
         // size chosen from the corner. Occupied presets start from chrome and
         // grow to their cells, so that same corner can shrink the frame.
         if count == 0 {
-            let floor = resize::default_frame();
+            let mut floor = resize::default_frame();
+            floor[1] += self.header_height() - HEADER;
             self.size = [self.size[0].max(floor[0]), self.size[1].max(floor[1])];
             return;
         }
         let size = first.map_or(CHILD_SIZE, |panel| panel.layout.size);
-        self.size = [PAD * 2.0, HEADER + PAD];
+        self.size = [self.minimum_width(), self.header_height() + PAD];
         let mut index = 0;
         for id in &self.panels {
             let Some(panel) = board.panels.iter_mut().find(|p| &p.local_id == id && p.visible) else {
@@ -231,9 +291,11 @@ impl CloudGroup {
                 size: group.size,
                 workspace_position: group.workspace_position,
                 collapsed: group.collapsed,
+                toolbar_expanded: group.toolbar_expanded,
                 panels_matched: group.panels == self.panels,
                 panel_count: self.panels.len(),
             });
+        self.size[0] = self.size[0].max(self.minimum_width());
         let workspace = board.workspace_id_by_local_id(&self.workspace);
         if let Some(ws) = workspace.and_then(|id| board.workspace_mut(id)) {
             for axis in 0..2 {
@@ -254,6 +316,8 @@ impl CloudGroup {
             }
         }
         self.hidden.retain(|id| self.panels.contains(id));
+        self.reserve_toolbar_space(board);
+        let header = self.header_height();
         for panel in &mut board.panels {
             if !self.panels.contains(&panel.local_id) {
                 continue;
@@ -264,6 +328,9 @@ impl CloudGroup {
             }
         }
         if !self.collapsed {
+            if self.remote.is_some() && self.panels.is_empty() {
+                self.size[1] = self.size[1].max(resize::default_frame()[1] + self.header_height() - HEADER);
+            }
             for panel in &mut board.panels {
                 if self.hidden.contains(&panel.local_id) {
                     panel.visible = true;
@@ -271,7 +338,7 @@ impl CloudGroup {
                 if !self.panels.contains(&panel.local_id) {
                     continue;
                 }
-                let offsets = [PAD, HEADER];
+                let offsets = [PAD, header];
                 for (axis, offset) in offsets.iter().enumerate() {
                     self.size[axis] = self.size[axis].max(offset + panel.layout.size[axis] + PAD);
                     let min = self.position[axis] + offset;
@@ -291,6 +358,29 @@ impl CloudGroup {
             self.publish(board, resolve_collisions);
         }
         changed
+    }
+
+    fn reserve_toolbar_space(&mut self, board: &mut Board) {
+        if self.remote.is_none() {
+            return;
+        }
+        let content_top = self.position[1] + self.header_height();
+        let first_top = board
+            .panels
+            .iter()
+            .filter(|panel| self.panels.contains(&panel.local_id))
+            .map(|panel| panel.layout.position[1])
+            .fold(content_top, f32::min);
+        let shift = content_top - first_top;
+        if shift > 0.0 {
+            // Older saved manual layouts must move together, including hidden members.
+            for panel in &mut board.panels {
+                if self.panels.contains(&panel.local_id) {
+                    panel.layout.position[1] += shift;
+                }
+            }
+            self.size[1] += shift;
+        }
     }
 
     /// Copy this group's geometry onto the board and reapply the workspace
