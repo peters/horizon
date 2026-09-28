@@ -138,7 +138,7 @@ impl HorizonApp {
                             ui.set_width(RUNTIME_WIDTH - 36.0);
                             readable_runtime_style(ui);
                             ui.set_min_height(RUNTIME_HEIGHT - 36.0);
-                            egui::ScrollArea::vertical()
+                            solid_scroll_area(ui)
                                 .id_salt(("runtime-scroll", group.issue))
                                 .max_height(RUNTIME_HEIGHT - 106.0)
                                 .show(ui, |ui| {
@@ -203,6 +203,15 @@ impl HorizonApp {
         }
         self.save_cloud_prototype();
     }
+}
+
+/// A vertical scroll area whose solid bar always reserves its width. A floating bar reserves none,
+/// so it overlays the right end of full-width controls and takes presses aimed at them, which can
+/// then scroll the content. Always visible, the bar never animates in and rewraps the content.
+/// Scroll areas nested in `ui` inherit the solid bar.
+pub(super) fn solid_scroll_area(ui: &mut egui::Ui) -> egui::ScrollArea {
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    egui::ScrollArea::vertical().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
 }
 
 /// Local card typography also applies to nested companion, progress and action rows.

@@ -4,6 +4,8 @@ mod production;
 mod render;
 mod resize;
 mod runtime;
+#[cfg(test)]
+mod scroll_bar_tests;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
