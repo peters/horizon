@@ -130,6 +130,46 @@ Private credential files protect against accidental inclusion in source, images
 and logs; they do not isolate agents from other root processes in the same cloud.
 Per-agent operating-system isolation requires a separate security architecture.
 
+## Helpers from the published artifact
+
+A recipe on its own base, such as a project CUDA image with extra libraries, can
+copy the current helpers instead of compiling them in a build stage. Each main
+commit that changes the worker scripts or helpers publishes
+`ghcr.io/peters/horizon-worker-helpers` tagged `sha-<commit>` and moves the `main`
+tag to it. The image holds only `horizon-cloud-worker`, `horizon-browser`,
+`horizon-device`, every `horizon-worker-*` script and the `gh` link to
+`horizon-worker-git-auth` under `/usr/local/bin`, plus the license and a `SOURCE`
+file naming the commit. Copy it pinned by digest:
+
+```dockerfile
+COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /
+```
+
+The publishing run's summary prints this line with the digest, and
+`docker buildx imagetools inspect ghcr.io/peters/horizon-worker-helpers:main`
+shows the newest one. Keep tags out of recipes, so a rebuild copies the same
+helpers. The copy replaces older helpers and scripts in the base. The base still
+supplies the rest of the contract: Python 3.12 or newer and glibc 2.36 or newer
+(Ubuntu 24.04 has both), SSH, tmux, Git with LFS, `gh`, util-linux,
+`/etc/horizon-worker/capabilities.json`, the worker entrypoint (the example runs
+`horizon-worker-start` under tini) and the selected agents, browsers and desktop
+packages. Run `horizon-worker-check --git-auth` after the copy so a missing
+piece fails the build.
+
+To see whether an image carries the current helpers, run the marker check from a
+checkout of the revision you compare against:
+
+```
+python3 examples/cloud-worker/check-markers.py <image>
+```
+
+It runs the image's own checker without networking and with an empty capability
+selection, then names every marker of this revision's checker that the image does
+not report. The remote browser and self-stop markers depend on the profile and a
+running worker, so the check does not require them. The publishing workflow runs
+the same check on a minimal Ubuntu base with the artifact copied in, and pushes
+nothing if a marker is missing.
+
 ## Running on a rented virtual machine
 
 Providers that rent whole servers instead of containers run the same image under

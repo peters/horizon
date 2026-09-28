@@ -299,6 +299,16 @@ pinned; a layer that writes only its own entry still passes the check. The [exam
 follows this pattern. Existing clouds keep the image they were built with; new
 clouds receive the latest agents.
 
+A custom Dockerfile on its own base, such as a project CUDA image, gets the
+current worker helpers and scripts by copying the published helper artifact,
+pinned by digest, instead of compiling them:
+`COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /`. The
+[worker README](../examples/cloud-worker/README.md#helpers-from-the-published-artifact)
+describes what the artifact contains, where to find the newest digest and what
+the base must still supply. `python3 examples/cloud-worker/check-markers.py IMAGE`
+names the current contract markers an image lacks, such as siblings, session
+environment or GPU lock.
+
 Choose **New cloud**, enter its title, repository and base revision, load profiles,
 then create and deploy. Horizon validates and uploads the image before allocating
 compute. It resolves an immutable digest and checks the worker contract. Keep the
