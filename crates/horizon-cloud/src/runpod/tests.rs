@@ -10,6 +10,7 @@ mod provenance;
 mod recovery;
 mod registry;
 mod replacement;
+mod resize;
 mod startup;
 mod storage;
 mod v2;

@@ -554,7 +554,7 @@ impl RunPod {
             .map(Volume::response)
             .collect()
     }
-    fn inspect_volume(&self, id: &str, cancel: &Cancellation) -> Result<Option<Volume>> {
+    pub(super) fn inspect_volume(&self, id: &str, cancel: &Cancellation) -> Result<Option<Volume>> {
         if !valid_id(id) {
             return Err(CloudError::Invalid("Invalid workspace volume ID"));
         }
