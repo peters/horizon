@@ -1,4 +1,5 @@
 //! Cached companion presentation and cancellable background refreshes.
+mod agent;
 mod job;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,7 @@ pub(super) struct State {
     entries: HashMap<String, Entry>,
     inventory: Vec<CloudIdentity>,
     retiring: Vec<Entry>,
+    agent: agent::State,
 }
 
 #[derive(PartialEq, Eq)]
@@ -319,7 +321,7 @@ impl State {
         let mut ready = self
             .entries
             .iter()
-            .filter(|(_, e)| !e.blocked && e.job.is_none() && Instant::now() >= e.due)
+            .filter(|(id, e)| !e.blocked && e.job.is_none() && Instant::now() >= e.due && !self.agent.holds(id))
             .map(|(id, e)| (e.clearing.is_empty(), e.pending.is_none(), e.due, id.clone()))
             .collect::<Vec<_>>();
         ready.sort();
@@ -455,6 +457,7 @@ impl HorizonApp {
         if let Some(root) = &self.cloud_prototype.root {
             state.tick(root, &self.cloud_prototype.groups, ctx);
         }
+        self.poll_cloud_companion_requests(ctx);
     }
 }
 

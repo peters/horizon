@@ -41,6 +41,7 @@ mod agent;
 mod audit;
 mod capture;
 mod close;
+mod cloud_companion;
 mod create;
 pub mod device;
 pub mod provider_usage;

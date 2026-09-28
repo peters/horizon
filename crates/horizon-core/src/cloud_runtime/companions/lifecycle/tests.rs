@@ -12,6 +12,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        let this = Self::unbound();
+        bind(&this.request(), this.binding.clone()).unwrap();
+        this
+    }
+    /// A checked companion with a ready deployment and no lifecycle binding yet.
+    fn unbound() -> Self {
         let root = tempfile::tempdir().unwrap();
         let owner = Owner {
             scope: Scope {
@@ -50,7 +56,6 @@ impl Fixture {
             binding,
         };
         this.select(&this.owner);
-        bind(&this.request(), this.binding.clone()).unwrap();
         this.save(&this.ready());
         this
     }
@@ -501,4 +506,40 @@ fn hetzner_deletion_and_missing_storage_journals_fail_before_execution() {
     let mut backend = Fake::new(&fixture);
     assert!(execute_with(&fixture.request(), op.intent.operation_id, &mut backend).is_err());
     assert!(backend.decisions.is_empty());
+}
+
+#[test]
+fn a_checked_companion_binds_to_the_checkout_its_deployment_records() {
+    let fixture = Fixture::unbound();
+    // Without a deployment record, creation needs the owner's confirmation.
+    std::fs::remove_file(fixture.root.path().join("target/deployment.json")).unwrap();
+    assert!(bind_selected(&fixture.request()).is_err());
+    fixture.save(&fixture.ready());
+    bind_selected(&fixture.request()).unwrap();
+    let state = journal::Store::open(fixture.root.path(), &fixture.owner)
+        .unwrap()
+        .load()
+        .unwrap();
+    assert_eq!(state.intents.binding("consumer"), Some(&fixture.binding));
+    // Binding again leaves the saved binding as it is.
+    bind_selected(&fixture.request()).unwrap();
+    assert_eq!(fixture.submit(Action::EnsureReady).phase, Phase::Submitted);
+}
+
+#[test]
+fn an_unchecked_companion_is_not_bound() {
+    let fixture = Fixture::unbound();
+    journal::Store::open(fixture.root.path(), &fixture.owner)
+        .map(|store| {
+            let mut state = store.load().unwrap();
+            state.grants.get_mut("consumer").unwrap().selected = false;
+            store.save(&state).unwrap();
+        })
+        .unwrap();
+    assert!(bind_selected(&fixture.request()).is_err());
+    let state = journal::Store::open(fixture.root.path(), &fixture.owner)
+        .unwrap()
+        .load()
+        .unwrap();
+    assert!(state.intents.binding("consumer").is_none());
 }
