@@ -8,7 +8,7 @@ pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
 
 pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
     // Settings saved for Hetzner alone hold no RunPod key to keep.
-    let saved_compute = draft.has_saved_settings() && draft.settings.runpod_configured();
+    let saved_compute = draft.saved_credentials.contains(&draft.settings.runpod_key_file);
     ui.label(RichText::new("Compute account").size(16.0).strong());
     ui.label("RunPod API key");
     secret(ui, "compute-key", &mut draft.runpod_key, saved_compute);
@@ -28,14 +28,22 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
             "Codex",
             &mut draft.openai_auth,
             &mut draft.openai_key,
-            draft.settings.openai_api_key_file.is_some(),
+            draft
+                .settings
+                .openai_api_key_file
+                .as_ref()
+                .is_some_and(|path| draft.saved_credentials.contains(path)),
         ),
         (
             Agent::Claude,
             "Claude",
             &mut draft.anthropic_auth,
             &mut draft.anthropic_key,
-            draft.settings.anthropic_api_key_file.is_some(),
+            draft
+                .settings
+                .anthropic_api_key_file
+                .as_ref()
+                .is_some_and(|path| draft.saved_credentials.contains(path)),
         ),
     ] {
         ui.push_id(label, |ui| {
@@ -71,7 +79,11 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
 
 /// Hetzner as an optional second provider for CPU clouds.
 fn render_hetzner(ui: &mut Ui, draft: &mut Draft) {
-    let saved = draft.settings.hetzner.is_some();
+    let saved = draft
+        .settings
+        .hetzner
+        .as_ref()
+        .is_some_and(|provider| draft.saved_credentials.contains(&provider.token_file));
     let hetzner = &mut draft.hetzner;
     ui.checkbox(&mut hetzner.enabled, RichText::new("Hetzner Cloud (CPU only)").strong());
     if !hetzner.enabled {
@@ -105,9 +117,14 @@ fn secret(ui: &mut Ui, id: &str, value: &mut String, saved: bool) {
             .password(true)
             .margin(egui::vec2(12.0, 10.0))
             .hint_text(if saved {
-                "Enter a key, or leave blank to keep the saved binding"
+                super::SAVED_SECRET_HINT
             } else {
                 "Paste API key"
             }),
-    );
+    )
+    .on_hover_text(if saved {
+        "Enter a replacement, or leave empty to keep the saved credential."
+    } else {
+        "Enter a credential to save on this computer."
+    });
 }
