@@ -67,6 +67,15 @@ pub(super) fn save(store: &Store, owner: &Owner, id: OperationId, phase: Phase) 
     write(store, &record)
 }
 
+/// Withdraws the owner's confirmation of `id`, keeping the claim and its phase.
+pub(super) fn withdraw(store: &Store, owner: &Owner, id: OperationId) -> Result<()> {
+    let Some(mut record) = load(store.root())?.filter(|record| record.owner == *owner && record.id == id) else {
+        return Ok(());
+    };
+    record.confirmed = None;
+    write(store, &record)
+}
+
 /// Records the owner's confirmation that `id` may create the target's first worker.
 pub(super) fn confirm(store: &Store, owner: &Owner, id: OperationId) -> Result<()> {
     let record = Receipt {

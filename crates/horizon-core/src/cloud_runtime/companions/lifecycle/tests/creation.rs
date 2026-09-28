@@ -158,10 +158,23 @@ fn unchecking_after_the_confirmation_withdraws_it_before_any_allocation() {
     state.grants.get_mut("consumer").unwrap().selected = false;
     store.save(&state).unwrap();
     drop(store);
+    {
+        let mut backend = Fake::new(&fixture);
+        assert!(execute_with(&fixture.request(), id, &mut backend).is_err());
+        assert!(backend.decisions.is_empty());
+        assert_eq!(status(&fixture.request(), id).unwrap().intent.state, State::Submitted);
+    }
+    // Checking the companion again does not revive the withdrawn confirmation.
+    select_reserved(&mut fixture);
     let mut backend = Fake::new(&fixture);
-    assert!(execute_with(&fixture.request(), id, &mut backend).is_err());
+    assert_eq!(
+        execute_with(&fixture.request(), id, &mut backend).unwrap().phase,
+        Phase::ConfirmationRequired
+    );
     assert!(backend.decisions.is_empty());
-    assert_eq!(status(&fixture.request(), id).unwrap().intent.state, State::Submitted);
+    confirm_creation(&fixture.request(), id).unwrap();
+    execute_with(&fixture.request(), id, &mut backend).unwrap();
+    assert_eq!(backend.decisions, [Decision::Reconnect]);
 }
 
 #[test]

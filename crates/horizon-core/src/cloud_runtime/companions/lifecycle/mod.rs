@@ -430,7 +430,7 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
         );
     }
     let observed = target.load()?;
-    let confirmed = confirmed(request, &journal, &binding, &intent, &claim)?;
+    let confirmed = confirmed(request, (&journal, &binding), &intent, (&target, &claim))?;
     let decision = execution::plan(&target, &binding, &intent, observed.as_ref(), confirmed)?;
     if decision == intent::Decision::Provision {
         receipt::save(&target, request.owner, intent.operation_id, Phase::ConfirmationRequired)?;
@@ -495,13 +495,13 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
 
 /// Whether the owner confirmed this operation's creation. A confirmation stands only
 /// while the owner's selection does; the caller holds the source journal lock, so an
-/// uncheck after the confirmation withdraws it before any paid allocation.
+/// uncheck after the confirmation withdraws it durably before any paid allocation,
+/// and checking the companion again later needs a fresh confirmation.
 fn confirmed(
     request: &Request<'_>,
-    journal: &journal::State,
-    binding: &Binding,
+    (journal, binding): (&journal::State, &Binding),
     intent: &Intent,
-    claim: &receipt::Receipt,
+    (target, claim): (&Store, &receipt::Receipt),
 ) -> Result<bool> {
     let confirmed = claim.confirmed == Some(intent.operation_id);
     if confirmed && binding.origin() == intent::Origin::Reserved {
@@ -510,9 +510,12 @@ fn confirmed(
             .declarations
             .get(request.alias)
             .ok_or(Error::Invalid("Companion declaration is missing"))?;
-        request
-            .require_selected(journal, binding, declaration)
-            .map_err(|_| Error::Invalid("The new companion cloud is no longer selected; nothing was created"))?;
+        if request.require_selected(journal, binding, declaration).is_err() {
+            receipt::withdraw(target, request.owner, intent.operation_id)?;
+            return Err(Error::Invalid(
+                "The new companion cloud is no longer selected; its creation needs confirming again and nothing was created",
+            ));
+        }
     }
     Ok(confirmed)
 }
