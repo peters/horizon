@@ -9,7 +9,11 @@ use horizon_cloud::{
     runpod::{RunPod, resize::Replacement},
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
 
 const JOURNAL: &str = "compute-resize.json";
 const PENDING: &str = "Compute resize is pending; retry the same CPU and memory before other cloud operations";
@@ -92,15 +96,12 @@ fn resize_compute_with(
                 }
                 return Err(Error::Invalid("Choose a different CPU or memory size"));
             }
-            validate_ssh_identity(&settings.ssh_identity_file)?;
-            settings.credential()?;
             let spec = state
                 .spec
                 .as_ref()
                 .ok_or(Error::Invalid("Missing worker specification"))?;
-            if super::super::current_public_key(&settings.ssh_identity_file)? != spec.public_key {
-                return Err(Error::Invalid("The SSH identity differs from the running worker"));
-            }
+            verify_identity(settings, &spec.public_key, cancel)?;
+            settings.credential()?;
         }
         let mut intent = match retained {
             Some(intent) => intent,
@@ -111,12 +112,7 @@ fn resize_compute_with(
             return Err(Error::Invalid(PENDING));
         }
         intent.verify(&store)?;
-        validate_ssh_identity(&settings.ssh_identity_file)?;
-        if super::super::current_public_key(&settings.ssh_identity_file)?
-            != intent.replacement.specification().public_key
-        {
-            return Err(Error::Invalid("The SSH identity differs from the replacement worker"));
-        }
+        verify_identity(settings, &intent.replacement.specification().public_key, cancel)?;
         if intent.observed.is_none() {
             let provider = RunPod::new(settings.credential()?);
             let mut replacement = intent.replacement.clone();
@@ -135,6 +131,37 @@ fn resize_compute_with(
         commit(&store, &intent, &mut |_| Ok(()))?;
     }
     reconnect()
+}
+
+fn verify_identity(settings: &Settings, expected: &str, cancel: &Cancellation) -> Result<()> {
+    const LIMIT: usize = 64 * 1024;
+    validate_ssh_identity(&settings.ssh_identity_file)?;
+    let invalid = || Error::Invalid("The SSH private identity must match the replacement worker");
+    if super::super::current_public_key(&settings.ssh_identity_file)? != expected {
+        return Err(invalid());
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(LIMIT + 1));
+    fs::File::open(&settings.ssh_identity_file)?
+        .take((LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > LIMIT {
+        return Err(invalid());
+    }
+    let runner = crate::cloud_runtime::command::Runner {
+        cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    };
+    let derived = crate::cloud_runtime::bootstrap_recovery::connection::public_identity(&bytes, &runner)
+        .map_err(|_| invalid())?;
+    if !derived
+        .split_whitespace()
+        .take(2)
+        .eq(expected.split_whitespace().take(2))
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn record_observation(

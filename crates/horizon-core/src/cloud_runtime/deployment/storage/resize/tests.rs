@@ -9,10 +9,19 @@ use std::os::unix::fs::PermissionsExt;
 fn fixture() -> (tempfile::TempDir, Store) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();
+    assert!(
+        std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(root.path().join("identity"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let public_key = fs::read_to_string(root.path().join("identity.pub")).unwrap();
     let worker: WorkerSpec = serde_json::from_value(json!({
         "operation_id":"owned-operation", "image_digest":format!("example/worker@sha256:{}", "a".repeat(64)),
         "profile":{"provider":"runpod","image":"example/worker","cpu":4,"memory_gb":8},
-        "public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f","registry_auth_id":null,"gpu_types":[],"cpu_flavors":["cpu3c"],"data_centers":[]
+        "public_key":public_key.trim(),"registry_auth_id":null,"gpu_types":[],"cpu_flavors":["cpu3c"],"data_centers":[]
     }))
     .unwrap();
     let spec = Spec {
@@ -60,11 +69,6 @@ fn settings() -> Settings {
 fn identity_settings(store: &Store) -> Settings {
     let mut settings = settings();
     settings.ssh_identity_file = store.root().join("identity");
-    // Production preflight checks file readability, size and permissions before using SSH.
-    fs::write(&settings.ssh_identity_file, "synthetic private identity").unwrap();
-    fs::set_permissions(&settings.ssh_identity_file, fs::Permissions::from_mode(0o600)).unwrap();
-    let state = store.load_during_storage_growth().unwrap().unwrap();
-    fs::write(store.root().join("identity.pub"), state.spec.unwrap().public_key).unwrap();
     settings
 }
 fn confirmed(store: &Store) -> Intent {
@@ -167,7 +171,7 @@ fn retained_resize_rechecks_ssh_identity_before_provider_work() {
         .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "The SSH identity differs from the replacement worker"
+            "The SSH private identity must match the replacement worker"
         );
         assert_eq!(fs::read(root.path().join(JOURNAL)).unwrap(), journal);
         assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
@@ -325,4 +329,53 @@ fn reconnect_failure_after_commit_retries_the_same_size_without_replacing_again(
     .unwrap();
     assert_eq!(state.worker.unwrap().id, "worker2");
     assert_eq!((state.profile.cpu, state.profile.memory_gb), (8, 16));
+}
+
+#[test]
+fn a_stale_public_sidecar_cannot_authorize_a_changed_or_invalid_private_key() {
+    for phase in ["new", "prepared", "observed"] {
+        for malformed in [false, true] {
+            let (root, store) = fixture();
+            let mut settings = identity_settings(&store);
+            settings.runpod_key_file = root.path().join("synthetic-provider-key");
+            fs::write(&settings.runpod_key_file, "synthetic-test-only-token").unwrap();
+            fs::set_permissions(&settings.runpod_key_file, fs::Permissions::from_mode(0o600)).unwrap();
+            match phase {
+                "prepared" => {
+                    prepare(&store, &settings, 8, 16).unwrap();
+                }
+                "observed" => {
+                    confirmed(&store);
+                }
+                _ => {}
+            }
+            if malformed {
+                fs::write(&settings.ssh_identity_file, "not an SSH private key").unwrap();
+            } else {
+                let (other, _) = fixture();
+                fs::copy(other.path().join("identity"), &settings.ssh_identity_file).unwrap();
+            }
+            let journal = fs::read(root.path().join(JOURNAL)).ok();
+            let deployment = fs::read(root.path().join("deployment.json")).unwrap();
+            let storage = fs::read(root.path().join("workspace-volume.json")).unwrap();
+            drop(store);
+            let error = resize_compute_with(
+                root.path(),
+                &settings,
+                8,
+                16,
+                &Cancellation::default(),
+                &|_| panic!("No provider work"),
+                || panic!("No reconnect"),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "The SSH private identity must match the replacement worker"
+            );
+            assert_eq!(fs::read(root.path().join(JOURNAL)).ok(), journal);
+            assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
+            assert_eq!(fs::read(root.path().join("workspace-volume.json")).unwrap(), storage);
+        }
+    }
 }

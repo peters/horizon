@@ -428,3 +428,59 @@ fn failing_creation_journal_never_allocates_after_termination() {
     task.join().unwrap();
     assert!(requests.lock().unwrap().iter().all(|r| !r.starts_with("POST ")));
 }
+
+#[test]
+fn stale_original_list_result_never_persists_a_binding_and_retries_safely() {
+    for requested in [false, true] {
+        let mut saved = serde_json::to_value(intent()).unwrap();
+        saved["phase"] = json!("creating");
+        saved["creation"] = serde_json::to_value(if requested {
+            CreateState::Requested
+        } else {
+            CreateState::Prepared
+        })
+        .unwrap();
+        let journal = serde_json::to_vec(&saved).unwrap();
+        let mut intent: Replacement = serde_json::from_slice(&journal).unwrap();
+        let mut rows = vec![(200, serde_json::to_string(&volume()).unwrap())];
+        if !requested {
+            rows.extend(empty_attachments());
+        }
+        rows.push((200, pods(&json!([observed(&current(), "worker1")]))));
+        rows.push((200, serde_json::to_string(&volume()).unwrap()));
+        if !requested {
+            rows.extend(empty_attachments());
+        }
+        let replacement = observed(&next(), "worker2");
+        rows.extend([
+            (200, pods(&json!([replacement.clone()]))),
+            (200, replacement.to_string()),
+        ]);
+        rows.extend(empty_attachments());
+        let (provider, requests, task) = provider(rows);
+        assert!(matches!(
+            provider.resize_cpu(
+                &mut intent,
+                &Cancellation::default(),
+                |_| panic!("The original ID must be rejected before persistence"),
+                |_| {}
+            ),
+            Err(CloudError::IdentityMismatch)
+        ));
+        assert_eq!(serde_json::to_value(&intent).unwrap(), saved);
+        let mut recovered: Replacement = serde_json::from_slice(&journal).unwrap();
+        let worker = provider
+            .resize_cpu(&mut recovered, &Cancellation::default(), |_| Ok(()), |_| {})
+            .unwrap();
+        task.join().unwrap();
+        assert_eq!(worker.id, "worker2");
+        recovered.verify_result(&worker).unwrap();
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.starts_with("GET "))
+        );
+    }
+}
