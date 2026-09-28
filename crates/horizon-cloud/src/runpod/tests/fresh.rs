@@ -1,5 +1,5 @@
 use crate::runpod::tests::{endpoints, pods, server, spec as base_spec, volumes, worker};
-use crate::runpod::volumes::{Spec, State, Volume};
+use crate::runpod::volumes::{Spec, State, Tier, Volume};
 use crate::{Cancellation, CloudError, CreateState, WorkerSpec};
 use serde_json::{Value, json};
 
@@ -16,6 +16,7 @@ fn spec() -> WorkerSpec {
 }
 fn volume_spec() -> Spec {
     Spec {
+        tier: Tier::default(),
         operation_id: spec().operation_id,
         size: 10,
         data_center_id: "test-region".into(),

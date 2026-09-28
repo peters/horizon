@@ -225,6 +225,7 @@ mod tests {
         Record {
             version: 1,
             spec: Spec {
+                tier: horizon_cloud::runpod::volumes::Tier::default(),
                 operation_id: worker.operation_id.clone(),
                 size: 20,
                 data_center_id: "EU-TEST-1".into(),

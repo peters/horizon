@@ -1,8 +1,9 @@
 use super::*;
-use crate::runpod::volumes::{Spec, State, Volume};
+use crate::runpod::volumes::{Spec, State, Tier, Volume};
 
 fn volume_spec() -> Spec {
     Spec {
+        tier: Tier::default(),
         operation_id: spec().operation_id,
         size: 80,
         data_center_id: "test-region".into(),

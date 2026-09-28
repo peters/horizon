@@ -5,6 +5,7 @@ fn volume_spec() -> Spec {
     Spec {
         operation_id: spec().operation_id,
         size: 20,
+        tier: Tier::default(),
         data_center_id: "test-region".into(),
     }
 }
@@ -248,4 +249,67 @@ fn recorded_tier_drift_blocks_use_and_deletion() {
     ));
     task.join().unwrap();
     assert!(requests.lock().unwrap().iter().all(|r| r.starts_with("GET ")));
+}
+
+#[test]
+fn requested_high_performance_tier_is_created_recorded_and_recovered() {
+    let spec = Spec {
+        tier: Tier::HighPerformance,
+        ..volume_spec()
+    };
+    let mut responses = vec![
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
+        (201, body(Tier::HighPerformance)),
+        (200, body(Tier::HighPerformance)),
+        (200, endpoints(&json!([]))),
+    ];
+    responses.extend(cleanup_responses(Tier::HighPerformance));
+    let (provider, requests, task) = server(responses);
+    let mut state = State::Prepared;
+    let created = provider
+        .ensure_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(created.tier, Some(Tier::HighPerformance));
+    assert!(state.creation_receipt(&spec).unwrap().is_some());
+    let serialized = serde_json::to_vec(&state).unwrap();
+    state = serde_json::from_slice(&serialized).unwrap();
+    assert_eq!(
+        provider
+            .ensure_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+            .unwrap(),
+        created
+    );
+    provider
+        .terminate_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(state, State::Deleted);
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    let posts: Vec<_> = requests.iter().filter(|r| r.starts_with("POST ")).collect();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].contains("HIGH_PERFORMANCE"));
+}
+
+#[test]
+fn legacy_spec_serialization_stays_stable_and_tier_changes_invalidate_receipts() {
+    let legacy = json!({"operation_id":spec().operation_id,"size":20,"data_center_id":"test-region"});
+    let parsed: Spec = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(parsed.tier, Tier::Standard);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+    let spec = Spec {
+        tier: Tier::HighPerformance,
+        ..volume_spec()
+    };
+    let (provider, _, task) = server(vec![
+        (200, endpoints(&json!([]))),
+        (200, volumes(&json!([]))),
+        (201, body(Tier::HighPerformance)),
+    ]);
+    let mut state = State::Prepared;
+    provider
+        .ensure_volume(&spec, &mut state, &Cancellation::default(), |_| Ok(()))
+        .unwrap();
+    assert!(state.creation_receipt(&volume_spec()).is_err());
+    task.join().unwrap();
 }
