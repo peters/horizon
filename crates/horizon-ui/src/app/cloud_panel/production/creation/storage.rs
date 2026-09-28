@@ -7,6 +7,32 @@ use horizon_core::cloud_runtime::{
     provider::{Choice, Description, Kind},
 };
 
+/// Why the chosen worker cannot start now, if anything stands in the way.
+pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    if super::provider::current(form.provider, profile).kind == Kind::RunPod {
+        if form.prices.too_old() {
+            return Some("Prices are over an hour old. Refresh them before starting.");
+        }
+        // Data centers the catalog knows must hold the chosen kind of workspace volume.
+        if let Some(fetched) = form.prices.list.as_ref().filter(|_| !profile.gpu) {
+            let mut known = fetched
+                .value
+                .0
+                .data_centers
+                .iter()
+                .filter(|center| form.placement.data_centers.contains(&center.id))
+                .peekable();
+            if known.peek().is_some() && !known.any(|center| center.holds(profile.storage.volume_tier)) {
+                return Some(
+                    "The chosen data center cannot hold this kind of workspace volume. Choose another data center or storage type.",
+                );
+            }
+        }
+    }
+    size_reason(form)
+}
+
 pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
     let provider = super::provider::current(form.provider, profile);

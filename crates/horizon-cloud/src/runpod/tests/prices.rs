@@ -19,7 +19,7 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
         {"id": "NVIDIA A100-SXM4-40GB", "name": "A100 SXM 40GB", "memory": 40, "secure": false, "price": {"community": 1.0, "secure": 0}}
     ]});
     let centers = json!({"dataCenters": [
-        {"id": "EU-RO-1", "region": "EUROPE", "networkVolumeTypes": ["STANDARD"], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "LOW"}], "cpuAvailability": [{"id": "cpu3c", "availability": "MEDIUM"}]},
+        {"id": "EU-RO-1", "region": "EUROPE", "networkVolumeTypes": ["STANDARD"], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "LOW"}], "cpuAvailability": [{"id": "cpu3c", "availability": "MEDIUM"}, {"id": "cpu3g", "availability": "UNAVAILABLE"}]},
         {"id": "EU-SE-1", "region": "EUROPE", "networkVolumeTypes": ["HIGH_PERFORMANCE"], "gpuAvailability": [{"id": "NVIDIA RTX 4000 Ada Generation", "availability": "HIGH"}]},
         {"id": "US-TX-3", "region": "NORTH_AMERICA", "gpuAvailability": [{"id": "NVIDIA RTX A6000", "availability": "HIGH"}]}
     ]});
@@ -65,9 +65,13 @@ fn secure_prices_and_the_best_gpu_availability_in_allowed_data_centers() {
         [("EU-RO-1", "EUROPE", true, false), ("EU-SE-1", "EUROPE", false, true)]
     );
     // Flavor families report their own stock beside the GPU types.
+    // An unknown family level reads as none rather than failing the price list.
     assert_eq!(
         list.data_centers[0].cpus,
-        [("cpu3c".to_owned(), crate::prices::Availability::Medium)]
+        [
+            ("cpu3c".to_owned(), crate::prices::Availability::Medium),
+            ("cpu3g".to_owned(), crate::prices::Availability::None)
+        ]
     );
     assert!(list.data_centers[1].cpus.is_empty());
     // Regions also name data centers outside the allowed set, where a worker may have

@@ -367,9 +367,9 @@ fn high_performance_workspaces_need_a_data_center_that_holds_them_and_are_not_pr
     assert!(standard.iter().all(|offer| offer.stopped_monthly > 0.0));
     // No data center holds a high-performance volume yet.
     let preferences = Preferences::default();
-    assert!(offers_with_storage(&list, &preferences, &requirements, Tier::HighPerformance).is_empty());
+    assert!(catalog(&list, &preferences, &requirements, (Tier::HighPerformance, 0)).is_empty());
     list.data_centers[1].high_performance_storage = true;
-    let fast = offers_with_storage(&list, &preferences, &requirements, Tier::HighPerformance);
+    let fast = catalog(&list, &preferences, &requirements, (Tier::HighPerformance, 0));
     assert_eq!(fast.len(), standard.len());
     // Its price is not published, so only compute is estimated.
     assert!(fast.iter().all(|offer| offer.stopped_monthly == 0.0));
@@ -377,4 +377,33 @@ fn high_performance_workspaces_need_a_data_center_that_holds_them_and_are_not_pr
         fast.iter()
             .all(|offer| (offer.estimated_total - offer.hourly).abs() < 1e-9)
     );
+}
+
+#[test]
+fn a_catalog_size_requests_only_flavors_that_hold_the_container_disk() {
+    let mut list = list();
+    list.cpu.push(CpuFlavorPrice {
+        id: "cpu5c".into(),
+        name: "Compute-Optimized".into(),
+        per_vcpu_hour: 0.035,
+    });
+    let preferences = Preferences {
+        cpu_flavors: vec!["cpu3c".into()],
+        gpu_types: Vec::new(),
+    };
+    let requirements = Requirements {
+        min_vcpu: Some(8),
+        ..Requirements::default()
+    };
+    let eight = |container_gb| {
+        catalog(&list, &preferences, &requirements, (Tier::Standard, container_gb))
+            .into_iter()
+            .find(|offer| offer.vcpu == Some(8) && offer.memory_gb == Some(16))
+            .unwrap()
+    };
+    // cpu3c holds 80 GB at 8 vCPU, so a 100 GB disk is placed on cpu5c, as it launches.
+    assert_eq!(eight(20).flavors, ["cpu3c"]);
+    let large = eight(100);
+    assert_eq!(large.flavors, ["cpu5c"]);
+    assert!((large.hourly - 0.28).abs() < 1e-9);
 }

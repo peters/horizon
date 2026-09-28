@@ -5,7 +5,6 @@ use super::{Production, placement};
 use crate::theme;
 use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::{
-    flavors,
     offers::{self, Offer, Picks, Place, Requirements},
     prices::{Availability, Profile},
 };
@@ -55,12 +54,14 @@ pub(super) fn catalog(form: &Production) -> Option<Catalog> {
     let profile = profile(form)?;
     let (list, preferences) = &form.prices.list.as_ref()?.value;
     let tier = profile.storage.volume_tier;
-    let mut offers = offers::offers_with_storage(list, preferences, &Requirements::for_profile(profile), tier);
-    // A CPU size is offered only with a flavor that can hold the profile's container disk.
-    offers.retain(|offer| match (offer.vcpu, offer.memory_gb) {
-        (Some(cpu), Some(memory_gb)) => flavors::offered((cpu, memory_gb), profile.storage.container_gb),
-        _ => true,
-    });
+    // CPU sizes request only flavors that hold the profile's container disk, as a
+    // deployment of that size would.
+    let offers = offers::catalog(
+        list,
+        preferences,
+        &Requirements::for_profile(profile),
+        (tier, profile.storage.container_gb),
+    );
     let places: Vec<Vec<Place>> = offers.iter().map(|offer| offers::places(list, offer, tier)).collect();
     // Offer IDs are unique within one kind of worker.
     let stocked: std::collections::HashSet<&str> = offers
@@ -121,13 +122,22 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
         );
         return;
     }
-    // A GPU profile always requests one explicit type, the cheapest to start with.
-    if catalog.gpu
-        && catalog.selected.is_none()
-        && let Some(index) = catalog.picks.cheapest
-    {
-        choose(form, true, &catalog.offers[index]);
+    // A GPU profile always requests one explicit type, the cheapest to start with. A
+    // type the person chose is never replaced, even once it is no longer offered.
+    if catalog.gpu && form.placement.gpu_types.is_empty() {
+        if let Some(index) = catalog.picks.cheapest {
+            choose(form, true, &catalog.offers[index]);
+        }
         return;
+    }
+    if catalog.gpu && catalog.selected.is_none() {
+        widgets::note(
+            ui,
+            &format!(
+                "{} is no longer offered here. Choose another GPU type.",
+                form.placement.gpu_types.join(", ")
+            ),
+        );
     }
     let mut chosen = cards::picks(ui, &catalog, form);
     ui.add_space(4.0);

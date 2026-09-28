@@ -518,8 +518,7 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
-        (false, false) if form.prices.too_old() => Some("Prices are over an hour old. Refresh them before starting."),
-        (false, false) => storage::size_reason(form),
+        (false, false) => storage::launch_reason(form),
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
         (true, true) => Some("Enter a cloud title and read the repository profile."),
@@ -533,6 +532,5 @@ fn can_submit(form: &Production) -> bool {
         && !form.launch.submitted
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
-        && storage::size_reason(form).is_none()
-        && !form.prices.too_old()
+        && storage::launch_reason(form).is_none()
 }

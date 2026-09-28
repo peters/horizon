@@ -61,7 +61,18 @@ impl RunPod {
                     workspace_storage: holds(Tier::Standard),
                     high_performance_storage: holds(Tier::HighPerformance),
                     gpus: levels(center.gpu_availability)?,
-                    cpus: levels(center.cpu_availability)?,
+                    // Family stock only narrows the offers, so a value RunPod adds later
+                    // reads as none there instead of failing every price.
+                    cpus: center
+                        .cpu_availability
+                        .into_iter()
+                        .map(|entry| {
+                            (
+                                entry.id,
+                                availability(&entry.availability).unwrap_or(Availability::None),
+                            )
+                        })
+                        .collect(),
                     id: center.id,
                     region: center.region,
                 })

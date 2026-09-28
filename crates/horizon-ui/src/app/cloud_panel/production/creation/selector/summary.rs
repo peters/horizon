@@ -237,7 +237,7 @@ fn watching(ui: &mut Ui, form: &Production) {
     if let Some(now) = form.launch.price_rose {
         ui.colored_label(
             theme::PALETTE_RED(),
-            format!("The price rose to ${now:.2}/hr, so it will not start. Stop watching to review."),
+            format!("The price is now ${now:.2}/hr, above the limit, so it waits until the price falls back or you stop watching."),
         );
     }
 }
@@ -255,9 +255,9 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
         && !watching
         && profile(form).is_some_and(|profile| provider::current(form.provider, profile).kind == Kind::RunPod);
     let wait = watchable && form.launch.selector.wait_for_stock;
-    let enabled = can_submit(form) && !(wait && watch::selection(form).is_err());
+    let enabled = can_submit(form) && !(wait && watch::armable(form).is_err());
     let reason = submit_reason(form);
-    let watch_reason = if wait { watch::selection(form).err() } else { None };
+    let watch_reason = if wait { watch::armable(form).err() } else { None };
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - 330.0).max(160.0));

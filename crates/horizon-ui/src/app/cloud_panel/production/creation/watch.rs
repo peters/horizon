@@ -16,17 +16,25 @@ pub(super) fn selection(form: &Production) -> Result<Selection, &'static str> {
     Selection::new(profile, form.placement.clone())
 }
 
-/// Arms the watch on the current selection, at the price on show now; a later price
-/// above it never starts the cloud.
-pub(super) fn arm(form: &mut Production) {
-    let Ok(selection) = selection(form) else {
-        return;
-    };
-    form.launch.watch_quote = form
+/// The current selection with the price on show now, which a watch never starts
+/// above. Without a known price there is no limit to hold it to, so it cannot arm.
+pub(super) fn armable(form: &Production) -> Result<(Selection, f64), &'static str> {
+    let selection = selection(form)?;
+    let quote = form
         .prices
         .list
         .as_ref()
-        .and_then(|list| selection.hourly(&list.value.0, &list.value.1));
+        .and_then(|list| selection.hourly(&list.value.0, &list.value.1))
+        .ok_or("The price of this worker is unknown, so a watch has no price to hold it to.")?;
+    Ok((selection, quote))
+}
+
+/// Arms the watch on the current selection at the price on show now.
+pub(super) fn arm(form: &mut Production) {
+    let Ok((selection, quote)) = armable(form) else {
+        return;
+    };
+    form.launch.watch_quote = Some(quote);
     form.launch.price_rose = None;
     form.launch.watch = Some(selection);
 }
@@ -50,11 +58,10 @@ pub(super) fn poll(form: &mut Production) {
     // A price above the one shown when the watch started waits for a person.
     let (list, preferences) = &fetched.value;
     let hourly = watch.hourly(list, preferences);
-    form.launch.price_rose = match (hourly, form.launch.watch_quote) {
-        (Some(now), Some(quoted)) if now > quoted + 1e-9 => Some(now),
-        (None, Some(_)) => return,
-        _ => None,
+    let (Some(now), Some(quoted)) = (hourly, form.launch.watch_quote) else {
+        return;
     };
+    form.launch.price_rose = (now > quoted + 1e-9).then_some(now);
     if form.launch.price_rose.is_some() {
         return;
     }

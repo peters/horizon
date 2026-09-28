@@ -247,3 +247,73 @@ fn ages_read_in_the_largest_whole_unit() {
     assert_eq!(ago(Duration::from_secs(125)), "2 min");
     assert_eq!(ago(Duration::from_secs(7300)), "2 h");
 }
+
+#[test]
+fn old_runpod_prices_never_hold_back_another_provider() {
+    let mut form = form("cpu");
+    let fetched = form.prices.list.as_mut().unwrap();
+    fetched.at = Instant::now().checked_sub(std::time::Duration::from_hours(2)).unwrap();
+    assert!(!can_submit(&form));
+    form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
+    assert_eq!(submit_reason(&form), None);
+    assert!(can_submit(&form));
+}
+
+#[test]
+fn a_watch_never_arms_without_a_price_to_hold_it_to() {
+    let mut form = form("gpu");
+    form.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: vec!["a5000".into()],
+    };
+    let mut unpriced = list(None);
+    unpriced.gpus.retain(|gpu| gpu.id != "a5000");
+    form.prices.answered(unpriced, preferences(), Vec::new());
+    assert!(watch::selection(&form).is_ok());
+    assert!(watch::armable(&form).is_err());
+    watch::arm(&mut form);
+    assert!(form.launch.watch.is_none());
+    form.launch.selector.wait_for_stock = true;
+    let labels = render(&mut form);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("The price of this worker is unknown"))
+    );
+}
+
+#[test]
+fn a_data_center_without_the_chosen_volume_blocks_start_instead_of_moving() {
+    let mut form = form("cpu");
+    form.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: Vec::new(),
+    };
+    assert!(can_submit(&form));
+    let profiles = &mut form.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("cpu").unwrap().storage.volume_tier = StorageTier::HighPerformance;
+    assert!(!can_submit(&form));
+    assert!(submit_reason(&form).is_some_and(|reason| reason.starts_with("The chosen data center cannot hold")));
+    assert_eq!(
+        form.placement.data_centers,
+        ["EU-1"],
+        "the place is never changed on its own"
+    );
+    form.placement.data_centers = vec!["US-1".into()];
+    assert!(can_submit(&form));
+}
+
+#[test]
+fn a_chosen_gpu_type_is_never_replaced_once_it_is_no_longer_offered() {
+    let mut form = form("gpu");
+    form.placement.gpu_types = vec!["retired".into()];
+    let labels = render(&mut form);
+    assert_eq!(form.placement.gpu_types, ["retired"]);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label == "retired is no longer offered here. Choose another GPU type.")
+    );
+}

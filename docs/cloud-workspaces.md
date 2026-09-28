@@ -383,8 +383,8 @@ when available**, which needs one exact data center, so the watch never broadens
 the chosen worker or place. While it waits, the summary names the data center and
 the price shown when the watch started. Every 15 seconds it checks current stock
 for that worker there and starts this cloud once when stock returns, at no more
-than that price: a higher price holds the start until you stop watching and
-review. A failed start does not retry. The watch lasts while the dialog stays open;
+than that price: while the price is higher the watch waits, and it needs a known
+price to start at all. A failed start does not retry. The watch lasts while the dialog stays open;
 closing it, Cancel or **Stop watching** ends it, and the fields stay locked until
 then.
 

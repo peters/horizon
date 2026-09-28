@@ -1,7 +1,7 @@
 //! What a person chooses a worker from: where each offer can run, with its stock
 //! there, and three starting points, so the cheapest or the most capable fit is one
 //! click away. Read only, like the offers themselves.
-use super::{MAX_LIMIT, Offer, Requirements};
+use super::{Offer, Requirements};
 use crate::Profile;
 use crate::prices::{Availability, PriceList};
 use crate::runpod::volumes::Tier;
@@ -16,7 +16,6 @@ impl Requirements {
         let mut requirements = Self {
             gpu: profile.gpu,
             storage_gb: Some(profile.storage.volume_gb.max(1)),
-            limit: Some(MAX_LIMIT),
             ..Self::default()
         };
         if profile.gpu {

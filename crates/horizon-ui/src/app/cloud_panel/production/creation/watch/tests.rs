@@ -1,7 +1,9 @@
 use super::*;
 use horizon_core::{
     cloud_panel::{CloudConfig, Placement},
-    cloud_runtime::prices::{Availability, DataCenter, Preferences, PriceList, RUNPOD_STORAGE, SizeAvailability},
+    cloud_runtime::prices::{
+        Availability, CpuFlavorPrice, DataCenter, Preferences, PriceList, RUNPOD_STORAGE, SizeAvailability,
+    },
 };
 
 fn form() -> Production {
@@ -25,7 +27,14 @@ fn answer(form: &mut Production, availability: Availability) {
     form.prices.answered(
         PriceList {
             provider: "RunPod",
-            cpu: Vec::new(),
+            cpu: ["cpu3c", "cpu3g", "cpu5c", "cpu5g"]
+                .into_iter()
+                .map(|id| CpuFlavorPrice {
+                    id: id.into(),
+                    name: id.into(),
+                    per_vcpu_hour: 0.03,
+                })
+                .collect(),
             gpus: Vec::new(),
             data_centers: vec![DataCenter {
                 id: "EU-1".into(),
@@ -55,7 +64,7 @@ fn only_an_armed_watch_submits_once_when_fresh_stock_returns() {
     poll(&mut form);
     assert!(!form.launch.submitted);
     answer(&mut form, Availability::None);
-    form.launch.watch = Some(selection(&form).unwrap());
+    arm(&mut form);
     poll(&mut form);
     assert!(form.launch.watch.is_some() && !form.launch.submitted);
     answer(&mut form, Availability::Low);
@@ -70,7 +79,7 @@ fn only_an_armed_watch_submits_once_when_fresh_stock_returns() {
 fn stale_stock_and_cancelled_or_changed_selections_never_submit() {
     let mut form = form();
     answer(&mut form, Availability::High);
-    form.launch.watch = Some(selection(&form).unwrap());
+    arm(&mut form);
     form.prices.refresh();
     poll(&mut form);
     assert!(form.launch.watch.is_some() && !form.launch.submitted);
@@ -79,7 +88,7 @@ fn stale_stock_and_cancelled_or_changed_selections_never_submit() {
     poll(&mut form);
     assert!(form.launch.watch.is_none() && !form.launch.submitted);
     form.size = None;
-    form.launch.watch = Some(selection(&form).unwrap());
+    arm(&mut form);
     form.launch = crate::app::cloud_panel::production::launch::State::default();
     poll(&mut form);
     assert!(!form.launch.submitted);

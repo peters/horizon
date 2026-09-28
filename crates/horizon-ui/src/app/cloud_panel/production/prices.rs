@@ -223,7 +223,12 @@ impl State {
                 // The last good catalog stays on show with its age; only current
                 // prices are ever treated as current.
                 Err(error) => {
-                    self.runpod_missing |= error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
+                    let key_missing = error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
+                    self.runpod_missing |= key_missing;
+                    // Without a key, RunPod's old prices are no longer this machine's to show.
+                    if key_missing {
+                        self.list = None;
+                    }
                     self.refreshed_after = Some(Instant::now());
                     self.list_error = Some(error);
                     self.list_failed_at = Some(Instant::now());
@@ -656,6 +661,20 @@ mod tests {
         state.poll();
         assert!(state.fresh_list().is_some());
         assert!(state.size(&profile(), (8, 32)).is_some());
+    }
+
+    #[test]
+    fn a_missing_runpod_key_drops_the_old_prices() {
+        let mut state = State {
+            list: Some(now((list(), Preferences::default()))),
+            ..State::default()
+        };
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(state.list.is_none() && !state.runpod_bound());
     }
 
     #[test]

@@ -159,17 +159,21 @@ pub struct Offer {
 /// request the flavors `preferences` choose, as a deployment would.
 #[must_use]
 pub fn offers(list: &PriceList, preferences: &Preferences, requirements: &Requirements) -> Vec<Offer> {
-    offers_with_storage(list, preferences, requirements, Tier::Standard)
+    let mut offers = catalog(list, preferences, requirements, (Tier::Standard, 0));
+    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
+    offers
 }
 
-/// [`offers`] for CPU workers keeping a workspace volume of `tier`, so only data
-/// centers that hold that kind of volume count.
+/// Every offer in `list` meeting `requirements`, cheapest estimated total first and
+/// never truncated, for a cloud whose CPU workers keep a workspace volume of `tier` and
+/// a container disk of `container_gb`. A CPU size requests only flavors that can hold
+/// that disk, as its deployment would, so its price and stock are the ones launched.
 #[must_use]
-pub fn offers_with_storage(
+pub fn catalog(
     list: &PriceList,
     preferences: &Preferences,
     requirements: &Requirements,
-    tier: Tier,
+    (tier, container_gb): (Tier, u16),
 ) -> Vec<Offer> {
     let hours = requirements.hours.unwrap_or(1.0);
     let storage_gb = u32::from(requirements.storage_gb.unwrap_or(DEFAULT_STORAGE_GB));
@@ -190,7 +194,7 @@ pub fn offers_with_storage(
             &preferences.cpu_flavors,
             requirements,
             &within,
-            (hours, storage_gb, tier),
+            (hours, storage_gb, tier, container_gb),
         )
     };
     offers.retain(|offer| requirements.max_hourly.is_none_or(|max| offer.hourly <= max));
@@ -199,7 +203,6 @@ pub fn offers_with_storage(
             .total_cmp(&b.estimated_total)
             .then_with(|| a.name.cmp(&b.name))
     });
-    offers.truncate(requirements.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT));
     offers
 }
 
@@ -208,7 +211,7 @@ fn cpu_offers(
     preferred: &[String],
     requirements: &Requirements,
     within: &[String],
-    (hours, storage_gb, tier): (f64, u32, Tier),
+    (hours, storage_gb, tier, container_gb): (f64, u32, Tier, u16),
 ) -> Vec<Offer> {
     // A CPU worker keeps its workspace on a network volume, so the region needs a data
     // center that can hold one of this size. Exact CPU stock is checked when the cloud
@@ -233,9 +236,9 @@ fn cpu_offers(
     let storage = volume_month * hours / MONTH_HOURS;
     let mut offers: Vec<Offer> = Vec::new();
     for vcpu in VCPU_COUNTS {
-        for (size_memory, _) in flavors::memory_options(vcpu, 0) {
+        for (size_memory, _) in flavors::memory_options(vcpu, container_gb) {
             // The flavors a deployment of this size requests, never one on its own.
-            let Ok(requested) = flavors::for_size((vcpu, size_memory), 0, preferred) else {
+            let Ok(requested) = flavors::for_size((vcpu, size_memory), container_gb, preferred) else {
                 continue;
             };
             let prices: Option<Vec<_>> = requested
