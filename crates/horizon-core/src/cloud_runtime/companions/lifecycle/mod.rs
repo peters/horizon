@@ -249,6 +249,8 @@ fn settle_access(store: &journal::Store, state: &mut journal::State, prior: &rec
 /// Ensure Ready may create its reserved companion cloud. The card first creates that
 /// cloud and durably prepares its deployment record with the reserved ID and the bound
 /// checkout; `execute` then allocates its first worker through the ordinary deployment.
+/// Confirming the same unstarted operation again, as the card's Retry does after a
+/// failed start, is idempotent: it records nothing new and never runs anything twice.
 /// # Errors
 /// Refuses anything but an unstarted Ensure Ready for a reserved binding whose target
 /// record is prepared, workerless and matches the binding.

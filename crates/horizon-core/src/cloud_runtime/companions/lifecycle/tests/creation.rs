@@ -95,8 +95,25 @@ fn only_the_owners_confirmation_lets_a_reserved_companion_allocate_its_first_wor
     let operation = execute_with(&fixture.request(), id, &mut backend).unwrap();
     assert_eq!(backend.decisions, [Decision::Reconnect]);
     assert_eq!(operation.phase, Phase::Ready);
-    // A finished operation is a status result; confirming it again does nothing.
+    // A finished operation is a status result; confirming it again is refused.
     assert!(confirm_creation(&fixture.request(), id).is_err());
+}
+
+#[test]
+fn confirming_an_unstarted_operation_again_changes_nothing_and_runs_it_once() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    let claim = || std::fs::read(fixture.root.path().join("reserved/companion-operation.json")).unwrap();
+    let first = claim();
+    // The card's Retry confirms again after a start that could not begin.
+    confirm_creation(&fixture.request(), id).unwrap();
+    assert_eq!(claim(), first);
+    let mut backend = Fake::new(&fixture);
+    execute_with(&fixture.request(), id, &mut backend).unwrap();
+    execute_with(&fixture.request(), id, &mut backend).unwrap();
+    assert_eq!(backend.decisions, [Decision::Reconnect]);
 }
 
 #[test]
