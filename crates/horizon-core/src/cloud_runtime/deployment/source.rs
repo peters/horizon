@@ -47,6 +47,23 @@ fn supported(configured: &Source, contract: &WorkerContract) -> Source {
     }
 }
 
+/// What a worker supporting only `supported` of the `packed` packaging receives instead.
+fn fallback_note(packed: &Source, supported: &Source) -> Option<String> {
+    let mut dropped = Vec::new();
+    if packed.submodule_history != supported.submodule_history {
+        dropped.push("full submodule history");
+    }
+    if packed.lfs != supported.lfs {
+        dropped.push("every LFS object");
+    }
+    (!dropped.is_empty()).then(|| {
+        format!(
+            "This worker supports less source packaging than its image reported; sending {}",
+            dropped.join(" and ")
+        )
+    })
+}
+
 impl Auxiliary {
     fn pack(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<Self> {
         let source = repository::launch::committed_config(repository, revision, runner)?
@@ -83,11 +100,9 @@ impl Auxiliary {
     /// [`Packed::settle`] decides from the image before allocation.
     fn for_worker(mut self, contract: &WorkerContract, runner: &Runner<'_>, emit: &dyn Fn(Event)) -> Result<PathBuf> {
         if let Some(archive) = &self.archive
-            && supported(&self.source, contract) != self.source
+            && let Some(note) = fallback_note(&self.source, &supported(&self.source, contract))
         {
-            emit(Event::Output(
-                "This worker supports less source packaging than its image reported; sending full submodule history and every LFS object".into(),
-            ));
+            emit(Event::Output(note));
             std::fs::remove_file(archive)?;
             self.archive = None;
         }
@@ -390,5 +405,28 @@ mod tests {
             );
             assert_eq!(notes.borrow().len(), usize::from(repacked));
         }
+    }
+
+    #[test]
+    fn the_fallback_note_names_exactly_what_the_worker_does_not_support() {
+        let packed: Source =
+            serde_yaml::from_str("submodule_history: pinned\nlfs: {exclude: ['fixtures/**']}").unwrap();
+        let contract = |pinned_submodules, lfs_selection| WorkerContract {
+            pinned_submodules,
+            lfs_selection,
+            ..WorkerContract::default()
+        };
+        let note = |worker| fallback_note(&packed, &supported(&packed, &worker));
+        let prefix = "This worker supports less source packaging than its image reported; sending ";
+        assert_eq!(note(contract(true, true)), None);
+        assert_eq!(
+            note(contract(false, true)),
+            Some(format!("{prefix}full submodule history"))
+        );
+        assert_eq!(note(contract(true, false)), Some(format!("{prefix}every LFS object")));
+        assert_eq!(
+            note(contract(false, false)),
+            Some(format!("{prefix}full submodule history and every LFS object"))
+        );
     }
 }
