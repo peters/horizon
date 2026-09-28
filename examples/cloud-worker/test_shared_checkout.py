@@ -87,7 +87,7 @@ class SharedCheckoutTests(unittest.TestCase):
         self.assertEqual([entry['cwd'] for entry in f.launches()],
                          [str(f.worktree), str(self.checkout), str(f.worktree)])
 
-    def test_interrupted_first_checkout_is_not_reset_or_exposed(self):
+    def test_failed_first_checkout_is_not_reset_or_exposed(self):
         f = self.fixture
         source = f.tools / 'horizon-worker-source'
         source.write_text('#!/bin/sh\nexit 9\n')
@@ -95,7 +95,7 @@ class SharedCheckoutTests(unittest.TestCase):
         (self.checkout / 'file.txt').write_text('recovery work\n')
         result = self.start('two')
         self.assertEqual(result.returncode, 3)
-        self.assertIn('preparation was interrupted', result.stderr)
+        self.assertIn('preparation failed', result.stderr)
         self.assertEqual((self.checkout / 'file.txt').read_text(), 'recovery work\n')
         self.assertEqual(f.launches(), [])
 
