@@ -255,6 +255,9 @@ fn prepare_image(
             .as_ref()
             .map_or_else(Vec::new, cloud_runtime::registry::Prepared::redactions),
     };
+    if let Some(registry) = &registry {
+        registry.preflight(&runner)?;
+    }
     repository::validate_tree(&request.repository, &request.revision, &runner)?;
     let snapshot = repository::snapshot(&request.repository, &request.revision, root.path(), &runner)?;
     let images = cloud_runtime::image::Images {

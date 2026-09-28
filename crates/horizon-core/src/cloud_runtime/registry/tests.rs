@@ -24,7 +24,7 @@ fn private_file(root: &Path, name: &str, value: &str) -> PathBuf {
     path
 }
 
-fn fixture() -> (tempfile::TempDir, Settings) {
+pub(super) fn fixture() -> (tempfile::TempDir, Settings) {
     let root = tempfile::tempdir().unwrap();
     let path = |name| root.path().join(name);
     let compute = private_file(root.path(), "compute", "synthetic-compute");

@@ -118,6 +118,9 @@ pub(super) fn prepare_image(
     state: &mut Deployment,
     registry: Option<&crate::cloud_runtime::registry::Prepared>,
 ) -> Result<()> {
+    if let Some(registry) = registry {
+        registry.preflight(runner)?;
+    }
     let build_root = tempfile::tempdir_in(store.root())?;
     let source = if state.profile.build.is_some() {
         repository::snapshot(&state.repository, &state.revision, build_root.path(), runner)?
