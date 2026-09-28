@@ -158,3 +158,21 @@ fn shrinking_and_unready_clouds_cannot_begin() {
     store.save(&state).unwrap();
     assert!(prepare(&store, 40).is_err());
 }
+
+#[test]
+fn reconciled_mounts_may_omit_capacity_but_cannot_report_a_different_one() {
+    for capacity in [None, Some(21)] {
+        let (_root, store) = fixture();
+        let mut state = store.load().unwrap().unwrap();
+        state.worker.as_mut().unwrap().network_volume.as_mut().unwrap().size = capacity;
+        store.save(&state).unwrap();
+        if capacity.is_none() {
+            let intent = confirmed(&store);
+            let next = commit(&store, &intent, &mut |_| Ok(())).unwrap();
+            assert_eq!(next.worker.unwrap().network_volume.unwrap().size, Some(40));
+        } else {
+            assert!(prepare(&store, 40).is_err());
+            assert!(read(&store).unwrap().is_none());
+        }
+    }
+}

@@ -147,11 +147,14 @@ impl Intent {
         let State::Bound { volume, .. } = &self.storage.state else {
             return Err(Error::Invalid("Disk growth requires bound storage"));
         };
-        original
-            .worker
-            .as_ref()
-            .ok_or(Error::Invalid("Missing worker"))?
-            .verify_resources_with_volume(&self.storage.worker, Some(volume))?;
+        let mut worker = original.worker.clone().ok_or(Error::Invalid("Missing worker"))?;
+        // REST v2 mount observations omit capacity. The recorded volume supplies
+        // only that missing field; its ID and location must still match, and the
+        // provider growth operation independently confirms the live capacity.
+        if let Some(mount) = &mut worker.network_volume {
+            mount.size.get_or_insert(volume.size);
+        }
+        worker.verify_resources_with_volume(&self.storage.worker, Some(volume))?;
         self.growth.verify_origin(&self.storage.spec, &self.storage.state)?;
         let current = store
             .load_during_storage_growth()?
