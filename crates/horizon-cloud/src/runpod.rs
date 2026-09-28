@@ -17,6 +17,7 @@ pub mod prices;
 pub mod recovery;
 pub mod registry;
 pub mod replacement;
+pub mod resize;
 mod stock;
 mod wire;
 #[cfg(test)]

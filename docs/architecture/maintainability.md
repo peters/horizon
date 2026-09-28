@@ -805,3 +805,5 @@ and terminal attachment remain separate APIs. Setup recovery and real SSH fixtur
 are colocated under the bootstrap initialization source tests' `setup/` tree.
 
 Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, before egui routes pointer events. It reserves the first modified click, opens the panel picker on the second press, and replays single-click/drag input while preventing deferred timestamps from creating native multi-clicks. Completed deferred clicks occupy isolated replay frames; later input stays queued while idle pointer and browser click histories are cleared at the replay boundary.
+
+- `horizon-cloud/runpod/resize.rs` journals CPU replacement across old-worker termination and new-worker allocation while retaining an identity-verified network workspace. It has no workspace initialization authority.
