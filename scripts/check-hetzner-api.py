@@ -55,6 +55,7 @@ USED = [
     ("delete", "/volumes/{id}", [], [], "204", []),
     ("post", "/volumes/{id}/actions/attach", [], ["server", "automount"], "201", prefixed("action", ACTION)),
     ("post", "/volumes/{id}/actions/detach", [], [], "201", prefixed("action", ACTION)),
+    ("post", "/volumes/{id}/actions/resize", [], ["size"], "201", prefixed("action", ACTION)),
     ("get", "/server_types", ["page", "per_page"], [], "200",
      prefixed("server_types.[]", SERVER_TYPE) + ["meta.pagination.next_page"]),
     ("get", "/pricing", [], [], "200", PRICING),

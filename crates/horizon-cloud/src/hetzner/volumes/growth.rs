@@ -27,8 +27,17 @@ enum Phase {
 impl Growth {
     /// # Errors
     /// Requires an available owned volume, its bound allocation and a larger size.
-    pub fn new(operation: &str, state: &CreateState, volume: &Volume, requested_size: u32) -> Result<Self> {
-        if !matches!(state, CreateState::Bound { worker_id } if *worker_id == volume.id.to_string()) {
+    pub fn new(
+        operation: &str,
+        state: &CreateState,
+        volume: &Volume,
+        worker_id: u64,
+        requested_size: u32,
+    ) -> Result<Self> {
+        if volume.server != Some(worker_id)
+            || worker_id == 0
+            || !matches!(state, CreateState::Bound { worker_id } if *worker_id == volume.id.to_string())
+        {
             return Err(CloudError::IdentityMismatch);
         }
         let growth = Self {
@@ -55,6 +64,7 @@ impl Growth {
     fn validate(&self) -> Result<()> {
         self.original.verify(&self.operation)?;
         if self.original.id == 0
+            || self.original.server.is_none_or(|id| id == 0)
             || self.original.status != "available"
             || !SIZE_GB.contains(&self.requested_size)
             || self.requested_size <= self.original.size
@@ -130,6 +140,12 @@ impl Hetzner {
             .inspect_volume(growth.original.id, cancel)?
             .ok_or(CloudError::WorkerLost)?;
         growth.verify_observed(&current)?;
+        let server_id = current.server.ok_or(CloudError::IdentityMismatch)?;
+        let server = self.inspect_server(server_id, cancel)?.ok_or(CloudError::WorkerLost)?;
+        server.verify(&growth.operation)?;
+        if server.status != "running" || server.location != current.location || !server.volumes.contains(&current.id) {
+            return Err(CloudError::IdentityMismatch);
+        }
         Ok(current)
     }
 }
