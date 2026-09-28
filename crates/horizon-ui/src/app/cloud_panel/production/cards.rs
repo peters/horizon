@@ -341,7 +341,8 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     if rebuild::in_progress(runtime) {
         rebuild::progress(ui, id, runtime);
-        return None;
+        // A rebuild pauses sharing; the owner can still switch it off before it resumes.
+        return super::local_network::show(ui, runtime);
     }
     if let Some(next) = rebuild::pending_notice(ui, runtime) {
         return Some(next);
