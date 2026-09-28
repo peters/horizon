@@ -493,6 +493,7 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
                 "10.0.3.100".parse().unwrap(),
                 "tap1",
             )),
+            ready: true,
         };
         let shown = texts(&ctx, runtime);
         assert!(

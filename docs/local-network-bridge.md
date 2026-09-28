@@ -47,7 +47,9 @@ waiting for the cloud then. The card says
 nothing is shared until you press **Share 10.0.0.0/24**, which starts again on the
 new network with the whole network in scope, or switch sharing off. The offer
 follows this computer if it moves again, and appears only while the cloud is
-connected and Ready. The scope you set belonged to the old network and is
+connected and Ready; during a reconnect it waits until that reconnect is Ready. A
+paused bridge that finds no network it can share when it would resume stops the
+same way. The scope you set belonged to the old network and is
 forgotten.
 
 On Windows, sleep is not noticed yet, because the clock Horizon compares with keeps

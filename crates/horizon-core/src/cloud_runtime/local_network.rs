@@ -45,9 +45,10 @@ pub enum StartError {
     Scope(#[from] ScopeError),
     #[error("The saved scope does not fit the current network: {0}")]
     Rules(#[from] RulesError),
-    /// The network this computer is on is not the one the start was approved for.
-    #[error("This computer is on another network now ({})", .0.subnet())]
-    Moved(Network),
+    /// The network this computer is on is not the one the start was approved for; `None` when
+    /// it is on no shareable network at all.
+    #[error("This computer is no longer on the network sharing was approved for")]
+    Moved(Option<Network>),
     #[error("Local Network Bridge could not start: {0}")]
     Io(#[from] io::Error),
 }
@@ -206,14 +207,10 @@ impl Bridge {
     /// # Errors
     /// Also fails when `rules` do not fit the current network, for example after a move to
     /// another Wi-Fi, and with [`StartError::Moved`] when `expected` names a network other than
-    /// the one this computer is on now: a start approved for one network never shares another.
+    /// the one this computer is on now, or when there is none it can share now: a start approved
+    /// for one network never shares another.
     pub fn start_with(connection: &Connection, rules: Rules, expected: Option<&Network>) -> Result<Self, StartError> {
-        let scope = Arc::new(Scope::current()?);
-        if let Some(expected) = expected
-            && expected.0 != scope.network
-        {
-            return Err(StartError::Moved(Network(scope.network.clone())));
-        }
+        let scope = Arc::new(approved(Scope::current(), expected)?);
         // Switching the bridge off also stops a probe or browse an agent asked for.
         let cancel = Cancellation::default();
         let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));
@@ -320,6 +317,22 @@ pub(super) trait Answers: Send + Sync + 'static {
     /// What this computer answers, told to the helper once per session.
     fn hello(&self) -> Hello;
     fn answer(&self, request: Request) -> Answer;
+}
+
+/// The scope a start may use: `current`, unless the start was approved for another network.
+/// No shareable network then is a move away from the approved one, not a refusal; failing to
+/// read the interfaces stays an error.
+fn approved(current: Result<Scope, StartError>, expected: Option<&Network>) -> Result<Scope, StartError> {
+    let scope = match current {
+        Err(StartError::Scope(ScopeError::NoNetwork | ScopeError::PointToPoint)) if expected.is_some() => {
+            return Err(StartError::Moved(None));
+        }
+        current => current?,
+    };
+    match expected {
+        Some(expected) if expected.0 != scope.network => Err(StartError::Moved(Some(Network(scope.network.clone())))),
+        _ => Ok(scope),
+    }
 }
 
 type Resolve = Box<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, Reply> + Send + Sync>;

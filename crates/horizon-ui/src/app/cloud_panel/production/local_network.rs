@@ -35,6 +35,9 @@ pub(super) enum Sharing {
     /// start from here must find exactly that network.
     Moved {
         to: Option<Network>,
+        /// As `Paused::ready_again`: set once the cloud is Ready on its current connection, so
+        /// a reconnect in progress, which still looks Ready, does not offer the new network.
+        ready: bool,
     },
     /// Why the bridge could not start, shown until the owner tries again.
     Refused(String),
@@ -49,14 +52,14 @@ impl Sharing {
 
     /// The cloud completed readiness (after a reconnect, resume or rebuild).
     pub(super) fn ready_again(&mut self) {
-        if let Self::Paused { ready_again } = self {
+        if let Self::Paused { ready_again } | Self::Moved { ready: ready_again, .. } = self {
             *ready_again = true;
         }
     }
 
     /// Forgets earlier readiness, so only the readiness of the connection that follows counts.
     pub(super) fn await_ready(&mut self) {
-        if let Self::Paused { ready_again } = self {
+        if let Self::Paused { ready_again } | Self::Moved { ready: ready_again, .. } = self {
             *ready_again = false;
         }
     }
@@ -77,8 +80,8 @@ impl Sharing {
 
 /// Why a bridge did not start.
 enum NotStarted {
-    /// This computer is on another network than the one the start was approved for.
-    Moved(Network),
+    /// This computer is on another network than the one the start was approved for, or on none.
+    Moved(Option<Network>),
     Refused(String),
 }
 
@@ -200,7 +203,7 @@ impl Runtime {
         // move only the network offered; switching on anew shares whatever network this is.
         let expected = match &self.sharing {
             Sharing::Paused { .. } => self.shared.clone(),
-            Sharing::Moved { to } => to.clone(),
+            Sharing::Moved { to, .. } => to.clone(),
             Sharing::Off | Sharing::On(_) | Sharing::Refused(_) => None,
         };
         self.sharing.stop();
@@ -210,7 +213,7 @@ impl Runtime {
             Some(Ok(connection)) => match start(&connection, self.scope.applied.clone(), expected.as_ref()) {
                 Ok(running) => Sharing::On(running),
                 Err(NotStarted::Moved(now)) => {
-                    self.moved(Some(now));
+                    self.moved(now);
                     return;
                 }
                 Err(NotStarted::Refused(error)) => Sharing::Refused(error),
@@ -257,10 +260,10 @@ impl Runtime {
                     }
                 }
                 // The offer always names the network this computer is on now.
-                Sharing::Moved { to } => {
+                Sharing::Moved { to, ready } => {
                     let on = current();
                     if on != *to {
-                        self.sharing = Sharing::Moved { to: on };
+                        self.sharing = Sharing::Moved { to: on, ready: *ready };
                     }
                 }
                 Sharing::Off | Sharing::Refused(_) => {}
@@ -287,7 +290,15 @@ impl Runtime {
     /// Stops sharing because this computer is no longer on the network it shared. The scope
     /// belonged to that network, so it is forgotten; the owner decides whether to share `to`.
     fn moved(&mut self, to: Option<Network>) {
-        self.sharing = Sharing::Moved { to };
+        // The cloud is as ready as it was: a running bridge's cloud is, a paused one's only once
+        // it completed readiness on its new connection.
+        let ready = self.connected_and_ready()
+            && match self.sharing {
+                Sharing::On(_) => true,
+                Sharing::Paused { ready_again } | Sharing::Moved { ready: ready_again, .. } => ready_again,
+                Sharing::Off | Sharing::Refused(_) => false,
+            };
+        self.sharing = Sharing::Moved { to, ready };
         self.scope.reset();
         self.shared = None;
     }
@@ -374,7 +385,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
         Sharing::Paused { .. } => Some(PAUSED.to_owned()),
-        Sharing::Moved { to } => Some(moved(to.as_ref().map(Network::subnet))),
+        Sharing::Moved { to, .. } => Some(moved(to.as_ref().map(Network::subnet))),
         Sharing::On(_) => status.map(describe),
     };
     if let Some(line) = line {
@@ -407,10 +418,13 @@ const PAUSED: &str = "Sharing paused: the cloud disconnected or this computer sl
      connected again, if this computer is still on the same network.";
 
 /// The network the card offers to share after a move: only once the cloud is connected and
-/// Ready, since a bridge needs its connection. The switch stays either way, to stop sharing.
+/// has completed readiness on that connection, since a bridge needs it. The switch stays either way, to stop sharing.
 fn move_offer(runtime: &Runtime) -> Option<Subnet> {
     match &runtime.sharing {
-        Sharing::Moved { to: Some(network) } if runtime.connected_and_ready() => Some(network.subnet()),
+        Sharing::Moved {
+            to: Some(network),
+            ready: true,
+        } if runtime.connected_and_ready() => Some(network.subnet()),
         _ => None,
     }
 }
@@ -874,7 +888,7 @@ mod tests {
         assert!(!runtime.reconcile_sharing_with(later(3, 0), || Some(home())));
         assert!(matches!(runtime.sharing, Sharing::On(_)), "still on the shared network");
         assert!(!runtime.reconcile_sharing_with(later(6, 0), || Some(office())));
-        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to) } if *to == office()));
+        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == office()));
         assert_eq!(
             (runtime.scope.applied.clone(), runtime.shared.clone()),
             (Rules::default(), None)
@@ -885,7 +899,7 @@ mod tests {
         // Leaving every network stops sharing too.
         let (mut runtime, _sender) = sharing_home();
         assert!(!runtime.reconcile_sharing_with(later(3, 0), || None));
-        assert!(matches!(runtime.sharing, Sharing::Moved { to: None }));
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
     }
 
     #[test]
@@ -917,7 +931,7 @@ mod tests {
         );
         assert!(!runtime.reconcile_sharing_with(later(3, 0), || Some(office())));
         assert!(
-            matches!(&runtime.sharing, Sharing::Moved { to: Some(to) } if *to == office()),
+            matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == office()),
             "moved while still disconnected"
         );
     }
@@ -932,7 +946,7 @@ mod tests {
         assert_eq!(move_offer(&runtime), Some(cafe.subnet()), "moved again before sharing");
         assert!(!runtime.reconcile_sharing_with(later(9, 0), || None));
         assert_eq!(move_offer(&runtime), None, "no network to offer");
-        assert!(matches!(runtime.sharing, Sharing::Moved { to: None }));
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
         assert!(!runtime.reconcile_sharing_with(later(12, 0), || Some(cafe.clone())));
         runtime.receiver = None;
         assert_eq!(
@@ -955,19 +969,54 @@ mod tests {
         assert_eq!(expected, Some(home()));
         // The owner's answer to a move expects exactly the network offered; finding another
         // one at start asks again about that one instead of sharing it.
-        runtime.sharing = Sharing::Moved { to: Some(office()) };
+        runtime.sharing = Sharing::Moved {
+            to: Some(office()),
+            ready: true,
+        };
         let cafe = Network::new("172.20.0.0/24".parse().unwrap(), "172.20.0.9".parse().unwrap(), "wlan0");
         runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, network| {
             assert_eq!(network, Some(&office()));
-            Err(NotStarted::Moved(cafe.clone()))
+            Err(NotStarted::Moved(Some(cafe.clone())))
         });
-        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to) } if *to == cafe));
+        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == cafe));
+        assert_eq!(
+            move_offer(&runtime),
+            Some(cafe.subnet()),
+            "still ready, so asked at once"
+        );
+        // A resume that finds no network at all is a move too, not a refusal.
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        runtime.shared = Some(home());
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, _| Err(NotStarted::Moved(None)));
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
         // Switching on anew shares whatever network this is.
         runtime.sharing = Sharing::Off;
         runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, network| {
             assert_eq!(network, None);
             Ok(Running::new(None))
         });
+    }
+
+    #[test]
+    fn a_move_during_a_reconnect_is_offered_only_once_that_reconnect_is_ready() {
+        // A reconnect in progress still looks connected and Ready.
+        let (mut runtime, _sender) = sharing_home();
+        runtime.sharing = Sharing::Paused { ready_again: false };
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Some(office())));
+        assert!(matches!(runtime.sharing, Sharing::Moved { ready: false, .. }));
+        assert_eq!(move_offer(&runtime), None, "offered before the reconnect was ready");
+        runtime.sharing.ready_again();
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        // Another reconnect forgets that readiness until its own Ready.
+        runtime.sharing.await_ready();
+        assert_eq!(move_offer(&runtime), None);
+        runtime.sharing.ready_again();
+        assert!(!runtime.reconcile_sharing_with(later(6, 0), || Some(office())));
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        // A disconnect forgets it as well.
+        runtime.receiver = None;
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), || Some(office())));
+        assert!(matches!(runtime.sharing, Sharing::Moved { ready: false, .. }));
     }
 
     #[test]
