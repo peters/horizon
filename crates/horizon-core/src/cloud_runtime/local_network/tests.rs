@@ -345,16 +345,17 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
         assert!(matches!(bridge.status().state, State::Active { .. }));
     }
 
-    /// Answers the first call slowly and every later one at once.
-    struct SlowFirst(AtomicUsize);
+    /// Answers a probe slowly and a browse at once. Calls are answered on threads that start in
+    /// any order, so the slow one is chosen by its request, not by arriving first.
+    struct SlowProbe;
 
-    impl Answers for SlowFirst {
+    impl Answers for SlowProbe {
         fn hello(&self) -> Hello {
             Unanswered.hello()
         }
 
-        fn answer(&self, _: Request) -> Answer {
-            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+        fn answer(&self, request: Request) -> Answer {
+            if matches!(request, Request::Probe { .. }) {
                 std::thread::sleep(Duration::from_millis(1500));
                 return Answer::Refused("slow".into());
             }
@@ -368,19 +369,13 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
         let script = Script {
             prepare: PREPARED.into(),
             hold: r#"printf '{"proxy":"127.0.0.1:41234"}\n'
-printf '{"id":1,"request":"discover"}\n{"id":2,"request":"discover"}\n'
+printf '{"id":1,"request":{"probe":{"host":"192.168.1.50"}}}\n{"id":2,"request":"discover"}\n'
 while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#
                 .into(),
             log: root.path().join("log"),
         };
         let proxy = Proxy::with_gate(subnet(), Arc::new(gate(Box::new(|_, _| Ok(Vec::new()))))).unwrap();
-        let bridge = Bridge::with_answers(
-            proxy,
-            script,
-            Arc::new(SlowFirst(AtomicUsize::new(0))),
-            Cancellation::default(),
-        )
-        .unwrap();
+        let bridge = Bridge::with_answers(proxy, script, Arc::new(SlowProbe), Cancellation::default()).unwrap();
         wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
         let deadline = Instant::now() + Duration::from_secs(10);
         while !log(&root).contains(r#""id":1"#) {
