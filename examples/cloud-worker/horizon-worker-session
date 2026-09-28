@@ -120,9 +120,10 @@ start_preparation() {
     : > "$state/prepare.log"
     export -f prepare present prepare_checkout
     export shared id root worktree revision state
-    # A signal (exit status above 128) leaves no failure record, so the next attach resumes.
+    # A signal (exit status 129 and above) leaves no failure record, so the next attach
+    # resumes. 128 is an ordinary failure, such as a fatal Git error.
     setsid -w bash -c '(set -euo pipefail; prepare_checkout "$@"); status=$?
-        if [ "$status" -ne 0 ] && [ "$status" -lt 128 ]; then touch "$state/failed"; sync -f "$state"; fi
+        if [ "$status" -ne 0 ] && [ "$status" -le 128 ]; then touch "$state/failed"; sync -f "$state"; fi
         exit "$status"' horizon-worker-prepare "${siblings[@]}" < /dev/null >> "$state/prepare.log" 2>&1 9>&- &
     local preparer=$!
     exec 8>&-
@@ -231,10 +232,12 @@ fi
 # A shared attach that ends before its launch fence leaves no session state behind, so a
 # refusal never binds the session id. The shared checkout is never part of that state.
 staging=
-created=false
+owner=
 roll_back() {
     if [ -n "$staging" ]; then rm -rf "$staging"; fi
-    if "$created" && [ ! -f "$session/launch-requested" ]; then rm -rf "$session"; fi
+    # Only a directory carrying this attach's own marker was published by it.
+    if [ -n "$owner" ] && [ ! -f "$session/launch-requested" ] \
+        && [ "$(cat "$session/attach-owner" 2>/dev/null)" = "$owner" ]; then rm -rf "$session"; fi
 }
 trap roll_back EXIT
 mkdir -p /workspace/sessions
@@ -258,9 +261,12 @@ else
         [ -n "$listing" ] || rm "$staging/siblings.json"
     fi
     touch "$staging/preparing"
+    # Claimed before the rename, so a signal right after it still rolls the binding back.
+    if "$shared"; then
+        owner="${staging##*/}"
+        printf '%s\n' "$owner" > "$staging/attach-owner"
+    fi
     mv "$staging" "$session"
-    # Only a directory this attach renamed into place is ever rolled back.
-    created="$shared"
     staging=
 fi
 load_layout

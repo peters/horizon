@@ -157,6 +157,34 @@ class SharedCheckoutRecoveryTests(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual([entry['cwd'] for entry in f.launches()], [str(self.checkout)])
 
+    def test_a_fatal_git_status_128_is_a_recorded_failure(self):
+        f = self.fixture
+        (f.tools / 'horizon-worker-source').write_text('#!/bin/sh\necho fatal: bad object >&2\nexit 128\n')
+        failed = self.start('one')
+        self.assertEqual(failed.returncode, 3)
+        self.assertIn('preparation failed', failed.stderr)
+        self.assertTrue((self.state / 'failed').exists())
+        fenced = self.start('one')
+        self.assertEqual(fenced.returncode, 3)
+        self.assertIn('--retry-shared-checkout', fenced.stderr)
+        self.assertEqual(f.launches(), [])
+
+    def test_a_hangup_right_after_publishing_the_binding_rolls_it_back(self):
+        f = self.fixture
+        self.release.touch()
+        # The rename completes, then the SSH client hangs up before the next command.
+        mv = f.tools / 'mv'
+        mv.write_text(f'#!/bin/bash\n{shutil.which("mv")} "$@" || exit\n'
+                      'case "$1" in */.preparing-*) kill -HUP "$PPID";; esac\n')
+        mv.chmod(0o700)
+        interrupted = self.start('one')
+        self.assertEqual(interrupted.returncode, -signal.SIGHUP, interrupted.stderr)
+        self.assert_no_session_state('one')
+        mv.unlink()
+        retried = self.start('one')
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertEqual(len(f.launches()), 1)
+
     def test_a_failure_recorded_after_ready_still_fences_attaches(self):
         f = self.fixture
         self.release.touch()
