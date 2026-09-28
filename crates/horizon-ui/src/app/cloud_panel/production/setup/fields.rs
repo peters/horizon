@@ -2,11 +2,7 @@ use crate::theme;
 use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::setup::{Agent, Authentication, Draft};
 
-pub(super) fn render(ui: &mut Ui, draft: &mut Draft) {
-    render_profile(ui, draft, false);
-}
-
-pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
+pub(super) fn accounts(ui: &mut Ui, draft: &mut Draft) {
     // Settings saved for Hetzner alone hold no RunPod key to keep.
     let saved_compute = draft.saved_credentials.contains(&draft.settings.runpod_key_file);
     ui.label(RichText::new("Compute account").size(16.0).strong());
@@ -18,7 +14,9 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
     );
     ui.add_space(12.0);
     render_hetzner(ui, draft);
-    ui.add_space(18.0);
+}
+
+pub(super) fn agents(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool) {
     ui.label(RichText::new("Coding agents").size(16.0).strong());
     ui.label(RichText::new("Choose one or both. New panels share the cloud checkout.").color(theme::FG_SOFT()));
     let selected_agents = draft.selected_agents().to_vec();
@@ -66,15 +64,16 @@ pub(super) fn render_profile(ui: &mut Ui, draft: &mut Draft, fixed_agents: bool)
             }
         });
     }
-    ui.add_space(12.0);
-    ui.collapsing("Advanced", |ui| {
-        ui.small("A dedicated SSH identity is created automatically. Existing registry, Git and remote-browser bindings are preserved.");
-        ui.label("Docker endpoint (blank uses the local default)");
-        let mut endpoint = draft.settings.docker_host.clone().unwrap_or_default();
-        if ui.text_edit_singleline(&mut endpoint).changed() {
-            draft.settings.docker_host = (!endpoint.trim().is_empty()).then(|| endpoint.trim().to_owned());
-        }
-    });
+}
+
+pub(super) fn advanced(ui: &mut Ui, draft: &mut Draft) {
+    ui.label(RichText::new("Advanced options").size(16.0).strong());
+    ui.small("A dedicated SSH identity is created automatically. Existing registry, Git and remote-browser bindings are preserved.");
+    ui.label("Docker endpoint (blank uses the local default)");
+    let mut endpoint = draft.settings.docker_host.clone().unwrap_or_default();
+    if ui.text_edit_singleline(&mut endpoint).changed() {
+        draft.settings.docker_host = (!endpoint.trim().is_empty()).then(|| endpoint.trim().to_owned());
+    }
 }
 
 /// Hetzner as an optional second provider for CPU clouds.
@@ -92,6 +91,18 @@ fn render_hetzner(ui: &mut Ui, draft: &mut Draft) {
     ui.label("Hetzner Cloud API token");
     secret(ui, "hetzner-token", &mut hetzner.token, saved);
     ui.small("A read and write token for a project used only by Horizon. It covers the whole project, so it stays on this computer and never reaches a worker.");
+}
+
+pub(super) fn placement(ui: &mut Ui, draft: &mut Draft) {
+    ui.label(RichText::new("Where clouds run").size(16.0).strong());
+    ui.label("Choose a size and data center for each cloud in New cloud.");
+    ui.add_space(12.0);
+    ui.label(RichText::new("Hetzner preferences").strong());
+    let hetzner = &mut draft.hetzner;
+    if !hetzner.enabled {
+        ui.label("Enable Hetzner in Accounts to edit its placement preferences.");
+        return;
+    }
     ui.label("Server types, in order of preference");
     list(ui, "hetzner-server-types", &mut hetzner.server_types);
     ui.label("Locations, in order of preference");
