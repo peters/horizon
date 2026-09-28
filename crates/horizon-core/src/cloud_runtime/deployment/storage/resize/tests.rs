@@ -73,6 +73,14 @@ fn confirmed(store: &Store) -> Intent {
 fn local_commit_recovers_each_boundary_and_keeps_workspace_sessions() {
     for after_storage in [false, true] {
         let (root, store) = fixture();
+        let mut original = store.load().unwrap().unwrap();
+        original.last_self_stop = Some(crate::cloud_runtime::worker_contract::SelfStop {
+            at: 123,
+            reason: "Previous worker stopped".into(),
+            agent: None,
+            session: None,
+        });
+        store.save(&original).unwrap();
         let intent = confirmed(&store);
         let sessions = serde_json::to_value(&intent.original().unwrap().sessions).unwrap();
         assert!(
@@ -95,11 +103,56 @@ fn local_commit_recovers_each_boundary_and_keeps_workspace_sessions() {
         assert_eq!((state.profile.cpu, state.profile.memory_gb), (8, 16));
         assert_eq!(state.worker.unwrap().id, "worker2");
         assert_eq!(state.stage, Stage::Readiness);
+        assert!(state.last_self_stop.is_none());
         assert!(state.source_ready);
         assert_eq!(serde_json::to_value(state.sessions).unwrap(), sessions);
         let storage = load(&store, state.spec.as_ref().unwrap()).unwrap().unwrap();
         assert!(matches!(storage.state, State::Bound { creation: None, .. }));
         assert!(!root.path().join(JOURNAL).exists());
+    }
+}
+
+#[test]
+fn retained_resize_rechecks_ssh_identity_before_provider_work() {
+    for phase in ["prepared", "terminating", "creating", "completed"] {
+        let (root, store) = fixture();
+        let mut intent = confirmed(&store);
+        let mut replacement = serde_json::to_value(&intent.replacement).unwrap();
+        replacement["phase"] = json!(phase);
+        if phase != "completed" {
+            replacement["creation"] = json!({"state":"prepared"});
+        }
+        intent.replacement = serde_json::from_value(replacement).unwrap();
+        intent.observed = None;
+        write(&store, &intent).unwrap();
+        let mut settings = settings();
+        settings.ssh_identity_file = root.path().join("identity");
+        fs::write(
+            root.path().join("identity.pub"),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF2kk2kaQHcd1MHINbQ4muiDkEONuV3co+7ug6QOawIB fixture",
+        )
+        .unwrap();
+        let journal = fs::read(root.path().join(JOURNAL)).unwrap();
+        let deployment = fs::read(root.path().join("deployment.json")).unwrap();
+        let storage = fs::read(root.path().join("workspace-volume.json")).unwrap();
+        drop(store);
+        let error = resize_compute_with(
+            root.path(),
+            &settings,
+            8,
+            16,
+            &Cancellation::default(),
+            &|_| panic!("Provider work must not begin"),
+            || panic!("A mismatched identity must not reconnect"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The SSH identity differs from the replacement worker"
+        );
+        assert_eq!(fs::read(root.path().join(JOURNAL)).unwrap(), journal);
+        assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
+        assert_eq!(fs::read(root.path().join("workspace-volume.json")).unwrap(), storage);
     }
 }
 #[test]

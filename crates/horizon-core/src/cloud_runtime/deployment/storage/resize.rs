@@ -108,6 +108,11 @@ fn resize_compute_with(
         }
         intent.verify(&store)?;
         if intent.observed.is_none() {
+            if super::super::current_public_key(&settings.ssh_identity_file)?
+                != intent.replacement.specification().public_key
+            {
+                return Err(Error::Invalid("The SSH identity differs from the replacement worker"));
+            }
             let provider = RunPod::new(settings.credential()?);
             let mut replacement = intent.replacement.clone();
             emit(Event::stage(Stage::Provision));
@@ -194,6 +199,7 @@ impl Intent {
         };
         state.worker = Some(worker.clone());
         state.stage = Stage::Readiness;
+        state.last_self_stop = None;
         let mut storage = self.storage.clone();
         storage.worker = spec;
         storage.state = State::Bound {
