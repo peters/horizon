@@ -2,9 +2,22 @@
 use crate::theme;
 use egui::{DragValue, RichText, Ui};
 use horizon_core::cloud_runtime::{
+    flavors,
     prices::{Profile, StorageTier},
     provider::{Choice, Description, Kind},
 };
+
+pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    let provider = super::provider::current(form.provider, profile);
+    (provider.kind == Kind::RunPod
+        && !profile.gpu
+        && !flavors::offered(
+            form.size.unwrap_or((profile.cpu, profile.memory_gb)),
+            profile.storage.container_gb,
+        ))
+    .then_some("Choose a CPU and memory size that supports this container disk before starting.")
+}
 
 pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) -> bool {
     let before = profile.storage.clone();
@@ -50,6 +63,11 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
     } else {
         "Your workspace is retained when the worker stops."
     });
+    let container_max = if provider.kind == Kind::RunPod && !profile.gpu {
+        flavors::max_container_gb()
+    } else {
+        u16::MAX
+    };
     ui.horizontal(|ui| {
         let label = ui.label(if provider.kind == Kind::Hetzner {
             "System disk requirement"
@@ -58,7 +76,7 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         });
         ui.add(
             DragValue::new(&mut profile.storage.container_gb)
-                .range(1..=u16::MAX)
+                .range(1..=container_max)
                 .suffix(" GB"),
         )
         .labelled_by(label.id);
@@ -97,6 +115,20 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn container_limit_uses_cpu_flavors_without_restricting_gpu_or_system_disks() {
+        let mut profile = profile();
+        profile.storage.container_gb = u16::MAX;
+        labels(&mut profile, &provider::RUNPOD);
+        assert_eq!(profile.storage.container_gb, flavors::max_container_gb());
+        for (gpu, provider) in [(true, &provider::RUNPOD), (false, &provider::HETZNER)] {
+            profile.gpu = gpu;
+            profile.storage.container_gb = u16::MAX;
+            labels(&mut profile, provider);
+            assert_eq!(profile.storage.container_gb, u16::MAX);
+        }
     }
 
     #[test]

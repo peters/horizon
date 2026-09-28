@@ -555,7 +555,7 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
-        (false, false) => None,
+        (false, false) => storage::size_reason(form),
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
         (true, true) => Some("Enter a cloud title and read the repository profile."),
@@ -569,4 +569,5 @@ fn can_submit(form: &Production) -> bool {
         && !form.launch.submitted
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
+        && storage::size_reason(form).is_none()
 }

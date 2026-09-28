@@ -254,7 +254,7 @@ output for build and push progress. Failures retain a retryable card and the
 persisted operation identity.
 
 New cloud's **Storage** fields edit workspace and container-disk sizes for this
-launch without changing the repository profile. CPU profiles offer Standard or
+launch without changing the repository profile. RunPod CPU profiles offer Standard or
 High-performance network storage. GPU profiles use a pod volume; Hetzner profiles
 use persistent block storage and show the minimum system-disk requirement. Prices,
 stock checks and launch use the edited values.
