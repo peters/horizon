@@ -746,3 +746,38 @@ fn focus_loss_discards_inherited_replay_pacing() {
         vec![Event::Text("preserved".into()), Event::WindowFocused(false)]
     );
 }
+
+#[test]
+fn startup_loading_and_recovery_controls_receive_modified_clicks_directly() {
+    use crate::app::{
+        StartupBootstrapFailure,
+        test_support::{raw_input, run_app_frame_with_input, test_app},
+    };
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    app.startup_receiver = Some(receiver);
+    let pos = Pos2::new(500.0, 400.0);
+    for failed in [false, true] {
+        if failed {
+            app.startup_receiver = None;
+            app.startup_bootstrap_failure = Some(StartupBootstrapFailure::WorkerDisconnected);
+        }
+        assert!(!app.canvas_gesture_enabled());
+        let mut raw = raw_input([1400.0, 900.0], None);
+        raw.events = vec![
+            button(pos, true),
+            button(pos, false),
+            button(pos, true),
+            button(pos, false),
+        ];
+        let original = raw.events.clone();
+        app.filter_canvas_gesture(&ctx, &mut raw);
+        assert_eq!(raw.events, original);
+        assert!(app.canvas_gesture.pending.is_none());
+        app.canvas_gesture.completed = Some(pos);
+        app.handle_canvas_double_click(&ctx);
+        assert!(app.pending_preset_pick.is_none());
+    }
+}
