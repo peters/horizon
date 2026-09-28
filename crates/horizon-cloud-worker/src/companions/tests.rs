@@ -7,6 +7,7 @@ fn runtime(root: &Path) -> Runtime {
         live: root.join("run"),
         ssh_home: root.join("home/.ssh"),
         source_helper: "/usr/bin/true".into(),
+        probe_wait: Duration::from_millis(300),
     }
 }
 
@@ -411,4 +412,48 @@ fn inspection_serializes_connection_metadata_and_live_probe_with_mutations() {
             .unwrap()
     );
     runtime.apply(&disconnect).unwrap();
+}
+
+#[test]
+fn an_inspection_waits_out_brief_setup_and_reports_a_held_lock_as_busy() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = runtime(root.path());
+    let access = Access {
+        grant: "one".into(),
+        ssh_alias: "companion-app".into(),
+        worktree: "/workspace/companions/worktrees/one".into(),
+    };
+    let directory = runtime.key_directory(&access.grant);
+    files::directory(&directory).unwrap();
+    let connection = Response::Connected {
+        ssh_alias: access.ssh_alias.clone(),
+        worktree: access.worktree.clone(),
+    };
+    files::write(
+        &directory.join("connection.json"),
+        &serde_json::to_vec(&connection).unwrap(),
+    )
+    .unwrap();
+    // Setup holds the lock briefly, as the owning Horizon's refresh does: the probe waits.
+    std::thread::scope(|scope| {
+        let (held, taken) = std::sync::mpsc::sync_channel(0);
+        let runtime = &runtime;
+        scope.spawn(move || {
+            runtime
+                .with_lock(|| {
+                    held.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+                    Ok(())
+                })
+                .unwrap();
+        });
+        taken.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(runtime.probe_access(&access, || Ok(true)).unwrap());
+    });
+    // Held past the wait: a busy error, never an SSH verdict.
+    let busy = runtime
+        .with_lock(|| Ok(runtime.probe_access(&access, || panic!("probe ran under a held lock"))))
+        .unwrap()
+        .unwrap_err();
+    assert!(is_busy(&busy));
 }
