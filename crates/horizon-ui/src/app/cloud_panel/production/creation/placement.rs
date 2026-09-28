@@ -41,7 +41,14 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
     let mut candidates: Vec<_> = list
         .data_centers
         .iter()
-        .filter(|center| profile.gpu || center.workspace_storage)
+        .filter(|center| {
+            profile.gpu
+                || if profile.storage.standard_tier() {
+                    center.workspace_storage
+                } else {
+                    size.is_some_and(|size| size.is_ok_and(|size| size.centers.iter().any(|(id, _)| *id == center.id)))
+                }
+        })
         .map(|center| {
             let here = std::slice::from_ref(&center.id);
             let stocked = if profile.gpu {
@@ -430,6 +437,39 @@ mod tests {
         let cpu = candidates(&prices, list, &[], &profile);
         assert_eq!(cpu.len(), 1);
         assert_eq!(cpu[0].center.id, "US-1");
+    }
+
+    #[test]
+    fn premium_placement_and_watch_use_exact_tier_stock() {
+        use horizon_core::cloud_runtime::prices::{Availability, SizeAvailability, watch::Selection};
+        let (mut prices, mut profile) = fixture();
+        profile.gpu = false;
+        profile.storage.volume_tier = serde_json::from_value(serde_json::json!("HIGH_PERFORMANCE")).unwrap();
+        let (mut list, preferences) = prices.list.as_ref().unwrap().value.clone();
+        list.data_centers.push(center("EU-3", "EUROPE", false));
+        let available = SizeAvailability {
+            centers: vec![("EU-2".into(), Availability::High), ("EU-3".into(), Availability::None)],
+        };
+        prices.answered(list.clone(), preferences, vec![(profile.clone(), available.clone())]);
+        let choices = candidates(&prices, &list, &[], &profile);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|entry| (entry.center.id.as_str(), entry.stock))
+                .collect::<Vec<_>>(),
+            [("EU-2", Stock::Yes), ("EU-3", Stock::No)]
+        );
+        let chosen = Selection::new(
+            profile,
+            Placement {
+                data_centers: vec!["EU-2".into()],
+                ..Placement::default()
+            },
+        )
+        .unwrap();
+        assert!(!chosen.available(&list, None));
+        assert!(chosen.available(&list, Some(&available)));
+        assert!(!chosen.available(&list, Some(&SizeAvailability { centers: Vec::new() })));
     }
 
     #[test]

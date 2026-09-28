@@ -183,6 +183,7 @@ fn load_at(root: &std::path::Path, worker: &WorkerSpec, replacement: Option<&Wor
         || !records_worker(&record.worker, worker, replacement)
         || record.spec.operation_id != worker.operation_id
         || record.spec.size != u32::from(worker.profile.storage.volume_gb)
+        || record.spec.tier != worker.profile.storage.volume_tier
         || worker.profile.gpu
         || (!worker.data_centers.is_empty() && !worker.data_centers.contains(&record.spec.data_center_id))
     {

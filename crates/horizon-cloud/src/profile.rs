@@ -66,6 +66,12 @@ pub struct Storage {
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
+impl Storage {
+    #[must_use]
+    pub fn standard_tier(&self) -> bool {
+        self.volume_tier == crate::runpod::volumes::Tier::Standard
+    }
+}
 impl Default for Storage {
     fn default() -> Self {
         Self {
@@ -169,9 +175,9 @@ impl Profile {
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
         self.capabilities.validate()?;
-        if self.storage.volume_tier != crate::runpod::volumes::Tier::Standard {
+        if !self.storage.standard_tier() && (self.provider != "runpod" || self.gpu) {
             return Err(ProfileError::Invalid(
-                "Only standard workspace storage is available for cloud profiles yet",
+                "High-performance network storage requires a RunPod CPU cloud",
             ));
         }
         let supported = matches!(self.provider.as_str(), "runpod" | crate::hetzner::PROVIDER);
@@ -286,7 +292,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storage_tier_preserves_legacy_profile_encoding_and_refuses_unwired_launches() {
+    fn storage_tier_preserves_legacy_encoding_and_requires_cpu_network_storage() {
         let legacy = r#"{"container_gb":20,"volume_gb":20}"#;
         let storage: Storage = serde_json::from_str(legacy).unwrap();
         assert_eq!(storage, Storage::default());
@@ -303,6 +309,11 @@ mod tests {
         let encoded = serde_json::to_string(&profile).unwrap();
         assert!(encoded.contains("HIGH_PERFORMANCE"));
         assert_eq!(serde_json::from_str::<Profile>(&encoded).unwrap(), profile);
+        assert!(profile.validate(false).is_ok());
+        profile.gpu = true;
+        assert!(profile.validate(false).is_err());
+        profile.gpu = false;
+        profile.provider = "hetzner".into();
         assert!(profile.validate(false).is_err());
         assert!(profile.validate(true).is_err());
     }

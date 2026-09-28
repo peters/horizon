@@ -199,3 +199,82 @@ fn changed_mount_or_another_attachment_cannot_qualify_created_resources() {
         task.join().unwrap();
     }
 }
+
+#[test]
+fn premium_storage_binds_only_to_a_matching_worker_profile() {
+    let mut requested = spec();
+    requested.profile.storage.volume_tier = Tier::HighPerformance;
+    let mut storage = volume_spec();
+    storage.tier = Tier::HighPerformance;
+    let mut premium = volume();
+    premium.tier = Some(Tier::HighPerformance);
+    let mut responses = creation_responses();
+    responses[2].1 = serde_json::to_string(&premium).unwrap();
+    responses.extend([
+        (200, observed().to_string()),
+        (200, mount().to_string()),
+        (200, endpoints(&json!([]))),
+        (200, pods(&json!([observed()]))),
+    ]);
+    let (mut provider, requests, task) = server(responses);
+    provider.api_endpoint = provider.endpoint.clone();
+    let cancel = Cancellation::default();
+    let attachment = provider
+        .create_fresh_volume(&storage, &cancel, |_| Ok(()))
+        .unwrap()
+        .create_worker(&requested, &cancel, |_| Ok(()))
+        .unwrap()
+        .confirm(&cancel)
+        .unwrap();
+    assert_eq!(attachment.volume(), &premium);
+    assert_eq!(attachment.spec(), &requested);
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    let allocation = requests
+        .iter()
+        .find(|r| r.starts_with("POST /network-volumes "))
+        .unwrap();
+    assert!(allocation.contains("HIGH_PERFORMANCE"));
+    assert!(premium.verify_worker_spec(&spec()).is_err());
+    let mut legacy = premium.clone();
+    legacy.tier = None;
+    assert!(legacy.verify_worker_spec(&requested).is_err());
+    assert!(legacy.verify_worker_spec(&spec()).is_ok());
+}
+
+#[test]
+fn placement_filters_the_requested_tier_before_checking_cpu_stock() {
+    use crate::runpod::volumes::{Catalog, candidates};
+    let catalog: Catalog = serde_json::from_value(json!({"dataCenters":[
+        {"id":"premium", "networkVolumeTypes":["HIGH_PERFORMANCE"],
+         "cpuAvailability":[{"id":"cpu3c","availability":"HIGH"}]},
+        {"id":"standard", "networkVolumeTypes":["STANDARD"],
+         "cpuAvailability":[{"id":"cpu3c","availability":"HIGH"}]}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        candidates(catalog, &[], &["cpu3c".into()], Tier::HighPerformance),
+        vec![(0, "premium".into())]
+    );
+}
+
+#[test]
+fn premium_stock_keeps_compatible_sold_out_locations_but_excludes_other_tiers() {
+    let mut profile = spec().profile;
+    profile.storage.volume_tier = Tier::HighPerformance;
+    let catalog = json!({"dataCenters":[
+        {"id":"premium-sold-out", "networkVolumeTypes":["HIGH_PERFORMANCE"]},
+        {"id":"standard", "networkVolumeTypes":["STANDARD"]}
+    ]});
+    let (mut provider, requests, task) = server(vec![(200, catalog.to_string())]);
+    provider.catalog_endpoint = provider.endpoint.clone();
+    let stock = provider
+        .cpu_size_availability(&profile, &["cpu3c".into()], &[], &Cancellation::default())
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(
+        stock.centers,
+        vec![("premium-sold-out".into(), crate::prices::Availability::None)]
+    );
+    assert!(requests.lock().unwrap()[0].contains("networkVolumeTypes=HIGH_PERFORMANCE"));
+}

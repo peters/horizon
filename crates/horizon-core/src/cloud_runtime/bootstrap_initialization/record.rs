@@ -202,6 +202,7 @@ impl Record {
         if expected_spec != self.spec
             || self.volume_spec.operation_id != self.spec.operation_id
             || self.volume_spec.size != u32::from(self.spec.profile.storage.volume_gb)
+            || self.volume_spec.tier != self.spec.profile.storage.volume_tier
             || (!self.spec.data_centers.is_empty()
                 && !self.spec.data_centers.contains(&self.volume_spec.data_center_id))
             || (matches!(
