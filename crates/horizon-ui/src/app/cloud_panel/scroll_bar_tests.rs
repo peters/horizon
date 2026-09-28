@@ -171,7 +171,7 @@ fn new_cloud_dialog_press_on_a_lower_control_reaches_it() {
         time += 0.05;
         let _ = ctx
             .run_ui(input(size, time, position, events), |ui| {
-                app.render_cloud_creation(ui.ctx())
+                app.render_cloud_creation(ui.ctx());
             })
             .discard_textures();
     };
@@ -204,7 +204,7 @@ fn cloud_settings_press_on_a_lower_control_reaches_it() {
     let mut frame = |app: &mut HorizonApp, position: Pos2, events: Vec<Event>| {
         time += 0.05;
         ctx.run_ui(input(size, time, position, events), |ui| {
-            app.render_cloud_accounts(ui.ctx())
+            app.render_cloud_accounts(ui.ctx());
         })
         .discard_textures()
     };
