@@ -455,5 +455,5 @@ fn an_inspection_waits_out_brief_setup_and_reports_a_held_lock_as_busy() {
         .with_lock(|| Ok(runtime.probe_access(&access, || panic!("probe ran under a held lock"))))
         .unwrap()
         .unwrap_err();
-    assert_eq!(busy.kind(), io::ErrorKind::WouldBlock);
+    assert!(is_busy(&busy));
 }

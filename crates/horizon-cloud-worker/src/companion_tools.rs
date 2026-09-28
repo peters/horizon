@@ -94,7 +94,7 @@ fn inspect(
             Ok(true) => Status::Ready,
             // Companion setup held the lock throughout: nothing was learned about
             // SSH, so the access is reported unverified rather than unreachable.
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Status::Unverified,
+            Err(error) if crate::companions::is_busy(&error) => Status::Unverified,
             Ok(false) | Err(_) => Status::Unreachable,
         };
         let latest = load(path)?;

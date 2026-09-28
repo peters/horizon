@@ -24,7 +24,21 @@ struct Runtime {
 }
 
 /// The companion lock was held throughout; nothing about the target is known.
-const BUSY: &str = "Companion setup busy; retry";
+#[derive(Debug)]
+pub(crate) struct Busy;
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Companion setup busy; retry")
+    }
+}
+
+impl std::error::Error for Busy {}
+
+/// Whether `error` is only the companion lock being held, never a probe failure.
+pub(crate) fn is_busy(error: &io::Error) -> bool {
+    matches!(error.get_ref(), Some(inner) if inner.is::<Busy>())
+}
 
 pub(super) fn run() -> io::Result<()> {
     let mut input = Vec::new();
@@ -109,11 +123,16 @@ impl Runtime {
             .write(true)
             .open(self.live.join("companion.lock"))?;
         let deadline = std::time::Instant::now() + wait;
-        while lock.try_lock().is_err() {
-            if std::time::Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, BUSY));
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                // Only contention is waited out; a locking failure is reported as itself.
+                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => return Err(io::Error::new(io::ErrorKind::WouldBlock, Busy)),
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
             }
-            std::thread::sleep(Duration::from_millis(100));
         }
         let result = operation();
         let unlock = lock.unlock();
