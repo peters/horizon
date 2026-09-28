@@ -166,18 +166,25 @@ pub(super) fn bounded_source(
         return Err(Error::Invalid("Source material manifest exceeds its limit"));
     }
     // The archive is retained and later framed, so it is charged twice, as a pack is.
+    let path = retained.join("source-material.tar");
     let mut output = Bounded {
-        file: std::io::BufWriter::new(std::fs::File::create_new(retained.join("source-material.tar"))?),
+        file: std::io::BufWriter::new(std::fs::File::create_new(&path)?),
         remaining: budget.remaining / 2,
         written: 0,
         exceeded: false,
     };
-    let result = archive::write(&selected, &manifest, &directory, &mut output, runner);
-    if output.exceeded {
+    let deadline = std::time::Instant::now() + archive::TIMEOUT;
+    let result = archive::write(&selected, &manifest, &directory, &mut output, runner, deadline);
+    let (exceeded, written) = (output.exceeded, output.written);
+    drop(output);
+    if exceeded || result.is_err() {
+        let _ = std::fs::remove_file(&path);
+    }
+    if exceeded {
         return Err(Error::Invalid("Source export exceeds its aggregate byte budget"));
     }
     result?;
-    budget.charge(output.written * 2)
+    budget.charge(written * 2)
 }
 
 /// Refuses any write past its share of the export budget.

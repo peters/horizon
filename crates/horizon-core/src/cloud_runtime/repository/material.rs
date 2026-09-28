@@ -408,6 +408,23 @@ impl Read for Verified<'_, '_> {
 }
 
 pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
+    archive_until(
+        repository,
+        revision,
+        root,
+        runner,
+        Instant::now() + super::archive::TIMEOUT,
+    )
+}
+
+/// Leaves no partial archive behind when writing it fails.
+pub(super) fn archive_until(
+    repository: &Path,
+    revision: &str,
+    root: &Path,
+    runner: &Runner<'_>,
+    deadline: Instant,
+) -> Result<PathBuf> {
     let material = Material::collect(repository, revision, runner)?;
     let packs = root.join("material");
     std::fs::create_dir(&packs)?;
@@ -422,8 +439,13 @@ pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &R
     let manifest = serde_json::to_vec(&material).map_err(|_| Error::Json)?;
     let archive = root.join("source-material.tar");
     let mut output = std::io::BufWriter::new(std::fs::File::create_new(&archive)?);
-    super::archive::write(&material, &manifest, &packs, &mut output, runner)?;
-    std::io::Write::flush(&mut output)?;
+    let written = super::archive::write(&material, &manifest, &packs, &mut output, runner, deadline)
+        .and_then(|()| Ok(std::io::Write::flush(&mut output)?));
+    drop(output);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&archive);
+        return Err(error);
+    }
     // The packs now live in the archive; do not keep a second copy through the upload.
     std::fs::remove_dir_all(&packs)?;
     Ok(archive)

@@ -172,7 +172,7 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
 }
 
 #[test]
-fn an_lfs_object_changed_after_collection_is_refused_while_archiving() {
+fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline() {
     use sha2::{Digest, Sha256};
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -201,28 +201,60 @@ fn an_lfs_object_changed_after_collection_is_refused_while_archiving() {
     std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs -text\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "Add streamed asset"]);
-    let cancel = horizon_cloud::Cancellation::default();
-    // Same size, different bytes: only the streamed checksum can notice.
-    let replace = |event| {
-        if let crate::cloud_runtime::Event::Progress(progress) = event
-            && progress.detail == "Pack source dependencies"
-        {
-            let mut damaged = content.to_vec();
-            damaged[0] ^= 1;
-            std::fs::write(&object, damaged).unwrap();
+    for case in ["damaged", "cancelled", "expired"] {
+        std::fs::write(&object, content).unwrap();
+        let cancel = horizon_cloud::Cancellation::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let archiving = std::cell::Cell::new(false);
+        // Interrupt once `./`, the manifest and `lfs/` are written and the object opens.
+        let interrupt = |event| {
+            let crate::cloud_runtime::Event::Progress(progress) = event else {
+                return;
+            };
+            if progress.detail == "Pack source dependencies" {
+                archiving.set(true);
+                if case == "damaged" {
+                    // Same size, different bytes: only the streamed checksum can notice.
+                    let mut damaged = content.to_vec();
+                    damaged[0] ^= 1;
+                    std::fs::write(&object, damaged).unwrap();
+                }
+            } else if archiving.get() && progress.completed == 0 {
+                if case == "cancelled" {
+                    cancel.cancel();
+                } else if case == "expired" {
+                    std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+                }
+            }
+        };
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &interrupt,
+            secrets: vec![],
+        };
+        let root = temp.path().join(case);
+        std::fs::create_dir(&root).unwrap();
+        let result = material::archive_until(&repo, "HEAD", &root, &runner, deadline);
+        match case {
+            "damaged" => assert!(matches!(
+                result,
+                Err(Error::Invalid("Local Git LFS object checksum mismatch"))
+            )),
+            "cancelled" => assert!(matches!(
+                result,
+                Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+            )),
+            _ => assert!(matches!(
+                result,
+                Err(Error::Invalid(crate::cloud_runtime::command::TIMED_OUT))
+            )),
         }
-    };
-    let runner = Runner {
-        cancel: &cancel,
-        emit: &replace,
-        secrets: vec![],
-    };
-    let root = temp.path().join("transfer");
-    std::fs::create_dir(&root).unwrap();
-    assert!(matches!(
-        auxiliary(&repo, "HEAD", &root, &runner),
-        Err(Error::Invalid("Local Git LFS object checksum mismatch"))
-    ));
+        assert!(archiving.get(), "{case} stops mid-archive");
+        assert!(
+            !root.join("source-material.tar").exists(),
+            "{case} leaves no partial archive"
+        );
+    }
 }
 
 /// Each archive member's name and content; directories have none.
