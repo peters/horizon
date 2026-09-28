@@ -42,7 +42,7 @@ impl Selection {
                     && list.gpu_availability(gpu, &self.placement.data_centers) != Availability::None
             })
         } else {
-            center.workspace_storage
+            (center.workspace_storage || !self.profile.storage.standard_tier())
                 && cpu.is_some_and(|size| size.best(&self.placement.data_centers) != Availability::None)
         }
     }

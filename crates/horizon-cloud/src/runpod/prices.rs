@@ -100,18 +100,38 @@ impl RunPod {
     ) -> Result<SizeAvailability, CloudError> {
         let requested = flavors::for_profile(profile, preferred)?;
         let catalog: Catalog = self.catalog(
-            "/datacenters?include=CPU_AVAILABILITY&networkVolumeTypes=STANDARD",
+            &format!(
+                "/datacenters?include=CPU_AVAILABILITY&networkVolumeTypes={}",
+                profile.storage.volume_tier.api_value()
+            ),
             cancel,
         )?;
-        let centers: Vec<String> = candidates(catalog, data_centers, &requested)
+        // Preserve compatible sold-out locations separately from the stock query.
+        let compatible: Vec<String> = catalog
+            .data_centers
+            .iter()
+            .filter(|center| {
+                valid_id(&center.id)
+                    && (data_centers.is_empty() || data_centers.contains(&center.id))
+                    && center
+                        .network_volume_types
+                        .iter()
+                        .any(|tier| tier == profile.storage.volume_tier.api_value())
+            })
+            .map(|center| center.id.clone())
+            .collect();
+        let centers: Vec<String> = candidates(catalog, data_centers, &requested, profile.storage.volume_tier)
             .into_iter()
             .map(|(_, id)| id)
             .collect();
         let flavors: Vec<&Flavor> = requested.iter().filter_map(|id| Flavor::get(id)).collect();
-        let mut centers: Vec<(String, Availability)> = self
-            .cpu_stock(&centers, &flavors, profile.cpu, cancel)?
+        let stock = self.cpu_stock(&centers, &flavors, profile.cpu, cancel)?;
+        let mut centers: Vec<(String, Availability)> = compatible
             .into_iter()
-            .map(|(center, level)| (center, level.into()))
+            .map(|center| {
+                let level = stock.get(&center).copied().map_or(Availability::None, Into::into);
+                (center, level)
+            })
             .collect();
         centers.sort();
         Ok(SizeAvailability { centers })

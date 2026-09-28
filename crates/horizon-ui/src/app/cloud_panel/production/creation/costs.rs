@@ -13,6 +13,7 @@ struct Storage {
     kind: &'static str,
     gb: u16,
     running: f64,
+    quoted: bool,
     /// `None` when it is not billed while the cloud is stopped.
     stopped: Option<f64>,
     note: &'static str,
@@ -28,17 +29,32 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
             kind: "Pod volume",
             gb: volume,
             running,
+            quoted: true,
             stopped: Some(stopped),
             note: "The pod volume holds your files and costs twice as much while stopped.",
         });
     } else {
-        let month = rates.network_month(u32::from(volume));
+        let quoted = profile.storage.standard_tier();
+        let month = if quoted {
+            rates.network_month(u32::from(volume))
+        } else {
+            0.0
+        };
         items.push(Storage {
-            kind: "Network volume",
+            kind: if quoted {
+                "Network volume"
+            } else {
+                "High-performance network volume"
+            },
             gb: volume,
             running: month,
+            quoted,
             stopped: Some(month),
-            note: "The network volume holds your files and stays in its data center.",
+            note: if quoted {
+                "The network volume holds your files and stays in its data center."
+            } else {
+                "High-performance storage pricing varies by data center; confirm the provider quote before starting."
+            },
         });
     }
     let container = profile.storage.container_gb;
@@ -46,6 +62,7 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
         kind: "Container disk",
         gb: container,
         running: f64::from(container) * rates.container,
+        quoted: true,
         stopped: None,
         note: "The container disk is cleared when the cloud stops.",
     });
@@ -54,11 +71,14 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
 }
 
 /// Monthly totals running all month and stopped all month, as low and high bounds.
-fn monthly(hourly: (f64, f64), storage: &[Storage]) -> ((f64, f64), f64) {
+fn monthly(hourly: (f64, f64), storage: &[Storage]) -> Option<((f64, f64), f64)> {
+    if storage.iter().any(|item| !item.quoted) {
+        return None;
+    }
     let running: f64 = storage.iter().map(|item| item.running).sum();
     let stopped = storage.iter().filter_map(|item| item.stopped).sum();
     let (low, high) = hourly;
-    ((low * MONTH_HOURS + running, high * MONTH_HOURS + running), stopped)
+    Some(((low * MONTH_HOURS + running, high * MONTH_HOURS + running), stopped))
 }
 
 /// Totals for `hourly`, the lowest and highest price a deployment may be charged, and
@@ -69,7 +89,7 @@ pub(super) fn show(ui: &mut Ui, list: &PriceList, profile: &Profile, hourly: Opt
     if hourly.is_none() && storage.is_empty() {
         return;
     }
-    let ((running_low, running_high), stopped) = monthly(hourly.unwrap_or_default(), &storage);
+    let monthly = monthly(hourly.unwrap_or_default(), &storage);
     divider(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
@@ -79,11 +99,22 @@ pub(super) fn show(ui: &mut Ui, list: &PriceList, profile: &Profile, hourly: Opt
             stat(
                 ui,
                 "RUNNING",
-                &format!("{}/mo", range(running_low, running_high)),
+                &monthly.map_or_else(
+                    || "Price unavailable".into(),
+                    |((low, high), _)| format!("{}/mo", range(low, high)),
+                ),
                 "compute and storage",
             );
         }
-        stat(ui, "STOPPED", &format!("{}/mo", money(stopped)), "storage it keeps");
+        stat(
+            ui,
+            "STOPPED",
+            &monthly.map_or_else(
+                || "Price unavailable".into(),
+                |(_, stopped)| format!("{}/mo", money(stopped)),
+            ),
+            "storage it keeps",
+        );
     });
     if !storage.is_empty() {
         ui.add_space(10.0);
@@ -116,8 +147,13 @@ fn breakdown(ui: &mut Ui, storage: &[Storage], list: &PriceList) {
                         .size(12.0)
                         .color(theme::FG_DIM()),
                 );
-                ui.label(amount(Some(item.running)));
-                ui.label(amount(item.stopped));
+                if item.quoted {
+                    ui.label(amount(Some(item.running)));
+                    ui.label(amount(item.stopped));
+                } else {
+                    ui.label("Price unavailable");
+                    ui.label("Price unavailable");
+                }
                 ui.end_row();
             }
         });
@@ -203,6 +239,16 @@ mod tests {
     }
 
     #[test]
+    fn premium_storage_never_uses_standard_prices_or_false_totals() {
+        let mut profile = profile(false, 20, 100);
+        profile.storage.volume_tier = serde_json::from_value(serde_json::json!("HIGH_PERFORMANCE")).unwrap();
+        let items = storage(&list(), &profile);
+        assert!(!items[0].quoted);
+        assert!(items[1].quoted);
+        assert!(monthly((0.24, 0.28), &items).is_none());
+    }
+
+    #[test]
     fn prices_read_naturally() {
         assert_eq!(money(0.24), "$0.24");
         assert_eq!(money(5.76), "$5.76");
@@ -219,7 +265,7 @@ mod tests {
         let items = storage(&list(), &profile(false, 40, 100));
         let kinds: Vec<(&str, u16)> = items.iter().map(|item| (item.kind, item.gb)).collect();
         assert_eq!(kinds, [("Network volume", 100), ("Container disk", 40)]);
-        let ((low, high), stopped) = monthly((0.24, 0.28), &items);
+        let ((low, high), stopped) = monthly((0.24, 0.28), &items).unwrap();
         // 730 hours of compute, plus $7 of network volume and $4 of container disk.
         assert!((low - 186.2).abs() < 1e-9 && (high - 215.4).abs() < 1e-9);
         assert!((stopped - 7.0).abs() < 1e-9);
@@ -232,7 +278,7 @@ mod tests {
         assert!((items[0].running - 20.0).abs() < 1e-9);
         assert_eq!(items[0].stopped.map(|stopped| (stopped * 100.0).round()), Some(4000.0));
         assert_eq!(items[1].stopped, None);
-        let (_, stopped) = monthly((0.49, 0.49), &items);
+        let (_, stopped) = monthly((0.49, 0.49), &items).unwrap();
         assert!((stopped - 40.0).abs() < 1e-9);
         assert!(storage(&list(), &profile(true, 0, 0)).is_empty());
     }

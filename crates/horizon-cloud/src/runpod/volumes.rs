@@ -58,6 +58,15 @@ pub enum Tier {
     Standard,
     HighPerformance,
 }
+impl Tier {
+    #[must_use]
+    pub const fn api_value(self) -> &'static str {
+        match self {
+            Self::Standard => "STANDARD",
+            Self::HighPerformance => "HIGH_PERFORMANCE",
+        }
+    }
+}
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
@@ -102,14 +111,14 @@ impl Volume {
         Ok(())
     }
     pub(crate) fn verify_worker_spec(&self, spec: &WorkerSpec) -> Result<()> {
-        if self.tier.is_some() {
-            self.require_tier(Tier::Standard)?;
+        if self.tier.is_some() || !spec.profile.storage.standard_tier() {
+            self.require_tier(spec.profile.storage.volume_tier)?;
         }
         let expected = Spec {
             operation_id: spec.operation_id.clone(),
             size: u32::from(spec.profile.storage.volume_gb),
             data_center_id: self.data_center_id.clone(),
-            tier: Tier::Standard,
+            tier: spec.profile.storage.volume_tier,
         };
         self.verify(&expected)?;
         if spec.profile.gpu || (!spec.data_centers.is_empty() && !spec.data_centers.contains(&self.data_center_id)) {
@@ -181,7 +190,7 @@ impl State {
     }
 }
 impl RunPod {
-    /// Selects a data center with the worker's exact CPU size in stock and standard
+    /// Selects a data center with the worker's exact CPU size in stock and its requested
     /// network storage, honoring placement preferences.
     /// # Errors
     /// Refuses missing or unknown capacity rather than allocating storage in an arbitrary location.
@@ -194,12 +203,18 @@ impl RunPod {
         }
         validate_request_size(u32::from(worker.profile.storage.volume_gb))?;
         let url = format!(
-            "{}/datacenters?include=CPU_AVAILABILITY&networkVolumeTypes=STANDARD",
-            self.catalog_endpoint
+            "{}/datacenters?include=CPU_AVAILABILITY&networkVolumeTypes={}",
+            self.catalog_endpoint,
+            worker.profile.storage.volume_tier.api_value()
         );
         let catalog: Catalog = serde_json::from_value(self.request_url("GET", &url, None, cancel, None)?)
             .map_err(|_| CloudError::InvalidResponse)?;
-        let candidates = candidates(catalog, &worker.data_centers, &worker.cpu_flavors);
+        let candidates = candidates(
+            catalog,
+            &worker.data_centers,
+            &worker.cpu_flavors,
+            worker.profile.storage.volume_tier,
+        );
         let centers: Vec<String> = candidates.iter().map(|(_, id)| id.clone()).collect();
         let flavors: Vec<&Flavor> = worker.cpu_flavors.iter().filter_map(|id| Flavor::get(id)).collect();
         let stock = self.cpu_stock(&centers, &flavors, worker.profile.cpu, cancel)?;
@@ -209,13 +224,13 @@ impl RunPod {
             .min()
             .map(|(_, _, id)| id)
             .ok_or(CloudError::Invalid(
-                "No allowed data center has this CPU size in stock with standard workspace storage",
+                "No allowed data center has this CPU size in stock with the requested workspace storage",
             ))?;
         let spec = Spec {
             operation_id: worker.operation_id.clone(),
             size: u32::from(worker.profile.storage.volume_gb),
             data_center_id,
-            tier: Tier::Standard,
+            tier: worker.profile.storage.volume_tier,
         };
         spec.validate()?;
         Ok(spec)
@@ -599,14 +614,24 @@ pub(super) struct Capacity {
     pub(super) id: String,
     pub(super) availability: String,
 }
-/// Configured data centers with standard storage whose flavor family reports
+/// Configured data centers with the requested storage whose flavor family reports
 /// capacity, with their preference rank. Family capacity only narrows the stock query.
-pub(super) fn candidates(catalog: Catalog, data_centers: &[String], cpu_flavors: &[String]) -> Vec<(usize, String)> {
+pub(super) fn candidates(
+    catalog: Catalog,
+    data_centers: &[String],
+    cpu_flavors: &[String],
+    requested_tier: Tier,
+) -> Vec<(usize, String)> {
     catalog
         .data_centers
         .into_iter()
         .filter_map(|center| {
-            if !valid_id(&center.id) || !center.network_volume_types.iter().any(|tier| tier == "STANDARD") {
+            if !valid_id(&center.id)
+                || !center
+                    .network_volume_types
+                    .iter()
+                    .any(|tier| tier == requested_tier.api_value())
+            {
                 return None;
             }
             let preference = if data_centers.is_empty() {

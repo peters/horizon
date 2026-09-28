@@ -26,7 +26,7 @@ pub(super) struct Fetched<T> {
 }
 
 /// A CPU size together with the container disk that limits which flavors offer it.
-type SizeKey = (u16, u16, u16);
+type SizeKey = (u16, u16, u16, bool);
 /// Answers are timestamped when the provider answers, not when a frame collects them.
 type Job<T> = Receiver<Result<Fetched<T>, String>>;
 
@@ -329,7 +329,12 @@ fn stale(at: Instant) -> bool {
 }
 
 fn key(profile: &Profile) -> SizeKey {
-    (profile.cpu, profile.memory_gb, profile.storage.container_gb)
+    (
+        profile.cpu,
+        profile.memory_gb,
+        profile.storage.container_gb,
+        profile.storage.standard_tier(),
+    )
 }
 
 fn spawn<T: Send + 'static>(
@@ -365,10 +370,11 @@ fn finished<T>(job: &mut Option<Job<T>>) -> Option<Result<Fetched<T>, String>> {
 }
 
 /// Prices and exact-size stock as if the provider had just answered, for the dialog
-/// tests, which never contact it and run on Unix only.
-#[cfg(all(test, unix))]
+/// tests, which never contact it.
+#[cfg(test)]
 impl State {
     /// As the dialog is while its first `RunPod` fetch runs.
+    #[cfg(unix)]
     pub fn runpod_checking(&mut self) {
         let (sender, receiver) = channel();
         std::mem::forget(sender);
@@ -376,6 +382,7 @@ impl State {
     }
 
     /// As a fetch finds it on a machine set up for Hetzner alone.
+    #[cfg(unix)]
     pub fn runpod_key_missing(&mut self) {
         self.runpod_missing = true;
         self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
@@ -437,6 +444,22 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    fn premium_stock_never_reuses_standard_stock_even_during_refresh() {
+        let mut state = State::default();
+        let standard = profile();
+        let mut premium = standard.clone();
+        premium.storage.volume_tier = serde_json::from_value(serde_json::json!("HIGH_PERFORMANCE")).unwrap();
+        state.sizes.insert(key(&standard), Ok(now(available())));
+        let size = (standard.cpu, standard.memory_gb);
+        assert!(state.size(&standard, size).is_some());
+        assert!(state.size(&premium, size).is_none());
+        assert!(state.displayed_size(&premium, size).is_none());
+        state.refresh();
+        assert!(state.displayed_size(&standard, size).is_some());
+        assert!(state.displayed_size(&premium, size).is_none());
     }
 
     #[test]
