@@ -328,6 +328,10 @@ fn an_lfs_selection_leaves_out_and_needs_only_paths_git_lfs_excludes_in_this_rep
         secrets: vec![],
     };
     let source: horizon_cloud::Source = serde_yaml::from_str("lfs: {exclude: ['fixtures/**']}").unwrap();
+    // A partially hydrated clone's own fetch filters narrow neither listing, since
+    // `git lfs ls-files` ignores them, so the skipped path is still found and left out.
+    git(&repo, &["config", "lfs.fetchinclude", "keep.bin"]);
+    git(&repo, &["config", "lfs.fetchexclude", "fixtures/**"]);
     // An object the selection leaves out need not have been fetched.
     let skipped = &oids["fixtures/skip.bin"];
     std::fs::remove_file(
