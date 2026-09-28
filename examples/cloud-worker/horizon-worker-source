@@ -80,50 +80,63 @@ def import_source(root, upload):
             with (folder / f'module-{index}.pack').open('rb') as objects:
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
-            record_shallow(repo, revision)
+            record_shallow(repo, revision, object_format)
             git('--git-dir', repo, 'update-ref', 'refs/heads/base', module['revision'])
         with (root / 'manifest.json.new').open('wb') as destination:
             destination.write((folder / 'manifest.json').read_bytes())
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(root / 'manifest.json.new', root / 'manifest.json')
-        descriptor = os.open(root, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        durable_directory(root)
     upload.unlink()
 
 
-def record_shallow(repo, revision):
+def missing_objects(repo, revision, object_format, history):
+    # Reads through a scratch repository that borrows repo's objects, so repo's own
+    # shallow file cannot hide missing ancestors. Without history, only the pinned
+    # commit and its tree are checked.
+    with tempfile.TemporaryDirectory(dir=repo.parent) as scratch:
+        probe = Path(scratch) / 'probe.git'
+        git('init', '--bare', '-q', '--object-format=' + object_format, probe, stdout=subprocess.DEVNULL)
+        (probe / 'objects' / 'info' / 'alternates').write_text(str((repo / 'objects').resolve()) + '\n')
+        listed = subprocess.run(['git', '--git-dir', str(probe), 'rev-list', '--objects', '--missing=print',
+                                 *([] if history else ['--no-walk']), revision],
+                                capture_output=True, text=True, check=True).stdout
+    return any(line.startswith('?') for line in listed.splitlines())
+
+
+def durable_directory(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def record_shallow(repo, revision, object_format):
     # A pinned-only pack carries the commit and its tree without ancestors. Git needs
     # the commit listed as shallow, or clones and history walks fail on the missing
-    # parents. Decide from what the repository holds, so a replay onto full history,
-    # or full history arriving later, drops the entry again.
-    parents = subprocess.check_output(['git', '--git-dir', str(repo), 'cat-file', 'commit', revision], text=True)
-    parents = [line.split()[1] for line in parents.split('\n\n', 1)[0].splitlines() if line.startswith('parent ')]
+    # history. Decide from what the repository holds: the entry is dropped only once
+    # every ancestor and its tree is present, so a replay onto full history, or full
+    # history arriving later, clears it, while partial history keeps it.
+    if missing_objects(repo, revision, object_format, history=False):
+        raise ValueError('Submodule tree is incomplete')
     listed = repo / 'shallow'
     shallow = set(listed.read_text().split()) if listed.exists() else set()
-    present = subprocess.run(['git', '--git-dir', str(repo), 'cat-file', '--batch-check'],
-                             input=''.join(p + '\n' for p in parents), capture_output=True, text=True, check=True)
-    if any(line.endswith(' missing') for line in present.stdout.splitlines()):
+    if missing_objects(repo, revision, object_format, history=True):
         shallow.add(revision)
     else:
         shallow.discard(revision)
+    # Durable before the caller publishes the manifest that makes this checkout usable.
     if shallow:
-        pending = repo / 'shallow.new'
-        pending.write_text(''.join(oid + '\n' for oid in sorted(shallow)))
-        os.replace(pending, listed)
+        with (repo / 'shallow.new').open('w') as pending:
+            pending.write(''.join(oid + '\n' for oid in sorted(shallow)))
+            pending.flush()
+            os.fsync(pending.fileno())
+        os.replace(repo / 'shallow.new', listed)
     elif listed.exists():
         listed.unlink()
-    # Every object of the pinned tree must be present, whatever history came with it.
-    objects = subprocess.run(['git', '--git-dir', str(repo), 'rev-list', '--objects', '--no-walk', revision],
-                             capture_output=True, text=True, check=True).stdout
-    names = ''.join(line.split(' ', 1)[0] + '\n' for line in objects.splitlines())
-    checked = subprocess.run(['git', '--git-dir', str(repo), 'cat-file', '--batch-check'],
-                             input=names, capture_output=True, text=True, check=True).stdout
-    if any(line.endswith(' missing') for line in checked.splitlines()):
-        raise ValueError('Submodule tree is incomplete')
+    durable_directory(repo)
 
 
 def beside_siblings(worktree, repository):
