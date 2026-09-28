@@ -331,11 +331,11 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
         }
         let log = log(&root);
         assert_eq!(log.lines().next(), Some(r#"{"hello":{"discovery":0,"sources":[]}}"#));
-        let refused = format!(
-            r#"{{"answer":{{"id":2,"answer":{{"refused":"{}"}}}}}}"#,
-            session::UNKNOWN_REQUEST
+        let refused = log.lines().find(|line| line.contains(r#""id":2"#)).unwrap_or_default();
+        assert!(
+            refused.contains("could not read this request (unknown variant"),
+            "{log}"
         );
-        assert!(log.contains(&refused), "{log}");
         assert!(
             log.contains(r#"{"answer":{"id":3,"answer":{"refused":"unanswered"}}}"#),
             "{log}"

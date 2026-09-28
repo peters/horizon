@@ -1,11 +1,12 @@
 use super::*;
 use crate::cloud_runtime::local_network::scope;
+use horizon_cloud_protocol::local_network::discovery::DEFAULT_PROBE_PORTS;
 use simple_dns::{
     CLASS, Label, Name, Packet, PacketFlag, ResourceRecord,
     rdata::{A, PTR, RData, SRV, TXT},
 };
 use std::{
-    net::UdpSocket,
+    net::{IpAddr, UdpSocket},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -357,6 +358,7 @@ fn a_browse_of_this_computers_network_ends_within_its_window() {
         Answer::Discovery(discovery) => assert!(discovery.devices.len() <= 256),
         // The runner's network can change while the test runs.
         Answer::Refused(_) => {}
+        Answer::Probe(_) => panic!("a discovery answered with a probe"),
     }
 }
 
@@ -470,4 +472,94 @@ fn the_neighbor_command_reports_failures_and_bounds_its_output_and_time() {
     let slow = neighbors::run(shell("exec sleep 10")).unwrap_err().to_string();
     assert!(slow.contains("too long"), "{slow}");
     assert!(started.elapsed() < Duration::from_secs(4));
+}
+
+/// The home network, where `printer.local` resolves to a device and `rebound.local` to this
+/// computer's loopback.
+fn probe_scope() -> Arc<Scope> {
+    let home = || scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Arc::new(Scope {
+        network: home().current_network().unwrap(),
+        resolve: Box::new(|name, port| match name {
+            "printer.local" => Ok(vec![SocketAddr::new(v4("192.168.1.50").into(), port)]),
+            "rebound.local" => Ok(vec![SocketAddr::new(v4("127.0.0.1").into(), port)]),
+            _ => Err(Reply::HostUnreachable),
+        }),
+        host: Box::new(move || Ok(home())),
+        source: Box::new(|_| Some(v4("192.168.1.20"))),
+    })
+}
+
+#[test]
+fn probes_connect_only_to_admitted_hosts_a_few_times_a_minute() {
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&attempts);
+    let discoverer = Discoverer::with_parts(
+        probe_scope(),
+        Box::new(|_, _| (Vec::new(), Vec::new())),
+        Box::new(move |target: SocketAddr, _| {
+            seen.lock().unwrap().push(target);
+            match target.port() {
+                80 | 631 => Ok(()),
+                22 => Err(io::ErrorKind::ConnectionRefused.into()),
+                _ => Err(io::ErrorKind::TimedOut.into()),
+            }
+        }),
+    );
+    let probe = |host: &str, ports: &[u16]| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: ports.to_vec(),
+        })
+    };
+    // Malformed requests and hosts outside the scope are refused before anything is sent,
+    // and do not count towards the rate.
+    let many: Vec<u16> = (1..=17).collect();
+    for (host, ports) in [
+        ("", &[][..]),
+        ("printer.local", &[0][..]),
+        ("printer.local", &many[..]),
+        ("10.0.0.5", &[][..]),
+        ("192.168.1.20", &[][..]),
+        ("192.168.1.255", &[][..]),
+        ("127.0.0.1", &[][..]),
+        ("rebound.local", &[][..]),
+        ("missing.local", &[][..]),
+    ] {
+        assert!(matches!(probe(host, ports), Answer::Refused(_)), "{host} {ports:?}");
+    }
+    assert!(attempts.lock().unwrap().is_empty());
+
+    let Answer::Probe(result) = probe("printer.local", &[22, 80, 631, 9100, 80]) else {
+        panic!("probe");
+    };
+    assert_eq!(result.address, v4("192.168.1.50"));
+    assert_eq!(
+        (result.open, result.closed, result.silent),
+        (vec![80, 631], vec![22], vec![9100])
+    );
+    assert!(matches!(probe("192.168.1.50", &[]), Answer::Probe(_)));
+    let attempted = attempts.lock().unwrap().clone();
+    assert_eq!(attempted.len(), 4 + DEFAULT_PROBE_PORTS.len());
+    assert!(
+        attempted
+            .iter()
+            .all(|target| target.ip() == IpAddr::from(v4("192.168.1.50")))
+    );
+
+    // Later discovery answers list the ports probes found open.
+    let Answer::Discovery(found) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(found.devices.len(), 1);
+    assert_eq!(found.devices[0].ports, [80, 631]);
+    assert_eq!(found.devices[0].sources, [Source::Probe]);
+
+    for _ in 2..probe::PER_MINUTE {
+        assert!(matches!(probe("192.168.1.50", &[80]), Answer::Probe(_)));
+    }
+    let Answer::Refused(limit) = probe("192.168.1.50", &[80]) else {
+        panic!("the rate limit held no probe back");
+    };
+    assert!(limit.contains("6 probes a minute"), "{limit}");
 }

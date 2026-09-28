@@ -141,6 +141,7 @@ fn discovery_asks_the_owner_and_bad_owner_lines_never_end_the_session() {
         availability,
         Availability {
             available: true,
+            probe: false,
             sources: vec!["mdns".into(), "ssdp".into(), "neighbors".into()],
             note: Some("Not qualified[2J here".into()),
         }
@@ -357,4 +358,60 @@ fn requests_and_answers_keep_their_wire_shape() {
     let off = serde_json::to_value(Status::off()).unwrap();
     assert_eq!(off["active"], false);
     assert!(off.get("proxy").is_none());
+}
+
+#[test]
+fn probes_are_checked_here_and_answered_by_the_owner() {
+    let (_root, paths) = paths();
+    let mut session = Session::start(&paths, NONCE);
+    // A Horizon that answers discovery but predates probes.
+    session.tell(r#"{"hello":{"discovery":1,"sources":["mdns"]}}"#);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !status(&paths).unwrap().discovery.unwrap().available {
+        assert!(Instant::now() < deadline, "no hello");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let refused = probe(&paths, "192.168.1.50", Vec::new()).unwrap_err().to_string();
+    assert!(refused.contains("does not support probes"), "{refused}");
+
+    session.tell(r#"{"hello":{"discovery":1,"sources":["mdns","probe"]}}"#);
+    while !status(&paths).unwrap().discovery.unwrap().probe {
+        assert!(Instant::now() < deadline, "no second hello");
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Requests the owner's Horizon would refuse fail here without asking it.
+    for (host, ports) in [
+        ("", vec![]),
+        ("a b", vec![]),
+        ("192.168.1.50", vec![0]),
+        ("192.168.1.50", (1..=17).collect()),
+    ] {
+        assert!(probe(&paths, host, ports).is_err(), "{host}");
+    }
+    let asking = {
+        let paths = paths.clone();
+        thread::spawn(move || probe(&paths, "printer.local", vec![631, 80]))
+    };
+    let call = session.call();
+    assert_eq!(
+        call.request,
+        discovery::Request::Probe {
+            host: "printer.local".into(),
+            ports: vec![631, 80]
+        }
+    );
+    let result = discovery::Probe {
+        host: "printer.local".into(),
+        address: Ipv4Addr::new(192, 168, 1, 50),
+        open: vec![631],
+        closed: vec![80],
+        silent: Vec::new(),
+    };
+    let answer = discovery::Message::Answer {
+        id: call.id,
+        answer: discovery::Answer::Probe(result.clone()),
+    };
+    session.tell(&serde_json::to_string(&answer).unwrap());
+    assert_eq!(asking.join().unwrap().unwrap(), result);
+    session.stop();
 }

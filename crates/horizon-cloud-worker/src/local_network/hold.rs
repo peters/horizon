@@ -30,6 +30,8 @@ const MAX_REQUESTS: usize = 8;
 /// for a newer one; a helper heard from more recently refuses to.
 const RETIRE_AFTER: Duration = Duration::from_secs(2 * HEARTBEAT_INTERVAL.as_secs());
 const BUSY: &str = "The bridge is busy; try again";
+const NO_PROBE: &str = "The owner's Horizon does not support probes yet; ask the owner to update Horizon";
+const UNEXPECTED: &str = "The owner's Horizon answered with something else";
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(10);
 const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker, including web pages open in its browsers, can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
 
@@ -65,19 +67,42 @@ impl Helper {
         match self.owner.hello().filter(|hello| hello.discovery > 0) {
             Some(hello) => Availability {
                 available: true,
+                probe: hello.sources.contains(&Source::Probe),
                 sources: hello
                     .sources
                     .iter()
-                    .filter(|source| **source != Source::Other)
+                    .filter(|source| !matches!(source, Source::Other | Source::Probe))
                     .filter_map(|source| serde_json::to_value(source).ok()?.as_str().map(str::to_owned))
                     .collect(),
                 note: hello.note.map(|note| discovery::text(&note)),
             },
             None => Availability {
                 available: false,
+                probe: false,
                 sources: Vec::new(),
                 note: Some(super::owner::NO_DISCOVERY.into()),
             },
+        }
+    }
+
+    /// Checked here as well as on the owner's computer, so a bad request fails at once.
+    fn probe(&self, host: String, ports: Vec<u16>) -> Answer {
+        let request = discovery::Request::Probe { host, ports };
+        if let Err(refusal) = request.validate() {
+            return Answer::Error(refusal);
+        }
+        if self
+            .owner
+            .hello()
+            .is_some_and(|hello| !hello.sources.contains(&Source::Probe))
+        {
+            return Answer::Error(NO_PROBE.into());
+        }
+        match self.owner.ask(request) {
+            Ok(discovery::Answer::Probe(probe)) => Answer::Probe(probe),
+            Ok(discovery::Answer::Refused(refusal)) => Answer::Error(discovery::text(&refusal)),
+            Ok(discovery::Answer::Discovery(_)) => Answer::Error(UNEXPECTED.into()),
+            Err(error) => Answer::Error(error.to_string()),
         }
     }
 
@@ -104,8 +129,10 @@ impl Helper {
             Request::Discover => match self.owner.ask(discovery::Request::Discover) {
                 Ok(discovery::Answer::Discovery(found)) => Answer::Discovery(found),
                 Ok(discovery::Answer::Refused(refusal)) => Answer::Error(discovery::text(&refusal)),
+                Ok(discovery::Answer::Probe(_)) => Answer::Error(UNEXPECTED.into()),
                 Err(error) => Answer::Error(error.to_string()),
             },
+            Request::Probe { host, ports } => self.probe(host, ports),
             Request::Unforward { worker_port } => {
                 let removed = {
                     let mut forwards = self.forwards();

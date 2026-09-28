@@ -24,6 +24,18 @@ struct Forward {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct Probe {
+    /// One device's IPv4 address or host name, for example 192.168.1.50 or printer.local,
+    /// usually one that `local_network_discover` returned.
+    host: String,
+    /// Up to 16 TCP ports to try. Leave it out for common ones: 22, 80, 443, 554, 631, 1883,
+    /// 3000, 5000, 8000, 8080, 8123, 8443, 8554 and 9100.
+    #[serde(default)]
+    ports: Vec<u16>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Unforward {
     /// The worker port that `local_network_forward` returned.
     worker_port: u16,
@@ -60,6 +72,15 @@ impl Server {
     async fn discover(&self) -> CallToolResult {
         let paths = self.paths.clone();
         blocking(move || super::discover(&paths)).await
+    }
+
+    #[tool(
+        name = "local_network_probe",
+        description = "Check which of a few TCP ports one device on the owner's local network accepts connections on, for example to see whether a camera serves RTSP or a board runs SSH before forwarding to it. The owner's Horizon tries each port with a plain TCP connect and sends nothing else. One device per call, at most 16 ports, at most 6 probes a minute, and only devices on the bridged subnet; it never scans the network. Open ports also appear in later local_network_discover answers."
+    )]
+    async fn probe(&self, Parameters(request): Parameters<Probe>) -> CallToolResult {
+        let paths = self.paths.clone();
+        blocking(move || super::probe(&paths, &request.host, request.ports)).await
     }
 
     #[tool(
@@ -114,7 +135,7 @@ impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-local-network", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Local Network Bridge reaches devices on the owner's local network over TCP, when the owner has turned it on. Find devices with local_network_discover, or ask the owner for an address; never sweep the network address by address.")
+            .with_instructions("Local Network Bridge reaches devices on the owner's local network over TCP, when the owner has turned it on. Find devices with local_network_discover, check a device's ports with local_network_probe, or ask the owner for an address; never sweep the network address by address.")
     }
 }
 
@@ -174,6 +195,10 @@ mod tests {
                 "tools/call",
                 serde_json::json!({"_meta": meta, "name": "local_network_discover", "arguments": {}}),
             ),
+            (
+                "tools/call",
+                serde_json::json!({"_meta": meta, "name": "local_network_probe", "arguments": {"host": "192.168.1.50"}}),
+            ),
         ];
         for (id, (method, params)) in calls.into_iter().enumerate() {
             let request = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -199,6 +224,7 @@ mod tests {
                         [
                             "local_network_discover",
                             "local_network_forward",
+                            "local_network_probe",
                             "local_network_status",
                             "local_network_unforward"
                         ]
@@ -217,7 +243,7 @@ mod tests {
                     assert_eq!(result["structuredContent"]["active"], false);
                     assert!(result["structuredContent"]["note"].as_str().unwrap().contains("owner"));
                 }
-                3 | 4 => {
+                3..=5 => {
                     assert_eq!(result["isError"], true);
                     assert!(result["content"][0]["text"].as_str().unwrap().contains("off"));
                 }

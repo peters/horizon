@@ -28,13 +28,22 @@ const ENVELOPE: usize = 256;
 /// Characters in any one name, type, attribute or note; devices choose most of these strings.
 pub const MAX_TEXT: usize = 128;
 pub const MAX_NOTES: usize = 8;
+/// Ports one probe tries, at most.
+pub const MAX_PROBE_PORTS: usize = 16;
+/// What a probe tries when the agent names no ports: remote shells, web interfaces, cameras,
+/// printers, MQTT, dev servers and home automation hubs.
+pub const DEFAULT_PROBE_PORTS: [u16; 14] = [
+    22, 80, 443, 554, 631, 1883, 3000, 5000, 8000, 8080, 8123, 8443, 8554, 9100,
+];
+/// Host names are DNS names or IPv4 literals.
+const MAX_HOST: usize = 253;
 
 /// What the owner's Horizon answers, announced once per session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     /// The discovery protocol [`VERSION`].
     pub discovery: u32,
-    /// What this computer browses.
+    /// What this computer browses; [`Source::Probe`] when it also answers port probes.
     pub sources: Vec<Source>,
     /// What an agent should know about discovery on this computer's system.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,6 +56,57 @@ pub struct Hello {
 pub enum Request {
     /// The devices on the bridged network.
     Discover,
+    /// Which of a few TCP ports one host accepts connections on.
+    Probe {
+        host: String,
+        /// Empty for [`DEFAULT_PROBE_PORTS`].
+        #[serde(default)]
+        ports: Vec<u16>,
+    },
+}
+
+impl Request {
+    /// Refuses requests the owner's Horizon never runs, before anything is sent on the network.
+    ///
+    /// # Errors
+    /// Explains the refusal in words an agent can act on.
+    pub fn validate(&self) -> Result<(), String> {
+        let Self::Probe { host, ports } = self else {
+            return Ok(());
+        };
+        if host.trim().is_empty()
+            || host.len() > MAX_HOST
+            || host
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err("Name one device by its address or host name".into());
+        }
+        if ports.len() > MAX_PROBE_PORTS {
+            return Err(format!("A probe tries at most {MAX_PROBE_PORTS} ports"));
+        }
+        if ports.contains(&0) {
+            return Err("Ports are 1 to 65535".into());
+        }
+        Ok(())
+    }
+
+    /// The ports a probe tries, in order, without repeats and at most [`MAX_PROBE_PORTS`].
+    #[must_use]
+    pub fn probe_ports(ports: &[u16]) -> Vec<u16> {
+        let ports = if ports.is_empty() {
+            &DEFAULT_PROBE_PORTS[..]
+        } else {
+            ports
+        };
+        let mut chosen = Vec::with_capacity(MAX_PROBE_PORTS);
+        for &port in ports {
+            if port != 0 && !chosen.contains(&port) && chosen.len() < MAX_PROBE_PORTS {
+                chosen.push(port);
+            }
+        }
+        chosen
+    }
 }
 
 /// One request, numbered so its answer finds the agent that asked. The owner's Horizon reads
@@ -70,6 +130,7 @@ pub enum Message {
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
     Discovery(Discovery),
+    Probe(Probe),
     /// Why the owner's Horizon did not run the request, for example a rate limit.
     Refused(String),
 }
@@ -84,6 +145,8 @@ pub enum Source {
     Ssdp,
     /// The owner's computer recently exchanged traffic with the device.
     Neighbors,
+    /// A port probe an agent asked for.
+    Probe,
     /// A source added after this build.
     #[serde(other)]
     Other,
@@ -129,6 +192,20 @@ pub struct Service {
     /// DNS-SD TXT pairs, or the SSDP server and description location.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attributes: BTreeMap<String, String>,
+}
+
+/// The TCP connect results for one host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Probe {
+    /// The host as the agent named it.
+    pub host: String,
+    pub address: Ipv4Addr,
+    /// Accepted a connection.
+    pub open: Vec<u16>,
+    /// Refused the connection.
+    pub closed: Vec<u16>,
+    /// Did not answer in time; a firewall may drop connections there.
+    pub silent: Vec<u16>,
 }
 
 /// Text a device chose, made safe to show: no control characters, at most [`MAX_TEXT`].
@@ -293,6 +370,26 @@ mod tests {
         };
         assert_eq!(discovery.devices[0].address, Ipv4Addr::new(192, 168, 1, 5));
         assert_eq!(discovery.devices[0].sources, [Source::Mdns, Source::Other]);
+    }
+
+    #[test]
+    fn probes_name_one_host_and_a_few_real_ports() {
+        let probe = |host: &str, ports: Vec<u16>| Request::Probe {
+            host: host.into(),
+            ports,
+        };
+        assert!(probe("192.168.1.5", vec![]).validate().is_ok());
+        assert!(probe("printer.local", vec![80, 631]).validate().is_ok());
+        for host in ["", " ", "a\nb", "two words", &"a".repeat(254)] {
+            assert!(probe(host, vec![]).validate().is_err(), "{host:?}");
+        }
+        assert!(probe("host", vec![0]).validate().is_err());
+        assert!(probe("host", (1..=17).collect()).validate().is_err());
+        assert_eq!(Request::probe_ports(&[]), DEFAULT_PROBE_PORTS.to_vec());
+        assert_eq!(Request::probe_ports(&[80, 80, 22]), vec![80, 22]);
+        // Ports outside 1 to 65535 do not parse at all.
+        assert!(serde_json::from_str::<Request>(r#"{"probe":{"host":"h","ports":[70000]}}"#).is_err());
+        assert!(serde_json::from_str::<Request>(r#"{"probe":{"host":"h","ports":[-1]}}"#).is_err());
     }
 
     #[test]

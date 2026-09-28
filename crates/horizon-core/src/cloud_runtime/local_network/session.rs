@@ -5,7 +5,7 @@ use super::{Answers, Shared, State};
 use crate::cloud_runtime::{Cancellation, command::Runner, ssh::Connection};
 use horizon_cloud_protocol::local_network::{
     HEARTBEAT_INTERVAL, Nonce, PREPARE_COMMAND, PREPARED, Ready, Subnet,
-    discovery::{Answer, Call, MAX_CALL, MAX_LINE, Message, Request},
+    discovery::{Answer, Call, MAX_CALL, MAX_LINE, Message, Request, text},
 };
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -24,7 +24,6 @@ const LAST_RETRY: Duration = Duration::from_secs(30);
 const STABLE: Duration = Duration::from_secs(60);
 /// Calls waiting for an answer; the helper never has more in flight.
 const MAX_QUEUED: usize = 8;
-pub(super) const UNKNOWN_REQUEST: &str = "The owner's Horizon does not know this request; it may need an update";
 pub(super) const UNSUPPORTED: &str =
     "This cloud's worker image does not support Local Network Bridge yet; rebuild the image";
 const CLOSED: &str = "The bridge connection to the worker closed";
@@ -261,12 +260,16 @@ fn message(message: &Message) -> Vec<u8> {
 }
 
 /// A call from the helper's output line, or `None` for any other line. A call whose request
-/// this build does not know is refused by its number.
-fn call(line: &str) -> Option<(u64, Result<Request, &'static str>)> {
+/// this build cannot read, unknown or malformed, is refused by its number.
+fn call(line: &str) -> Option<(u64, Result<Request, String>)> {
     let call: Call<serde_json::Value> = serde_json::from_str(line.trim_end()).ok()?;
     Some((
         call.id,
-        serde_json::from_value(call.request).map_err(|_| UNKNOWN_REQUEST),
+        serde_json::from_value(call.request).map_err(|error| {
+            text(&format!(
+                "The owner's Horizon could not read this request ({error}); it may need an update"
+            ))
+        }),
     ))
 }
 
@@ -307,7 +310,7 @@ impl Hold {
                     for (id, request) in queue {
                         let answer = match request {
                             Ok(request) => answers.answer(request),
-                            Err(refusal) => Answer::Refused(refusal.into()),
+                            Err(refusal) => Answer::Refused(refusal),
                         };
                         if send(&input, &message(&Message::Answer { id, answer }), true).is_err() {
                             return;

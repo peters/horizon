@@ -3,6 +3,7 @@
 //! only on request. Every address passes the bridge's [`Scope`] before an agent sees it.
 mod mdns;
 mod neighbors;
+mod probe;
 mod ssdp;
 
 use super::{Answers, Scope};
@@ -52,6 +53,7 @@ pub struct Discoverer {
     /// The last results and when their browse ended. It stays locked for a whole browse, so
     /// requests that arrive meanwhile wait and then share its results.
     last: Mutex<Option<(Instant, Discovery)>>,
+    prober: probe::Prober,
 }
 
 impl Discoverer {
@@ -61,10 +63,15 @@ impl Discoverer {
     }
 
     fn with_browse(scope: Arc<Scope>, browse: Browse) -> Self {
+        Self::with_parts(scope, browse, Box::new(probe::connect))
+    }
+
+    fn with_parts(scope: Arc<Scope>, browse: Browse, connect: probe::Connect) -> Self {
         Self {
             scope,
             browse,
             last: Mutex::new(None),
+            prober: probe::Prober::new(connect),
         }
     }
 
@@ -75,10 +82,10 @@ impl Discoverer {
         if let Some((at, discovery)) = last.as_ref()
             && at.elapsed() < REUSE_FOR
         {
-            return Answer::Discovery(Discovery {
+            return Answer::Discovery(self.with_probes(Discovery {
                 age_seconds: at.elapsed().as_secs(),
                 ..discovery.clone()
-            });
+            }));
         }
         // Nothing is sent on a network other than the bridged one.
         if let Err(reply) = self.scope.on_network() {
@@ -97,7 +104,36 @@ impl Discoverer {
         }
         .bounded();
         *last = Some((Instant::now(), discovery.clone()));
-        Answer::Discovery(discovery)
+        Answer::Discovery(self.with_probes(discovery))
+    }
+
+    /// Adds the ports that probes found open, so later answers list them as known ports.
+    fn with_probes(&self, mut discovery: Discovery) -> Discovery {
+        let open = self.prober.open();
+        if open.is_empty() {
+            return discovery;
+        }
+        for (address, ports) in open {
+            let index = if let Some(index) = discovery.devices.iter().position(|device| device.address == address) {
+                index
+            } else {
+                discovery.devices.push(Device {
+                    address,
+                    names: Vec::new(),
+                    services: Vec::new(),
+                    ports: Vec::new(),
+                    sources: Vec::new(),
+                });
+                discovery.devices.len() - 1
+            };
+            let device = &mut discovery.devices[index];
+            device.ports.extend(ports);
+            if !device.sources.contains(&Source::Probe) {
+                device.sources.push(Source::Probe);
+                device.sources.sort_unstable();
+            }
+        }
+        discovery.bounded()
     }
 }
 
@@ -107,6 +143,7 @@ impl Answers for Discoverer {
         if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
             sources.push(Source::Neighbors);
         }
+        sources.push(Source::Probe);
         Hello {
             discovery: VERSION,
             sources,
@@ -116,9 +153,14 @@ impl Answers for Discoverer {
         }
     }
 
+    /// Every request is checked here first: the helper that sent it is not trusted.
     fn answer(&self, request: Request) -> Answer {
+        if let Err(refusal) = request.validate() {
+            return Answer::Refused(refusal);
+        }
         match request {
             Request::Discover => self.discover(),
+            Request::Probe { host, ports } => self.prober.probe(&self.scope, &host, &ports),
         }
     }
 }
