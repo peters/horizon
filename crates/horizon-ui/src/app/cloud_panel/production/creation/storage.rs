@@ -10,9 +10,27 @@ use horizon_core::cloud_runtime::{
 /// Why the chosen worker cannot start now, if anything stands in the way.
 pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
+        return Some("Hetzner prices are over an hour old. Refresh them before starting.");
+    }
     if super::provider::current(form.provider, profile).kind == Kind::RunPod {
         if form.prices.too_old() {
             return Some("Prices are over an hour old. Refresh them before starting.");
+        }
+        // A catalog that lists workers but none this profile allows cannot start one,
+        // and a GPU profile starts only on a type the catalog offers it.
+        let listed = form
+            .prices
+            .list
+            .as_ref()
+            .is_some_and(|fetched| !fetched.value.0.cpu.is_empty() || !fetched.value.0.gpus.is_empty());
+        if listed && let Some(catalog) = super::selector::catalog(form) {
+            if catalog.offers.is_empty() {
+                return Some("No worker the provider lists meets this profile's minimums.");
+            }
+            if profile.gpu && catalog.selected.is_none() {
+                return Some("Choose a GPU type the catalog offers for this profile.");
+            }
         }
         // Data centers the catalog knows must hold the chosen kind of workspace volume.
         if let Some(fetched) = form.prices.list.as_ref().filter(|_| !profile.gpu) {
@@ -37,7 +55,7 @@ pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
     let provider = super::provider::current(form.provider, profile);
     if provider.kind == Kind::Hetzner {
-        form.prices.hetzner.fresh()?.value.as_ref()?;
+        form.prices.hetzner.displayed()?.value.as_ref()?;
         let sized = super::provider::sized(provider, profile, form.size).ok()?;
         return (!super::provider::location_offers(&form.prices, &sized)
             .iter()

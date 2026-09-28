@@ -274,12 +274,10 @@ fn a_watch_never_arms_without_a_price_to_hold_it_to() {
     assert!(watch::armable(&form).is_err());
     watch::arm(&mut form);
     assert!(form.launch.watch.is_none());
-    form.launch.selector.wait_for_stock = true;
-    let labels = render(&mut form);
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.starts_with("The price of this worker is unknown"))
+    // A type the catalog no longer prices is not offered, so Start says to choose another.
+    assert_eq!(
+        submit_reason(&form),
+        Some("Choose a GPU type the catalog offers for this profile.")
     );
 }
 
@@ -334,4 +332,23 @@ fn only_stock_is_waited_for_and_a_new_profile_clears_the_search() {
     form.launch.selector.wait_for_stock = true;
     form.launch.selector.profile_changed();
     assert!(form.launch.selector.search.is_empty() && !form.launch.selector.wait_for_stock);
+}
+
+#[test]
+fn a_catalog_with_no_match_blocks_start_and_high_performance_totals_leave_the_volume_out() {
+    let mut gpu = form("gpu");
+    let profiles = &mut gpu.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("gpu").unwrap().min_gpu_memory_gb = Some(1000);
+    assert!(!can_submit(&gpu));
+    assert_eq!(
+        submit_reason(&gpu),
+        Some("No worker the provider lists meets this profile's minimums.")
+    );
+    let mut cpu = form("cpu");
+    cpu.placement.data_centers = vec!["US-1".into()];
+    let profiles = &mut cpu.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("cpu").unwrap().storage.volume_tier = StorageTier::HighPerformance;
+    let labels = render(&mut cpu);
+    assert!(labels.iter().any(|label| label == "Running all month, without it"));
+    assert!(labels.iter().any(|label| label == "Price not published"));
 }

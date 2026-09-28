@@ -200,20 +200,36 @@ fn cost(ui: &mut Ui, form: &Production) {
             ui.label(RichText::new("Price not published").size(11.5).color(theme::FG_DIM()));
         }
     }
-    match costs::monthly((low, high), &storage) {
-        Some(((low, high), stopped)) => {
-            widgets::line(
-                ui,
-                "Running all month",
-                &format!("{}/mo", costs::range(low, high)),
-                true,
-            );
-            widgets::line(ui, "Stopped", &format!("{}/mo", costs::money(stopped)), false);
-        }
-        None => widgets::note(
+    if let Some(((low, high), stopped)) = costs::monthly((low, high), &storage) {
+        widgets::line(
             ui,
-            "High-performance storage is priced per data center and not published; the totals leave it out.",
-        ),
+            "Running all month",
+            &format!("{}/mo", costs::range(low, high)),
+            true,
+        );
+        widgets::line(ui, "Stopped", &format!("{}/mo", costs::money(stopped)), false);
+    } else {
+        // Totals of what is priced, labelled as leaving the unpublished storage out.
+        let quoted = storage.iter().filter(|item| item.quoted);
+        let running: f64 = quoted.clone().map(|item| item.running).sum();
+        let stopped: f64 = quoted.filter_map(|item| item.stopped).sum();
+        let month = |hourly: f64| hourly * 730.0 + running;
+        widgets::line(
+            ui,
+            "Running all month, without it",
+            &format!("{}/mo", costs::range(month(low), month(high))),
+            true,
+        );
+        widgets::line(
+            ui,
+            "Stopped, without it",
+            &format!("{}/mo", costs::money(stopped)),
+            false,
+        );
+        widgets::note(
+            ui,
+            "High-performance storage is priced per data center and not published; these totals leave it out.",
+        );
     }
 }
 

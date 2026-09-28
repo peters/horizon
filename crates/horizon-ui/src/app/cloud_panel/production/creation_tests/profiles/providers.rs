@@ -599,3 +599,32 @@ fn incompatible_hetzner_system_disk_blocks_launch_until_corrected() {
     finish_creation(&ctx, &mut app);
     assert!(!app.cloud_creation_open());
 }
+
+#[test]
+fn a_failed_hetzner_refresh_keeps_its_last_catalog_on_show_with_the_reason() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Hetzner\neuros, net of VAT · CPU").center(),
+    );
+    app.cloud_prototype
+        .production
+        .prices
+        .hetzner
+        .refresh_failed("Hetzner answered 503");
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    let text = painted(&output);
+    assert!(
+        text.contains("Could not refresh Hetzner prices (Hetzner answered 503). Showing prices from "),
+        "{text}"
+    );
+    assert!(has_label(&output, "cx33 · 4 vCPU · 8 GB · €0.0136/h"), "{text}");
+    assert!(!text.contains("Hetzner prices unavailable"));
+}
