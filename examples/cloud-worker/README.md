@@ -108,8 +108,9 @@ The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` an
 `horizon-capabilities-contract=1`, plus the optional `horizon-session-restart-contract=1`
 ([session relaunch](#session-relaunch-after-a-container-reset)), `horizon-siblings-contract=1`
 ([sibling repositories](#sibling-repositories)), `horizon-session-env-contract=1`
-([session environment](#session-environment-from-image-layers)) and `horizon-gpu-lock-contract=1`
-([GPU lock](#gpu-lock)). Source transfer carries verified LFS objects and
+([session environment](#session-environment-from-image-layers)), `horizon-gpu-lock-contract=1`
+([GPU lock](#gpu-lock)) and `horizon-source-shallow-contract=1`
+([pinned submodule history](#pinned-submodule-history)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -197,6 +198,19 @@ Any other failure, such as services that are not ready, starts nothing. A launch
 that fails after the fence is persisted is not replayed. A later operation with a new
 identifier can relaunch the session again. Images without the marker keep reporting
 such sessions lost.
+
+## Pinned submodule history
+
+Horizon can send only each submodule's pinned commit and its tree, without
+ancestors. `horizon-worker-source import` decides from what the bare `module-N.git` repository holds: when the pinned
+commit's parents are absent it lists the commit in the repository's `shallow` file,
+and when full history arrives later it removes the entry again. Clones for agent
+checkouts are then shallow, so `git log`, `git describe` and `git blame` inside a
+submodule see a single commit. Every import also checks that every object of the
+pinned tree is present, whatever history came with it, and refuses the import
+otherwise. `horizon-worker-source --shallow-contract` prints
+`horizon-source-shallow-contract=1`, and the checker reports that marker only when
+the helper declares it. Horizon sends full submodule history to images without the marker.
 
 ## Sibling repositories
 

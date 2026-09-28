@@ -80,6 +80,7 @@ def import_source(root, upload):
             with (folder / f'module-{index}.pack').open('rb') as objects:
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
+            record_shallow(repo, revision)
             git('--git-dir', repo, 'update-ref', 'refs/heads/base', module['revision'])
         with (root / 'manifest.json.new').open('wb') as destination:
             destination.write((folder / 'manifest.json').read_bytes())
@@ -92,6 +93,37 @@ def import_source(root, upload):
         finally:
             os.close(descriptor)
     upload.unlink()
+
+
+def record_shallow(repo, revision):
+    # A pinned-only pack carries the commit and its tree without ancestors. Git needs
+    # the commit listed as shallow, or clones and history walks fail on the missing
+    # parents. Decide from what the repository holds, so a replay onto full history,
+    # or full history arriving later, drops the entry again.
+    parents = subprocess.check_output(['git', '--git-dir', str(repo), 'cat-file', 'commit', revision], text=True)
+    parents = [line.split()[1] for line in parents.split('\n\n', 1)[0].splitlines() if line.startswith('parent ')]
+    listed = repo / 'shallow'
+    shallow = set(listed.read_text().split()) if listed.exists() else set()
+    present = subprocess.run(['git', '--git-dir', str(repo), 'cat-file', '--batch-check'],
+                             input=''.join(p + '\n' for p in parents), capture_output=True, text=True, check=True)
+    if any(line.endswith(' missing') for line in present.stdout.splitlines()):
+        shallow.add(revision)
+    else:
+        shallow.discard(revision)
+    if shallow:
+        pending = repo / 'shallow.new'
+        pending.write_text(''.join(oid + '\n' for oid in sorted(shallow)))
+        os.replace(pending, listed)
+    elif listed.exists():
+        listed.unlink()
+    # Every object of the pinned tree must be present, whatever history came with it.
+    objects = subprocess.run(['git', '--git-dir', str(repo), 'rev-list', '--objects', '--no-walk', revision],
+                             capture_output=True, text=True, check=True).stdout
+    names = ''.join(line.split(' ', 1)[0] + '\n' for line in objects.splitlines())
+    checked = subprocess.run(['git', '--git-dir', str(repo), 'cat-file', '--batch-check'],
+                             input=names, capture_output=True, text=True, check=True).stdout
+    if any(line.endswith(' missing') for line in checked.splitlines()):
+        raise ValueError('Submodule tree is incomplete')
 
 
 def beside_siblings(worktree, repository):
@@ -157,6 +189,10 @@ def checkout(worktree, alias=None):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--shallow-contract']:
+        # Imports record pinned-only submodule packs as shallow (see record_shallow).
+        print('horizon-source-shallow-contract=1')
+        sys.exit(0)
     os.umask(0o077)
     with open('/workspace/source.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

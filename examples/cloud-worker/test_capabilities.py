@@ -80,6 +80,13 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(status, 0, output)
             self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
 
+    def test_shallow_source_is_reported_only_when_the_source_helper_declares_it(self):
+        for reply, expected in [(b'horizon-source-shallow-contract=1\n', True), (b'', False),
+                                (b'horizon-source-shallow-contract=1 extra\n', False)]:
+            status, output, _ = self.run_check(reported={'horizon-worker-source': reply})
+            self.assertEqual(status, 0, output)
+            self.assertEqual('horizon-source-shallow-contract=1' in output.splitlines(), expected, reply)
+
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
             imported = __import__(module)
@@ -165,7 +172,8 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertEqual([call.args[0] for call in commands],
                          [['horizon-worker-session-env', 'check'], ['git', 'lfs', 'version'],
-                          ['horizon-worker-supervise', '--idle-stop-contract']])
+                          ['horizon-worker-supervise', '--idle-stop-contract'],
+                          ['horizon-worker-source', '--shallow-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})
