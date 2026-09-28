@@ -441,6 +441,37 @@ fn a_placement_error_also_moves_on_and_the_body_attaches_the_volume() {
 }
 
 #[test]
+fn a_volume_attached_after_the_create_response_is_read_once_its_actions_finish() {
+    let placements = [Placement {
+        server_type: "cpx22".into(),
+        location: "hel1".into(),
+    }];
+    let volume: Volume = serde_json::from_value(super::volumes::volume(9, None)).unwrap();
+    let mut attaching = created(42);
+    attaching["next_actions"] = json!([action(2, "running")]);
+    let mut attached = server(42);
+    attached["volumes"] = json!([9]);
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("servers", json!([]))),
+        (200, json!({"volume": super::volumes::volume(9, None)})),
+        (201, attaching),
+        (200, json!({"action": action(2, "success")})),
+        (200, json!({"server": attached})),
+    ]);
+    let request = ServerRequest {
+        volume: Some(&volume),
+        ..request(&placements)
+    };
+    let mut state = CreateState::Prepared;
+    let found = hetzner
+        .ensure_server(&request, &mut state, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    assert_eq!(found.volumes, [9]);
+    assert!(requests.lock().unwrap()[4].starts_with("GET /servers/42 "));
+}
+
+#[test]
 fn cancellation_or_a_failed_fence_before_sending_never_posts() {
     let placements = placements();
     let (hetzner, requests, task) = provider(vec![

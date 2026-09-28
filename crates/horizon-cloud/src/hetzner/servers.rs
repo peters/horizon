@@ -195,7 +195,17 @@ impl Hetzner {
                     for next in &created.next_actions {
                         self.wait(next, cancel)?;
                     }
-                    return placed(created.server, request);
+                    let mut server = created.server;
+                    // The create response predates the volume attach it starts, so it
+                    // is read again once those actions have finished.
+                    if request
+                        .volume
+                        .is_some_and(|volume| !server.volumes.contains(&volume.id))
+                    {
+                        server = self.inspect_server(server.id, cancel)?.ok_or(CloudError::WorkerLost)?;
+                        server.verify(request.operation_id)?;
+                    }
+                    return placed(server, request);
                 }
                 Err(failure) if failure.name_taken() => {
                     let server = self.reconcile(request.operation_id, state, cancel, &mut persist)?;
