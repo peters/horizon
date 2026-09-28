@@ -61,31 +61,30 @@ pub(super) fn show(
     } else {
         runtime.stage.map_or("Not deployed", Stage::label)
     };
-    ui.add(egui::Label::new(format!("Deployment: {state}")).truncate())
-        .on_hover_text(state);
+    let error = runtime.error.as_ref().or(runtime.remote_release_error.as_ref());
+    let deployment = if error.is_some() {
+        RichText::new(format!("Deployment: {state} · Needs attention — open Activity")).color(theme::PALETTE_RED())
+    } else {
+        RichText::new(format!("Deployment: {state}"))
+    };
+    ui.add(egui::Label::new(deployment).truncate())
+        .on_hover_text(error.map_or(state, String::as_str));
     ui.add(egui::Label::new(attachment_summary(group, runtime, board)).truncate())
         .on_hover_text("Local terminal processes are counted separately from deployment. A running process alone does not confirm the remote connection; check the terminal output. Browser and desktop connections are shown on their panels.");
-    if let Some(error) = runtime.error.as_ref().or(runtime.remote_release_error.as_ref()) {
-        ui.add(
-            egui::Label::new(RichText::new("Needs attention — open Activity").color(theme::PALETTE_RED())).truncate(),
-        )
-        .on_hover_text(error);
-    } else {
-        let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
-        let label = worker.map_or_else(
-            || "Worker: awaiting details".to_owned(),
-            |worker| format!("Worker: {} (last observed)", worker.desired_status),
-        );
-        let profile = runtime
-            .state
-            .as_ref()
-            .map(|state| &state.profile)
-            .or_else(|| group.remote.as_ref().map(|launch| &launch.profile));
-        let label = profile.map_or(label.clone(), |profile| {
-            format!("{} vCPU · {} GB · {label}", profile.cpu, profile.memory_gb)
-        });
-        ui.add(egui::Label::new(&label).truncate()).on_hover_text(label);
-    }
+    let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
+    let label = worker.map_or_else(
+        || "Worker: awaiting details".to_owned(),
+        |worker| format!("Worker: {} (last observed)", worker.desired_status),
+    );
+    let profile = runtime
+        .state
+        .as_ref()
+        .map(|state| &state.profile)
+        .or_else(|| group.remote.as_ref().map(|launch| &launch.profile));
+    let label = profile.map_or(label.clone(), |profile| {
+        format!("{} vCPU · {} GB · {label}", profile.cpu, profile.memory_gb)
+    });
+    ui.add(egui::Label::new(&label).truncate()).on_hover_text(label);
     ui.add_space(4.0);
     spending(ui, runtime);
     ui.add_space(4.0);
@@ -156,7 +155,7 @@ pub(super) fn attachment_summary(group: &CloudGroup, runtime: &super::super::Run
 fn spending(ui: &mut egui::Ui, runtime: &super::super::Runtime) {
     let now = std::time::SystemTime::now();
     let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
-    let run = worker.and_then(|worker| cloud_runtime::cost::current_run(worker, now));
+    let run = runtime.current_run_cost(now);
     let total = runtime.total_cost(now);
     let rate = worker.and_then(cloud_runtime::cost::hourly_rate);
     ui.columns(3, |columns| {
@@ -174,7 +173,9 @@ fn spending(ui: &mut egui::Ui, runtime: &super::super::Runtime) {
         metric(&mut columns[0], title, &amount, &note);
         let billing = if runtime.billing.error().is_some() { "Billing stale/unavailable" }
             else if runtime.billing.refreshing() { "Refreshing billing…" }
-            else if total.is_some() { "Billed + estimated" } else { "Billing not available" };
+            else if total.is_some() { "Billed + estimated" }
+            else if runtime.billing.sample().is_some() { "Awaiting provider billing" }
+            else { "Billing not available" };
         columns[0].add(egui::Label::new(RichText::new(billing).small()).truncate());
         metric(&mut columns[1], "This run (estimate)", &run.map_or_else(|| "Unavailable".into(), |run| horizon_core::format_cost(run.amount)),
             "Estimate from the last observed worker start and rate. Reconnect or check the provider to refresh worker state.");
@@ -223,6 +224,37 @@ mod tests {
         assert!(runtime.total_cost(now).is_none());
         assert!(runtime.current_run_cost(now).is_some());
         assert!(!runtime.cost_badge(now).unwrap().contains("total"));
+        runtime.stage = Some(Stage::Validate);
+        runtime.error = Some("Synthetic reconnect failure".into());
+        let group = CloudGroup::new(101, "Fixture".into(), "fixture".into(), "/synthetic".into(), [0.0, 0.0]);
+        let context = egui::Context::default();
+        let board = Board::new();
+        for _ in 0..2 {
+            use crate::test_egui::DiscardTextures;
+            let output = context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    show(ui, &group, &mut runtime, &board, false);
+                })
+                .discard_textures();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            assert!(texts.iter().any(|text| text.contains("Needs attention")));
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text.contains("4 vCPU · 8 GB · Worker: RUNNING"))
+            );
+            assert!(texts.iter().any(|text| text == "Awaiting provider billing"));
+            assert!(!texts.iter().any(|text| text == "Billing not available"));
+            assert!(texts.iter().any(|text| text == "Unavailable"));
+        }
+        assert!(runtime.current_run_cost(now).is_none());
         runtime.stage = Some(Stage::Stopped);
         let state = runtime.state.as_mut().unwrap();
         state.stage = Stage::Stopped;
