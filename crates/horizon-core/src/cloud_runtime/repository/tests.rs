@@ -369,6 +369,19 @@ fn an_lfs_selection_leaves_out_and_needs_only_paths_git_lfs_excludes_in_this_rep
         ["keep.bin", "module/fixtures/nested.bin"],
         "submodule content is always sent"
     );
+    // An object the selection keeps must still be local.
+    let kept = &oids["keep.bin"];
+    std::fs::remove_file(
+        repo.join(".git/lfs/objects")
+            .join(&kept[..2])
+            .join(&kept[2..4])
+            .join(kept),
+    )
+    .unwrap();
+    assert!(validate_selected(&repo, "HEAD", &source.lfs, &runner).is_err());
+    let again = temp.path().join("again");
+    std::fs::create_dir(&again).unwrap();
+    assert!(auxiliary(&repo, "HEAD", &again, &source, &runner).is_err());
 }
 
 /// Each archive member's name and content; directories have none.
