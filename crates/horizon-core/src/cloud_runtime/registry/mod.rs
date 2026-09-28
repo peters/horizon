@@ -2,6 +2,7 @@
 pub use horizon_cloud::runpod::registry::State;
 mod credentials;
 mod management;
+mod preflight;
 pub use management::{Action, Status, Validation, manage};
 pub mod draft;
 mod store;

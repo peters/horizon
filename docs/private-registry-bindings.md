@@ -25,8 +25,30 @@ because a generic Docker registry does not expose the issuer's full grant. A pul
 probe proves image readability, not absence of write permission. Horizon neither
 broadens grants nor falls back to a public image after an explicit binding fails.
 
-The deployment pipeline uses the selected publishing login for build/push, then
-checks the immutable result using the separate pull login before allocation.
+Before initial image preparation or a rebuild, the deployment pipeline checks the
+selected worker-pull login, then the publishing login when building. Each login
+uses a temporary Docker config without cached credentials and a private stdin payload; cached logins
+cannot make a changed password appear valid. Authentication failures stop before
+the build or upload and identify which credential needs attention. GHCR's pull
+scope check also runs at this point.
+
+For Azure Container Registry (`*.azurecr.io`, `*.azurecr.cn`, `*.azurecr.us`),
+preflight additionally requests a fresh repository-scoped access token over HTTPS.
+Its issuer response must grant `pull` to the worker login and `pull,push` to the
+publishing login for the exact repository, with a current expiry and matching
+audience. A successful login or token response with an empty grant is insufficient.
+This works before the first image exists and does not upload a probe image or
+create an upload session. Redirects, unavailable services and unreadable grants
+fail preflight. The grant is evidence from the HTTPS issuer response, not an
+independently verified JWT or proof that the pull credential has no broader rights.
+See [ACR token claims](https://github.com/Azure/acr/blob/main/docs/AAD-OAuth.md#azure-container-registry-token-claim-sets).
+
+Other registries receive the early login check; their repository push permissions
+are still checked by the actual push. Registry policies, connectivity and token
+revocation can change after preflight. The pipeline therefore still uses the
+selected publishing login for build/push, then checks the immutable result using
+the separate pull login before allocation. The early checks do not replace that
+validation or authorize transferring a credential to the compute provider.
 Image-only deployments do not require a live publishing credential. Exact repository
 matching prevents neighboring repositories on the same registry from inheriting a
 grant. Unconfigured registries keep their existing Docker/provider settings.

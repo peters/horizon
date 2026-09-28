@@ -267,6 +267,9 @@ impl Provider for Live<'_> {
 
 impl Steps for Live<'_> {
     fn build(&self, state: &Deployment, revision: &str, siblings: &[String], tag: &str) -> Result<ReplacementImage> {
+        if let Some(registry) = self.registry.borrow().as_ref() {
+            registry.preflight(&self.runner)?;
+        }
         let root = tempfile::tempdir_in(self.store.root())?;
         let source = repository::snapshot(&state.repository, revision, root.path(), &self.runner)?;
         let digest = {

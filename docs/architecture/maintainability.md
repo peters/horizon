@@ -643,6 +643,8 @@ identity and performs preparation while the user enters a title. Credential
 preflight runs off-thread and checks only profile-enabled agents.
 `registry` owns repository-scoped machine bindings, credential separation, private
 Docker authentication, issuer scope checks and pre-allocation image validation.
+Its `preflight` checks selected logins before image preparation and rebuilds;
+`preflight::acr` checks fresh ACR repository grants without publishing probe images.
 Its `draft` shares setup with the UI/CLI; `store` persists generation/account fences;
 `management` shares validation, status, reconciliation and revocation with the
 standalone registry MCP adapter. `horizon-cloud::runpod::registry` owns only provider
