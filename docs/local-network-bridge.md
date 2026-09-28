@@ -166,7 +166,9 @@ before it forwards port 554:
   do not count.
 
 The answer lists open, refused and silent ports, and later discovery answers include
-the open ports. Horizon never walks the subnet on its own.
+the open ports. Switching the bridge off stops a probe or a browse at once: no new
+connection attempt starts, and one already under way may finish within its 1.5
+seconds, when its connection is closed without use. Horizon never walks the subnet on its own.
 
 ## How it works
 

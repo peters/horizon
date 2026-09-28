@@ -12,7 +12,7 @@ use horizon_cloud_protocol::local_network::{
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     sync::{Arc, Mutex, PoisonError, TryLockError, mpsc},
     thread,
     time::{Duration, Instant},
@@ -24,8 +24,8 @@ const MINUTE: Duration = Duration::from_secs(60);
 /// Connection attempts in flight at once.
 const AT_ONCE: usize = 4;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
-/// How often a connection attempt checks whether it finished or the bridge stopped.
-const CONNECT_POLL: Duration = Duration::from_millis(10);
+/// How often a probe waiting for a connection attempt checks whether the bridge stopped.
+const CONNECT_POLL: Duration = Duration::from_millis(20);
 /// How often a probe waiting for its host's lookup checks whether the bridge stopped.
 const ADMIT_POLL: Duration = Duration::from_millis(100);
 /// Addresses whose open ports are remembered for discovery answers.
@@ -34,35 +34,31 @@ const MAX_REMEMBERED: usize = 256;
 /// Opens one TCP connection and closes it at once, giving up when the bridge stops.
 pub(super) type Connect = Box<dyn Fn(SocketAddr, Duration, &Cancellation) -> io::Result<()> + Send + Sync>;
 
-/// A non-blocking connect polled until it completes, fails, times out or the bridge stops;
-/// the socket closes when this returns, which abandons an attempt still in progress.
+/// A plain blocking connect with its own time limit, on a short-lived thread the caller stops
+/// waiting for once the bridge stops. No new attempt starts after that; one already in flight
+/// may still complete within its limit, and its connection is closed at once without use.
 ///
 /// # Errors
 /// Returns the connection's own error, `TimedOut`, or `Interrupted` once `cancel` fires.
 pub(super) fn connect(address: SocketAddr, timeout: Duration, cancel: &Cancellation) -> io::Result<()> {
-    use socket2::{Domain, Protocol, Socket, Type};
-    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
-    socket.set_nonblocking(true)?;
-    match socket.connect(&address.into()) {
-        Ok(()) => return Ok(()),
-        Err(error) if in_progress(&error) => {}
-        Err(error) => return Err(error),
+    if cancel.is_cancelled() {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED));
     }
-    let deadline = Instant::now() + timeout;
+    let (sender, outcome) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("local-network-dial".into())
+        .spawn(move || {
+            let _ = sender.send(TcpStream::connect_timeout(&address, timeout).map(drop));
+        })?;
     loop {
-        if let Some(error) = socket.take_error()? {
-            return Err(error);
+        match outcome.recv_timeout(CONNECT_POLL) {
+            Ok(outcome) => return outcome,
+            Err(mpsc::RecvTimeoutError::Timeout) if cancel.is_cancelled() => {
+                return Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(io::Error::other("the attempt stopped")),
         }
-        if socket.peer_addr().is_ok() {
-            return Ok(());
-        }
-        if cancel.is_cancelled() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, STOPPED));
-        }
-        if Instant::now() >= deadline {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
-        thread::sleep(CONNECT_POLL);
     }
 }
 
@@ -87,15 +83,6 @@ fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) ->
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Reply::GeneralFailure.message().into()),
         }
     }
-}
-
-/// A non-blocking connect that has started: `EINPROGRESS` on Unix, `WSAEWOULDBLOCK` on Windows.
-fn in_progress(error: &io::Error) -> bool {
-    #[cfg(unix)]
-    if error.raw_os_error() == Some(libc::EINPROGRESS) {
-        return true;
-    }
-    error.kind() == io::ErrorKind::WouldBlock
 }
 
 pub(super) struct Prober {
