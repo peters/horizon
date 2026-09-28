@@ -733,11 +733,26 @@ fn run_deployment_with_siblings(
     }
 }
 
-/// Reports the saved record with the failure, so the card shows what was kept.
+/// Reports the saved record with the failure, so the card shows what was kept. A
+/// record found busy is read once its lock is released, since that may be an idle
+/// stop finishing, which the card then shows instead of the failure.
 fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) {
-    if let Ok(store) = Store::lock(root)
-        && let Ok(Some(state)) = store.load()
-    {
+    let load = || Store::lock(root).and_then(|store| store.load());
+    let saved = if matches!(error, cloud_runtime::Error::Busy) {
+        match idle::after_busy(load, std::time::Duration::from_secs(1)).map(idle::stopped_while_busy) {
+            Some(Ok(events)) => {
+                for event in events {
+                    emit(event);
+                }
+                return;
+            }
+            Some(Err(state)) => Some(*state),
+            None => None,
+        }
+    } else {
+        load().ok().flatten()
+    };
+    if let Some(state) = saved {
         emit(Event::Snapshot(Box::new(state)));
     }
     emit(Event::failed(error.to_string()));
