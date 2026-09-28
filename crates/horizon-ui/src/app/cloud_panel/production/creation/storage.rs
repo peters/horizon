@@ -47,6 +47,15 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
                 );
             }
         }
+        // A CPU size also starts only as the catalog offers it; a size no flavor holds
+        // keeps its more specific reason.
+        if let Some(reason) = size_reason(form) {
+            return Some(reason);
+        }
+        if listed && !profile.gpu && super::selector::catalog(form).is_some_and(|catalog| catalog.selected.is_none()) {
+            return Some("Choose a CPU size the catalog offers for this profile.");
+        }
+        return None;
     }
     size_reason(form)
 }

@@ -352,3 +352,74 @@ fn a_catalog_with_no_match_blocks_start_and_high_performance_totals_leave_the_vo
     assert!(labels.iter().any(|label| label == "Running all month, without it"));
     assert!(labels.iter().any(|label| label == "Price not published"));
 }
+
+#[test]
+fn worker_cards_are_chosen_from_the_keyboard() {
+    let mut form = form("cpu");
+    let ctx = egui::Context::default();
+    let key = |key: egui::Key, pressed: bool| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frame = |form: &mut Production, events: Vec<egui::Event>| {
+        ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..egui::RawInput::default()
+            },
+            |ui| {
+                ui.set_width(1000.0);
+                section(ui, form);
+            },
+        )
+        .discard_textures()
+        .platform_output
+        .events
+    };
+    let _ = frame(&mut form, Vec::new());
+    // Tab through the dialog until a card other than the chosen one has focus.
+    let mut target = None;
+    for _ in 0..40 {
+        let events = frame(&mut form, vec![key(egui::Key::Tab, true), key(egui::Key::Tab, false)]);
+        target = events.into_iter().find_map(|event| match event {
+            egui::output::OutputEvent::FocusGained(info) => info
+                .label
+                .filter(|label| label.contains(" vCPU · ") && !label.starts_with("4 vCPU · 8 GB")),
+            _ => None,
+        });
+        if target.is_some() {
+            break;
+        }
+    }
+    let label = target.expect("a worker card takes keyboard focus");
+    let _ = frame(
+        &mut form,
+        vec![key(egui::Key::Enter, true), key(egui::Key::Enter, false)],
+    );
+    let size: Vec<u16> = label
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .take(2)
+        .map(|part| part.parse().unwrap())
+        .collect();
+    assert_eq!(form.size, Some((size[0], size[1])), "{label}");
+}
+
+#[test]
+fn a_cpu_size_the_catalog_no_longer_offers_blocks_start() {
+    let mut form = form("cpu");
+    assert!(can_submit(&form));
+    // The preferred flavor loses its price, so the 4 vCPU / 8 GB size drops out.
+    let mut unpriced = list(None);
+    unpriced.cpu.retain(|flavor| flavor.id != "cpu3c");
+    form.prices.answered(unpriced, preferences(), Vec::new());
+    assert!(catalog(&form).unwrap().selected.is_none());
+    assert!(!can_submit(&form));
+    assert_eq!(
+        submit_reason(&form),
+        Some("Choose a CPU size the catalog offers for this profile.")
+    );
+}

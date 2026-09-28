@@ -55,6 +55,8 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
     let selected = catalog.selected == Some(index);
     let id = ui.id().with(("worker-card", &offer.id));
     let hovered = ui.is_enabled() && ui.ctx().read_response(id).is_some_and(|response| response.hovered());
+    // Cards take keyboard focus like buttons, and Enter or Space chooses one.
+    let focused = ui.memory(|memory| memory.has_focus(id));
     let (fill, stroke) = if selected {
         (
             theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.14),
@@ -65,6 +67,7 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
     } else {
         (theme::PANEL_BG_ALT(), Stroke::new(1.0, theme::BORDER_SUBTLE()))
     };
+    let stroke = if focused { Stroke::new(2.0, theme::FG()) } else { stroke };
     let (name, detail) = title(offer);
     let (stock, color) = widgets::stock(catalog.stock(index, form));
     let frame = Frame::new()
@@ -169,6 +172,9 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
         egui::Color32::TRANSPARENT
     };
     painter.rect_filled(rect, 6, fill);
+    if response.has_focus() {
+        painter.rect_stroke(rect, 6, Stroke::new(1.5, theme::FG()), egui::StrokeKind::Inside);
+    }
     if selected {
         let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
         painter.rect_filled(bar, 2, theme::ACCENT());
