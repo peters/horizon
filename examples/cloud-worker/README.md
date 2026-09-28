@@ -319,7 +319,9 @@ are prepared from each repository's own material before the launch fence, so rel
 paths such as `../native-lib` in the repositories' scripts work unchanged. Each submodule
 is registered in its superproject's configuration with the imported material as its URL,
 so `git submodule status` reports it at its pin and `git submodule update --init` does not
-clone it again. Relaunch
+clone it again. That needs exactly one `.gitmodules` entry for the path: a raw gitlink
+without one is still checked out at its pin but stays unregistered, and the checkout log
+names it. Relaunch
 refuses with exit 3 when any worktree of the layout is missing or is not a worktree of
 its own repository, and never recreates it. Attach refuses the same way when a path it
 would complete after an interrupted preparation holds another repository.

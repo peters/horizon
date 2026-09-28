@@ -76,6 +76,8 @@ class SourceFormatTests(unittest.TestCase):
                 agent.mkdir(parents=True)
                 checked = self.execute('horizon-worker-source', workspace, 'checkout', str(agent))
                 self.assertEqual(checked.returncode, 0, checked.stderr.decode())
+                # A raw gitlink without a .gitmodules mapping still checks out; the log names it.
+                self.assertIn(b'nested/module has no .gitmodules mapping', checked.stderr)
                 self.assertEqual((agent / 'nested/module/file.txt').read_text(), 'selected committed content\n')
                 self.assertEqual(self.git('-C', agent / 'nested/module', 'rev-parse', 'HEAD').decode().strip(), revision)
 

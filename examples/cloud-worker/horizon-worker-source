@@ -115,12 +115,17 @@ def register(worktree, modules, index, origin):
     relative = str(path.relative_to(parent) if parent else path)
     listing = subprocess.run(['git', '-C', str(superproject), 'config', '-z', '-f', '.gitmodules',
                               '--get-regexp', r'^submodule\..*\.path$'], capture_output=True, text=True, check=False)
-    for record in listing.stdout.split('\0'):
-        key, _, value = record.partition('\n')
-        if value == relative:
-            name = key.removeprefix('submodule.').removesuffix('.path')
-            git('-C', superproject, 'config', f'submodule.{name}.url', origin)
-            git('-C', superproject, 'config', f'submodule.{name}.active', 'true')
+    names = [key.removeprefix('submodule.').removesuffix('.path')
+             for key, _, value in (record.partition('\n') for record in listing.stdout.split('\0'))
+             if value == relative]
+    if len(names) != 1:
+        # A raw gitlink without exactly one .gitmodules mapping stays checked out but
+        # unregistered, as before: Git itself cannot name it for `submodule status`.
+        print(f'horizon-worker-source: {path} has {"no" if not names else "more than one"} '
+              '.gitmodules mapping; leaving it unregistered', file=sys.stderr)
+        return
+    git('-C', superproject, 'config', f'submodule.{names[0]}.url', origin)
+    git('-C', superproject, 'config', f'submodule.{names[0]}.active', 'true')
 
 
 def checkout(worktree, alias=None):
