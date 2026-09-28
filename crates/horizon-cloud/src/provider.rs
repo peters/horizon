@@ -42,7 +42,7 @@ pub enum Choice {
     /// Third-party hosts, which a person must opt into. No provider offers it yet:
     /// clouds use Secure Cloud hosts only.
     CommunityHosts,
-    /// More than one kind of network volume storage. No provider offers it yet.
+    /// More than one kind of network volume storage for CPU workers.
     VolumeTiers,
     /// A region picker with live stock.
     Region,

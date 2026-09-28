@@ -32,7 +32,7 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         });
     }
     let (min, max) = if profile.gpu {
-        (10, u32::from(u16::MAX))
+        (1, u32::from(u16::MAX))
     } else {
         provider.cpu_volume_gb
     };
@@ -97,6 +97,18 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn rendering_preserves_small_gpu_workspace_sizes() {
+        let mut profile = profile();
+        profile.gpu = true;
+        for size in [1, 9] {
+            profile.storage.volume_gb = size;
+            let original = profile.clone();
+            labels(&mut profile, &provider::RUNPOD);
+            assert_eq!(profile, original);
+        }
     }
 
     #[test]
