@@ -42,7 +42,7 @@ pub(super) fn run(
         let valid = selection_status(&grant, context, &alias);
         if !grant.selected || valid != Status::Ready {
             let result = revoke(store, state, &alias, &mut grant, transport);
-            row.companion.status = if grant.source_disconnected && grant.target_revoked {
+            row.companion.status = if grant.cleaned_up() {
                 valid
             } else {
                 Status::RevocationPending
@@ -50,7 +50,7 @@ pub(super) fn run(
             if let Err(error) = result {
                 row.error = Some(error.to_string());
             }
-            if !grant.selected && grant.source_disconnected && grant.target_revoked {
+            if !grant.selected && grant.cleaned_up() {
                 state.grants.remove(&alias);
                 store.save(state)?;
                 if let Some(declaration_row) = declaration_row {
@@ -70,7 +70,7 @@ pub(super) fn run(
                     if let Err(error) = revoke(store, state, &alias, &mut grant, transport) {
                         row.error = Some(error.to_string());
                     }
-                    if !grant.source_disconnected || !grant.target_revoked {
+                    if !grant.cleaned_up() {
                         row.companion.status = Status::RevocationPending;
                     }
                 }
@@ -226,6 +226,7 @@ fn connect(
     let address = endpoint(&source, &target)?;
     grant.source_disconnected = false;
     grant.target_revoked = false;
+    grant.source_forgotten = false;
     // Arm cleanup durably before the first potentially successful remote operation.
     persist(store, state, alias, grant)?;
     let Response::Identity { public_key } = transport.call(
@@ -324,7 +325,52 @@ fn revoke(
             Err(error) => failure = Some(error),
         }
     }
+    // The source's key opens nothing once the target revoked it; it is dropped, and
+    // retried like the rest of the cleanup until the source confirms it.
+    if grant.source_disconnected && grant.target_revoked && !grant.source_forgotten {
+        match forget(transport, &source_id, grant) {
+            Ok(()) => {
+                grant.source_forgotten = true;
+                persist(store, state, alias, grant)?;
+            }
+            Err(error) => failure = Some(error),
+        }
+    }
     failure.map_or(Ok(()), Err)
+}
+
+/// Drops the revoked grant's key directory on the source. A source worker that was
+/// replaced keeps nothing of the old one, and an image without the request says so
+/// when it rejects it; both count as done.
+fn forget(transport: &mut impl Transport, source_id: &str, grant: &Grant) -> Result<()> {
+    let Some(pinned) = grant.source_worker.as_deref() else {
+        return Ok(());
+    };
+    let worker = transport
+        .worker(source_id)?
+        .ok_or(Error::Invalid("Key removal pending: the source worker is unavailable"))?;
+    if worker.id != pinned {
+        return Ok(());
+    }
+    if worker.status != Status::Ready {
+        return Err(Error::Invalid(
+            "Key removal pending: the source worker must be reachable",
+        ));
+    }
+    match transport.call(
+        source_id,
+        &Request::Forget {
+            grant: grant.id.clone(),
+        },
+    ) {
+        Ok(Response::Forgotten) => Ok(()),
+        Ok(_) => Err(Error::Invalid("Key removal was not confirmed")),
+        Err(Error::Invalid(message)) if message == super::transport::UNSUPPORTED_REQUEST => {
+            tracing::debug!("the source worker image keeps revoked companion keys until it restarts");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn revoke_end(transport: &mut impl Transport, cloud: &str, pinned: Option<&str>, request: &Request) -> Result<()> {
@@ -337,10 +383,10 @@ fn revoke_end(transport: &mut impl Transport, cloud: &str, pinned: Option<&str>,
             "Revocation pending: the original worker must be reachable",
         ));
     }
-    let expected = if matches!(request, Request::Disconnect { .. }) {
-        Response::Disconnected
-    } else {
-        Response::Revoked
+    let expected = match request {
+        Request::Disconnect { .. } => Response::Disconnected,
+        Request::Forget { .. } => Response::Forgotten,
+        _ => Response::Revoked,
     };
     if transport.call(cloud, request)? != expected {
         return Err(Error::Invalid("Revocation was not confirmed"));

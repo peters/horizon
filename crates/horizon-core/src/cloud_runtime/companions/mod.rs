@@ -202,6 +202,7 @@ fn apply_action(state: &mut journal::State, context: Option<&Context>, action: &
                     revision: None,
                     source_disconnected: true,
                     target_revoked: true,
+                    source_forgotten: true,
                     access: None,
                 },
             );

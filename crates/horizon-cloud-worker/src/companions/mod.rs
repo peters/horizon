@@ -157,8 +157,12 @@ impl Runtime {
             } => self.connect(grant, alias, host, *port, host_key),
             Request::Revoke { .. } => {
                 self.authorized_key(grant, None)?;
+                // The key is gone, which is what revocation needs; a worktree that
+                // cannot be checked is kept rather than failing the revocation.
+                let _ = self.remove_clean_worktree(grant);
                 Ok(Response::Revoked)
             }
+            Request::Forget { .. } => self.forget(grant),
             Request::Disconnect { .. } => {
                 let directory = self.key_directory(grant);
                 if directory.exists() {
@@ -170,6 +174,46 @@ impl Runtime {
                 Ok(Response::Disconnected)
             }
         }
+    }
+
+    /// Removes the grant's worktree and its prepared record when nothing in it would
+    /// be lost: no changes and no untracked or ignored files. A dirty worktree is kept.
+    fn remove_clean_worktree(&self, grant: &str) -> io::Result<()> {
+        let worktree = self.worktree(grant);
+        let prepared = self.workspace.join("companions/prepared").join(grant);
+        if worktree.exists() {
+            let status = ssh::checked(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&worktree)
+                    .args(["status", "--porcelain", "--ignored"])
+                    .env("HOME", self.workspace.join("home")),
+            )?;
+            if !status.trim().is_empty() {
+                return Ok(());
+            }
+            ssh::checked(
+                std::process::Command::new("git")
+                    .arg(format!("--git-dir={}", self.workspace.join("repository.git").display()))
+                    .args(["worktree", "remove"])
+                    .arg(&worktree)
+                    .env("HOME", self.workspace.join("home")),
+            )?;
+        }
+        files::remove(&prepared)
+    }
+
+    /// Drops a disconnected grant's key directory once the target revoked the key.
+    fn forget(&self, grant: &str) -> io::Result<Response> {
+        let directory = self.key_directory(grant);
+        if directory.join("config").exists() || directory.join("connection.json").exists() {
+            return Err(io::Error::other("Disconnect the companion before forgetting its key"));
+        }
+        match std::fs::remove_dir_all(&directory) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        Ok(Response::Forgotten)
     }
 
     fn key_directory(&self, grant: &str) -> PathBuf {
