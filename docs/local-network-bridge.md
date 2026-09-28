@@ -63,6 +63,8 @@ off when you change networks.
 
 - **TCP only.** UDP does not cross the bridge: no mDNS or SSDP from the worker, no
   RTSP over UDP, no ping. Use RTSP over TCP (for example `ffmpeg -rtsp_transport tcp`).
+  To find devices, agents ask this computer instead; see
+  [Finding devices](#finding-devices).
 - **Bandwidth.** Traffic crosses this computer's uplink twice, so a video stream is
   limited by its upload speed.
 - **Bounds.** At most 64 connections at once and 64 GiB relayed per bridge; switch
@@ -78,11 +80,14 @@ off when you change networks.
 ## What the agent sees
 
 Agents on the worker get a `horizon-local-network` MCP server, and the same
-operations as `horizon-cloud-worker local-network status|forward|unforward`:
+operations as `horizon-cloud-worker local-network status|discover|forward|unforward`:
 
 - `local_network_status`: whether the bridge is on, the bridged subnet, the SOCKS5
-  proxy address on the worker's `127.0.0.1`, and the pinned forwards. When the
-  bridge is off it says that only you can turn it on.
+  proxy address on the worker's `127.0.0.1`, the pinned forwards, and whether
+  discovery works and with what on this computer. When the bridge is off it says
+  that only you can turn it on.
+- `local_network_discover`: the devices on your network, found by this computer.
+  See [Finding devices](#finding-devices).
 - `local_network_forward` with a host and port: pins that device to a port on the
   worker's `127.0.0.1`, so any TCP tool works unchanged, for example
   `ffmpeg -rtsp_transport tcp -i rtsp://127.0.0.1:<port>/stream`. Horizon checks
@@ -99,11 +104,53 @@ reachable from the Horizon computer" or "The device refused the connection on
 that port". Forwards end when the bridge stops or reconnects; agents check the
 status and forward again.
 
+## Finding devices
+
+An agent can ask what is on your network instead of being told addresses, for a
+demo such as "find the printer and show me its status page". The browse runs on
+this computer, never on the worker, and only when an agent asks:
+
+- **mDNS / Bonjour**: devices that announce services, such as printers, TVs,
+  speakers, cameras, dev boards and other computers, with the names they give
+  themselves, their services, ports and details such as the printer model.
+- **SSDP / UPnP**: routers, TVs and media devices, with their device type, server
+  string and the address of their description page, which the agent can fetch
+  through the bridge.
+- **The neighbor table**: devices this computer has recently exchanged traffic
+  with. Only their addresses are shared, never their hardware addresses.
+
+It looks for about three seconds and repeats the same answer to requests in the
+next 15 seconds, so asking again soon sends nothing on the network. Only one browse
+runs at a time. The answer lists at most 256 devices, each with at most 4 names and
+16 services, and shortens the text that devices choose.
+
+Every device passes the same scope as a connection: only addresses on the bridged
+subnet are listed, never this computer, and nothing is sent when this computer has
+left the bridged network. Queries go out through the bridged network's interface
+only. Horizon does not answer mDNS for this computer, and it never sweeps the
+subnet address by address.
+
+What each system provides:
+
+| This computer | mDNS | SSDP | Neighbor table |
+|---|---|---|---|
+| Linux | yes | yes | yes |
+| macOS | yes | yes | yes, from `arp` |
+| Windows | yes | yes | yes, from `arp` |
+
+Discovery from Windows is not fully tested yet, and Windows Firewall can hide
+devices that answer mDNS or SSDP; `local_network_status` tells agents so. A source
+that fails adds a note to the answer instead of failing the whole request.
+
+A worker helper whose owner's Horizon is older than discovery reports that
+discovery is unavailable; update Horizon on this computer.
+
 ## How it works
 
 Switching the bridge on starts a SOCKS5 proxy on this computer's loopback and one
 SSH process to the worker, with the cloud's own pinned host key and no agent or X11
 forwarding. That SSH process forwards a private socket on the worker to the proxy
 and runs a small helper that serves the proxy address, the forwards and the status
-on the worker's `127.0.0.1`. The helper stops, and removes its sockets and forwards,
+on the worker's `127.0.0.1`. The helper passes discovery requests to this computer
+over the same SSH session, and this computer checks each one before it answers. The helper stops, and removes its sockets and forwards,
 when the SSH session ends or stops sending its heartbeat for a minute.

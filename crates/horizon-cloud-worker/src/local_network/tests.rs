@@ -60,6 +60,8 @@ type JoinHandle = thread::JoinHandle<()>;
 
 struct Session {
     heartbeat: Option<io::PipeWriter>,
+    /// The helper's output after its ready line: its calls to the owner.
+    output: BufReader<io::PipeReader>,
     ready: Ready,
     helper: Option<thread::JoinHandle<io::Result<()>>>,
 }
@@ -75,9 +77,11 @@ impl Session {
             let (paths, nonce) = (paths.clone(), nonce.to_owned());
             thread::spawn(move || hold::run(&paths, &nonce, "192.168.1.0/24", input, ready_writer))
         };
-        let line = read_line(&mut BufReader::new(output)).unwrap().unwrap();
+        let mut output = BufReader::new(output);
+        let line = read_line(&mut output).unwrap().unwrap();
         Self {
             heartbeat: Some(heartbeat),
+            output,
             ready: serde_json::from_str(&line).unwrap(),
             helper: Some(helper),
         }
@@ -89,7 +93,96 @@ impl Session {
     }
 }
 
-use horizon_cloud_protocol::local_network::Ready;
+use horizon_cloud_protocol::local_network::{
+    Ready,
+    discovery::{self, Call, Device, MAX_LINE, Source},
+};
+
+impl Session {
+    /// Writes one line as the owner's Horizon.
+    fn tell(&mut self, line: &str) {
+        let owner = self.heartbeat.as_mut().unwrap();
+        owner.write_all(line.as_bytes()).unwrap();
+        owner.write_all(b"\n").unwrap();
+    }
+
+    /// Waits for the helper's next call to the owner.
+    fn call(&mut self) -> Call {
+        serde_json::from_str(&read_line(&mut self.output).unwrap().unwrap()).unwrap()
+    }
+}
+
+#[test]
+fn discovery_asks_the_owner_and_bad_owner_lines_never_end_the_session() {
+    let (_root, paths) = paths();
+    let mut session = Session::start(&paths, NONCE);
+    let hello =
+        r#"{"hello":{"discovery":1,"sources":["mdns","ssdp","neighbors"],"note":"Not qualified\u001b[2J here"}}"#;
+    // Before the owner says what it answers, discovery is unavailable.
+    assert!(!status(&paths).unwrap().discovery.unwrap().available);
+    let refused = discover(&paths).unwrap_err().to_string();
+    assert!(refused.contains("update Horizon"), "{refused}");
+    // Junk, and a hello at the end of an oversized line, are ignored.
+    session.tell("not json");
+    session.tell(&format!("{}{hello}", "x".repeat(MAX_LINE)));
+    session.tell(r#"{"answer":{"id":99,"answer":{"refused":"nobody asked"}}}"#);
+    thread::sleep(Duration::from_millis(200));
+    assert!(!status(&paths).unwrap().discovery.unwrap().available);
+    session.tell(hello);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let availability = loop {
+        let availability = status(&paths).unwrap().discovery.unwrap();
+        if availability.available || Instant::now() > deadline {
+            break availability;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        availability,
+        Availability {
+            available: true,
+            sources: vec!["mdns".into(), "ssdp".into(), "neighbors".into()],
+            note: Some("Not qualified[2J here".into()),
+        }
+    );
+
+    let asking = {
+        let paths = paths.clone();
+        thread::spawn(move || discover(&paths))
+    };
+    let call = session.call();
+    assert_eq!(call.request, discovery::Request::Discover);
+    let printer = Device {
+        address: Ipv4Addr::new(192, 168, 1, 50),
+        names: vec!["printer.local".into()],
+        services: Vec::new(),
+        ports: vec![631],
+        sources: vec![Source::Mdns],
+    };
+    let answer =
+        |id: u64, answer: discovery::Answer| serde_json::to_string(&discovery::Message::Answer { id, answer }).unwrap();
+    // An answer to another call does not end this one.
+    session.tell(&answer(call.id + 1, discovery::Answer::Refused("wrong".into())));
+    session.tell(&answer(
+        call.id,
+        discovery::Answer::Discovery(discovery::Discovery {
+            devices: vec![printer.clone()],
+            ..discovery::Discovery::default()
+        }),
+    ));
+    assert_eq!(asking.join().unwrap().unwrap().devices, [printer]);
+
+    let asking = {
+        let paths = paths.clone();
+        thread::spawn(move || discover(&paths))
+    };
+    let call = session.call();
+    session.tell(&answer(call.id, discovery::Answer::Refused("Busy browsing".into())));
+    let refused = asking.join().unwrap().unwrap_err().to_string();
+    assert_eq!(refused, "Busy browsing");
+    assert!(status(&paths).unwrap().active);
+    session.stop();
+}
 
 fn paths() -> (tempfile::TempDir, Paths) {
     // Unix socket paths are limited to about 100 bytes.

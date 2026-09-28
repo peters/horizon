@@ -2,13 +2,22 @@
 //! owner's network.
 //!
 //! Discovery runs on the owner's computer, never on the worker, because mDNS, SSDP and the
-//! neighbor table do not travel through a TCP relay. The owner's Horizon sends each
-//! [`Answer`] to the worker over the bridge's own SSH session.
+//! neighbor table do not travel through a TCP relay. Requests and answers share the bridge's
+//! own SSH session: the helper on the worker writes one [`Call`] per line on its standard
+//! output, and the owner's Horizon writes one [`Message`] per line on the helper's standard
+//! input, between the empty heartbeat lines. The owner's Horizon announces what it answers
+//! with a [`Hello`] first; a helper that never hears one knows discovery is unavailable.
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, net::Ipv4Addr};
+use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
 
-/// The longest answer line; the worker discards longer lines unread.
+/// The discovery protocol version this build speaks.
+pub const VERSION: u32 = 1;
+/// The longest line the owner's Horizon writes; the helper discards longer lines unread.
 pub const MAX_LINE: usize = 256 * 1024;
+/// The longest call line the owner's Horizon reads.
+pub const MAX_CALL: usize = 4096;
+/// How long the helper waits for the owner's Horizon to answer one call.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_DEVICES: usize = 256;
 pub const MAX_NAMES: usize = 4;
 pub const MAX_SERVICES: usize = 16;
@@ -19,6 +28,43 @@ const ENVELOPE: usize = 256;
 /// Characters in any one name, type, attribute or note; devices choose most of these strings.
 pub const MAX_TEXT: usize = 128;
 pub const MAX_NOTES: usize = 8;
+
+/// What the owner's Horizon answers, announced once per session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    /// The discovery protocol [`VERSION`].
+    pub discovery: u32,
+    /// What this computer browses.
+    pub sources: Vec<Source>,
+    /// What an agent should know about discovery on this computer's system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// A request from the helper to the owner's Horizon.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Request {
+    /// The devices on the bridged network.
+    Discover,
+}
+
+/// One request, numbered so its answer finds the agent that asked. The owner's Horizon reads
+/// `request` on its own, so a request it does not know is refused by number.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Call<R = Request> {
+    pub id: u64,
+    pub request: R,
+}
+
+/// A line from the owner's Horizon to the helper, besides the empty heartbeat lines.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Message {
+    Hello(Hello),
+    Answer { id: u64, answer: Answer },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -193,6 +239,45 @@ mod tests {
             ports: vec![80, 22, 80],
             sources: vec![Source::Mdns],
         }
+    }
+
+    #[test]
+    fn calls_and_messages_keep_their_wire_shape() {
+        let call = Call {
+            id: 7,
+            request: Request::Discover,
+        };
+        assert_eq!(
+            serde_json::to_string(&call).unwrap(),
+            r#"{"id":7,"request":"discover"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Call>(r#"{"id":7,"request":"discover"}"#).unwrap(),
+            call
+        );
+        // The helper's ready line never reads as a call.
+        assert!(serde_json::from_str::<Call<serde_json::Value>>(r#"{"proxy":"127.0.0.1:1"}"#).is_err());
+        // An unknown request still yields its number, so it can be refused.
+        let unknown: Call<serde_json::Value> = serde_json::from_str(r#"{"id":8,"request":"sweep"}"#).unwrap();
+        assert_eq!(unknown.id, 8);
+        assert!(serde_json::from_value::<Request>(unknown.request).is_err());
+        let answer = Message::Answer {
+            id: 7,
+            answer: Answer::Refused("busy".into()),
+        };
+        let line = serde_json::to_string(&answer).unwrap();
+        assert_eq!(line, r#"{"answer":{"id":7,"answer":{"refused":"busy"}}}"#);
+        assert_eq!(serde_json::from_str::<Message>(&line).unwrap(), answer);
+        let hello: Message =
+            serde_json::from_str(r#"{"hello":{"discovery":1,"sources":["mdns","sonar"],"later":1}}"#).unwrap();
+        assert_eq!(
+            hello,
+            Message::Hello(Hello {
+                discovery: 1,
+                sources: vec![Source::Mdns, Source::Other],
+                note: None
+            })
+        );
     }
 
     #[test]

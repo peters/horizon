@@ -5,10 +5,10 @@ mod mdns;
 mod neighbors;
 mod ssdp;
 
-use super::Scope;
+use super::{Answers, Scope};
 use horizon_cloud_protocol::local_network::{
     Reply, Subnet,
-    discovery::{Answer, Device, Discovery, MAX_NAMES, MAX_SERVICES, Service, Source},
+    discovery::{Answer, Device, Discovery, Hello, MAX_NAMES, MAX_SERVICES, Request, Service, Source, VERSION},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -98,6 +98,28 @@ impl Discoverer {
         .bounded();
         *last = Some((Instant::now(), discovery.clone()));
         Answer::Discovery(discovery)
+    }
+}
+
+impl Answers for Discoverer {
+    fn hello(&self) -> Hello {
+        let mut sources = vec![Source::Mdns, Source::Ssdp];
+        if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+            sources.push(Source::Neighbors);
+        }
+        Hello {
+            discovery: VERSION,
+            sources,
+            note: cfg!(windows).then(|| {
+                "Discovery from a Windows computer is not fully tested yet; its firewall can hide devices that answer mDNS or SSDP".into()
+            }),
+        }
+    }
+
+    fn answer(&self, request: Request) -> Answer {
+        match request {
+            Request::Discover => self.discover(),
+        }
     }
 }
 

@@ -1,7 +1,10 @@
 //! The helper at the worker end of one bridge session. It lives exactly as long as the owner's
 //! SSH session keeps writing heartbeats, and takes its sockets and forwards with it.
-use super::{Answer, Forward, MAX_MESSAGE, Paths, Request, Status, forward};
-use horizon_cloud_protocol::local_network::{HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, Nonce, Ready, Subnet};
+use super::{Answer, Availability, Forward, MAX_MESSAGE, Paths, Request, Status, forward, owner::Owner};
+use horizon_cloud_protocol::local_network::{
+    HEARTBEAT_INTERVAL, Nonce, Ready, Subnet,
+    discovery::{self, Source},
+};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, Read, Write},
@@ -41,7 +44,7 @@ struct Helper {
     proxy: SocketAddrV4,
     relays: Arc<AtomicUsize>,
     forwards: Mutex<Vec<Pinned>>,
-    heartbeat: Heartbeat,
+    owner: Owner,
     /// Set when a newer session took over; the helper then ends.
     retired: AtomicBool,
 }
@@ -53,7 +56,28 @@ impl Helper {
             subnet: Some(self.subnet.to_string()),
             proxy: Some(self.proxy.to_string()),
             forwards: self.forwards().iter().map(|pinned| pinned.forward.clone()).collect(),
+            discovery: Some(self.availability()),
             note: NOTE.into(),
+        }
+    }
+
+    fn availability(&self) -> Availability {
+        match self.owner.hello().filter(|hello| hello.discovery > 0) {
+            Some(hello) => Availability {
+                available: true,
+                sources: hello
+                    .sources
+                    .iter()
+                    .filter(|source| **source != Source::Other)
+                    .filter_map(|source| serde_json::to_value(source).ok()?.as_str().map(str::to_owned))
+                    .collect(),
+                note: hello.note.map(|note| discovery::text(&note)),
+            },
+            None => Availability {
+                available: false,
+                sources: Vec::new(),
+                note: Some(super::owner::NO_DISCOVERY.into()),
+            },
         }
     }
 
@@ -65,7 +89,7 @@ impl Helper {
         match request {
             Request::Status => Answer::Status(self.status()),
             Request::Retire => {
-                if self.heartbeat.silent_for() < RETIRE_AFTER {
+                if self.owner.silent_for() < RETIRE_AFTER {
                     return Answer::Error(
                         "Another Horizon is already sharing its local network with this worker".into(),
                     );
@@ -75,6 +99,11 @@ impl Helper {
             }
             Request::Forward { host, port } => match self.forward(host, port) {
                 Ok(forward) => Answer::Forward(forward),
+                Err(error) => Answer::Error(error.to_string()),
+            },
+            Request::Discover => match self.owner.ask(discovery::Request::Discover) {
+                Ok(discovery::Answer::Discovery(found)) => Answer::Discovery(found),
+                Ok(discovery::Answer::Refused(refusal)) => Answer::Error(discovery::text(&refusal)),
                 Err(error) => Answer::Error(error.to_string()),
             },
             Request::Unforward { worker_port } => {
@@ -254,7 +283,7 @@ pub(super) fn run(
     nonce: &str,
     subnet: &str,
     input: impl Read + Send + 'static,
-    mut output: impl Write,
+    output: impl Write + Send + 'static,
 ) -> io::Result<()> {
     let nonce = Nonce::parse(nonce).ok_or_else(|| io::Error::other("Invalid bridge session"))?;
     let subnet: Subnet = subnet.parse().map_err(io::Error::other)?;
@@ -272,13 +301,11 @@ pub(super) fn run(
         proxy: SocketAddrV4::new(Ipv4Addr::LOCALHOST, endpoint.port()),
         relays,
         forwards: Mutex::new(Vec::new()),
-        heartbeat: Heartbeat::watch(input)?,
+        owner: Owner::watch(input, output)?,
         retired: AtomicBool::new(false),
     });
     let control = Control::bind(paths)?;
-    serde_json::to_writer(&mut output, &Ready { proxy: helper.proxy })?;
-    output.write_all(b"\n")?;
-    output.flush()?;
+    helper.owner.write(&Ready { proxy: helper.proxy })?;
     serve(&helper, &control);
     helper.forwards().clear();
     drop(endpoint);
@@ -296,45 +323,6 @@ fn wait_for_socket(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// When the owner's session last wrote to standard input, and whether it closed it.
-struct Heartbeat {
-    last: Arc<Mutex<Instant>>,
-    ended: Arc<AtomicBool>,
-}
-
-impl Heartbeat {
-    fn watch(mut input: impl Read + Send + 'static) -> io::Result<Self> {
-        let last = Arc::new(Mutex::new(Instant::now()));
-        let ended = Arc::new(AtomicBool::new(false));
-        {
-            let (last, ended) = (Arc::clone(&last), Arc::clone(&ended));
-            thread::Builder::new()
-                .name("local-network-heartbeat".into())
-                .spawn(move || {
-                    let mut buffer = [0; 64];
-                    loop {
-                        match input.read(&mut buffer) {
-                            Ok(0) => break,
-                            Ok(_) => *last.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now(),
-                            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                            Err(_) => break,
-                        }
-                    }
-                    ended.store(true, Ordering::Release);
-                })?;
-        }
-        Ok(Self { last, ended })
-    }
-
-    fn silent_for(&self) -> Duration {
-        self.last.lock().unwrap_or_else(PoisonError::into_inner).elapsed()
-    }
-
-    fn alive(&self) -> bool {
-        !self.ended.load(Ordering::Acquire) && self.silent_for() < HEARTBEAT_TIMEOUT
-    }
-}
-
 /// One control request's share of [`MAX_REQUESTS`], returned however its handler ends.
 struct Pending(Arc<AtomicUsize>);
 
@@ -346,7 +334,7 @@ impl Drop for Pending {
 
 fn serve(helper: &Arc<Helper>, control: &Control) {
     let requests = Arc::new(AtomicUsize::new(0));
-    while helper.heartbeat.alive() && !helper.retired.load(Ordering::Acquire) {
+    while helper.owner.alive() && !helper.retired.load(Ordering::Acquire) {
         match control.listener.accept() {
             Ok((mut stream, _)) => {
                 if requests
@@ -399,17 +387,13 @@ mod tests {
     use super::*;
 
     fn helper(silent: Duration) -> Helper {
-        let last = Instant::now().checked_sub(silent).unwrap_or_else(Instant::now);
         Helper {
             bridge: PathBuf::from("/nonexistent"),
             subnet: "192.168.1.0/24".parse().unwrap(),
             proxy: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1),
             relays: Arc::new(AtomicUsize::new(0)),
             forwards: Mutex::new(Vec::new()),
-            heartbeat: Heartbeat {
-                last: Arc::new(Mutex::new(last)),
-                ended: Arc::new(AtomicBool::new(false)),
-            },
+            owner: Owner::silent(silent),
             retired: AtomicBool::new(false),
         }
     }
@@ -420,7 +404,7 @@ mod tests {
         assert!(matches!(live.answer(Request::Retire), Answer::Error(error) if error.contains("Another Horizon")));
         assert!(!live.retired.load(Ordering::Acquire));
         let lost = helper(RETIRE_AFTER + Duration::from_secs(1));
-        if lost.heartbeat.silent_for() >= RETIRE_AFTER {
+        if lost.owner.silent_for() >= RETIRE_AFTER {
             assert_eq!(lost.answer(Request::Retire), Answer::Retired);
             assert!(lost.retired.load(Ordering::Acquire));
         }

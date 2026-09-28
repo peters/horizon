@@ -9,6 +9,26 @@ use std::{
     },
 };
 
+/// Answers every request with a refusal and announces no sources; the session tests that use
+/// it need a Unix shell.
+#[cfg(unix)]
+pub(super) struct Unanswered;
+
+#[cfg(unix)]
+impl Answers for Unanswered {
+    fn hello(&self) -> Hello {
+        Hello {
+            discovery: 0,
+            sources: Vec::new(),
+            note: None,
+        }
+    }
+
+    fn answer(&self, _: Request) -> Answer {
+        Answer::Refused("unanswered".into())
+    }
+}
+
 fn subnet() -> Subnet {
     "192.168.1.0/24".parse().unwrap()
 }
@@ -292,6 +312,37 @@ mod supervision {
         assert_eq!(arguments[2].parse::<u16>().unwrap(), bridge.proxy.port());
         let status = bridge.status();
         assert_eq!((status.subnet, status.counters), (subnet(), Counters::default()));
+    }
+
+    #[test]
+    fn calls_are_answered_by_number_and_bad_lines_never_end_the_session() {
+        let hold = r#"printf '{"proxy":"127.0.0.1:41234"}\n'
+printf 'not json\n'
+head -c 5000 /dev/zero | tr '\0' 'x'; printf '{"id":1,"request":"discover"}\n'
+printf '{"id":2,"request":{"sweep":{"subnet":"0.0.0.0/0"}}}\n'
+printf '{"id":3,"request":"discover"}\n'
+while IFS= read -r line; do printf '%s\n' "$line" >> "$LOG"; done"#;
+        let (bridge, root) = start(PREPARED, hold);
+        wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !log(&root).contains(r#""id":3"#) {
+            assert!(Instant::now() < deadline, "no answer: {}", log(&root));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let log = log(&root);
+        assert_eq!(log.lines().next(), Some(r#"{"hello":{"discovery":0,"sources":[]}}"#));
+        let refused = format!(
+            r#"{{"answer":{{"id":2,"answer":{{"refused":"{}"}}}}}}"#,
+            session::UNKNOWN_REQUEST
+        );
+        assert!(log.contains(&refused), "{log}");
+        assert!(
+            log.contains(r#"{"answer":{"id":3,"answer":{"refused":"unanswered"}}}"#),
+            "{log}"
+        );
+        // The oversized line is skipped whole, including the call at its end.
+        assert!(!log.contains(r#""id":1"#), "{log}");
+        assert!(matches!(bridge.status().state, State::Active { .. }));
     }
 
     #[test]
