@@ -82,6 +82,35 @@ fn button(pos: Pos2, pressed: bool) -> Event {
     }
 }
 
+#[test]
+fn pointer_exit_preserves_a_completed_single_click_before_forwarding_exit() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    assert!(feed(&mut gesture, 1.0, vec![button(pos, true)]).events.is_empty());
+    assert!(feed(&mut gesture, 1.05, vec![button(pos, false)]).events.is_empty());
+    let replay = feed(&mut gesture, 1.1, vec![Event::PointerGone]);
+    assert_eq!(replay.events, vec![button(pos, true), button(pos, false)]);
+    assert_eq!(feed(&mut gesture, 1.15, vec![]).events, vec![Event::PointerGone]);
+    assert!(gesture.pending.is_none());
+    assert!(gesture.take_completed().is_none());
+}
+
+#[test]
+fn pointer_exit_forwards_a_reserved_press_for_drag_cleanup() {
+    let mut gesture = CanvasGesture::default();
+    let pos = Pos2::new(300.0, 300.0);
+    feed(&mut gesture, 1.0, vec![button(pos, true)]);
+    assert_eq!(
+        feed(&mut gesture, 1.1, vec![Event::PointerGone]).events,
+        vec![button(pos, true), Event::PointerGone]
+    );
+    assert_eq!(
+        feed(&mut gesture, 1.15, vec![button(pos, false)]).events,
+        vec![button(pos, false)]
+    );
+    assert!(!gesture.forwarded_down);
+}
+
 fn feed(gesture: &mut CanvasGesture, time: f64, events: Vec<Event>) -> RawInput {
     let mut raw = RawInput {
         time: Some(time),

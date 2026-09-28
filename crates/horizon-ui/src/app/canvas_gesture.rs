@@ -85,7 +85,7 @@ impl CanvasGesture {
             || raw
                 .events
                 .iter()
-                .any(|event| matches!(event, Event::WindowFocused(false) | Event::PointerGone));
+                .any(|event| matches!(event, Event::WindowFocused(false)));
         if lost_focus || self.replayed_origin.is_some_and(|origin| !eligible(origin)) {
             self.cancel();
             for frame in &mut self.queued {
