@@ -65,12 +65,25 @@ fn retire(bridge: Bridge) {
     }
 }
 
+impl HorizonApp {
+    /// A bridge lives only while this Horizon is connected to the Ready cloud. Runs after failed
+    /// operations dropped their receivers, so a disconnect in this frame counts.
+    pub(super) fn stop_disconnected_sharing(&mut self) {
+        for runtime in self.cloud_prototype.production.runtimes.values_mut() {
+            runtime.stop_sharing_when_disconnected();
+        }
+    }
+}
+
 impl Runtime {
-    /// A bridge lives only while this Horizon is connected to the Ready cloud.
-    pub(super) fn stop_sharing_when_disconnected(&mut self) {
-        if !(self.stage == Some(Stage::Ready) && self.receiver.is_some()) {
+    fn stop_sharing_when_disconnected(&mut self) {
+        if !self.connected_and_ready() {
             self.sharing.stop();
         }
+    }
+
+    fn connected_and_ready(&self) -> bool {
+        self.stage == Some(Stage::Ready) && self.receiver.is_some()
     }
 }
 
@@ -121,6 +134,10 @@ impl HorizonApp {
 
 /// The switch and, while it is on, what the bridge is doing.
 pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
+    // A disconnected card still shows Ready; it offers Reconnect instead.
+    if !runtime.connected_and_ready() {
+        return None;
+    }
     let mut sharing = matches!(runtime.sharing, Sharing::On(_));
     let changed = ui
         .checkbox(&mut sharing, "Share local network")

@@ -332,10 +332,10 @@ impl HorizonApp {
                 }
             }
             runtime.poll_release_and_repaint(ctx);
-            runtime.stop_sharing_when_disconnected();
         }
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);
+        self.stop_disconnected_sharing();
         self.finish_closing_clouds(ctx);
         for id in resumed {
             self.start_production_deployment(id, ctx);
