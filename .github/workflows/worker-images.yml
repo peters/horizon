@@ -21,6 +21,8 @@ on:
       - crates/horizon-process-time/**
       - Cargo.toml
       - Cargo.lock
+      # The image ships the license, so a license change republishes it.
+      - LICENSE
       - .github/workflows/worker-images.yml
   workflow_dispatch:
 
