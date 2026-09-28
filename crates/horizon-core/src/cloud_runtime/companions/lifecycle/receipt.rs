@@ -50,8 +50,11 @@ pub(super) fn load(root: &Path) -> Result<Option<Receipt>> {
 
 pub(super) fn save(store: &Store, owner: &Owner, id: OperationId, phase: Phase) -> Result<()> {
     let previous = load(store.root())?;
+    // A confirmation authorizes one owner's operation, never another source's claim
+    // that happens to reuse its ID.
     let confirmed = previous
         .as_ref()
+        .filter(|record| record.owner == *owner && record.id == id)
         .and_then(|record| record.confirmed)
         .filter(|confirmed| *confirmed == id);
     let record = Receipt {

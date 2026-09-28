@@ -163,3 +163,21 @@ fn unchecking_after_the_confirmation_withdraws_it_before_any_allocation() {
     assert!(backend.decisions.is_empty());
     assert_eq!(status(&fixture.request(), id).unwrap().intent.state, State::Submitted);
 }
+
+#[test]
+fn a_confirmation_never_carries_over_to_another_owners_claim() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    let target = Store::lock(&fixture.root.path().join("reserved")).unwrap();
+    let mut other = fixture.owner.clone();
+    other.cloud_id = "other-source".into();
+    // Another source's claim reusing the operation ID starts unconfirmed.
+    receipt::save(&target, &other, id, Phase::Submitted).unwrap();
+    assert_eq!(receipt::load(target.root()).unwrap().unwrap().confirmed, None);
+    // The same owner's claim keeps its confirmation across phase updates.
+    receipt::confirm(&target, &fixture.owner, id).unwrap();
+    receipt::save(&target, &fixture.owner, id, Phase::Running).unwrap();
+    assert_eq!(receipt::load(target.root()).unwrap().unwrap().confirmed, Some(id));
+}

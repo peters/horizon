@@ -255,7 +255,9 @@ fn settle_access(store: &journal::Store, state: &mut journal::State, prior: &rec
 /// Refuses anything but an unstarted Ensure Ready for a reserved binding whose target
 /// record is prepared, workerless and matches the binding.
 pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
-    let (_, state) = request.load()?;
+    // Held through the write, in execution's lock order (source, execution, target),
+    // so an uncheck cannot land between the checks and the recorded confirmation.
+    let (_source, state) = request.load()?;
     let binding = request.authorize(&state)?;
     if binding.origin() != intent::Origin::Reserved {
         return Err(Error::Invalid("Only a reserved companion is created on confirmation"));
