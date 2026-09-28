@@ -2,6 +2,8 @@
 //!
 //! The client owns every policy decision: the worker receives only a Unix socket
 //! whose connections reach the client's scope-checking SOCKS5 proxy.
+pub mod discovery;
+
 use std::{
     fmt,
     net::{Ipv4Addr, SocketAddrV4},

@@ -119,6 +119,11 @@ uuid = { version = "1.24.1", features = ["serde", "v4"] }
 # Interface addresses and netmasks on Linux, macOS and Windows without unsafe
 # code in Horizon crates; Local Network Bridge derives its scope from them.
 if-addrs = "0.15.0"
+# DNS wire format for Local Network Bridge's one-shot mDNS/DNS-SD queries; a
+# parser and builder only, with no daemon or responder.
+simple-dns = "0.12.0"
+# Selects the bridged interface for Local Network Bridge's multicast queries.
+socket2 = "0.6.5"
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 regex = "1.13.1"

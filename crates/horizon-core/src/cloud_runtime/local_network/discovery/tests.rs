@@ -1,0 +1,355 @@
+use super::*;
+use crate::cloud_runtime::local_network::scope;
+use simple_dns::{
+    CLASS, Label, Name, Packet, PacketFlag, ResourceRecord,
+    rdata::{A, PTR, RData, SRV, TXT},
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn v4(value: &str) -> Ipv4Addr {
+    value.parse().unwrap()
+}
+
+fn record(name: Name<'static>, rdata: RData<'static>) -> ResourceRecord<'static> {
+    ResourceRecord::new(name, CLASS::IN, 120, rdata)
+}
+
+fn name(value: &'static str) -> Name<'static> {
+    Name::new_unchecked(value)
+}
+
+/// An instance name whose first label holds characters DNS host names cannot.
+fn instance(label: &'static str, kind: &'static str) -> Name<'static> {
+    let mut labels = vec![Label::new_unchecked(label.as_bytes())];
+    labels.extend(kind.split('.').map(|part| Label::new_unchecked(part.as_bytes())));
+    Name::new_with_labels(&labels)
+}
+
+fn response(answers: Vec<ResourceRecord<'static>>, additional: Vec<ResourceRecord<'static>>) -> Vec<u8> {
+    let mut packet = Packet::new_reply(0);
+    packet.set_flags(PacketFlag::AUTHORITATIVE_ANSWER);
+    packet.answers = answers;
+    packet.additional_records = additional;
+    packet.build_bytes_vec_compressed().unwrap()
+}
+
+fn questions(packets: &[Vec<u8>]) -> Vec<String> {
+    packets
+        .iter()
+        .flat_map(|bytes| {
+            let packet = Packet::parse(bytes).unwrap();
+            assert!(!packet.has_flags(PacketFlag::RESPONSE));
+            packet
+                .questions
+                .iter()
+                .map(|question| format!("{} {:?}", question.qname, question.qtype))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn a_browse_asks_for_types_then_instances_then_hosts_and_never_twice() {
+    let mut browse = mdns::Browse::default();
+    let first = questions(&browse.first_queries(&[v4("192.168.1.60")]));
+    assert!(first.contains(&"_services._dns-sd._udp.local TYPE(PTR)".to_owned()));
+    assert!(first.contains(&"_ipp._tcp.local TYPE(PTR)".to_owned()));
+    assert!(first.contains(&"60.1.168.192.in-addr.arpa TYPE(PTR)".to_owned()));
+
+    browse.absorb(&response(
+        vec![
+            record(
+                name("_services._dns-sd._udp.local"),
+                RData::PTR(PTR(name("_arduino._tcp.local"))),
+            ),
+            record(
+                name("_services._dns-sd._udp.local"),
+                RData::PTR(PTR(name("_ipp._tcp.local"))),
+            ),
+            // Not a service type, so not asked about.
+            record(
+                name("_services._dns-sd._udp.local"),
+                RData::PTR(PTR(name("printer.local"))),
+            ),
+            record(
+                name("_arduino._tcp.local"),
+                RData::PTR(PTR(instance("Desk Board 3D", "_arduino._tcp.local"))),
+            ),
+        ],
+        Vec::new(),
+    ));
+    let second = questions(&browse.next_queries());
+    assert!(
+        second.contains(&"_arduino._tcp.local TYPE(PTR)".to_owned()),
+        "{second:?}"
+    );
+    assert!(
+        !second.iter().any(|question| question.starts_with("_ipp._tcp.local")),
+        "asked in the first round"
+    );
+    assert!(second.contains(&"Desk Board 3D._arduino._tcp.local TYPE(SRV)".to_owned()));
+    assert!(second.contains(&"Desk Board 3D._arduino._tcp.local TYPE(TXT)".to_owned()));
+
+    browse.absorb(&response(
+        vec![record(
+            instance("Desk Board 3D", "_arduino._tcp.local"),
+            RData::SRV(SRV {
+                priority: 0,
+                weight: 0,
+                port: 5000,
+                target: name("uno.local"),
+            }),
+        )],
+        Vec::new(),
+    ));
+    let third = questions(&browse.next_queries());
+    assert_eq!(third, ["uno.local TYPE(A)"]);
+    assert!(browse.next_queries().is_empty());
+}
+
+#[test]
+fn a_response_places_services_names_and_reverse_names_at_their_addresses() {
+    let mut browse = mdns::Browse::default();
+    let printer = instance("Office\u{1b} Printer.2nd floor", "_ipp._tcp.local");
+    let mut txt = TXT::new();
+    txt.add_string("ty=Brother HL-L2350DW").unwrap();
+    txt.add_string("rp=ipp/print").unwrap();
+    txt.add_string("=no-key").unwrap();
+    txt.add_char_string(simple_dns::CharacterString::new(b"pk=\xff\xfe").unwrap());
+    browse.absorb(&response(
+        vec![record(name("_ipp._tcp.local"), RData::PTR(PTR(printer.clone())))],
+        vec![
+            record(
+                printer,
+                RData::SRV(SRV {
+                    priority: 0,
+                    weight: 0,
+                    port: 631,
+                    target: name("brother.local"),
+                }),
+            ),
+            record(
+                instance("Office\u{1b} Printer.2nd floor", "_ipp._tcp.local"),
+                RData::TXT(txt),
+            ),
+            record(name("brother.local"), RData::A(A::from(v4("192.168.1.50")))),
+            record(
+                name("60.1.168.192.in-addr.arpa"),
+                RData::PTR(PTR(name("raspberrypi.local"))),
+            ),
+        ],
+    ));
+    // A query, and bytes that are no DNS message at all, teach nothing.
+    browse.absorb(&Packet::new_query(1).build_bytes_vec().unwrap());
+    browse.absorb(b"\x00\x01garbage");
+    let findings = browse.findings();
+    let printer = v4("192.168.1.50");
+    assert!(findings.contains(&Finding::Name(printer, "brother.local".into())));
+    assert!(findings.contains(&Finding::Name(v4("192.168.1.60"), "raspberrypi.local".into())));
+    let service = findings
+        .iter()
+        .find_map(|finding| match finding {
+            Finding::Service(address, service) if *address == printer => Some(service.clone()),
+            _ => None,
+        })
+        .expect("printer service");
+    assert_eq!(service.kind, "_ipp._tcp");
+    assert_eq!(service.name.as_deref(), Some("Office Printer.2nd floor"));
+    assert_eq!(service.port, Some(631));
+    assert_eq!(
+        service.attributes.get("ty").map(String::as_str),
+        Some("Brother HL-L2350DW")
+    );
+    assert_eq!(service.attributes.len(), 2);
+}
+
+#[test]
+fn ssdp_answers_describe_each_device_once_by_its_most_telling_type() {
+    let from = v4("192.168.1.70");
+    let answer = |kind: &str, location: &str| {
+        format!(
+            "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nLOCATION: {location}\r\nSERVER: Linux/5.4 UPnP/1.0 Sonos/80.1\r\nST: {kind}\r\nUSN: uuid:RINCON::{kind}\r\n\r\n"
+        )
+    };
+    let description = "http://192.168.1.70:1400/xml/device_description.xml";
+    let answers: Vec<_> = [
+        answer("upnp:rootdevice", description),
+        answer("urn:schemas-upnp-org:device:ZonePlayer:1", description),
+        answer("urn:schemas-upnp-org:service:AVTransport:1", description),
+    ]
+    .iter()
+    .map(|text| (from, ssdp::parse(from, text.as_bytes()).unwrap()))
+    .collect();
+    let findings = ssdp::findings(answers);
+    assert_eq!(findings.len(), 2);
+    let Finding::Service(address, service) = &findings[1] else {
+        panic!("{findings:?}");
+    };
+    assert_eq!(*address, from);
+    assert_eq!(service.kind, "urn:schemas-upnp-org:device:ZonePlayer:1");
+    assert_eq!(service.port, Some(1400));
+    assert_eq!(service.attributes["location"], description);
+    assert!(service.attributes["server"].contains("Sonos"));
+
+    // A description on another host is not reachable through this device, so it is dropped.
+    let elsewhere = ssdp::parse(from, answer("upnp:rootdevice", "http://10.0.0.9/desc.xml").as_bytes()).unwrap();
+    let findings = ssdp::findings([(from, elsewhere)]);
+    let Finding::Service(_, service) = &findings[1] else {
+        panic!("{findings:?}");
+    };
+    assert!(!service.attributes.contains_key("location"));
+    assert_eq!(service.port, None);
+    assert!(ssdp::parse(from, b"NOTIFY * HTTP/1.1\r\nNT: upnp:rootdevice\r\n\r\n").is_none());
+    assert!(ssdp::parse(from, b"HTTP/1.1 500 Error\r\nST: upnp:rootdevice\r\n\r\n").is_none());
+    assert!(ssdp::parse(from, b"HTTP/1.1 200 OK\r\nSERVER: x\r\n\r\n").is_none());
+}
+
+#[test]
+fn neighbor_tables_list_resolved_addresses_on_every_system() {
+    let linux = "IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         a4:91:b1:00:11:22     *        wlp2s0
+192.168.1.77     0x1         0x0         00:00:00:00:00:00     *        wlp2s0
+192.168.1.50     0x1         0x6         3c:2a:f4:01:02:03     *        wlp2s0
+";
+    assert_eq!(neighbors::linux(linux), [v4("192.168.1.1"), v4("192.168.1.50")]);
+    let bsd = "? (192.168.1.1) at a4:91:b1:0:11:22 on en0 ifscope [ethernet]
+? (192.168.1.77) at (incomplete) on en0 ifscope [ethernet]
+raspberrypi.lan (192.168.1.60) at dc:a6:32:1:2:3 on en0 ifscope [ethernet]
+? (192.168.1.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]
+";
+    assert_eq!(neighbors::bsd(bsd), [v4("192.168.1.1"), v4("192.168.1.60")]);
+    let windows = "
+Schnittstelle: 192.168.1.20 --- 0x7
+  Internetadresse       Physische Adresse     Typ
+  192.168.1.1           a4-91-b1-00-11-22     dynamisch
+  192.168.1.255         ff-ff-ff-ff-ff-ff     statisch
+  224.0.0.251           01-00-5e-00-00-fb     statisch
+";
+    assert_eq!(neighbors::windows(windows), [v4("192.168.1.1"), v4("224.0.0.251")]);
+}
+
+fn service(kind: &str, port: Option<u16>) -> Service {
+    Service {
+        source: Source::Mdns,
+        kind: kind.into(),
+        name: None,
+        port,
+        attributes: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn findings_merge_per_address_and_only_admitted_addresses_remain() {
+    let printer = v4("192.168.1.50");
+    let findings = vec![
+        Finding::Seen(printer, Source::Neighbors),
+        Finding::Name(printer, "brother.local".into()),
+        Finding::Name(printer, "brother.local".into()),
+        Finding::Service(printer, service("_ipp._tcp", Some(631))),
+        Finding::Service(printer, service("_ipp._tcp", Some(631))),
+        Finding::Service(printer, service("_http._tcp", Some(80))),
+        Finding::Service(printer, service("_sleep-proxy._udp", Some(55124))),
+        Finding::Seen(v4("10.0.0.5"), Source::Ssdp),
+    ];
+    let devices = merge(findings, |addresses| {
+        assert_eq!(addresses.len(), 2);
+        Ok(addresses
+            .iter()
+            .copied()
+            .filter(|address| *address == printer)
+            .collect())
+    })
+    .unwrap();
+    assert_eq!(devices.len(), 1);
+    let device = &devices[0];
+    assert_eq!(device.names, ["brother.local"]);
+    assert_eq!(device.services.len(), 3);
+    assert_eq!(device.ports, [631, 80]);
+    assert_eq!(device.sources, [Source::Mdns, Source::Neighbors]);
+    assert_eq!(
+        merge(vec![Finding::Seen(printer, Source::Mdns)], |_| Err(
+            Reply::NetworkUnreachable
+        )),
+        Err(Reply::NetworkUnreachable)
+    );
+}
+
+/// A scope on the home network whose host answers from `host`, with every destination routed
+/// out of the bridged interface.
+fn scope(host: impl Fn() -> io::Result<scope::Host> + Send + Sync + 'static) -> Arc<Scope> {
+    let home = scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Arc::new(Scope {
+        network: home.current_network().unwrap(),
+        resolve: Box::new(|_, _| Err(Reply::HostUnreachable)),
+        host: Box::new(host),
+        source: Box::new(|_| Some(v4("192.168.1.20"))),
+    })
+}
+
+#[test]
+fn browses_are_shared_scoped_and_never_run_off_the_bridged_network() {
+    let home = || Ok(scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20")));
+    let browses = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&browses);
+    let discoverer = Discoverer::with_browse(
+        scope(home),
+        Box::new(move |local, subnet| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(
+                (local, subnet.to_string().as_str()),
+                (v4("192.168.1.20"), "192.168.1.0/24")
+            );
+            let findings = [
+                "192.168.1.50",
+                "192.168.1.20",
+                "192.168.1.255",
+                "10.0.0.5",
+                "224.0.0.251",
+            ]
+            .into_iter()
+            .map(|address| Finding::Seen(v4(address), Source::Neighbors))
+            .collect();
+            (findings, vec!["SSDP search failed".into()])
+        }),
+    );
+    let Answer::Discovery(first) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    let addresses: Vec<_> = first.devices.iter().map(|device| device.address).collect();
+    assert_eq!(addresses, [v4("192.168.1.50")]);
+    assert_eq!(first.notes, ["SSDP search failed"]);
+    let Answer::Discovery(second) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(second.devices, first.devices);
+    assert_eq!(
+        browses.load(Ordering::SeqCst),
+        1,
+        "a second request within the reuse window shares the browse"
+    );
+
+    let moved = Discoverer::with_browse(
+        scope(|| Ok(scope::tests::host(&[("10.0.0.20", Some(24))], Some("10.0.0.20")))),
+        Box::new(|_, _| panic!("browsed a network that is not the bridged one")),
+    );
+    assert_eq!(
+        moved.discover(),
+        Answer::Refused(Reply::NetworkUnreachable.message().into())
+    );
+}
+
+#[test]
+fn a_browse_of_this_computers_network_ends_within_its_window() {
+    // Runners without a shareable network have nothing to browse.
+    let Ok(current) = Scope::current() else {
+        return;
+    };
+    let started = Instant::now();
+    let answer = Discoverer::new(Arc::new(current)).discover();
+    assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+    match answer {
+        Answer::Discovery(discovery) => assert!(discovery.devices.len() <= 256),
+        // The runner's network can change while the test runs.
+        Answer::Refused(_) => {}
+    }
+}

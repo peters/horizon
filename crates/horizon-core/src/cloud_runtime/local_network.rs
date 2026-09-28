@@ -4,17 +4,20 @@
 //! [`Scope`] is the whole policy and the [`Proxy`] applies it: the worker only ever reaches
 //! the proxy's loopback port. Only the owner starts a [`Bridge`], from the cloud card, and
 //! nothing persists it; dropping it stops its SSH session and closes every relayed connection.
+mod discovery;
 mod scope;
 mod session;
 mod socks;
 
 use super::{Cancellation, ssh::Connection};
+pub use discovery::Discoverer;
 use horizon_cloud_protocol::local_network::{Reply, Subnet};
 pub use scope::ScopeError;
 pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS};
 use std::{
+    collections::BTreeSet,
     io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs},
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicUsize, Ordering},
@@ -252,6 +255,25 @@ impl Scope {
             return Err(Reply::NotAllowed);
         }
         Ok(allowed)
+    }
+
+    /// The addresses among `addresses` that a bridge may reach, judged against this computer
+    /// as it is now, read once for all of them.
+    ///
+    /// # Errors
+    /// Refuses everything once this computer has left the bridged network.
+    fn reachable(&self, addresses: &BTreeSet<Ipv4Addr>) -> Result<BTreeSet<Ipv4Addr>, Reply> {
+        let host = self.on_network()?;
+        Ok(addresses
+            .iter()
+            .copied()
+            .filter(|address| {
+                scope::admits(&self.network, &host, IpAddr::V4(*address), || {
+                    // Any port routes the same; the discard port stands for all of them.
+                    (self.source)(SocketAddr::new(IpAddr::V4(*address), 9))
+                })
+            })
+            .collect())
     }
 
     /// This computer now, while it is still on the bridged network.
