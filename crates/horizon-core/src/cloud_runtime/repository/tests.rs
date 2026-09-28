@@ -149,13 +149,98 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
     );
     let root = temp.path().join("transfer");
     std::fs::create_dir(&root).unwrap();
-    auxiliary(&repo, "HEAD", &root, &runner).unwrap();
-    let manifest = std::fs::read_to_string(root.join("material/manifest.json")).unwrap();
+    let archive = auxiliary(&repo, "HEAD", &root, &runner).unwrap();
+    let entries = archive_entries(&archive);
+    let lfs = format!("lfs/{oid}");
+    assert_eq!(
+        entries.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["./", "lfs/", lfs.as_str(), "manifest.json", "module-0.pack"]
+    );
+    assert_eq!(entries[&lfs], content);
+    let manifest = String::from_utf8(entries["manifest.json"].clone()).unwrap();
     assert!(manifest.contains(&module_sha));
     assert!(!manifest.contains(repo.to_str().unwrap()));
-    assert!(root.join("material/module-0.pack").metadata().unwrap().len() > 0);
+    assert!(!entries["module-0.pack"].is_empty());
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        1,
+        "the archive is the only staged copy"
+    );
+
     std::fs::write(media.join(&oid), b"damaged binary content").unwrap();
     assert!(validate_tree(&repo, "HEAD", &runner).is_err());
+}
+
+#[test]
+fn an_lfs_object_changed_after_collection_is_refused_while_archiving() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let content = b"streamed binary content";
+    let mut oid = String::with_capacity(64);
+    for byte in Sha256::digest(content) {
+        use std::fmt::Write as _;
+        write!(oid, "{byte:02x}").unwrap();
+    }
+    let object = repo
+        .join(".git/lfs/objects")
+        .join(&oid[..2])
+        .join(&oid[2..4])
+        .join(&oid);
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::write(&object, content).unwrap();
+    std::fs::write(
+        repo.join("asset.bin"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+            content.len()
+        ),
+    )
+    .unwrap();
+    std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs -text\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "Add streamed asset"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    // Same size, different bytes: only the streamed checksum can notice.
+    let replace = |event| {
+        if let crate::cloud_runtime::Event::Progress(progress) = event
+            && progress.detail == "Pack source dependencies"
+        {
+            let mut damaged = content.to_vec();
+            damaged[0] ^= 1;
+            std::fs::write(&object, damaged).unwrap();
+        }
+    };
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &replace,
+        secrets: vec![],
+    };
+    let root = temp.path().join("transfer");
+    std::fs::create_dir(&root).unwrap();
+    assert!(matches!(
+        auxiliary(&repo, "HEAD", &root, &runner),
+        Err(Error::Invalid("Local Git LFS object checksum mismatch"))
+    ));
+}
+
+/// Each archive member's name and content; directories have none.
+fn archive_entries(path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut archive = tar::Archive::new(std::fs::File::open(path).unwrap());
+    archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let mut entry = entry.unwrap();
+            let name = String::from_utf8(entry.path_bytes().into_owned()).unwrap();
+            let kind = entry.header().entry_type();
+            assert!(kind.is_file() || kind.is_dir(), "{name}");
+            let mut content = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut content).unwrap();
+            (name, content)
+        })
+        .collect()
 }
 
 #[test]

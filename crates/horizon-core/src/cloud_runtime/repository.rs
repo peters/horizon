@@ -1,4 +1,5 @@
 //! Export only the selected committed tree and its Git history.
+mod archive;
 mod attributes;
 pub mod launch;
 mod material;
@@ -150,14 +151,6 @@ pub(super) fn bounded_source(
     bounded_pack(repository, revision, &retained.join("pack"), runner, &mut budget, 2)?;
     let directory = scratch.join("material");
     std::fs::create_dir(&directory)?;
-    let objects = directory.join("lfs");
-    std::fs::create_dir(&objects)?;
-    let mut copied = std::collections::BTreeSet::new();
-    for asset in &selected.assets {
-        if copied.insert(&asset.oid) {
-            copy_asset(asset, &objects.join(&asset.oid), runner, &mut budget)?;
-        }
-    }
     for (index, module) in selected.modules.iter().enumerate() {
         bounded_pack(
             &module.repository,
@@ -172,19 +165,45 @@ pub(super) fn bounded_source(
     if manifest.len() > 1024 * 1024 {
         return Err(Error::Invalid("Source material manifest exceeds its limit"));
     }
-    budget.charge(manifest.len() as u64)?;
-    std::fs::File::create_new(directory.join("manifest.json"))?.write_all(&manifest)?;
-    bounded_output(
-        Command::new("tar")
-            .args(["-cf", "-", "-C"])
-            .arg(&directory)
-            .arg(".")
-            .stdin(std::process::Stdio::null()),
-        &retained.join("source-material.tar"),
-        runner,
-        &mut budget,
-        2,
-    )
+    // The archive is retained and later framed, so it is charged twice, as a pack is.
+    let mut output = Bounded {
+        file: std::io::BufWriter::new(std::fs::File::create_new(retained.join("source-material.tar"))?),
+        remaining: budget.remaining / 2,
+        written: 0,
+        exceeded: false,
+    };
+    let result = archive::write(&selected, &manifest, &directory, &mut output, runner);
+    if output.exceeded {
+        return Err(Error::Invalid("Source export exceeds its aggregate byte budget"));
+    }
+    result?;
+    budget.charge(output.written * 2)
+}
+
+/// Refuses any write past its share of the export budget.
+#[cfg(target_os = "linux")]
+struct Bounded {
+    file: std::io::BufWriter<std::fs::File>,
+    remaining: u64,
+    written: u64,
+    exceeded: bool,
+}
+#[cfg(target_os = "linux")]
+impl Write for Bounded {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let length = buffer.len() as u64;
+        if length > self.remaining {
+            self.exceeded = true;
+            return Err(std::io::Error::other("Source export exceeds its aggregate byte budget"));
+        }
+        let written = self.file.write(buffer)?;
+        self.remaining -= written as u64;
+        self.written += written as u64;
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -239,48 +258,6 @@ fn bounded_output(
     let mut file = std::fs::File::create_new(output)?;
     let length = runner.bounded_file(command, &mut file, budget.remaining / copies, Duration::from_secs(300))?;
     budget.charge(length * copies)
-}
-
-#[cfg(target_os = "linux")]
-fn copy_asset(asset: &material::Asset, path: &Path, runner: &Runner<'_>, budget: &mut ExportBudget) -> Result<()> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    budget.charge(asset.size)?;
-    let mut source = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
-        .open(&asset.source)?;
-    let metadata = source.metadata()?;
-    if !metadata.is_file() || metadata.len() != asset.size {
-        return Err(Error::Invalid("Source asset changed during export"));
-    }
-    let mut output = std::fs::File::create_new(path)?;
-    let mut hash = Sha256::new();
-    let mut copied = 0_u64;
-    let mut buffer = [0; 16384];
-    loop {
-        runner.cancel.check()?;
-        let length = source.read(&mut buffer)?;
-        if length == 0 {
-            break;
-        }
-        if length as u64 > asset.size.saturating_sub(copied) {
-            return Err(Error::Invalid("Source asset changed during export"));
-        }
-        output.write_all(&buffer[..length])?;
-        hash.update(&buffer[..length]);
-        copied += length as u64;
-    }
-    let mut digest = String::with_capacity(64);
-    for byte in hash.finalize() {
-        use std::fmt::Write as _;
-        write!(digest, "{byte:02x}").map_err(|_| Error::Invalid("Cannot encode source checksum"))?;
-    }
-    if copied != asset.size || digest != asset.oid {
-        return Err(Error::Invalid("Source asset changed during export"));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

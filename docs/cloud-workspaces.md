@@ -210,7 +210,8 @@ committed tree, honor `.dockerignore`, and reuse local BuildKit layers. Dirty an
 untracked files are excluded. Selected Git LFS objects and recursively pinned
 submodule commits must be available locally. They are verified before allocation,
 transferred without local Git configuration, and checked out independently for
-each agent. Only attributes from the selected commit determine LFS hydration.
+each agent. LFS content goes into the transfer archive straight from the local LFS
+store and is verified as it is written, so local staging holds it only once. Only attributes from the selected commit determine LFS hydration.
 Extended LFS pointer formats are rejected explicitly. Source repositories must use
 SHA-1 object IDs and UTF-8 paths; unsupported formats fail validation before
 compute allocation.

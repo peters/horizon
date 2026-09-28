@@ -103,6 +103,8 @@ wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
 # Wayland socket.
 wayland-server = "0.31.14"
 tempfile = "3.27.0"
+# Cloud source material archives, streamed from verified LFS objects.
+tar = "0.4.46"
 # Windows-only process-tree ownership for browser and WebDriver service
 # descendants. The wrapper creates the child suspended, assigns it to a Job
 # Object, then resumes it, avoiding PID-based teardown and assignment races.
