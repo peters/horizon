@@ -4,9 +4,12 @@
 //! made ready again in this run of Horizon, until the owner switches it off.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, State, Status};
-use std::sync::{
-    Mutex, OnceLock, PoisonError,
-    mpsc::{Sender, channel},
+use std::{
+    sync::{
+        Mutex, MutexGuard, OnceLock, PoisonError,
+        mpsc::{Sender, channel},
+    },
+    time::{Duration, Instant},
 };
 
 #[derive(Default)]
@@ -68,17 +71,41 @@ enum Step {
 /// A running bridge. However it is dropped (switched off, cloud disconnected, runtimes
 /// cleared), its teardown, which waits for the SSH session to end, runs on a shutdown thread
 /// and never on the UI thread.
-pub(super) struct Running(Option<Bridge>);
+pub(super) struct Running {
+    bridge: Option<Bridge>,
+    /// The bridge's last status and when it was read. A snapshot copies every open relay, so
+    /// frames between refreshes reuse it instead of taking their own.
+    status: Mutex<Option<(Instant, Status)>>,
+}
+
+/// How often the card reads the bridge's status; it repaints at the same cadence.
+const STATUS_REFRESH: Duration = Duration::from_secs(1);
 
 impl Running {
-    fn status(&self) -> Option<Status> {
-        self.0.as_ref().map(Bridge::status)
+    fn new(bridge: Option<Bridge>) -> Self {
+        Self {
+            bridge,
+            status: Mutex::new(None),
+        }
+    }
+
+    /// The bridge's status, read again only once the last reading is [`STATUS_REFRESH`] old.
+    fn status(&self, now: Instant) -> MutexGuard<'_, Option<(Instant, Status)>> {
+        let mut status = self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(bridge) = &self.bridge
+            && status
+                .as_ref()
+                .is_none_or(|(read, _)| now.saturating_duration_since(*read) >= STATUS_REFRESH)
+        {
+            *status = Some((now, bridge.status()));
+        }
+        status
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Some(bridge) = self.0.take() {
+        if let Some(bridge) = self.bridge.take() {
             // Access ends here; only the wait for the SSH session moves off this thread.
             bridge.revoke();
             retire(bridge);
@@ -161,7 +188,7 @@ impl HorizonApp {
             None => Sharing::Off,
             Some(Err(error)) => Sharing::Refused(error.to_string()),
             Some(Ok(connection)) => match Bridge::start(&connection) {
-                Ok(bridge) => Sharing::On(Running(Some(bridge))),
+                Ok(bridge) => Sharing::On(Running::new(Some(bridge))),
                 Err(error) => Sharing::Refused(error.to_string()),
             },
         };
@@ -211,25 +238,30 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
              restarts. While it is on, every process on the worker can use it.",
         )
         .changed();
-    let status = match &runtime.sharing {
+    let now = Instant::now();
+    let reading = match &runtime.sharing {
         Sharing::On(bridge) => {
             // The state, counters and connections change without other repaints.
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
-            bridge.status()
+            ui.ctx().request_repaint_after(STATUS_REFRESH);
+            Some(bridge.status(now))
         }
         _ => None,
     };
+    let status = reading
+        .as_ref()
+        .and_then(|reading| reading.as_ref())
+        .map(|(_, status)| status);
     let line = match &runtime.sharing {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
         Sharing::Paused { .. } => Some(PAUSED.to_owned()),
-        Sharing::On(_) => status.as_ref().map(describe),
+        Sharing::On(_) => status.map(describe),
     };
     if let Some(line) = line {
         ui.small(line);
     }
     if let Some(status) = status.filter(|status| matches!(status.state, State::Active { .. })) {
-        let _ = connections(ui, &status.relays, std::time::Instant::now());
+        let _ = connections(ui, &status.relays, now);
     }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
@@ -557,7 +589,7 @@ mod tests {
 
     #[test]
     fn sharing_pauses_on_disconnect_and_resumes_only_after_the_cloud_is_ready_again() {
-        let mut sharing = Sharing::On(Running(None));
+        let mut sharing = Sharing::On(Running::new(None));
         assert_eq!(sharing.step(true), Step::Keep);
         assert_eq!(sharing.step(false), Step::Pause);
         sharing = Sharing::Paused { ready_again: false };
@@ -577,7 +609,7 @@ mod tests {
         let (_sender, receiver) = std::sync::mpsc::channel();
         runtime.receiver = Some(receiver);
         runtime.stage = Some(Stage::Ready);
-        runtime.sharing = Sharing::On(Running(None));
+        runtime.sharing = Sharing::On(Running::new(None));
         assert!(!runtime.reconcile_sharing());
         assert!(matches!(runtime.sharing, Sharing::On(_)));
         // The presentation watch failed: the receiver is gone while the stage still says Ready.
