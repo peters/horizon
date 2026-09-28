@@ -266,7 +266,7 @@ fn multicast_socket(local: Ipv4Addr, ttl: u32) -> io::Result<UdpSocket> {
 fn browse(local: Ipv4Addr, subnet: Subnet, cancel: &Cancellation) -> (Vec<Finding>, Vec<String>) {
     let mut notes = Vec::new();
     let mut findings = Vec::new();
-    let neighbors = neighbors::read().unwrap_or_else(|error| {
+    let neighbors = neighbors::read(cancel).unwrap_or_else(|error| {
         notes.push(format!(
             "The neighbor table could not be read on the owner's computer: {error}"
         ));

@@ -460,18 +460,44 @@ fn the_neighbor_command_reports_failures_and_bounds_its_output_and_time() {
         command.args(["-c", script]);
         command
     };
-    assert_eq!(neighbors::run(shell("printf 'table\\n'")).unwrap(), "table\n");
-    let failed = neighbors::run(shell("printf 'arp: not permitted\\n' >&2; exit 2"))
+    let idle = Cancellation::default();
+    assert_eq!(neighbors::run(shell("printf 'table\\n'"), &idle).unwrap(), "table\n");
+    let failed = neighbors::run(shell("printf 'arp: not permitted\\n' >&2; exit 2"), &idle)
         .unwrap_err()
         .to_string();
     assert!(failed.contains("ended with"), "{failed}");
     // A long table is cut, and the command still finishes.
-    let long = neighbors::run(shell("head -c 1000000 /dev/zero | tr '\\0' 'a'")).unwrap();
+    let long = neighbors::run(shell("head -c 1000000 /dev/zero | tr '\\0' 'a'"), &idle).unwrap();
     assert_eq!(long.len(), 256 * 1024);
     let started = Instant::now();
-    let slow = neighbors::run(shell("exec sleep 10")).unwrap_err().to_string();
+    let slow = neighbors::run(shell("exec sleep 10"), &idle).unwrap_err().to_string();
     assert!(slow.contains("too long"), "{slow}");
     assert!(started.elapsed() < Duration::from_secs(4));
+    // Switching the bridge off stops and reaps the command at once.
+    let root = tempfile::tempdir().unwrap();
+    let pid_file = root.path().join("pid");
+    let cancel = Cancellation::default();
+    let stopper = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            cancel.cancel();
+        })
+    };
+    let started = Instant::now();
+    let script = format!("echo $$ > '{}'; exec sleep 10", pid_file.display());
+    let interrupted = neighbors::run(shell(&script), &cancel).unwrap_err();
+    assert_eq!(interrupted.kind(), io::ErrorKind::Interrupted);
+    assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    stopper.join().unwrap();
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "arp stand-in {pid} survived the switch-off");
 }
 
 /// The home network, where `printer.local` resolves to a device and `rebound.local` to this
@@ -727,4 +753,95 @@ fn an_mdns_browse_and_an_ssdp_search_stop_soon_after_the_bridge_does() {
         "{:?}",
         started.elapsed()
     );
+}
+
+/// A scope on the home network whose resolver takes three seconds for `slow.local`, and whose
+/// computer reports another network on the on-network check numbered `away`.
+fn scope_with(away: Arc<AtomicUsize>) -> Arc<Scope> {
+    let checks = AtomicUsize::new(0);
+    let home = || scope::tests::host(&[("192.168.1.20", Some(24))], Some("192.168.1.20"));
+    Arc::new(Scope {
+        network: home().current_network().unwrap(),
+        resolve: Box::new(|name, port| {
+            if name == "slow.local" {
+                thread::sleep(Duration::from_secs(3));
+            }
+            Ok(vec![SocketAddr::new(v4("192.168.1.50").into(), port)])
+        }),
+        host: Box::new(move || {
+            if checks.fetch_add(1, Ordering::SeqCst) + 1 == away.load(Ordering::SeqCst) {
+                return Ok(scope::tests::host(&[("10.0.0.20", Some(24))], Some("10.0.0.20")));
+            }
+            Ok(home())
+        }),
+        source: Box::new(|_| Some(v4("192.168.1.20"))),
+    })
+}
+
+#[test]
+fn a_slow_lookup_is_abandoned_at_switch_off_and_preflight_refusals_cost_no_slot() {
+    let away = Arc::new(AtomicUsize::new(usize::MAX));
+    let dials = Arc::new(AtomicUsize::new(0));
+    let cancel = Cancellation::default();
+    let discoverer = {
+        let dials = Arc::clone(&dials);
+        Arc::new(Discoverer::with_parts(
+            scope_with(Arc::clone(&away)),
+            Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+            Box::new(move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            cancel.clone(),
+        ))
+    };
+    let probe = |discoverer: &Discoverer, host: &str| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![80],
+        })
+    };
+    // The bridge's computer leaves the network between admission and the first batch: the
+    // third on-network check is the preflight, after the two the admission makes.
+    away.store(3, Ordering::SeqCst);
+    assert_eq!(
+        probe(&discoverer, "192.168.1.50"),
+        Answer::Refused(Reply::NetworkUnreachable.message().into())
+    );
+    away.store(usize::MAX, Ordering::SeqCst);
+    assert_eq!(dials.load(Ordering::SeqCst), 0);
+    // That refusal took no slot: the whole minute's allowance is still there.
+    for _ in 0..probe::PER_MINUTE {
+        assert!(matches!(probe(&discoverer, "192.168.1.50"), Answer::Probe(_)));
+    }
+    assert!(matches!(probe(&discoverer, "192.168.1.50"), Answer::Refused(limit) if limit.contains("a minute")));
+
+    // A probe waiting on a slow lookup ends as soon as the bridge stops, and dials nothing.
+    let dialled = dials.load(Ordering::SeqCst);
+    let fresh = Arc::new(Discoverer::with_parts(
+        scope_with(Arc::new(AtomicUsize::new(usize::MAX))),
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new({
+            let dials = Arc::clone(&dials);
+            move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }),
+        cancel.clone(),
+    ));
+    let waiting = {
+        let fresh = Arc::clone(&fresh);
+        thread::spawn(move || probe(&fresh, "slow.local"))
+    };
+    thread::sleep(Duration::from_millis(200));
+    let started = Instant::now();
+    cancel.cancel();
+    assert_eq!(waiting.join().unwrap(), Answer::Refused(STOPPED.into()));
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(dials.load(Ordering::SeqCst), dialled);
 }

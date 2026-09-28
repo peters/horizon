@@ -5,12 +5,15 @@ use super::{
     super::{Cancellation, Destination, Scope},
     STOPPED,
 };
-use horizon_cloud_protocol::local_network::discovery::{Answer, Probe, Request};
+use horizon_cloud_protocol::local_network::{
+    Reply,
+    discovery::{Answer, Probe, Request},
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Mutex, PoisonError, TryLockError},
+    sync::{Arc, Mutex, PoisonError, TryLockError, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -23,6 +26,8 @@ const AT_ONCE: usize = 4;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
 /// How often a connection attempt checks whether it finished or the bridge stopped.
 const CONNECT_POLL: Duration = Duration::from_millis(10);
+/// How often a probe waiting for its host's lookup checks whether the bridge stopped.
+const ADMIT_POLL: Duration = Duration::from_millis(100);
 /// Addresses whose open ports are remembered for discovery answers.
 const MAX_REMEMBERED: usize = 256;
 
@@ -61,6 +66,29 @@ pub(super) fn connect(address: SocketAddr, timeout: Duration, cancel: &Cancellat
     }
 }
 
+/// The scope's decision on `destination`, abandoned as soon as the bridge stops: a name lookup
+/// can take seconds, so it runs on its own thread and its late result is dropped.
+fn admit(scope: &Arc<Scope>, destination: Destination, cancel: &Cancellation) -> Result<Vec<SocketAddr>, String> {
+    let (sender, decision) = mpsc::sync_channel(1);
+    let scope = Arc::clone(scope);
+    thread::Builder::new()
+        .name("local-network-probe-admit".into())
+        .spawn(move || {
+            let _ = sender.send(scope.admit(&destination));
+        })
+        .map_err(|error| error.to_string())?;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(STOPPED.into());
+        }
+        match decision.recv_timeout(ADMIT_POLL) {
+            Ok(decision) => return decision.map_err(|reply| reply.message().into()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Reply::GeneralFailure.message().into()),
+        }
+    }
+}
+
 /// A non-blocking connect that has started: `EINPROGRESS` on Unix, `WSAEWOULDBLOCK` on Windows.
 fn in_progress(error: &io::Error) -> bool {
     #[cfg(unix)]
@@ -89,7 +117,7 @@ impl Prober {
     }
 
     /// Tries `ports`, or the defaults, on `host`; the caller has validated both.
-    pub(super) fn probe(&self, scope: &Scope, host: &str, ports: &[u16], cancel: &Cancellation) -> Answer {
+    pub(super) fn probe(&self, scope: &Arc<Scope>, host: &str, ports: &[u16], cancel: &Cancellation) -> Answer {
         // Never queued: a probe waiting behind another could start after the helper stopped
         // waiting for its answer.
         let mut started = match self.started.try_lock() {
@@ -115,21 +143,16 @@ impl Prober {
             Ok(address) => Destination::Address(SocketAddr::new(address.into(), 1)),
             Err(_) => Destination::Name(host.to_owned(), 1),
         };
-        let address = match scope.admit(&destination) {
+        let address = match admit(scope, destination, cancel) {
             Ok(admitted) => admitted.iter().find_map(|candidate| match candidate.ip() {
                 IpAddr::V4(address) => Some(address),
                 IpAddr::V6(_) => None,
             }),
-            Err(reply) => return Answer::Refused(reply.message().into()),
+            Err(refusal) => return Answer::Refused(refusal),
         };
         let Some(address) = address else {
-            return Answer::Refused(
-                horizon_cloud_protocol::local_network::Reply::NotAllowed
-                    .message()
-                    .into(),
-            );
+            return Answer::Refused(Reply::NotAllowed.message().into());
         };
-        started.push_back(now);
         let mut probe = Probe {
             // Validation bounds the host, so it is echoed as the agent named it.
             host: host.to_owned(),
@@ -138,13 +161,17 @@ impl Prober {
             closed: Vec::new(),
             silent: Vec::new(),
         };
-        for batch in Request::probe_ports(ports).chunks(AT_ONCE) {
+        for (index, batch) in Request::probe_ports(ports).chunks(AT_ONCE).enumerate() {
             // A bridge switched off, or whose computer left the network, stops probing at once.
             if cancel.is_cancelled() {
                 return Answer::Refused(STOPPED.into());
             }
             if let Err(reply) = scope.on_network() {
                 return Answer::Refused(reply.message().into());
+            }
+            // Only a probe about to dial takes a slot of the rate limit.
+            if index == 0 {
+                started.push_back(now);
             }
             for (port, result) in self.attempt(address, batch, cancel) {
                 match result {

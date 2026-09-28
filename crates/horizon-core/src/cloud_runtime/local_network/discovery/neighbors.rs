@@ -1,6 +1,7 @@
 //! This computer's neighbor (ARP) table: devices it recently exchanged traffic with. Only the
 //! addresses leave this module; hardware addresses are read to skip incomplete entries and
 //! are never reported.
+use super::{Cancellation, stopped};
 use std::{io, net::Ipv4Addr};
 
 /// Output read from the system's `arp` command, at most.
@@ -12,8 +13,9 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 /// The neighbors' addresses, or why this system cannot list them.
 ///
 /// # Errors
-/// Reports a table that cannot be read.
-pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
+/// Reports a table that cannot be read, or `Interrupted` once the bridge stops.
+pub(super) fn read(cancel: &Cancellation) -> io::Result<Vec<Ipv4Addr>> {
+    stopped(cancel)?;
     #[cfg(target_os = "linux")]
     {
         Ok(linux(&std::fs::read_to_string("/proc/net/arp")?))
@@ -22,7 +24,7 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
     {
         let mut command = std::process::Command::new("/usr/sbin/arp");
         command.arg("-an").env_clear();
-        Ok(bsd(&run(command)?))
+        Ok(bsd(&run(command, cancel)?))
     }
     #[cfg(windows)]
     {
@@ -39,7 +41,7 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
             .env_clear()
             .env("SystemRoot", &root)
             .creation_flags(CREATE_NO_WINDOW);
-        Ok(windows(&run(command)?))
+        Ok(windows(&run(command, cancel)?))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -47,10 +49,11 @@ pub(super) fn read() -> io::Result<Vec<Ipv4Addr>> {
     }
 }
 
-/// Runs the system's `arp`, stopping it at [`TIMEOUT`]. Output past [`MAX_OUTPUT`] is read
-/// and discarded, so a long table still lets `arp` finish, and only its start is parsed.
+/// Runs the system's `arp`, stopping and reaping it at [`TIMEOUT`] or as soon as the bridge
+/// stops. Output past [`MAX_OUTPUT`] is read and discarded, so a long table still lets `arp`
+/// finish, and only its start is parsed.
 #[cfg(any(test, target_os = "macos", windows))]
-pub(super) fn run(mut command: std::process::Command) -> io::Result<String> {
+pub(super) fn run(mut command: std::process::Command, cancel: &Cancellation) -> io::Result<String> {
     use std::{io::Read, process::Stdio, time::Instant};
     let mut child = command
         .stdin(Stdio::null())
@@ -80,6 +83,11 @@ pub(super) fn run(mut command: std::process::Command) -> io::Result<String> {
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
+        }
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::Interrupted, super::STOPPED));
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
