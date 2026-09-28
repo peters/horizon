@@ -30,6 +30,7 @@ pub(super) fn field(ui: &mut Ui, form: &mut Production) {
         form.provider = None;
         form.selected_profile = name;
         form.launch.accounts_checked = false;
+        form.launch.selector.profile_changed();
     }
 }
 

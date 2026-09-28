@@ -191,12 +191,14 @@ fn cost(ui: &mut Ui, form: &Production) {
     let storage = costs::storage(list, &sized);
     widgets::line(ui, "Compute", &format!("{}/hr", costs::range(low, high)), false);
     for item in &storage {
-        let value = if item.quoted {
-            format!("{}/mo", costs::money(item.running))
+        let label = format!("{} · {} GB", item.kind, item.gb);
+        if item.quoted {
+            widgets::line(ui, &label, &format!("{}/mo", costs::money(item.running)), false);
         } else {
-            "not published".to_owned()
-        };
-        widgets::line(ui, &format!("{} · {} GB", item.kind, item.gb), &value, false);
+            // A long label and an unpublished price would collide on one row.
+            ui.label(RichText::new(label).size(13.0).color(theme::FG_SOFT()));
+            ui.label(RichText::new("Price not published").size(11.5).color(theme::FG_DIM()));
+        }
     }
     match costs::monthly((low, high), &storage) {
         Some(((low, high), stopped)) => {
@@ -250,7 +252,9 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
     let sold_out = profile(form)
         .map(|profile| sized(form, profile))
         .is_some_and(|sized| placement::in_stock(&form.prices, &sized, &form.placement) == Some(false));
+    // Only stock can be waited for: another reason Start is unavailable comes first.
     let watchable = sold_out
+        && super::super::storage::launch_reason(form).is_none()
         && !starting
         && !watching
         && profile(form).is_some_and(|profile| provider::current(form.provider, profile).kind == Kind::RunPod);

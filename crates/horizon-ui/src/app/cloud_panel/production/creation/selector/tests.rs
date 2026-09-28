@@ -317,3 +317,21 @@ fn a_chosen_gpu_type_is_never_replaced_once_it_is_no_longer_offered() {
             .any(|label| label == "retired is no longer offered here. Choose another GPU type.")
     );
 }
+
+#[test]
+fn only_stock_is_waited_for_and_a_new_profile_clears_the_search() {
+    let mut form = form("cpu");
+    form.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: Vec::new(),
+    };
+    let profiles = &mut form.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("cpu").unwrap().storage.volume_tier = StorageTier::HighPerformance;
+    let labels = render(&mut form);
+    assert!(!labels.iter().any(|label| label == "Start new cloud once available"));
+    form.launch.selector.search = "16 vCPU".into();
+    form.launch.selector.wait_for_stock = true;
+    form.launch.selector.profile_changed();
+    assert!(form.launch.selector.search.is_empty() && !form.launch.selector.wait_for_stock);
+}

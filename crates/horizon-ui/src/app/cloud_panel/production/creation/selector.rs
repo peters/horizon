@@ -24,6 +24,14 @@ pub(in crate::app::cloud_panel::production) struct State {
     pub wait_for_stock: bool,
 }
 
+impl State {
+    /// A search for one kind of worker means nothing for another profile's.
+    pub(super) fn profile_changed(&mut self) {
+        self.search.clear();
+        self.wait_for_stock = false;
+    }
+}
+
 /// The workers a repository profile allows, from the latest catalog, current or not.
 pub(super) struct Catalog {
     pub offers: Vec<Offer>,
