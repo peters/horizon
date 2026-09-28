@@ -11,7 +11,10 @@ mod socks;
 
 use super::{Cancellation, ssh::Connection};
 pub use discovery::Discoverer;
-use horizon_cloud_protocol::local_network::{Reply, Subnet};
+use horizon_cloud_protocol::local_network::{
+    Reply, Subnet,
+    discovery::{Answer, Hello, Request},
+};
 pub use scope::ScopeError;
 pub use socks::{BYTE_BUDGET, Counters, MAX_CONNECTIONS};
 use std::{
@@ -138,15 +141,25 @@ pub struct Bridge {
 }
 
 impl Bridge {
-    /// Shares the current network with the worker behind `connection`.
+    /// Shares the current network with the worker behind `connection`, and answers its
+    /// agents' discovery requests.
     ///
     /// # Errors
     /// Fails when there is no shareable network or the local proxy cannot start.
     pub fn start(connection: &Connection) -> Result<Self, StartError> {
-        Ok(Self::with_parts(Proxy::start()?, session::Ssh(connection.clone()))?)
+        let scope = Arc::new(Scope::current()?);
+        let answers = Arc::new(Discoverer::new(Arc::clone(&scope)));
+        let proxy = Proxy::with_gate(scope.subnet(), scope)?;
+        Ok(Self::with_answers(proxy, session::Ssh(connection.clone()), answers)?)
     }
 
+    /// A bridge whose helper hears that nothing is answered here.
+    #[cfg(test)]
     fn with_parts(proxy: Proxy, transport: impl session::Transport) -> io::Result<Self> {
+        Self::with_answers(proxy, transport, Arc::new(tests::Unanswered))
+    }
+
+    fn with_answers(proxy: Proxy, transport: impl session::Transport, answers: Arc<dyn Answers>) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::Starting),
         });
@@ -157,7 +170,7 @@ impl Bridge {
             let (subnet, port) = (proxy.subnet(), proxy.port());
             thread::Builder::new()
                 .name("local-network-bridge".into())
-                .spawn(move || session::supervise(&transport, subnet, port, &shared, &cancel))?
+                .spawn(move || session::supervise(&transport, subnet, port, &answers, &shared, &cancel))?
         };
         Ok(Self {
             shared,
@@ -195,6 +208,13 @@ impl Drop for Bridge {
         }
         // The proxy then stops accepting and closes every relayed connection.
     }
+}
+
+/// Answers what the worker helper asks on behalf of its agents.
+pub(super) trait Answers: Send + Sync + 'static {
+    /// What this computer answers, told to the helper once per session.
+    fn hello(&self) -> Hello;
+    fn answer(&self, request: Request) -> Answer;
 }
 
 type Resolve = Box<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, Reply> + Send + Sync>;

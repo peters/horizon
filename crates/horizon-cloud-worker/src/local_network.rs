@@ -1,15 +1,16 @@
 //! Local Network Bridge on the worker. `hold` keeps one bridge session that the owner's
-//! Horizon opened; `status`, `forward`, `unforward` and `mcp` let agents use it.
+//! Horizon opened; `status`, `discover`, `forward`, `unforward` and `mcp` let agents use it.
 //!
 //! The worker never decides what is reachable: every connection is a SOCKS5 CONNECT that the
 //! owner's Horizon checks against the bridged subnet, and its refusal is what agents see.
 mod forward;
 mod hold;
 mod mcp;
+mod owner;
 #[cfg(test)]
 mod tests;
 
-use horizon_cloud_protocol::local_network::{DIRECTORY, Nonce, PREPARED};
+use horizon_cloud_protocol::local_network::{DIRECTORY, Nonce, PREPARED, discovery::Discovery};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
@@ -22,7 +23,8 @@ use std::{
 
 const OFF: &str = "Local Network Bridge is off. Only the owner can turn it on, from this cloud's card in Horizon.";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_MESSAGE: u64 = 64 * 1024;
+/// Room for a discovery answer on the control socket.
+const MAX_MESSAGE: u64 = 512 * 1024;
 
 /// Where one worker keeps its bridge sockets.
 #[derive(Clone, Debug)]
@@ -54,6 +56,7 @@ impl Paths {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Status,
+    Discover,
     Forward {
         host: String,
         port: u16,
@@ -77,7 +80,21 @@ pub(crate) struct Status {
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy: Option<String>,
     forwards: Vec<Forward>,
+    /// Whether `local_network_discover` works, and with what, on the owner's computer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discovery: Option<Availability>,
     note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Availability {
+    /// Whether the owner's Horizon answers discovery requests.
+    available: bool,
+    /// What the owner's computer finds devices with: `mdns`, `ssdp` and `neighbors`.
+    sources: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 impl Status {
@@ -87,6 +104,7 @@ impl Status {
             subnet: None,
             proxy: None,
             forwards: Vec::new(),
+            discovery: None,
             note: OFF.into(),
         }
     }
@@ -105,6 +123,7 @@ pub(crate) struct Forward {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum Answer {
     Status(Status),
+    Discovery(Discovery),
     Forward(Forward),
     Retired,
     Error(String),
@@ -122,6 +141,7 @@ pub(crate) fn run() -> io::Result<()> {
         }
         ["hold", nonce, subnet] => hold::run(&paths, nonce, subnet, io::stdin(), io::stdout()),
         ["status"] => print(&status(&paths)?),
+        ["discover"] => print(&discover(&paths)?),
         ["forward", host, port] => {
             let port = port.parse().map_err(|_| io::Error::other("Invalid port"))?;
             print(&forward(&paths, host, port)?)
@@ -134,7 +154,7 @@ pub(crate) fn run() -> io::Result<()> {
         }
         ["mcp"] => mcp::run(paths),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker local-network status|forward <host> <port>|unforward <worker-port>|mcp",
+            "Usage: horizon-cloud-worker local-network status|discover|forward <host> <port>|unforward <worker-port>|mcp",
         )),
     }
 }
@@ -184,7 +204,17 @@ pub(crate) fn status(paths: &Paths) -> io::Result<Status> {
     match exchange(paths, &Request::Status)? {
         Answer::Status(status) => Ok(status),
         Answer::Error(error) => Err(io::Error::other(error)),
-        Answer::Forward(_) | Answer::Retired => Err(io::Error::other("Invalid local network answer")),
+        Answer::Discovery(_) | Answer::Forward(_) | Answer::Retired => {
+            Err(io::Error::other("Invalid local network answer"))
+        }
+    }
+}
+
+pub(crate) fn discover(paths: &Paths) -> io::Result<Discovery> {
+    match exchange(paths, &Request::Discover)? {
+        Answer::Discovery(found) => Ok(found),
+        Answer::Error(error) => Err(io::Error::other(error)),
+        Answer::Status(_) | Answer::Forward(_) | Answer::Retired => Err(io::Error::other(OFF)),
     }
 }
 
@@ -198,7 +228,7 @@ pub(crate) fn forward(paths: &Paths, host: &str, port: u16) -> io::Result<Forwar
     )? {
         Answer::Forward(forward) => Ok(forward),
         Answer::Error(error) => Err(io::Error::other(error)),
-        Answer::Status(_) | Answer::Retired => Err(io::Error::other(OFF)),
+        Answer::Status(_) | Answer::Discovery(_) | Answer::Retired => Err(io::Error::other(OFF)),
     }
 }
 
