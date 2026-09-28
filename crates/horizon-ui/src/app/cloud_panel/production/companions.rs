@@ -414,6 +414,7 @@ impl State {
             return;
         };
         view::render(ui, entry);
+        self.agent.creation.render(ui, cloud);
     }
 }
 

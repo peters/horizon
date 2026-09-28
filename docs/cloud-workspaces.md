@@ -802,11 +802,21 @@ provider reports the worker running.
 
 A deleted, deleting, lost or changed companion is refused, and a companion
 whose provider outcome is uncertain is reconciled on the next request, never
-repeated. Agents cannot create a companion that has no cloud yet: the owner creates it
-with **New cloud** and checks it on the source cloud's card first. A checked
-cloud whose first worker was never started answers `confirmation_required`;
-start it from its own card. Starting a companion never starts the companions it
-declares itself. The first request for a checked companion binds it to that
+repeated. Starting a companion never starts the companions it declares itself.
+
+When no cloud in the workspace matches a companion, Ensure Ready answers
+`confirmation_required` with `done` false and asks the owner on the source
+cloud's card. Nothing is reserved, recorded or created until the owner acts, and
+an unanswered request is forgotten when Horizon closes. The card offers the
+checkouts of the companion's repository it finds in the workspace, or **Choose
+checkout…**; the checkout's committed `.horizon/cloud.yml` must define the
+declared profile. **Create cloud** adds an ordinary cloud card from that
+checkout, checks the companion for the source cloud and starts its first
+worker, paid like any new cloud; the agent's operation continues on the new
+card until Ready. **Decline** answers the agent's polls as `refused`. If a step
+fails, the card keeps what was already created and **Retry** continues from
+there. A checked cloud whose first worker was never started also answers
+`confirmation_required`; start it from its own card. The first request for a checked companion binds it to that
 cloud and its checkout; choosing another cloud for the same alias later needs
 the binding cleared first.
 

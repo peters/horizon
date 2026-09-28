@@ -24,6 +24,12 @@ pub enum DirPickerPurpose {
     },
     #[cfg(feature = "cloud-workspaces")]
     CloudRepository,
+    /// A checkout for the companion cloud an agent asked the owner to create.
+    #[cfg(feature = "cloud-workspaces")]
+    CompanionCheckout {
+        source: String,
+        alias: String,
+    },
 }
 
 pub struct DirPicker {
@@ -106,6 +112,8 @@ impl DirPicker {
             Some(DirPickerPurpose::NewWorkspace { .. }) => "Select workspace directory",
             #[cfg(feature = "cloud-workspaces")]
             Some(DirPickerPurpose::CloudRepository) => "Select repository directory",
+            #[cfg(feature = "cloud-workspaces")]
+            Some(DirPickerPurpose::CompanionCheckout { .. }) => "Select the companion's checkout",
             Some(DirPickerPurpose::AddPanel { .. }) | None => "Select terminal directory",
         }
     }
@@ -113,7 +121,7 @@ impl DirPicker {
     fn footer_action_label(&self) -> Option<&'static str> {
         match &self.selected_purpose {
             #[cfg(feature = "cloud-workspaces")]
-            Some(DirPickerPurpose::CloudRepository) => None,
+            Some(DirPickerPurpose::CloudRepository | DirPickerPurpose::CompanionCheckout { .. }) => None,
             _ => Some("Skip (use default)"),
         }
     }

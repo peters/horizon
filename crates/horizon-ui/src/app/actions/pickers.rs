@@ -64,6 +64,13 @@ impl HorizonApp {
                 }
                 return;
             }
+            #[cfg(feature = "cloud-workspaces")]
+            DirPickerPurpose::CompanionCheckout { source, alias } => {
+                if let Some(path) = path {
+                    self.choose_companion_checkout(&source, &alias, path);
+                }
+                return;
+            }
         }
         self.mark_runtime_dirty();
     }

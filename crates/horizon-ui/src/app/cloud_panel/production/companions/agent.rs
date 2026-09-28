@@ -12,7 +12,7 @@ use horizon_core::{
     cloud_runtime::{
         self, Cancellation, Event, Stage,
         companions::{
-            Context, intent, inventory,
+            self, Context, intent, inventory,
             lifecycle::{self, Operation, Phase},
         },
         settings::Settings,
@@ -27,6 +27,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod creation;
+
 /// How long a job waits for a companion journal another job holds.
 const BUSY_WAIT: Duration = Duration::from_secs(8);
 
@@ -39,18 +41,26 @@ pub(super) struct State {
     held: BTreeMap<String, usize>,
     /// Target clouds with an operation running on this Horizon.
     executing: BTreeSet<String>,
+    /// Missing companions agents asked for, awaiting the owner on the source card.
+    pub(super) creation: creation::State,
 }
 
 enum Message {
     Answered {
         request: Box<UsageRequest>,
         source: String,
-        outcome: Result<Box<Submitted>, String>,
+        outcome: Result<Box<Answer>, String>,
     },
     Executed {
         source: String,
         target: String,
     },
+}
+
+enum Answer {
+    Recorded(Submitted),
+    /// An Ensure Ready for a declared companion that has no cloud to bind.
+    Missing(Owner, companions::Declaration),
 }
 
 struct Submitted {
@@ -95,6 +105,7 @@ impl HorizonApp {
 
     /// Starts queued agent requests and finishes the ones whose jobs answered.
     pub(in crate::app::cloud_panel) fn poll_cloud_companion_requests(&mut self, ctx: &egui::Context) {
+        self.poll_companion_creations(ctx);
         for request in std::mem::take(&mut self.cloud_prototype.production.companions.agent.queued) {
             if let Err(error) = self.start_companion_request(&request, ctx) {
                 complete(&request, Err(error));
@@ -108,10 +119,24 @@ impl HorizonApp {
                     outcome,
                 } => {
                     let (answer, started) = match outcome {
-                        Ok(submitted) => {
-                            let (answer, started) = self.answer_submitted(&request, &source, *submitted, ctx);
-                            (Ok(answer), started)
-                        }
+                        Ok(answer) => match *answer {
+                            Answer::Recorded(submitted) => {
+                                let (answer, started) = self.answer_submitted(&request, &source, submitted, ctx);
+                                (Ok(answer), started)
+                            }
+                            Answer::Missing(owner, declaration) => {
+                                let alias = request
+                                    .cloud_companion
+                                    .as_ref()
+                                    .and_then(|companion| companion.alias.clone())
+                                    .unwrap_or_default();
+                                let id = operation_id(&request);
+                                (
+                                    id.map(|id| self.request_companion_creation(owner, &alias, declaration, id)),
+                                    false,
+                                )
+                            }
+                        },
                         Err(error) => (Err(error), false),
                     };
                     // A started execution keeps this request's hold until it reports back.
@@ -207,9 +232,18 @@ impl HorizonApp {
             .root
             .clone()
             .ok_or("cloud_companion_unavailable: Horizon has no cloud state directory")?;
-        let id = serde_json::from_value::<OperationId>(json!(companion.operation_id))
-            .map_err(|_| "cloud_companion_invalid_request: operation_id must be a UUID")?;
+        let id = operation_id(request)?;
         expired(request)?;
+        let action = match companion.action {
+            CompanionAction::EnsureReady => Some(intent::Action::EnsureReady),
+            CompanionAction::Stop => Some(intent::Action::Stop),
+            CompanionAction::Status | CompanionAction::List => None,
+        };
+        let alias = companion.alias.clone().unwrap_or_default();
+        if let Some(answer) = companions.agent.creation.answer(&source, &alias, action, id) {
+            complete(request, answer);
+            return Ok(());
+        }
         // A refresh holds the source journal while it reaches workers, and may carry
         // the owner's checkbox change, so it finishes; the job waits for its lock.
         let owner = entry.owner.clone();
@@ -462,7 +496,7 @@ fn submit(
     groups: &CloudGroups,
     (companion, deadline): (&CompanionRequest, i64),
     id: OperationId,
-) -> Result<Submitted, String> {
+) -> Result<Answer, String> {
     let context = inventory::prepare(owner, groups, &Cancellation::default()).map_err(|error| error.to_string())?;
     let alias = companion.alias.clone().unwrap_or_default();
     let request = lifecycle::Request {
@@ -471,6 +505,18 @@ fn submit(
         context: &context,
         alias: &alias,
     };
+    if companion.action != CompanionAction::Status && manifest::now_millis() >= deadline {
+        return Err(EXPIRED.into());
+    }
+    if companion.action == CompanionAction::EnsureReady
+        && let Err(error) = retry_busy(|| lifecycle::bind_selected(&request))
+    {
+        // No cloud matches the declaration: the owner may create one on the card.
+        return match missing(&context, &alias) {
+            Some(declaration) => Ok(Answer::Missing(owner.clone(), declaration)),
+            None => Err(error.to_string()),
+        };
+    }
     let operation = match companion.action {
         CompanionAction::Status => retry_busy(|| lifecycle::status(&request, id)),
         CompanionAction::EnsureReady | CompanionAction::Stop => retry_busy(|| {
@@ -495,11 +541,31 @@ fn submit(
         }
         error => error.to_string(),
     })?;
-    Ok(Submitted {
+    Ok(Answer::Recorded(Submitted {
         operation,
         context,
         alias,
-    })
+    }))
+}
+
+/// The declaration of a separate-cloud companion that no cloud in the workspace matches.
+fn missing(context: &Context, alias: &str) -> Option<companions::Declaration> {
+    let declaration = context.declarations.get(alias)?;
+    (!context
+        .inventory
+        .iter()
+        .any(|target| target.cloud_id != context.source.cloud_id && target.declaration.matches(declaration)))
+    .then(|| declaration.clone())
+}
+
+fn operation_id(request: &UsageRequest) -> Result<OperationId, String> {
+    serde_json::from_value::<OperationId>(json!(
+        request
+            .cloud_companion
+            .as_ref()
+            .and_then(|companion| companion.operation_id.clone())
+    ))
+    .map_err(|_| "cloud_companion_invalid_request: operation_id must be a UUID".to_owned())
 }
 
 const EXPIRED: &str =

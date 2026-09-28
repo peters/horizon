@@ -59,6 +59,13 @@ operation lock. `status` only reads. A missing target stops at
 `ConfirmationRequired`, and deleted, deletion-pending, lost or changed targets
 are refused before any deployment call.
 
+`confirm_creation` records the owner's confirmation, given on the source
+cloud's card, that one Ensure Ready may create its reserved companion: only
+once the card has created that cloud with the reserved ID and the bound
+checkout, prepared its record, and the owner's selection covers it. Execution
+checks that selection again under the source journal lock, so an uncheck after
+the confirmation withdraws it before any allocation.
+
 Horizon claims agent requests from the browser MCP tools through its private
 request queue, scoped to the calling agent panel's workspace and the source
 cloud's saved session, and runs each operation on the target cloud's card. The
