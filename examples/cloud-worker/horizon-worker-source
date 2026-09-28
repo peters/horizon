@@ -141,14 +141,14 @@ def select_lfs(repository, value):
         sent = {asset['path'] for asset in value['assets']}
         if any(asset['path'] not in excluded or asset['path'] in sent for asset in skipped):
             raise ValueError('Selected LFS content is missing from the transfer')
+    local_lfs_filters(['--git-dir', repository], patterns)
+
+
+def local_lfs_filters(target, patterns):
+    # Both keys are always set locally, empty for an unselected side, so a global or
+    # system lfs.fetchinclude/fetchexclude never changes what a checkout hydrates.
     for key, name in (('include', 'lfs.fetchinclude'), ('exclude', 'lfs.fetchexclude')):
-        if patterns[key]:
-            git('--git-dir', repository, 'config', name, ','.join(patterns[key]))
-        else:
-            # Exit status 5: the key was not set.
-            unset = subprocess.run(['git', '--git-dir', str(repository), 'config', '--unset-all', name], check=False)
-            if unset.returncode not in (0, 5):
-                raise ValueError('Cannot clear the LFS selection')
+        git(*target, 'config', '--replace-all', name, ','.join(patterns.get(key, [])))
 
 
 def missing_objects(repo, revision, object_format, history):
@@ -261,6 +261,8 @@ def checkout(worktree, alias=None):
         if alias is not None:
             # The global lfs.storage names the primary's store.
             git('-C', path, 'config', 'lfs.storage', root / 'lfs')
+        # Submodule LFS content is always sent in full.
+        local_lfs_filters(['-C', path], {})
         # Called only before the session launch fence: finish an interrupted checkout.
         git('-C', path, 'checkout', '--force', '--detach', module['revision'])
         git('-C', path, 'reset', '--hard', module['revision'])

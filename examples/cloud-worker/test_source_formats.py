@@ -306,11 +306,13 @@ class SourceFormatTests(unittest.TestCase):
                                            input=(revision + '\n').encode(), env=plain)
             workspace = root / 'workspace'
             workspace.mkdir()
-            # The worker's global configuration names the primary's store, which holds nothing.
+            # The worker's global configuration names the primary's store, which holds nothing,
+            # and global fetch filters that must not reach imported repositories.
             worker_config = root / 'worker.gitconfig'
             worker_config.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n'
                                      '\tprocess = git-lfs filter-process\n\trequired = true\n'
-                                     f'[lfs]\n\tstorage = {workspace}/source/lfs\n')
+                                     f'[lfs]\n\tstorage = {workspace}/source/lfs\n'
+                                     '\tfetchinclude = nothing/**\n\tfetchexclude = *.bin\n')
             worker = dict(os.environ, GIT_CONFIG_GLOBAL=str(worker_config), GIT_CONFIG_NOSYSTEM='1')
             self.assertEqual(self.import_sibling(workspace, 'lib', revision, pack, env=worker).returncode, 0)
             self.archive(root, workspace, [{'path': 'nested/module', 'revision': revision}], [pack],
@@ -397,9 +399,11 @@ class SourceFormatTests(unittest.TestCase):
             workspace = root / 'workspace'
             workspace.mkdir()
             worker_config = root / 'worker.gitconfig'
+            # Global fetch filters that disagree with the manifest must not reach a checkout.
             worker_config.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n'
                                      '\tprocess = git-lfs filter-process\n\trequired = true\n'
-                                     f'[lfs]\n\tstorage = {workspace}/source/lfs\n')
+                                     f'[lfs]\n\tstorage = {workspace}/source/lfs\n'
+                                     '\tfetchinclude = fixtures/**\n\tfetchexclude = keep.bin\n')
             worker = dict(os.environ, GIT_CONFIG_GLOBAL=str(worker_config), GIT_CONFIG_NOSYSTEM='1')
             (workspace / 'horizon-transfer.pack').write_bytes(pack)
             self.assertEqual(self.execute('horizon-worker-import', workspace, revision, env=worker).returncode, 0)
@@ -429,8 +433,9 @@ class SourceFormatTests(unittest.TestCase):
             imported = self.execute('horizon-worker-source', workspace, 'import', env=worker)
             self.assertEqual(imported.returncode, 0, imported.stderr.decode())
             repository = workspace / 'repository.git'
-            self.assertEqual(subprocess.check_output(['git', '--git-dir', repository, 'config', 'lfs.fetchexclude'],
-                                                     env=worker, text=True).strip(), 'fixtures/**')
+            local = lambda key: subprocess.check_output(['git', '--git-dir', repository, 'config', '--local', key],
+                                                        env=worker, text=True).strip()
+            self.assertEqual((local('lfs.fetchinclude'), local('lfs.fetchexclude')), ('', 'fixtures/**'))
             agent = workspace / 'agents' / 'session-1'
             subprocess.run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', agent, revision],
                            check=True, env=worker, capture_output=True)

@@ -223,7 +223,10 @@ git-lfs itself excludes every skipped path at the imported revision
 (`git lfs ls-files` with and without the patterns) and no skipped path was also
 sent. It then sets `lfs.fetchinclude` and `lfs.fetchexclude` in the repository's
 configuration, so worktrees keep skipped paths as pointer files without trying the
-network and `git status` stays clean. An import without a selection clears both keys.
+network and `git status` stays clean. Both keys are always set locally, empty for a
+side the selection leaves open and on every import without a selection, and submodule
+checkouts get empty local values too, so a global or system fetch filter never
+changes what a checkout hydrates.
 Submodule LFS content is always sent. `horizon-worker-source --lfs-selection-contract`
 prints `horizon-source-lfs-selection-contract=1`, and the checker reports that marker
 only when the helper declares it. Horizon sends every LFS object to images without it.
