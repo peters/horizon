@@ -70,18 +70,7 @@ impl HorizonApp {
 
     pub(in crate::app) fn handle_canvas_double_click(&mut self, ctx: &Context) {
         let canvas_rect = self.canvas_rect(ctx);
-        let ctrl_double_click = ctx.input(|input| {
-            let ctrl = input.modifiers.ctrl || input.modifiers.command;
-            let double = input.pointer.button_double_clicked(egui::PointerButton::Primary);
-            let pos = input.pointer.interact_pos();
-            if ctrl && double {
-                pos.filter(|pos| canvas_rect.contains(*pos))
-            } else {
-                None
-            }
-        });
-
-        let Some(screen_pos) = ctrl_double_click else {
+        let Some(screen_pos) = self.canvas_gesture.take_completed() else {
             return;
         };
 
@@ -89,7 +78,10 @@ impl HorizonApp {
         // consume their own double-clicks (fit-to-target). Without this the
         // preset picker opens underneath them too — the same reason raw
         // panel-focus handling consults `overlay_exclusion_zones`.
-        if self.overlay_exclusion_zones(ctx).contains(screen_pos) {
+        if !self.canvas_gesture_enabled()
+            || !canvas_rect.contains(screen_pos)
+            || self.overlay_exclusion_zones(ctx).contains(screen_pos)
+        {
             return;
         }
 

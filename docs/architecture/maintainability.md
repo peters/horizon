@@ -803,3 +803,5 @@ transaction layer. Source export retains its existing uncertainty fence, and the
 coordinator checks the caller deadline again before transfer. Runtime readiness
 and terminal attachment remain separate APIs. Setup recovery and real SSH fixtures
 are colocated under the bootstrap initialization source tests' `setup/` tree.
+
+Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, before egui routes pointer events. It reserves the first modified click, opens the panel picker on the second press, and replays single-click/drag input while preventing deferred timestamps from creating native multi-clicks. Completed deferred clicks occupy isolated replay frames; later input stays queued while idle pointer and browser click histories are cleared at the replay boundary.
