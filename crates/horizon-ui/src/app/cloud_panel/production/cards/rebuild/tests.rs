@@ -434,3 +434,27 @@ fn remote_device_release_waits_for_a_pending_replacement() {
         assert_eq!(runtime(state).can_release_remote_devices(), offered, "{phase:?}");
     }
 }
+
+#[test]
+fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_waits() {
+    use super::super::super::local_network::Sharing;
+    let ctx = egui::Context::default();
+    let (mut running, _sender) = rebuilding(Kind::Rebuild, Stage::Build);
+    let mut pending = ready(true, Phase::Built);
+    for (case, runtime) in [("running", &mut running), ("pending", &mut pending)] {
+        runtime.sharing = Sharing::Paused { ready_again: false };
+        let shown = texts(&ctx, runtime);
+        assert!(has(&shown, "Share local network"), "{case}");
+        assert!(has(&shown, "Sharing paused: cloud disconnected"), "{case}");
+        assert!(
+            matches!(
+                click(&ctx, runtime, "Share local network"),
+                Some(Action::StopSharingLocalNetwork)
+            ),
+            "{case}"
+        );
+        // Without an intent to keep, a cloud that is not connected and Ready offers no switch.
+        runtime.sharing = Sharing::Off;
+        assert!(!has(&texts(&ctx, runtime), "Share local network"), "{case}");
+    }
+}

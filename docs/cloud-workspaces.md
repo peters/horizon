@@ -597,6 +597,12 @@ reconnection. The breakdown is kept
 with the cloud and survives restarting Horizon. The `cloud_deploy` harness
 prints the same phases and timestamps every line.
 
+## Local network bridge
+
+**Share local network** on a Ready cloud's card lets that cloud's agents reach
+devices on the network this computer is on, over TCP, through this computer. It is
+off by default and after every restart. See [Local Network Bridge](local-network-bridge.md).
+
 ## Planned shared workers
 
 Explicit sharing of a compatible CPU worker across trusted projects is tracked in

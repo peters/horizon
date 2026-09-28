@@ -10,6 +10,7 @@ mod creation_tests;
 mod idle;
 mod launch;
 mod lifecycle;
+mod local_network;
 mod machine_size;
 mod offer_publication;
 mod offers;
@@ -125,9 +126,17 @@ pub(super) struct Runtime {
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
     idle_reports: Option<idle::Reports>,
+    sharing: local_network::Sharing,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
+
+    fn observe(&mut self, event: &Event) {
+        self.observe_rebuild(event);
+        if matches!(event, Event::Ready(..)) {
+            self.sharing.ready_again();
+        }
+    }
     const PENDING_LOG_LINES: usize = 4_000;
 
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
@@ -199,6 +208,7 @@ impl Runtime {
         self.desktop = None;
         self.progress.reset();
         self.rebuild = None;
+        self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
         self.cancel = Some(cancel.clone());
@@ -264,7 +274,7 @@ impl HorizonApp {
                 .as_ref()
                 .map_or_else(Vec::new, |rx| rx.try_iter().collect());
             for event in events {
-                runtime.observe_rebuild(&event);
+                runtime.observe(&event);
                 match event {
                     Event::Snapshot(state) => {
                         runtime.stage = Some(state.stage);
@@ -333,6 +343,7 @@ impl HorizonApp {
         }
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);
+        self.reconcile_sharing();
         self.finish_closing_clouds(ctx);
         for id in resumed {
             self.start_production_deployment(id, ctx);

@@ -482,6 +482,15 @@ companion worktrees. These transport operations have no provider lifecycle autho
 its MCP leaf only adapts requests. Readiness expiration and grant probes stay
 in the shared worker service, and neither interface starts compute.
 
+`cloud_runtime::local_network` owns Local Network Bridge policy and transport on
+the client. `scope` reads interfaces and routes and decides destinations, `Scope`
+resolves names and admits only checked addresses, `socks` is the loopback SOCKS5
+proxy that applies it, and `session` supervises the one `ssh -R` session and its
+heartbeat. `horizon-cloud-protocol::local_network` holds the shared contract.
+`horizon-cloud-worker::local_network` is the worker end: `hold` lives for one
+session and owns its sockets, `forward` owns the loopback listeners, and `mcp`
+only adapts requests. The UI keeps the switch in memory only.
+
 `cloud_runtime::companions` owns machine-local selection and grant reconciliation.
 `inventory` reads committed declarations and repository identity away from UI
 frames; `journal` durably pins ownership and grant identities; `transport` uses

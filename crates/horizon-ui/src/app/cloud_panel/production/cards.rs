@@ -90,6 +90,8 @@ impl HorizonApp {
                 Action::Deploy => self.start_production_deployment(id, ctx),
                 Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),
                 Action::Remove => self.remove_deleted_cloud(id, ctx),
+                Action::ShareLocalNetwork => self.share_local_network(id, true),
+                Action::StopSharingLocalNetwork => self.share_local_network(id, false),
                 _ => self.change_production_worker(id, action, ctx),
             }
         }
@@ -195,7 +197,8 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     }
     if rebuild::in_progress(runtime) {
         rebuild::progress(ui, id, runtime);
-        return None;
+        // A rebuild pauses sharing; the owner can still switch it off before it resumes.
+        return super::local_network::show(ui, runtime);
     }
     if let Some(next) = rebuild::pending_notice(ui, runtime) {
         return Some(next);
@@ -256,6 +259,8 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if runtime.stage == Some(Stage::Ready) {
         action = ready_actions(ui, runtime).or(action);
     }
+    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
+    action = super::local_network::show(ui, runtime).or(action);
     bound_provider_check(ui, runtime)
         .or_else(|| deletion_action(ui, runtime))
         .or(action)
