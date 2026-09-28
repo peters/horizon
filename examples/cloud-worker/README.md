@@ -908,11 +908,13 @@ owner after restart; it cannot accumulate a fresh directory on each retry. Its f
 remain retained. Automatic recovery or cleanup of incomplete generation is not
 supported; replacement paths are never adopted or recursively removed.
 Generation enforces one 4 GiB byte budget while writing the retained pack and tar
-and the disposable LFS/submodule staging files. It reserves a second copy of each
+and the disposable submodule pack staging files. LFS objects are not staged: they
+stream from the local store into the tar and are verified as they are written. It
+reserves a second copy of each
 retained byte plus the maximum request header for the temporary SSH input frame.
 Framing rechecks that budget and rejects artifact growth before copying excess
 bytes. This conservative reservation keeps retained transfer data below 2 GiB;
-material staging reduces the available capacity further. Scratch is private, outside
+submodule pack staging reduces the available capacity further. Scratch is private, outside
 the owner directory, and removed on ordinary completion or error; only pack and
 tar are retained after a successful export. Collection stops before exceeding
 65,536 tree entries, 16 MiB of accumulated project-relative path bytes (4 KiB per

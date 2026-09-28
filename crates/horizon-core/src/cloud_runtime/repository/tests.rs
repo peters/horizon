@@ -149,13 +149,139 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
     );
     let root = temp.path().join("transfer");
     std::fs::create_dir(&root).unwrap();
-    auxiliary(&repo, "HEAD", &root, &runner).unwrap();
-    let manifest = std::fs::read_to_string(root.join("material/manifest.json")).unwrap();
+    let archive = auxiliary(&repo, "HEAD", &root, &runner).unwrap();
+    let entries = archive_entries(&archive);
+    let lfs = format!("lfs/{oid}");
+    assert_eq!(
+        entries.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["./", "lfs/", lfs.as_str(), "manifest.json", "module-0.pack"]
+    );
+    assert_eq!(entries[&lfs], content);
+    let manifest = String::from_utf8(entries["manifest.json"].clone()).unwrap();
     assert!(manifest.contains(&module_sha));
     assert!(!manifest.contains(repo.to_str().unwrap()));
-    assert!(root.join("material/module-0.pack").metadata().unwrap().len() > 0);
+    assert!(!entries["module-0.pack"].is_empty());
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        1,
+        "the archive is the only staged copy"
+    );
+
     std::fs::write(media.join(&oid), b"damaged binary content").unwrap();
     assert!(validate_tree(&repo, "HEAD", &runner).is_err());
+}
+
+#[test]
+fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeout() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let content = b"streamed binary content";
+    let mut oid = String::with_capacity(64);
+    for byte in Sha256::digest(content) {
+        use std::fmt::Write as _;
+        write!(oid, "{byte:02x}").unwrap();
+    }
+    let object = repo
+        .join(".git/lfs/objects")
+        .join(&oid[..2])
+        .join(&oid[2..4])
+        .join(&oid);
+    std::fs::create_dir_all(object.parent().unwrap()).unwrap();
+    std::fs::write(&object, content).unwrap();
+    std::fs::write(
+        repo.join("asset.bin"),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+            content.len()
+        ),
+    )
+    .unwrap();
+    std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs -text\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "Add streamed asset"]);
+    let timeout = std::time::Duration::from_secs(1);
+    for case in ["damaged", "cancelled", "expired", "slow staging"] {
+        std::fs::write(&object, content).unwrap();
+        let cancel = horizon_cloud::Cancellation::default();
+        let archiving = std::cell::Cell::new(false);
+        // Interrupt once `./`, the manifest and `lfs/` are written and the object opens;
+        // slow staging instead outlasts the timeout while collection verifies it.
+        let interrupt = |event| {
+            let crate::cloud_runtime::Event::Progress(progress) = event else {
+                return;
+            };
+            if progress.detail == "Pack source dependencies" {
+                archiving.set(true);
+                if case == "damaged" {
+                    // Same size, different bytes: only the streamed checksum can notice.
+                    let mut damaged = content.to_vec();
+                    damaged[0] ^= 1;
+                    std::fs::write(&object, damaged).unwrap();
+                }
+            } else if progress.completed == 0 {
+                match (case, archiving.get()) {
+                    ("cancelled", true) => cancel.cancel(),
+                    ("expired", true) | ("slow staging", false) => std::thread::sleep(timeout * 3 / 2),
+                    _ => {}
+                }
+            }
+        };
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &interrupt,
+            secrets: vec![],
+        };
+        let root = temp.path().join(case);
+        std::fs::create_dir(&root).unwrap();
+        let result = material::archive_within(&repo, "HEAD", &root, &runner, timeout);
+        assert!(archiving.get(), "{case} reaches the archive");
+        match case {
+            "damaged" => assert!(matches!(
+                result,
+                Err(Error::Invalid("Local Git LFS object checksum mismatch"))
+            )),
+            "cancelled" => assert!(matches!(
+                result,
+                Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
+            )),
+            "expired" => assert!(matches!(
+                result,
+                Err(Error::Invalid(crate::cloud_runtime::command::TIMED_OUT))
+            )),
+            _ => {
+                assert_eq!(
+                    result.unwrap(),
+                    root.join("source-material.tar"),
+                    "staging time is not archive time"
+                );
+                continue;
+            }
+        }
+        assert!(
+            !root.join("source-material.tar").exists(),
+            "{case} leaves no partial archive"
+        );
+    }
+}
+
+/// Each archive member's name and content; directories have none.
+fn archive_entries(path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut archive = tar::Archive::new(std::fs::File::open(path).unwrap());
+    archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let mut entry = entry.unwrap();
+            let name = String::from_utf8(entry.path_bytes().into_owned()).unwrap();
+            let kind = entry.header().entry_type();
+            assert!(kind.is_file() || kind.is_dir(), "{name}");
+            let mut content = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut content).unwrap();
+            (name, content)
+        })
+        .collect()
 }
 
 #[test]

@@ -2420,6 +2420,7 @@ dependencies = [
  "sha2",
  "simple-dns",
  "socket2",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "time",

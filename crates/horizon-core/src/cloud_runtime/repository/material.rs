@@ -307,99 +307,142 @@ fn media_directory(repository: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
         .ok_or(Error::Invalid("Cannot locate local Git LFS objects"))
 }
 fn verify_object(path: &Path, oid: &str, size: u64, runner: &Runner<'_>) -> Result<()> {
-    runner.cancel.check()?;
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+    let mut object = Verified::open(path, oid, size, runner)?;
+    let copied = std::io::copy(&mut object, &mut std::io::sink()).map(|_| ());
+    object.finish(copied)
+}
+
+/// A local LFS object read once, with its size and SHA-256 identity checked as it
+/// streams, so its bytes can go straight into an archive without a staged copy.
+pub(super) struct Verified<'a, 'r> {
+    file: std::fs::File,
+    oid: &'a str,
+    size: u64,
+    runner: &'a Runner<'r>,
+    hash: Sha256,
+    completed: u64,
+    reported: Instant,
+    failure: Option<Error>,
+}
+impl<'a, 'r> Verified<'a, 'r> {
+    pub(super) fn open(path: &Path, oid: &'a str, size: u64, runner: &'a Runner<'r>) -> Result<Self> {
+        runner.cancel.check()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+        }
+        let file = options
+            .open(path)
+            .map_err(|_| Error::Invalid("Fetch selected Git LFS objects locally before deploying"))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != size {
+            return Err(Error::Invalid("Local Git LFS object size mismatch"));
+        }
+        let object = Self {
+            file,
+            oid,
+            size,
+            runner,
+            hash: Sha256::new(),
+            completed: 0,
+            reported: Instant::now(),
+            failure: None,
+        };
+        object.progress();
+        Ok(object)
     }
-    let mut file = options
-        .open(path)
-        .map_err(|_| Error::Invalid("Fetch selected Git LFS objects locally before deploying"))?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() != size {
-        return Err(Error::Invalid("Local Git LFS object size mismatch"));
-    }
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 8192];
-    let mut completed = 0;
-    let mut reported = Instant::now();
-    let progress = |completed| {
-        (runner.emit)(Event::Progress(Progress {
+    fn progress(&self) {
+        (self.runner.emit)(Event::Progress(Progress {
             detail: "Verifying current source asset".into(),
-            completed,
-            total: Some(size),
-            transferred: Some(completed),
+            completed: self.completed,
+            total: Some(self.size),
+            transferred: Some(self.completed),
             ..Progress::default()
         }));
-    };
-    progress(0);
-    loop {
-        runner.cancel.check()?;
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        completed += n as u64;
-        if completed > size {
+    }
+    fn fill(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        self.runner.cancel.check()?;
+        let length = self.file.read(buffer)?;
+        self.completed += length as u64;
+        // Never hand out bytes past the recorded size: an archive entry's header
+        // already promised exactly that many.
+        if self.completed > self.size {
             return Err(Error::Invalid("Local Git LFS object grew during verification"));
         }
-        hash.update(&buffer[..n]);
-        if reported.elapsed() >= Duration::from_millis(250) {
-            progress(completed);
-            reported = Instant::now();
+        self.hash.update(&buffer[..length]);
+        if length == 0 || self.reported.elapsed() >= Duration::from_millis(250) {
+            self.progress();
+            self.reported = Instant::now();
         }
+        Ok(length)
     }
-    progress(completed);
-    let mut digest = String::with_capacity(64);
-    for byte in hash.finalize() {
-        use std::fmt::Write as _;
-        let _ = write!(digest, "{byte:02x}");
+    /// Accepts the object only when every byte was read and matched its identity;
+    /// `read` is the outcome of whatever consumed it.
+    pub(super) fn finish(mut self, read: std::io::Result<()>) -> Result<()> {
+        if let Some(failure) = self.failure.take() {
+            return Err(failure);
+        }
+        read?;
+        let mut digest = String::with_capacity(64);
+        for byte in self.hash.finalize() {
+            use std::fmt::Write as _;
+            let _ = write!(digest, "{byte:02x}");
+        }
+        if self.completed != self.size || digest != self.oid {
+            return Err(Error::Invalid("Local Git LFS object checksum mismatch"));
+        }
+        Ok(())
     }
-    if completed != size || digest != oid {
-        return Err(Error::Invalid("Local Git LFS object checksum mismatch"));
+}
+impl Read for Verified<'_, '_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.fill(buffer).map_err(|failure| {
+            let error = std::io::Error::other(failure.to_string());
+            self.failure = Some(failure);
+            error
+        })
     }
-    Ok(())
 }
 
 pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
+    archive_within(repository, revision, root, runner, super::archive::TIMEOUT)
+}
+
+/// Collects and stages without the archive's `timeout`, which starts when writing
+/// does. Leaves no partial archive behind when writing fails.
+pub(super) fn archive_within(
+    repository: &Path,
+    revision: &str,
+    root: &Path,
+    runner: &Runner<'_>,
+    timeout: Duration,
+) -> Result<PathBuf> {
     let material = Material::collect(repository, revision, runner)?;
-    let directory = root.join("material");
-    std::fs::create_dir(&directory)?;
-    let objects = directory.join("lfs");
-    std::fs::create_dir(&objects)?;
-    for asset in &material.assets {
-        let path = objects.join(&asset.oid);
-        if !path.exists() {
-            std::fs::copy(&asset.source, &path)?;
-            verify_object(&path, &asset.oid, asset.size, runner)?;
-        }
-    }
+    let packs = root.join("material");
+    std::fs::create_dir(&packs)?;
     for (index, module) in material.modules.iter().enumerate() {
         super::pack(
             &module.repository,
             &module.revision,
-            &directory.join(format!("module-{index}.pack")),
+            &packs.join(format!("module-{index}.pack")),
             runner,
         )?;
     }
-    std::fs::write(
-        directory.join("manifest.json"),
-        serde_json::to_vec(&material).map_err(|_| Error::Json)?,
-    )?;
+    let manifest = serde_json::to_vec(&material).map_err(|_| Error::Json)?;
     let archive = root.join("source-material.tar");
-    runner.run(
-        "Pack source dependencies",
-        Command::new("tar")
-            .arg("-cf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(directory)
-            .arg("."),
-        Duration::from_secs(300),
-    )?;
+    let mut output = std::io::BufWriter::new(std::fs::File::create_new(&archive)?);
+    let written = super::archive::write(&material, &manifest, &packs, &mut output, runner, timeout)
+        .and_then(|()| Ok(std::io::Write::flush(&mut output)?));
+    drop(output);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&archive);
+        return Err(error);
+    }
+    // The packs now live in the archive; do not keep a second copy through the upload.
+    std::fs::remove_dir_all(&packs)?;
     Ok(archive)
 }
 
