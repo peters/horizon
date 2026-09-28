@@ -12,8 +12,9 @@ mod socks;
 
 use super::{Cancellation, ssh::Connection};
 pub use discovery::Discoverer;
+pub use horizon_cloud_protocol::local_network::Subnet;
 use horizon_cloud_protocol::local_network::{
-    Reply, Subnet,
+    Reply,
     discovery::{Answer, Hello, Request},
 };
 pub use rules::{Device, MAX_DEVICES, MAX_PORTS, Rules, RulesError};
@@ -46,6 +47,38 @@ pub enum StartError {
     Rules(#[from] RulesError),
     #[error("Local Network Bridge could not start: {0}")]
     Io(#[from] io::Error),
+}
+
+/// Which network this computer is on: the subnet that carries its default route, and its own
+/// address and interface there. A bridge shares only the network it started on, so comparing
+/// this with [`Bridge::network`] tells a move to another network, such as a new Wi-Fi.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Network(scope::Network);
+
+impl Network {
+    /// The network that carries this computer's default route now.
+    ///
+    /// # Errors
+    /// Fails when there is no shareable network or the interfaces cannot be read.
+    pub fn current() -> Result<Self, StartError> {
+        Ok(Self(scope::Host::read()?.current_network()?))
+    }
+
+    /// A network described by its parts, for code that compares networks without reading
+    /// this computer's interfaces.
+    #[must_use]
+    pub fn new(subnet: Subnet, address: Ipv4Addr, interface: impl Into<String>) -> Self {
+        Self(scope::Network {
+            subnet,
+            address,
+            interface: interface.into(),
+        })
+    }
+
+    #[must_use]
+    pub const fn subnet(&self) -> Subnet {
+        self.0.subnet
+    }
 }
 
 /// A requested destination, before any policy decision.
@@ -228,6 +261,12 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// The network this bridge shares; absent only for the session tests' fixture gate.
+    #[must_use]
+    pub fn network(&self) -> Option<Network> {
+        self.scope.as_ref().map(|scope| Network(scope.network.clone()))
+    }
+
     /// The owner's current narrowing of the scope.
     #[must_use]
     pub fn rules(&self) -> Rules {

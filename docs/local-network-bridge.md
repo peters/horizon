@@ -32,12 +32,20 @@ While it is on, the card shows what the bridge is doing:
   `/16`, or the default route is a VPN's point-to-point link.
 
 Switch it off to stop the bridge at once. When the cloud stops being connected
-and Ready (it disconnects, stops or rebuilds), the bridge stops too and the card
-shows **Sharing paused: cloud disconnected** with the switch still on. Once you
-reconnect or resume that cloud and it is Ready again, sharing restarts by itself
-with a new session; agents check the status and forward again. Switch it off while
-paused to stop waiting. A paused switch never outlives Horizon: after a restart it
-is off.
+and Ready (it disconnects, stops or rebuilds), or this computer sleeps, the bridge
+stops too and the card shows **Sharing paused: the cloud disconnected or this
+computer slept** with the switch still on. Once the cloud is Ready again, sharing
+restarts by itself with a new session, keeping the scope you set, but only if this
+computer is still on the same network; agents check the status and forward again.
+Switch it off while paused to stop waiting. A paused switch never outlives
+Horizon: after a restart it is off.
+
+When this computer moves to another network, for example a new Wi-Fi, sharing
+stops within a few seconds, whether it was running or paused. The card says
+**Sharing stopped: this computer moved to another network (10.0.0.0/24)**, and
+nothing is shared until you press **Share 10.0.0.0/24**, which starts again on the
+new network with the whole network in scope, or switch sharing off. The scope you
+set belonged to the old network and is forgotten.
 
 The worker image must include the bridge helper. An image built before this
 feature makes the card say so; rebuild the cloud's image.
@@ -58,8 +66,8 @@ every connection on this computer, never on the worker:
   `::ffff:192.168.1.50`, which is judged as the IPv4 address it carries.
 - Names such as `printer.local` are resolved by this computer's resolver, and the
   connection goes to exactly the address that was checked.
-- When this computer moves to another network, every connection is refused until
-  you switch the bridge off and on again.
+- When this computer moves to another network, every connection is refused, and the
+  card stops sharing and asks you again (see above).
 
 Some changes are not detected yet. A different network that hands this computer
 the same address on the same interface and subnet (two Wi-Fi networks that both
