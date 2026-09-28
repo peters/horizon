@@ -196,6 +196,7 @@ impl HorizonApp {
             .ok_or("cloud_companion_unavailable: Horizon has no cloud state directory")?;
         let id = serde_json::from_value::<OperationId>(json!(companion.operation_id))
             .map_err(|_| "cloud_companion_invalid_request: operation_id must be a UUID")?;
+        expired(request)?;
         // A refresh holds the source journal while it reaches workers, and may carry
         // the owner's checkbox change, so it finishes; the job waits for its lock.
         let owner = entry.owner.clone();
@@ -204,9 +205,10 @@ impl HorizonApp {
         let groups = self.cloud_prototype.groups.clone();
         let request = Box::new(request.clone());
         let companion = companion.clone();
+        let deadline = request.deadline_at_millis;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let outcome = submit(&root, &owner, &groups, &companion, id).map(Box::new);
+            let outcome = submit(&root, &owner, &groups, (&companion, deadline), id).map(Box::new);
             let _ = sender.send(Message::Answered {
                 request,
                 source,
@@ -439,7 +441,7 @@ fn submit(
     root: &Path,
     owner: &Owner,
     groups: &CloudGroups,
-    companion: &CompanionRequest,
+    (companion, deadline): (&CompanionRequest, i64),
     id: OperationId,
 ) -> Result<Submitted, String> {
     let context = inventory::prepare(owner, groups, &Cancellation::default()).map_err(|error| error.to_string())?;
@@ -453,6 +455,11 @@ fn submit(
     let operation = match companion.action {
         CompanionAction::Status => retry_busy(|| lifecycle::status(&request, id)),
         CompanionAction::EnsureReady | CompanionAction::Stop => retry_busy(|| {
+            // Reading the workspace may take a while; nothing is recorded after the
+            // caller has stopped waiting.
+            if manifest::now_millis() >= deadline {
+                return Err(cloud_runtime::Error::Invalid(EXPIRED));
+            }
             lifecycle::bind_selected(&request)?;
             let action = if companion.action == CompanionAction::Stop {
                 intent::Action::Stop
@@ -474,6 +481,22 @@ fn submit(
         context,
         alias,
     })
+}
+
+const EXPIRED: &str =
+    "cloud_companion_timed_out: the request expired before Horizon recorded it; nothing was started or stopped";
+
+/// An Ensure Ready or Stop whose caller has stopped waiting is refused before it is
+/// recorded; a status poll is always answered.
+fn expired(request: &UsageRequest) -> Result<(), String> {
+    let lifecycle = request
+        .cloud_companion
+        .as_ref()
+        .is_some_and(|companion| matches!(companion.action, CompanionAction::EnsureReady | CompanionAction::Stop));
+    if lifecycle && manifest::now_millis() >= request.deadline_at_millis {
+        return Err(EXPIRED.into());
+    }
+    Ok(())
 }
 
 fn reads_only(request: &UsageRequest) -> bool {

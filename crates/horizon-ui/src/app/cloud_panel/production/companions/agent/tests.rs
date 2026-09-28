@@ -269,3 +269,26 @@ fn a_status_poll_never_starts_a_recorded_operation() {
     assert!(!started);
     assert_ne!(answer["message"], hint(Phase::Submitted));
 }
+
+#[test]
+fn an_expired_ensure_ready_or_stop_is_refused_but_a_poll_is_answered() {
+    let request = |action: &str, deadline: i64| -> UsageRequest {
+        serde_json::from_value(json!({
+            "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+            "deadline_at_millis": deadline, "claimed": true,
+            "cloud_companion": {"action": action, "cloud": "source", "alias": "consumer",
+                "operation_id": OperationId::generate()}
+        }))
+        .unwrap()
+    };
+    let past = manifest::now_millis() - 1;
+    for action in ["ensure_ready", "stop"] {
+        assert!(
+            expired(&request(action, past))
+                .unwrap_err()
+                .starts_with("cloud_companion_timed_out")
+        );
+        assert!(expired(&request(action, i64::MAX)).is_ok());
+    }
+    assert!(expired(&request("status", past)).is_ok());
+}
