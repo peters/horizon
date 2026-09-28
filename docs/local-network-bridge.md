@@ -20,7 +20,7 @@ While it is on, the card shows what the bridge is doing:
   connections open now and the data relayed since it started.
 - **Open connections (2)**, collapsed until you open it: each relayed connection,
   newest first, with where it goes, the data it relayed and how long it has been
-  open, for example `printer.local:80 (192.168.1.216) · 12.4 KB · 3 min`. A name
+  open, for example `printer.local:80 (192.168.1.50) · 12.4 KB · 3 min`. A name
   the agent asked for is shown with the address it reached. Pinned forwards
   appear here too, because they travel through the same proxy. The list keeps
   one height and scrolls, so connections starting and ending do not move the

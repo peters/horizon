@@ -249,7 +249,9 @@ fn describe(status: &Status) -> String {
         State::Active { .. } => format!(
             "Sharing {} · {} open · {}",
             status.subnet,
-            status.counters.connections,
+            // The relays the list below shows, not the proxy's count, which also includes
+            // connections still negotiating, so the two never disagree.
+            status.relays.len(),
             amount(status.counters.bytes)
         ),
         State::Reconnecting { error } => format!("Reconnecting: {error}"),
@@ -295,7 +297,9 @@ fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) -> 
 fn connection(relay: &Relay, now: std::time::Instant) -> String {
     let target = match &relay.requested {
         Destination::Name(name, port) => format!("{name}:{port} ({})", relay.address.ip()),
-        Destination::Address(_) => relay.address.to_string(),
+        Destination::Address(requested) if *requested == relay.address => requested.to_string(),
+        // The scope dials an IPv4-mapped address as the IPv4 address it carries.
+        Destination::Address(requested) => format!("{requested} ({})", relay.address.ip()),
     };
     let open = now.saturating_duration_since(relay.opened).as_secs();
     let age = match open {
@@ -326,16 +330,26 @@ mod tests {
     use crate::test_egui::DiscardTextures;
     use horizon_core::cloud_runtime::local_network::Counters;
 
+    /// A bridge relaying `connections` connections, with one more still negotiating.
     fn status(state: State, connections: usize, bytes: u64) -> Status {
+        let address: std::net::SocketAddr = "192.168.1.50:80".parse().unwrap();
         Status {
             subnet: "192.168.1.0/24".parse().unwrap(),
             state,
             counters: Counters {
-                connections,
+                connections: connections + 1,
                 bytes,
                 refused: 0,
             },
-            relays: Vec::new(),
+            relays: vec![
+                Relay {
+                    requested: Destination::Address(address),
+                    address,
+                    bytes: 0,
+                    opened: std::time::Instant::now(),
+                };
+                connections
+            ],
         }
     }
 
@@ -344,26 +358,34 @@ mod tests {
         let opened = std::time::Instant::now();
         let relay = |requested| Relay {
             requested,
-            address: "192.168.1.216:80".parse().unwrap(),
+            address: "192.168.1.50:80".parse().unwrap(),
             bytes: 12_400,
             opened,
         };
         let after = |seconds| opened + std::time::Duration::from_secs(seconds);
         assert_eq!(
             connection(
-                &relay(Destination::Address("192.168.1.216:80".parse().unwrap())),
+                &relay(Destination::Address("192.168.1.50:80".parse().unwrap())),
                 after(42)
             ),
-            "192.168.1.216:80 · 12.4 KB · 42 s"
+            "192.168.1.50:80 · 12.4 KB · 42 s"
+        );
+        assert_eq!(
+            connection(
+                &relay(Destination::Address("[::ffff:192.168.1.50]:80".parse().unwrap())),
+                after(42)
+            ),
+            "[::ffff:192.168.1.50]:80 (192.168.1.50) · 12.4 KB · 42 s",
+            "the address the worker asked for, then the one dialled"
         );
         let named = relay(Destination::Name("printer.local".into(), 80));
         assert_eq!(
             connection(&named, after(185)),
-            "printer.local:80 (192.168.1.216) · 12.4 KB · 3 min"
+            "printer.local:80 (192.168.1.50) · 12.4 KB · 3 min"
         );
         assert_eq!(
             connection(&named, after(7_380)),
-            "printer.local:80 (192.168.1.216) · 12.4 KB · 2 h 3 min"
+            "printer.local:80 (192.168.1.50) · 12.4 KB · 2 h 3 min"
         );
     }
 
@@ -399,7 +421,7 @@ mod tests {
             let relays: Vec<_> = (0..count)
                 .map(|index| Relay {
                     requested: Destination::Name(format!("device-{index}.local"), 80),
-                    address: "192.168.1.216:80".parse().unwrap(),
+                    address: "192.168.1.50:80".parse().unwrap(),
                     bytes: u64::try_from(index).unwrap(),
                     opened: now,
                 })

@@ -17,9 +17,19 @@ With **Share local network** on:
 
 - A Linux or macOS computer on a home or office network with at least one device
   that serves TCP, for example a printer's or router's web page.
-- A candidate build of the PR head, launched isolated from your own sessions:
-  `target/debug/horizon --new-session`. On a headless Linux box, use a private
-  Xvfb display with a window manager, as in the other UI smoke plans.
+- A candidate build of the PR head, frozen with its SHA-256, on a task-owned
+  isolated desktop: a private Xvfb display with its own window manager, private
+  `HOME` and runtime directory, launched with `--new-session` (a cloud needs a
+  saved session, so not `--ephemeral`).
+- That desktop viewed live in a **Horizon native VNC Device panel** in your
+  current workspace, as `AGENTS.md` requires: serve the display with a
+  loopback, view-only VNC server, create the panel with `device_panel`, and check
+  `connection`, `image_received`, `image_displayed` and an advancing
+  `frame_sequence` before interacting. See
+  [the device smoke README](../../scripts/device-smoke/README.md#automatic-viewer-health-check).
+- A recorder scoped to that display, for example `ffmpeg -f x11grab -i :<display>`,
+  started before step 1 and stopped after step 6. The list is motion-sensitive:
+  rows appear and disappear while the controls below must stay still.
 - A Ready cloud. The cheapest is a Hetzner `cx23` image-only profile whose image
   carries this revision's `horizon-cloud-worker` and worker scripts. Delete it
   when you finish.
@@ -37,7 +47,7 @@ MCP server or CLI over the cloud's SSH connection, so no model key is placed on 
 3. On the worker, call `local_network_forward` for the LAN device's web port and
    fetch a page through the returned loopback port, keeping the connection open
    (for example `curl --limit-rate 2k` of a larger resource, or `nc` held open).
-   Expect a row such as `192.168.1.216:80 · 1.2 KB · 4 s` within a second, with
+   Expect a row such as `192.168.1.50:80 · 1.2 KB · 4 s` within a second, with
    growing bytes and age, and the header count at 1.
 4. Open seven or more connections at once. Expect newest first, a scroll bar in the
    list, and the controls below the list at the same position as in step 2.
@@ -50,3 +60,8 @@ MCP server or CLI over the cloud's SSH connection, so no model key is placed on 
 
 For each step, record pass or fail with a screenshot of the card. For step 4,
 also record the y position of the control below the list before and after.
+Decode frames from the recording around steps 3 to 5 and confirm rows appear
+and disappear while the controls below stay put. Record the candidate commit and
+binary hash with the evidence. Keep screenshots and the recording private: they
+show the tester's own network. Public reports use only synthetic names and
+addresses such as `printer.local` and `192.168.1.50`.
