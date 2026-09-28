@@ -22,13 +22,7 @@ fn run() -> Result<()> {
     };
     repository::validate_tree(&source, &revision, &runner)?;
     repository::pack(&source, &revision, &output.join("source.pack"), &runner)?;
-    repository::auxiliary(
-        &source,
-        &revision,
-        &output,
-        horizon_cloud::SubmoduleHistory::Full,
-        &runner,
-    )?;
+    repository::auxiliary(&source, &revision, &output, &horizon_cloud::Source::default(), &runner)?;
     repository::snapshot(&source, &revision, &output, &runner)?;
     std::fs::write(output.join("revision"), revision)?;
     Ok(())

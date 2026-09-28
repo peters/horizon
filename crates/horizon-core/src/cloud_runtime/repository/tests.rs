@@ -149,7 +149,7 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
     );
     let root = temp.path().join("transfer");
     std::fs::create_dir(&root).unwrap();
-    let archive = auxiliary(&repo, "HEAD", &root, SubmoduleHistory::Full, &runner).unwrap();
+    let archive = auxiliary(&repo, "HEAD", &root, &horizon_cloud::Source::default(), &runner).unwrap();
     let entries = archive_entries(&archive);
     let lfs = format!("lfs/{oid}");
     assert_eq!(
@@ -235,7 +235,14 @@ fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeou
         };
         let root = temp.path().join(case);
         std::fs::create_dir(&root).unwrap();
-        let result = material::archive_within(&repo, "HEAD", &root, SubmoduleHistory::Full, &runner, timeout);
+        let result = material::archive_within(
+            &repo,
+            "HEAD",
+            &root,
+            &horizon_cloud::Source::default(),
+            &runner,
+            timeout,
+        );
         assert!(archiving.get(), "{case} reaches the archive");
         match case {
             "damaged" => assert!(matches!(
@@ -264,6 +271,93 @@ fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeou
             "{case} leaves no partial archive"
         );
     }
+}
+
+#[test]
+fn an_lfs_selection_leaves_out_only_paths_git_lfs_excludes_in_this_repository() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    let module = repo.join("module");
+    init(&module);
+    let mut oids = std::collections::BTreeMap::new();
+    for (repository, path, content) in [
+        (&repo, "keep.bin", "kept content"),
+        (&repo, "fixtures/skip.bin", "skipped content"),
+        (&module, "fixtures/nested.bin", "submodule content"),
+    ] {
+        let mut oid = String::with_capacity(64);
+        for byte in Sha256::digest(content) {
+            use std::fmt::Write as _;
+            write!(oid, "{byte:02x}").unwrap();
+        }
+        let media = repository.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]);
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join(&oid), content).unwrap();
+        std::fs::create_dir_all(repository.join(path).parent().unwrap()).unwrap();
+        std::fs::write(
+            repository.join(path),
+            format!(
+                "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+                content.len()
+            ),
+        )
+        .unwrap();
+        std::fs::write(repository.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
+        oids.insert(path, oid);
+    }
+    git(&module, &["add", "."]);
+    git(&module, &["commit", "-m", "Add submodule asset"]);
+    let pinned = git(&module, &["rev-parse", "HEAD"]);
+    git(&repo, &["add", ".gitattributes", "keep.bin", "fixtures"]);
+    git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{pinned},module"),
+        ],
+    );
+    git(&repo, &["commit", "-m", "Add assets"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    let source: horizon_cloud::Source = serde_yaml::from_str("lfs: {exclude: ['fixtures/**']}").unwrap();
+    let root = temp.path().join("transfer");
+    std::fs::create_dir(&root).unwrap();
+    let entries = archive_entries(&auxiliary(&repo, "HEAD", &root, &source, &runner).unwrap());
+    let sent: Vec<_> = entries
+        .keys()
+        .filter_map(|name| name.strip_prefix("lfs/"))
+        .filter(|oid| !oid.is_empty())
+        .collect();
+    assert_eq!(sent, {
+        let mut expected = vec![oids["keep.bin"].as_str(), oids["fixtures/nested.bin"].as_str()];
+        expected.sort_unstable();
+        expected
+    });
+    let manifest: serde_json::Value = serde_json::from_slice(&entries["manifest.json"]).unwrap();
+    assert_eq!(manifest["lfs"]["exclude"], serde_json::json!(["fixtures/**"]));
+    assert_eq!(
+        manifest["lfs"]["skipped"],
+        serde_json::json!([{"path": "fixtures/skip.bin", "oid": oids["fixtures/skip.bin"], "size": 15}])
+    );
+    let paths: Vec<_> = manifest["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|asset| asset["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        ["keep.bin", "module/fixtures/nested.bin"],
+        "submodule content is always sent"
+    );
 }
 
 /// Each archive member's name and content; directories have none.

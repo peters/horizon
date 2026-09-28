@@ -4,7 +4,7 @@ mod attributes;
 pub mod launch;
 mod material;
 use super::{Error, Result, command::Runner};
-use horizon_cloud::SubmoduleHistory;
+use horizon_cloud::Source;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -160,15 +160,16 @@ pub fn validate_tree(repository: &Path, revision: &str, runner: &Runner<'_>) -> 
     material::Material::collect(repository, revision, runner).map(|_| ())
 }
 /// # Errors
-/// Packages verified LFS content and pinned submodule history without local configuration.
+/// Packages verified LFS content and submodule history, as `source` selects, without
+/// local configuration.
 pub fn auxiliary(
     repository: &Path,
     revision: &str,
     root: &Path,
-    history: SubmoduleHistory,
+    source: &Source,
     runner: &Runner<'_>,
 ) -> Result<PathBuf> {
-    material::archive(repository, revision, root, history, runner)
+    material::archive(repository, revision, root, source, runner)
 }
 
 /// Reserves the transfer frame while counting retained output and disposable material.

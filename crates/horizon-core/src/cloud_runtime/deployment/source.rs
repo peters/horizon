@@ -1,6 +1,6 @@
 //! Committed source: validated and packed before allocation, transferred to the ready worker.
 use super::{Connection, Deployment, Event, Result, Runner, Stage, Store, WorkerContract, repository};
-use horizon_cloud::SubmoduleHistory;
+use horizon_cloud::{Lfs, Source, SubmoduleHistory};
 use std::path::{Path, PathBuf};
 
 pub(super) struct Packed {
@@ -18,57 +18,72 @@ struct Sibling {
     auxiliary: Auxiliary,
 }
 
-/// A repository's source material archive. Pinned submodule history, which its committed
-/// `.horizon/cloud.yml` may select, waits for the image's contract, so an image that
-/// cannot record shallow submodules gets full history before any worker is allocated.
+/// A repository's source material archive. Pinned submodule history and an LFS path
+/// selection, which its committed `.horizon/cloud.yml` may ask for, wait for the image's
+/// contract, so an image that cannot honor them gets everything before any worker is
+/// allocated.
 struct Auxiliary {
     archive: Option<PathBuf>,
     repository: PathBuf,
     revision: String,
     root: PathBuf,
-    history: SubmoduleHistory,
+    /// As configured until packed, then as packed.
+    source: Source,
+}
+
+/// What of `configured` a worker reporting `contract` can receive.
+fn supported(configured: &Source, contract: &WorkerContract) -> Source {
+    Source {
+        submodule_history: if contract.pinned_submodules {
+            configured.submodule_history
+        } else {
+            SubmoduleHistory::Full
+        },
+        lfs: if contract.lfs_selection {
+            configured.lfs.clone()
+        } else {
+            Lfs::default()
+        },
+    }
 }
 
 impl Auxiliary {
     fn pack(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<Self> {
-        let history = repository::launch::committed_config(repository, revision, runner)?
-            .map(|config| config.source.submodule_history)
+        let source = repository::launch::committed_config(repository, revision, runner)?
+            .map(|config| config.source)
             .unwrap_or_default();
         let mut auxiliary = Self {
             archive: None,
             repository: repository.to_owned(),
             revision: revision.to_owned(),
             root: root.to_owned(),
-            history,
+            source,
         };
-        if history == SubmoduleHistory::Full {
+        if auxiliary.source.is_default() {
             auxiliary.settle(&WorkerContract::default(), runner)?;
         }
         Ok(auxiliary)
     }
 
-    /// Packs a waiting archive: pinned when `contract` records shallow submodules.
+    /// Packs a waiting archive with what `contract` supports of the configured packaging.
     fn settle(&mut self, contract: &WorkerContract, runner: &Runner<'_>) -> Result<()> {
         if self.archive.is_none() {
-            if !contract.pinned_submodules {
-                self.history = SubmoduleHistory::Full;
-            }
-            let archive = repository::auxiliary(&self.repository, &self.revision, &self.root, self.history, runner)?;
+            self.source = supported(&self.source, contract);
+            let archive = repository::auxiliary(&self.repository, &self.revision, &self.root, &self.source, runner)?;
             self.archive = Some(archive);
         }
         Ok(())
     }
 
-    /// The archive for the ready worker. One packed pinned for an image whose contract
-    /// differs from the worker's is packed again with full history; this only guards a
-    /// mismatch, since [`Packed::settle`] decides from the image before allocation.
+    /// The archive for the ready worker. One packed for an image whose contract promised
+    /// more than the worker reports is packed again; this only guards a mismatch, since
+    /// [`Packed::settle`] decides from the image before allocation.
     fn for_worker(mut self, contract: &WorkerContract, runner: &Runner<'_>, emit: &dyn Fn(Event)) -> Result<PathBuf> {
         if let Some(archive) = &self.archive
-            && self.history == SubmoduleHistory::Pinned
-            && !contract.pinned_submodules
+            && supported(&self.source, contract) != self.source
         {
             emit(Event::Output(
-                "This worker cannot record pinned submodule history although its image could; sending full submodule history".into(),
+                "This worker supports less source packaging than its image reported; sending full submodule history and every LFS object".into(),
             ));
             std::fs::remove_file(archive)?;
             self.archive = None;
@@ -276,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_submodule_history_is_decided_by_the_image_before_allocation() {
+    fn source_packaging_is_decided_by_the_image_before_allocation() {
         let root = tempfile::tempdir().unwrap();
         let app = root.path().join("app");
         committed(&app);
@@ -289,7 +304,7 @@ mod tests {
             app.join(".horizon/cloud.yml"),
             "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    \
              image: registry.example.com/horizon/dev\n    cpu: 4\n    memory_gb: 8\n\
-             source:\n  submodule_history: pinned\n",
+             source:\n  submodule_history: pinned\n  lfs: {exclude: ['fixtures/**']}\n",
         )
         .unwrap();
         git(&app, &["add", ".horizon"]);
@@ -321,6 +336,7 @@ mod tests {
         };
         let current = WorkerContract {
             pinned_submodules: true,
+            lfs_selection: true,
             ..WorkerContract::default()
         };
         let older = WorkerContract::default();
@@ -352,6 +368,18 @@ mod tests {
             archived.set(0);
             let archive = packed.auxiliary.unwrap().for_worker(worker, &runner, &emit).unwrap();
             assert_eq!(&archived_commits(&archive, &module), expected);
+            let manifest = Command::new("tar")
+                .arg("-xOf")
+                .arg(&archive)
+                .arg("manifest.json")
+                .output()
+                .unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(&manifest.stdout).unwrap();
+            assert_eq!(
+                manifest.get("lfs").is_some(),
+                expected == &only_pinned,
+                "the selection travels with pinned history"
+            );
             let packed_after_ready = usize::from(repacked || image.is_none());
             assert_eq!(
                 archived.get(),

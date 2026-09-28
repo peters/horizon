@@ -25,12 +25,54 @@ pub struct CloudConfig {
 pub struct Source {
     #[serde(default)]
     pub submodule_history: SubmoduleHistory,
+    #[serde(default, skip_serializing_if = "Lfs::is_empty")]
+    pub lfs: Lfs,
 }
 
 impl Source {
     #[must_use]
     pub fn is_default(&self) -> bool {
         self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<(), ProfileError> {
+        let patterns = self.lfs.include.iter().chain(&self.lfs.exclude);
+        if patterns.clone().count() > Lfs::MAX_PATTERNS
+            || patterns.clone().any(|pattern| {
+                pattern.is_empty()
+                    || pattern.len() > 256
+                    || pattern.contains(',')
+                    || pattern.chars().any(char::is_control)
+            })
+        {
+            return Err(ProfileError::Invalid(
+                "source.lfs patterns must be non-empty, without commas, and at most 64",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The repository's own LFS paths a worker receives, as git-lfs fetch patterns
+/// (`lfs.fetchinclude`/`lfs.fetchexclude`). Paths left out stay pointer files on the
+/// worker. Submodule LFS content is always sent.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Lfs {
+    /// Only matching paths; empty means every path.
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// Matching paths are left out, after `include`.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+impl Lfs {
+    const MAX_PATTERNS: usize = 64;
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
     }
 }
 
@@ -159,6 +201,7 @@ impl CloudConfig {
             ));
         }
         crate::companions::validate_declarations(&config.companions)?;
+        config.source.validate()?;
         for (name, profile) in &config.profiles {
             if !valid_id(name) {
                 return Err(ProfileError::Invalid("Invalid profile name"));
@@ -323,7 +366,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn submodule_history_defaults_to_full_and_rejects_unknown_values() {
+    fn source_block_defaults_to_everything_and_rejects_invalid_selections() {
         let parse = |yaml: &str| serde_yaml::from_str::<Source>(yaml);
         assert_eq!(parse("{}").unwrap().submodule_history, SubmoduleHistory::Full);
         assert_eq!(
@@ -331,7 +374,23 @@ mod tests {
             SubmoduleHistory::Pinned
         );
         assert!(parse("submodule_history: shallow").is_err());
-        assert!(parse("lfs: {}").is_err());
+        assert!(parse("lfs: {paths: []}").is_err());
+        let lfs = parse("lfs: {include: [src/**], exclude: ['fixtures/**']}").unwrap().lfs;
+        assert_eq!(
+            (lfs.include, lfs.exclude),
+            (vec!["src/**".into()], vec!["fixtures/**".into()])
+        );
+        let config =
+            |lfs: &str| CloudConfig::parse(&format!("{}\nsource:\n  lfs: {lfs}\n", EXAMPLE.replace("\r\n", "\n")));
+        assert!(config("{exclude: ['*.mp4']}").is_ok());
+        for invalid in ["{exclude: ['a,b']}", "{exclude: ['']}", "{include: [\"a\\nb\"]}"] {
+            assert!(config(invalid).is_err(), "{invalid}");
+        }
+        let many = (0..=Lfs::MAX_PATTERNS)
+            .map(|index| format!("p{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(config(&format!("{{exclude: [{many}]}}")).is_err());
         // A Windows checkout gives the included example CRLF line endings.
         let documented = EXAMPLE.replace("\r\n", "\n");
         let (head, tail) = documented.split_once("# source:\n").unwrap();
@@ -339,6 +398,7 @@ mod tests {
         let example = format!("{head}source:\n{}\n\n{rest}", block.replace("#   ", "  "));
         let config = CloudConfig::parse(&example).unwrap();
         assert_eq!(config.source.submodule_history, SubmoduleHistory::Pinned);
+        assert_eq!(config.source.lfs.exclude, ["fixtures/video/**"]);
         assert!(CloudConfig::parse(&documented).unwrap().source.is_default());
     }
 

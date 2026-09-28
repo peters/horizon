@@ -2,7 +2,7 @@
 use super::super::{Event, progress::Progress};
 use super::{Error, Result, Runner};
 use git2::{ObjectType, Repository, TreeWalkMode, TreeWalkResult};
-use horizon_cloud::SubmoduleHistory;
+use horizon_cloud::{Lfs, Source, SubmoduleHistory};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -16,8 +16,18 @@ use std::{
 pub(super) struct Material {
     pub modules: Vec<Module>,
     pub assets: Vec<Asset>,
+    /// The repository's own LFS paths left out of the transfer and the patterns that
+    /// left them out; absent when every LFS object is sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lfs: Option<Selection>,
     #[serde(skip)]
     budget: Option<CollectionBudget>,
+}
+#[derive(Serialize)]
+struct Selection {
+    include: Vec<String>,
+    exclude: Vec<String>,
+    skipped: Vec<Asset>,
 }
 struct CollectionBudget {
     entries: usize,
@@ -412,10 +422,67 @@ pub(super) fn archive(
     repository: &Path,
     revision: &str,
     root: &Path,
-    history: SubmoduleHistory,
+    source: &Source,
     runner: &Runner<'_>,
 ) -> Result<PathBuf> {
-    archive_within(repository, revision, root, history, runner, super::archive::TIMEOUT)
+    archive_within(repository, revision, root, source, runner, super::archive::TIMEOUT)
+}
+
+impl Material {
+    /// Leaves out the repository's own LFS paths that git-lfs itself excludes under
+    /// `lfs`, so the worker keeps them as pointers. Submodule content is always sent.
+    fn select(&mut self, repository: &Path, revision: &str, lfs: &Lfs, runner: &Runner<'_>) -> Result<()> {
+        if lfs.is_empty() {
+            return Ok(());
+        }
+        let mut filters = Vec::new();
+        for (flag, patterns) in [("-I", &lfs.include), ("-X", &lfs.exclude)] {
+            if !patterns.is_empty() {
+                filters.extend([flag.to_owned(), patterns.join(",")]);
+            }
+        }
+        let every = lfs_paths(repository, revision, &[], runner)?;
+        let selected = lfs_paths(repository, revision, &filters, runner)?;
+        let nested: Vec<_> = self.modules.iter().map(|module| format!("{}/", module.path)).collect();
+        let (skipped, sent) = std::mem::take(&mut self.assets).into_iter().partition(|asset: &Asset| {
+            !nested.iter().any(|prefix| asset.path.starts_with(prefix))
+                && every.contains(&asset.path)
+                && !selected.contains(&asset.path)
+        });
+        self.assets = sent;
+        self.lfs = Some(Selection {
+            include: lfs.include.clone(),
+            exclude: lfs.exclude.clone(),
+            skipped,
+        });
+        Ok(())
+    }
+}
+
+/// The repository's LFS paths at `revision` that git-lfs lists under `filters`.
+fn lfs_paths(
+    repository: &Path,
+    revision: &str,
+    filters: &[String],
+    runner: &Runner<'_>,
+) -> Result<std::collections::BTreeSet<String>> {
+    // A listing of every LFS path is not deployment output.
+    let quiet = Runner {
+        cancel: runner.cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    let listed = quiet.run(
+        "List selected LFS paths",
+        Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["lfs", "ls-files", "--name-only"])
+            .args(filters)
+            .arg(revision),
+        Duration::from_secs(120),
+    )?;
+    Ok(listed.lines().map(str::to_owned).collect())
 }
 
 /// Collects and stages without the archive's `timeout`, which starts when writing
@@ -424,15 +491,16 @@ pub(super) fn archive_within(
     repository: &Path,
     revision: &str,
     root: &Path,
-    history: SubmoduleHistory,
+    source: &Source,
     runner: &Runner<'_>,
     timeout: Duration,
 ) -> Result<PathBuf> {
-    let material = Material::collect(repository, revision, runner)?;
+    let mut material = Material::collect(repository, revision, runner)?;
+    material.select(repository, revision, &source.lfs, runner)?;
     let packs = root.join("material");
     std::fs::create_dir(&packs)?;
     for (index, module) in material.modules.iter().enumerate() {
-        let pack = match history {
+        let pack = match source.submodule_history {
             SubmoduleHistory::Full => super::pack,
             SubmoduleHistory::Pinned => super::pack_pinned,
         };
