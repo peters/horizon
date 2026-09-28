@@ -491,7 +491,7 @@ fn hint(phase: Phase) -> &'static str {
         Phase::Submitted | Phase::Running | Phase::Inspecting | Phase::Settling | Phase::VerifyingAccess => {
             "In progress; poll its status with this operation_id"
         }
-        Phase::ConfirmationRequired => "Creating this cloud needs the owner's confirmation on the source cloud's card",
+        Phase::ConfirmationRequired => "This companion's cloud was never started; the owner starts it from its card",
         Phase::ReconcileRequired => {
             "The provider's outcome is uncertain; the next Ensure Ready or Stop reconciles it and never repeats it"
         }

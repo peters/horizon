@@ -769,9 +769,10 @@ provider reports the worker running.
 
 A deleted, deleting, lost or changed companion is refused, and a companion
 whose provider outcome is uncertain is reconciled on the next request, never
-repeated. A companion that has no cloud yet is not created by an agent: the
-request answers `confirmation_required`, and the owner confirms creation on the
-source cloud's card. Starting a companion never starts the companions it
+repeated. Agents cannot create a companion that has no cloud yet: the owner creates it
+with **New cloud** and checks it on the source cloud's card first. A checked
+cloud whose first worker was never started answers `confirmation_required`;
+start it from its own card. Starting a companion never starts the companions it
 declares itself. The first request for a checked companion binds it to that
 cloud and its checkout; choosing another cloud for the same alias later needs
 the binding cleared first.
