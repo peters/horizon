@@ -172,7 +172,7 @@ fn selected_lfs_and_submodule_objects_are_verified_without_copying_dirty_files()
 }
 
 #[test]
-fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline() {
+fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeout() {
     use sha2::{Digest, Sha256};
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -201,12 +201,13 @@ fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline()
     std::fs::write(repo.join(".gitattributes"), "asset.bin filter=lfs -text\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "Add streamed asset"]);
-    for case in ["damaged", "cancelled", "expired"] {
+    let timeout = std::time::Duration::from_secs(1);
+    for case in ["damaged", "cancelled", "expired", "slow staging"] {
         std::fs::write(&object, content).unwrap();
         let cancel = horizon_cloud::Cancellation::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let archiving = std::cell::Cell::new(false);
-        // Interrupt once `./`, the manifest and `lfs/` are written and the object opens.
+        // Interrupt once `./`, the manifest and `lfs/` are written and the object opens;
+        // slow staging instead outlasts the timeout while collection verifies it.
         let interrupt = |event| {
             let crate::cloud_runtime::Event::Progress(progress) = event else {
                 return;
@@ -219,11 +220,11 @@ fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline()
                     damaged[0] ^= 1;
                     std::fs::write(&object, damaged).unwrap();
                 }
-            } else if archiving.get() && progress.completed == 0 {
-                if case == "cancelled" {
-                    cancel.cancel();
-                } else if case == "expired" {
-                    std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+            } else if progress.completed == 0 {
+                match (case, archiving.get()) {
+                    ("cancelled", true) => cancel.cancel(),
+                    ("expired", true) | ("slow staging", false) => std::thread::sleep(timeout * 3 / 2),
+                    _ => {}
                 }
             }
         };
@@ -234,7 +235,8 @@ fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline()
         };
         let root = temp.path().join(case);
         std::fs::create_dir(&root).unwrap();
-        let result = material::archive_until(&repo, "HEAD", &root, &runner, deadline);
+        let result = material::archive_within(&repo, "HEAD", &root, &runner, timeout);
+        assert!(archiving.get(), "{case} reaches the archive");
         match case {
             "damaged" => assert!(matches!(
                 result,
@@ -244,12 +246,19 @@ fn archiving_refuses_changed_lfs_objects_and_stops_on_cancellation_or_deadline()
                 result,
                 Err(Error::Provider(horizon_cloud::CloudError::Cancelled))
             )),
-            _ => assert!(matches!(
+            "expired" => assert!(matches!(
                 result,
                 Err(Error::Invalid(crate::cloud_runtime::command::TIMED_OUT))
             )),
+            _ => {
+                assert_eq!(
+                    result.unwrap(),
+                    root.join("source-material.tar"),
+                    "staging time is not archive time"
+                );
+                continue;
+            }
         }
-        assert!(archiving.get(), "{case} stops mid-archive");
         assert!(
             !root.join("source-material.tar").exists(),
             "{case} leaves no partial archive"

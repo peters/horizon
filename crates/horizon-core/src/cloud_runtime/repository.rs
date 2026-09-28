@@ -173,8 +173,7 @@ pub(super) fn bounded_source(
         written: 0,
         exceeded: false,
     };
-    let deadline = std::time::Instant::now() + archive::TIMEOUT;
-    let result = archive::write(&selected, &manifest, &directory, &mut output, runner, deadline);
+    let result = archive::write(&selected, &manifest, &directory, &mut output, runner, archive::TIMEOUT);
     let (exceeded, written) = (output.exceeded, output.written);
     drop(output);
     if exceeded || result.is_err() {

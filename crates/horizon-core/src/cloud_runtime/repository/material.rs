@@ -408,22 +408,17 @@ impl Read for Verified<'_, '_> {
 }
 
 pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<PathBuf> {
-    archive_until(
-        repository,
-        revision,
-        root,
-        runner,
-        Instant::now() + super::archive::TIMEOUT,
-    )
+    archive_within(repository, revision, root, runner, super::archive::TIMEOUT)
 }
 
-/// Leaves no partial archive behind when writing it fails.
-pub(super) fn archive_until(
+/// Collects and stages without the archive's `timeout`, which starts when writing
+/// does. Leaves no partial archive behind when writing fails.
+pub(super) fn archive_within(
     repository: &Path,
     revision: &str,
     root: &Path,
     runner: &Runner<'_>,
-    deadline: Instant,
+    timeout: Duration,
 ) -> Result<PathBuf> {
     let material = Material::collect(repository, revision, runner)?;
     let packs = root.join("material");
@@ -439,7 +434,7 @@ pub(super) fn archive_until(
     let manifest = serde_json::to_vec(&material).map_err(|_| Error::Json)?;
     let archive = root.join("source-material.tar");
     let mut output = std::io::BufWriter::new(std::fs::File::create_new(&archive)?);
-    let written = super::archive::write(&material, &manifest, &packs, &mut output, runner, deadline)
+    let written = super::archive::write(&material, &manifest, &packs, &mut output, runner, timeout)
         .and_then(|()| Ok(std::io::Write::flush(&mut output)?));
     drop(output);
     if let Err(error) = written {

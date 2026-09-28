@@ -15,20 +15,21 @@ pub(super) const TIMEOUT: Duration = Duration::from_secs(300);
 /// Writes `./`, `manifest.json`, `lfs/`, one `lfs/<oid>` per distinct object and each
 /// `module-<index>.pack` from `packs`. LFS content is read from the local store and
 /// verified as it is written, so it is never staged as a second copy. Every write
-/// stops on cancellation or once `deadline` passes; the caller discards the output.
+/// stops on cancellation or once `timeout`, counted from here, has passed; the caller
+/// discards the output.
 pub(super) fn write(
     material: &Material,
     manifest: &[u8],
     packs: &Path,
     output: impl Write,
     runner: &Runner<'_>,
-    deadline: Instant,
+    timeout: Duration,
 ) -> Result<()> {
     (runner.emit)(Event::Progress(Progress::activity("Pack source dependencies")));
     let mut output = Checked {
         output,
         runner,
-        deadline,
+        deadline: Instant::now() + timeout,
         failure: None,
     };
     let written = append(material, manifest, packs, &mut output, runner);
