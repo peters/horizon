@@ -217,7 +217,9 @@ the helper declares it. Horizon sends full submodule history to images without t
 
 A repository can leave some of its own LFS paths out of the transfer. The source
 archive's `manifest.json` then carries an `lfs` object with the `include` and
-`exclude` patterns (git-lfs fetch patterns, no commas) and the `skipped` paths with
+`exclude` patterns (git-lfs fetch patterns: at most 64, each non-empty, at most 256
+characters, without commas or Unicode control, format, surrogate or private-use
+characters) and the `skipped` paths with
 their object identities. `horizon-worker-source import` refuses the import unless
 git-lfs itself excludes every skipped path at the imported revision
 (`git lfs ls-files` with and without the patterns) and no skipped path was also

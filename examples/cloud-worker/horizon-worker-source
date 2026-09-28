@@ -33,8 +33,8 @@ def git(*args, **kwargs):
 def lfs_selection(value):
     # The same rules as Horizon's source.lfs validation: lists of at most 64 patterns in
     # all, each a non-empty string of at most 256 characters without commas (git-lfs
-    # joins them with commas) or Unicode control, format, private-use or unassigned
-    # characters; skipped entries name exactly one LFS object each. git-lfs never lists
+    # joins them with commas) or Unicode control, format, surrogate or private-use
+    # characters (unassigned ones depend on the Unicode version, so both ends allow them); skipped entries name exactly one LFS object each. git-lfs never lists
     # an empty object, nor a path with a newline in a way lfs_paths can read, so
     # neither can be one it excludes; Horizon sends both.
     selection = value.get('lfs', {})
@@ -46,7 +46,7 @@ def lfs_selection(value):
         raise ValueError('Invalid LFS selection')
     for pattern in patterns['include'] + patterns['exclude']:
         if not isinstance(pattern, str) or not pattern or len(pattern) > 256 \
-                or any(c == ',' or unicodedata.category(c).startswith('C') for c in pattern):
+                or any(c == ',' or unicodedata.category(c) in ('Cc', 'Cf', 'Cs', 'Co') for c in pattern):
             raise ValueError('Invalid LFS selection pattern')
     skipped = selection.get('skipped', [])
     if not isinstance(skipped, list) or any(
