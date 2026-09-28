@@ -201,8 +201,11 @@ impl Material {
                 if let Some(budget) = &mut self.budget {
                     budget.asset(size)?;
                 }
-                // Left out of the transfer, so neither verified nor needed locally.
+                // Left out of the transfer, so neither verified nor needed locally. git-lfs
+                // never lists an empty object, so the worker could not confirm one excluded:
+                // it is always sent, which costs nothing.
                 if depth == 0
+                    && size > 0
                     && let Some(selection) = &mut self.lfs
                     && selection.excluded.contains(&portable_path(&path)?)
                 {
@@ -474,20 +477,27 @@ impl Material {
     }
 }
 
-/// The repository's LFS paths at `revision` that git-lfs lists under `filters`.
+/// The repository's LFS paths at `revision` that git-lfs lists under `filters`, one per
+/// `\n`-terminated line as the worker reads them, so other separators such as U+2028
+/// stay in a name. The listing is streamed to a file: a repository at the collection
+/// limits lists more than a captured command output may hold.
 fn lfs_paths(
     repository: &Path,
     revision: &str,
     filters: &[String],
     runner: &Runner<'_>,
 ) -> Result<std::collections::BTreeSet<String>> {
+    use std::io::BufRead;
     // A listing of every LFS path is not deployment output.
     let quiet = Runner {
         cancel: runner.cancel,
         emit: &|_| {},
         secrets: vec![],
     };
-    let listed = quiet.run(
+    let scratch = tempfile::tempdir()?;
+    let (empty, listing) = (scratch.path().join("empty"), scratch.path().join("listing"));
+    std::fs::File::create_new(&empty)?;
+    quiet.to_file(
         "List selected LFS paths",
         Command::new("git")
             .arg("-C")
@@ -495,9 +505,20 @@ fn lfs_paths(
             .args(["lfs", "ls-files", "--name-only"])
             .args(filters)
             .arg(revision),
+        &empty,
+        &listing,
         Duration::from_secs(120),
     )?;
-    Ok(listed.lines().map(str::to_owned).collect())
+    let mut paths = std::collections::BTreeSet::new();
+    for line in std::io::BufReader::new(std::fs::File::open(&listing)?).split(b'\n') {
+        runner.cancel.check()?;
+        let line = line?;
+        let line = line.strip_suffix(b"\r").unwrap_or(&line);
+        if !line.is_empty() {
+            paths.insert(String::from_utf8_lossy(line).into_owned());
+        }
+    }
+    Ok(paths)
 }
 
 /// Collects and stages without the archive's `timeout`, which starts when writing

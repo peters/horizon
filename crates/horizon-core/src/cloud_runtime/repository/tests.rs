@@ -384,6 +384,115 @@ fn an_lfs_selection_leaves_out_and_needs_only_paths_git_lfs_excludes_in_this_rep
     assert!(auxiliary(&repo, "HEAD", &again, &source, &runner).is_err());
 }
 
+/// Writes `content` as an LFS object with its pointer at `path`; returns its identity.
+fn lfs_file(repository: &Path, path: &str, content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut oid = String::with_capacity(64);
+    for byte in Sha256::digest(content) {
+        use std::fmt::Write as _;
+        write!(oid, "{byte:02x}").unwrap();
+    }
+    let media = repository.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]);
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join(&oid), content).unwrap();
+    std::fs::create_dir_all(repository.join(path).parent().unwrap()).unwrap();
+    std::fs::write(
+        repository.join(path),
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n",
+            content.len()
+        ),
+    )
+    .unwrap();
+    oid
+}
+
+#[test]
+fn an_lfs_selection_never_skips_empty_objects_and_keeps_separators_in_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    std::fs::write(repo.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
+    let separated = "fixtures/line\u{2028}name.bin";
+    let separated_oid = lfs_file(&repo, separated, "separated content");
+    lfs_file(&repo, "fixtures/empty.bin", "");
+    lfs_file(&repo, "keep.bin", "kept content");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "Add assets"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    let source: horizon_cloud::Source = serde_yaml::from_str("lfs: {exclude: ['fixtures/**']}").unwrap();
+    let root = temp.path().join("transfer");
+    std::fs::create_dir(&root).unwrap();
+    let entries = archive_entries(&auxiliary(&repo, "HEAD", &root, &source, &runner).unwrap());
+    let manifest: serde_json::Value = serde_json::from_slice(&entries["manifest.json"]).unwrap();
+    assert_eq!(
+        manifest["lfs"]["skipped"],
+        serde_json::json!([{"path": separated, "oid": separated_oid, "size": 17}]),
+        "a U+2028 separator stays in the name"
+    );
+    let paths: Vec<_> = manifest["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|asset| asset["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        ["fixtures/empty.bin", "keep.bin"],
+        "git-lfs never lists an empty object"
+    );
+}
+
+#[test]
+fn an_lfs_listing_larger_than_a_captured_output_is_read_whole() {
+    use std::io::Write as _;
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init(&repo);
+    std::fs::write(repo.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
+    git(&repo, &["add", ".gitattributes"]);
+    let pointer = temp.path().join("pointer");
+    std::fs::write(
+        &pointer,
+        format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 1\n",
+            "a".repeat(64)
+        ),
+    )
+    .unwrap();
+    let blob = git(&repo, &["hash-object", "-w", &pointer.to_string_lossy()]);
+    // 8,192 paths of 600 bytes list about 4.9 MB, past the 4 MiB bound on captured output.
+    let mut entries = tempfile::tempfile().unwrap();
+    for index in 0..8192 {
+        writeln!(entries, "100644 {blob}\t{}{index:05}.bin", "p".repeat(591)).unwrap();
+    }
+    std::io::Seek::rewind(&mut entries).unwrap();
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["update-index", "--index-info"])
+        .stdin(entries)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git(&repo, &["commit", "-m", "Add many pointers"]);
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    let lfs: horizon_cloud::Lfs = serde_yaml::from_str("exclude: ['*.bin']").unwrap();
+    // Every object is excluded, so none needs to be local.
+    validate_selected(&repo, "HEAD", &lfs, &runner).unwrap();
+    assert!(validate_tree(&repo, "HEAD", &runner).is_err());
+}
+
 /// Each archive member's name and content; directories have none.
 fn archive_entries(path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     let mut archive = tar::Archive::new(std::fs::File::open(path).unwrap());
