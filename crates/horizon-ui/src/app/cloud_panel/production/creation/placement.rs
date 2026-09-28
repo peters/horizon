@@ -169,7 +169,10 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
                 ..Placement::default()
             });
         }
-        for region in regions.iter().filter(|region| regions.len() > 1 || region.data_centers.len() > 1) {
+        for region in regions
+            .iter()
+            .filter(|region| regions.len() > 1 || region.data_centers.len() > 1)
+        {
             let selected = current.data_centers == region.data_centers;
             let (detail, tint) = stock_label(region.in_stock);
             if option(ui, &region.name, selected, Some(&detail), Some(tint)) {
@@ -213,7 +216,8 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
         .count();
     let mut note = where_it_lives(current);
     if excluded > 0 {
-        note.push_str(&format!(" Cloud settings exclude {excluded} other data centers."));
+        use std::fmt::Write as _;
+        let _ = write!(note, " Cloud settings exclude {excluded} other data centers.");
     }
     ui.label(RichText::new(note).size(12.0).color(theme::FG_DIM()));
     chosen.filter(|placement| placement != current)

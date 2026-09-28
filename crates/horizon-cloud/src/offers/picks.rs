@@ -113,7 +113,7 @@ pub fn picks(offers: &[Offer], in_stock: impl Fn(&Offer) -> bool) -> Picks {
         .max_by(|&a, &b| capability(&offers[a], &offers[b]))
         .filter(|&index| Some(index) != cheapest);
     let balanced = cheapest.zip(powerful).and_then(|(low, high)| {
-        let target = (offers[low].hourly.ln() + offers[high].hourly.ln()) / 2.0;
+        let target = f64::midpoint(offers[low].hourly.ln(), offers[high].hourly.ln());
         pool.iter()
             .copied()
             .filter(|&index| index != low && index != high)
@@ -155,7 +155,11 @@ mod tests {
             memory_gb: (kind == "cpu").then_some(size.1),
             gpu_memory_gb: (kind == "gpu").then_some(size.1),
             hourly,
-            flavors: if kind == "cpu" { vec!["cpu3c".into()] } else { Vec::new() },
+            flavors: if kind == "cpu" {
+                vec!["cpu3c".into()]
+            } else {
+                Vec::new()
+            },
             estimated_total: hourly,
             monthly: None,
             stopped_monthly: 0.0,
@@ -230,30 +234,44 @@ mod tests {
             offer("gpu", "small", 0.2, (0, 16)),
         ];
         assert_eq!(picks(&gpus, |_| true).powerful, Some(1));
-        let cpus = [offer("cpu", "cpu3c", 0.24, (8, 16)), offer("cpu", "cpu5c", 0.28, (8, 16))];
+        let cpus = [
+            offer("cpu", "cpu3c", 0.24, (8, 16)),
+            offer("cpu", "cpu5c", 0.28, (8, 16)),
+        ];
         assert_eq!(picks(&cpus, |_| true).powerful, Some(1));
     }
 
     #[test]
     fn places_follow_storage_tier_and_offer_kind() {
-        let center = |id: &str, standard, fast, cpus: &[(&str, Availability)], gpus: &[(&str, Availability)]| {
-            DataCenter {
+        let center =
+            |id: &str, standard, fast, cpus: &[(&str, Availability)], gpus: &[(&str, Availability)]| DataCenter {
                 id: id.into(),
                 region: "EUROPE".into(),
                 workspace_storage: standard,
                 high_performance_storage: fast,
                 gpus: gpus.iter().map(|&(id, level)| (id.into(), level)).collect(),
                 cpus: cpus.iter().map(|&(id, level)| (id.into(), level)).collect(),
-            }
-        };
+            };
         let list = PriceList {
             provider: "RunPod",
             cpu: Vec::new(),
             gpus: Vec::new(),
             data_centers: vec![
-                center("EU-RO-1", true, false, &[("cpu3c", Availability::Low)], &[("l4", Availability::None)]),
+                center(
+                    "EU-RO-1",
+                    true,
+                    false,
+                    &[("cpu3c", Availability::Low)],
+                    &[("l4", Availability::None)],
+                ),
                 center("EU-SE-1", true, true, &[("cpu3c", Availability::High)], &[]),
-                center("US-KS-2", false, true, &[("cpu3g", Availability::High)], &[("l4", Availability::High)]),
+                center(
+                    "US-KS-2",
+                    false,
+                    true,
+                    &[("cpu3g", Availability::High)],
+                    &[("l4", Availability::High)],
+                ),
                 center("CA-MTL-3", true, false, &[], &[]),
             ],
             regions: std::collections::BTreeMap::new(),

@@ -17,7 +17,9 @@ fn label_rect(output: &egui::FullOutput, label: &str) -> Rect {
         .iter()
         .find_map(|shape| match &shape.shape {
             // A two-line choice, such as a profile with its size, is found by its first line.
-            Shape::Text(text) if text.galley.job.text == label || text.galley.job.text.split('\n').next() == Some(label) => {
+            Shape::Text(text)
+                if text.galley.job.text == label || text.galley.job.text.split('\n').next() == Some(label) =>
+            {
                 Some(Rect::from_min_size(text.pos, text.galley.size()))
             }
             _ => None,
@@ -160,7 +162,7 @@ fn created_size(app: &HorizonApp) -> (u16, u16) {
     (profile.cpu, profile.memory_gb)
 }
 
-/// A RunPod catalog with compute-optimized and general-purpose CPU flavors in stock in
+/// A `RunPod` catalog with compute-optimized and general-purpose CPU flavors in stock in
 /// one European data center.
 fn answer_cpu_catalog(app: &mut HorizonApp) {
     use horizon_core::cloud_runtime::prices::{
@@ -183,7 +185,10 @@ fn answer_cpu_catalog(app: &mut HorizonApp) {
             region: "EUROPE".into(),
             workspace_storage: true,
             high_performance_storage: false,
-            cpus: vec![("cpu3c".into(), Availability::High), ("cpu3g".into(), Availability::High)],
+            cpus: vec![
+                ("cpu3c".into(), Availability::High),
+                ("cpu3g".into(), Availability::High),
+            ],
             gpus: Vec::new(),
         }],
         regions: std::collections::BTreeMap::new(),
@@ -193,7 +198,10 @@ fn answer_cpu_catalog(app: &mut HorizonApp) {
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: Vec::new(),
     };
-    app.cloud_prototype.production.prices.answered(list, preferences, Vec::new());
+    app.cloud_prototype
+        .production
+        .prices
+        .answered(list, preferences, Vec::new());
 }
 
 fn label_starting(output: &egui::FullOutput, prefix: &str) -> Rect {
@@ -451,7 +459,10 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change
     assert_eq!(app.cloud_prototype.production.size, None);
     let output = tall_frame(&ctx, &mut app);
     assert!(has_label(&output, "GPU workers for the accelerated profile"));
-    assert!(!has_label(&output, "At least 4 vCPU and 8 GB memory, for the accelerated profile"));
+    assert!(!has_label(
+        &output,
+        "At least 4 vCPU and 8 GB memory, for the accelerated profile"
+    ));
     app.cloud_prototype.production.size = Some((3, 17));
     let profile = &app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["accelerated"];
     let sized =

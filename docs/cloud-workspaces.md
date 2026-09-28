@@ -88,7 +88,7 @@ In an existing workspace, choose **Cloud** from the panel-creation menu (or
 root from the workspace directory, loads `.horizon/cloud.yml`, and uses its named
 default profile. Preparation runs while you type. A configured launch starts
 provisioning immediately after submission, without a separate Deploy action.
-**Advanced** contains repository, committed revision and profile overrides.
+**More options** contains the container disk, repository and committed revision.
 Only committed source is transferred; local changes stay on this computer.
 
 Missing account settings open a repair form without losing the title or target
@@ -276,6 +276,10 @@ capacity refusal may try the next configured GPU type with the same floor. An
 uncertain response never permits another create. The GPU stock New cloud shows
 does not yet take the floor into account.
 
+A GPU profile can also set `min_gpu_memory_gb`, such as `min_gpu_memory_gb: 24`,
+so New cloud offers only GPU types with at least that much GPU memory. It takes 1
+to 1024, and CPU profiles reject it.
+
 Before each image build, Horizon looks up the release npm currently tags `latest`
 for every supported agent CLI. It passes them as the `HORIZON_CODEX_VERSION`,
 `HORIZON_CLAUDE_VERSION` and `HORIZON_GROK_VERSION` build arguments, next to
@@ -316,47 +320,73 @@ computer online until image/source upload and readiness complete. Expand verbose
 output for build and push progress. Failures retain a retryable card and the
 persisted operation identity.
 
-New cloud's **Storage** fields edit workspace and container-disk sizes for this
-launch without changing the repository profile. RunPod CPU profiles offer Standard or
-High-performance network storage. GPU profiles use a pod volume; Hetzner profiles
-use persistent block storage and show the minimum system-disk requirement. Prices,
-stock checks and launch use the edited values.
+### Choosing a worker
 
-While you choose a size, New cloud shows RunPod's current prices and stock: each
-vCPU and memory choice carries its hourly price, and a price card shows the
-chosen size's price, whether it is in stock in the allowed data centers, 8 and 24
-hour compute estimates, and what the cloud costs per month running all month and
-stopped all month. Below that it lists every kind of storage the cloud is billed
-for, with its size and monthly price while running and while stopped:
+New cloud is a wide dialog: the worker catalog on the left and a summary on the
+right, with **Start cloud** and **Cancel** in the action bar under both. Pick a
+**Profile** from `.horizon/cloud.yml`; its kind decides between CPU and GPU workers.
+The profile's `cpu` and `memory_gb` are minimums for CPU workers, and
+`min_gpu_memory_gb` is the minimum GPU memory for GPU workers, so workers below them
+are never offered.
+
+**Machine** shows three starting points from RunPod's current catalog: **Cheapest**,
+**Most powerful** and **Balanced**, priced between the two. They are chosen among
+workers in stock where the cloud may go, or among every matching worker when none
+is. CPU workers are more powerful with more vCPUs and then more memory; GPU types
+rank by price, which follows their performance more closely than their memory does.
+**Show all N workers** lists every match with search and an **In stock only**
+filter; sold-out GPU types are listed by default. A CPU size is offered only when a
+flavor can hold the profile's container disk. A GPU profile always requests one
+explicit GPU type, the cheapest in stock to start with, which replaces the
+`gpu_types` setting for every attempt, retry and redeploy of that cloud and is
+named on its card. Choosing a card or row changes only the worker; nothing is
+rented until the cloud starts.
+
+The summary names the chosen worker, its stock where the cloud may go, and its
+storage: RunPod CPU workers keep a **Standard** or **High-performance** network
+volume, and GPU workers a pod volume, whose size is edited here for this launch
+without changing the repository profile. The estimated cost lists compute per hour,
+each kind of storage per month, and the month running and stopped:
 
 - a standard network volume of a CPU cloud: $0.07 per GB for the first TB and
   $0.05 beyond it, billed whether the cloud runs or not;
-- a high-performance CPU network volume: **Price unavailable** until a supported
-  quote exists. Its running and stopped monthly totals are also unavailable;
-  compute and container-disk estimates remain visible;
+- a high-performance CPU network volume: RunPod prices it per data center and does
+  not publish the price, so it shows as not published and the monthly totals leave
+  it out. Only data centers that hold high-performance volumes are offered;
 - the pod volume of a GPU cloud: $0.10 per GB while running and $0.20 while
   stopped;
 - the container disk: $0.10 per GB, billed only while running and cleared when
   the cloud stops.
 
 RunPod does not publish storage prices in its catalog, so these are list prices
-with the date they were checked. Storage is shown for GPU profiles even when none
-of their GPUs is in stock. For GPU profiles the card also lists your
-preferred GPU types (`gpu_types` in the settings file) in the order Horizon
-requests them, marks the first one in stock, shows types the catalog does not
-list as not offered, and offers the cheapest GPU in stock when none of them is,
-or when no preferences are set: its **Use** button (for example **Use RTX A5000
-instead**) requests that GPU type for this cloud only. **Advanced**
-also lists every GPU type in stock where the cloud may go, cheapest first with
-its memory and hourly price, next to **Your preferences**. A GPU type chosen
-this way is saved with the cloud like its region, replaces the `gpu_types`
-setting for every attempt, retry and redeploy of that cloud, and is named on its
-card. The 8 and 24 hour estimates are ranges when the size may land on flavors
-with different prices. Prices come
-from RunPod's Secure Cloud catalog and refresh every 15 minutes while the dialog
-is open; Refresh fetches them at once. Only providers Horizon can deploy to show
-prices. Details such as how many data centers have stock are written in the card
-rather than in tooltips, which would draw below the dialog.
+with the date they were checked. CPU prices are the dearest flavor a size may land
+on, marked "up to" when there is more than one.
+
+Catalog stock is RunPod's own: each data center reports its GPU types and CPU
+flavor families with high, medium or low availability, and a GPU type it does not
+list is out of stock there. The chosen CPU size gets an exact stock check of its
+own, which the summary and the data center choices show. Prices and stock refresh
+every 15 seconds while the dialog is open, and **Refresh** fetches them at once.
+The dialog says how old they are. When a refresh fails, the last good catalog stays
+on show with its age and the reason, but it is never treated as current; once it is
+more than an hour old, Start cloud waits for a successful refresh.
+
+Hetzner, when configured beside RunPod, is chosen under **Provider** and keeps its
+own size and location fields and price card. Adding it to the catalog is a
+follow-up.
+
+### Starting once a sold-out worker returns
+
+When the chosen worker is out of stock where the cloud may go, the action bar
+offers **Start new cloud once available**. Checking it turns Start into **Start
+when available**, which needs one exact data center, so the watch never broadens
+the chosen worker or place. While it waits, the summary names the data center and
+the price shown when the watch started. Every 15 seconds it checks current stock
+for that worker there and starts this cloud once when stock returns, at no more
+than that price: a higher price holds the start until you stop watching and
+review. A failed start does not retry. The watch lasts while the dialog stays open;
+closing it, Cancel or **Stop watching** ends it, and the fields stay locked until
+then.
 
 Agents in Horizon panels can ask for the same prices through the `cloud_offers`
 tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in
@@ -381,20 +411,18 @@ to drop the RunPod prices it holds, so its agents stop being offered them at onc
 worker images built before this refuse it and keep the old prices until they are
 20 minutes old.
 
-When the allowed data centers span more than one region, New cloud also shows a
-**Region** row: **Any region** (the default, where Horizon picks a data center
-with stock) and each region with how many of its data centers have the chosen
-size, or one of the GPU types the cloud requests (a type chosen for it, or else
-the preferred ones), in stock. A region known to be sold
-out stays visible and selectable as a wish. CPU stock checks require network
-storage of the selected tier. **Advanced** lists individual data centers,
-including sold-out locations, for choosing exactly one. The machine's
-`data_centers` setting still limits what is offered.
+**Data center** is part of the catalog, not an advanced setting: **Any data
+center** (the default, where Horizon picks one with stock) or a region, each with
+how many of its data centers have the chosen worker in stock. Choosing a region
+lists its data centers for choosing exactly one. Sold-out regions and data centers
+stay visible and selectable. CPU clouds are offered only data centers that hold
+their kind of workspace volume. The machine's `data_centers` setting still limits
+what is offered, and the dialog says how many other data centers it excludes.
 
 The choice is saved with the cloud: every attempt, retry and redeploy asks the
 provider only for the chosen data centers. A cloud's workspace stays in the data
 center it first starts in, and a stopped cloud resumes there, so the dialog says
-so under the Region row. Once a worker exists, the cloud card names its data
+so under the data center choices. Once a worker exists, the cloud card names its data
 center and region, also for a cloud placed in any region. Horizon looks the region
 up in RunPod's data center list, which covers every data center even after the
 `data_centers` setting changes, and fetches that list once if New cloud has not

@@ -4,10 +4,8 @@ use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{
-    ShortcutBinding, ShortcutKey, ShortcutModifiers,
-    cloud_panel::Placement,
-    cloud_runtime::provider::Placement as ProviderPlacement,
-    dir_search,
+    ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
+    cloud_runtime::provider::Placement as ProviderPlacement, dir_search,
 };
 use std::path::Path;
 
@@ -107,7 +105,9 @@ impl HorizonApp {
                             super::super::runtime::solid_scroll_area(ui)
                                 .id_salt("cloud-creation-summary")
                                 .max_height(body_height)
-                                .show(ui, |ui| selector::summary::show(ui, &mut self.cloud_prototype.production));
+                                .show(ui, |ui| {
+                                    selector::summary::show(ui, &mut self.cloud_prototype.production);
+                                });
                         });
                     });
                 } else {

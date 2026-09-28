@@ -43,8 +43,17 @@ pub(in super::super) fn show(ui: &mut Ui, form: &mut Production) {
 /// A worker whose provider places it by location, named in that provider's terms.
 fn located(ui: &mut Ui, form: &Production, profile: &Profile, provider: &str) {
     let sized = sized(form, profile);
-    ui.label(RichText::new(format!("{} vCPU · {} GB", sized.cpu, sized.memory_gb)).size(20.0).strong().color(theme::FG()));
-    ui.label(RichText::new(format!("{provider} · profile {}", form.selected_profile)).size(12.5).color(theme::FG_SOFT()));
+    ui.label(
+        RichText::new(format!("{} vCPU · {} GB", sized.cpu, sized.memory_gb))
+            .size(20.0)
+            .strong()
+            .color(theme::FG()),
+    );
+    ui.label(
+        RichText::new(format!("{provider} · profile {}", form.selected_profile))
+            .size(12.5)
+            .color(theme::FG_SOFT()),
+    );
     let place = match form.placement.data_centers.as_slice() {
         [] => "Any location".to_owned(),
         places => places.join(", "),
@@ -119,7 +128,11 @@ fn storage(ui: &mut Ui, form: &mut Production) {
             ] {
                 let selected = profile.storage.volume_tier == tier;
                 if ui
-                    .add(Button::new(RichText::new(label).size(12.5)).selected(selected).corner_radius(8))
+                    .add(
+                        Button::new(RichText::new(label).size(12.5))
+                            .selected(selected)
+                            .corner_radius(8),
+                    )
                     .clicked()
                 {
                     profile.storage.volume_tier = tier;
@@ -134,13 +147,9 @@ fn storage(ui: &mut Ui, form: &mut Production) {
     };
     ui.horizontal(|ui| {
         let label = ui.label(
-            RichText::new(if profile.gpu {
-                "Pod volume"
-            } else {
-                "Workspace volume"
-            })
-            .size(13.0)
-            .color(theme::FG_SOFT()),
+            RichText::new(if profile.gpu { "Pod volume" } else { "Workspace volume" })
+                .size(13.0)
+                .color(theme::FG_SOFT()),
         );
         ui.add(
             DragValue::new(&mut profile.storage.volume_gb)
@@ -191,7 +200,12 @@ fn cost(ui: &mut Ui, form: &Production) {
     }
     match costs::monthly((low, high), &storage) {
         Some(((low, high), stopped)) => {
-            widgets::line(ui, "Running all month", &format!("{}/mo", costs::range(low, high)), true);
+            widgets::line(
+                ui,
+                "Running all month",
+                &format!("{}/mo", costs::range(low, high)),
+                true,
+            );
             widgets::line(ui, "Stopped", &format!("{}/mo", costs::money(stopped)), false);
         }
         None => widgets::note(
@@ -248,7 +262,11 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - 330.0).max(160.0));
             if watchable {
-                widgets::checkbox(ui, &mut form.launch.selector.wait_for_stock, "Start new cloud once available");
+                widgets::checkbox(
+                    ui,
+                    &mut form.launch.selector.wait_for_stock,
+                    "Start new cloud once available",
+                );
                 let hint = watch_reason.unwrap_or(if wait {
                     "Waits for this exact worker and data center, never another."
                 } else {
@@ -262,7 +280,10 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if watching {
-                if ui.add(button(Button::new(RichText::new("Stop watching").size(14.0)))).clicked() {
+                if ui
+                    .add(button(Button::new(RichText::new("Stop watching").size(14.0))))
+                    .clicked()
+                {
                     form.launch.watch = None;
                     form.launch.watch_quote = None;
                     form.launch.price_rose = None;
@@ -275,7 +296,8 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
                 } else {
                     "Start cloud"
                 };
-                let primary = Button::new(RichText::new(label).size(14.0).strong().color(theme::BG())).fill(theme::ACCENT());
+                let primary =
+                    Button::new(RichText::new(label).size(14.0).strong().color(theme::BG())).fill(theme::ACCENT());
                 if ui.add_enabled(enabled, button(primary)).clicked() {
                     if form.launch.selector.wait_for_stock && watchable {
                         watch::arm(form);
@@ -284,7 +306,9 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
                     }
                 }
             }
-            actions.cancel |= ui.add(button(Button::new(RichText::new("Cancel").size(14.0)))).clicked();
+            actions.cancel |= ui
+                .add(button(Button::new(RichText::new("Cancel").size(14.0))))
+                .clicked();
         });
     });
 }

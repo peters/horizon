@@ -51,7 +51,12 @@ impl RunPod {
                         .map(|entry| Ok((entry.id, availability(&entry.availability)?)))
                         .collect::<Result<Vec<_>, CloudError>>()
                 };
-                let holds = |tier: Tier| center.network_volume_types.iter().any(|value| value == tier.api_value());
+                let holds = |tier: Tier| {
+                    center
+                        .network_volume_types
+                        .iter()
+                        .any(|value| value == tier.api_value())
+                };
                 Ok(DataCenter {
                     workspace_storage: holds(Tier::Standard),
                     high_performance_storage: holds(Tier::HighPerformance),

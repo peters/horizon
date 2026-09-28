@@ -85,7 +85,10 @@ pub(super) fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Re
         *checked = !*checked;
         response.mark_changed();
     }
-    let square = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - BOX / 2.0), egui::vec2(BOX, BOX));
+    let square = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), rect.center().y - BOX / 2.0),
+        egui::vec2(BOX, BOX),
+    );
     let enabled = ui.is_enabled();
     let accent = if enabled { theme::ACCENT() } else { theme::FG_DIM() };
     let painter = ui.painter();

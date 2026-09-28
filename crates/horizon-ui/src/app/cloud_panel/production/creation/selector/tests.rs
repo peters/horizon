@@ -14,7 +14,12 @@ const CONFIG: &str = "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider:
 fn center(id: &str, fast: bool, cpus: &[(&str, Availability)], gpus: &[(&str, Availability)]) -> DataCenter {
     DataCenter {
         id: id.into(),
-        region: if id.starts_with("EU") { "EUROPE" } else { "NORTH_AMERICA" }.into(),
+        region: if id.starts_with("EU") {
+            "EUROPE"
+        } else {
+            "NORTH_AMERICA"
+        }
+        .into(),
         workspace_storage: true,
         high_performance_storage: fast,
         gpus: gpus.iter().map(|&(id, level)| (id.into(), level)).collect(),
@@ -131,7 +136,11 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
     assert_eq!(chosen.offers[chosen.selected.unwrap()], powerful);
     let labels = render(&mut form);
     assert!(labels.iter().any(|label| label == "CHEAPEST"));
-    assert!(labels.iter().any(|label| label == "At least 4 vCPU and 8 GB memory, for the cpu profile"));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label == "At least 4 vCPU and 8 GB memory, for the cpu profile")
+    );
 }
 
 #[test]
@@ -157,7 +166,11 @@ fn high_performance_storage_offers_only_data_centers_that_hold_it() {
     assert!(shown.places.iter().flatten().all(|place| place.id == "US-1"));
     assert!(shown.places.iter().any(|places| !places.is_empty()));
     let labels = render(&mut form);
-    assert!(labels.iter().any(|label| label.starts_with("High-performance storage is priced per data center")));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("High-performance storage is priced per data center"))
+    );
 }
 
 #[test]
@@ -177,7 +190,11 @@ fn the_wait_checkbox_appears_only_for_a_sold_out_selection() {
     form.launch.selector.wait_for_stock = true;
     let labels = render(&mut form);
     assert!(labels.iter().any(|label| label == "Start when available"));
-    assert!(labels.iter().any(|label| label == "Waits for this exact worker and data center, never another."));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label == "Waits for this exact worker and data center, never another.")
+    );
 }
 
 #[test]
@@ -213,9 +230,7 @@ fn prices_older_than_an_hour_cannot_start_a_cloud() {
     let mut form = form("cpu");
     assert!(can_submit(&form));
     let fetched = form.prices.list.as_mut().unwrap();
-    fetched.at = Instant::now()
-        .checked_sub(std::time::Duration::from_secs(2 * 60 * 60))
-        .unwrap();
+    fetched.at = Instant::now().checked_sub(std::time::Duration::from_hours(2)).unwrap();
     assert!(!can_submit(&form));
     assert_eq!(
         submit_reason(&form),

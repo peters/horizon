@@ -39,7 +39,9 @@ fn label_position(output: &egui::FullOutput, label: &str) -> Pos2 {
         .iter()
         .find_map(|shape| match &shape.shape {
             // A two-line choice, such as a profile with its size, is found by its first line.
-            Shape::Text(text) if text.galley.job.text == label || text.galley.job.text.split('\n').next() == Some(label) => {
+            Shape::Text(text)
+                if text.galley.job.text == label || text.galley.job.text.split('\n').next() == Some(label) =>
+            {
                 Some(Rect::from_min_size(text.pos, text.galley.size()).center())
             }
             _ => None,

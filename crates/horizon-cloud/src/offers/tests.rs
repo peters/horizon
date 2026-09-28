@@ -373,5 +373,8 @@ fn high_performance_workspaces_need_a_data_center_that_holds_them_and_are_not_pr
     assert_eq!(fast.len(), standard.len());
     // Its price is not published, so only compute is estimated.
     assert!(fast.iter().all(|offer| offer.stopped_monthly == 0.0));
-    assert!(fast.iter().all(|offer| (offer.estimated_total - offer.hourly).abs() < 1e-9));
+    assert!(
+        fast.iter()
+            .all(|offer| (offer.estimated_total - offer.hourly).abs() < 1e-9)
+    );
 }

@@ -184,7 +184,10 @@ fn freshness(ui: &mut Ui, form: &mut Production) {
     let age = list.at.elapsed();
     let (text, color) = if prices.too_old() {
         (
-            format!("Prices are {} old. Start needs current prices; refresh first.", ago(age)),
+            format!(
+                "Prices are {} old. Start needs current prices; refresh first.",
+                ago(age)
+            ),
             theme::PALETTE_RED(),
         )
     } else if let Some(error) = &prices.list_error {
@@ -200,8 +203,11 @@ fn freshness(ui: &mut Ui, form: &mut Production) {
     let refresh = ui
         .horizontal_wrapped(|ui| {
             ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap());
-            ui.add_enabled(!prices.loading(), egui::Button::new(RichText::new("Refresh").size(12.0)).small())
-                .clicked()
+            ui.add_enabled(
+                !prices.loading(),
+                egui::Button::new(RichText::new("Refresh").size(12.0)).small(),
+            )
+            .clicked()
         })
         .inner;
     if refresh {

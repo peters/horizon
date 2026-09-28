@@ -684,7 +684,10 @@ mod tests {
     fn a_gpu_memory_floor_is_optional_bounded_and_only_for_gpu_profiles() {
         let config = CloudConfig::parse(EXAMPLE).unwrap();
         let yaml = EXAMPLE.replace("    # min_gpu_memory_gb: 24", "    min_gpu_memory_gb: 24");
-        assert_eq!(CloudConfig::parse(&yaml).unwrap().profiles["gpu"].min_gpu_memory_gb, Some(24));
+        assert_eq!(
+            CloudConfig::parse(&yaml).unwrap().profiles["gpu"].min_gpu_memory_gb,
+            Some(24)
+        );
         let mut profile = config.profiles["gpu"].clone();
         let saved = serde_json::to_value(&profile).unwrap();
         assert!(saved.get("min_gpu_memory_gb").is_none());

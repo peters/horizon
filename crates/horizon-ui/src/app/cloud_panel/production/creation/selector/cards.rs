@@ -9,7 +9,10 @@ const PICKS: [&str; 3] = ["CHEAPEST", "BALANCED", "MOST POWERFUL"];
 /// What a worker is called, and what it has, in the words a card uses.
 fn title(offer: &Offer) -> (String, String) {
     if offer.kind == "gpu" {
-        let memory = offer.gpu_memory_gb.map(|gb| format!("{gb} GB GPU memory")).unwrap_or_default();
+        let memory = offer
+            .gpu_memory_gb
+            .map(|gb| format!("{gb} GB GPU memory"))
+            .unwrap_or_default();
         (offer.name.clone(), memory)
     } else {
         let size = format!("{} vCPU · {} GB", offer.vcpu.unwrap_or(0), offer.memory_gb.unwrap_or(0));
@@ -102,7 +105,10 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
     } else {
         format!("Show all {} workers", catalog.offers.len())
     };
-    if ui.link(RichText::new(label).size(13.0).color(theme::ACCENT())).clicked() {
+    if ui
+        .link(RichText::new(label).size(13.0).color(theme::ACCENT()))
+        .clicked()
+    {
         state.show_all = !state.show_all;
     }
     if !state.show_all {
@@ -170,10 +176,34 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let font = FontId::proportional(13.0);
     let y = rect.center().y;
     let at = |fraction: f32| rect.left() + 12.0 + (width - 24.0) * fraction;
-    painter.text(egui::pos2(at(0.0), y), Align2::LEFT_CENTER, &name, font.clone(), theme::FG());
-    painter.text(egui::pos2(at(0.34), y), Align2::LEFT_CENTER, &detail, font.clone(), theme::FG_DIM());
-    painter.text(egui::pos2(at(0.66), y), Align2::LEFT_CENTER, stock, font.clone(), stock_color);
-    painter.text(egui::pos2(at(1.0), y), Align2::RIGHT_CENTER, price(offer), font, theme::FG());
+    painter.text(
+        egui::pos2(at(0.0), y),
+        Align2::LEFT_CENTER,
+        &name,
+        font.clone(),
+        theme::FG(),
+    );
+    painter.text(
+        egui::pos2(at(0.34), y),
+        Align2::LEFT_CENTER,
+        &detail,
+        font.clone(),
+        theme::FG_DIM(),
+    );
+    painter.text(
+        egui::pos2(at(0.66), y),
+        Align2::LEFT_CENTER,
+        stock,
+        font.clone(),
+        stock_color,
+    );
+    painter.text(
+        egui::pos2(at(1.0), y),
+        Align2::RIGHT_CENTER,
+        price(offer),
+        font,
+        theme::FG(),
+    );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Button,

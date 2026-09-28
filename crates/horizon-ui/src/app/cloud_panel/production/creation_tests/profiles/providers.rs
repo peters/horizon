@@ -258,7 +258,9 @@ fn hetzner_fields_stay_consistent_as_its_catalog_and_the_profile_change() {
         label_rect(&output, "RunPod\nUS dollars · CPU and GPU").center(),
     );
     tall_frame(&ctx, &mut app);
-    assert!(painted(&tall_frame(&ctx, &mut app)).contains("No worker the provider lists meets this profile's minimums"));
+    assert!(
+        painted(&tall_frame(&ctx, &mut app)).contains("No worker the provider lists meets this profile's minimums")
+    );
     // A binding whose catalog could not be fetched still offers the choice, with the reason.
     app.cloud_prototype
         .production

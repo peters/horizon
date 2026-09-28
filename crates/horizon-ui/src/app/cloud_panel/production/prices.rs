@@ -19,7 +19,7 @@ pub(super) mod hetzner;
 pub(super) const FRESH: Duration = Duration::from_secs(15);
 /// A catalog older than this can no longer start a cloud: prices and stock may have
 /// changed too much since.
-pub(super) const START_LIMIT: Duration = Duration::from_secs(60 * 60);
+pub(super) const START_LIMIT: Duration = Duration::from_hours(1);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
 
