@@ -1,6 +1,9 @@
 //! CPU replacement commits its new worker and storage binding under one journal.
 use super::{Deployment, Error, Record, Result, State, Store, load, save};
-use crate::cloud_runtime::{Event, Stage, settings::Settings};
+use crate::cloud_runtime::{
+    Event, Stage,
+    settings::{Settings, validate_ssh_identity},
+};
 use horizon_cloud::{
     Cancellation, CreateState, Worker,
     runpod::{RunPod, resize::Replacement},
@@ -89,6 +92,7 @@ fn resize_compute_with(
                 }
                 return Err(Error::Invalid("Choose a different CPU or memory size"));
             }
+            validate_ssh_identity(&settings.ssh_identity_file)?;
             settings.credential()?;
             let spec = state
                 .spec
@@ -107,12 +111,13 @@ fn resize_compute_with(
             return Err(Error::Invalid(PENDING));
         }
         intent.verify(&store)?;
+        validate_ssh_identity(&settings.ssh_identity_file)?;
+        if super::super::current_public_key(&settings.ssh_identity_file)?
+            != intent.replacement.specification().public_key
+        {
+            return Err(Error::Invalid("The SSH identity differs from the replacement worker"));
+        }
         if intent.observed.is_none() {
-            if super::super::current_public_key(&settings.ssh_identity_file)?
-                != intent.replacement.specification().public_key
-            {
-                return Err(Error::Invalid("The SSH identity differs from the replacement worker"));
-            }
             let provider = RunPod::new(settings.credential()?);
             let mut replacement = intent.replacement.clone();
             emit(Event::stage(Stage::Provision));

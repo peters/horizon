@@ -4,6 +4,7 @@ use horizon_cloud::{
     runpod::volumes::{Spec, Tier, Volume},
 };
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
 
 fn fixture() -> (tempfile::TempDir, Store) {
     let root = tempfile::tempdir().unwrap();
@@ -54,6 +55,17 @@ fn settings() -> Settings {
     serde_json::from_value(json!({"runpod_key_file":"missing-key","ssh_identity_file":"unused",
         "docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":["cpu3c"],"gpu_types":[]}))
     .unwrap()
+}
+
+fn identity_settings(store: &Store) -> Settings {
+    let mut settings = settings();
+    settings.ssh_identity_file = store.root().join("identity");
+    // Production preflight checks file readability, size and permissions before using SSH.
+    fs::write(&settings.ssh_identity_file, "synthetic private identity").unwrap();
+    fs::set_permissions(&settings.ssh_identity_file, fs::Permissions::from_mode(0o600)).unwrap();
+    let state = store.load_during_storage_growth().unwrap().unwrap();
+    fs::write(store.root().join("identity.pub"), state.spec.unwrap().public_key).unwrap();
+    settings
 }
 fn confirmed(store: &Store) -> Intent {
     let mut intent = prepare(store, &settings(), 8, 16).unwrap();
@@ -114,7 +126,13 @@ fn local_commit_recovers_each_boundary_and_keeps_workspace_sessions() {
 
 #[test]
 fn retained_resize_rechecks_ssh_identity_before_provider_work() {
-    for phase in ["prepared", "terminating", "creating", "completed"] {
+    for (phase, observed) in [
+        ("prepared", false),
+        ("terminating", false),
+        ("creating", false),
+        ("completed", false),
+        ("completed", true),
+    ] {
         let (root, store) = fixture();
         let mut intent = confirmed(&store);
         let mut replacement = serde_json::to_value(&intent.replacement).unwrap();
@@ -123,10 +141,11 @@ fn retained_resize_rechecks_ssh_identity_before_provider_work() {
             replacement["creation"] = json!({"state":"prepared"});
         }
         intent.replacement = serde_json::from_value(replacement).unwrap();
-        intent.observed = None;
+        if !observed {
+            intent.observed = None;
+        }
         write(&store, &intent).unwrap();
-        let mut settings = settings();
-        settings.ssh_identity_file = root.path().join("identity");
+        let settings = identity_settings(&store);
         fs::write(
             root.path().join("identity.pub"),
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF2kk2kaQHcd1MHINbQ4muiDkEONuV3co+7ug6QOawIB fixture",
@@ -151,6 +170,39 @@ fn retained_resize_rechecks_ssh_identity_before_provider_work() {
             "The SSH identity differs from the replacement worker"
         );
         assert_eq!(fs::read(root.path().join(JOURNAL)).unwrap(), journal);
+        assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
+        assert_eq!(fs::read(root.path().join("workspace-volume.json")).unwrap(), storage);
+    }
+}
+
+#[test]
+fn missing_private_identity_with_matching_public_key_cannot_begin_or_resume_resize() {
+    for retained in [false, true] {
+        let (root, store) = fixture();
+        let mut settings = identity_settings(&store);
+        settings.runpod_key_file = root.path().join("synthetic-provider-key");
+        fs::write(&settings.runpod_key_file, "synthetic-test-only-token").unwrap();
+        fs::set_permissions(&settings.runpod_key_file, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::remove_file(&settings.ssh_identity_file).unwrap();
+        if retained {
+            prepare(&store, &settings, 8, 16).unwrap();
+        }
+        let journal = fs::read(root.path().join(JOURNAL)).ok();
+        let deployment = fs::read(root.path().join("deployment.json")).unwrap();
+        let storage = fs::read(root.path().join("workspace-volume.json")).unwrap();
+        drop(store);
+        let error = resize_compute_with(
+            root.path(),
+            &settings,
+            8,
+            16,
+            &Cancellation::default(),
+            &|_| panic!("Provider work must not begin"),
+            || panic!("A missing private identity must not reconnect"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
+        assert_eq!(fs::read(root.path().join(JOURNAL)).ok(), journal);
         assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
         assert_eq!(fs::read(root.path().join("workspace-volume.json")).unwrap(), storage);
     }
@@ -224,31 +276,18 @@ fn pending_resize_blocks_migration_and_disk_growth() {
 fn reconnect_failure_after_commit_retries_the_same_size_without_replacing_again() {
     let (root, store) = fixture();
     confirmed(&store);
+    let settings = identity_settings(&store);
     drop(store);
-    let first = resize_compute_with(
-        root.path(),
-        &settings(),
-        8,
-        16,
-        &Cancellation::default(),
-        &|_| {},
-        || Err(Error::Invalid("synthetic readiness failure")),
-    );
+    let first = resize_compute_with(root.path(), &settings, 8, 16, &Cancellation::default(), &|_| {}, || {
+        Err(Error::Invalid("synthetic readiness failure"))
+    });
     assert!(first.unwrap_err().to_string().contains("synthetic readiness failure"));
     assert!(!root.path().join(JOURNAL).exists());
-    let state = resize_compute_with(
-        root.path(),
-        &settings(),
-        8,
-        16,
-        &Cancellation::default(),
-        &|_| {},
-        || {
-            let state = Store::lock(root.path())?.load()?.unwrap();
-            assert_eq!(state.stage, Stage::Readiness);
-            Ok(state)
-        },
-    )
+    let state = resize_compute_with(root.path(), &settings, 8, 16, &Cancellation::default(), &|_| {}, || {
+        let state = Store::lock(root.path())?.load()?.unwrap();
+        assert_eq!(state.stage, Stage::Readiness);
+        Ok(state)
+    })
     .unwrap();
     assert_eq!(state.worker.unwrap().id, "worker2");
     assert_eq!((state.profile.cpu, state.profile.memory_gb), (8, 16));
