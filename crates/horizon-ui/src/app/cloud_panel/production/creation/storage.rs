@@ -17,20 +17,17 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         if form.prices.too_old() {
             return Some("Prices are over an hour old. Refresh them before starting.");
         }
-        // A catalog that lists workers but none this profile allows cannot start one,
-        // and a GPU profile starts only on a type the catalog offers it.
-        let listed = form
-            .prices
-            .list
-            .as_ref()
-            .is_some_and(|fetched| !fetched.value.0.cpu.is_empty() || !fetched.value.0.gpus.is_empty());
-        if listed && let Some(catalog) = super::selector::catalog(form) {
-            if catalog.offers.is_empty() {
-                return Some("No worker the provider lists meets this profile's minimums.");
-            }
-            if profile.gpu && catalog.selected.is_none() {
-                return Some("Choose a GPU type the catalog offers for this profile.");
-            }
+        // A GPU cloud requests exactly the one type chosen for it, never the machine's
+        // preferences, and any fetched catalog must offer the chosen worker.
+        let catalog = super::selector::catalog(form);
+        if catalog.as_ref().is_some_and(|catalog| catalog.offers.is_empty()) {
+            return Some("No worker the provider lists meets this profile's minimums.");
+        }
+        if profile.gpu && form.placement.gpu_types.len() != 1 {
+            return Some("Choose a GPU type for this cloud.");
+        }
+        if profile.gpu && catalog.as_ref().is_some_and(|catalog| catalog.selected.is_none()) {
+            return Some("Choose a GPU type the catalog offers for this profile.");
         }
         // Data centers the catalog knows must hold the chosen kind of workspace volume.
         if let Some(fetched) = form.prices.list.as_ref().filter(|_| !profile.gpu) {
@@ -52,7 +49,7 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         if let Some(reason) = size_reason(form) {
             return Some(reason);
         }
-        if listed && !profile.gpu && super::selector::catalog(form).is_some_and(|catalog| catalog.selected.is_none()) {
+        if !profile.gpu && catalog.is_some_and(|catalog| catalog.selected.is_none()) {
             return Some("Choose a CPU size the catalog offers for this profile.");
         }
         return None;

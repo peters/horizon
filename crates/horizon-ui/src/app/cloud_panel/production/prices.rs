@@ -408,15 +408,36 @@ impl State {
         self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
     }
 
-    /// As `RunPod` answers the first fetch with nothing on offer, so a `RunPod` cloud
-    /// can be submitted.
+    /// As `RunPod` answers the first fetch with a small catalog in stock in one data
+    /// center, every CPU flavor and one GPU type, so a `RunPod` cloud can be submitted.
     #[cfg(unix)]
     pub fn runpod_answered(&mut self) {
+        use horizon_core::cloud_runtime::prices::{Availability, CpuFlavorPrice, DataCenter, GpuPrice};
+        let families = ["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"];
         let list = PriceList {
             provider: "RunPod",
-            cpu: Vec::new(),
-            gpus: Vec::new(),
-            data_centers: Vec::new(),
+            cpu: families
+                .iter()
+                .map(|&id| CpuFlavorPrice {
+                    id: id.into(),
+                    name: id.into(),
+                    per_vcpu_hour: 0.03,
+                })
+                .collect(),
+            gpus: vec![GpuPrice {
+                id: "NVIDIA RTX A5000".into(),
+                name: "RTX A5000".into(),
+                memory_gb: 24,
+                hourly: 0.27,
+            }],
+            data_centers: vec![DataCenter {
+                id: "EU-RO-1".into(),
+                region: "EUROPE".into(),
+                workspace_storage: true,
+                high_performance_storage: false,
+                gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
+                cpus: families.iter().map(|&id| (id.into(), Availability::High)).collect(),
+            }],
             regions: std::collections::BTreeMap::new(),
             storage: prices::RUNPOD_STORAGE,
         };

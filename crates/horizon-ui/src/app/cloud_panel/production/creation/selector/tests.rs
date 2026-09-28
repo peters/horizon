@@ -423,3 +423,23 @@ fn a_cpu_size_the_catalog_no_longer_offers_blocks_start() {
         Some("Choose a CPU size the catalog offers for this profile.")
     );
 }
+
+#[test]
+fn a_gpu_cloud_needs_one_chosen_type_and_an_empty_catalog_starts_nothing() {
+    // Before any catalog arrives, a GPU cloud never falls back to the machine's preferences.
+    let mut before = form("gpu");
+    before.prices = crate::app::cloud_panel::production::prices::State::default();
+    assert!(!can_submit(&before));
+    assert_eq!(submit_reason(&before), Some("Choose a GPU type for this cloud."));
+    // A catalog that lists nothing at all offers nothing to start.
+    let mut empty = form("cpu");
+    let mut nothing = list(None);
+    nothing.cpu.clear();
+    nothing.gpus.clear();
+    empty.prices.answered(nothing, preferences(), Vec::new());
+    assert!(!can_submit(&empty));
+    assert_eq!(
+        submit_reason(&empty),
+        Some("No worker the provider lists meets this profile's minimums.")
+    );
+}
