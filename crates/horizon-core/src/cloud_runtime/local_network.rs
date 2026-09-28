@@ -45,6 +45,9 @@ pub enum StartError {
     Scope(#[from] ScopeError),
     #[error("The saved scope does not fit the current network: {0}")]
     Rules(#[from] RulesError),
+    /// The network this computer is on is not the one the start was approved for.
+    #[error("This computer is on another network now ({})", .0.subnet())]
+    Moved(Network),
     #[error("Local Network Bridge could not start: {0}")]
     Io(#[from] io::Error),
 }
@@ -194,7 +197,7 @@ impl Bridge {
     /// # Errors
     /// Fails when there is no shareable network or the local proxy cannot start.
     pub fn start(connection: &Connection) -> Result<Self, StartError> {
-        Self::start_with(connection, Rules::default())
+        Self::start_with(connection, Rules::default(), None)
     }
 
     /// As [`Self::start`], narrowed by `rules` before the worker can reach the proxy: a bridge
@@ -202,9 +205,15 @@ impl Bridge {
     ///
     /// # Errors
     /// Also fails when `rules` do not fit the current network, for example after a move to
-    /// another Wi-Fi.
-    pub fn start_with(connection: &Connection, rules: Rules) -> Result<Self, StartError> {
+    /// another Wi-Fi, and with [`StartError::Moved`] when `expected` names a network other than
+    /// the one this computer is on now: a start approved for one network never shares another.
+    pub fn start_with(connection: &Connection, rules: Rules, expected: Option<&Network>) -> Result<Self, StartError> {
         let scope = Arc::new(Scope::current()?);
+        if let Some(expected) = expected
+            && expected.0 != scope.network
+        {
+            return Err(StartError::Moved(Network(scope.network.clone())));
+        }
         // Switching the bridge off also stops a probe or browse an agent asked for.
         let cancel = Cancellation::default();
         let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));

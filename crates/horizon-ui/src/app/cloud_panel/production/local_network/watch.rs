@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 /// another network after waking still is.
 const SLEEP_GAP: Duration = Duration::from_secs(15);
 /// How often a running bridge compares the current network with the one it shares.
-const NETWORK_CHECK: Duration = Duration::from_secs(2);
+pub(super) const NETWORK_CHECK: Duration = Duration::from_secs(2);
 
 /// The two clocks, read together.
 #[derive(Clone, Copy, Debug)]

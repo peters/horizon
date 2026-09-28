@@ -488,7 +488,11 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
         // After a move to another network the owner is asked, but the new network is offered only
         // once the cloud is Ready again; the switch still stops sharing meanwhile.
         runtime.sharing = Sharing::Moved {
-            to: Some("10.0.3.0/24".parse().unwrap()),
+            to: Some(horizon_core::cloud_runtime::local_network::Network::new(
+                "10.0.3.0/24".parse().unwrap(),
+                "10.0.3.100".parse().unwrap(),
+                "tap1",
+            )),
         };
         let shown = texts(&ctx, runtime);
         assert!(
