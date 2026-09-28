@@ -3,10 +3,13 @@
 //! When the cloud disconnects, sharing pauses; it resumes by itself once that cloud has been
 //! made ready again in this run of Horizon, until the owner switches it off.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
-use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, State, Status};
-use std::sync::{
-    Mutex, OnceLock, PoisonError,
-    mpsc::{Sender, channel},
+use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, State, Status};
+use std::{
+    sync::{
+        Mutex, MutexGuard, OnceLock, PoisonError,
+        mpsc::{Sender, channel},
+    },
+    time::{Duration, Instant},
 };
 
 #[derive(Default)]
@@ -68,17 +71,41 @@ enum Step {
 /// A running bridge. However it is dropped (switched off, cloud disconnected, runtimes
 /// cleared), its teardown, which waits for the SSH session to end, runs on a shutdown thread
 /// and never on the UI thread.
-pub(super) struct Running(Option<Bridge>);
+pub(super) struct Running {
+    bridge: Option<Bridge>,
+    /// The bridge's last status and when it was read. A snapshot copies every open relay, so
+    /// frames between refreshes reuse it instead of taking their own.
+    status: Mutex<Option<(Instant, Status)>>,
+}
+
+/// How often the card reads the bridge's status; it repaints at the same cadence.
+const STATUS_REFRESH: Duration = Duration::from_secs(1);
 
 impl Running {
-    fn status(&self) -> Option<Status> {
-        self.0.as_ref().map(Bridge::status)
+    fn new(bridge: Option<Bridge>) -> Self {
+        Self {
+            bridge,
+            status: Mutex::new(None),
+        }
+    }
+
+    /// The bridge's status, read again only once the last reading is [`STATUS_REFRESH`] old.
+    fn status(&self, now: Instant) -> MutexGuard<'_, Option<(Instant, Status)>> {
+        let mut status = self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(bridge) = &self.bridge
+            && status
+                .as_ref()
+                .is_none_or(|(read, _)| now.saturating_duration_since(*read) >= STATUS_REFRESH)
+        {
+            *status = Some((now, bridge.status()));
+        }
+        status
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Some(bridge) = self.0.take() {
+        if let Some(bridge) = self.bridge.take() {
             // Access ends here; only the wait for the SSH session moves off this thread.
             bridge.revoke();
             retire(bridge);
@@ -161,7 +188,7 @@ impl HorizonApp {
             None => Sharing::Off,
             Some(Err(error)) => Sharing::Refused(error.to_string()),
             Some(Ok(connection)) => match Bridge::start(&connection) {
-                Ok(bridge) => Sharing::On(Running(Some(bridge))),
+                Ok(bridge) => Sharing::On(Running::new(Some(bridge))),
                 Err(error) => Sharing::Refused(error.to_string()),
             },
         };
@@ -211,18 +238,30 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
              restarts. While it is on, every process on the worker can use it.",
         )
         .changed();
+    let now = Instant::now();
+    let reading = match &runtime.sharing {
+        Sharing::On(bridge) => {
+            // The state, counters and connections change without other repaints.
+            ui.ctx().request_repaint_after(STATUS_REFRESH);
+            Some(bridge.status(now))
+        }
+        _ => None,
+    };
+    let status = reading
+        .as_ref()
+        .and_then(|reading| reading.as_ref())
+        .map(|(_, status)| status);
     let line = match &runtime.sharing {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
         Sharing::Paused { .. } => Some(PAUSED.to_owned()),
-        Sharing::On(bridge) => {
-            // The state and counters change without other repaints.
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
-            bridge.status().as_ref().map(describe)
-        }
+        Sharing::On(_) => status.map(describe),
     };
     if let Some(line) = line {
         ui.small(line);
+    }
+    if let Some(status) = status.filter(|status| matches!(status.state, State::Active { .. })) {
+        let _ = connections(ui, &status.relays, now);
     }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
@@ -242,12 +281,65 @@ fn describe(status: &Status) -> String {
         State::Active { .. } => format!(
             "Sharing {} · {} open · {}",
             status.subnet,
-            status.counters.connections,
+            // The relays the list below shows, not the proxy's count, which also includes
+            // connections still negotiating, so the two never disagree.
+            status.relays.len(),
             amount(status.counters.bytes)
         ),
         State::Reconnecting { error } => format!("Reconnecting: {error}"),
         State::Failed { error } => error.clone(),
     }
+}
+
+/// Rows the open connection list keeps room for before it scrolls.
+const LIST_ROWS: u8 = 6;
+
+/// The open connections, newest first, collapsed by default. The header stays while the bridge
+/// is active and the open list keeps one height, so connections that start and end never move
+/// the controls below it. Returns where the header is.
+fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) -> egui::Rect {
+    egui::CollapsingHeader::new(format!("Open connections ({})", relays.len()))
+        .id_salt("local-network-connections")
+        .default_open(false)
+        .show(ui, |ui| {
+            let row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+            // A box of fixed size that the list fills: inside a scrolling card, a list sized by
+            // its content would shrink to whatever space is left in view.
+            let size = egui::vec2(ui.available_width(), row * f32::from(LIST_ROWS));
+            ui.allocate_ui(size, |ui| {
+                ui.set_min_size(size);
+                egui::ScrollArea::vertical()
+                    .id_salt("local-network-connection-list")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if relays.is_empty() {
+                            ui.small("No connections open.");
+                        }
+                        for relay in relays.iter().rev() {
+                            ui.small(connection(relay, now));
+                        }
+                    });
+            });
+        })
+        .header_response
+        .rect
+}
+
+/// One open connection: where it goes, what it relayed and for how long it has been open.
+fn connection(relay: &Relay, now: std::time::Instant) -> String {
+    let target = match &relay.requested {
+        Destination::Name(name, port) => format!("{name}:{port} ({})", relay.address.ip()),
+        Destination::Address(requested) if *requested == relay.address => requested.to_string(),
+        // The scope dials an IPv4-mapped address as the IPv4 address it carries.
+        Destination::Address(requested) => format!("{requested} ({})", relay.address.ip()),
+    };
+    let open = now.saturating_duration_since(relay.opened).as_secs();
+    let age = match open {
+        0..60 => format!("{open} s"),
+        60..3600 => format!("{} min", open / 60),
+        _ => format!("{} h {} min", open / 3600, open % 3600 / 60),
+    };
+    format!("{target} · {} · {age}", amount(relay.bytes))
 }
 
 fn amount(bytes: u64) -> String {
@@ -267,18 +359,184 @@ fn amount(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_egui::DiscardTextures;
     use horizon_core::cloud_runtime::local_network::Counters;
 
+    /// A bridge relaying `connections` connections, with one more still negotiating.
     fn status(state: State, connections: usize, bytes: u64) -> Status {
+        let address: std::net::SocketAddr = "192.168.1.50:80".parse().unwrap();
         Status {
             subnet: "192.168.1.0/24".parse().unwrap(),
             state,
             counters: Counters {
-                connections,
+                connections: connections + 1,
                 bytes,
                 refused: 0,
             },
+            relays: vec![
+                Relay {
+                    requested: Destination::Address(address),
+                    address,
+                    bytes: 0,
+                    opened: std::time::Instant::now(),
+                };
+                connections
+            ],
         }
+    }
+
+    #[test]
+    fn a_connection_names_its_destination_bytes_and_age() {
+        let opened = std::time::Instant::now();
+        let relay = |requested| Relay {
+            requested,
+            address: "192.168.1.50:80".parse().unwrap(),
+            bytes: 12_400,
+            opened,
+        };
+        let after = |seconds| opened + std::time::Duration::from_secs(seconds);
+        assert_eq!(
+            connection(
+                &relay(Destination::Address("192.168.1.50:80".parse().unwrap())),
+                after(42)
+            ),
+            "192.168.1.50:80 · 12.4 KB · 42 s"
+        );
+        assert_eq!(
+            connection(
+                &relay(Destination::Address("[::ffff:192.168.1.50]:80".parse().unwrap())),
+                after(42)
+            ),
+            "[::ffff:192.168.1.50]:80 (192.168.1.50) · 12.4 KB · 42 s",
+            "the address the worker asked for, then the one dialled"
+        );
+        let named = relay(Destination::Name("printer.local".into(), 80));
+        assert_eq!(
+            connection(&named, after(185)),
+            "printer.local:80 (192.168.1.50) · 12.4 KB · 3 min"
+        );
+        assert_eq!(
+            connection(&named, after(7_380)),
+            "printer.local:80 (192.168.1.50) · 12.4 KB · 2 h 3 min"
+        );
+    }
+
+    /// A scrolling card with little room left in view below the list, as in the Manage window,
+    /// and the control that must not move below it.
+    struct Card {
+        ctx: egui::Context,
+        frame: u32,
+        header: egui::Rect,
+    }
+
+    /// Where the control below the list is, and whether the empty-list line is in view.
+    struct Frame {
+        below: f32,
+        empty_line_visible: bool,
+        /// One list row, in this style.
+        row: f32,
+    }
+
+    impl Card {
+        fn new() -> Self {
+            Self {
+                ctx: egui::Context::default(),
+                frame: 0,
+                header: egui::Rect::NOTHING,
+            }
+        }
+
+        /// Renders frames with `count` relays until the header animation settles; `click`
+        /// presses and releases on the header in the first of them.
+        fn show(&mut self, count: usize, click: bool) -> Frame {
+            let now = std::time::Instant::now();
+            let relays: Vec<_> = (0..count)
+                .map(|index| Relay {
+                    requested: Destination::Name(format!("device-{index}.local"), 80),
+                    address: "192.168.1.50:80".parse().unwrap(),
+                    bytes: u64::try_from(index).unwrap(),
+                    opened: now,
+                })
+                .collect();
+            let mut result = Frame {
+                below: 0.0,
+                empty_line_visible: false,
+                row: 0.0,
+            };
+            for step in 0..10 {
+                self.frame += 1;
+                let events = if click && step == 0 {
+                    [true, false]
+                        .map(|pressed| egui::Event::PointerButton {
+                            pos: self.header.center(),
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into()
+                } else {
+                    Vec::new()
+                };
+                let input = egui::RawInput {
+                    time: Some(f64::from(self.frame)),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                };
+                let mut header = self.header;
+                let output = self
+                    .ctx
+                    .run_ui(input, |ui| {
+                        result.row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
+                        egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                            ui.add_space(60.0);
+                            header = connections(ui, &relays, now);
+                            result.below = ui.button("Delete cloud resources…").rect.top();
+                        });
+                    })
+                    .discard_textures();
+                self.header = header;
+                result.empty_line_visible = output.shapes.iter().any(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "No connections open." => {
+                        clipped.clip_rect.contains(text.visual_bounding_rect().center())
+                    }
+                    _ => false,
+                });
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn connections_starting_and_ending_never_move_the_controls_below_the_list() {
+        for open in [false, true] {
+            let mut card = Card::new();
+            card.show(0, false);
+            let empty = card.show(0, open).below;
+            for count in [1, usize::from(LIST_ROWS) + 1, 20, 0] {
+                assert!(
+                    (card.show(count, false).below - empty).abs() < 0.5,
+                    "{count} relays, open: {open}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_open_list_keeps_room_for_its_rows_in_a_scrolling_card() {
+        let mut card = Card::new();
+        let collapsed = card.show(0, false).below;
+        let opened = card.show(0, true);
+        assert!(
+            opened.below - collapsed >= opened.row * f32::from(LIST_ROWS),
+            "the list keeps six rows although little of the card is in view"
+        );
+        assert!(opened.empty_line_visible);
+        card.show(20, false);
+        assert!(
+            card.show(0, false).empty_line_visible,
+            "a list that empties after scrolling shows its empty line"
+        );
     }
 
     #[test]
@@ -331,7 +589,7 @@ mod tests {
 
     #[test]
     fn sharing_pauses_on_disconnect_and_resumes_only_after_the_cloud_is_ready_again() {
-        let mut sharing = Sharing::On(Running(None));
+        let mut sharing = Sharing::On(Running::new(None));
         assert_eq!(sharing.step(true), Step::Keep);
         assert_eq!(sharing.step(false), Step::Pause);
         sharing = Sharing::Paused { ready_again: false };
@@ -351,7 +609,7 @@ mod tests {
         let (_sender, receiver) = std::sync::mpsc::channel();
         runtime.receiver = Some(receiver);
         runtime.stage = Some(Stage::Ready);
-        runtime.sharing = Sharing::On(Running(None));
+        runtime.sharing = Sharing::On(Running::new(None));
         assert!(!runtime.reconcile_sharing());
         assert!(matches!(runtime.sharing, Sharing::On(_)));
         // The presentation watch failed: the receiver is gone while the stage still says Ready.

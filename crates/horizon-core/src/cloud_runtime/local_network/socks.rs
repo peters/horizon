@@ -3,7 +3,7 @@
 use super::Destination;
 use horizon_cloud_protocol::local_network::Reply;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
@@ -53,6 +53,26 @@ pub struct Counters {
     pub refused: u64,
 }
 
+/// One connection the proxy is relaying now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Relay {
+    /// What the worker asked for: an address, or a name and port resolved here.
+    pub requested: Destination,
+    /// The admitted address the proxy dialled.
+    pub address: SocketAddr,
+    /// Bytes relayed in both directions so far.
+    pub bytes: u64,
+    pub opened: Instant,
+}
+
+/// A relay's record while it runs; its byte count grows as the relay copies.
+struct Entry {
+    requested: Destination,
+    address: SocketAddr,
+    bytes: AtomicU64,
+    opened: Instant,
+}
+
 struct Shared {
     gate: Arc<dyn Gate>,
     active: AtomicUsize,
@@ -61,6 +81,8 @@ struct Shared {
     /// Every open socket, so stopping the proxy ends relays that are blocked in reads.
     sockets: Mutex<Sockets>,
     next: AtomicU64,
+    /// Open relays, removed when they end.
+    relays: Mutex<BTreeMap<u64, Arc<Entry>>>,
 }
 
 #[derive(Default)]
@@ -132,10 +154,12 @@ impl Shared {
     }
 }
 
-/// One accepted connection's slot and registered sockets, released on every exit path.
+/// One accepted connection's slot, registered sockets and relay record, released on every
+/// exit path.
 struct Slot {
     shared: Arc<Shared>,
     ids: Vec<u64>,
+    relay: Option<u64>,
 }
 
 impl Slot {
@@ -143,12 +167,37 @@ impl Slot {
         self.ids.push(self.shared.register(socket)?);
         Ok(())
     }
+
+    /// Lists the connection as relaying `requested` to `address` until the slot is released.
+    fn relaying(&mut self, requested: Destination, address: SocketAddr) -> Arc<Entry> {
+        let entry = Arc::new(Entry {
+            requested,
+            address,
+            bytes: AtomicU64::new(0),
+            opened: Instant::now(),
+        });
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        self.shared
+            .relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, Arc::clone(&entry));
+        self.relay = Some(id);
+        entry
+    }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         for id in self.ids.drain(..) {
             self.shared.release(id);
+        }
+        if let Some(id) = self.relay.take() {
+            self.shared
+                .relays
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id);
         }
         self.shared.active.fetch_sub(1, Ordering::AcqRel);
     }
@@ -174,6 +223,7 @@ impl Proxy {
             refused: AtomicU64::new(0),
             sockets: Mutex::default(),
             next: AtomicU64::new(0),
+            relays: Mutex::default(),
         });
         let accept = {
             let shared = Arc::clone(&shared);
@@ -198,6 +248,26 @@ impl Proxy {
             bytes: self.shared.bytes.load(Ordering::Acquire),
             refused: self.shared.refused.load(Ordering::Acquire),
         }
+    }
+
+    /// The connections relaying now, oldest first. Relays that start together may take their
+    /// keys in either order, so the list is ordered by when each opened.
+    pub(super) fn relays(&self) -> Vec<Relay> {
+        let mut relays: Vec<_> = self
+            .shared
+            .relays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|entry| Relay {
+                requested: entry.requested.clone(),
+                address: entry.address,
+                bytes: entry.bytes.load(Ordering::Acquire),
+                opened: entry.opened,
+            })
+            .collect();
+        relays.sort_by_key(|relay| relay.opened);
+        relays
     }
 
     /// Refuses everything from now on and closes every open connection, without waiting.
@@ -233,6 +303,7 @@ fn accept(listener: &TcpListener, shared: &Arc<Shared>) {
                 let slot = Slot {
                     shared: Arc::clone(shared),
                     ids: Vec::with_capacity(2),
+                    relay: None,
                 };
                 // A failed spawn drops the closure, and with it the slot and the socket.
                 if thread::Builder::new()
@@ -268,11 +339,15 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
     }
     let _ = client.set_nodelay(true);
     let shared = Arc::clone(&slot.shared);
-    let upstream = match negotiate(&mut client, Instant::now() + HANDSHAKE_TIMEOUT)
-        .and_then(|destination| open(&shared, &destination))
-        .and_then(|upstream| adopt(&mut slot, upstream))
-    {
-        Ok(upstream) => upstream,
+    let opened = negotiate(&mut client, Instant::now() + HANDSHAKE_TIMEOUT).and_then(|destination| {
+        let upstream = adopt(&mut slot, open(&shared, &destination)?)?;
+        let address = upstream
+            .peer_addr()
+            .map_err(|_| Refusal::Reply(Reply::GeneralFailure))?;
+        Ok((destination, address, upstream))
+    });
+    let (requested, address, upstream) = match opened {
+        Ok(opened) => opened,
         Err(refusal) => {
             shared.refuse();
             if let Refusal::Reply(reply) = refusal {
@@ -286,7 +361,8 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
         return;
     }
     let _ = upstream.set_nodelay(true);
-    relay(&shared, client, upstream);
+    let entry = slot.relaying(requested, address);
+    relay(&shared, &entry, client, upstream);
 }
 
 /// Registers a new upstream connection so stopping or spending the budget closes it, and
@@ -438,22 +514,22 @@ fn name_destination(name: &[u8]) -> Option<Destination> {
     valid.then(|| Destination::Name(name.to_owned(), 0))
 }
 
-fn relay(shared: &Arc<Shared>, client: TcpStream, upstream: TcpStream) {
+fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: TcpStream, upstream: TcpStream) {
     let (Ok(client_reader), Ok(upstream_writer)) = (client.try_clone(), upstream.try_clone()) else {
         return;
     };
     let downstream = {
-        let shared = Arc::clone(shared);
+        let (shared, entry) = (Arc::clone(shared), Arc::clone(entry));
         thread::Builder::new()
             .name("local-network-relay".into())
-            .spawn(move || copy(&shared, upstream, client))
+            .spawn(move || copy(&shared, &entry, upstream, client))
     };
     let Ok(downstream) = downstream else {
         let _ = client_reader.shutdown(Shutdown::Both);
         let _ = upstream_writer.shutdown(Shutdown::Both);
         return;
     };
-    copy(shared, client_reader, upstream_writer);
+    copy(shared, entry, client_reader, upstream_writer);
     let _ = downstream.join();
 }
 
@@ -472,7 +548,7 @@ fn write_counted(to: &mut TcpStream, bytes: &[u8]) -> usize {
 }
 
 /// Copies until end of input, then half-closes the other side so each direction ends on its own.
-fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
+fn copy(shared: &Shared, entry: &Entry, mut from: TcpStream, mut to: TcpStream) {
     let mut buffer = vec![0; BUFFER_BYTES];
     loop {
         match from.read(&mut buffer) {
@@ -484,6 +560,7 @@ fn copy(shared: &Shared, mut from: TcpStream, mut to: TcpStream) {
                 let (allowed, spent) = shared.reserve(count as u64);
                 let allowed = usize::try_from(allowed).unwrap_or(count);
                 let written = write_counted(&mut to, &buffer[..allowed]);
+                entry.bytes.fetch_add(written as u64, Ordering::AcqRel);
                 if written < allowed {
                     // Undelivered bytes go back to the budget and out of the count.
                     shared.bytes.fetch_sub((allowed - written) as u64, Ordering::AcqRel);
