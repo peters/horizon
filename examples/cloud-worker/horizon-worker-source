@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 
 PRIMARY = Path('/workspace/source')
 AGENTS = Path('/workspace/agents')
@@ -29,9 +30,37 @@ def git(*args, **kwargs):
     subprocess.run(['git', *map(str, args)], check=True, **kwargs)
 
 
+def lfs_selection(value):
+    # The same rules as Horizon's source.lfs validation: lists of at most 64 patterns in
+    # all, each a non-empty string of at most 256 characters without commas (git-lfs
+    # joins them with commas) or Unicode control, format, private-use or unassigned
+    # characters; skipped entries name exactly one LFS object each. git-lfs never lists
+    # an empty object, nor a path with a newline in a way lfs_paths can read, so
+    # neither can be one it excludes; Horizon sends both.
+    selection = value.get('lfs', {})
+    if not isinstance(selection, dict) or set(selection) - {'include', 'exclude', 'skipped'}:
+        raise ValueError('Invalid LFS selection')
+    patterns = {key: selection.get(key, []) for key in ('include', 'exclude')}
+    if any(not isinstance(listed, list) for listed in patterns.values()) \
+            or len(patterns['include']) + len(patterns['exclude']) > 64:
+        raise ValueError('Invalid LFS selection')
+    for pattern in patterns['include'] + patterns['exclude']:
+        if not isinstance(pattern, str) or not pattern or len(pattern) > 256 \
+                or any(c == ',' or unicodedata.category(c).startswith('C') for c in pattern):
+            raise ValueError('Invalid LFS selection pattern')
+    skipped = selection.get('skipped', [])
+    if not isinstance(skipped, list) or any(
+            not isinstance(asset, dict) or set(asset) != {'path', 'oid', 'size'} or not isinstance(asset['path'], str)
+            or not isinstance(asset['oid'], str) or not re.fullmatch(r'[0-9a-f]{64}', asset['oid'])
+            or type(asset['size']) is not int or asset['size'] < 1 or '\n' in asset['path'] for asset in skipped):
+        raise ValueError('Invalid LFS selection')
+    return patterns, skipped
+
+
 def manifest(root):
     value = json.loads((root / 'manifest.json').read_text())
-    for item in value['modules'] + value['assets']:
+    _, skipped = lfs_selection(value)
+    for item in value['modules'] + value['assets'] + skipped:
         path = PurePosixPath(item['path'])
         if path.is_absolute() or not path.parts or any(p in ('.', '..', '.git') for p in path.parts):
             raise ValueError('Invalid committed source path')
@@ -82,6 +111,7 @@ def import_source(root, upload):
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
             record_shallow(repo, revision, object_format)
             git('--git-dir', repo, 'update-ref', 'refs/heads/base', module['revision'])
+        select_lfs(root.parent / 'repository.git', value)
         with (root / 'manifest.json.new').open('wb') as destination:
             destination.write((folder / 'manifest.json').read_bytes())
             destination.flush()
@@ -89,6 +119,40 @@ def import_source(root, upload):
         os.replace(root / 'manifest.json.new', root / 'manifest.json')
         durable_directory(root)
     upload.unlink()
+
+
+def lfs_paths(repository, *filters):
+    listed = subprocess.run(['git', '--git-dir', str(repository), 'lfs', 'ls-files', '--name-only', *filters,
+                             'refs/heads/base'], capture_output=True, check=True).stdout.decode(errors='replace')
+    # One name per '\n'-terminated line, as Horizon reads the same listing: other
+    # separators, such as U+0085, belong to the name.
+    return {line.removesuffix('\r') for line in listed.split('\n') if line}
+
+
+def select_lfs(repository, value):
+    # A repository may leave LFS paths out of the transfer. They stay pointers: git-lfs
+    # skips smudging paths outside lfs.fetchinclude/fetchexclude. Every path left out
+    # must be one git-lfs itself excludes, so a checkout never tries the network.
+    if 'lfs' not in value and not repository.exists():
+        return
+    patterns, skipped = lfs_selection(value)
+    if skipped:
+        filters = []
+        for key, flag in (('include', '-I'), ('exclude', '-X')):
+            if patterns[key]:
+                filters += [flag, ','.join(patterns[key])]
+        excluded = lfs_paths(repository) - lfs_paths(repository, *filters)
+        sent = {asset['path'] for asset in value['assets']}
+        if any(asset['path'] not in excluded or asset['path'] in sent for asset in skipped):
+            raise ValueError('Selected LFS content is missing from the transfer')
+    local_lfs_filters(['--git-dir', repository], patterns)
+
+
+def local_lfs_filters(target, patterns):
+    # Both keys are always set locally, empty for an unselected side, so a global or
+    # system lfs.fetchinclude/fetchexclude never changes what a checkout hydrates.
+    for key, name in (('include', 'lfs.fetchinclude'), ('exclude', 'lfs.fetchexclude')):
+        git(*target, 'config', '--replace-all', name, ','.join(patterns.get(key, [])))
 
 
 def missing_objects(repo, revision, object_format, history):
@@ -201,6 +265,8 @@ def checkout(worktree, alias=None):
         if alias is not None:
             # The global lfs.storage names the primary's store.
             git('-C', path, 'config', 'lfs.storage', root / 'lfs')
+        # Submodule LFS content is always sent in full.
+        local_lfs_filters(['-C', path], {})
         # Called only before the session launch fence: finish an interrupted checkout.
         git('-C', path, 'checkout', '--force', '--detach', module['revision'])
         git('-C', path, 'reset', '--hard', module['revision'])
@@ -211,6 +277,10 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['--shallow-contract']:
         # Imports record pinned-only submodule packs as shallow (see record_shallow).
         print('horizon-source-shallow-contract=1')
+        sys.exit(0)
+    if sys.argv[1:] == ['--lfs-selection-contract']:
+        # Imports honor a manifest's LFS selection (see select_lfs).
+        print('horizon-source-lfs-selection-contract=1')
         sys.exit(0)
     os.umask(0o077)
     with open('/workspace/source.lock', 'a') as lock:

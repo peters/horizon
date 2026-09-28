@@ -80,12 +80,19 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(status, 0, output)
             self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
 
-    def test_shallow_source_is_reported_only_when_the_source_helper_declares_it(self):
-        for reply, expected in [(b'horizon-source-shallow-contract=1\n', True), (b'', False),
-                                (b'horizon-source-shallow-contract=1 extra\n', False)]:
-            status, output, _ = self.run_check(reported={'horizon-worker-source': reply})
-            self.assertEqual(status, 0, output)
-            self.assertEqual('horizon-source-shallow-contract=1' in output.splitlines(), expected, reply)
+    def test_source_features_are_reported_only_when_the_source_helper_declares_them(self):
+        for option, marker in [('--shallow-contract', 'horizon-source-shallow-contract=1'),
+                               ('--lfs-selection-contract', 'horizon-source-lfs-selection-contract=1')]:
+            for reply, expected in [((marker + '\n').encode(), True), (b'', False), ((marker + ' extra\n').encode(), False)]:
+                def run(command, **kwargs):
+                    declared = command == ['horizon-worker-source', option]
+                    return subprocess.CompletedProcess(command, 0, stdout=reply if declared else b'')
+                status, output, _ = self.run_check(run=run)
+                self.assertEqual(status, 0, output)
+                lines = output.splitlines()
+                self.assertEqual(marker in lines, expected, (option, reply))
+                self.assertEqual(len([line for line in lines if line.startswith('horizon-source-') and line != 'horizon-source-contract=1']),
+                                 int(expected), (option, reply))
 
     def test_old_python_source_apis_fail_before_runtime_probes(self):
         for module, attribute in [('hashlib', 'file_digest'), ('tarfile', 'data_filter')]:
@@ -173,7 +180,8 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in commands],
                          [['horizon-worker-session-env', 'check'], ['git', 'lfs', 'version'],
                           ['horizon-worker-supervise', '--idle-stop-contract'],
-                          ['horizon-worker-source', '--shallow-contract']])
+                          ['horizon-worker-source', '--shallow-contract'],
+                          ['horizon-worker-source', '--lfs-selection-contract']])
 
     def test_environment_selection_rejects_full_defaults_on_minimal_images(self):
         self.write('/etc/horizon-worker/capabilities.json', {})
