@@ -81,7 +81,7 @@ struct Shared {
     /// Every open socket, so stopping the proxy ends relays that are blocked in reads.
     sockets: Mutex<Sockets>,
     next: AtomicU64,
-    /// Relays in the order they started, removed when they end.
+    /// Open relays, removed when they end.
     relays: Mutex<BTreeMap<u64, Arc<Entry>>>,
 }
 
@@ -250,9 +250,11 @@ impl Proxy {
         }
     }
 
-    /// The connections relaying now, oldest first.
+    /// The connections relaying now, oldest first. Relays that start together may take their
+    /// keys in either order, so the list is ordered by when each opened.
     pub(super) fn relays(&self) -> Vec<Relay> {
-        self.shared
+        let mut relays: Vec<_> = self
+            .shared
             .relays
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -263,7 +265,9 @@ impl Proxy {
                 bytes: entry.bytes.load(Ordering::Acquire),
                 opened: entry.opened,
             })
-            .collect()
+            .collect();
+        relays.sort_by_key(|relay| relay.opened);
+        relays
     }
 
     /// Refuses everything from now on and closes every open connection, without waiting.

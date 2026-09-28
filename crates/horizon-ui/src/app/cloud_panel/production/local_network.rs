@@ -229,7 +229,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) -> Option<Action> {
         ui.small(line);
     }
     if let Some(status) = status.filter(|status| matches!(status.state, State::Active { .. })) {
-        connections(ui, &status.relays, std::time::Instant::now());
+        let _ = connections(ui, &status.relays, std::time::Instant::now());
     }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
@@ -258,12 +258,12 @@ fn describe(status: &Status) -> String {
 }
 
 /// Rows the open connection list keeps room for before it scrolls.
-const LIST_ROWS: f32 = 6.0;
+const LIST_ROWS: u8 = 6;
 
 /// The open connections, newest first, collapsed by default. The header stays while the bridge
 /// is active and the open list keeps one height, so connections that start and end never move
-/// the controls below it.
-fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) {
+/// the controls below it. Returns where the header is.
+fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) -> egui::Rect {
     egui::CollapsingHeader::new(format!("Open connections ({})", relays.len()))
         .id_salt("local-network-connections")
         .default_open(false)
@@ -271,9 +271,9 @@ fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) {
             let row = ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y;
             egui::ScrollArea::vertical()
                 .id_salt("local-network-connection-list")
-                .max_height(row * LIST_ROWS)
+                .max_height(row * f32::from(LIST_ROWS))
                 .show(ui, |ui| {
-                    ui.set_min_height(row * LIST_ROWS);
+                    ui.set_min_height(row * f32::from(LIST_ROWS));
                     if relays.is_empty() {
                         ui.small("No connections open.");
                     }
@@ -281,7 +281,9 @@ fn connections(ui: &mut egui::Ui, relays: &[Relay], now: std::time::Instant) {
                         ui.small(connection(relay, now));
                     }
                 });
-        });
+        })
+        .header_response
+        .rect
 }
 
 /// One open connection: where it goes, what it relayed and for how long it has been open.
@@ -316,6 +318,7 @@ fn amount(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_egui::DiscardTextures;
     use horizon_core::cloud_runtime::local_network::Counters;
 
     fn status(state: State, connections: usize, bytes: u64) -> Status {
@@ -356,6 +359,68 @@ mod tests {
         assert_eq!(
             connection(&named, after(7_380)),
             "printer.local:80 (192.168.1.216) · 12.4 KB · 2 h 3 min"
+        );
+    }
+
+    /// Where a control below the connection list lands, with `count` relays and the list
+    /// collapsed or open, once the header animation has settled.
+    fn control_below(count: usize, open: bool) -> f32 {
+        let ctx = egui::Context::default();
+        let now = std::time::Instant::now();
+        let relays: Vec<_> = (0..count)
+            .map(|index| Relay {
+                requested: Destination::Name(format!("device-{index}.local"), 80),
+                address: "192.168.1.216:80".parse().unwrap(),
+                bytes: u64::try_from(index).unwrap(),
+                opened: now,
+            })
+            .collect();
+        let mut top = 0.0;
+        let mut header = egui::Rect::NOTHING;
+        for frame in 0..10 {
+            // The owner opens the list by clicking its header, pressed and released in one frame.
+            let events = if open && frame == 1 {
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: header.center(),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .into()
+            } else {
+                Vec::new()
+            };
+            let input = egui::RawInput {
+                time: Some(f64::from(frame)),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx
+                .run_ui(input, |ui| {
+                    header = connections(ui, &relays, now);
+                    top = ui.button("Delete worker").rect.top();
+                })
+                .discard_textures();
+        }
+        top
+    }
+
+    #[test]
+    fn connections_starting_and_ending_never_move_the_controls_below_the_list() {
+        for open in [false, true] {
+            let empty = control_below(0, open);
+            for count in [1, usize::from(LIST_ROWS) + 1, 20] {
+                assert!(
+                    (control_below(count, open) - empty).abs() < 0.5,
+                    "{count} relays, open: {open}"
+                );
+            }
+        }
+        assert!(
+            control_below(0, true) > control_below(0, false) + 20.0,
+            "the open list takes its fixed height"
         );
     }
 
