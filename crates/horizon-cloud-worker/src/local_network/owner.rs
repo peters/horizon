@@ -18,6 +18,8 @@ use std::{
 };
 
 const POLL: Duration = Duration::from_millis(250);
+/// Input read at a time; a line may span many chunks.
+const CHUNK: usize = 16 * 1024;
 pub(super) const NO_DISCOVERY: &str =
     "The owner's Horizon does not support discovery yet; ask the owner to update Horizon, or ask for device addresses";
 const NO_ANSWER: &str = "The owner's Horizon did not answer in time; try again";
@@ -65,21 +67,36 @@ impl Owner {
         thread::Builder::new()
             .name("local-network-owner".into())
             .spawn(move || {
-                let mut reader = BufReader::new(input);
+                let mut reader = BufReader::with_capacity(CHUNK, input);
                 let mut line = Vec::new();
                 let mut oversized = false;
                 loop {
-                    line.clear();
-                    match (&mut reader).take(MAX_LINE as u64).read_until(b'\n', &mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            *last.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
-                            let complete = line.ends_with(b"\n");
-                            if complete && !oversized {
-                                receive(&line, &hello, &waiting);
-                            }
-                            oversized = !complete;
+                    // Every chunk counts as a heartbeat, so a long answer arriving slowly
+                    // keeps the session alive while its line is still incomplete.
+                    let chunk = match reader.fill_buf() {
+                        Ok([]) => break,
+                        Ok(chunk) => chunk,
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    };
+                    *last.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
+                    let (taken, complete) = chunk
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map_or((chunk.len(), false), |end| (end + 1, true));
+                    if !oversized && line.len() + taken <= MAX_LINE {
+                        line.extend_from_slice(&chunk[..taken]);
+                    } else {
+                        oversized = true;
+                        line.clear();
+                    }
+                    reader.consume(taken);
+                    if complete {
+                        if !oversized {
+                            receive(&line, &hello, &waiting);
                         }
+                        line.clear();
+                        oversized = false;
                     }
                 }
                 ended.store(true, Ordering::Release);
@@ -170,5 +187,100 @@ fn receive(line: &[u8], hello: &Mutex<Option<Hello>>, waiting: &Waiting) {
             }
         }
         Err(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_cloud_protocol::local_network::discovery::{Message, Source};
+
+    /// Takes the calls the helper writes, one per line.
+    struct Calls(mpsc::Receiver<Vec<u8>>);
+
+    /// The helper's output, passed on as it is written.
+    struct Sink(mpsc::Sender<Vec<u8>>);
+
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let _ = self.0.send(bytes.to_vec());
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Calls {
+        fn next(&self) -> Call {
+            let mut line = Vec::new();
+            while !line.ends_with(b"\n") {
+                line.extend(self.0.recv_timeout(Duration::from_secs(5)).unwrap());
+            }
+            serde_json::from_slice(&line).unwrap()
+        }
+    }
+
+    #[test]
+    fn a_long_answer_arriving_slowly_keeps_the_owner_heard() {
+        let (input, mut owner_side) = io::pipe().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let owner = Arc::new(Owner::watch(input, Sink(sender)).unwrap());
+        let calls = Calls(receiver);
+        let hello = Message::Hello(Hello {
+            discovery: 1,
+            sources: vec![Source::Mdns],
+            note: None,
+        });
+        owner_side
+            .write_all(format!("{}\n", serde_json::to_string(&hello).unwrap()).as_bytes())
+            .unwrap();
+        while owner.hello().is_none() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let asking = {
+            let owner = Arc::clone(&owner);
+            thread::spawn(move || owner.ask(Request::Discover))
+        };
+        let call = calls.next();
+        let answer = Answer::Refused("x".repeat(100_000));
+        let line = format!(
+            "{}\n",
+            serde_json::to_string(&Message::Answer {
+                id: call.id,
+                answer: answer.clone()
+            })
+            .unwrap()
+        );
+        // The line takes far longer to arrive than the gap between its chunks, and the owner
+        // stays heard throughout: `last` moves with every chunk, not only with whole lines.
+        for chunk in line.as_bytes().chunks(line.len() / 8 + 1) {
+            thread::sleep(Duration::from_millis(150));
+            owner_side.write_all(chunk).unwrap();
+            thread::sleep(Duration::from_millis(20));
+            assert!(
+                owner.silent_for() < Duration::from_millis(100),
+                "{:?}",
+                owner.silent_for()
+            );
+            assert!(owner.alive());
+        }
+        assert_eq!(asking.join().unwrap().unwrap(), answer);
+    }
+
+    #[test]
+    fn an_oversized_line_is_skipped_whole_and_the_next_one_read() {
+        let (input, mut owner_side) = io::pipe().unwrap();
+        let owner = Owner::watch(input, io::sink()).unwrap();
+        let hello = r#"{"hello":{"discovery":1,"sources":[]}}"#;
+        owner_side
+            .write_all(format!("{}{hello}\n{hello}\n", "x".repeat(MAX_LINE)).as_bytes())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while owner.hello().is_none() {
+            assert!(Instant::now() < deadline, "the line after the oversized one was lost");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }

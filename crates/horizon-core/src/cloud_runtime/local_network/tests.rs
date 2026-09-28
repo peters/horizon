@@ -9,9 +9,12 @@ use std::{
     },
 };
 
-/// Answers every request with a refusal and announces no sources.
+/// Answers every request with a refusal and announces no sources; the session tests that use
+/// it need a Unix shell.
+#[cfg(unix)]
 pub(super) struct Unanswered;
 
+#[cfg(unix)]
 impl Answers for Unanswered {
     fn hello(&self) -> Hello {
         Hello {

@@ -153,8 +153,8 @@ impl Bridge {
         Ok(Self::with_answers(proxy, session::Ssh(connection.clone()), answers)?)
     }
 
-    /// A bridge whose helper hears that nothing is answered here.
-    #[cfg(test)]
+    /// A bridge whose helper hears that nothing is answered here, for the Unix-only session tests.
+    #[cfg(all(test, unix))]
     fn with_parts(proxy: Proxy, transport: impl session::Transport) -> io::Result<Self> {
         Self::with_answers(proxy, transport, Arc::new(tests::Unanswered))
     }
