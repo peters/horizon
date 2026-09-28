@@ -137,6 +137,16 @@ def idle_report_supported():
     return reply.returncode == 0 and reply.stdout == b'horizon-idle-report-contract=1\n'
 
 
+def shallow_source_supported():
+    # Older source helpers reject the unknown option and need full submodule history.
+    try:
+        reply = subprocess.run(['horizon-worker-source', '--shallow-contract'],
+                               capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return reply.returncode == 0 and reply.stdout == b'horizon-source-shallow-contract=1\n'
+
+
 def services_ready(selected):
     probe(['horizon-worker-supervise', '--check'])
     with socket.create_connection(('127.0.0.1', 47280), timeout=5) as connection:
@@ -239,6 +249,8 @@ try:
         print('horizon-session-env-contract=1')
     if shutil.which('horizon-worker-gpu-lock'):
         print('horizon-gpu-lock-contract=1')
+    if shallow_source_supported():
+        print('horizon-source-shallow-contract=1')
     # Session restart: horizon-worker-session --relaunch replaces a lost process in its worktree.
     print('horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n'
           'horizon-session-restart-contract=1\nhorizon-shared-checkout-contract=1')

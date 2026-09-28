@@ -3,11 +3,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).parent
 # Without an init.defaultBranch setting, as on a fresh worker.
@@ -80,6 +82,92 @@ class SourceFormatTests(unittest.TestCase):
                 self.assertIn(b'nested/module has no .gitmodules mapping', checked.stderr)
                 self.assertEqual((agent / 'nested/module/file.txt').read_text(), 'selected committed content\n')
                 self.assertEqual(self.git('-C', agent / 'nested/module', 'rev-parse', 'HEAD').decode().strip(), revision)
+
+    def test_pinned_submodule_pack_is_recorded_shallow_until_full_history_arrives(self):
+        for object_format in ['sha1', 'sha256']:
+            with self.subTest(object_format=object_format), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _, _, workspace = self.fixture(root, object_format)
+                local = root / 'local'
+                (local / 'file.txt').write_text('pinned content\n')
+                revision = self.commit_all(local, 'Pin')
+                objects = self.git('-C', local, 'rev-list', '--objects', '--no-walk', revision)
+                pinned = self.git('-C', local, 'pack-objects', '--stdout', input=objects)
+                full = self.git('-C', local, 'pack-objects', '--stdout', '--revs', input=(revision + '\n').encode())
+                module = workspace / 'source' / 'module-0.git'
+                self.archive(root, workspace, [{'path': 'module', 'revision': revision}], [pinned])
+                imported = self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT)
+                self.assertEqual(imported.returncode, 0, imported.stderr.decode())
+                self.assertEqual(imported.stderr, b'')
+                self.assertEqual((module / 'shallow').read_text(), revision + '\n')
+                agent = workspace / 'agents' / 'isolated'
+                agent.mkdir(parents=True)
+                checked = self.execute('horizon-worker-source', workspace, 'checkout', str(agent))
+                self.assertEqual(checked.returncode, 0, checked.stderr.decode())
+                self.assertEqual((agent / 'module/file.txt').read_text(), 'pinned content\n')
+                self.assertEqual(self.git('-C', agent / 'module', 'rev-list', '--count', 'HEAD').strip(), b'1')
+                self.git('-C', agent / 'module', 'fsck', '--no-dangling')
+                # The parent commit alone, without its tree, is not full history.
+                parent = self.git('-C', local, 'rev-parse', revision + '^').decode().strip()
+                partial = self.git('-C', local, 'pack-objects', '--stdout', input=(parent + '\n').encode())
+                self.archive(root, workspace, [{'path': 'module', 'revision': revision}], [partial])
+                kept = self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT)
+                self.assertEqual(kept.returncode, 0, kept.stderr.decode())
+                self.assertEqual((module / 'shallow').read_text(), revision + '\n')
+                self.assertEqual(self.git('--git-dir', module, 'rev-list', '--count', revision).strip(), b'1')
+                # Full history replayed onto the same repository drops the shallow entry.
+                self.archive(root, workspace, [{'path': 'module', 'revision': revision}], [full])
+                replayed = self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT)
+                self.assertEqual(replayed.returncode, 0, replayed.stderr.decode())
+                self.assertFalse((module / 'shallow').exists())
+                self.assertEqual(self.git('--git-dir', module, 'rev-list', '--count', revision).strip(), b'2')
+
+    def test_shallow_state_is_durable_before_the_manifest_is_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, _, workspace = self.fixture(root, 'sha1')
+            local = root / 'local'
+            (local / 'file.txt').write_text('pinned content\n')
+            revision = self.commit_all(local, 'Pin')
+            objects = self.git('-C', local, 'rev-list', '--objects', '--no-walk', revision)
+            pinned = self.git('-C', local, 'pack-objects', '--stdout', input=objects)
+            self.archive(root, workspace, [{'path': 'module', 'revision': revision}], [pinned])
+            script = root / 'horizon-worker-source'
+            script.write_text((SCRIPTS / 'horizon-worker-source').read_text().replace('/workspace', str(workspace)))
+            helper = runpy.run_path(str(script), run_name='horizon_worker_source')
+            module = workspace / 'source' / 'module-0.git'
+            events = []
+            real_replace, real_fsync = os.replace, os.fsync
+            def replace(source, destination):
+                events.append(('replace', Path(destination).name))
+                return real_replace(source, destination)
+            def fsync(descriptor):
+                events.append(('fsync', Path(os.readlink(f'/proc/self/fd/{descriptor}'))))
+                return real_fsync(descriptor)
+            with mock.patch('os.replace', side_effect=replace), mock.patch('os.fsync', side_effect=fsync):
+                helper['import_source'](workspace / 'source', workspace / 'horizon-source.tar')
+            self.assertEqual((module / 'shallow').read_text(), revision + '\n')
+            shallow = events.index(('replace', 'shallow'))
+            published = events.index(('replace', 'manifest.json'))
+            self.assertIn(('fsync', module / 'shallow.new'), events[:shallow])
+            self.assertIn(('fsync', module), events[shallow:published])
+
+    def test_submodule_pack_without_the_pinned_tree_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision, _, workspace = self.fixture(root, 'sha1')
+            commit_only = self.git('-C', root / 'local', 'pack-objects', '--stdout', input=(revision + '\n').encode())
+            self.archive(root, workspace, [{'path': 'module', 'revision': revision}], [commit_only])
+            refused = self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertFalse((workspace / 'source' / 'manifest.json').exists())
+
+    def test_source_helper_reports_its_shallow_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / 'workspace'
+            reply = self.execute('horizon-worker-source', workspace, '--shallow-contract')
+            self.assertEqual((reply.returncode, reply.stdout), (0, b'horizon-source-shallow-contract=1\n'))
+            self.assertFalse(workspace.exists(), 'the probe takes no lock and writes nothing')
 
     def commit_all(self, repository, message):
         self.git('-C', repository, 'add', '-A')

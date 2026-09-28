@@ -80,18 +80,69 @@ def import_source(root, upload):
             with (folder / f'module-{index}.pack').open('rb') as objects:
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')
+            record_shallow(repo, revision, object_format)
             git('--git-dir', repo, 'update-ref', 'refs/heads/base', module['revision'])
         with (root / 'manifest.json.new').open('wb') as destination:
             destination.write((folder / 'manifest.json').read_bytes())
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(root / 'manifest.json.new', root / 'manifest.json')
-        descriptor = os.open(root, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        durable_directory(root)
     upload.unlink()
+
+
+def missing_objects(repo, revision, object_format, history):
+    # Reads through a scratch repository that borrows repo's objects, so repo's own
+    # shallow file cannot hide missing ancestors. Without history, only the pinned
+    # commit and its tree are checked.
+    with tempfile.TemporaryDirectory(dir=repo.parent) as scratch:
+        probe = Path(scratch) / 'probe.git'
+        git('init', '--bare', '-q', '--object-format=' + object_format, probe, stdout=subprocess.DEVNULL)
+        (probe / 'objects' / 'info' / 'alternates').write_text(str((repo / 'objects').resolve()) + '\n')
+        # Streamed: a full history can list millions of objects.
+        missing = False
+        with subprocess.Popen(['git', '--git-dir', str(probe), 'rev-list', '--objects', '--missing=print',
+                               *([] if history else ['--no-walk']), revision],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as listing:
+            for line in listing.stdout:
+                missing = missing or line.startswith(b'?')
+        if listing.returncode != 0:
+            raise subprocess.CalledProcessError(listing.returncode, listing.args)
+    return missing
+
+
+def durable_directory(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def record_shallow(repo, revision, object_format):
+    # A pinned-only pack carries the commit and its tree without ancestors. Git needs
+    # the commit listed as shallow, or clones and history walks fail on the missing
+    # history. Decide from what the repository holds: the entry is dropped only once
+    # every ancestor and its tree is present, so a replay onto full history, or full
+    # history arriving later, clears it, while partial history keeps it.
+    if missing_objects(repo, revision, object_format, history=False):
+        raise ValueError('Submodule tree is incomplete')
+    listed = repo / 'shallow'
+    shallow = set(listed.read_text().split()) if listed.exists() else set()
+    if missing_objects(repo, revision, object_format, history=True):
+        shallow.add(revision)
+    else:
+        shallow.discard(revision)
+    # Durable before the caller publishes the manifest that makes this checkout usable.
+    if shallow:
+        with (repo / 'shallow.new').open('w') as pending:
+            pending.write(''.join(oid + '\n' for oid in sorted(shallow)))
+            pending.flush()
+            os.fsync(pending.fileno())
+        os.replace(repo / 'shallow.new', listed)
+    elif listed.exists():
+        listed.unlink()
+    durable_directory(repo)
 
 
 def beside_siblings(worktree, repository):
@@ -157,6 +208,10 @@ def checkout(worktree, alias=None):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--shallow-contract']:
+        # Imports record pinned-only submodule packs as shallow (see record_shallow).
+        print('horizon-source-shallow-contract=1')
+        sys.exit(0)
     os.umask(0o077)
     with open('/workspace/source.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
