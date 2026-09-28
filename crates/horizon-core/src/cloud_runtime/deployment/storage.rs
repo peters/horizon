@@ -10,7 +10,9 @@ use horizon_cloud::{
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-#[derive(Deserialize, Serialize)]
+pub(in crate::cloud_runtime) mod growth;
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct Record {
     version: u32,
     worker: WorkerSpec,

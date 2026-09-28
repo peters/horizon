@@ -587,6 +587,9 @@ before allocation and project locks, with exclusive mutable handle access. These
 local APIs perform no provider I/O and are not called by runtime entry points yet;
 credential binding, runtime activation and sharing remain integration work. `deployment::storage` persists a separate volume journal under the same
 per-cloud lock; explicit cleanup and local removal account for both resources.
+Its `growth` leaf journals one absolute capacity increase across the provider and
+both local records. Other lifecycle loads remain fenced until the retained target
+commits; recovery never creates storage or grants bootstrap initialization authority.
 `horizon-cloud::runpod` uses REST v2 throughout. Its `wire` leaf translates
 provider responses into the existing durable worker representation; `pages` owns
 complete cursor traversal, and `create` owns ordered single-compute requests with

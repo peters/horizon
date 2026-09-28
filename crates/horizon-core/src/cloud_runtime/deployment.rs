@@ -20,6 +20,7 @@ use git_credentials::configure_git_auth;
 use image::{prepare_image, validate_allocation_image};
 pub use reconnect::reconnect;
 use sizing::{assign_requested_size, refresh_allocation};
+pub use storage::growth::grow_storage;
 
 use super::{
     Error, Event, Result, Stage, WorkerContract,

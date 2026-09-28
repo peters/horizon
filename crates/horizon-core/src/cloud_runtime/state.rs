@@ -171,6 +171,11 @@ impl Store {
     /// # Errors
     /// Returns read/parse errors without resetting or ignoring corrupt state.
     pub fn load(&self) -> Result<Option<Deployment>> {
+        super::deployment::storage::growth::require_settled(self)?;
+        self.load_during_storage_growth()
+    }
+
+    pub(in crate::cloud_runtime) fn load_during_storage_growth(&self) -> Result<Option<Deployment>> {
         let path = self.root.join("deployment.json");
         match std::fs::read(path) {
             Ok(bytes) => {

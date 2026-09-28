@@ -54,10 +54,20 @@ impl Growth {
         self.phase == Phase::Confirmed
     }
 
+    /// # Errors
+    /// Checks the original durable binding without changing a pending phase.
+    pub fn verify_origin(&self, spec: &Spec, state: &State) -> Result<()> {
+        let expected = Self::new(spec, state, self.requested_size)?;
+        if self.spec != expected.spec || self.original != expected.original {
+            return Err(CloudError::IdentityMismatch);
+        }
+        self.validate()
+    }
+
     fn validate(&self) -> Result<()> {
         self.original.verify(&self.spec)?;
         validate_request_size(self.requested_size)?;
-        if self.original.tier.is_none() || self.requested_size <= self.original.size {
+        if self.original.tier != Some(self.spec.tier) || self.requested_size <= self.original.size {
             return Err(CloudError::Invalid(
                 "Storage growth requires a recorded tier and a larger capacity",
             ));
