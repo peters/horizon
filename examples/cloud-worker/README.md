@@ -109,8 +109,9 @@ The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` an
 ([session relaunch](#session-relaunch-after-a-container-reset)), `horizon-siblings-contract=1`
 ([sibling repositories](#sibling-repositories)), `horizon-session-env-contract=1`
 ([session environment](#session-environment-from-image-layers)), `horizon-gpu-lock-contract=1`
-([GPU lock](#gpu-lock)) and `horizon-source-shallow-contract=1`
-([pinned submodule history](#pinned-submodule-history)). Source transfer carries verified LFS objects and
+([GPU lock](#gpu-lock)), `horizon-source-shallow-contract=1`
+([pinned submodule history](#pinned-submodule-history)) and
+`horizon-source-lfs-selection-contract=1` ([LFS path selection](#lfs-path-selection)). Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
 fence prevents replaying a process whose launch or survival is uncertain.
 
@@ -211,6 +212,21 @@ pinned tree is present, whatever history came with it, and refuses the import
 otherwise. `horizon-worker-source --shallow-contract` prints
 `horizon-source-shallow-contract=1`, and the checker reports that marker only when
 the helper declares it. Horizon sends full submodule history to images without the marker.
+
+## LFS path selection
+
+A repository can leave some of its own LFS paths out of the transfer. The source
+archive's `manifest.json` then carries an `lfs` object with the `include` and
+`exclude` patterns (git-lfs fetch patterns, no commas) and the `skipped` paths with
+their object identities. `horizon-worker-source import` refuses the import unless
+git-lfs itself excludes every skipped path at the imported revision
+(`git lfs ls-files` with and without the patterns) and no skipped path was also
+sent. It then sets `lfs.fetchinclude` and `lfs.fetchexclude` in the repository's
+configuration, so worktrees keep skipped paths as pointer files without trying the
+network and `git status` stays clean. An import without a selection clears both keys.
+Submodule LFS content is always sent. `horizon-worker-source --lfs-selection-contract`
+prints `horizon-source-lfs-selection-contract=1`, and the checker reports that marker
+only when the helper declares it. Horizon sends every LFS object to images without it.
 
 ## Sibling repositories
 

@@ -37,12 +37,15 @@ class SourceFormatTests(unittest.TestCase):
         command = ['bash' if name == 'horizon-worker-import' else 'python3', str(script), *args]
         return subprocess.run(command, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
-    def archive(self, root, workspace, modules, packs, assets=(), alias=None):
+    def archive(self, root, workspace, modules, packs, assets=(), alias=None, lfs=None):
         source = root / 'transfer'
         shutil.rmtree(source, ignore_errors=True)
         (source / 'lfs').mkdir(parents=True)
-        (source / 'manifest.json').write_text(json.dumps({'modules': modules, 'assets': [
-            {'path': path, 'oid': hashlib.sha256(content).hexdigest(), 'size': len(content)} for path, content in assets]}))
+        value = {'modules': modules, 'assets': [
+            {'path': path, 'oid': hashlib.sha256(content).hexdigest(), 'size': len(content)} for path, content in assets]}
+        if lfs is not None:
+            value['lfs'] = lfs
+        (source / 'manifest.json').write_text(json.dumps(value))
         for index, pack in enumerate(packs):
             (source / f'module-{index}.pack').write_bytes(pack)
         for _, content in assets:
@@ -368,5 +371,61 @@ class SourceFormatTests(unittest.TestCase):
                 self.assertNotEqual(self.execute('horizon-worker-source', workspace, 'checkout', str(worktree), *extra).returncode, 0,
                                     (worktree, extra))
 
+
+    @unittest.skipUnless(shutil.which('git-lfs'), 'LFS selection needs git-lfs')
+    def test_lfs_selection_leaves_only_paths_git_lfs_excludes_as_pointers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean = root / 'clean.gitconfig'
+            clean.touch()
+            plain = dict(os.environ, GIT_CONFIG_GLOBAL=str(clean), GIT_CONFIG_NOSYSTEM='1')
+            contents = {'keep.bin': b'kept binary content\n', 'fixtures/skip.bin': b'skipped binary content\n'}
+            pointer = lambda content: (f'version https://git-lfs.github.com/spec/v1\noid sha256:{hashlib.sha256(content).hexdigest()}'
+                                       f'\nsize {len(content)}\n')
+            local = root / 'local'
+            subprocess.run(['git', 'init', '--quiet', local], check=True, env=plain)
+            (local / 'fixtures').mkdir()
+            (local / '.gitattributes').write_text('*.bin filter=lfs diff=lfs merge=lfs -text\n')
+            for path, content in contents.items():
+                (local / path).write_text(pointer(content))
+            subprocess.run(['git', '-C', local, 'add', '.'], check=True, env=plain)
+            subprocess.run(['git', '-C', local, '-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid',
+                            'commit', '--quiet', '-m', 'Add LFS fixtures'], check=True, env=plain)
+            revision = subprocess.check_output(['git', '-C', local, 'rev-parse', 'HEAD'], env=plain, text=True).strip()
+            pack = subprocess.check_output(['git', '-C', local, 'pack-objects', '--stdout', '--revs'],
+                                           input=(revision + '\n').encode(), env=plain)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            worker_config = root / 'worker.gitconfig'
+            worker_config.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n'
+                                     '\tprocess = git-lfs filter-process\n\trequired = true\n'
+                                     f'[lfs]\n\tstorage = {workspace}/source/lfs\n')
+            worker = dict(os.environ, GIT_CONFIG_GLOBAL=str(worker_config), GIT_CONFIG_NOSYSTEM='1')
+            (workspace / 'horizon-transfer.pack').write_bytes(pack)
+            self.assertEqual(self.execute('horizon-worker-import', workspace, revision, env=worker).returncode, 0)
+            skipped = contents['fixtures/skip.bin']
+            skipped = [{'path': 'fixtures/skip.bin', 'oid': hashlib.sha256(skipped).hexdigest(), 'size': len(skipped)}]
+            kept = [('keep.bin', contents['keep.bin'])]
+            refusals = [({'exclude': ['other/**'], 'skipped': skipped}, kept),  # git-lfs would smudge it
+                        ({'exclude': ['fixtures/**'], 'skipped': skipped}, kept + [('fixtures/skip.bin', contents['fixtures/skip.bin'])]),
+                        ({'exclude': ['fixtures/**,keep.bin'], 'skipped': skipped}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': skipped, 'unknown': []}, kept)]
+            for lfs, assets in refusals:
+                self.archive(root, workspace, [], [], assets, lfs=lfs)
+                refused = self.execute('horizon-worker-source', workspace, 'import', env=worker)
+                self.assertNotEqual(refused.returncode, 0, lfs)
+                self.assertFalse((workspace / 'source' / 'manifest.json').exists(), lfs)
+            self.archive(root, workspace, [], [], kept, lfs={'exclude': ['fixtures/**'], 'skipped': skipped})
+            imported = self.execute('horizon-worker-source', workspace, 'import', env=worker)
+            self.assertEqual(imported.returncode, 0, imported.stderr.decode())
+            repository = workspace / 'repository.git'
+            self.assertEqual(subprocess.check_output(['git', '--git-dir', repository, 'config', 'lfs.fetchexclude'],
+                                                     env=worker, text=True).strip(), 'fixtures/**')
+            agent = workspace / 'agents' / 'session-1'
+            subprocess.run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', agent, revision],
+                           check=True, env=worker, capture_output=True)
+            self.assertEqual((agent / 'keep.bin').read_bytes(), contents['keep.bin'])
+            self.assertEqual((agent / 'fixtures/skip.bin').read_text(), pointer(contents['fixtures/skip.bin']))
+            self.assertEqual(subprocess.check_output(['git', '-C', agent, 'status', '--porcelain'], env=worker), b'')
 
 if __name__ == '__main__': unittest.main()
