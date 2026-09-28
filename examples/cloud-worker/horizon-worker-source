@@ -99,10 +99,16 @@ def missing_objects(repo, revision, object_format, history):
         probe = Path(scratch) / 'probe.git'
         git('init', '--bare', '-q', '--object-format=' + object_format, probe, stdout=subprocess.DEVNULL)
         (probe / 'objects' / 'info' / 'alternates').write_text(str((repo / 'objects').resolve()) + '\n')
-        listed = subprocess.run(['git', '--git-dir', str(probe), 'rev-list', '--objects', '--missing=print',
-                                 *([] if history else ['--no-walk']), revision],
-                                capture_output=True, text=True, check=True).stdout
-    return any(line.startswith('?') for line in listed.splitlines())
+        # Streamed: a full history can list millions of objects.
+        missing = False
+        with subprocess.Popen(['git', '--git-dir', str(probe), 'rev-list', '--objects', '--missing=print',
+                               *([] if history else ['--no-walk']), revision],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as listing:
+            for line in listing.stdout:
+                missing = missing or line.startswith(b'?')
+        if listing.returncode != 0:
+            raise subprocess.CalledProcessError(listing.returncode, listing.args)
+    return missing
 
 
 def durable_directory(path):
