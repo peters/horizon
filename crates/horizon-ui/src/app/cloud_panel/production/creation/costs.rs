@@ -80,6 +80,8 @@ pub(super) fn monthly(hourly: (f64, f64), storage: &[Storage]) -> Option<((f64, 
 }
 
 pub(super) fn money(value: f64) -> String {
+    // An empty float sum is negative zero, which would read as "-$0.00".
+    let value = value + 0.0;
     if value >= 100.0 {
         format!("${value:.0}")
     } else {
@@ -141,6 +143,7 @@ mod tests {
         assert_eq!(money(0.24), "$0.24");
         assert_eq!(money(5.76), "$5.76");
         assert_eq!(money(242.0), "$242");
+        assert_eq!(money(Vec::<f64>::new().into_iter().sum()), "$0.00");
         assert_eq!(range(0.24, 0.24), "$0.24");
         assert_eq!(range(0.24, 0.28), "$0.24–0.28");
         assert_eq!(range(0.244, 0.248), "$0.24–0.25");
