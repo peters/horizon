@@ -144,3 +144,106 @@ fn a_probe_stops_before_dialling_ports_the_owner_closed_while_it_ran() {
     let dialled = dials.lock().unwrap().clone();
     assert!(dialled.iter().all(|port| (8000..8004).contains(port)), "{dialled:?}");
 }
+
+#[test]
+fn devices_out_of_scope_never_crowd_an_allowed_one_out_of_the_answer() {
+    // A /16 network, which has room for more devices than one answer lists.
+    let home = || scope::tests::host(&[("10.0.0.20", Some(16))], Some("10.0.0.20"));
+    let scope = Arc::new(Scope {
+        network: home().current_network().unwrap(),
+        resolve: Box::new(|_, _| Err(Reply::HostUnreachable)),
+        host: Box::new(move || Ok(home())),
+        source: Box::new(|_| Some(v4("10.0.0.20"))),
+        rules: std::sync::RwLock::default(),
+    });
+    // More named devices than an answer holds; named devices are listed first.
+    let crowd = |_: Ipv4Addr, _: Subnet, _: &Cancellation| {
+        let findings = (0..300u16)
+            .map(|index| {
+                let [high, low] = (index + 256).to_be_bytes();
+                Finding::Name(Ipv4Addr::new(10, 0, high, low), format!("device-{index}.local"))
+            })
+            .collect();
+        (findings, Vec::new())
+    };
+    let discoverer = Discoverer::with_parts(
+        Arc::clone(&scope),
+        Box::new(crowd),
+        Box::new(|_, _, _: &Cancellation| Ok(())),
+        Cancellation::default(),
+    );
+    // Known only from a probe, so it is listed after every named device.
+    assert!(matches!(probe(&discoverer, "10.0.200.5", &[22]), Answer::Probe(_)));
+    let Answer::Discovery(crowded) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert!(crowded.truncated);
+    assert!(!crowded.devices.iter().any(|device| device.address == v4("10.0.200.5")));
+    scope
+        .set_rules(
+            Rules {
+                devices: vec![Device {
+                    address: v4("10.0.200.5"),
+                    ports: Vec::new(),
+                }],
+                local_ports: Vec::new(),
+            },
+            41234,
+        )
+        .unwrap();
+    let Answer::Discovery(narrowed) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(
+        narrowed.devices.iter().map(|device| device.address).collect::<Vec<_>>(),
+        [v4("10.0.200.5")]
+    );
+}
+
+#[test]
+fn a_name_with_several_addresses_probes_one_the_scope_allows_on_those_ports() {
+    let twin = Arc::new(Scope {
+        resolve: Box::new(|_, port| {
+            Ok(vec![
+                SocketAddr::new(v4("192.168.1.50").into(), port),
+                SocketAddr::new(v4("192.168.1.60").into(), port),
+            ])
+        }),
+        ..Arc::into_inner(probe_scope()).unwrap()
+    });
+    *twin.rules.write().unwrap() = Rules {
+        devices: vec![
+            Device {
+                address: v4("192.168.1.50"),
+                ports: vec![80],
+            },
+            Device {
+                address: v4("192.168.1.60"),
+                ports: vec![22],
+            },
+        ],
+        local_ports: Vec::new(),
+    };
+    let discoverer = Discoverer::with_parts(
+        twin,
+        Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+        Box::new(|_, _, _: &Cancellation| Ok(())),
+        Cancellation::default(),
+    );
+    let Answer::Probe(ssh) = probe(&discoverer, "twin.local", &[22]) else {
+        panic!("the second address allows port 22");
+    };
+    assert_eq!((ssh.address, ssh.open), (v4("192.168.1.60"), vec![22]));
+    let Answer::Probe(defaults) = probe(&discoverer, "twin.local", &[]) else {
+        panic!("defaults");
+    };
+    assert_eq!(
+        defaults.address,
+        v4("192.168.1.50"),
+        "the first address allowing any default"
+    );
+    assert!(matches!(
+        probe(&discoverer, "twin.local", &[22, 80]),
+        Answer::Refused(_)
+    ));
+}

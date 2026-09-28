@@ -142,31 +142,45 @@ impl Prober {
             Ok(address) => Destination::Address(SocketAddr::new(address.into(), 1)),
             Err(_) => Destination::Name(host.to_owned(), 1),
         };
-        let address = match admit(scope, destination, cancel) {
-            Ok(admitted) => admitted.iter().find_map(|candidate| match candidate.ip() {
-                IpAddr::V4(address) => Some(address),
-                IpAddr::V6(_) => None,
-            }),
+        let candidates: Vec<Ipv4Addr> = match admit(scope, destination, cancel) {
+            Ok(admitted) => admitted
+                .iter()
+                .filter_map(|candidate| match candidate.ip() {
+                    IpAddr::V4(address) => Some(address),
+                    IpAddr::V6(_) => None,
+                })
+                .collect(),
             Err(refusal) => return Answer::Refused(refusal),
         };
-        let Some(address) = address else {
-            return Answer::Refused(Reply::NotAllowed.message().into());
+        // The owner may have narrowed a device to some ports. A name with several addresses
+        // probes the first that allows every named port, or, for the defaults, the first that
+        // allows any; the defaults are then probed only where the scope reaches.
+        let requested = Request::probe_ports(ports);
+        let allowed = |address: Ipv4Addr| -> Vec<u16> {
+            requested
+                .iter()
+                .copied()
+                .filter(|port| scope.keeps(SocketAddr::new(address.into(), *port)))
+                .collect()
         };
-        // The owner may have narrowed the device to some ports: named ports outside them are
-        // refused, and the defaults are probed only where the scope reaches.
-        let mut chosen = Request::probe_ports(ports);
-        let outside: Vec<_> = chosen
+        let picked = candidates
             .iter()
-            .copied()
-            .filter(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
-            .collect();
-        if !ports.is_empty() && !outside.is_empty() {
+            .map(|address| (*address, allowed(*address)))
+            .find(|(_, allowed)| {
+                if ports.is_empty() {
+                    !allowed.is_empty()
+                } else {
+                    allowed.len() == requested.len()
+                }
+            });
+        let Some((address, chosen)) = picked else {
+            let Some(first) = candidates.first() else {
+                return Answer::Refused(Reply::NotAllowed.message().into());
+            };
+            let open = allowed(*first);
+            let outside: Vec<_> = requested.iter().copied().filter(|port| !open.contains(port)).collect();
             return Answer::Refused(outside_ports(host, &outside));
-        }
-        chosen.retain(|port| !outside.contains(port));
-        if chosen.is_empty() {
-            return Answer::Refused(outside_ports(host, &outside));
-        }
+        };
         let mut probe = Probe {
             // Validation bounds the host, so it is echoed as the agent named it.
             host: host.to_owned(),

@@ -89,7 +89,7 @@ impl Discoverer {
         if let Some((at, discovery)) = last.as_ref()
             && at.elapsed() < REUSE_FOR
         {
-            return Answer::Discovery(self.in_scope(self.with_probes(Discovery {
+            return Answer::Discovery(self.with_probes(self.in_scope(Discovery {
                 age_seconds: at.elapsed().as_secs(),
                 ..discovery.clone()
             })));
@@ -115,11 +115,12 @@ impl Discoverer {
         }
         .bounded();
         *last = Some((Instant::now(), discovery.clone()));
-        Answer::Discovery(self.in_scope(self.with_probes(discovery)))
+        Answer::Discovery(self.with_probes(self.in_scope(discovery)))
     }
 
-    /// Only the devices the owner's current rules reach: a browse or probe from before the
-    /// owner narrowed the scope must not list the rest.
+    /// Only the devices the owner's current rules reach: a browse from before the owner
+    /// narrowed the scope must not list the rest. It runs before [`Self::with_probes`] bounds
+    /// the answer, so devices out of scope never take the room of devices in it.
     fn in_scope(&self, mut discovery: Discovery) -> Discovery {
         discovery
             .devices
@@ -133,7 +134,11 @@ impl Discoverer {
         if open.is_empty() {
             return discovery;
         }
-        for (address, ports) in open {
+        // A device probed before the owner narrowed the scope stays out of the answer.
+        for (address, ports) in open
+            .into_iter()
+            .filter(|(address, _)| self.scope.permits_host(*address))
+        {
             let index = if let Some(index) = discovery.devices.iter().position(|device| device.address == address) {
                 index
             } else {
