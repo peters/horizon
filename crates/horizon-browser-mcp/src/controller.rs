@@ -15,6 +15,7 @@ use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
 
+pub(crate) mod companion;
 mod device;
 mod handoff;
 pub(crate) mod provider_usage;

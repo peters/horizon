@@ -163,6 +163,16 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
     assert_eq!(list["result"]["structuredContent"]["panels"], json!([]));
     assert!(!list.to_string().contains("browser_ws"));
 
+    // Without a Horizon agent identity nothing is queued, so nothing can start.
+    let ensure = process.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "cloud_companion_ensure_ready", "arguments": {"cloud": "source", "alias": "consumer"} }
+    }));
+    assert_eq!(ensure["result"]["isError"], true, "{ensure}");
+    assert!(ensure.to_string().contains("cloud_companion_unavailable"), "{ensure}");
+
     process.close();
 }
 
@@ -217,12 +227,35 @@ fn assert_provider_tools_contract(tools: &Value) {
     );
 }
 
+fn assert_companion_tools_contract(tools: &Value) {
+    for name in ["cloud_companion_ensure_ready", "cloud_companion_stop"] {
+        let properties = &listed_tool(tools, name)["inputSchema"]["properties"];
+        for field in ["cloud", "alias", "operation_id"] {
+            assert!(properties.get(field).is_some(), "{name} schema lacks {field}");
+        }
+        assert!(properties.get("worker").is_none() && properties.get("credentials").is_none());
+    }
+    let status = listed_tool(tools, "cloud_companion_operation");
+    assert!(
+        status["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("without changing anything"))
+    );
+    let listing = listed_tool(tools, "cloud_companions");
+    assert!(
+        listing["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("Reading starts nothing"))
+    );
+}
+
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(24));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
     assert_provider_tools_contract(tools);
+    assert_companion_tools_contract(tools);
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
