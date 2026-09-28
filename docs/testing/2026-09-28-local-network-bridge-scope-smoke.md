@@ -15,7 +15,7 @@ its port is opened.
   [open connections smoke](2026-09-28-local-network-bridge-connections-smoke.md):
   - a frozen candidate of the PR head on a task-owned isolated desktop, viewed live
     in a Horizon native VNC Device panel;
-  - a recorder scoped to that display, from step 1 to step 7;
+  - a recorder scoped to that display, from step 1 to step 8;
   - a Ready Hetzner `cx23` cloud whose image carries the bridge helper.
 - On this computer, a throwaway dev server on loopback only, for example
   `python3 -m http.server 8765 --bind 127.0.0.1` in an empty directory.
@@ -45,13 +45,18 @@ connection, so no model key is placed on the worker.
    **Scope: 1 device · 1 port on this computer**. `forward localhost 8765` and a
    `curl` through it return the dev server's listing. `forward localhost 22` is
    still refused.
-5. Enter `10.0.0.5` under Devices and press **Apply scope**. Expect "10.0.0.5 is
+5. Pause and resume: press **Reconnect cloud** and wait for Ready. Sharing shows
+   **Sharing paused: cloud disconnected** while it reconnects, then comes back on
+   with the header still reading **Scope: 1 device · 1 port on this computer**.
+   `forward 192.168.1.50 80` is still refused, and `forward localhost 8765` still
+   works: the resumed bridge kept the owner's scope.
+6. Enter `10.0.0.5` under Devices and press **Apply scope**. Expect "10.0.0.5 is
    not a device on the bridged network" under the button, and the header still
    reads **Scope: 1 device · 1 port on this computer**.
-6. Clear both fields and press **Apply scope**. Expect **Scope: the whole
+7. Clear both fields and press **Apply scope**. Expect **Scope: the whole
    network**. `forward 192.168.1.50 80` succeeds again, and `forward localhost
    8765` is refused.
-7. Switch sharing off and on. Expect **Scope: the whole network**.
+8. Switch sharing off and on. Expect **Scope: the whole network**.
 
 ## Record
 

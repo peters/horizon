@@ -5,7 +5,7 @@
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 mod editor;
 pub(super) use editor::Editor;
-use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, State, Status};
+use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, Rules, State, Status};
 use std::{
     sync::{
         Mutex, MutexGuard, OnceLock, PoisonError,
@@ -156,6 +156,29 @@ impl HorizonApp {
 }
 
 impl Runtime {
+    /// Stops any bridge, then starts one through `start` with the owner's scope when there is
+    /// a connection. A bridge that resumes after a pause therefore starts no wider than the
+    /// owner left it, while one switched on after being off starts with the whole network.
+    /// Unless sharing is on afterwards, the scope is forgotten.
+    fn start_sharing<T, E: std::fmt::Display>(
+        &mut self,
+        connection: Option<Result<T, E>>,
+        start: impl FnOnce(&T, Rules) -> Result<Running, String>,
+    ) {
+        self.sharing.stop();
+        self.sharing = match connection {
+            None => Sharing::Off,
+            Some(Err(error)) => Sharing::Refused(error.to_string()),
+            Some(Ok(connection)) => match start(&connection, self.scope.applied.clone()) {
+                Ok(running) => Sharing::On(running),
+                Err(error) => Sharing::Refused(error),
+            },
+        };
+        if !matches!(self.sharing, Sharing::On(_)) {
+            self.scope.reset();
+        }
+    }
+
     /// Pauses a running bridge whose cloud left Connected+Ready, which revokes it at once, and
     /// says whether a paused one should restart now.
     fn reconcile_sharing(&mut self) -> bool {
@@ -185,19 +208,11 @@ impl HorizonApp {
         let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
             return;
         };
-        runtime.sharing.stop();
-        // A bridge that resumes starts with the owner's scope; one switched on starts whole.
-        runtime.sharing = match connection {
-            None => Sharing::Off,
-            Some(Err(error)) => Sharing::Refused(error.to_string()),
-            Some(Ok(connection)) => match Bridge::start_with(&connection, runtime.scope.applied.clone()) {
-                Ok(bridge) => Sharing::On(Running::new(Some(bridge))),
-                Err(error) => Sharing::Refused(error.to_string()),
-            },
-        };
-        if !matches!(runtime.sharing, Sharing::On(_)) {
-            runtime.scope.reset();
-        }
+        runtime.start_sharing(connection, |connection, rules| {
+            Bridge::start_with(connection, rules)
+                .map(|bridge| Running::new(Some(bridge)))
+                .map_err(|error| error.to_string())
+        });
     }
 
     fn cloud_connection(&self, id: u32) -> cloud_runtime::Result<Connection> {
@@ -638,6 +653,60 @@ mod tests {
         assert!(runtime.reconcile_sharing());
         runtime.stage = Some(Stage::Stopped);
         assert!(!runtime.reconcile_sharing());
+    }
+
+    /// A narrowed scope, as the owner applied it on the card.
+    fn narrowed() -> Rules {
+        Rules {
+            devices: vec![horizon_core::cloud_runtime::local_network::Device {
+                address: std::net::Ipv4Addr::new(192, 168, 1, 50),
+                ports: vec![554],
+            }],
+            local_ports: vec![3000],
+        }
+    }
+
+    #[test]
+    fn a_resumed_bridge_starts_with_the_owners_scope_and_a_failed_resume_forgets_it() {
+        let mut runtime = Runtime::default();
+        runtime.scope.outcome(narrowed(), Ok(()));
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        let mut given = None;
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+            given = Some(rules);
+            Ok(Running::new(None))
+        });
+        assert_eq!(given, Some(narrowed()), "the resumed bridge is narrowed from the start");
+        assert!(matches!(runtime.sharing, Sharing::On(_)));
+        assert_eq!(runtime.scope.applied, narrowed(), "the scope outlasts the resume");
+        // The network changed while paused: the saved scope no longer fits, so sharing is
+        // refused rather than started wider, and the scope is forgotten.
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+            assert_eq!(rules, narrowed());
+            Err("The saved scope does not fit the current network".into())
+        });
+        assert!(matches!(&runtime.sharing, Sharing::Refused(why) if why.contains("does not fit")));
+        assert_eq!(runtime.scope.applied, Rules::default());
+    }
+
+    #[test]
+    fn switching_sharing_off_or_losing_the_connection_forgets_the_scope() {
+        for connection in [None, Some(Err("Cloud is disconnected".to_owned()))] {
+            let mut runtime = Runtime::default();
+            runtime.scope.outcome(narrowed(), Ok(()));
+            runtime.sharing = Sharing::On(Running::new(None));
+            runtime.start_sharing(connection, |(), _| panic!("nothing starts without a connection"));
+            assert!(!matches!(runtime.sharing, Sharing::On(_)));
+            assert_eq!(runtime.scope.applied, Rules::default());
+        }
+        let mut runtime = Runtime::default();
+        let mut given = None;
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+            given = Some(rules);
+            Ok(Running::new(None))
+        });
+        assert_eq!(given, Some(Rules::default()), "switched on anew, the whole network");
     }
 
     #[test]
