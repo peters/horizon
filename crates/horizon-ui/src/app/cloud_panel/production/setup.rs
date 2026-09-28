@@ -283,7 +283,7 @@ impl HorizonApp {
                 ui.label(RichText::new("Connect your account. Choose who you work with.").color(theme::FG_SOFT()));
                 ui.add_space(16.0);
                 let navigation_height = state.render_navigation(ui);
-                egui::ScrollArea::vertical()
+                super::super::runtime::solid_scroll_area(ui)
                     .id_salt(match state.section {
                         Section::Accounts => "cloud-settings-accounts",
                         Section::Placement => "cloud-settings-placement",

@@ -91,7 +91,7 @@ impl HorizonApp {
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
                 heading(ui, provider::label(&self.cloud_prototype.production));
                 ui.add_space(16.0);
-                egui::ScrollArea::vertical()
+                super::super::runtime::solid_scroll_area(ui)
                     .id_salt("cloud-creation-body")
                     .max_height(body_height)
                     .show(ui, |ui| {
