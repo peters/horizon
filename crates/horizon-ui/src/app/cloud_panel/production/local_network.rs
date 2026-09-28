@@ -87,8 +87,9 @@ pub(super) struct Running {
     bridge: Option<Bridge>,
     watch: Watch,
     /// The bridge's last status and when it was read. A snapshot copies every open relay, so
-    /// frames between refreshes reuse it instead of taking their own.
-    status: Mutex<Option<(Instant, Status)>>,
+    /// frames between refreshes reuse it instead of taking their own. Boxed, as it is most of
+    /// a running bridge's size.
+    status: Box<Mutex<Option<(Instant, Status)>>>,
 }
 
 /// How often the card reads the bridge's status; it repaints at the same cadence.
@@ -99,7 +100,7 @@ impl Running {
         Self {
             bridge,
             watch: Watch::new(Clock::now()),
-            status: Mutex::new(None),
+            status: Box::new(Mutex::new(None)),
         }
     }
 
