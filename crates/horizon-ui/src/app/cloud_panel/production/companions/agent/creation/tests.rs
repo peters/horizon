@@ -1,5 +1,6 @@
 use super::*;
 use horizon_core::cloud_runtime::companions::Scope;
+#[cfg(unix)]
 use std::process::Command;
 
 fn owner() -> Owner {
@@ -62,6 +63,12 @@ fn declining_forgets_the_request_and_answers_its_polls_as_refused() {
         (refused["phase"].as_str(), refused["done"].as_bool()),
         (Some("refused"), Some(true))
     );
+    // Resending the declined request stays refused.
+    let resent = creation
+        .answer("source", "consumer", Some(Action::EnsureReady), id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resent["phase"], "refused");
     // A fresh Ensure Ready after a decline asks the owner again.
     assert!(
         creation
@@ -102,6 +109,13 @@ fn only_a_declaration_without_any_matching_cloud_is_missing() {
     };
     assert_eq!(super::super::missing(&context, "consumer"), Some(declaration()));
     assert_eq!(super::super::missing(&context, "unknown"), None);
+    // A same-worker sibling never has a cloud of its own to create.
+    let sibling: Declaration = serde_json::from_value(json!({
+        "repository": "example/consumer", "profile": "cpu", "placement": "same_worker"
+    }))
+    .unwrap();
+    context.declarations.insert("sibling".into(), sibling);
+    assert_eq!(super::super::missing(&context, "sibling"), None);
     context.inventory.push(Target {
         cloud_id: "target".into(),
         declaration: declaration(),
@@ -110,12 +124,14 @@ fn only_a_declaration_without_any_matching_cloud_is_missing() {
     assert_eq!(super::super::missing(&context, "consumer"), None);
 }
 
+#[cfg(unix)]
 fn git(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git").arg("-C").arg(path).args(args).output().unwrap();
     assert!(output.status.success(), "{args:?}");
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
+#[cfg(unix)]
 fn repository(path: &Path, origin: &str, config: &str) -> String {
     std::fs::create_dir_all(path.join(".horizon")).unwrap();
     git(path, &["init", "--quiet"]);
@@ -137,6 +153,7 @@ fn repository(path: &Path, origin: &str, config: &str) -> String {
     git(path, &["rev-parse", "HEAD"])
 }
 
+#[cfg(unix)]
 const PROFILE: &str = "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
 
 #[cfg(unix)]

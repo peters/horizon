@@ -95,7 +95,8 @@ impl State {
             .iter()
             .find(|pending| pending.source == source && pending.alias == alias);
         match (action, pending) {
-            (None, _) if self.declined.contains(&id) => Some(Ok(json!({
+            // A declined request stays declined, whether polled or sent again.
+            (None | Some(Action::EnsureReady), _) if self.declined.contains(&id) => Some(Ok(json!({
                 "operation_id": id,
                 "action": "ensure_ready",
                 "cloud": source,

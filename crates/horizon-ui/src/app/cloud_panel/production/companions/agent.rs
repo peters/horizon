@@ -554,8 +554,12 @@ fn submit(
 }
 
 /// The declaration of a separate-cloud companion that no cloud in the workspace matches.
+/// A same-worker sibling never has a cloud of its own, so it is never missing.
 fn missing(context: &Context, alias: &str) -> Option<companions::Declaration> {
-    let declaration = context.declarations.get(alias)?;
+    let declaration = context
+        .declarations
+        .get(alias)
+        .filter(|declaration| declaration.placement.is_cloud())?;
     (!context
         .inventory
         .iter()
