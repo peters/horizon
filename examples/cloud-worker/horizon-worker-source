@@ -34,7 +34,9 @@ def lfs_selection(value):
     # The same rules as Horizon's source.lfs validation: lists of at most 64 patterns in
     # all, each a non-empty string of at most 256 characters without commas (git-lfs
     # joins them with commas) or Unicode control, format, private-use or unassigned
-    # characters; skipped entries name exactly one LFS object each.
+    # characters; skipped entries name exactly one LFS object each. git-lfs never lists
+    # an empty object, nor a path with a newline in a way lfs_paths can read, so
+    # neither can be one it excludes; Horizon sends both.
     selection = value.get('lfs', {})
     if not isinstance(selection, dict) or set(selection) - {'include', 'exclude', 'skipped'}:
         raise ValueError('Invalid LFS selection')
@@ -50,7 +52,7 @@ def lfs_selection(value):
     if not isinstance(skipped, list) or any(
             not isinstance(asset, dict) or set(asset) != {'path', 'oid', 'size'} or not isinstance(asset['path'], str)
             or not isinstance(asset['oid'], str) or not re.fullmatch(r'[0-9a-f]{64}', asset['oid'])
-            or type(asset['size']) is not int or asset['size'] < 0 for asset in skipped):
+            or type(asset['size']) is not int or asset['size'] < 1 or '\n' in asset['path'] for asset in skipped):
         raise ValueError('Invalid LFS selection')
     return patterns, skipped
 
@@ -121,8 +123,10 @@ def import_source(root, upload):
 
 def lfs_paths(repository, *filters):
     listed = subprocess.run(['git', '--git-dir', str(repository), 'lfs', 'ls-files', '--name-only', *filters,
-                             'refs/heads/base'], capture_output=True, text=True, check=True).stdout
-    return set(listed.splitlines())
+                             'refs/heads/base'], capture_output=True, check=True).stdout.decode(errors='replace')
+    # One name per '\n'-terminated line, as Horizon reads the same listing: other
+    # separators, such as U+0085, belong to the name.
+    return {line.removesuffix('\r') for line in listed.split('\n') if line}
 
 
 def select_lfs(repository, value):

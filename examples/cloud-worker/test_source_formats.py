@@ -381,7 +381,9 @@ class SourceFormatTests(unittest.TestCase):
             clean = root / 'clean.gitconfig'
             clean.touch()
             plain = dict(os.environ, GIT_CONFIG_GLOBAL=str(clean), GIT_CONFIG_NOSYSTEM='1')
-            contents = {'keep.bin': b'kept binary content\n', 'fixtures/skip.bin': b'skipped binary content\n'}
+            # U+0085 is a line separator to str.splitlines(), not to git-lfs's listing.
+            contents = {'keep.bin': b'kept binary content\n', 'fixtures/skip.bin': b'skipped binary content\n',
+                        'fixtures/odd\u0085name.bin': b'oddly named content\n'}
             pointer = lambda content: (f'version https://git-lfs.github.com/spec/v1\noid sha256:{hashlib.sha256(content).hexdigest()}'
                                        f'\nsize {len(content)}\n')
             local = root / 'local'
@@ -407,8 +409,8 @@ class SourceFormatTests(unittest.TestCase):
             worker = dict(os.environ, GIT_CONFIG_GLOBAL=str(worker_config), GIT_CONFIG_NOSYSTEM='1')
             (workspace / 'horizon-transfer.pack').write_bytes(pack)
             self.assertEqual(self.execute('horizon-worker-import', workspace, revision, env=worker).returncode, 0)
-            skipped = contents['fixtures/skip.bin']
-            skipped = [{'path': 'fixtures/skip.bin', 'oid': hashlib.sha256(skipped).hexdigest(), 'size': len(skipped)}]
+            skipped = [{'path': path, 'oid': hashlib.sha256(contents[path]).hexdigest(), 'size': len(contents[path])}
+                       for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin')]
             kept = [('keep.bin', contents['keep.bin'])]
             refusals = [({'exclude': ['other/**'], 'skipped': skipped}, kept),  # git-lfs would smudge it
                         ({'exclude': ['fixtures/**'], 'skipped': skipped}, kept + [('fixtures/skip.bin', contents['fixtures/skip.bin'])]),
@@ -418,6 +420,9 @@ class SourceFormatTests(unittest.TestCase):
                         ({'exclude': 'fixtures/**', 'skipped': skipped}, kept),
                         ({'exclude': ['fixtures/**'], 'skipped': skipped[0]}, kept),
                         ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size='23')]}, kept),
+                        # git-lfs never lists an empty object or reads a newline in a name.
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size=0)]}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], path='fixtures/a\nb.bin')]}, kept),
                         # DEL, a C1 control and a format character.
                         ({'exclude': ['fixtures/**', 'a\x7fb'], 'skipped': skipped}, kept),
                         ({'exclude': ['fixtures/**', 'a\x85b'], 'skipped': skipped}, kept),
@@ -440,7 +445,8 @@ class SourceFormatTests(unittest.TestCase):
             subprocess.run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', agent, revision],
                            check=True, env=worker, capture_output=True)
             self.assertEqual((agent / 'keep.bin').read_bytes(), contents['keep.bin'])
-            self.assertEqual((agent / 'fixtures/skip.bin').read_text(), pointer(contents['fixtures/skip.bin']))
+            for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin'):
+                self.assertEqual((agent / path).read_text(), pointer(contents[path]))
             self.assertEqual(subprocess.check_output(['git', '-C', agent, 'status', '--porcelain'], env=worker), b'')
 
 if __name__ == '__main__': unittest.main()

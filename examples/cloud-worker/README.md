@@ -221,7 +221,8 @@ archive's `manifest.json` then carries an `lfs` object with the `include` and
 their object identities. `horizon-worker-source import` refuses the import unless
 git-lfs itself excludes every skipped path at the imported revision
 (`git lfs ls-files` with and without the patterns) and no skipped path was also
-sent. It then sets `lfs.fetchinclude` and `lfs.fetchexclude` in the repository's
+sent. git-lfs lists neither empty objects nor names with a newline in a readable way,
+so such paths are never skipped. It then sets `lfs.fetchinclude` and `lfs.fetchexclude` in the repository's
 configuration, so worktrees keep skipped paths as pointer files without trying the
 network and `git status` stays clean. Both keys are always set locally, empty for a
 side the selection leaves open and on every import without a selection, and submodule
