@@ -35,8 +35,9 @@ pub(crate) fn run() -> io::Result<()> {
             &hetzner_path(Path::new(SNAPSHOT)),
             manifest::now_millis(),
         ),
+        [command] if command == "clear-runpod" => clear_runpod(io::stdin().lock(), Path::new(SNAPSHOT)),
         _ => Err(io::Error::other(
-            "Usage: horizon-cloud-worker cloud-offers publish|publish-hetzner",
+            "Usage: horizon-cloud-worker cloud-offers publish|publish-hetzner|clear-runpod",
         )),
     }
 }
@@ -49,6 +50,23 @@ fn publish(reader: impl Read, path: &Path, now: i64) -> io::Result<()> {
         ));
     }
     write_private(path, &serde_json::to_vec(&snapshot)?)
+}
+
+/// Removes the `RunPod` prices, as when the owning Horizon no longer has a `RunPod` key,
+/// so agents stop being offered them at once rather than once they go stale. Other
+/// providers' catalogs stay. The request body carries nothing and is only drained.
+fn clear_runpod(reader: impl Read, path: &Path) -> io::Result<()> {
+    bounded(reader)?;
+    if let Err(error) = std::fs::remove_file(path)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(error);
+    }
+    #[cfg(unix)]
+    if let Some(directory) = path.parent() {
+        std::fs::File::open(directory)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn hetzner_path(snapshot: &Path) -> std::path::PathBuf {

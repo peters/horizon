@@ -116,6 +116,25 @@ impl<'a> Live<'a> {
         Ok(Published::Sent)
     }
 
+    /// Removes the `RunPod` prices the ready worker of `cloud` holds, as when this machine
+    /// no longer has a `RunPod` key. Worker images without the command refuse it.
+    pub(in crate::cloud_runtime) fn clear_runpod_offers(
+        &mut self,
+        cloud: &str,
+    ) -> Result<super::super::offer_publication::Published> {
+        use super::super::offer_publication::Published;
+        if self.worker(cloud)?.is_none_or(|worker| worker.status != Status::Ready) {
+            return Ok(Published::NotReady);
+        }
+        self.exchange(
+            cloud,
+            "horizon-cloud-worker cloud-offers clear-runpod",
+            &serde_json::json!({}),
+            Duration::from_secs(45),
+        )?;
+        Ok(Published::Sent)
+    }
+
     fn exchange(
         &mut self,
         cloud: &str,

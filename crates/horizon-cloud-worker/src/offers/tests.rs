@@ -291,6 +291,36 @@ fn a_horizon_without_runpod_prices_still_offers_its_other_providers() {
 }
 
 #[test]
+fn clearing_runpod_prices_keeps_the_other_providers() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cloud-offers.json");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(sessions.join("a")).unwrap();
+    let agent = request("horizon:cloud-a", HOST, &serde_json::json!({"min_vcpu": 8}));
+    let minute_ago = u64::try_from(NOW).unwrap() - 60_000;
+    publish(snapshot(minute_ago).as_slice(), &path, NOW).unwrap();
+    publish_hetzner(hetzner_snapshot(minute_ago).as_slice(), &hetzner_path(&path), NOW).unwrap();
+    assert_eq!(
+        answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap()["provider"],
+        "RunPod"
+    );
+    // The owning Horizon lost its RunPod key: the prices go at once, Hetzner's stay.
+    clear_runpod(&b"{}"[..], &path).unwrap();
+    assert!(!path.exists());
+    let answered = answer_from(&agent, (&path, &sessions), HOST, NOW).offers.unwrap();
+    assert_eq!(answered["offers"], serde_json::json!([]));
+    assert!(answered["unavailable"].as_str().unwrap().contains("no RunPod prices"));
+    assert_eq!(answered["other_providers"][0]["offers"][0]["id"], "cx43");
+    // Clearing again, or a worker that never had prices, succeeds.
+    clear_runpod(&b"{}"[..], &path).unwrap();
+    // An oversized body is refused before anything is removed.
+    publish(snapshot(minute_ago).as_slice(), &path, NOW).unwrap();
+    let oversized = vec![b' '; MAX_BYTES + 1];
+    assert!(clear_runpod(oversized.as_slice(), &path).is_err());
+    assert!(path.exists());
+}
+
+#[test]
 fn stale_runpod_prices_do_not_hold_back_current_hetzner_offers() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("cloud-offers.json");
