@@ -236,6 +236,35 @@ from the image contract it checks before allocating a worker and packs full hist
 for such an image up front. Older Horizon builds refuse a `.horizon/cloud.yml` with
 a `source` block.
 
+A repository whose tests need only some of its LFS content, such as a large set of
+video fixtures, can leave the rest out of the transfer:
+
+```yaml
+source:
+  lfs:
+    include: [src/**, fixtures/reversal/**]   # default: every path
+    exclude: [fixtures/reversal/*.raw]        # applied after include
+```
+
+Patterns are git-lfs fetch patterns (`lfs.fetchinclude`/`lfs.fetchexclude`): at most
+64 in all, each non-empty, at most 256 characters, without commas and without Unicode
+control, format, surrogate or private-use characters. The worker applies the same
+per-pattern rules. Horizon also caps the patterns at 8,192 characters in all, so its
+git-lfs call fits a Windows command line. Horizon asks the local git-lfs which of the repository's
+own LFS paths the patterns exclude and sends every other object; the worker checks with
+its git-lfs that each path left out is excluded, then sets the same patterns in the
+repository's configuration, so worktrees keep those paths as pointer files and
+`git status` stays clean. Submodule LFS content is always sent, and so are empty
+objects, paths containing a newline and paths ending in a carriage return, which
+git-lfs's line-based listing cannot identify.
+Objects the selection leaves out need not be fetched locally; every other object,
+including those exceptions, is verified before allocation. An image that cannot honor the selection receives every object, which
+then must all be local. For an application whose LFS content was 3.23 GB, 3.14 GB of it video
+fixtures, excluding the fixtures its tests do not read is the largest transfer
+saving. Images without `horizon-source-lfs-selection-contract=1` receive every LFS
+object; Horizon decides that from the image contract before allocation, as for pinned
+submodule history.
+
 A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
 `major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
 newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a

@@ -33,6 +33,37 @@ fn session_restart_is_reported_only_by_its_exact_marker_and_never_required() {
 }
 
 #[test]
+fn source_packaging_features_are_reported_only_by_their_exact_markers() {
+    let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
+    let features = |output: &str| {
+        let reported = WorkerContract::reported(output);
+        (reported.pinned_submodules, reported.lfs_selection)
+    };
+    assert_eq!(features(current), (false, false));
+    assert_eq!(
+        features(&format!("{current}{PINNED_SUBMODULES_MARKER}\n")),
+        (true, false)
+    );
+    assert_eq!(features(&format!("{current}{LFS_SELECTION_MARKER}\n")), (false, true));
+    for marker in [PINNED_SUBMODULES_MARKER, LFS_SELECTION_MARKER] {
+        for incidental in [
+            format!("prefix-{marker}"),
+            format!("{marker}-suffix"),
+            format!(" {marker}"),
+            marker.replace("=1", "=2"),
+        ] {
+            assert_eq!(
+                features(&format!("{current}{incidental}\n")),
+                (false, false),
+                "{incidental}"
+            );
+        }
+        // A feature marker never substitutes for a required contract marker.
+        assert!(validate(marker, &Capabilities::default(), false, false).is_err());
+    }
+}
+
+#[test]
 fn the_container_start_is_read_only_from_its_exact_marker() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     assert_eq!(WorkerContract::reported(current).container_started, None);
