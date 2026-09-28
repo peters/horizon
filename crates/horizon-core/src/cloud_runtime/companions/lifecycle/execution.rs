@@ -39,6 +39,23 @@ pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Opt
     Ok(decision)
 }
 
+/// The resume an Ensure Ready still has to run when the provider confirms the worker
+/// stopped: whatever it had started never applied.
+pub(super) fn resume_to_continue(reconciled: &lifecycle::ReconciledDeployment) -> Option<Decision> {
+    if !reconciled.confirmed_stopped() {
+        return None;
+    }
+    Some(
+        if horizon_cloud::provider::Description::of(&reconciled.state.profile).stopped
+            == horizon_cloud::provider::StoppedCost::ServerDeleted
+        {
+            Decision::ResumeWithNewServer
+        } else {
+            Decision::ResumeThenReconnect
+        },
+    )
+}
+
 /// Whether a prepared record is a resume in progress rather than a cloud never
 /// created: only a provider whose stop deletes the server clears its fence on resume,
 /// and then a volume a server held proves the cloud existed.
@@ -319,6 +336,16 @@ impl Live<'_> {
                 if !self.inspecting && action == Action::EnsureReady && resume_settled(store, &reconciled)? {
                     self.settled = true;
                     return self.reconnect(store, observe);
+                }
+                // A crash before the resume this Ensure Ready authorized: the provider
+                // confirms the worker still stopped, so the resume never applied and
+                // runs now, then its reconnect.
+                if !self.inspecting
+                    && action == Action::EnsureReady
+                    && let Some(resume) = resume_to_continue(&reconciled)
+                {
+                    self.settled = true;
+                    return self.execute(store, resume, action, observe);
                 }
                 if matches!(
                     reconciled.report.outcome,

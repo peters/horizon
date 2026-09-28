@@ -484,3 +484,43 @@ fn a_reconnect_after_a_proven_resume_that_fails_without_a_mutation_can_be_retrie
         State::RetryRequired
     );
 }
+
+#[test]
+fn an_ensure_interrupted_before_its_resume_continues_it_once_the_stop_is_confirmed() {
+    use crate::cloud_runtime::lifecycle::ReconciledDeployment;
+    use horizon_cloud::runpod::recovery::{Outcome, Reconciliation};
+    let fixture = Fixture::new();
+    let reconciled = |state: Deployment, outcome: Outcome| ReconciledDeployment {
+        state,
+        report: Reconciliation {
+            operation_id: "target".into(),
+            outcome,
+            worker: None,
+        },
+    };
+    // A Hetzner stop released the server, which the check proves gone.
+    let mut released = fixture.ready();
+    released.profile.provider = horizon_cloud::hetzner::PROVIDER.into();
+    released.stage = Stage::Stopped;
+    released.stop_requested = true;
+    let inactive = Outcome::Inactive {
+        worker_id: "worker1".into(),
+    };
+    assert_eq!(
+        execution::resume_to_continue(&reconciled(released.clone(), inactive)),
+        Some(Decision::ResumeWithNewServer)
+    );
+    // Not yet proven stopped: the earlier operation stays unresolved.
+    let found = Outcome::Found {
+        worker_id: "worker1".into(),
+    };
+    assert_eq!(
+        execution::resume_to_continue(&reconciled(released.clone(), found)),
+        None
+    );
+    released.stage = Stage::Stopping;
+    let inactive = Outcome::Inactive {
+        worker_id: "worker1".into(),
+    };
+    assert_eq!(execution::resume_to_continue(&reconciled(released, inactive)), None);
+}
