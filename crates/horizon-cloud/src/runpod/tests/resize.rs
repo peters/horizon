@@ -168,6 +168,72 @@ fn completed_journal_recovers_without_replacing_again_when_the_observation_was_l
 }
 
 #[test]
+fn legacy_standard_volume_can_resize_only_after_live_tier_confirmation() {
+    let mut legacy = volume();
+    legacy.tier = None;
+    let old = observed(&current(), "worker1");
+    let mut rows = prefix(&old);
+    rows.extend(termination(&old));
+    rows.extend(creation());
+    let (provider, _, task) = provider(rows);
+    let mut intent = Replacement::new(current(), next(), "worker1".into(), legacy.clone()).unwrap();
+    let worker = provider
+        .resize_cpu(&mut intent, &Cancellation::default(), |_| Ok(()), |_| {})
+        .unwrap();
+    task.join().unwrap();
+    intent.verify_origin(&current(), "worker1", &legacy).unwrap();
+    intent.verify_result(&worker).unwrap();
+
+    let mut premium = volume();
+    premium.tier = Some(Tier::HighPerformance);
+    let (provider, requests, task) = self::provider(vec![(200, serde_json::to_string(&premium).unwrap())]);
+    let mut intent = Replacement::new(current(), next(), "worker1".into(), legacy).unwrap();
+    assert!(matches!(
+        provider.resize_cpu(
+            &mut intent,
+            &Cancellation::default(),
+            |_| panic!("No mutation authority"),
+            |_| {}
+        ),
+        Err(CloudError::IdentityMismatch)
+    ));
+    task.join().unwrap();
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[test]
+fn stopped_original_refuses_before_authorizing_a_prepared_replacement() {
+    let mut old = observed(&current(), "worker1");
+    old["status"] = json!("EXITED");
+    let (provider, requests, task) = provider(prefix(&old));
+    let mut intent = intent();
+    assert!(matches!(
+        provider.resize_cpu(
+            &mut intent,
+            &Cancellation::default(),
+            |_| panic!("No mutation authority"),
+            |_| {}
+        ),
+        Err(CloudError::Invalid("The original worker is not running"))
+    ));
+    task.join().unwrap();
+    assert!(intent.unstarted());
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[test]
 fn persisted_termination_can_finish_after_the_original_worker_stops() {
     let mut old = observed(&current(), "worker1");
     old["status"] = json!("EXITED");

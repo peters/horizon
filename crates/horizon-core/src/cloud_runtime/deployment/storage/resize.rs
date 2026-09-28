@@ -121,7 +121,7 @@ fn resize_compute_with(
             let provider = RunPod::new(settings.credential()?);
             let mut replacement = intent.replacement.clone();
             emit(Event::stage(Stage::Provision));
-            let worker = provider.resize_cpu(
+            let result = provider.resize_cpu(
                 &mut replacement,
                 cancel,
                 |next| {
@@ -129,13 +129,33 @@ fn resize_compute_with(
                     write(&store, &intent).map_err(|_| horizon_cloud::CloudError::Persistence)
                 },
                 |progress| emit(Event::Output(format!("{progress:?}"))),
-            )?;
-            intent.observed = Some(worker);
-            write(&store, &intent)?;
+            );
+            record_observation(&store, &mut intent, result)?;
         }
         commit(&store, &intent, &mut |_| Ok(()))?;
     }
     reconnect()
+}
+
+fn record_observation(
+    store: &Store,
+    intent: &mut Intent,
+    result: std::result::Result<Worker, horizon_cloud::CloudError>,
+) -> Result<()> {
+    match result {
+        Ok(worker) => {
+            intent.observed = Some(worker);
+            write(store, intent)
+        }
+        Err(error) => {
+            if intent.replacement.unstarted() {
+                fs::remove_file(store.root().join(JOURNAL))?;
+                #[cfg(unix)]
+                fs::File::open(store.root())?.sync_all()?;
+            }
+            Err(error.into())
+        }
+    }
 }
 
 fn prepare(store: &Store, settings: &Settings, cpu: u16, memory_gb: u16) -> Result<Intent> {

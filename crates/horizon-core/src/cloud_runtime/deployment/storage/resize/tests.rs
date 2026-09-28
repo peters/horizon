@@ -273,6 +273,40 @@ fn pending_resize_blocks_migration_and_disk_growth() {
 }
 
 #[test]
+fn provider_refusal_unfences_only_before_termination_was_authorized() {
+    for phase in ["prepared", "terminating"] {
+        let (root, store) = fixture();
+        let mut intent = prepare(&store, &settings(), 8, 16).unwrap();
+        let mut replacement = serde_json::to_value(&intent.replacement).unwrap();
+        replacement["phase"] = json!(phase);
+        intent.replacement = serde_json::from_value(replacement).unwrap();
+        write(&store, &intent).unwrap();
+        let journal = fs::read(root.path().join(JOURNAL)).unwrap();
+        let deployment = fs::read(root.path().join("deployment.json")).unwrap();
+        let storage = fs::read(root.path().join("workspace-volume.json")).unwrap();
+        assert!(matches!(
+            record_observation(
+                &store,
+                &mut intent,
+                Err(horizon_cloud::CloudError::Invalid("The original worker is not running"))
+            ),
+            Err(Error::Provider(horizon_cloud::CloudError::Invalid(
+                "The original worker is not running"
+            )))
+        ));
+        if phase == "prepared" {
+            assert!(!root.path().join(JOURNAL).exists());
+            assert!(store.load().unwrap().is_some());
+        } else {
+            assert_eq!(fs::read(root.path().join(JOURNAL)).unwrap(), journal);
+            assert!(store.load().is_err());
+        }
+        assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), deployment);
+        assert_eq!(fs::read(root.path().join("workspace-volume.json")).unwrap(), storage);
+    }
+}
+
+#[test]
 fn reconnect_failure_after_commit_retries_the_same_size_without_replacing_again() {
     let (root, store) = fixture();
     confirmed(&store);
