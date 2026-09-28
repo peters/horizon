@@ -105,6 +105,21 @@ impl Running {
     }
 }
 
+impl Running {
+    /// Connections the bridge relays now, once it is sharing; `None` while it starts or reconnects.
+    pub(super) fn open_connections(&self) -> Option<usize> {
+        let status = self.status(Instant::now());
+        match status.as_ref().map(|(_, status)| status) {
+            Some(Status {
+                state: State::Active { .. },
+                relays,
+                ..
+            }) => Some(relays.len()),
+            _ => None,
+        }
+    }
+}
+
 impl Drop for Running {
     fn drop(&mut self) {
         if let Some(bridge) = self.bridge.take() {

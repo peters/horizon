@@ -1,6 +1,6 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
 mod capabilities;
-mod cards;
+pub(super) mod cards;
 mod close;
 mod companions;
 mod creation;
@@ -93,9 +93,17 @@ pub(super) enum Confirmation {
     Rebuild,
     CancelRebuild,
 }
+/// One line of a cloud operation's output, with the step that printed it and when.
+pub(super) struct LogLine {
+    pub text: String,
+    pub stage: Option<Stage>,
+    /// Time into the attempt; `None` for lines outside one, such as idle reports.
+    pub at: Option<std::time::Duration>,
+}
+
 #[derive(Default)]
 pub(super) struct Runtime {
-    detail_view: cards::DetailView,
+    drawer: Option<cards::Tab>,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
@@ -106,10 +114,10 @@ pub(super) struct Runtime {
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     stage: Option<Stage>,
     progress: progress::Timeline,
-    logs: std::collections::VecDeque<String>,
+    logs: std::collections::VecDeque<LogLine>,
     /// Lines that arrived after the reader scrolled up. They join `logs` when
     /// follow mode resumes, so the visible history does not shift.
-    pending_logs: std::collections::VecDeque<String>,
+    pending_logs: std::collections::VecDeque<LogLine>,
     /// The reader scrolled away from the latest line.
     verbose_unpinned: bool,
     state: Option<Deployment>,
@@ -147,7 +155,12 @@ impl Runtime {
 
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
     /// lines wait aside so the lines on screen are neither dropped nor shifted.
-    fn push_log(&mut self, line: String) {
+    fn push_log(&mut self, text: String) {
+        let line = LogLine {
+            text,
+            stage: self.stage,
+            at: self.progress.elapsed(),
+        };
         if self.verbose_unpinned {
             self.pending_logs.push_back(line);
             while self.pending_logs.len() > Self::PENDING_LOG_LINES {

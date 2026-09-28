@@ -1,7 +1,7 @@
 //! Geometry, membership and reconciliation of one cloud group.
 use super::{
-    CHILD_SIZE, CloudGeometry, CloudGroup, Environment, HEADER, PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH,
-    TOOLBAR_CONTROLS_HEIGHT, TOOLBAR_HEIGHT, resize,
+    CHILD_SIZE, CloudGeometry, CloudGroup, Environment, HEADER, LEGACY_TOOLBAR_CONTROLS_HEIGHT, LEGACY_TOOLBAR_HEIGHT,
+    PAD, RUNTIME_HEIGHT, RUNTIME_WIDTH, STATUS_HEIGHT, resize,
 };
 use crate::{Board, PanelId, WorkspaceLayout};
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ impl CloudGroup {
             environment: Environment::prototype(format!("issue-{issue}")),
             size: [CHILD_SIZE[0] + PAD * 2.0, CHILD_SIZE[1] + HEADER + PAD],
             collapsed: false,
-            toolbar_expanded: false,
+            legacy_toolbar: None,
             layout: Some(WorkspaceLayout::default()),
             panels: Vec::new(),
             hidden: Vec::new(),
@@ -41,40 +41,10 @@ impl CloudGroup {
         )
     }
 
-    /// Space reserved for identity and the production toolbar before session panels.
+    /// Space reserved for identity, and a production cloud's status strip, before session panels.
     #[must_use]
     pub fn header_height(&self) -> f32 {
-        HEADER
-            + if self.remote.is_some() {
-                self.toolbar_height() + PAD
-            } else {
-                0.0
-            }
-    }
-
-    fn toolbar_height(&self) -> f32 {
-        TOOLBAR_HEIGHT
-            + if self.toolbar_expanded {
-                TOOLBAR_CONTROLS_HEIGHT
-            } else {
-                0.0
-            }
-    }
-
-    pub fn set_toolbar_expanded(&mut self, board: &mut Board, expanded: bool) {
-        if self.toolbar_expanded == expanded || self.remote.is_none() {
-            return;
-        }
-        let before = self.header_height();
-        self.toolbar_expanded = expanded;
-        let shift = self.header_height() - before;
-        for panel in &mut board.panels {
-            if self.panels.contains(&panel.local_id) {
-                panel.layout.position[1] += shift;
-            }
-        }
-        self.size[1] += shift;
-        self.publish(board, true);
+        HEADER + if self.remote.is_some() { STATUS_HEIGHT } else { 0.0 }
     }
 
     pub(super) fn minimum_width(&self) -> f32 {
@@ -181,15 +151,19 @@ impl CloudGroup {
         }
     }
 
-    /// Runtime toolbar or prototype card geometry shared by rendering and input routing.
+    /// Runtime status or prototype card geometry shared by rendering and input routing.
+    /// A production cloud without panels shows its steps and output in the body, so
+    /// the body belongs to the runtime until the first panel arrives.
     #[must_use]
     pub fn runtime_bounds(&self) -> ([f32; 2], [f32; 2]) {
         if self.remote.is_some() {
-            let min = [self.position[0] + PAD, self.position[1] + HEADER];
-            return (
-                min,
-                [self.position[0] + self.size[0] - PAD, min[1] + self.toolbar_height()],
-            );
+            let min = [self.position[0], self.position[1] + HEADER];
+            let bottom = if self.panels.is_empty() && !self.collapsed {
+                self.position[1] + self.size[1]
+            } else {
+                min[1] + STATUS_HEIGHT
+            };
+            return (min, [self.position[0] + self.size[0], bottom]);
         }
         let min = [self.position[0] + self.size[0] + PAD, self.position[1]];
         (min, [min[0] + RUNTIME_WIDTH, min[1] + RUNTIME_HEIGHT])
@@ -291,7 +265,6 @@ impl CloudGroup {
                 size: group.size,
                 workspace_position: group.workspace_position,
                 collapsed: group.collapsed,
-                toolbar_expanded: group.toolbar_expanded,
                 panels_matched: group.panels == self.panels,
                 panel_count: self.panels.len(),
             });
@@ -316,7 +289,8 @@ impl CloudGroup {
             }
         }
         self.hidden.retain(|id| self.panels.contains(id));
-        self.reserve_toolbar_space(board);
+        self.release_legacy_toolbar_space(board);
+        self.reserve_header_space(board);
         let header = self.header_height();
         for panel in &mut board.panels {
             if !self.panels.contains(&panel.local_id) {
@@ -360,7 +334,40 @@ impl CloudGroup {
         changed
     }
 
-    fn reserve_toolbar_space(&mut self, board: &mut Board) {
+    /// Sessions saved under the earlier summary card sit that card's height lower;
+    /// move them, hidden ones included, up under the status strip once.
+    fn release_legacy_toolbar_space(&mut self, board: &mut Board) {
+        let Some(expanded) = self.legacy_toolbar.take() else {
+            return;
+        };
+        if self.remote.is_none() {
+            return;
+        }
+        let legacy_top =
+            HEADER + LEGACY_TOOLBAR_HEIGHT + PAD + if expanded { LEGACY_TOOLBAR_CONTROLS_HEIGHT } else { 0.0 };
+        let content_top = self.position[1] + self.header_height();
+        let first_top = board
+            .panels
+            .iter()
+            .filter(|panel| self.panels.contains(&panel.local_id))
+            .map(|panel| panel.layout.position[1])
+            .reduce(f32::min);
+        // Only the reserved band is released; sessions a person placed lower keep their gap.
+        let shift = first_top.map_or(legacy_top - self.header_height(), |top| {
+            (top - content_top).min(legacy_top - self.header_height())
+        });
+        if shift <= 0.0 {
+            return;
+        }
+        for panel in &mut board.panels {
+            if self.panels.contains(&panel.local_id) {
+                panel.layout.position[1] -= shift;
+            }
+        }
+        self.size[1] -= shift;
+    }
+
+    fn reserve_header_space(&mut self, board: &mut Board) {
         if self.remote.is_none() {
             return;
         }

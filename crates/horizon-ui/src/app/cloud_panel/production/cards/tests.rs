@@ -1,118 +1,93 @@
 use super::*;
+use crate::app::view::canvas_scene_transform;
 use crate::test_egui::DiscardTextures;
+use egui::{Id, Order, Pos2};
 use horizon_core::{cloud_panel::CloudLaunch, cloud_runtime::state::Deployment};
 
-#[test]
-fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
-    let launch = bounds_launch();
+/// Every text and control the header strip draws for `status`, at `width`.
+fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(String, egui::Rect)>, egui::Rect) {
     let ctx = egui::Context::default();
-    for _ in 0..3 {
-        let mut rects = Vec::new();
-        let _ = ctx
-            .run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 2000.0))),
-                    ..Default::default()
-                },
-                |ui| {
-                    let cases = [
-                        (Confirmation::Stop, false),
-                        (Confirmation::Delete, false),
-                        (Confirmation::None, true),
-                    ];
-                    for (id, (confirmation, deleting)) in cases.into_iter().enumerate() {
-                        let mut runtime = super::super::Runtime {
-                            stage: Some(Stage::Ready),
-                            error: Some("Detailed retryable failure ".repeat(200)),
-                            confirmation,
-                            state: Some(Deployment {
-                                version: 1,
-                                cloud_id: launch.id.clone(),
-                                repository: "/synthetic".into(),
-                                revision: launch.revision.clone(),
-                                profile: launch.profile.clone(),
-                                stage: Stage::Ready,
-                                operation: horizon_core::cloud_runtime::CreateState::Bound {
-                                    worker_id: "worker1".into(),
-                                },
-                                spec: None,
-                                registry_generation: None,
-                                worker: None,
-                                sessions: Vec::new(),
-                                source_ready: true,
-                                ready_after_seconds: Some(420),
-                                ready_history: horizon_core::cloud_runtime::state::ReadyHistory::Observed,
-                                stop_requested: false,
-                                browserstack_released: false,
-                                browserstack_targets: std::collections::BTreeSet::new(),
-                                image_replacement: None,
-                                session_restart: None,
-                                timeline: None,
-                                last_self_stop: None,
-                                siblings: None,
-                            }),
-                            ..Default::default()
-                        };
-                        let _sender = deleting.then(|| {
-                            let (sender, receiver) = std::sync::mpsc::channel();
-                            runtime.receiver = Some(receiver);
-                            runtime.stage = Some(Stage::DeleteWorker);
-                            runtime.progress.stage(Stage::DeleteWorker, std::time::Instant::now());
-                            runtime
-                                .progress
-                                .update(horizon_core::cloud_runtime::progress::Progress::activity(
-                                    "Deleting the worker and confirming its removal ".repeat(40),
-                                ));
-                            runtime
-                                .logs
-                                .extend(std::iter::repeat_n("Detailed release output ".repeat(20), 40));
-                            sender
-                        });
-                        let id = u32::try_from(id).unwrap();
-                        let mut group = horizon_core::cloud_panel::CloudGroup::new(
-                            id,
-                            "Fixture".into(),
-                            "fixture".into(),
-                            "/synthetic".into(),
-                            [0.0, 0.0],
-                        );
-                        group.remote = Some(launch.clone());
-                        let board = horizon_core::Board::new();
-                        let response = runtime_frame(ui, &group, |ui| {
-                            toolbar::show(ui, &group, &mut runtime, &board, false);
-                        });
-                        let (min, max) = group.runtime_bounds();
-                        assert!(
-                            (response.response.rect.width() - (max[0] - min[0])).abs() < 0.1,
-                            "case {id}: {:?}",
-                            response.response.rect
-                        );
-                        assert!(
-                            (response.response.rect.height() - (max[1] - min[1])).abs() < 0.1,
-                            "case {id}: {:?}",
-                            response.response.rect
-                        );
-                        rects.push(response.response.rect);
-                    }
-                },
-            )
-            .discard_textures();
-        assert!(rects.windows(2).all(|pair| pair[0].bottom() <= pair[1].top()));
-    }
+    let mut result = None;
+    let header = egui::Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(width, 118.0));
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            let indicators = strip::Indicators {
+                running: 2,
+                terminals: 3,
+                desktop: Some(true),
+                sharing: strip::Sharing::Open(3),
+                companions: 2,
+            };
+            let spend = strip::Spend {
+                line: "$0.320/h · $1.02 run · $8.86 total".into(),
+                explanation: String::new(),
+            };
+            result = Some(strip::show(ui, header, status, &indicators, &spend, false));
+        })
+        .discard_textures();
+    let texts = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((
+                text.galley.text().to_owned(),
+                text.visual_bounding_rect().intersect(clipped.clip_rect),
+            )),
+            _ => None,
+        })
+        .collect();
+    (result.unwrap(), texts, header)
 }
 
-fn bounds_launch() -> CloudLaunch {
-    let mut config = super::super::CloudConfig::parse(
-        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/team/worker\n    cpu: 4\n    memory_gb: 8\n",
-    )
-    .unwrap();
-    CloudLaunch {
-        deployment_started: true,
-        id: "runtime-bounds".into(),
-        revision: "a".repeat(40),
-        profile_name: "Long development profile ".repeat(8),
-        profile: config.profiles.remove("dev").unwrap(),
-        placement: horizon_core::cloud_panel::Placement::default(),
+#[test]
+fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
+    let long = "Detailed retryable failure ".repeat(40);
+    let runtime = super::super::Runtime {
+        stage: Some(Stage::Push),
+        error: Some(long.clone()),
+        ..Default::default()
+    };
+    let failed = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+    let ready = status::of(
+        &super::super::Runtime::default(),
+        status::Occupancy {
+            panels: 3,
+            running: 2,
+            terminals: 3,
+        },
+        std::time::SystemTime::now(),
+    );
+    for status in [&failed, &ready] {
+        for width in [548.0, 900.0, 1760.0] {
+            let (strip, texts, header) = strip_frame(width, status);
+            let close_left = header.right() - 42.0;
+            assert!(
+                strip.reserved <= width - 64.0 - 170.0 + 0.5,
+                "the title keeps its room at {width}"
+            );
+            for (text, rect) in &texts {
+                if rect.is_negative() || rect.width() <= 0.0 {
+                    continue;
+                }
+                assert!(
+                    header.contains_rect(rect.shrink(0.5)),
+                    "{text:?} stays in the header at {width}: {rect:?}"
+                );
+                if rect.top() < 60.0 {
+                    assert!(
+                        rect.right() <= close_left + 0.5,
+                        "{text:?} clears the close button at {width}"
+                    );
+                }
+            }
+            let has = |label: &str| texts.iter().any(|(text, _)| text == label);
+            assert!(has(status.primary.unwrap().label()), "the main action survives {width}");
+            assert_eq!(
+                has("$0.320/h · $1.02 run · $8.86 total"),
+                width >= 900.0,
+                "spend is the first thing a narrow header drops ({width})"
+            );
+        }
     }
 }
 

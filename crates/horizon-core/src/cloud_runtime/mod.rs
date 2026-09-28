@@ -9,6 +9,7 @@ pub mod command;
 pub mod companions;
 pub mod cost;
 pub mod deployment;
+pub mod diagnosis;
 pub mod git_auth;
 pub mod image;
 pub mod lifecycle;

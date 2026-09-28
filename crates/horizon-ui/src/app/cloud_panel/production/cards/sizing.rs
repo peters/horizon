@@ -62,21 +62,6 @@ pub(super) fn profile_details(
     resize
 }
 
-pub(super) fn profile_summary(
-    ui: &mut egui::Ui,
-    launch: &horizon_core::cloud_panel::CloudLaunch,
-    runtime: &super::super::Runtime,
-    region_of: &dyn Fn(&str) -> Option<String>,
-) {
-    ui.label(RichText::new(&launch.profile_name).size(17.0).color(theme::FG_DIM()));
-    let profile = runtime.state.as_ref().map_or(&launch.profile, |state| &state.profile);
-    ui.label(super::super::machine_size::fixed(
-        (profile.cpu, profile.memory_gb),
-        profile.gpu,
-    ));
-    profile_metadata(ui, launch, runtime, region_of);
-}
-
 fn profile_metadata(
     ui: &mut egui::Ui,
     launch: &horizon_core::cloud_panel::CloudLaunch,

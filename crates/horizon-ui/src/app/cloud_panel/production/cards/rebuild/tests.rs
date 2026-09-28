@@ -209,7 +209,7 @@ fn a_running_rebuild_lists_its_steps_and_cancels_only_before_the_switch() {
         "Ready",
         "Building the committed recipe",
         "Cancel rebuild",
-        "Verbose output",
+        "Output",
     ] {
         assert!(has(&running, shown), "{shown} is shown while rebuilding");
     }
@@ -262,7 +262,17 @@ fn a_running_rebuild_lists_its_steps_and_cancels_only_before_the_switch() {
     runtime.progress.stage(Stage::Replace, Instant::now());
     runtime.progress.stage(Stage::Ready, Instant::now());
     let finished = texts(&ctx, &mut runtime);
-    assert!(has(&finished, "Replace image · 0m"));
+    let status = super::super::status::of(
+        &runtime,
+        super::super::status::Occupancy::default(),
+        std::time::SystemTime::now(),
+    );
+    assert_eq!(status.track.stages.len(), 7, "the header keeps the rebuild's steps");
+    assert!(status.track.stages.contains(&Stage::Replace));
+    assert!(
+        runtime.progress.stage_duration(Stage::Replace).is_some(),
+        "its time is kept"
+    );
     assert!(!has(&finished, "Provision worker"));
     assert!(!has(&finished, "Cancelling image rebuild"));
     assert!(has(&finished, OFFER));
@@ -326,7 +336,6 @@ fn cancelling_a_requested_switch_needs_a_confirmation() {
         REQUESTED,
         "Continue rebuild",
         "Cancel rebuild…",
-        "Replace image",
         "Worker status needs confirmation",
         "Check provider",
         "Delete cloud resources…",

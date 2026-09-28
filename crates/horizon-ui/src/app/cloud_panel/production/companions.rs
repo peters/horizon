@@ -392,6 +392,16 @@ impl State {
         !self.retiring.is_empty()
     }
 
+    /// Companion clouds selected for `cloud`, as its header counts them.
+    pub(super) fn selected(&self, cloud: &str) -> usize {
+        self.entries
+            .get(cloud)
+            .and_then(|entry| entry.snapshot.as_ref())
+            .map_or(0, |snapshot| {
+                snapshot.rows.iter().filter(|row| row.companion.selected).count()
+            })
+    }
+
     pub(super) fn render(&mut self, ui: &mut egui::Ui, cloud: &str) {
         if !self.retiring.is_empty() {
             ui.small("Removing previous companion access…");

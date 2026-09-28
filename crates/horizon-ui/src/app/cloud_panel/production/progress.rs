@@ -5,6 +5,57 @@ use horizon_core::cloud_runtime::{
 };
 use std::time::{Duration, Instant};
 
+/// A step's reported progress and what can be derived from it.
+pub(super) struct Measured<'a> {
+    pub detail: &'a str,
+    pub completed: u64,
+    pub total: Option<u64>,
+    pub unit: Unit,
+    /// Set only when bytes were reported as sent; an activity alone moves nothing.
+    pub transferred: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub remaining: Option<Duration>,
+    pub estimable: bool,
+}
+
+impl Measured<'_> {
+    /// Share done, when a total is known.
+    pub fn fraction(&self) -> Option<f32> {
+        let total = self.total?;
+        let permille = u128::from(self.completed.min(total)) * 1000 / u128::from(total);
+        Some(f32::from(u16::try_from(permille).unwrap_or(1000)) / 1000.0)
+    }
+
+    /// "612 MB / 1.84 GB · 41 MB/s" or "24/26 steps".
+    pub fn numbers(&self) -> String {
+        let amount = |value| match self.unit {
+            Unit::Bytes => progress::bytes(value),
+            Unit::Steps => value.to_string(),
+        };
+        let mut text = match (self.unit, self.total) {
+            (Unit::Steps, Some(total)) => format!("{}/{total} steps", self.completed),
+            (_, Some(total)) => format!("{} / {}", amount(self.completed), amount(total)),
+            (Unit::Bytes, None) if self.transferred.is_some() => format!("{} transferred", amount(self.completed)),
+            (_, None) => String::new(),
+        };
+        if let Some(speed) = self.bytes_per_second {
+            text.push_str(" · ");
+            text.push_str(&progress::bytes(speed));
+            text.push_str("/s");
+        }
+        text
+    }
+
+    /// "~40s left", or what is missing for an estimate.
+    pub fn eta(&self) -> Option<String> {
+        if let Some(remaining) = self.remaining {
+            Some(format!("~{} left", progress::duration(remaining)))
+        } else {
+            self.estimable.then(|| "ETA once measurable".to_owned())
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Timeline {
     started: Option<Instant>,
@@ -94,6 +145,43 @@ impl Timeline {
         } else {
             None
         }
+    }
+
+    /// How long `stage` ran in this attempt: live while it runs, frozen once finished.
+    pub fn stage_duration(&self, stage: Stage) -> Option<Duration> {
+        if let Some((_, start)) = self.active.filter(|(current, _)| *current == stage) {
+            return Some(start.elapsed());
+        }
+        self.finished
+            .iter()
+            .rev()
+            .find(|(current, _)| *current == stage)
+            .map(|(_, elapsed)| *elapsed)
+    }
+
+    /// The step running now, else the last one this attempt reported.
+    pub fn last_stage(&self) -> Option<Stage> {
+        self.active
+            .map(|(stage, _)| stage)
+            .or_else(|| self.finished.last().map(|(stage, _)| *stage))
+    }
+
+    /// The running step's measured progress, for the one-line status.
+    pub fn measured(&self) -> Option<Measured<'_>> {
+        let detail = self.detail.as_ref()?;
+        let running = self.active.is_some();
+        let remaining = self.rate.remaining(detail).filter(|_| running);
+        Some(Measured {
+            detail: &detail.detail,
+            completed: detail.completed,
+            total: detail.total.filter(|total| *total > 0),
+            unit: detail.unit,
+            transferred: detail.transferred,
+            bytes_per_second: self.rate.bytes_per_second().filter(|_| running),
+            remaining,
+            // Complete work has nothing left to estimate.
+            estimable: detail.total.is_some_and(|total| detail.completed < total),
+        })
     }
 
     pub fn activity(&self) -> Option<&str> {

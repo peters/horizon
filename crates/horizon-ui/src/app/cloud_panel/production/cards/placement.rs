@@ -27,6 +27,25 @@ pub(super) fn landed(state: Option<&Deployment>) -> Option<&str> {
     state?.worker.as_ref()?.data_center()
 }
 
+/// Where the cloud lives in a few characters, for its header: the data center its
+/// worker landed in, else the one chosen, the chosen region, or how many were chosen.
+pub(in crate::app::cloud_panel) fn short(launch: &CloudLaunch, state: Option<&Deployment>) -> Option<String> {
+    if let Some(center) = landed(state) {
+        return Some(center.to_owned());
+    }
+    let placement = &launch.placement;
+    match placement.data_centers.as_slice() {
+        [center] => Some(center.clone()),
+        [] => placement.region.clone(),
+        many => Some(
+            placement
+                .region
+                .clone()
+                .unwrap_or_else(|| format!("{} data centers", many.len())),
+        ),
+    }
+}
+
 /// `region_of` names the region of a data center, when the provider's list is known.
 pub(super) fn where_it_lives(
     ui: &mut egui::Ui,
@@ -116,6 +135,30 @@ mod tests {
             .unwrap(),
             placement,
         }
+    }
+
+    #[test]
+    fn the_header_names_the_landed_data_center_before_the_choice() {
+        let chosen = launch(Placement {
+            region: Some("Europe".into()),
+            data_centers: vec!["EU-RO-1".into(), "EU-SE-1".into()],
+            gpu_types: Vec::new(),
+        });
+        assert_eq!(short(&chosen, None).as_deref(), Some("Europe"));
+        let landed =
+            deployment(r#"{"id":"w","name":"w","imageName":"i","desiredStatus":"RUNNING","dataCenterId":"EU-SE-1"}"#);
+        assert_eq!(short(&chosen, Some(&landed)).as_deref(), Some("EU-SE-1"));
+        let one = launch(Placement {
+            data_centers: vec!["US-TX-3".into()],
+            ..Placement::default()
+        });
+        assert_eq!(short(&one, None).as_deref(), Some("US-TX-3"));
+        let many = launch(Placement {
+            data_centers: vec!["A".into(), "B".into(), "C".into()],
+            ..Placement::default()
+        });
+        assert_eq!(short(&many, None).as_deref(), Some("3 data centers"));
+        assert_eq!(short(&launch(Placement::default()), None), None);
     }
 
     fn deployment(worker: &str) -> Deployment {
