@@ -176,3 +176,39 @@ fn reconciled_mounts_may_omit_capacity_but_cannot_report_a_different_one() {
         }
     }
 }
+
+#[test]
+fn confirmed_local_recovery_does_not_need_provider_credentials() {
+    let (root, store) = fixture();
+    confirmed(&store);
+    drop(store);
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file":root.path().join("missing-key"),
+        "ssh_identity_file":"unused", "docker_config":"unused", "registry_pull_auth_id":null,
+        "cpu_flavors":[], "gpu_types":[]
+    }))
+    .unwrap();
+    let state = grow_storage(root.path(), &settings, 40, &Cancellation::default()).unwrap();
+    assert_eq!(state.profile.storage.volume_gb, 40);
+    assert!(!root.path().join(JOURNAL).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_cannot_capture_an_incomplete_growth() {
+    let (root, store) = fixture();
+    prepare(&store, 40).unwrap();
+    let before = fs::read(root.path().join("deployment.json")).unwrap();
+    drop(store);
+    let error = crate::cloud_runtime::state::migration::MigratedStore::migrate(
+        root.path(),
+        "synthetic-session",
+        "synthetic-workspace",
+        crate::cloud_runtime::allocation::ControllerId::generate(),
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("disk growth is pending"));
+    assert!(!root.path().join("migration.json").exists());
+    assert_eq!(fs::read(root.path().join("deployment.json")).unwrap(), before);
+}

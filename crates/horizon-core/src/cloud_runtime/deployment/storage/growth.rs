@@ -21,8 +21,8 @@ struct Intent {
     observed: Option<Volume>,
 }
 
-pub(in crate::cloud_runtime) fn require_settled(store: &Store) -> Result<()> {
-    if store.root().join(JOURNAL).try_exists()? {
+pub(in crate::cloud_runtime) fn require_settled(root: &Path) -> Result<()> {
+    if root.join(JOURNAL).try_exists()? {
         return Err(Error::Invalid(PENDING));
     }
     Ok(())
@@ -35,9 +35,12 @@ pub(in crate::cloud_runtime) fn require_settled(store: &Store) -> Result<()> {
 /// Refuses shrinking, unmanaged storage, migrated allocations and profile drift.
 pub fn grow_storage(root: &Path, settings: &Settings, size_gb: u16, cancel: &Cancellation) -> Result<Deployment> {
     cancel.check()?;
-    let provider = RunPod::new(settings.credential()?);
     let store = Store::lock(root)?;
-    let mut intent = match read(&store)? {
+    let retained = read(&store)?;
+    if retained.is_none() {
+        settings.credential()?;
+    }
+    let mut intent = match retained {
         Some(intent) => intent,
         None => prepare(&store, size_gb)?,
     };
@@ -46,6 +49,7 @@ pub fn grow_storage(root: &Path, settings: &Settings, size_gb: u16, cancel: &Can
     }
     intent.verify(&store)?;
     if intent.observed.is_none() {
+        let provider = RunPod::new(settings.credential()?);
         let mut growth = intent.growth.clone();
         let volume = provider.grow_volume(&mut growth, cancel, |next| {
             intent.growth = next.clone();

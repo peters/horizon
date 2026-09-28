@@ -170,8 +170,9 @@ impl Store {
     }
     /// # Errors
     /// Returns read/parse errors without resetting or ignoring corrupt state.
+    /// Refuses loading while a workspace-growth journal requires recovery.
     pub fn load(&self) -> Result<Option<Deployment>> {
-        super::deployment::storage::growth::require_settled(self)?;
+        super::deployment::storage::growth::require_settled(self.root())?;
         self.load_during_storage_growth()
     }
 
