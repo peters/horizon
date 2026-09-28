@@ -231,9 +231,10 @@ library with six third-party submodules, `pinned` cut their transfer from 1.19 G
 to 0.19 GB. The primary repository and each same-worker sibling keep their full
 history either way. Each repository reads the setting from its own committed
 `.horizon/cloud.yml`; a sibling without one gets full history. Worker images older
-than this option report no `horizon-source-shallow-contract=1`, and Horizon sends
-them full history. Older Horizon builds refuse a `.horizon/cloud.yml` with a
-`source` block.
+than this option report no `horizon-source-shallow-contract=1`. Horizon reads that
+from the image contract it checks before allocating a worker and packs full history
+for such an image up front. Older Horizon builds refuse a `.horizon/cloud.yml` with
+a `source` block.
 
 A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
 `major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the

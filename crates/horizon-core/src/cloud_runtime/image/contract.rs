@@ -1,15 +1,22 @@
 use super::{Duration, Error, Event, Images, Result, Runner};
-use crate::cloud_runtime::{git_auth, siblings, worker_contract};
+use crate::cloud_runtime::{WorkerContract, git_auth, siblings, worker_contract};
 use horizon_cloud::{Cancellation, Capabilities, CloudError, Profile};
 
 impl Images<'_> {
     pub(super) fn validate(&self, image: &str, operation_id: &str, profile: &Profile) -> Result<()> {
-        self.validate_contract(image, operation_id, profile, false)
+        self.validate_contract(image, operation_id, profile, false).map(|_| ())
     }
 
+    /// The optional features the image reports, such as pinned submodule history.
     /// # Errors
     /// Checks the selected runtime and optional Git binding before allocating compute.
-    pub fn validate_contract(&self, image: &str, operation_id: &str, profile: &Profile, git_auth: bool) -> Result<()> {
+    pub fn validate_contract(
+        &self,
+        image: &str,
+        operation_id: &str,
+        profile: &Profile,
+        git_auth: bool,
+    ) -> Result<WorkerContract> {
         self.check(image, operation_id, profile, git_auth, None)
     }
 
@@ -22,7 +29,7 @@ impl Images<'_> {
         operation_id: &str,
         profile: &Profile,
         grants: bool,
-    ) -> Result<()> {
+    ) -> Result<WorkerContract> {
         self.check(image, operation_id, profile, grants, Some(grants))
     }
 
@@ -33,7 +40,7 @@ impl Images<'_> {
         profile: &Profile,
         git_auth: bool,
         sibling_grants: Option<bool>,
-    ) -> Result<()> {
+    ) -> Result<WorkerContract> {
         let capabilities = &profile.capabilities;
         if !horizon_cloud::valid_id(operation_id) {
             return Err(Error::Invalid("Invalid image operation identity"));
@@ -46,7 +53,8 @@ impl Images<'_> {
             .and_then(|output| {
                 worker_contract::validate(&output, capabilities, git_auth, profile.idle_stop_minutes.is_some())?;
                 worker_contract::validate_idle_report(&output, stopped_by_horizon(profile))?;
-                sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))
+                sibling_grants.map_or(Ok(()), |grants| validate_siblings(&output, grants))?;
+                Ok(WorkerContract::reported(&output))
             });
         // Killing a Docker client does not stop its daemon-owned container.
         finish_cleanup(result, self.remove_contract(&name), self.runner.emit)

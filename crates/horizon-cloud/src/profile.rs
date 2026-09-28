@@ -332,12 +332,14 @@ mod tests {
         );
         assert!(parse("submodule_history: shallow").is_err());
         assert!(parse("lfs: {}").is_err());
-        let (head, tail) = EXAMPLE.split_once("# source:\n").unwrap();
+        // A Windows checkout gives the included example CRLF line endings.
+        let documented = EXAMPLE.replace("\r\n", "\n");
+        let (head, tail) = documented.split_once("# source:\n").unwrap();
         let (block, rest) = tail.split_once("\n\n").unwrap();
         let example = format!("{head}source:\n{}\n\n{rest}", block.replace("#   ", "  "));
         let config = CloudConfig::parse(&example).unwrap();
         assert_eq!(config.source.submodule_history, SubmoduleHistory::Pinned);
-        assert!(CloudConfig::parse(EXAMPLE).unwrap().source.is_default());
+        assert!(CloudConfig::parse(&documented).unwrap().source.is_default());
     }
 
     #[test]

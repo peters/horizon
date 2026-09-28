@@ -18,10 +18,11 @@ struct Sibling {
     auxiliary: Auxiliary,
 }
 
-/// A repository's source material archive, packed with the submodule history its
-/// committed `.horizon/cloud.yml` selects, and what it takes to pack it again.
+/// A repository's source material archive. Pinned submodule history, which its committed
+/// `.horizon/cloud.yml` may select, waits for the image's contract, so an image that
+/// cannot record shallow submodules gets full history before any worker is allocated.
 struct Auxiliary {
-    archive: PathBuf,
+    archive: Option<PathBuf>,
     repository: PathBuf,
     revision: String,
     root: PathBuf,
@@ -33,31 +34,60 @@ impl Auxiliary {
         let history = repository::launch::committed_config(repository, revision, runner)?
             .map(|config| config.source.submodule_history)
             .unwrap_or_default();
-        Ok(Self {
-            archive: repository::auxiliary(repository, revision, root, history, runner)?,
+        let mut auxiliary = Self {
+            archive: None,
             repository: repository.to_owned(),
             revision: revision.to_owned(),
             root: root.to_owned(),
             history,
-        })
+        };
+        if history == SubmoduleHistory::Full {
+            auxiliary.settle(&WorkerContract::default(), runner)?;
+        }
+        Ok(auxiliary)
     }
 
-    /// A worker image that cannot record a shallow submodule gets full history instead.
-    fn for_worker(self, contract: &WorkerContract, runner: &Runner<'_>, emit: &dyn Fn(Event)) -> Result<PathBuf> {
-        if self.history == SubmoduleHistory::Full || contract.pinned_submodules {
-            return Ok(self.archive);
+    /// Packs a waiting archive: pinned when `contract` records shallow submodules.
+    fn settle(&mut self, contract: &WorkerContract, runner: &Runner<'_>) -> Result<()> {
+        if self.archive.is_none() {
+            if !contract.pinned_submodules {
+                self.history = SubmoduleHistory::Full;
+            }
+            let archive = repository::auxiliary(&self.repository, &self.revision, &self.root, self.history, runner)?;
+            self.archive = Some(archive);
         }
-        emit(Event::Output(
-            "This worker image predates pinned submodule history; sending full submodule history".into(),
-        ));
-        std::fs::remove_file(&self.archive)?;
-        repository::auxiliary(
-            &self.repository,
-            &self.revision,
-            &self.root,
-            SubmoduleHistory::Full,
-            runner,
-        )
+        Ok(())
+    }
+
+    /// The archive for the ready worker. One packed pinned for an image whose contract
+    /// differs from the worker's is packed again with full history; this only guards a
+    /// mismatch, since [`Packed::settle`] decides from the image before allocation.
+    fn for_worker(mut self, contract: &WorkerContract, runner: &Runner<'_>, emit: &dyn Fn(Event)) -> Result<PathBuf> {
+        if let Some(archive) = &self.archive
+            && self.history == SubmoduleHistory::Pinned
+            && !contract.pinned_submodules
+        {
+            emit(Event::Output(
+                "This worker cannot record pinned submodule history although its image could; sending full submodule history".into(),
+            ));
+            std::fs::remove_file(archive)?;
+            self.archive = None;
+        }
+        self.settle(contract, runner)?;
+        self.archive
+            .ok_or(super::Error::Invalid("Source material was not packed"))
+    }
+}
+
+impl Packed {
+    /// Packs each archive that waited for `image`, the contract of the image the worker
+    /// will run, before the worker is allocated.
+    pub(super) fn settle(&mut self, image: &WorkerContract, runner: &Runner<'_>) -> Result<()> {
+        let siblings = self.siblings.iter_mut().map(|sibling| &mut sibling.auxiliary);
+        for auxiliary in self.auxiliary.iter_mut().chain(siblings) {
+            auxiliary.settle(image, runner)?;
+        }
+        Ok(())
     }
 }
 
@@ -192,7 +222,7 @@ mod tests {
             ("native", pinned.as_str())
         );
         assert!(sibling.pack.starts_with(packs.path().join("sibling-0")) && sibling.pack.is_file());
-        let archive = &sibling.auxiliary.archive;
+        let archive = sibling.auxiliary.archive.as_ref().unwrap();
         assert!(archive.starts_with(packs.path().join("sibling-0")) && archive.is_file());
         git(&lib, &["index-pack", &sibling.pack.to_string_lossy()]);
         let listed = git(
@@ -246,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_can_opt_into_pinned_submodule_history_and_older_workers_get_full() {
+    fn pinned_submodule_history_is_decided_by_the_image_before_allocation() {
         let root = tempfile::tempdir().unwrap();
         let app = root.path().join("app");
         committed(&app);
@@ -276,12 +306,13 @@ mod tests {
         let revision = git(&app, &["rev-parse", "HEAD"]);
         let cancel = Cancellation::default();
         let notes = std::cell::RefCell::new(Vec::new());
-        let emit = |event| {
-            if let Event::Output(line) = event
-                && line.contains("full submodule history")
-            {
-                notes.borrow_mut().push(line);
+        let archived = std::cell::Cell::new(0);
+        let emit = |event| match event {
+            Event::Output(line) if line.contains("full submodule history") => notes.borrow_mut().push(line),
+            Event::Progress(progress) if progress.detail == "Pack source dependencies" => {
+                archived.set(archived.get() + 1);
             }
+            _ => {}
         };
         let runner = Runner {
             cancel: &cancel,
@@ -292,16 +323,42 @@ mod tests {
             pinned_submodules: true,
             ..WorkerContract::default()
         };
-        for (contract, expected) in [
-            (&current, [pinned.clone()].into()),
-            (&WorkerContract::default(), [first.clone(), pinned.clone()].into()),
+        let older = WorkerContract::default();
+        let (only_pinned, full) = ([pinned.clone()].into(), [first.clone(), pinned.clone()].into());
+        // The image decides before allocation; the ready worker only guards a mismatch,
+        // and a reconnect without an image check decides from the worker once.
+        for (image, worker, expected, repacked) in [
+            (Some(&current), &current, &only_pinned, false),
+            (Some(&older), &older, &full, false),
+            (Some(&current), &older, &full, true),
+            (None, &current, &only_pinned, false),
         ] {
+            notes.borrow_mut().clear();
             let packs = tempfile::tempdir().unwrap();
-            let auxiliary = Auxiliary::pack(&app, &revision, packs.path(), &runner).unwrap();
-            assert_eq!(auxiliary.history, SubmoduleHistory::Pinned);
-            let archive = auxiliary.for_worker(contract, &runner, &emit).unwrap();
-            assert_eq!(archived_commits(&archive, &module), expected);
+            let mut packed = Packed {
+                pack: packs.path().join("source.pack"),
+                auxiliary: Some(Auxiliary::pack(&app, &revision, packs.path(), &runner).unwrap()),
+                siblings: Vec::new(),
+                manifest: None,
+            };
+            assert!(
+                packed.auxiliary.as_ref().unwrap().archive.is_none(),
+                "pinned waits for a contract"
+            );
+            if let Some(image) = image {
+                packed.settle(image, &runner).unwrap();
+                assert!(packed.auxiliary.as_ref().unwrap().archive.as_ref().unwrap().is_file());
+            }
+            archived.set(0);
+            let archive = packed.auxiliary.unwrap().for_worker(worker, &runner, &emit).unwrap();
+            assert_eq!(&archived_commits(&archive, &module), expected);
+            let packed_after_ready = usize::from(repacked || image.is_none());
+            assert_eq!(
+                archived.get(),
+                packed_after_ready,
+                "archives packed once the worker is ready"
+            );
+            assert_eq!(notes.borrow().len(), usize::from(repacked));
         }
-        assert_eq!(notes.borrow().len(), 1, "only the older worker is told why");
     }
 }
