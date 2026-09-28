@@ -36,7 +36,8 @@ ARG HORIZON_CODEX_VERSION=
 RUN bash /usr/local/lib/horizon/install-build-tools.sh codex "$HORIZON_CODEX_VERSION"
 ARG HORIZON_CLAUDE_VERSION=
 RUN bash /usr/local/lib/horizon/install-build-tools.sh claude "$HORIZON_CLAUDE_VERSION" \
-    && horizon-worker-check --git-auth
+    && contract=$(horizon-worker-check --git-auth) \
+    && printf '%s\n' "$contract" | grep -qx 'horizon-shared-checkout-contract=1'
 ENV LANG=C.UTF-8 PATH="${CARGO_HOME}/bin:${PATH}"
 RUN printf 'export RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/workspace/cargo LANG=C.UTF-8 PATH="%s"\n' "$PATH" \
         > /etc/profile.d/horizon-development.sh \

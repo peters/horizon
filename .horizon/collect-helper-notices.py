@@ -22,8 +22,8 @@ for source in sorted((root / 'registry/src').glob('*/*')) + sorted((root / 'git/
     supplements = {
         'profiling': ('aclysma/profiling', '8271551172eb6fa4cba47369aedd93790c623df9', ['LICENSE-APACHE', 'LICENSE-MIT']),
         'profiling-procmacros': ('aclysma/profiling', '8271551172eb6fa4cba47369aedd93790c623df9', ['LICENSE-APACHE', 'LICENSE-MIT']),
-        'rmcp': ('modelcontextprotocol/rust-sdk', 'fd7811fdaa9fefa1c8034534b4d7a31c97204f89', ['LICENSE']),
-        'rmcp-macros': ('modelcontextprotocol/rust-sdk', 'fd7811fdaa9fefa1c8034534b4d7a31c97204f89', ['LICENSE']),
+        'rmcp': ('modelcontextprotocol/rust-sdk', '9427a929959e665e0d12e9395f674026baf4bd48', ['LICENSE']),
+        'rmcp-macros': ('modelcontextprotocol/rust-sdk', '0cde3c5cf3e6aff0cc852ce6045f107e95991f48', ['LICENSE']),
     }
     provenance = {'package': data, 'source_revision': None}
     vcs = source / '.cargo_vcs_info.json'
