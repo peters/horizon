@@ -845,3 +845,39 @@ fn a_slow_lookup_is_abandoned_at_switch_off_and_preflight_refusals_cost_no_slot(
     );
     assert_eq!(dials.load(Ordering::SeqCst), dialled);
 }
+
+#[test]
+fn a_probe_takes_its_rate_slot_when_it_dials_not_when_it_was_asked() {
+    let dials = Arc::new(AtomicUsize::new(0));
+    let discoverer = {
+        let dials = Arc::clone(&dials);
+        Discoverer::with_parts(
+            scope_with(Arc::new(AtomicUsize::new(usize::MAX))),
+            Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+            Box::new(move |_, _, _: &Cancellation| {
+                dials.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            Cancellation::default(),
+        )
+    };
+    let probe = |host: &str| {
+        discoverer.answer(Request::Probe {
+            host: host.into(),
+            ports: vec![80],
+        })
+    };
+    // The lookup takes three seconds; the slot is stamped after it, when the first batch dials.
+    let asked = Instant::now();
+    assert!(matches!(probe("slow.local"), Answer::Probe(_)));
+    let stamped = discoverer.prober.last_start().unwrap();
+    assert!(stamped >= asked + Duration::from_secs(3), "{:?}", stamped - asked);
+    for _ in 1..probe::PER_MINUTE {
+        assert!(matches!(probe("192.168.1.50"), Answer::Probe(_)));
+    }
+    assert_eq!(dials.load(Ordering::SeqCst), probe::PER_MINUTE);
+    let sixth = discoverer.prober.last_start().unwrap();
+    assert!(matches!(probe("192.168.1.50"), Answer::Refused(limit) if limit.contains("a minute")));
+    assert!(sixth.elapsed() < Duration::from_secs(60));
+    assert_eq!(dials.load(Ordering::SeqCst), probe::PER_MINUTE);
+}

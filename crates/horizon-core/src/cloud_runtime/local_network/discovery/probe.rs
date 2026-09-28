@@ -156,9 +156,10 @@ impl Prober {
             if let Err(reply) = scope.on_network() {
                 return Answer::Refused(reply.message().into());
             }
-            // Only a probe about to dial takes a slot of the rate limit.
+            // Only a probe about to dial takes a slot of the rate limit, stamped now: a slow
+            // lookup before it must not backdate the slot.
             if index == 0 {
-                started.push_back(now);
+                started.push_back(Instant::now());
             }
             for (port, result) in self.attempt(address, batch, cancel) {
                 match result {
@@ -210,6 +211,16 @@ impl Prober {
             return;
         }
         remembered.entry(address).or_default().extend(open);
+    }
+
+    /// When the latest probe took its slot.
+    #[cfg(test)]
+    pub(super) fn last_start(&self) -> Option<Instant> {
+        self.started
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .back()
+            .copied()
     }
 
     /// The ports probes found open so far, per address.
