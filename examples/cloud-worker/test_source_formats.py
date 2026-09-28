@@ -383,7 +383,8 @@ class SourceFormatTests(unittest.TestCase):
             plain = dict(os.environ, GIT_CONFIG_GLOBAL=str(clean), GIT_CONFIG_NOSYSTEM='1')
             # U+0085 is a line separator to str.splitlines(), not to git-lfs's listing.
             contents = {'keep.bin': b'kept binary content\n', 'fixtures/skip.bin': b'skipped binary content\n',
-                        'fixtures/odd\u0085name.bin': b'oddly named content\n'}
+                        'fixtures/odd\u0085name.bin': b'oddly named content\n',
+                        'fixtures/line\u2028separated.bin': b'separated content\n'}
             pointer = lambda content: (f'version https://git-lfs.github.com/spec/v1\noid sha256:{hashlib.sha256(content).hexdigest()}'
                                        f'\nsize {len(content)}\n')
             local = root / 'local'
@@ -410,7 +411,7 @@ class SourceFormatTests(unittest.TestCase):
             (workspace / 'horizon-transfer.pack').write_bytes(pack)
             self.assertEqual(self.execute('horizon-worker-import', workspace, revision, env=worker).returncode, 0)
             skipped = [{'path': path, 'oid': hashlib.sha256(contents[path]).hexdigest(), 'size': len(contents[path])}
-                       for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin')]
+                       for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin', 'fixtures/line\u2028separated.bin')]
             kept = [('keep.bin', contents['keep.bin'])]
             refusals = [({'exclude': ['other/**'], 'skipped': skipped}, kept),  # git-lfs would smudge it
                         ({'exclude': ['fixtures/**'], 'skipped': skipped}, kept + [('fixtures/skip.bin', contents['fixtures/skip.bin'])]),
@@ -445,7 +446,7 @@ class SourceFormatTests(unittest.TestCase):
             subprocess.run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', agent, revision],
                            check=True, env=worker, capture_output=True)
             self.assertEqual((agent / 'keep.bin').read_bytes(), contents['keep.bin'])
-            for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin'):
+            for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin', 'fixtures/line\u2028separated.bin'):
                 self.assertEqual((agent / path).read_text(), pointer(contents[path]))
             self.assertEqual(subprocess.check_output(['git', '-C', agent, 'status', '--porcelain'], env=worker), b'')
 

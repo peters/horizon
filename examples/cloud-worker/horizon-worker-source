@@ -52,8 +52,12 @@ def lfs_selection(value):
     if not isinstance(skipped, list) or any(
             not isinstance(asset, dict) or set(asset) != {'path', 'oid', 'size'} or not isinstance(asset['path'], str)
             or not isinstance(asset['oid'], str) or not re.fullmatch(r'[0-9a-f]{64}', asset['oid'])
-            or type(asset['size']) is not int or asset['size'] < 1 or '\n' in asset['path'] for asset in skipped):
+            or type(asset['size']) is not int or asset['size'] < 0 for asset in skipped):
         raise ValueError('Invalid LFS selection')
+    if any(asset['size'] == 0 for asset in skipped):
+        raise ValueError('An empty LFS object is always transferred; a selection cannot skip it')
+    if any('\n' in asset['path'] for asset in skipped):
+        raise ValueError('An LFS path with a newline is always transferred; a selection cannot skip it')
     return patterns, skipped
 
 
@@ -125,7 +129,9 @@ def lfs_paths(repository, *filters):
     listed = subprocess.run(['git', '--git-dir', str(repository), 'lfs', 'ls-files', '--name-only', *filters,
                              'refs/heads/base'], capture_output=True, check=True).stdout.decode(errors='replace')
     # One name per '\n'-terminated line, as Horizon reads the same listing: other
-    # separators, such as U+0085, belong to the name.
+    # separators, such as U+0085 or U+2028, belong to the name. The --json listing is
+    # not used because git-lfs before 3.2, still shipped by some hosts and base images,
+    # lacks it; a name with a newline is therefore never skipped on either end.
     return {line.removesuffix('\r') for line in listed.split('\n') if line}
 
 
