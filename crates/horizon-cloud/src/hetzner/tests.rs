@@ -9,6 +9,7 @@ use std::{
 mod keys;
 mod networks;
 mod servers;
+mod volume_growth;
 mod volumes;
 
 const OPERATION: &str = "op-1";
