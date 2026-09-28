@@ -253,8 +253,7 @@ mod tests {
                 shown
                     .iter()
                     .find(|(text, _)| text == label)
-                    .map(|(_, rect)| *rect)
-                    .unwrap_or_else(|| panic!("{label} is painted at {size:?}"))
+                    .map_or_else(|| panic!("{label} is painted at {size:?}"), |(_, rect)| *rect)
             };
             let tops: Vec<f32> = crate::app::cloud_panel::production::Stage::ALL
                 .iter()

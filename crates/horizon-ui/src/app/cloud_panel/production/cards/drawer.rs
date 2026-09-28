@@ -197,8 +197,8 @@ fn tab_layout(ui: &egui::Ui, tabs: &[Tab], teasers: &[String; 6], width: f32) ->
 fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
     let mut chosen = None;
     let shown = Tab::shown(context.body);
-    let (teased, layout) = tab_layout(ui, shown, &context.teasers, ui.available_width());
-    let height = layout.last().map_or(TAB_HEIGHT, |rect| rect.bottom()) + 2.0;
+    let (with_teasers, layout) = tab_layout(ui, shown, &context.teasers, ui.available_width());
+    let height = layout.last().map_or(TAB_HEIGHT, Rect::bottom) + 2.0;
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     for (&tab, local) in shown.iter().zip(layout) {
         let rect = local.translate(row.min.to_vec2());
@@ -217,7 +217,7 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
             if tab == active { theme::FG() } else { theme::FG_SOFT() },
         );
         let teaser = &context.teasers[tab as usize];
-        if teased && !teaser.is_empty() {
+        if with_teasers && !teaser.is_empty() {
             let color = if tab == Tab::Output && context.status.failure.is_some() {
                 theme::PALETTE_RED()
             } else {
