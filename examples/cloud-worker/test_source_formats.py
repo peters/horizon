@@ -383,7 +383,8 @@ class SourceFormatTests(unittest.TestCase):
             plain = dict(os.environ, GIT_CONFIG_GLOBAL=str(clean), GIT_CONFIG_NOSYSTEM='1')
             # U+0085 is a line separator to str.splitlines(), not to git-lfs's listing.
             contents = {'keep.bin': b'kept binary content\n', 'fixtures/skip.bin': b'skipped binary content\n',
-                        'fixtures/odd\u0085name.bin': b'oddly named content\n'}
+                        'fixtures/odd\u0085name.bin': b'oddly named content\n',
+                        'fixtures/line\u2028separated.bin': b'separated content\n'}
             pointer = lambda content: (f'version https://git-lfs.github.com/spec/v1\noid sha256:{hashlib.sha256(content).hexdigest()}'
                                        f'\nsize {len(content)}\n')
             local = root / 'local'
@@ -410,7 +411,7 @@ class SourceFormatTests(unittest.TestCase):
             (workspace / 'horizon-transfer.pack').write_bytes(pack)
             self.assertEqual(self.execute('horizon-worker-import', workspace, revision, env=worker).returncode, 0)
             skipped = [{'path': path, 'oid': hashlib.sha256(contents[path]).hexdigest(), 'size': len(contents[path])}
-                       for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin')]
+                       for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin', 'fixtures/line\u2028separated.bin')]
             kept = [('keep.bin', contents['keep.bin'])]
             refusals = [({'exclude': ['other/**'], 'skipped': skipped}, kept),  # git-lfs would smudge it
                         ({'exclude': ['fixtures/**'], 'skipped': skipped}, kept + [('fixtures/skip.bin', contents['fixtures/skip.bin'])]),
@@ -421,31 +422,38 @@ class SourceFormatTests(unittest.TestCase):
                         ({'exclude': ['fixtures/**'], 'skipped': skipped[0]}, kept),
                         ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size='23')]}, kept),
                         # git-lfs never lists an empty object or reads a newline in a name.
-                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size=0)]}, kept),
-                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], path='fixtures/a\nb.bin')]}, kept),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], size=0)]}, kept,
+                         b'An empty LFS object is always transferred; a selection cannot skip it'),
+                        ({'exclude': ['fixtures/**'], 'skipped': [dict(skipped[0], path='fixtures/a\nb.bin')]}, kept,
+                         b'An LFS path with a newline is always transferred; a selection cannot skip it'),
                         # DEL, a C1 control and a format character.
                         ({'exclude': ['fixtures/**', 'a\x7fb'], 'skipped': skipped}, kept),
                         ({'exclude': ['fixtures/**', 'a\x85b'], 'skipped': skipped}, kept),
                         ({'exclude': ['fixtures/**', 'a\u200bb'], 'skipped': skipped}, kept),
+                        ({'exclude': ['fixtures/**', 'a\ue000b'], 'skipped': skipped}, kept),  # private use
                         ({'exclude': [f'p{index}' for index in range(64)] + ['fixtures/**'], 'skipped': skipped}, kept),
                         ([], kept)]
-            for lfs, assets in refusals:
+            for lfs, assets, *reason in refusals:
                 self.archive(root, workspace, [], [], assets, lfs=lfs)
                 refused = self.execute('horizon-worker-source', workspace, 'import', env=worker)
                 self.assertNotEqual(refused.returncode, 0, lfs)
+                for message in reason:
+                    self.assertIn(message, refused.stderr, lfs)
                 self.assertFalse((workspace / 'source' / 'manifest.json').exists(), lfs)
-            self.archive(root, workspace, [], [], kept, lfs={'exclude': ['fixtures/**'], 'skipped': skipped})
+            # An unassigned code point depends on the Unicode version, so Horizon and the worker allow it.
+            unassigned = 'x\U000e0080y'
+            self.archive(root, workspace, [], [], kept, lfs={'exclude': ['fixtures/**', unassigned], 'skipped': skipped})
             imported = self.execute('horizon-worker-source', workspace, 'import', env=worker)
             self.assertEqual(imported.returncode, 0, imported.stderr.decode())
             repository = workspace / 'repository.git'
             local = lambda key: subprocess.check_output(['git', '--git-dir', repository, 'config', '--local', key],
                                                         env=worker, text=True).strip()
-            self.assertEqual((local('lfs.fetchinclude'), local('lfs.fetchexclude')), ('', 'fixtures/**'))
+            self.assertEqual((local('lfs.fetchinclude'), local('lfs.fetchexclude')), ('', 'fixtures/**,' + unassigned))
             agent = workspace / 'agents' / 'session-1'
             subprocess.run(['git', '--git-dir', repository, 'worktree', 'add', '--quiet', '--detach', agent, revision],
                            check=True, env=worker, capture_output=True)
             self.assertEqual((agent / 'keep.bin').read_bytes(), contents['keep.bin'])
-            for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin'):
+            for path in ('fixtures/skip.bin', 'fixtures/odd\u0085name.bin', 'fixtures/line\u2028separated.bin'):
                 self.assertEqual((agent / path).read_text(), pointer(contents[path]))
             self.assertEqual(subprocess.check_output(['git', '-C', agent, 'status', '--porcelain'], env=worker), b'')
 
