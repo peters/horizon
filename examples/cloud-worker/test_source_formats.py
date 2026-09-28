@@ -79,6 +79,32 @@ class SourceFormatTests(unittest.TestCase):
                 self.assertEqual((agent / 'nested/module/file.txt').read_text(), 'selected committed content\n')
                 self.assertEqual(self.git('-C', agent / 'nested/module', 'rev-parse', 'HEAD').decode().strip(), revision)
 
+    def test_shared_checkout_reports_its_submodules_as_initialized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child_revision, child_pack, workspace = self.fixture(root, 'sha1')
+            superproject = root / 'superproject'
+            self.git('init', superproject)
+            self.git('-C', superproject, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet',
+                     root / 'local', 'nested/module')
+            self.git('-C', superproject, '-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid',
+                     'commit', '-m', 'Add submodule')
+            self.git('clone', '--bare', superproject, workspace / 'repository.git')
+            checkout = workspace / 'checkout'
+            self.git('--git-dir', workspace / 'repository.git', 'worktree', 'add', '--detach', checkout, 'HEAD')
+            self.archive(root, workspace, [{'path': 'nested/module', 'revision': child_revision}], [child_pack])
+            self.assertEqual(self.execute('horizon-worker-source', workspace, 'import', env=UNCONFIGURED_GIT).returncode, 0)
+            shutil.rmtree(root / 'local')
+            for _ in range(2):
+                checked = self.execute('horizon-worker-source', workspace, 'checkout', str(checkout))
+                self.assertEqual(checked.returncode, 0, checked.stderr.decode())
+            status = self.git('-C', checkout, 'submodule', 'status').decode()
+            self.assertEqual(status.strip().split()[:2], [child_revision, 'nested/module'])
+            self.assertTrue(status.startswith(' '), status)
+            # Already initialized at its pin: no clone from the recorded (now missing) remote.
+            self.git('-C', checkout, 'submodule', 'update', '--init')
+            self.assertEqual((checkout / 'nested/module/file.txt').read_text(), 'selected committed content\n')
+
     def import_sibling(self, workspace, alias, revision, pack, env=None):
         (workspace / 'siblings' / alias).mkdir(parents=True, exist_ok=True)
         (workspace / 'siblings' / alias / 'horizon-transfer.pack').write_bytes(pack)

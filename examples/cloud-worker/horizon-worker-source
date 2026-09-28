@@ -104,6 +104,25 @@ def beside_siblings(worktree, repository):
     return common.returncode == 0 and Path(common.stdout.strip()).resolve() == repository.resolve()
 
 
+def register(worktree, modules, index, origin):
+    # Git treats a submodule as initialized only when its superproject's config names it,
+    # so `git submodule status` would print it as uninitialized and `update --init` would
+    # clone it again. Name the imported material, which also keeps both off the network.
+    path = PurePosixPath(modules[index]['path'])
+    parents = [PurePosixPath(m['path']) for m in modules[:index]]
+    parent = max((p for p in parents if p in path.parents), key=lambda p: len(p.parts), default=None)
+    superproject = worktree / parent if parent else worktree
+    relative = str(path.relative_to(parent) if parent else path)
+    listing = subprocess.run(['git', '-C', str(superproject), 'config', '-z', '-f', '.gitmodules',
+                              '--get-regexp', r'^submodule\..*\.path$'], capture_output=True, text=True, check=False)
+    for record in listing.stdout.split('\0'):
+        key, _, value = record.partition('\n')
+        if value == relative:
+            name = key.removeprefix('submodule.').removesuffix('.path')
+            git('-C', superproject, 'config', f'submodule.{name}.url', origin)
+            git('-C', superproject, 'config', f'submodule.{name}.active', 'true')
+
+
 def checkout(worktree, alias=None):
     root = material(alias)
     worktree = Path(worktree).resolve()
@@ -112,7 +131,8 @@ def checkout(worktree, alias=None):
         raise ValueError('Invalid agent worktree')
     if not (root / 'manifest.json').exists():
         raise ValueError('Source dependencies have not been imported')
-    for index, module in enumerate(manifest(root)['modules']):
+    modules = manifest(root)['modules']
+    for index, module in enumerate(modules):
         path = worktree / module['path']
         if not path.resolve().is_relative_to(worktree):
             raise ValueError('Submodule checkout escapes agent worktree')
@@ -128,6 +148,7 @@ def checkout(worktree, alias=None):
         # Called only before the session launch fence: finish an interrupted checkout.
         git('-C', path, 'checkout', '--force', '--detach', module['revision'])
         git('-C', path, 'reset', '--hard', module['revision'])
+        register(worktree, modules, index, origin)
 
 
 if __name__ == '__main__':
