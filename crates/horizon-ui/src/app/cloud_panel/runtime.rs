@@ -265,7 +265,7 @@ pub(in crate::app::cloud_panel) fn runtime_heading(
                 .color(theme::FG_SOFT()),
         );
         if group.remote.is_none() {
-            ui.label(RichText::new("DESIGN FIXTURE").size(12.0).color(theme::PALETTE_CYAN()));
+            ui.label(RichText::new("DESIGN FIXTURE").size(14.0).color(theme::PALETTE_CYAN()));
         }
     });
     ui.add_space(10.0);

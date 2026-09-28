@@ -214,7 +214,7 @@ fn notice(ui: &mut egui::Ui, text: &str) {
 /// The last attempt's outcomes, kept until another operation starts.
 pub(super) fn notes(ui: &mut egui::Ui, runtime: &Runtime) {
     for note in runtime.rebuild.iter().flat_map(|attempt| &attempt.notes) {
-        ui.label(RichText::new(&note.text).size(12.0).color(if note.warning {
+        ui.label(RichText::new(&note.text).size(14.0).color(if note.warning {
             theme::PALETTE_YELLOW()
         } else {
             theme::FG_DIM()
