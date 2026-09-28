@@ -21,14 +21,16 @@ on:
       - crates/horizon-process-time/**
       - Cargo.toml
       - Cargo.lock
-      # The image ships the license, so a license change republishes it.
+      # The image ships the license and the dependency notices this collector gathers.
       - LICENSE
+      - .horizon/collect-helper-notices.py
       - .github/workflows/worker-images.yml
   workflow_dispatch:
 
+# A running publication always finishes; GitHub keeps only the newest waiting run.
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read

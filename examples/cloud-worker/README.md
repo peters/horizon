@@ -133,13 +133,17 @@ Per-agent operating-system isolation requires a separate security architecture.
 ## Helpers from the published artifact
 
 A recipe on its own base, such as a project CUDA image with extra libraries, can
-copy the current helpers instead of compiling them in a build stage. Each main
-commit that changes the worker scripts or helpers publishes
+copy the current helpers instead of compiling them in a build stage. A main commit
+that changes the worker scripts or helpers publishes
 `ghcr.io/peters/horizon-worker-helpers` tagged `sha-<commit>` and moves the `main`
-tag to it. The image holds only `horizon-cloud-worker`, `horizon-browser`,
+tag to it. Runs are queued, not cancelled, but when several such commits land while
+one run is publishing, only the newest of them is built, so not every commit gets
+its own tag. The image holds only `horizon-cloud-worker`, `horizon-browser`,
 `horizon-device`, every `horizon-worker-*` script and the `gh` link to
-`horizon-worker-git-auth` under `/usr/local/bin`, plus the license and a `SOURCE`
-file naming the commit. Copy it pinned by digest:
+`horizon-worker-git-auth` under `/usr/local/bin`, plus under
+`/usr/local/share/licenses/` the Horizon license, a `SOURCE` file naming the commit
+and the notices and provenance of every Rust dependency the helpers are built from.
+Copy it pinned by digest:
 
 ```dockerfile
 COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /

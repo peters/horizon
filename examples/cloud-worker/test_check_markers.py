@@ -87,6 +87,10 @@ class HelperRecipeTests(unittest.TestCase):
                 self.assertRegex(base, r'@sha256:[0-9a-f]{64}$')
         self.assertIn('install -m 755 examples/cloud-worker/horizon-worker-* /output/usr/local/bin/', recipe)
         self.assertIn('ln -s /usr/local/bin/horizon-worker-git-auth /output/usr/local/bin/gh', recipe)
+        # Dependency notices come from the collector the worker images use, over this build's cache.
+        self.assertIn('CARGO_HOME=/tmp/helper-cargo cargo build', recipe)
+        self.assertIn('python3 .horizon/collect-helper-notices.py', recipe)
+        self.assertIn('mv /output/share/licenses/horizon-dependencies /output/usr/local/share/licenses/', recipe)
         self.assertRegex(recipe, r'FROM scratch AS helpers\n(?:.*\n)*?COPY --from=build /output/ /')
         self.assertRegex(recipe, r'AS probe\n(?:.*\n)*?COPY --from=helpers / /')
 

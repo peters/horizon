@@ -8,7 +8,7 @@ ARG HORIZON_REVISION
 FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS build
 ARG HORIZON_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential pkg-config libssl-dev libxkbcommon-dev git ca-certificates \
+        build-essential pkg-config libssl-dev libxkbcommon-dev git ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 # RUSTUP_TOOLCHAIN keeps the image's pinned compiler instead of the repository's stable channel.
 # Debian 12 links the helpers against glibc 2.36, so they run on any base the checker accepts.
@@ -16,7 +16,7 @@ RUN printf '%s\n' "$HORIZON_REVISION" | grep -Eqx '[0-9a-f]{40}' \
         || { echo 'HORIZON_REVISION must be a full 40-character commit' >&2; exit 1; }
 RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters/horizon.git "$HORIZON_REVISION" \
     && git -C /src -c advice.detachedHead=false checkout -q FETCH_HEAD \
-    && cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.98.1 cargo build --locked --release \
+    && cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.98.1 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
         -p horizon-cloud-worker -p horizon-browser-cli -p horizon-device --features horizon-device/cli \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/licenses/horizon \
     && install -m 755 -s target/release/horizon-cloud-worker target/release/horizon-browser \
@@ -26,7 +26,11 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters
     && install -m 644 LICENSE /output/usr/local/share/licenses/horizon/LICENSE \
     && printf 'https://github.com/peters/horizon/tree/%s\n' "$HORIZON_REVISION" \
         > /output/usr/local/share/licenses/horizon/SOURCE \
-    && rm -rf /src
+    # The same revision's collector copies every dependency's notices, as the worker images do.
+    && python3 .horizon/collect-helper-notices.py \
+    && mv /output/share/licenses/horizon-dependencies /output/usr/local/share/licenses/ \
+    && rmdir /output/share/licenses /output/share \
+    && rm -rf /src /tmp/helper-cargo
 
 FROM scratch AS helpers
 ARG HORIZON_REVISION
