@@ -69,11 +69,20 @@ pub(super) fn field(
         );
         return Outcome::Waiting;
     };
-    ui.label(RichText::new(order(&ranked)).size(13.0).color(theme::FG()));
-    note(
-        ui,
-        "Prices in different currencies are not compared yet, so this profile's own provider is tried first.",
+    ui.label(
+        RichText::new(format!("Creates on {}", describe(top)))
+            .size(13.0)
+            .color(theme::FG()),
     );
+    // Only the first is tried: a sold-out one does not move the cloud to the next yet.
+    if ranked.len() > 1 {
+        let others: Vec<String> = ranked[1..].iter().map(describe).collect();
+        note(ui, &format!("Also has this size: {}.", others.join(", ")));
+        note(
+            ui,
+            "Prices in different currencies are not compared yet, so this profile's own provider comes first.",
+        );
+    }
     Outcome::Top(top.provider)
 }
 
@@ -135,12 +144,7 @@ fn sources(prices: &State) -> Sources<'_> {
     }
 }
 
-/// Candidates in the order they are tried, such as "Hetzner cx53 in hel1 at
-/// €0.0473/h, then `RunPod` 8 vCPU · 32 GB at $0.32/h".
-fn order(ranked: &[Candidate]) -> String {
-    ranked.iter().map(describe).collect::<Vec<_>>().join(", then ")
-}
-
+/// One candidate as the dialog names it, such as "Hetzner cx53 in hel1 at €0.0473/h".
 fn describe(candidate: &Candidate) -> String {
     let price = if candidate.currency == HETZNER.currency {
         super::provider::euros(candidate.hourly)

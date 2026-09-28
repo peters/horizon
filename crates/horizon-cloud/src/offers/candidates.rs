@@ -100,15 +100,23 @@ fn runpod(profile: &Profile, (list, preferences): (&PriceList, &Preferences)) ->
     };
     let volume_gb = u32::from(profile.storage.volume_gb);
     if profile.gpu {
-        // The cheapest preferred GPU type in stock anywhere allowed, or the cheapest of
-        // all without preferences; its files live on the pod volume.
+        // The first preferred GPU type in stock anywhere allowed, as creation requests
+        // them in preference order, or the cheapest in stock without preferences; its
+        // files live on the pod volume.
         let (running, _) = list.storage.pod_volume_month(volume_gb);
-        let gpu = list
-            .gpus
-            .iter()
-            .filter(|gpu| preferences.gpu_types.is_empty() || preferences.gpu_types.contains(&gpu.id))
-            .filter(|gpu| list.gpu_availability(&gpu.id, &[]) != Availability::None)
-            .min_by(|a, b| a.hourly.total_cmp(&b.hourly))?;
+        let in_stock = |gpu: &&crate::prices::GpuPrice| list.gpu_availability(&gpu.id, &[]) != Availability::None;
+        let gpu = if preferences.gpu_types.is_empty() {
+            list.gpus
+                .iter()
+                .filter(in_stock)
+                .min_by(|a, b| a.hourly.total_cmp(&b.hourly))?
+        } else {
+            preferences
+                .gpu_types
+                .iter()
+                .filter_map(|id| list.gpu(id))
+                .find(in_stock)?
+        };
         return Some(candidate(gpu.name.clone(), gpu.hourly, running));
     }
     // A CPU worker keeps its workspace on a network volume, so an allowed data center

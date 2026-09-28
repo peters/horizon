@@ -242,3 +242,38 @@ fn a_profile_hetzner_cannot_run_is_ranked_on_runpod_alone() {
         (&provider::RUNPOD, "A40")
     );
 }
+
+#[test]
+fn preferred_gpu_types_are_asked_for_in_order() {
+    let mut list = list();
+    list.gpus.push(GpuPrice {
+        id: "NVIDIA RTX 4090".into(),
+        name: "RTX 4090".into(),
+        memory_gb: 24,
+        hourly: 0.2,
+    });
+    list.data_centers[0].gpus = vec![
+        ("NVIDIA RTX A5000".into(), Availability::Low),
+        ("NVIDIA A40".into(), Availability::High),
+        ("NVIDIA RTX 4090".into(), Availability::High),
+    ];
+    let preferences = Preferences {
+        cpu_flavors: Vec::new(),
+        gpu_types: vec!["NVIDIA A40".into(), "NVIDIA RTX 4090".into()],
+    };
+    let sources = Sources {
+        runpod: Some((&list, &preferences)),
+        hetzner: None,
+    };
+    let mut gpu = profile("runpod", (8, 32));
+    gpu.gpu = true;
+    // The first preference in stock, although the second is cheaper.
+    assert_eq!(candidates(&gpu, &sources, None)[0].name, "A40");
+    // Without preferences, the cheapest in stock.
+    let any = Preferences::default();
+    let sources = Sources {
+        runpod: Some((&list, &any)),
+        hetzner: None,
+    };
+    assert_eq!(candidates(&gpu, &sources, None)[0].name, "RTX 4090");
+}

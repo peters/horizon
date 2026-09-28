@@ -87,11 +87,12 @@ fn checking_it_replaces_the_provider_choice_with_the_order_providers_are_tried_i
     click(&ctx, &mut app, label_rect(&output, CHECKBOX).center());
     let output = tall_frame(&ctx, &mut app);
     assert!(!has_label(&output, "Provider"), "the choice is Horizon's now");
+    assert!(has_label(&output, "Creates on RunPod 4 vCPU · 8 GB at $0.12/h"));
     assert!(has_label(
         &output,
-        "RunPod 4 vCPU · 8 GB at $0.12/h, then Hetzner cx33 in hel1 at €0.0136/h"
+        "Also has this size: Hetzner cx33 in hel1 at €0.0136/h."
     ));
-    assert!(painted(&output).contains("this profile's own provider is tried first"));
+    assert!(painted(&output).contains("this profile's own provider comes first"));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);
     let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
@@ -109,9 +110,10 @@ fn a_hetzner_profile_is_created_on_hetzner_in_any_allowed_location() {
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, CHECKBOX).center());
     let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Creates on Hetzner cx33 in hel1 at €0.0136/h"));
     assert!(has_label(
         &output,
-        "Hetzner cx33 in hel1 at €0.0136/h, then RunPod 4 vCPU · 8 GB at $0.12/h"
+        "Also has this size: RunPod 4 vCPU · 8 GB at $0.12/h."
     ));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);
@@ -154,7 +156,11 @@ fn another_provider_is_used_when_the_profiles_own_has_no_worker_of_this_size() {
     // No configured Hetzner type has 8 vCPU.
     app.cloud_prototype.production.size = Some((8, 16));
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "RunPod 8 vCPU · 16 GB at $0.24/h"));
+    assert!(has_label(&output, "Creates on RunPod 8 vCPU · 16 GB at $0.24/h"));
+    assert!(
+        !painted(&output).contains("own provider comes first"),
+        "the profile's own provider has no worker of this size"
+    );
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);
     let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
@@ -197,10 +203,7 @@ fn nothing_is_chosen_while_a_providers_prices_are_still_arriving() {
     // Once RunPod answers, the profile's own provider comes first.
     both_providers(&mut app);
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(
-        &output,
-        "RunPod 4 vCPU · 8 GB at $0.12/h, then Hetzner cx33 in hel1 at €0.0136/h"
-    ));
+    assert!(has_label(&output, "Creates on RunPod 4 vCPU · 8 GB at $0.12/h"));
 }
 
 #[test]
