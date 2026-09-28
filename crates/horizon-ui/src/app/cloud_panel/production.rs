@@ -292,6 +292,8 @@ impl HorizonApp {
                         runtime.error = None;
                         runtime.receiver = None;
                         runtime.cancel = None;
+                        // A stop can end a rebuild that met it; its steps no longer apply.
+                        runtime.rebuild = None;
                     }
                     Event::Resumed => {
                         runtime.receiver = None;
