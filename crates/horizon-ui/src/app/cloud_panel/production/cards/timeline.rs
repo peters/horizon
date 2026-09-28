@@ -36,11 +36,11 @@ pub(super) fn show(ui: &mut egui::Ui, id: u32, runtime: &super::super::Runtime) 
     let verb = if timeline.reconnected { "Reconnected" } else { "Ready" };
     ui.label(
         RichText::new(format!("{verb} in {}", progress::duration(timeline.total())))
-            .size(13.0)
+            .size(16.0)
             .color(theme::FG_SOFT()),
     );
     ribbon(ui, timeline);
-    egui::CollapsingHeader::new(RichText::new("Where the time went").size(12.0).color(theme::FG_DIM()))
+    egui::CollapsingHeader::new(RichText::new("Where the time went").size(14.0).color(theme::FG_DIM()))
         .id_salt(("cloud-timeline", id))
         .show(ui, |ui| rows(ui, id, timeline));
 }
@@ -88,35 +88,27 @@ fn ribbon(ui: &mut egui::Ui, timeline: &Timeline) {
 /// Phases largest first, with their share of the total.
 fn rows(ui: &mut egui::Ui, id: u32, timeline: &Timeline) {
     let total = timeline.total().as_secs_f32().max(f32::EPSILON);
-    egui::Grid::new(("cloud-timeline-rows", id))
-        .num_columns(4)
-        .spacing([6.0, 4.0])
-        .show(ui, |ui| {
-            for (phase, spent) in timeline.phases().into_iter().filter(|(_, spent)| *spent >= SHOWN) {
-                let share = spent.as_secs_f32() / total;
-                ui.horizontal(|ui| {
-                    let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                    ui.painter().circle_filled(dot.center(), 4.0, color(phase));
-                    ui.label(RichText::new(timeline.label(phase)).size(12.0).color(theme::FG_SOFT()));
-                })
-                .response
+    ui.push_id(("cloud-timeline-rows", id), |ui| {
+        for (phase, spent) in timeline.phases().into_iter().filter(|(_, spent)| *spent >= SHOWN) {
+            let share = spent.as_secs_f32() / total;
+            ui.label(RichText::new(timeline.label(phase)).size(14.0).color(theme::FG_SOFT()))
                 .on_hover_text(timeline.detail(phase));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(short(spent)).size(11.5).monospace().color(theme::FG()));
-                });
+            ui.horizontal(|ui| {
+                bar(ui, share, color(phase));
+                ui.label(RichText::new(short(spent)).size(14.0).monospace().color(theme::FG()));
                 ui.label(
                     RichText::new(percent(share))
-                        .size(11.0)
+                        .size(14.0)
                         .monospace()
                         .color(theme::FG_DIM()),
                 );
-                bar(ui, share, color(phase));
-                ui.end_row();
-            }
-        });
+            });
+            ui.add_space(4.0);
+        }
+    });
     if let Some(hint) = hint(timeline) {
         ui.add_space(2.0);
-        ui.label(RichText::new(hint).size(11.0).italics().color(theme::FG_DIM()));
+        ui.label(RichText::new(hint).size(14.0).italics().color(theme::FG_DIM()));
     }
 }
 

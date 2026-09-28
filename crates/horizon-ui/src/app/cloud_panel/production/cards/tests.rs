@@ -84,7 +84,11 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                             assert!(profile_details(ui, id, &launch, &runtime, &|_| None).is_none());
                             runtime_actions(ui, id, &mut runtime);
                         });
-                        assert!((response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1);
+                        assert!(
+                            (response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1,
+                            "case {id}: {:?}",
+                            response.response.rect
+                        );
                         assert!((response.response.rect.height() - RUNTIME_HEIGHT).abs() < 0.1);
                         rects.push(response.response.rect);
                     }

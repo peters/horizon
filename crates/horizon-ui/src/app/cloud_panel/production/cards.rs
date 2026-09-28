@@ -156,6 +156,7 @@ fn runtime_frame(ui: &mut egui::Ui, id: u32, contents: impl FnOnce(&mut egui::Ui
     let inner = Vec2::new(RUNTIME_WIDTH, RUNTIME_HEIGHT) - frame.total_margin().sum();
     frame.show(ui, |ui| {
         ui.set_width(inner.x);
+        super::super::runtime::readable_runtime_style(ui);
         egui::ScrollArea::vertical()
             .id_salt(("cloud-runtime-body", id))
             .max_height(inner.y)
@@ -172,9 +173,9 @@ fn profile_details(
     runtime: &super::Runtime,
     region_of: &dyn Fn(&str) -> Option<String>,
 ) -> Option<(u16, u16)> {
-    ui.label(RichText::new(&launch.profile_name).size(15.0).color(theme::FG_DIM()));
+    ui.label(RichText::new(&launch.profile_name).size(17.0).color(theme::FG_DIM()));
     let resize = machine_size(ui, id, launch, runtime);
-    ui.label(RichText::new(&launch.profile.image).monospace().size(12.0));
+    ui.label(RichText::new(&launch.profile.image).monospace().size(14.0));
     placement::where_it_lives(ui, launch, runtime.state.as_ref(), region_of);
     self_stop::show(ui, runtime.state.as_ref());
     ui.small(format!(
@@ -586,7 +587,7 @@ fn stage_rows(ui: &mut egui::Ui, runtime: &super::Runtime, stages: &[Stage]) {
         let current = runtime.stage == Some(stage);
         ui.label(
             RichText::new(runtime.progress.stage_label(stage))
-                .size(14.0)
+                .size(16.0)
                 .color(if current {
                     theme::PALETTE_CYAN()
                 } else {
@@ -612,7 +613,7 @@ fn verbose_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     for line in &runtime.logs {
-                        ui.label(RichText::new(line).monospace().size(11.0));
+                        ui.label(RichText::new(line).monospace().size(14.0));
                     }
                 });
             let max_offset = (log.content_size.y - log.inner_rect.height()).max(0.0);
