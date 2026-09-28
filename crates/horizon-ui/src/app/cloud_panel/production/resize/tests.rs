@@ -187,6 +187,34 @@ fn a_preflight_refusal_returns_the_healthy_cloud_to_its_watch_loop() {
 
 #[test]
 #[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
+fn a_resize_that_met_an_idle_stop_reports_the_stopped_cloud_as_readable() {
+    let root = tempfile::tempdir().unwrap();
+    let mut stopped = ready().state.unwrap();
+    // The idle stop holds the record while the resize fails on it.
+    let stop = Store::lock(root.path()).unwrap();
+    let cancel = cloud_runtime::Cancellation::default();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let path = root.path().to_owned();
+    let resizing = std::thread::spawn(move || {
+        complete(&path, Err(cloud_runtime::Error::Busy), &cancel, &|event| {
+            let _ = sender.send(event);
+        })
+    });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    stopped.stage = Stage::Stopped;
+    stopped.stop_requested = true;
+    stop.save(&stopped).unwrap();
+    drop(stop);
+    let completion = resizing.join().unwrap();
+    assert!(
+        !completion.outcome.unavailable,
+        "the record was read once the stop released it"
+    );
+    assert!(receiver.try_iter().any(|event| matches!(event, Event::Stopped(..))));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn disconnected_resize_worker_clears_busy_and_reloads_durable_state() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = ready();

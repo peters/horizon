@@ -191,7 +191,9 @@ fn run(
             emit(Event::Output(format!("{REFUSED} {error}")));
             super::run_deployment(request, cancel, tx, idle, ctx);
         }
-        Err(error) => super::report_failure(&request.state_root, &error, &emit),
+        Err(error) => {
+            super::report_failure(&request.state_root, &error, &emit);
+        }
     }
 }
 
