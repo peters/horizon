@@ -85,6 +85,7 @@ fn prepare(app: &mut HorizonApp, ctx: &egui::Context, directory: &std::path::Pat
     app.cloud_prototype.production.profiles = Some(config);
     app.cloud_prototype.production.selected_profile = "development".into();
     app.cloud_prototype.production.launch.accounts_checked = true;
+    app.cloud_prototype.production.prices.runpod_answered();
     app.add_mock_cloud(ctx);
     for _ in 0..3 {
         dialog_frame(ctx, app, Vec::new());
@@ -563,6 +564,9 @@ fn disk_edits_preserve_gpu_placement_and_survive_launch_capture() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    // As the dialog first opens, with no GPU offers drawn over the disk fields; this
+    // test creates the cloud directly rather than through a queued submission.
+    app.cloud_prototype.production.prices = super::super::prices::State::default();
     app.cloud_prototype
         .production
         .profiles

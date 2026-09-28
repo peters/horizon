@@ -350,20 +350,21 @@ fn a_runpod_cloud_waits_for_the_first_check_of_the_runpod_key() {
     });
     prepare(&mut app, &ctx, temp.path());
     // The dialog just opened: its first RunPod fetch has not answered.
+    app.cloud_prototype.production.prices = super::super::super::prices::State::default();
     app.cloud_prototype.production.prices.runpod_checking();
     tall_frame(&ctx, &mut app);
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     tall_frame(&ctx, &mut app);
+    assert!(app.cloud_prototype.production.launch.submitted, "the submission waits");
     assert!(app.cloud_prototype.production.pending_creation.is_none());
-    assert!(
-        app.cloud_prototype
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("has not confirmed this machine's RunPod key")),
-        "{:?}",
-        app.cloud_prototype.error
-    );
+    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
+    app.cloud_prototype.production.prices.runpod_answered();
+    tall_frame(&ctx, &mut app);
+    super::finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "runpod");
 }
 
 /// A Hetzner catalog as the running Horizon would have it with a binding.
