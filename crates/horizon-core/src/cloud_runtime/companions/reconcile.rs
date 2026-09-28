@@ -75,6 +75,13 @@ pub(super) fn run(
                     }
                 }
             }
+            // A cloud operation holding the lock, even one in this Horizon, says
+            // nothing about SSH: the access is kept and checked again on refresh.
+            Err(Error::Busy) => {
+                row.companion.status = Status::Unverified;
+                row.companion.access.clone_from(&grant.access);
+                row.error = Some(BUSY.into());
+            }
             Err(error) => {
                 row.companion.status = Status::Unreachable;
                 row.companion.access.clone_from(&grant.access);
@@ -94,6 +101,9 @@ pub(super) fn run(
         notice: None,
     })
 }
+
+/// Why a companion was not checked while another cloud operation held its lock.
+const BUSY: &str = "Not checked: another operation on these clouds was running. Refresh to check again.";
 
 fn declaration_rows(context: Option<&Context>) -> BTreeMap<String, Row> {
     let mut rows = BTreeMap::new();

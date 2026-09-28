@@ -18,7 +18,13 @@ struct Runtime {
     live: PathBuf,
     ssh_home: PathBuf,
     source_helper: PathBuf,
+    /// How long an inspection waits for companion setup that holds the lock, as
+    /// the owning Horizon's own refresh does for a few seconds.
+    probe_wait: Duration,
 }
+
+/// The companion lock was held throughout; nothing about the target is known.
+const BUSY: &str = "Companion setup busy; retry";
 
 pub(super) fn run() -> io::Result<()> {
     let mut input = Vec::new();
@@ -39,6 +45,7 @@ fn runtime() -> Runtime {
         // OpenSSH looks up the login's home in passwd, not the agent's HOME override.
         ssh_home: "/root/.ssh".into(),
         source_helper: "/usr/local/bin/horizon-worker-source".into(),
+        probe_wait: Duration::from_secs(10),
     }
 }
 
@@ -64,8 +71,10 @@ pub(crate) fn probe_access(access: &Access) -> io::Result<bool> {
 }
 
 impl Runtime {
+    /// Probes under the companion lock, waiting up to `probe_wait` for setup that holds
+    /// it. A lock that stays held fails with `WouldBlock`, which says nothing about SSH.
     fn probe_access(&self, access: &Access, probe: impl FnOnce() -> io::Result<bool>) -> io::Result<bool> {
-        self.with_lock(|| {
+        self.with_lock_within(self.probe_wait, || {
             let directory = self.key_directory(&access.grant);
             let response: Response = serde_json::from_slice(&std::fs::read(directory.join("connection.json"))?)?;
             if response
@@ -88,6 +97,10 @@ impl Runtime {
     }
 
     fn with_lock<T>(&self, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        self.with_lock_within(Duration::ZERO, operation)
+    }
+
+    fn with_lock_within<T>(&self, wait: Duration, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
         std::fs::create_dir_all(&self.live)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -95,8 +108,13 @@ impl Runtime {
             .read(true)
             .write(true)
             .open(self.live.join("companion.lock"))?;
-        lock.try_lock()
-            .map_err(|_| io::Error::other("Companion setup busy; retry"))?;
+        let deadline = std::time::Instant::now() + wait;
+        while lock.try_lock().is_err() {
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, BUSY));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         let result = operation();
         let unlock = lock.unlock();
         let response = result?;

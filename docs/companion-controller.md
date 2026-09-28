@@ -35,7 +35,10 @@ worktrees, cannot undo copied data, and does not terminate existing shells.
 Successful source-to-target SSH verification produces the shared discovery
 catalog used by worker CLI and MCP. A failed refresh reports unreachable while
 retaining a previously verified, unchanged connection for an independent worker
-probe. Deselection and identity changes clear that connection information.
+probe. A refresh that finds a cloud's operation lock held by another operation,
+even one in the same Horizon, checks nothing: it reports the access as needing
+verification, keeps it, and says to refresh again. Deselection and identity
+changes clear that connection information.
 Catalogs include up to 64 declarations and 64 retained cleanup entries.
 
 The service supports the same controller platforms as durable cloud state.

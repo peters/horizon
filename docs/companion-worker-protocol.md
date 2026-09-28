@@ -66,6 +66,8 @@ pinned cloud identity, status, and any existing SSH alias and separate worktree.
 Ready observations expire after 60 seconds. Inspect checks an existing grant's
 direct SSH connection and worktree and can verify access even when the controller
 snapshot is old. It does not contact stopped, unselected, or unavailable targets.
-Failures report unreachable, and selection changes during a probe require a
-fresh inspection. Existing SSH can work while the controller is offline; a
+It waits up to 10 seconds for grant setup that holds the companion lock, as the
+owning Horizon's refresh does briefly; a lock held throughout reports the access
+as unverified, never unreachable. Other failures report unreachable, and
+selection changes during a probe require a fresh inspection. Existing SSH can work while the controller is offline; a
 snapshot's non-ready lifecycle state remains the last controller observation.

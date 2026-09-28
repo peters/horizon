@@ -16,6 +16,8 @@ struct Fake {
     calls: Vec<(String, String)>,
     fail_authorize: bool,
     fail_source_lookup: bool,
+    /// Another operation holds the target's lock, as one in the same Horizon can.
+    busy_target: bool,
     cancel_on_call: Option<Cancellation>,
     journal: PathBuf,
 }
@@ -26,6 +28,9 @@ impl Transport for Fake {
     }
     fn worker(&mut self, cloud: &str) -> Result<Option<Worker>> {
         if cloud == "source" && self.fail_source_lookup {
+            return Err(Error::Busy);
+        }
+        if cloud == "target" && self.busy_target {
             return Err(Error::Busy);
         }
         if cloud != "source" {
@@ -128,6 +133,7 @@ impl Fixture {
             calls: Vec::new(),
             fail_authorize: false,
             fail_source_lookup: false,
+            busy_target: false,
             cancel_on_call: None,
             journal: root.path().join("source/companions.json"),
         };
@@ -432,8 +438,9 @@ fn observed_target_is_pinned_when_the_source_is_missing_or_busy() {
         fixture.transport.fail_source_lookup = source_busy;
         assert_eq!(
             fixture.select().rows[0].companion.status,
+            // A busy lock is not an SSH failure.
             if source_busy {
-                Status::Unreachable
+                Status::Unverified
             } else {
                 Status::Unavailable
             }
@@ -627,4 +634,24 @@ fn companions_in_one_private_network_zone_connect_privately() {
         public,
         "a target without one"
     );
+}
+
+#[test]
+fn a_busy_target_lock_is_not_reported_as_unreachable() {
+    let mut fixture = Fixture::new();
+    let first = fixture.select();
+    assert_eq!(first.rows[0].companion.status, Status::Ready);
+    fixture.transport.busy_target = true;
+    let busy = fixture.run(&Action::Refresh);
+    assert_eq!(busy.rows[0].companion.status, Status::Unverified);
+    assert_eq!(busy.rows[0].companion.access, first.rows[0].companion.access);
+    assert!(
+        busy.rows[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Refresh to check again")
+    );
+    fixture.transport.busy_target = false;
+    assert_eq!(fixture.run(&Action::Refresh).rows[0].companion.status, Status::Ready);
 }

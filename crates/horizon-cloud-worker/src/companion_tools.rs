@@ -90,10 +90,12 @@ fn inspect(
     if let Some(access) = &entry.access
         && matches!(entry.status, Status::Ready | Status::Unverified | Status::Unreachable)
     {
-        entry.status = if probe(access).unwrap_or(false) {
-            Status::Ready
-        } else {
-            Status::Unreachable
+        entry.status = match probe(access) {
+            Ok(true) => Status::Ready,
+            // Companion setup held the lock throughout: nothing was learned about
+            // SSH, so the access is reported unverified rather than unreachable.
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Status::Unverified,
+            Ok(false) | Err(_) => Status::Unreachable,
         };
         let latest = load(path)?;
         let current = latest.companions.into_iter().find(|current| current.alias == alias);

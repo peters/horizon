@@ -55,6 +55,10 @@ fn inspection_probes_only_existing_access_and_preserves_stopped_state() {
     assert_eq!(entry.status, Status::Ready);
     let entry = inspect(file.path(), "app", 200, |_| Err(io::Error::other("network offline"))).unwrap();
     assert_eq!(entry.status, Status::Unreachable);
+    // Companion setup held the lock throughout: nothing is known about SSH.
+    let busy = || Err(io::Error::new(io::ErrorKind::WouldBlock, "Companion setup busy; retry"));
+    let entry = inspect(file.path(), "app", 200, |_| busy()).unwrap();
+    assert_eq!(entry.status, Status::Unverified);
     assert!(
         inspect(file.path(), "unknown", 100, |_| panic!(
             "unknown alias must not be probed"
