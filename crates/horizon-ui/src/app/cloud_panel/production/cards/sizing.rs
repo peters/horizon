@@ -115,7 +115,9 @@ fn machine_size(
         let shown = fixed.map_or(profile, |state| &state.profile);
         let label = ui.label(machine_size::fixed((shown.cpu, shown.memory_gb), profile.gpu));
         if fixed.is_some() && flavors {
-            label.on_hover_text("RunPod cannot resize a requested worker. Create a new cloud for a different size.");
+            label.on_hover_text(
+                "A ready CPU cloud can change compute size or grow its workspace using the resize controls below.",
+            );
         }
         return None;
     }

@@ -20,6 +20,7 @@ mod progress;
 mod readiness;
 mod rebuild;
 mod repository_setup;
+mod resize;
 mod sessions;
 mod setup;
 use super::HorizonApp;
@@ -125,6 +126,7 @@ pub(super) struct Runtime {
     browsers: Option<Vec<horizon_core::browser::CloudViewState>>,
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
+    resize: resize::State,
     idle_reports: Option<idle::Reports>,
     sharing: local_network::Sharing,
 }
@@ -235,6 +237,7 @@ impl Runtime {
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
         self.poll_recovery();
+        self.poll_resize();
         self.poll_idle();
         if self.needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -248,6 +251,7 @@ impl Runtime {
 
     fn needs_repaint(&self) -> bool {
         self.remote_release.is_some()
+            || self.resize.busy()
             || self.recovery_receiver.is_some()
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.needs_attach
@@ -349,11 +353,16 @@ impl HorizonApp {
             self.start_production_deployment(id, ctx);
         }
         self.remove_closed_cloud_browsers(removed);
+        self.sync_resized_profiles();
         self.sync_cloud_presentations();
         self.cloud_prototype.groups.reconcile(&mut self.board);
         self.sync_board_cloud_groups();
         self.prepare_cloud_companions(ctx);
         self.publish_cloud_offers(ctx);
+        self.retain_cloud_workspaces();
+    }
+
+    fn retain_cloud_workspaces(&mut self) {
         for group in &self.cloud_prototype.groups.0 {
             if let Some(ws) = self.board.workspace_id_by_local_id(&group.workspace) {
                 self.board.retain_workspace_when_empty(ws);
@@ -439,6 +448,11 @@ impl HorizonApp {
                                 Runtime {
                                     error: Some(message),
                                     state_unavailable: true,
+                                    resize: cloud_runtime::state::cloud_directory(
+                                        self.cloud_prototype.root.as_ref()?,
+                                        &launch.id,
+                                    )
+                                    .map_or_else(|_| resize::State::default(), |root| resize::restored(&root)),
                                     ..Runtime::default()
                                 },
                             );
@@ -456,6 +470,7 @@ impl HorizonApp {
                     Runtime::reconnects_on_restore(&state).then_some(group.issue)
                 })
                 .collect();
+            self.sync_resized_profiles();
             for id in reconnect {
                 self.start_production_deployment(id, ctx);
             }
