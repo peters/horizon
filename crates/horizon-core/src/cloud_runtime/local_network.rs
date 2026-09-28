@@ -85,6 +85,10 @@ impl Proxy {
     pub fn counters(&self) -> Counters {
         self.inner.counters()
     }
+
+    fn close(&self) {
+        self.inner.close();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +171,16 @@ impl Bridge {
             state: self.shared.state.lock().unwrap_or_else(PoisonError::into_inner).clone(),
             counters: self.proxy.counters(),
         }
+    }
+}
+
+impl Bridge {
+    /// Revokes the bridge at once without waiting: the proxy refuses and closes every
+    /// connection, and the SSH session is told to end. Dropping it afterwards only waits for
+    /// that session to finish.
+    pub fn revoke(&self) {
+        self.cancel.cancel();
+        self.proxy.close();
     }
 }
 

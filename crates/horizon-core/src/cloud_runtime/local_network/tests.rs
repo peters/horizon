@@ -365,12 +365,19 @@ mod supervision {
     }
 
     #[test]
-    fn stopping_the_bridge_ends_the_session_process() {
+    fn revoking_cuts_access_and_stopping_ends_the_session_process() {
         let hold = r#"printf '%s\n' "$$" >> "$LOG"; printf '{"proxy":"127.0.0.1:41234"}\n'; exec sleep 600"#;
         let (bridge, root) = start(PREPARED, hold);
         wait_for_state(&bridge, |state| matches!(state, State::Active { .. }));
         let pid = log(&root).trim().to_owned();
+        let mut open = std::net::TcpStream::connect(("127.0.0.1", bridge.proxy.port())).unwrap();
+        open.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // Revoking cuts access at once, before anything waits for the session.
         let started = Instant::now();
+        bridge.revoke();
+        let mut byte = [0; 1];
+        assert!(matches!(std::io::Read::read(&mut open, &mut byte), Ok(0) | Err(_)));
+        assert!(started.elapsed() < Duration::from_secs(1));
         drop(bridge);
         assert!(started.elapsed() < Duration::from_secs(10));
         let alive = Command::new("kill")

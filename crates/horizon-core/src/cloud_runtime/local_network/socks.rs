@@ -199,6 +199,11 @@ impl Proxy {
             refused: self.shared.refused.load(Ordering::Acquire),
         }
     }
+
+    /// Refuses everything from now on and closes every open connection, without waiting.
+    pub(super) fn close(&self) {
+        self.shared.stop();
+    }
 }
 
 impl Drop for Proxy {

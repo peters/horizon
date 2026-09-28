@@ -38,6 +38,8 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if let Some(bridge) = self.0.take() {
+            // Access ends here; only the wait for the SSH session moves off this thread.
+            bridge.revoke();
             retire(bridge);
         }
     }
