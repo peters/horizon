@@ -14,6 +14,10 @@ pub(super) struct Receipt {
     pub phase: Phase,
     #[serde(default)]
     pub released_workers: std::collections::BTreeSet<String>,
+    /// The operation whose cloud creation the owner confirmed on the card. Only that
+    /// operation may allocate the target's first worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed: Option<OperationId>,
 }
 
 pub(super) fn load(root: &Path) -> Result<Option<Receipt>> {
@@ -45,11 +49,29 @@ pub(super) fn load(root: &Path) -> Result<Option<Receipt>> {
 }
 
 pub(super) fn save(store: &Store, owner: &Owner, id: OperationId, phase: Phase) -> Result<()> {
+    let previous = load(store.root())?;
+    let confirmed = previous
+        .as_ref()
+        .and_then(|record| record.confirmed)
+        .filter(|confirmed| *confirmed == id);
     let record = Receipt {
         owner: owner.clone(),
         id,
         phase,
+        released_workers: previous.map_or_else(Default::default, |record| record.released_workers),
+        confirmed,
+    };
+    write(store, &record)
+}
+
+/// Records the owner's confirmation that `id` may create the target's first worker.
+pub(super) fn confirm(store: &Store, owner: &Owner, id: OperationId) -> Result<()> {
+    let record = Receipt {
+        owner: owner.clone(),
+        id,
+        phase: Phase::Submitted,
         released_workers: load(store.root())?.map_or_else(Default::default, |record| record.released_workers),
+        confirmed: Some(id),
     };
     write(store, &record)
 }

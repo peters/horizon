@@ -7,7 +7,14 @@ use crate::cloud_runtime::{
 use intent::{Decision, Observation};
 use std::cell::Cell;
 
-pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Option<&Deployment>) -> Result<Decision> {
+/// `confirmed` means the owner confirmed this operation's cloud creation on the card.
+pub(super) fn plan(
+    store: &Store,
+    binding: &Binding,
+    intent: &Intent,
+    state: Option<&Deployment>,
+    confirmed: bool,
+) -> Result<Decision> {
     let observation = match state {
         Some(state) if deletion_pending(store, state)? => Observation::DeletionPending,
         Some(state) => Observation::Existing(state),
@@ -28,6 +35,7 @@ pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Opt
         && intent.state == intent::State::Submitted
         && let Some(state) = state
         && state.operation == CreateState::Prepared
+        && !confirmed
         // A resume on a provider whose stop deletes the server clears that server's
         // fence; a volume a server held proves the cloud was created, so a retry
         // only reconnects. Every other prepared record needs creation confirmed.

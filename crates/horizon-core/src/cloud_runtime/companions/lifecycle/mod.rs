@@ -67,22 +67,34 @@ impl Request<'_> {
             .ok_or(Error::Invalid("Companion declaration is missing"))?;
         binding.validate(self.owner, self.alias, declaration)?;
         if binding.origin() == intent::Origin::Existing {
-            let grant = state
-                .grants
-                .get(self.alias)
-                .filter(|grant| {
-                    grant.selected
-                        && grant.target.cloud_id == binding.target().cloud_id
-                        && grant.target.scope == binding.target().scope
-                        && grant.target.declaration.matches(&binding.target().declaration)
-                })
-                .ok_or(Error::Invalid("Companion is no longer selected"))?;
-            grant
-                .selection
-                .resolve(&self.context.source, self.alias, declaration, &self.context.inventory)
-                .map_err(|_| Error::Invalid("Companion target is missing or changed"))?;
+            self.require_selected(state, binding, declaration)?;
         }
         Ok(binding.clone())
+    }
+
+    /// The owner's checkbox grant for exactly this binding's target, resolved against
+    /// the current inventory.
+    fn require_selected(
+        &self,
+        state: &journal::State,
+        binding: &Binding,
+        declaration: &super::Declaration,
+    ) -> Result<()> {
+        let grant = state
+            .grants
+            .get(self.alias)
+            .filter(|grant| {
+                grant.selected
+                    && grant.target.cloud_id == binding.target().cloud_id
+                    && grant.target.scope == binding.target().scope
+                    && grant.target.declaration.matches(&binding.target().declaration)
+            })
+            .ok_or(Error::Invalid("Companion is no longer selected"))?;
+        grant
+            .selection
+            .resolve(&self.context.source, self.alias, declaration, &self.context.inventory)
+            .map_err(|_| Error::Invalid("Companion target is missing or changed"))?;
+        Ok(())
     }
 
     fn target_store(&self, binding: &Binding) -> Result<Store> {
@@ -233,6 +245,64 @@ fn settle_access(store: &journal::Store, state: &mut journal::State, prior: &rec
     Ok(())
 }
 
+/// Record the owner's confirmation, given on the source cloud's card, that a submitted
+/// Ensure Ready may create its reserved companion cloud. The card first creates that
+/// cloud and durably prepares its deployment record with the reserved ID and the bound
+/// checkout; `execute` then allocates its first worker through the ordinary deployment.
+/// # Errors
+/// Refuses anything but an unstarted Ensure Ready for a reserved binding whose target
+/// record is prepared, workerless and matches the binding.
+pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
+    let (_, state) = request.load()?;
+    let binding = request.authorize(&state)?;
+    if binding.origin() != intent::Origin::Reserved {
+        return Err(Error::Invalid("Only a reserved companion is created on confirmation"));
+    }
+    // Access is verified once the worker is ready, so the owner's selection must
+    // already cover the new cloud; otherwise the paid worker could never become Ready.
+    let declaration = request
+        .context
+        .declarations
+        .get(request.alias)
+        .ok_or(Error::Invalid("Companion declaration is missing"))?;
+    request
+        .require_selected(&state, &binding, declaration)
+        .map_err(|_| Error::Invalid("Select the new companion cloud before confirming it"))?;
+    state
+        .intents
+        .operation(id)
+        .filter(|intent| {
+            intent.state == State::Submitted
+                && intent.action == Action::EnsureReady
+                && intent.target_cloud_id == binding.target().cloud_id
+        })
+        .ok_or(Error::Invalid("Only an unstarted Ensure Ready can be confirmed"))?;
+    let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+    let _execution = receipt::execution_lock(&root)?;
+    let target = request.target_store(&binding)?;
+    if !receipt::load(target.root())?.is_some_and(|claim| {
+        claim.owner == *request.owner
+            && claim.id == id
+            && matches!(claim.phase, Phase::Submitted | Phase::ConfirmationRequired)
+    }) {
+        return Err(Error::Invalid("The operation no longer owns the companion target"));
+    }
+    let prepared = target
+        .load()?
+        .ok_or(Error::Invalid("Create the companion cloud before confirming it"))?;
+    if prepared.cloud_id != binding.target().cloud_id
+        || prepared.repository != binding.checkout()
+        || prepared.operation != crate::cloud_runtime::CreateState::Prepared
+        || prepared.worker.is_some()
+        || prepared.stop_requested
+    {
+        return Err(Error::Invalid(
+            "The companion cloud does not match its reserved binding",
+        ));
+    }
+    receipt::confirm(&target, request.owner, id)
+}
+
 /// Read status only. No reconciliation, resume, deployment or grant refresh occurs.
 /// # Errors
 /// Refuses unknown IDs, changed authorization and corrupt durable state.
@@ -356,7 +426,8 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
         );
     }
     let observed = target.load()?;
-    let decision = execution::plan(&target, &binding, &intent, observed.as_ref())?;
+    let confirmed = claim.confirmed == Some(intent.operation_id);
+    let decision = execution::plan(&target, &binding, &intent, observed.as_ref(), confirmed)?;
     if decision == intent::Decision::Provision {
         receipt::save(&target, request.owner, intent.operation_id, Phase::ConfirmationRequired)?;
         return Ok(Operation {
