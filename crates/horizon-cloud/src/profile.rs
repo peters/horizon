@@ -37,16 +37,10 @@ impl Source {
 
     fn validate(&self) -> Result<(), ProfileError> {
         let patterns = self.lfs.include.iter().chain(&self.lfs.exclude);
-        if patterns.clone().count() > Lfs::MAX_PATTERNS
-            || patterns.clone().any(|pattern| {
-                pattern.is_empty()
-                    || pattern.len() > 256
-                    || pattern.contains(',')
-                    || pattern.chars().any(char::is_control)
-            })
+        if patterns.clone().count() > Lfs::MAX_PATTERNS || patterns.clone().any(|pattern| !Lfs::valid_pattern(pattern))
         {
             return Err(ProfileError::Invalid(
-                "source.lfs patterns must be non-empty, without commas, and at most 64",
+                "source.lfs allows at most 64 patterns, each non-empty, at most 256 characters, without commas or control characters",
             ));
         }
         Ok(())
@@ -69,6 +63,20 @@ pub struct Lfs {
 
 impl Lfs {
     const MAX_PATTERNS: usize = 64;
+    const MAX_PATTERN_CHARS: usize = 256;
+
+    /// As the worker's check: git-lfs joins patterns with commas, and no Unicode
+    /// control, format, private-use or unassigned character belongs in a path pattern.
+    fn valid_pattern(pattern: &str) -> bool {
+        !pattern.is_empty()
+            && pattern.chars().count() <= Self::MAX_PATTERN_CHARS
+            && !pattern.chars().any(|c| {
+                c == ','
+                    || unicode_general_category::get_general_category(c)
+                        .abbreviation()
+                        .starts_with('C')
+            })
+    }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -383,9 +391,25 @@ mod tests {
         let config =
             |lfs: &str| CloudConfig::parse(&format!("{}\nsource:\n  lfs: {lfs}\n", EXAMPLE.replace("\r\n", "\n")));
         assert!(config("{exclude: ['*.mp4']}").is_ok());
-        for invalid in ["{exclude: ['a,b']}", "{exclude: ['']}", "{include: [\"a\\nb\"]}"] {
-            assert!(config(invalid).is_err(), "{invalid}");
+        assert!(
+            config(&format!("{{exclude: ['{}']}}", "é".repeat(256))).is_ok(),
+            "characters, not bytes"
+        );
+        for invalid in [
+            "{exclude: ['a,b']}",
+            "{exclude: ['']}",
+            "{include: [\"a\\nb\"]}",
+            "{exclude: [\"a\\x7fb\"]}",
+            "{exclude: [\"a\\x85b\"]}",
+            "{exclude: [\"a\\u200bb\"]}",
+        ] {
+            assert!(matches!(config(invalid), Err(ProfileError::Invalid(_))), "{invalid}");
         }
+        assert!(
+            matches!(config("{exclude: 'fixtures/**'}"), Err(ProfileError::Yaml)),
+            "a list, not a string"
+        );
+        assert!(config(&format!("{{exclude: ['{}']}}", "a".repeat(257))).is_err());
         let many = (0..=Lfs::MAX_PATTERNS)
             .map(|index| format!("p{index}"))
             .collect::<Vec<_>>()

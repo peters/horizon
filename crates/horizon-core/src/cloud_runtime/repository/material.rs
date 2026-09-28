@@ -28,6 +28,9 @@ struct Selection {
     include: Vec<String>,
     exclude: Vec<String>,
     skipped: Vec<Asset>,
+    /// The repository's own LFS paths git-lfs excludes under the patterns.
+    #[serde(skip)]
+    excluded: std::collections::BTreeSet<String>,
 }
 struct CollectionBudget {
     entries: usize,
@@ -197,6 +200,19 @@ impl Material {
                 };
                 if let Some(budget) = &mut self.budget {
                     budget.asset(size)?;
+                }
+                // Left out of the transfer, so neither verified nor needed locally.
+                if depth == 0
+                    && let Some(selection) = &mut self.lfs
+                    && selection.excluded.contains(&portable_path(&path)?)
+                {
+                    selection.skipped.push(Asset {
+                        path: portable_path(&path)?,
+                        oid,
+                        size,
+                        source: PathBuf::new(),
+                    });
+                    continue;
                 }
                 if media.is_none() {
                     media = Some(media_directory(directory, runner)?);
@@ -429,33 +445,32 @@ pub(super) fn archive(
 }
 
 impl Material {
-    /// Leaves out the repository's own LFS paths that git-lfs itself excludes under
-    /// `lfs`, so the worker keeps them as pointers. Submodule content is always sent.
-    fn select(&mut self, repository: &Path, revision: &str, lfs: &Lfs, runner: &Runner<'_>) -> Result<()> {
-        if lfs.is_empty() {
-            return Ok(());
-        }
-        let mut filters = Vec::new();
-        for (flag, patterns) in [("-I", &lfs.include), ("-X", &lfs.exclude)] {
-            if !patterns.is_empty() {
-                filters.extend([flag.to_owned(), patterns.join(",")]);
+    /// As [`Self::collect`], leaving out the repository's own LFS paths that git-lfs itself
+    /// excludes under `lfs`: the worker keeps them as pointers, so they are neither sent
+    /// nor needed locally. Submodule content is always collected.
+    pub fn collect_selecting(repository: &Path, revision: &str, lfs: &Lfs, runner: &Runner<'_>) -> Result<Self> {
+        let mut result = Self::default();
+        if !lfs.is_empty() {
+            let mut filters = Vec::new();
+            for (flag, patterns) in [("-I", &lfs.include), ("-X", &lfs.exclude)] {
+                if !patterns.is_empty() {
+                    filters.extend([flag.to_owned(), patterns.join(",")]);
+                }
             }
+            let selected = lfs_paths(repository, revision, &filters, runner)?;
+            let excluded = lfs_paths(repository, revision, &[], runner)?
+                .into_iter()
+                .filter(|path| !selected.contains(path))
+                .collect();
+            result.lfs = Some(Selection {
+                include: lfs.include.clone(),
+                exclude: lfs.exclude.clone(),
+                skipped: Vec::new(),
+                excluded,
+            });
         }
-        let every = lfs_paths(repository, revision, &[], runner)?;
-        let selected = lfs_paths(repository, revision, &filters, runner)?;
-        let nested: Vec<_> = self.modules.iter().map(|module| format!("{}/", module.path)).collect();
-        let (skipped, sent) = std::mem::take(&mut self.assets).into_iter().partition(|asset: &Asset| {
-            !nested.iter().any(|prefix| asset.path.starts_with(prefix))
-                && every.contains(&asset.path)
-                && !selected.contains(&asset.path)
-        });
-        self.assets = sent;
-        self.lfs = Some(Selection {
-            include: lfs.include.clone(),
-            exclude: lfs.exclude.clone(),
-            skipped,
-        });
-        Ok(())
+        result.visit(repository, revision, Path::new(""), 0, runner)?;
+        Ok(result)
     }
 }
 
@@ -495,8 +510,7 @@ pub(super) fn archive_within(
     runner: &Runner<'_>,
     timeout: Duration,
 ) -> Result<PathBuf> {
-    let mut material = Material::collect(repository, revision, runner)?;
-    material.select(repository, revision, &source.lfs, runner)?;
+    let material = Material::collect_selecting(repository, revision, &source.lfs, runner)?;
     let packs = root.join("material");
     std::fs::create_dir(&packs)?;
     for (index, module) in material.modules.iter().enumerate() {

@@ -160,6 +160,16 @@ pub fn validate_tree(repository: &Path, revision: &str, runner: &Runner<'_>) -> 
     material::Material::collect(repository, revision, runner).map(|_| ())
 }
 /// # Errors
+/// As [`validate_tree`], except that LFS objects `lfs` leaves out need not be local.
+pub fn validate_selected(
+    repository: &Path,
+    revision: &str,
+    lfs: &horizon_cloud::Lfs,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    material::Material::collect_selecting(repository, revision, lfs, runner).map(|_| ())
+}
+/// # Errors
 /// Packages verified LFS content and submodule history, as `source` selects, without
 /// local configuration.
 pub fn auxiliary(

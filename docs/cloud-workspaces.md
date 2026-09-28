@@ -246,14 +246,16 @@ source:
     exclude: [fixtures/reversal/*.raw]        # applied after include
 ```
 
-Patterns are git-lfs fetch patterns (`lfs.fetchinclude`/`lfs.fetchexclude`), at most
-64 in all and without commas. Horizon asks the local git-lfs which of the repository's
+Patterns are git-lfs fetch patterns (`lfs.fetchinclude`/`lfs.fetchexclude`): at most
+64 in all, each non-empty, at most 256 characters, without commas and without Unicode
+control, format, private-use or unassigned characters. The worker applies the same rules. Horizon asks the local git-lfs which of the repository's
 own LFS paths the patterns exclude and sends every other object; the worker checks with
 its git-lfs that each path left out is excluded, then sets the same patterns in the
 repository's configuration, so worktrees keep those paths as pointer files and
-`git status` stays clean. Submodule LFS content is always sent. Every selected object
-must still be available locally, since the whole selected commit is verified before
-allocation. For an application whose LFS content was 3.23 GB, 3.14 GB of it video
+`git status` stays clean. Submodule LFS content is always sent. Objects the selection
+leaves out need not be fetched locally; every other object is verified before
+allocation. An image that cannot honor the selection receives every object, which
+then must all be local. For an application whose LFS content was 3.23 GB, 3.14 GB of it video
 fixtures, excluding the fixtures its tests do not read is the largest transfer
 saving. Images without `horizon-source-lfs-selection-contract=1` receive every LFS
 object; Horizon decides that from the image contract before allocation, as for pinned

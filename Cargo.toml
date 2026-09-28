@@ -105,6 +105,8 @@ wayland-server = "0.31.14"
 tempfile = "3.27.0"
 # Cloud source material archives, streamed from verified LFS objects.
 tar = "0.4.46"
+# Unicode categories for git-lfs pattern validation, matching the worker's Python check.
+unicode-general-category = "1.1.0"
 # Windows-only process-tree ownership for browser and WebDriver service
 # descendants. The wrapper creates the child suspended, assigns it to a Job
 # Object, then resumes it, avoiding PID-based teardown and assignment races.

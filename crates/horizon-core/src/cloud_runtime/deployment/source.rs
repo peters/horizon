@@ -59,8 +59,11 @@ impl Auxiliary {
             root: root.to_owned(),
             source,
         };
+        // Either way every source asset the transfer may need is verified before allocation.
         if auxiliary.source.is_default() {
             auxiliary.settle(&WorkerContract::default(), runner)?;
+        } else {
+            repository::validate_selected(repository, revision, &auxiliary.source.lfs, runner)?;
         }
         Ok(auxiliary)
     }
@@ -117,21 +120,20 @@ pub(super) fn pack(state: &Deployment, pack_root: &Path, runner: &Runner<'_>) ->
             .as_ref()
             .map(super::siblings::Set::manifest)
             .transpose()?;
-        repository::validate_tree(&state.repository, &state.revision, runner)?;
-        repository::pack(&state.repository, &state.revision, &pack, runner)?;
         auxiliary = Some(Auxiliary::pack(&state.repository, &state.revision, pack_root, runner)?);
+        repository::pack(&state.repository, &state.revision, &pack, runner)?;
         for (index, sibling) in state.siblings.iter().flat_map(|set| &set.members).enumerate() {
             let checkout = sibling.checkout()?;
             let root = pack_root.join(format!("sibling-{index}"));
             std::fs::create_dir(&root)?;
             let pack = root.join("source.pack");
-            repository::validate_tree(checkout, &sibling.revision, runner)?;
+            let auxiliary = Auxiliary::pack(checkout, &sibling.revision, &root, runner)?;
             repository::pack(checkout, &sibling.revision, &pack, runner)?;
             siblings.push(Sibling {
                 alias: sibling.alias.clone(),
                 revision: sibling.revision.clone(),
                 pack,
-                auxiliary: Auxiliary::pack(checkout, &sibling.revision, &root, runner)?,
+                auxiliary,
             });
         }
     }

@@ -274,7 +274,7 @@ fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeou
 }
 
 #[test]
-fn an_lfs_selection_leaves_out_only_paths_git_lfs_excludes_in_this_repository() {
+fn an_lfs_selection_leaves_out_and_needs_only_paths_git_lfs_excludes_in_this_repository() {
     use sha2::{Digest, Sha256};
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -328,6 +328,17 @@ fn an_lfs_selection_leaves_out_only_paths_git_lfs_excludes_in_this_repository() 
         secrets: vec![],
     };
     let source: horizon_cloud::Source = serde_yaml::from_str("lfs: {exclude: ['fixtures/**']}").unwrap();
+    // An object the selection leaves out need not have been fetched.
+    let skipped = &oids["fixtures/skip.bin"];
+    std::fs::remove_file(
+        repo.join(".git/lfs/objects")
+            .join(&skipped[..2])
+            .join(&skipped[2..4])
+            .join(skipped),
+    )
+    .unwrap();
+    assert!(validate_tree(&repo, "HEAD", &runner).is_err());
+    validate_selected(&repo, "HEAD", &source.lfs, &runner).unwrap();
     let root = temp.path().join("transfer");
     std::fs::create_dir(&root).unwrap();
     let entries = archive_entries(&auxiliary(&repo, "HEAD", &root, &source, &runner).unwrap());

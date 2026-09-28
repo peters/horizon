@@ -23,5 +23,6 @@ thiserror.workspace = true
 serde_json.workspace = true
 schemars = { workspace = true, optional = true }
 ureq.workspace = true
+unicode-general-category.workspace = true
 time.workspace = true
 zeroize.workspace = true
