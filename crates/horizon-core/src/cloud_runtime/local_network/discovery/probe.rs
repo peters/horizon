@@ -20,6 +20,7 @@ use std::{
 
 pub(super) const PER_MINUTE: usize = 6;
 pub(super) const RUNNING: &str = "A probe is already running; try again in a few seconds";
+pub(super) const NARROWED: &str = "The owner changed the bridge's scope during the probe; probe again";
 const MINUTE: Duration = Duration::from_secs(60);
 /// Connection attempts in flight at once.
 const AT_ONCE: usize = 4;
@@ -181,6 +182,14 @@ impl Prober {
             }
             if let Err(reply) = scope.on_network() {
                 return Answer::Refused(reply.message().into());
+            }
+            // The owner may narrow the scope while a probe runs: no port it no longer allows is
+            // dialled, so the probe ends instead.
+            if batch
+                .iter()
+                .any(|port| !scope.keeps(SocketAddr::new(address.into(), *port)))
+            {
+                return Answer::Refused(NARROWED.into());
             }
             // Only a probe about to dial takes a slot of the rate limit, stamped now: a slow
             // lookup before it must not backdate the slot.

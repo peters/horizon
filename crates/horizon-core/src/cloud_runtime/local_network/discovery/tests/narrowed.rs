@@ -74,3 +74,73 @@ fn a_device_open_on_no_default_port_refuses_a_probe_of_the_defaults() {
         Answer::Probe(_)
     ));
 }
+
+#[test]
+fn narrowing_the_scope_hides_devices_already_found_or_probed() {
+    let scope = probe_scope();
+    let discoverer = Discoverer::with_parts(
+        Arc::clone(&scope),
+        Box::new(|_, _, _: &Cancellation| (vec![Finding::Seen(v4("192.168.1.50"), Source::Mdns)], Vec::new())),
+        Box::new(|_, _, _: &Cancellation| Ok(())),
+        Cancellation::default(),
+    );
+    // Found by a browse, and a second device known only from a probe.
+    assert!(matches!(probe(&discoverer, "192.168.1.60", &[22]), Answer::Probe(_)));
+    let Answer::Discovery(before) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(before.devices.len(), 2);
+    scope
+        .set_rules(
+            Rules {
+                devices: vec![Device {
+                    address: v4("192.168.1.50"),
+                    ports: Vec::new(),
+                }],
+                local_ports: Vec::new(),
+            },
+            41234,
+        )
+        .unwrap();
+    // The cached answer is reused, but only with what the rules now reach.
+    let Answer::Discovery(after) = discoverer.discover() else {
+        panic!("discovery");
+    };
+    assert_eq!(
+        after.devices.iter().map(|device| device.address).collect::<Vec<_>>(),
+        [v4("192.168.1.50")]
+    );
+}
+
+#[test]
+fn a_probe_stops_before_dialling_ports_the_owner_closed_while_it_ran() {
+    let scope = probe_scope();
+    let dials = Arc::new(Mutex::new(Vec::new()));
+    let discoverer = {
+        let (scope, seen) = (Arc::clone(&scope), Arc::clone(&dials));
+        Discoverer::with_parts(
+            Arc::clone(&scope),
+            Box::new(|_, _, _: &Cancellation| (Vec::new(), Vec::new())),
+            Box::new(move |target: SocketAddr, _, _: &Cancellation| {
+                seen.lock().unwrap().push(target.port());
+                // The owner narrows the printer to its web port while the first batch runs.
+                *scope.rules.write().unwrap() = Rules {
+                    devices: vec![Device {
+                        address: v4("192.168.1.50"),
+                        ports: vec![80],
+                    }],
+                    local_ports: Vec::new(),
+                };
+                Ok(())
+            }),
+            Cancellation::default(),
+        )
+    };
+    let ports: Vec<u16> = (8000..8008).collect();
+    let Answer::Refused(refusal) = probe(&discoverer, "printer.local", &ports) else {
+        panic!("the probe went on after the scope changed");
+    };
+    assert_eq!(refusal, probe::NARROWED);
+    let dialled = dials.lock().unwrap().clone();
+    assert!(dialled.iter().all(|port| (8000..8004).contains(port)), "{dialled:?}");
+}

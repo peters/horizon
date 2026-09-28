@@ -357,6 +357,14 @@ impl Scope {
         self.rules.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
+    /// Whether the owner's current rules reach the device at `address` on some port.
+    pub(super) fn permits_host(&self, address: Ipv4Addr) -> bool {
+        self.rules
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .permits_host(address)
+    }
+
     /// Whether a relay to `address`, admitted earlier, may stay open under the current rules.
     pub(super) fn keeps(&self, address: SocketAddr) -> bool {
         self.rules.read().unwrap_or_else(PoisonError::into_inner).keeps(address)

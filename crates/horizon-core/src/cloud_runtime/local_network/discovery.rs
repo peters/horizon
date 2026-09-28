@@ -89,10 +89,10 @@ impl Discoverer {
         if let Some((at, discovery)) = last.as_ref()
             && at.elapsed() < REUSE_FOR
         {
-            return Answer::Discovery(self.with_probes(Discovery {
+            return Answer::Discovery(self.in_scope(self.with_probes(Discovery {
                 age_seconds: at.elapsed().as_secs(),
                 ..discovery.clone()
-            }));
+            })));
         }
         // Nothing is sent on a network other than the bridged one.
         if let Err(reply) = self.scope.on_network() {
@@ -115,7 +115,16 @@ impl Discoverer {
         }
         .bounded();
         *last = Some((Instant::now(), discovery.clone()));
-        Answer::Discovery(self.with_probes(discovery))
+        Answer::Discovery(self.in_scope(self.with_probes(discovery)))
+    }
+
+    /// Only the devices the owner's current rules reach: a browse or probe from before the
+    /// owner narrowed the scope must not list the rest.
+    fn in_scope(&self, mut discovery: Discovery) -> Discovery {
+        discovery
+            .devices
+            .retain(|device| self.scope.permits_host(device.address));
+        discovery
     }
 
     /// Adds the ports that probes found open, so later answers list them as known ports.

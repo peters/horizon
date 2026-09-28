@@ -425,14 +425,17 @@ fn narrowed_rules_close_the_relays_they_no_longer_allow_and_leave_the_rest() {
     wait_for(|| proxy.relays().len() == 2);
     proxy.close_unless(|address| address == kept);
     assert!(closed(&mut goes));
+    // The worker's end closes once it sees the close, as `stopping_the_proxy_ends_open_relays`
+    // does; only then do the relay's threads end on every platform.
+    drop(goes);
+    dropped_server.join().unwrap();
     stays.write_all(b"still here").unwrap();
     let mut echoed = [0; 10];
     stays.read_exact(&mut echoed).unwrap();
     assert_eq!(&echoed, b"still here");
     wait_for(|| proxy.relays().iter().map(|relay| relay.address).eq([kept]));
-    drop((stays, goes));
+    drop(stays);
     kept_server.join().unwrap();
-    dropped_server.join().unwrap();
 }
 
 #[test]
