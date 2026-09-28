@@ -151,15 +151,17 @@ struct Control {
 
 impl Control {
     /// A newer session takes the control socket over from a helper whose session was lost,
-    /// which then ends; it refuses while that helper's owner is still heard from.
+    /// which then ends; it refuses while that helper's owner is still heard from. Asking and
+    /// replacing happen under one lock, so two new sessions cannot both take over.
     fn bind(paths: &Paths) -> io::Result<Self> {
-        // Otherwise the helper there retired, is absent or does not answer: the socket is free.
-        if let Ok(Answer::Error(error)) = super::exchange(paths, &Request::Retire) {
-            return Err(io::Error::other(error));
-        }
         let path = paths.control();
         let lock = paths.lock();
         let _guard = Locked::new(&lock)?;
+        // Otherwise the helper there retired, is absent or does not answer: the socket is free.
+        // A retiring helper removes its socket only under this lock, after checking it is its own.
+        if let Ok(Answer::Error(error)) = super::exchange(paths, &Request::Retire) {
+            return Err(io::Error::other(error));
+        }
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}

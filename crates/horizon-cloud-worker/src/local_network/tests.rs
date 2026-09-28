@@ -171,6 +171,39 @@ fn a_live_session_keeps_the_bridge_and_a_dead_one_makes_way() {
 }
 
 #[test]
+fn of_two_sessions_starting_together_exactly_one_holds_the_bridge() {
+    let (_root, paths) = paths();
+    prepare(&paths).unwrap();
+    let nonces = ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"];
+    let mut starts = Vec::new();
+    for nonce in nonces {
+        owner_proxy(&paths.bridge(&Nonce::parse(nonce).unwrap()));
+        let (input, heartbeat) = io::pipe().unwrap();
+        let (output, ready) = io::pipe().unwrap();
+        let paths = paths.clone();
+        let helper = thread::spawn(move || hold::run(&paths, nonce, "192.168.1.0/24", input, ready));
+        starts.push((helper, heartbeat, output));
+    }
+    let mut ready = Vec::new();
+    let mut refused = 0;
+    for (helper, heartbeat, output) in starts {
+        if let Some(line) = read_line(&mut BufReader::new(output)).unwrap() {
+            ready.push((helper, heartbeat, line));
+        } else {
+            let error = helper.join().unwrap().unwrap_err();
+            assert!(error.to_string().contains("Another Horizon"), "{error}");
+            refused += 1;
+        }
+    }
+    assert_eq!((ready.len(), refused), (1, 1));
+    let (helper, heartbeat, line) = ready.pop().unwrap();
+    let proxy = serde_json::from_str::<Ready>(&line).unwrap().proxy;
+    assert_eq!(status(&paths).unwrap().proxy, Some(proxy.to_string()));
+    drop(heartbeat);
+    helper.join().unwrap().unwrap();
+}
+
+#[test]
 fn the_helper_refuses_invalid_sessions_and_a_missing_bridge_socket() {
     let (_root, paths) = paths();
     for (nonce, subnet) in [
