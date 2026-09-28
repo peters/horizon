@@ -58,6 +58,31 @@ pub(super) fn profile_details(
 ) -> Option<(u16, u16)> {
     ui.label(RichText::new(&launch.profile_name).size(17.0).color(theme::FG_DIM()));
     let resize = machine_size(ui, id, launch, runtime);
+    profile_metadata(ui, launch, runtime, region_of);
+    resize
+}
+
+pub(super) fn profile_summary(
+    ui: &mut egui::Ui,
+    launch: &horizon_core::cloud_panel::CloudLaunch,
+    runtime: &super::super::Runtime,
+    region_of: &dyn Fn(&str) -> Option<String>,
+) {
+    ui.label(RichText::new(&launch.profile_name).size(17.0).color(theme::FG_DIM()));
+    let profile = runtime.state.as_ref().map_or(&launch.profile, |state| &state.profile);
+    ui.label(super::super::machine_size::fixed(
+        (profile.cpu, profile.memory_gb),
+        profile.gpu,
+    ));
+    profile_metadata(ui, launch, runtime, region_of);
+}
+
+fn profile_metadata(
+    ui: &mut egui::Ui,
+    launch: &horizon_core::cloud_panel::CloudLaunch,
+    runtime: &super::super::Runtime,
+    region_of: &dyn Fn(&str) -> Option<String>,
+) {
     ui.label(RichText::new(&launch.profile.image).monospace().size(14.0));
     placement::where_it_lives(ui, launch, runtime.state.as_ref(), region_of);
     self_stop::show(ui, runtime.state.as_ref());
@@ -85,7 +110,6 @@ pub(super) fn profile_details(
     } else {
         "Desktop: disabled"
     });
-    resize
 }
 
 /// CPU and memory can change until a worker is requested; `RunPod` cannot resize an

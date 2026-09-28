@@ -4,18 +4,7 @@ use horizon_core::{cloud_panel::CloudLaunch, cloud_runtime::state::Deployment};
 
 #[test]
 fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
-    let mut config = super::super::CloudConfig::parse(
-        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/team/worker\n    cpu: 4\n    memory_gb: 8\n",
-    )
-    .unwrap();
-    let launch = CloudLaunch {
-        deployment_started: true,
-        id: "runtime-bounds".into(),
-        revision: "a".repeat(40),
-        profile_name: "Long development profile ".repeat(8),
-        profile: config.profiles.remove("dev").unwrap(),
-        placement: horizon_core::cloud_panel::Placement::default(),
-    };
+    let launch = bounds_launch();
     let ctx = egui::Context::default();
     for _ in 0..3 {
         let mut rects = Vec::new();
@@ -80,22 +69,50 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                             sender
                         });
                         let id = u32::try_from(id).unwrap();
-                        let response = runtime_frame(ui, id, |ui| {
-                            assert!(profile_details(ui, id, &launch, &runtime, &|_| None).is_none());
-                            runtime_actions(ui, id, &mut runtime);
+                        let mut group = horizon_core::cloud_panel::CloudGroup::new(
+                            id,
+                            "Fixture".into(),
+                            "fixture".into(),
+                            "/synthetic".into(),
+                            [0.0, 0.0],
+                        );
+                        group.remote = Some(launch.clone());
+                        let board = horizon_core::Board::new();
+                        let response = runtime_frame(ui, &group, |ui| {
+                            toolbar::show(ui, &group, &mut runtime, &board, false);
                         });
+                        let (min, max) = group.runtime_bounds();
                         assert!(
-                            (response.response.rect.width() - RUNTIME_WIDTH).abs() < 0.1,
+                            (response.response.rect.width() - (max[0] - min[0])).abs() < 0.1,
                             "case {id}: {:?}",
                             response.response.rect
                         );
-                        assert!((response.response.rect.height() - RUNTIME_HEIGHT).abs() < 0.1);
+                        assert!(
+                            (response.response.rect.height() - (max[1] - min[1])).abs() < 0.1,
+                            "case {id}: {:?}",
+                            response.response.rect
+                        );
                         rects.push(response.response.rect);
                     }
                 },
             )
             .discard_textures();
         assert!(rects.windows(2).all(|pair| pair[0].bottom() <= pair[1].top()));
+    }
+}
+
+fn bounds_launch() -> CloudLaunch {
+    let mut config = super::super::CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/team/worker\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap();
+    CloudLaunch {
+        deployment_started: true,
+        id: "runtime-bounds".into(),
+        revision: "a".repeat(40),
+        profile_name: "Long development profile ".repeat(8),
+        profile: config.profiles.remove("dev").unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
     }
 }
 

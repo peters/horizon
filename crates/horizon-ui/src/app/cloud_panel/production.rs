@@ -94,6 +94,7 @@ pub(super) enum Confirmation {
 }
 #[derive(Default)]
 pub(super) struct Runtime {
+    detail_view: cards::DetailView,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,

@@ -96,7 +96,7 @@ impl HorizonApp {
             workspace,
             [
                 group.position[0] + horizon_core::cloud_panel::PAD,
-                group.position[1] + horizon_core::cloud_panel::HEADER,
+                group.position[1] + group.header_height(),
             ],
         ))
     }
