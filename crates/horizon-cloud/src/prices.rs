@@ -205,7 +205,7 @@ impl PriceList {
 /// Stock of one CPU worker size in the allowed data centers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SizeAvailability {
-    /// Data centers with this exact size in stock; the others have none.
+    /// Compatible data centers and their exact-size stock, including sold-out entries.
     pub centers: Vec<(String, Availability)>,
 }
 
@@ -222,7 +222,9 @@ impl SizeAvailability {
     /// How many data centers in `within` (every allowed one when empty) have this size.
     #[must_use]
     pub fn count(&self, within: &[String]) -> usize {
-        self.in_scope(within).count()
+        self.in_scope(within)
+            .filter(|(_, level)| *level != Availability::None)
+            .count()
     }
 
     fn in_scope<'a>(&'a self, within: &'a [String]) -> impl Iterator<Item = &'a (String, Availability)> {
@@ -324,11 +326,16 @@ mod tests {
             centers: vec![
                 ("EU-RO-1".into(), Availability::Low),
                 ("US-MO-2".into(), Availability::High),
+                ("EUR-IS-1".into(), Availability::None),
             ],
         };
         assert_eq!((size.best(&[]), size.count(&[])), (Availability::High, 2));
         let europe = ["EU-RO-1".to_owned(), "EUR-IS-1".to_owned()];
         assert_eq!((size.best(&europe), size.count(&europe)), (Availability::Low, 1));
         assert_eq!(size.best(&["AP-JP-1".into()]), Availability::None);
+        assert_eq!(
+            (size.best(&["EUR-IS-1".into()]), size.count(&["EUR-IS-1".into()])),
+            (Availability::None, 0)
+        );
     }
 }
