@@ -690,3 +690,29 @@ fn an_old_catalog_keeps_a_watch_waiting_and_a_volume_nobody_holds_is_named() {
         Some("No allowed data center can hold this kind of workspace volume. Choose another storage type.")
     );
 }
+
+#[test]
+fn retained_region_selection_requires_every_center_to_hold_the_storage_tier() {
+    let mut form = form("cpu");
+    let second = &mut form.prices.list.as_mut().unwrap().value.0.data_centers[1];
+    second.id = "EU-2".into();
+    second.region = "EUROPE".into();
+    form.placement.data_centers = vec!["EU-1".into(), "EU-2".into()];
+    form.placement.region = Some("Europe".into());
+    assert!(can_submit(&form));
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("cpu")
+        .unwrap()
+        .storage
+        .volume_tier = StorageTier::HighPerformance;
+    assert!(!can_submit(&form));
+    assert!(submit_reason(&form).unwrap().contains("cannot hold"));
+    form.placement.data_centers = vec!["EU-2".into()];
+    assert!(can_submit(&form));
+    form.placement.data_centers.push("not-offered".into());
+    assert!(!can_submit(&form));
+    assert!(submit_reason(&form).unwrap().contains("no longer offered"));
+}

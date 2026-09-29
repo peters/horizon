@@ -40,8 +40,8 @@ profiles:
   cheap:
     provider: hetzner
     image: registry.example.com/team/worker
-    cpu: 8
-    memory_gb: 16
+    min_cpu: 8
+    min_memory_gb: 16
     storage:
       volume_gb: 100
 ```

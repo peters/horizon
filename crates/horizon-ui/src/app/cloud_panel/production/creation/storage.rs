@@ -31,17 +31,20 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         }
         // A chosen place must still be offered, and hold the chosen kind of workspace volume.
         if let Some(fetched) = form.prices.list.as_ref().filter(|_| !form.placement.is_any()) {
-            let mut known = fetched
-                .value
-                .0
+            let centers = &fetched.value.0.data_centers;
+            if form
+                .placement
                 .data_centers
                 .iter()
-                .filter(|center| form.placement.data_centers.contains(&center.id))
-                .peekable();
-            if known.peek().is_none() {
+                .any(|id| !centers.iter().any(|center| center.id == *id))
+            {
                 return Some("The chosen data center is no longer offered. Choose another data center.");
             }
-            if !profile.gpu && !known.any(|center| center.holds(profile.storage.volume_tier)) {
+            if !profile.gpu
+                && centers.iter().any(|center| {
+                    form.placement.data_centers.contains(&center.id) && !center.holds(profile.storage.volume_tier)
+                })
+            {
                 return Some(
                     "The chosen data center cannot hold this kind of workspace volume. Choose another data center or storage type.",
                 );
