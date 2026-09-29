@@ -189,7 +189,8 @@ impl State {
             return;
         }
         let destination = source::destination(&parent, &remote);
-        let token = Token::new(&remote, &self.token);
+        // What the probe read without one needs no token, whatever was typed before.
+        let token = (!self.public).then(|| Token::new(&remote, &self.token)).flatten();
         self.token_tried = token.is_some();
         self.token_focused = false;
         let remember = token.is_some() && self.remember;

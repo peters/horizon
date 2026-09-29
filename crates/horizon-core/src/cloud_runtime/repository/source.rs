@@ -131,28 +131,35 @@ pub fn default_parent(home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join("Horizon"))
 }
 
+/// The folders a clone of `remote` can land in under `parent`, in the order they are tried:
+/// the repository's name, then that name with `-2`, `-3` and so on.
+fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
+    (1..=1000).map(move |n| match n {
+        1 => parent.join(&remote.name),
+        n => parent.join(format!("{}-{n}", remote.name)),
+    })
+}
+
 /// A folder under `parent` named for the repository that nothing occupies yet.
 #[must_use]
 pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
-    (1..=1000)
-        .map(|n| match n {
-            1 => remote.name.clone(),
-            n => format!("{}-{n}", remote.name),
-        })
-        .map(|name| parent.join(name))
+    candidates(parent, remote)
         .find(|path| !path.exists())
         .unwrap_or_else(|| parent.join(&remote.name))
 }
 
-/// The checkout of `remote` already under `parent`, so a second request reuses it.
+/// The checkout of `remote` already under `parent`, so a second request reuses it: any of the
+/// folders [`destination`] would have chosen for an earlier clone.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
-    let path = parent.join(&remote.name);
-    if !path.is_dir() {
-        return None;
-    }
-    let origin = git_output(&path, &["config", "--get", "remote.origin.url"])?;
-    (parse(origin.trim())?.url == remote.url && is_checkout(&path)).then_some(path)
+    candidates(parent, remote)
+        .take_while(|path| path.is_dir())
+        .find(|path| {
+            git_output(path, &["config", "--get", "remote.origin.url"])
+                .and_then(|origin| parse(origin.trim()))
+                .is_some_and(|origin| origin.url == remote.url)
+                && is_checkout(path)
+        })
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
@@ -701,6 +708,19 @@ mod tests {
         git(temp.path(), &["clone", "-q", origin.to_str().unwrap(), "demo"]);
         assert_eq!(existing(temp.path(), &remote), None, "another origin is not this link");
         git(&checkout, &["remote", "set-url", "origin", &remote.url]);
-        assert_eq!(existing(temp.path(), &remote), Some(checkout));
+        assert_eq!(existing(temp.path(), &remote), Some(checkout.clone()));
+        // A second copy made beside an occupied name is found too.
+        let beside = temp.path().join("demo-2");
+        git(temp.path(), &["clone", "-q", origin.to_str().unwrap(), "demo-2"]);
+        git(
+            &beside,
+            &["remote", "set-url", "origin", "https://github.com/demo-org/other.git"],
+        );
+        git(
+            &checkout,
+            &["remote", "set-url", "origin", "https://github.com/demo-org/other.git"],
+        );
+        git(&beside, &["remote", "set-url", "origin", &remote.url]);
+        assert_eq!(existing(temp.path(), &remote), Some(beside));
     }
 }

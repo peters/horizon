@@ -228,7 +228,9 @@ impl State {
                 }
                 ui.horizontal(|ui| {
                     widgets::checkbox(ui, &mut self.remember, "Save it in Git’s credential helper");
-                    ui.hyperlink_to(RichText::new("Create a token").size(13.0), token_page(host, origin));
+                    if let Some(page) = token_page(host, origin) {
+                        ui.hyperlink_to(RichText::new("Create a token").size(13.0), page);
+                    }
                 });
                 if field.lost_focus() && enter && !self.token.trim().is_empty() {
                     self.start(ui.ctx());
@@ -237,11 +239,12 @@ impl State {
     }
 }
 
-fn token_page(host: &str, origin: &str) -> String {
+/// Where a personal access token is made, for the hosts whose page is known.
+fn token_page(host: &str, origin: &str) -> Option<String> {
     match host {
-        "github.com" => "https://github.com/settings/personal-access-tokens/new".into(),
-        // A self-hosted GitLab may listen on a port of its own.
-        _ => format!("{origin}/-/user_settings/personal_access_tokens"),
+        "github.com" => Some("https://github.com/settings/personal-access-tokens/new".into()),
+        "gitlab.com" => Some(format!("{origin}/-/user_settings/personal_access_tokens")),
+        _ => None,
     }
 }
 
@@ -304,14 +307,16 @@ mod tests {
     use super::token_page;
 
     #[test]
-    fn a_self_hosted_gitlab_keeps_its_port_in_the_token_page() {
+    fn a_token_page_is_offered_only_where_it_is_known() {
         assert_eq!(
-            token_page("gitlab.example.org", "https://gitlab.example.org:8443"),
-            "https://gitlab.example.org:8443/-/user_settings/personal_access_tokens"
+            token_page("gitlab.com", "https://gitlab.com").as_deref(),
+            Some("https://gitlab.com/-/user_settings/personal_access_tokens")
         );
         assert_eq!(
-            token_page("github.com", "https://github.com"),
-            "https://github.com/settings/personal-access-tokens/new"
+            token_page("github.com", "https://github.com").as_deref(),
+            Some("https://github.com/settings/personal-access-tokens/new")
         );
+        assert_eq!(token_page("bitbucket.org", "https://bitbucket.org"), None);
+        assert_eq!(token_page("git.example.org", "https://git.example.org:8443"), None);
     }
 }

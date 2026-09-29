@@ -659,7 +659,7 @@ Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
 channels, and removal rechecks durable resource ownership before discarding panels.
 The New cloud dialog asks where the code is before anything else.
-`cloud_runtime::repository::source` reads links, probes whether a repository is public,
+`cloud_runtime::repository::source` reads links, probes whether a repository can be read without a token,
 and clones with system Git without ever prompting; a personal access token reaches Git
 only through its environment and is remembered only through the user's Git credential
 helper. `cloud_runtime::deployment::admission` runs deployment's own first checks
