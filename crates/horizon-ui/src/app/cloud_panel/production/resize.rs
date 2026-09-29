@@ -242,7 +242,7 @@ impl HorizonApp {
         let (root, settings) = match setup {
             Ok(setup) => setup,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                runtime.fail_preflight(error.to_string());
                 return;
             }
         };

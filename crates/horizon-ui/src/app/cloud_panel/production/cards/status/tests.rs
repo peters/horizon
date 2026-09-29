@@ -570,3 +570,25 @@ fn a_stop_that_fails_before_the_provider_records_it_offers_reconcile_stop() {
     assert_eq!(status.primary, Some(Primary::ReconcileStop), "not a reconnect");
     assert!(!status.track.failed, "no deployment step failed");
 }
+
+#[test]
+fn a_reconnect_rebuild_or_resize_that_fails_its_preflight_is_not_the_earlier_stop() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        operation: Some(super::super::Action::Stop),
+        state: Some(deployment("Ready", &bound(), &running_worker())),
+        ..Runtime::default()
+    };
+    runtime.push_log("error: the stop's own output".into());
+    let before = runtime.progress.attempt();
+    runtime.fail_preflight("settings.json could not be read".into());
+    assert_eq!(
+        runtime.progress.attempt(),
+        before + 1,
+        "the stop's output is not this failure's"
+    );
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_ne!(status.verb, "Stop failed");
+    assert_ne!(status.primary, Some(Primary::ReconcileStop));
+    assert_eq!(status.numbers, "settings.json could not be read");
+}

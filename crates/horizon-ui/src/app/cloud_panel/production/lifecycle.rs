@@ -77,7 +77,7 @@ impl Runtime {
                 self.state_unavailable = false;
                 self.error = (recovered.report.outcome.needs_attention() && !stopped)
                     .then(|| recovered.report.outcome.explanation().into());
-                self.push_log(if stopped {
+                self.push_note(if stopped {
                     format!("The provider confirmed this worker is stopped. {resume}")
                 } else {
                     recovered.report.outcome.explanation().into()
@@ -143,7 +143,7 @@ impl Runtime {
             Ok(state) => {
                 self.remote_release_error = None;
                 self.state = Some(state);
-                self.push_log("Remote devices released and copied credentials removed".into());
+                self.push_note("Remote devices released and copied credentials removed".into());
             }
             Err(error) => self.remote_release_error = Some(error.to_string()),
         }

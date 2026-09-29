@@ -36,7 +36,7 @@ impl HorizonApp {
             Err(error) => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.state_unavailable = true;
-                runtime.error = Some(error.to_string());
+                runtime.fail_preflight(error.to_string());
                 return None;
             }
         };
@@ -53,7 +53,7 @@ impl HorizonApp {
             other => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.state_unavailable = true;
-                runtime.error = Some(other.err().map_or_else(
+                runtime.fail_preflight(other.err().map_or_else(
                     || "Deployment record is missing; reconcile its worker before continuing".into(),
                     |error| error.to_string(),
                 ));
@@ -63,8 +63,12 @@ impl HorizonApp {
         let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
             Ok(settings) => settings,
             Err(error) => {
-                self.cloud_prototype.production.runtimes.entry(id).or_default().error =
-                    Some(format!("{error}. Configure {}", root.join("settings.json").display()));
+                self.cloud_prototype
+                    .production
+                    .runtimes
+                    .entry(id)
+                    .or_default()
+                    .fail_preflight(format!("{error}. Configure {}", root.join("settings.json").display()));
                 return None;
             }
         };

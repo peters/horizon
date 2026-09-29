@@ -233,6 +233,26 @@ impl Runtime {
         let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
         line.attempt = self.progress.attempt();
         line.visit = line.stage.map_or(0, |stage| self.progress.visit(stage));
+        self.append_log(line);
+    }
+
+    /// A deployment, reconnect, rebuild or resize that failed before it started: that is
+    /// this attempt's failure, with its own output, not an earlier stop's or resume's.
+    fn fail_preflight(&mut self, error: String) {
+        self.progress.reset();
+        self.operation = None;
+        self.error = Some(error);
+    }
+
+    /// A line outside any operation's steps: an idle report, a provider check or a device
+    /// release. It has no step or time, so it is not filed under the last step's heading.
+    fn push_note(&mut self, text: String) {
+        let mut line = LogLine::new(text, None, None);
+        line.attempt = self.progress.attempt();
+        self.append_log(line);
+    }
+
+    fn append_log(&mut self, line: LogLine) {
         self.log_generation += 1;
         // An update replaces its layer's line wherever it is: in place, it moves nothing
         // on a scrolled-up screen, and a following view never shows the layer twice.

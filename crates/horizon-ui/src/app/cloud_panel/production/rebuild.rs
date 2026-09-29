@@ -135,7 +135,7 @@ impl HorizonApp {
         let profile_name = launch.profile_name.clone();
         match request(&root, launch, repository) {
             Ok(request) => runtime.start_rebuild(request, kind, profile_name, ctx),
-            Err(error) => runtime.error = Some(error.to_string()),
+            Err(error) => runtime.fail_preflight(error.to_string()),
         }
     }
 }

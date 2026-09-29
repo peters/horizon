@@ -107,11 +107,19 @@ fn lines(ui: &mut egui::Ui, runtime: &Runtime, follows: bool) {
         if previous != Some(group) {
             if let Some(stage) = line.stage {
                 stage_heading(ui, runtime, stage, line.attempt, line.visit);
+            } else if previous.is_some() {
+                // Notes after a step's lines are not that step's output.
+                note_heading(ui);
             }
             previous = Some(group);
         }
         row(ui, line);
     }
+}
+
+fn note_heading(ui: &mut egui::Ui) {
+    ui.add_space(2.0);
+    ui.label(RichText::new("Notes").size(12.0).color(theme::FG_DIM()));
 }
 
 /// Only the current attempt's steps are timed from the timeline, each visit with its own
@@ -367,5 +375,35 @@ mod tests {
             ["first", "5f70bf18a086: Pushed"],
             "the scrolled-up view keeps its lines where they are; a layer updates in place"
         );
+    }
+
+    #[test]
+    fn a_note_after_a_step_gets_its_own_heading_instead_of_the_steps() {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Sessions),
+            ..Runtime::default()
+        };
+        runtime.progress.stage(Stage::Sessions, std::time::Instant::now());
+        runtime.push_log("session started".into());
+        runtime.push_note("Idle watch: stopped by claude".into());
+        let shown: Vec<String> = {
+            let output = egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    show(ui, 1, "test", &mut runtime, 400.0, None);
+                })
+                .discard_textures();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let heading = shown.iter().position(|text| text == "Notes").expect("a Notes heading");
+        let note = shown.iter().position(|text| text.contains("Idle watch")).unwrap();
+        let step = shown.iter().position(|text| text == "session started").unwrap();
+        assert!(step < heading && heading < note, "{shown:?}");
     }
 }
