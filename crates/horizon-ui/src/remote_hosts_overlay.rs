@@ -20,7 +20,7 @@ use self::layout::{
 };
 use self::paint::{HostRowRenderContext, paint_empty, render_column_headers, render_host_details, render_host_row};
 use self::query::{QueryOverrides, connect_action, filtered_indices, parse_query};
-use crate::command_palette::render::paint_card;
+use crate::command_palette::render::{focus_once, paint_card};
 use crate::theme;
 
 const NOTICE_DURATION: Duration = Duration::from_secs(4);
@@ -30,6 +30,8 @@ pub struct RemoteHostsOverlay {
     selected: usize,
     expanded_host: Option<ExpandedHostId>,
     opened_at: Instant,
+    /// Whether the filter has had focus since the overlay opened.
+    focused: bool,
     mode: RemoteConnectMode,
     destination: WorkspaceChoice,
     /// Short-lived feedback shown in place of the host count.
@@ -211,6 +213,7 @@ impl RemoteHostsOverlay {
             selected: 0,
             expanded_host: None,
             opened_at: Instant::now(),
+            focused: false,
             mode: RemoteConnectMode::default(),
             destination: WorkspaceChoice::default(),
             notice: None,
@@ -463,9 +466,7 @@ impl RemoteHostsOverlay {
                 )
                 .margin(Margin::ZERO),
         );
-        if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
-            response.request_focus();
-        }
+        focus_once(&response, &mut self.focused);
         // Tab switches SSH/VNC instead of moving focus out of the filter.
         child.memory_mut(|memory| {
             memory.set_focus_lock_filter(
@@ -1206,6 +1207,46 @@ mod tests {
             | RemoteHostsOverlayAction::SetDefaultWorkspace(_)
             | RemoteHostsOverlayAction::SaveShortcut { .. } => panic!("expected an open action"),
         }
+    }
+
+    #[test]
+    fn a_slow_first_frame_still_focuses_the_filter_and_never_takes_focus_back() {
+        let ctx = egui::Context::default();
+        let catalog = RemoteHostCatalog {
+            hosts: vec![remote_host("live-a", 22429)],
+            refreshed_at: None,
+        };
+        let workspaces = Vec::new();
+        let mut overlay = RemoteHostsOverlay::new();
+        // A first frame drawn a second after opening, as under heavy load.
+        overlay.opened_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("the process started more than a second ago");
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        show_overlay(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![egui::Event::Text("live".into())],
+        );
+        assert_eq!(overlay.query, "live");
+        // Once the user moves focus away, the filter leaves it there.
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+        show_overlay(&ctx, &mut overlay, &catalog, &workspaces, Vec::new());
+        show_overlay(
+            &ctx,
+            &mut overlay,
+            &catalog,
+            &workspaces,
+            vec![egui::Event::Text("-a".into())],
+        );
+        assert_eq!(overlay.query, "live");
+        assert_eq!(ctx.memory(egui::Memory::focused), None);
     }
 
     #[test]
