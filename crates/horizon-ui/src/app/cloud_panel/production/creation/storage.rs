@@ -29,8 +29,8 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         if profile.gpu && catalog.as_ref().is_some_and(|catalog| catalog.selected.is_none()) {
             return Some("Choose a GPU type the catalog offers for this profile.");
         }
-        // Data centers the catalog knows must hold the chosen kind of workspace volume.
-        if let Some(fetched) = form.prices.list.as_ref().filter(|_| !profile.gpu) {
+        // A chosen place must still be offered, and hold the chosen kind of workspace volume.
+        if let Some(fetched) = form.prices.list.as_ref().filter(|_| !form.placement.is_any()) {
             let mut known = fetched
                 .value
                 .0
@@ -38,7 +38,10 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
                 .iter()
                 .filter(|center| form.placement.data_centers.contains(&center.id))
                 .peekable();
-            if known.peek().is_some() && !known.any(|center| center.holds(profile.storage.volume_tier)) {
+            if known.peek().is_none() {
+                return Some("The chosen data center is no longer offered. Choose another data center.");
+            }
+            if !profile.gpu && !known.any(|center| center.holds(profile.storage.volume_tier)) {
                 return Some(
                     "The chosen data center cannot hold this kind of workspace volume. Choose another data center or storage type.",
                 );

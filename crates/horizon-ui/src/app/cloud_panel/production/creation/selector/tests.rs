@@ -475,3 +475,53 @@ fn only_the_chosen_cpu_size_reads_exact_stock_and_the_rest_say_likely() {
     assert_eq!(widgets::stock(shown.stock(other, &form)).0, "Likely in stock");
     assert_eq!(widgets::stock(shown.stock(chosen, &form)).0, "Out of stock");
 }
+
+#[test]
+fn start_arms_the_watch_for_a_checked_sold_out_worker_whether_clicked_or_entered() {
+    let mut form = form("gpu");
+    form.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: vec!["a5000".into()],
+    };
+    form.launch.selector.wait_for_stock = true;
+    assert!(summary::plan(&form).wait);
+    summary::start(&mut form);
+    assert!(
+        form.launch.watch.is_some() && !form.launch.submitted,
+        "it waits instead of starting"
+    );
+    // A worker in stock starts at once, checked box or not.
+    let mut ready = self::form("gpu");
+    ready.placement.gpu_types = vec!["a6000".into()];
+    ready.launch.selector.wait_for_stock = true;
+    summary::start(&mut ready);
+    assert!(ready.launch.submitted && ready.launch.watch.is_none());
+}
+
+#[test]
+fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
+    let mut gone = form("cpu");
+    gone.placement.data_centers = vec!["GONE-1".into()];
+    assert_eq!(
+        submit_reason(&gone),
+        Some("The chosen data center is no longer offered. Choose another data center.")
+    );
+    // A watched GPU the catalog stops pricing ends the watch instead of waiting forever.
+    let mut watched = form("gpu");
+    watched.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: vec!["a5000".into()],
+    };
+    watch::arm(&mut watched);
+    assert!(watched.launch.watch.is_some());
+    let mut unpriced = list(None);
+    unpriced.gpus.retain(|gpu| gpu.id != "a5000");
+    watched.prices.answered(unpriced, preferences(), Vec::new());
+    watch::poll(&mut watched);
+    assert!(watched.launch.watch.is_none() && !watched.launch.submitted);
+    // Its summary still names the chosen type rather than CPU dimensions.
+    let labels = render(&mut watched);
+    assert!(labels.iter().any(|label| label == "a5000 (not offered)"));
+}

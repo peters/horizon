@@ -613,7 +613,7 @@ fn disk_edits_preserve_gpu_placement_and_survive_launch_capture() {
         .gpu = true;
     let selected = horizon_core::cloud_panel::Placement {
         region: Some("Chosen region".into()),
-        data_centers: vec!["chosen-dc".into()],
+        data_centers: vec!["EU-RO-1".into()],
         gpu_types: vec!["chosen-gpu".into()],
     };
     app.cloud_prototype.production.placement = selected.clone();
@@ -692,7 +692,7 @@ fn container_edit_requires_a_compatible_cpu_size_before_starting() {
         .storage
         .volume_gb = 25;
     let placement = horizon_core::cloud_panel::Placement {
-        data_centers: vec!["chosen-dc".into()],
+        data_centers: vec!["EU-RO-1".into()],
         ..Default::default()
     };
     app.cloud_prototype.production.placement = placement.clone();

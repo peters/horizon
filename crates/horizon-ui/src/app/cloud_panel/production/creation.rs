@@ -138,8 +138,10 @@ impl HorizonApp {
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::None => {}
         }
+        // The Start button and Enter in the title take the same path: with "Start new
+        // cloud once available" checked for a sold-out worker, both arm the watch.
         if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
-            self.cloud_prototype.production.launch.submitted = true;
+            selector::summary::start(&mut self.cloud_prototype.production);
         }
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
@@ -510,7 +512,15 @@ fn title_requirement(ui: &mut Ui, form: &Production) {
     }
 }
 
+/// Why Start is unavailable, for the selector tests; the dialog works it out once per
+/// frame with [`submit_reason_given`].
+#[cfg(all(test, unix))]
 fn submit_reason(form: &Production) -> Option<&'static str> {
+    submit_reason_given(form, storage::launch_reason(form))
+}
+
+/// [`submit_reason`] with the chosen worker's launch reason already worked out.
+fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Option<&'static str> {
     if form.pending_creation.is_some() || form.launch.submitted {
         return None;
     }
@@ -518,7 +528,7 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
-        (false, false) => storage::launch_reason(form),
+        (false, false) => blocked,
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
         (true, true) => Some("Enter a cloud title and read the repository profile."),
@@ -526,11 +536,16 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
 }
 
 fn can_submit(form: &Production) -> bool {
+    can_submit_given(form, storage::launch_reason(form))
+}
+
+/// [`can_submit`] with the chosen worker's launch reason already worked out.
+fn can_submit_given(form: &Production, blocked: Option<&'static str>) -> bool {
     !form.title.trim().is_empty()
         && (form.profiles.is_some() || form.launch.loading())
         && form.pending_creation.is_none()
         && !form.launch.submitted
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
-        && storage::launch_reason(form).is_none()
+        && blocked.is_none()
 }

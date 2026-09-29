@@ -1,6 +1,6 @@
 //! The configuration summary beside the catalog: the chosen worker, where it runs, its
 //! storage and cost, and the one action that starts it, now or once it is in stock.
-use super::super::{Actions, Production, can_submit, costs, placement, provider, submit_reason, watch};
+use super::super::{Actions, Production, can_submit_given, costs, placement, provider, submit_reason_given, watch};
 use super::{catalog, profile, sized, widgets};
 use crate::theme;
 use egui::{Button, DragValue, Frame, RichText, Stroke, Ui, Vec2};
@@ -68,8 +68,14 @@ fn worker(ui: &mut Ui, form: &Production, profile: &Profile) {
         let index = catalog.selected?;
         Some(catalog.offers[index].clone())
     });
+    // A GPU type no longer in the catalog is still named, never by CPU dimensions.
     let name = match &chosen {
         Some(offer) if offer.kind == "gpu" => offer.name.clone(),
+        _ if profile.gpu => form
+            .placement
+            .gpu_types
+            .first()
+            .map_or_else(|| "No GPU type chosen".to_owned(), |gpu| format!("{gpu} (not offered)")),
         _ => format!("{} vCPU · {} GB", sized.cpu, sized.memory_gb),
     };
     ui.label(RichText::new(name).size(20.0).strong().color(theme::FG()));
@@ -262,22 +268,61 @@ fn watching(ui: &mut Ui, form: &Production) {
 
 /// The dialog's action bar: why Start is unavailable, the wait checkbox for a sold-out
 /// selection, and Cancel beside Start, or Stop watching while a watch runs.
-pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut Actions) {
+/// What Start does now, worked out once per frame.
+pub(in super::super) struct Plan {
+    /// Why the chosen worker cannot start, if anything but its stock stands in the way.
+    pub blocked: Option<&'static str>,
+    /// The worker is out of stock where it may go and can be waited for.
+    pub watchable: bool,
+    /// "Start new cloud once available" is checked for a watchable worker.
+    pub wait: bool,
+    /// Why a watch cannot arm now, while waiting.
+    pub watch_reason: Option<&'static str>,
+}
+
+pub(in super::super) fn plan(form: &Production) -> Plan {
+    let blocked = super::super::storage::launch_reason(form);
     let starting = form.pending_creation.is_some() || form.launch.submitted;
-    let watching = form.launch.watch.is_some();
     let sold_out = profile(form)
         .map(|profile| sized(form, profile))
         .is_some_and(|sized| placement::in_stock(&form.prices, &sized, &form.placement) == Some(false));
     // Only stock can be waited for: another reason Start is unavailable comes first.
     let watchable = sold_out
-        && super::super::storage::launch_reason(form).is_none()
+        && blocked.is_none()
         && !starting
-        && !watching
+        && form.launch.watch.is_none()
         && profile(form).is_some_and(|profile| provider::current(form.provider, profile).kind == Kind::RunPod);
     let wait = watchable && form.launch.selector.wait_for_stock;
-    let enabled = can_submit(form) && !(wait && watch::armable(form).is_err());
-    let reason = submit_reason(form);
     let watch_reason = if wait { watch::armable(form).err() } else { None };
+    Plan {
+        blocked,
+        watchable,
+        wait,
+        watch_reason,
+    }
+}
+
+/// Starts the chosen worker now, or arms the watch when "Start new cloud once
+/// available" is checked for a sold-out one. The Start button and Enter both land here.
+pub(in super::super) fn start(form: &mut Production) {
+    if plan(form).wait {
+        watch::arm(form);
+    } else {
+        form.launch.submitted = true;
+    }
+}
+
+pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut Actions) {
+    let starting = form.pending_creation.is_some() || form.launch.submitted;
+    let watching = form.launch.watch.is_some();
+    let Plan {
+        blocked,
+        watchable,
+        wait,
+        watch_reason,
+    } = plan(form);
+    let enabled = can_submit_given(form, blocked) && watch_reason.is_none();
+    let reason = submit_reason_given(form, blocked);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - 330.0).max(160.0));
@@ -311,20 +356,15 @@ pub(in super::super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut
             } else {
                 let label = if starting {
                     "Starting cloud…"
-                } else if form.launch.selector.wait_for_stock && watchable {
+                } else if wait {
                     "Start when available"
                 } else {
                     "Start cloud"
                 };
                 let primary =
                     Button::new(RichText::new(label).size(14.0).strong().color(theme::BG())).fill(theme::ACCENT());
-                if ui.add_enabled(enabled, button(primary)).clicked() {
-                    if form.launch.selector.wait_for_stock && watchable {
-                        watch::arm(form);
-                    } else {
-                        actions.create = true;
-                    }
-                }
+                // Arming or starting happens with Enter's in the dialog, from the same plan.
+                actions.create |= ui.add_enabled(enabled, button(primary)).clicked();
             }
             actions.cancel |= ui
                 .add(button(Button::new(RichText::new("Cancel").size(14.0))))

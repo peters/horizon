@@ -48,8 +48,11 @@ pub(super) fn poll(form: &mut Production) {
         || form.pending_creation.is_some()
         || form.launch.submitted
         || form.launch.siblings.blocks_launch()
+        || super::storage::launch_reason(form).is_some()
     {
         form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
         return;
     }
     let Some(fetched) = form.prices.fresh_list() else {
@@ -58,7 +61,12 @@ pub(super) fn poll(form: &mut Production) {
     // A price above the one shown when the watch started waits for a person.
     let (list, preferences) = &fetched.value;
     let hourly = watch.hourly(list, preferences);
+    // A worker the catalog no longer prices is no longer a stock wait: the watch ends
+    // and the dialog says what is wrong with the selection.
     let (Some(now), Some(quoted)) = (hourly, form.launch.watch_quote) else {
+        form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
         return;
     };
     form.launch.price_rose = (now > quoted + 1e-9).then_some(now);
