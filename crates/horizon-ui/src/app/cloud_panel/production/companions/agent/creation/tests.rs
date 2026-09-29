@@ -163,6 +163,26 @@ fn repository(path: &Path, origin: &str, config: &str) -> String {
     git(path, &["rev-parse", "HEAD"])
 }
 
+/// A started cloud card with the fixture's CPU profile.
+#[cfg(unix)]
+fn cloud_group(
+    issue: u32,
+    id: &str,
+    repository: std::path::PathBuf,
+    revision: &str,
+) -> horizon_core::cloud_panel::CloudGroup {
+    let mut group =
+        horizon_core::cloud_panel::CloudGroup::new(issue, id.into(), "workspace".into(), repository, [0.0, 0.0]);
+    group.remote = Some(
+        serde_json::from_value(json!({
+            "id": id, "revision": revision, "profile_name": "cpu",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
+        }))
+        .unwrap(),
+    );
+    group
+}
+
 #[cfg(unix)]
 const PROFILE: &str = "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n";
 
@@ -179,20 +199,21 @@ fn a_confirmed_request_reserves_a_fresh_cloud_bound_to_the_checkout_and_records_
         &format!("{PROFILE}companions:\n  consumer:\n    repository: example/consumer\n    profile: cpu\n"),
     );
     repository(&checkout, "https://github.com/example/consumer.git", PROFILE);
-    let mut group = horizon_core::cloud_panel::CloudGroup::new(
-        1,
-        "Source".into(),
-        "workspace".into(),
-        source_repository,
-        [0.0, 0.0],
-    );
-    group.remote = Some(
-        serde_json::from_value(json!({
-            "id": "source", "revision": revision, "profile_name": "cpu",
-            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
-        }))
-        .unwrap(),
-    );
+    let group = cloud_group(1, "source", source_repository, &revision);
+    // A matching cloud the owner added while the prompt waited is never duplicated.
+    let manual = cloud_group(2, "manual", checkout.clone(), &git(&checkout, &["rev-parse", "HEAD"]));
+    let with_manual = CloudGroups(vec![group.clone(), manual]);
+    let stale = reserve(
+        &root,
+        &owner(),
+        &with_manual,
+        ("consumer", &declaration()),
+        &checkout,
+        &cloud_runtime::new_id(),
+        OperationId::generate(),
+    )
+    .unwrap_err();
+    assert!(stale.contains("matching cloud now exists"), "{stale}");
     let groups = CloudGroups(vec![group]);
     let id = OperationId::generate();
     // Another repository is refused before anything is reserved.
@@ -504,4 +525,50 @@ fn a_checkout_search_that_ends_without_an_answer_stops_showing_as_running() {
     app.poll_companion_creations(&ctx);
     let pending = &creation(&mut app).pending[0];
     assert!(pending.search.is_none() && pending.waiting());
+}
+
+#[test]
+fn a_confirmed_creation_shows_its_checked_row_even_before_any_refresh_listed_it() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let mut group = horizon_core::cloud_panel::CloudGroup::new(
+        1,
+        "source".into(),
+        "workspace".into(),
+        "/checkouts/source".into(),
+        [0.0, 0.0],
+    );
+    group.remote = Some(
+        serde_json::from_value(json!({
+            "id": "source", "revision": "a".repeat(40), "profile_name": "cpu",
+            "profile": {"provider": "runpod", "image": "example.invalid/worker", "cpu": 4, "memory_gb": 8}
+        }))
+        .unwrap(),
+    );
+    app.cloud_prototype.groups.0.push(group);
+    let groups = app.cloud_prototype.groups.clone();
+    app.cloud_prototype.production.companions.sync(Some("session"), &groups);
+    app.request_companion_creation(owner(), "consumer", declaration(), OperationId::generate());
+    let context = Context {
+        source: Target {
+            scope: owner().scope,
+            cloud_id: "source".into(),
+            declaration: Declaration::new("example/source", "cpu"),
+        },
+        declarations: std::collections::BTreeMap::new(),
+        inventory: Vec::new(),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    creation(&mut app).pending[0].step = Step::Selecting {
+        target: "target".into(),
+        receiver,
+    };
+    // The selection was saved but its refresh failed, and no refresh ran before.
+    sender.send(Ok(Box::new((context, None)))).unwrap();
+    app.poll_companion_creations(&ctx);
+    let entry = &app.cloud_prototype.production.companions.entries["source"];
+    let row = &entry.snapshot.as_ref().expect("a row to uncheck").rows[0].companion;
+    assert_eq!(row.alias, "consumer");
+    assert!(row.selected);
+    assert_eq!(row.target_cloud_id.as_deref(), Some("target"));
 }

@@ -22,6 +22,17 @@ pub(super) fn reserve(
     if context.declarations.get(alias) != Some(declaration) {
         return Err("The companion's declaration changed; the agent must ask again".into());
     }
+    // The prompt may have waited while the owner added a matching cloud; only this
+    // request's own reserved cloud may match, as on a Retry.
+    if context.inventory.iter().any(|target| {
+        target.cloud_id != context.source.cloud_id
+            && target.cloud_id != cloud_id
+            && target.declaration.matches(declaration)
+    }) {
+        return Err(
+            "A matching cloud now exists in this workspace; check it on this card instead of creating another".into(),
+        );
+    }
     let request = lifecycle::Request {
         root,
         owner,

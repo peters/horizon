@@ -531,7 +531,11 @@ impl HorizonApp {
             return;
         };
         let target = target.clone();
-        let (source, alias) = (pending.source.clone(), pending.alias.clone());
+        let (source, alias, declaration) = (
+            pending.source.clone(),
+            pending.alias.clone(),
+            pending.declaration.clone(),
+        );
         pending.step = Step::Starting {
             target: target.clone(),
             context: Box::new(context),
@@ -540,7 +544,7 @@ impl HorizonApp {
         // The source's refresh stays held until the start, and the owner can still
         // uncheck before allocation.
         if let Some(entry) = self.cloud_prototype.production.companions.entries.get_mut(&source) {
-            entry.show_selected(&alias, &target, snapshot);
+            entry.show_selected(&alias, &target, &declaration, snapshot);
         }
     }
 

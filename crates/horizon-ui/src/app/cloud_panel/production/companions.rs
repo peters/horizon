@@ -12,7 +12,7 @@ use horizon_core::{
     cloud_panel::CloudGroups,
     cloud_runtime::{
         Cancellation,
-        companions::{Action, Owner, Scope, Snapshot},
+        companions::{Action, Catalog, Companion, Declaration, Owner, Row, Scope, Snapshot, Status},
     },
 };
 use std::{
@@ -101,18 +101,44 @@ impl Entry {
     }
 
     /// Shows a selection a creation saved outside the periodic refresh: the snapshot
-    /// that selection returned, or else the row marked checked for the new cloud.
-    fn show_selected(&mut self, alias: &str, target: &str, snapshot: Option<Snapshot>) {
-        if let Some(snapshot) = snapshot {
+    /// that selection returned, or else the row marked checked for the new cloud, added
+    /// when no refresh has listed it yet, so the owner can always uncheck it.
+    fn show_selected(&mut self, alias: &str, target: &str, declaration: &Declaration, snapshot: Option<Snapshot>) {
+        if let Some(snapshot) = snapshot.filter(|snapshot| snapshot.rows.iter().any(|row| row.companion.alias == alias))
+        {
             self.snapshot = Some(snapshot);
             self.error = None;
-        } else if let Some(row) = self
-            .snapshot
-            .as_mut()
-            .and_then(|snapshot| snapshot.rows.iter_mut().find(|row| row.companion.alias == alias))
-        {
+            return;
+        }
+        let companion = Companion {
+            alias: alias.to_owned(),
+            repository: declaration.repository.clone(),
+            profile: declaration.profile.clone(),
+            target_cloud_id: Some(target.to_owned()),
+            selected: true,
+            status: Status::Stopped,
+            access: None,
+        };
+        let snapshot = self.snapshot.get_or_insert_with(|| Snapshot {
+            catalog: Catalog {
+                version: 1,
+                source_cloud_id: self.owner.cloud_id.clone(),
+                observed_at: 0,
+                companions: Vec::new(),
+            },
+            rows: Vec::new(),
+            publication_error: None,
+            notice: None,
+        });
+        if let Some(row) = snapshot.rows.iter_mut().find(|row| row.companion.alias == alias) {
             row.companion.selected = true;
             row.companion.target_cloud_id = Some(target.to_owned());
+        } else {
+            snapshot.rows.push(Row {
+                companion,
+                candidates: Vec::new(),
+                error: None,
+            });
         }
     }
 

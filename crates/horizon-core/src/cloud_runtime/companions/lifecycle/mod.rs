@@ -69,7 +69,11 @@ impl Request<'_> {
             .get(self.alias)
             .ok_or(Error::Invalid("Companion declaration is missing"))?;
         binding.validate(self.owner, self.alias, declaration)?;
-        if binding.origin() == intent::Origin::Existing {
+        // A reserved identity has no selection to check while its creation runs. Once an
+        // operation on it has settled, the owner's checkbox governs it like any other.
+        let creating =
+            binding.origin() == intent::Origin::Reserved && !state.intents.settled_on(&binding.target().cloud_id);
+        if !creating {
             self.require_selected(state, binding, declaration)?;
         }
         Ok(binding.clone())

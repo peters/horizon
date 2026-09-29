@@ -156,6 +156,22 @@ impl Journal {
         self.intents.values().any(|intent| intent.state.pending())
     }
 
+    /// Whether an operation on this cloud has settled while none is still pending on it.
+    #[must_use]
+    pub fn settled_on(&self, target_cloud_id: &str) -> bool {
+        let on_target = |intent: &&Intent| intent.target_cloud_id == target_cloud_id;
+        !self
+            .intents
+            .values()
+            .filter(on_target)
+            .any(|intent| intent.state.pending())
+            && self
+                .intents
+                .values()
+                .chain(self.history.values())
+                .any(|intent| on_target(&intent))
+    }
+
     /// Retire authorization after grant cleanup, retaining old request IDs forever.
     /// An uncertain operation must be reconciled under its original owner first.
     pub(super) fn retire(&mut self, owner: &Owner) -> Result<bool> {

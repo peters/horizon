@@ -140,8 +140,9 @@ fn existing_companions_and_stops_are_never_confirmed_for_creation() {
     let fixture = Fixture::new();
     let op = fixture.submit(Action::EnsureReady);
     assert!(confirm_creation(&fixture.request(), op.intent.operation_id).is_err());
-    let (fixture, id) = reserved();
+    let (mut fixture, id) = reserved();
     cancel_submission(&fixture.request(), id).unwrap();
+    select_reserved(&mut fixture);
     let stop = fixture.submit(Action::Stop).intent.operation_id;
     save_reserved(&fixture, &prepared(&fixture));
     assert!(confirm_creation(&fixture.request(), stop).is_err());
@@ -405,4 +406,29 @@ fn a_reserved_card_is_recoverable_only_before_any_worker_or_provider_resource() 
     save_reserved(&fixture, &prepared(&fixture));
     std::fs::write(fixture.root.path().join("reserved/hetzner.json"), "{}").unwrap();
     assert!(!card_recoverable(&fixture.request()).unwrap());
+}
+
+#[test]
+fn a_created_companion_needs_the_owners_selection_like_any_other_once_created() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    let mut backend = Fake::new(&fixture);
+    assert_eq!(
+        execute_with(&fixture.request(), id, &mut backend).unwrap().phase,
+        Phase::Ready
+    );
+    // While still selected, later requests are authorized as before.
+    status(&fixture.request(), id).unwrap();
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.grants.get_mut("consumer").unwrap().selected = false;
+    store.save(&state).unwrap();
+    drop(store);
+    // After the owner unchecks it, its reserved binding no longer authorizes anything.
+    for action in [Action::EnsureReady, Action::Stop] {
+        let refused = submit(&fixture.request(), action, OperationId::generate()).unwrap_err();
+        assert!(refused.to_string().contains("no longer selected"), "{refused}");
+    }
 }

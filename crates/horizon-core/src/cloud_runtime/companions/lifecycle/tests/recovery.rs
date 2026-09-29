@@ -240,7 +240,9 @@ fn missing_reserved_targets_require_confirmation_and_existing_ids_cannot_bypass_
     );
     assert!(backend.decisions.is_empty());
     cancel_submission(&fixture.request(), op.intent.operation_id).unwrap();
-    assert_eq!(fixture.submit(Action::Stop).phase, Phase::Submitted);
+    // Once its operation settled, the reserved identity needs the owner's selection too.
+    let refused = submit(&fixture.request(), Action::Stop, OperationId::generate()).unwrap_err();
+    assert!(refused.to_string().contains("no longer selected"), "{refused}");
 }
 
 #[test]
