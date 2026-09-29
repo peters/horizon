@@ -86,7 +86,7 @@ impl State {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn input(&self) -> &str {
         &self.input
     }
