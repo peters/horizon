@@ -240,6 +240,7 @@ fn archiving_refuses_changed_objects_and_stops_on_cancellation_or_its_own_timeou
             "HEAD",
             &root,
             &horizon_cloud::Source::default(),
+            None,
             &runner,
             timeout,
         );

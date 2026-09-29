@@ -1,5 +1,6 @@
 //! Committed source: validated and packed before allocation, transferred to the ready worker.
 use super::{Connection, Deployment, Event, Result, Runner, Stage, Store, WorkerContract, repository};
+use crate::cloud_runtime::package_restore::{self, Approval, Restored};
 use horizon_cloud::{Lfs, Source, SubmoduleHistory};
 use std::path::{Path, PathBuf};
 
@@ -29,6 +30,8 @@ struct Auxiliary {
     root: PathBuf,
     /// As configured until packed, then as packed.
     source: Source,
+    /// The package folder restored on this computer before allocation, when configured.
+    packages: Option<Restored>,
 }
 
 /// What of `configured` a worker reporting `contract` can receive.
@@ -44,7 +47,20 @@ fn supported(configured: &Source, contract: &WorkerContract) -> Source {
         } else {
             Lfs::default()
         },
+        // Never dropped: without its packages the worker's build would reach for the
+        // private feed. [`refuse_unsupported`] stops the deployment instead.
+        packages: configured.packages.clone(),
     }
+}
+
+/// A repository that restores packages needs a worker that keeps them.
+fn refuse_unsupported(source: &Source, contract: &WorkerContract) -> Result<()> {
+    if source.packages.is_some() && !contract.packages {
+        return Err(super::Error::Invalid(
+            "Worker image does not support source.packages; rebuild it with the current worker bootstrap",
+        ));
+    }
+    Ok(())
 }
 
 /// What a worker supporting only `supported` of the `packed` packaging receives instead.
@@ -65,16 +81,30 @@ fn fallback_note(packed: &Source, supported: &Source) -> Option<String> {
 }
 
 impl Auxiliary {
-    fn pack(repository: &Path, revision: &str, root: &Path, runner: &Runner<'_>) -> Result<Self> {
+    /// Restores the repository's packages, when it restores any, and verifies its source.
+    fn pack(
+        repository: &Path,
+        revision: &str,
+        root: &Path,
+        approvals: &[Approval],
+        runner: &Runner<'_>,
+    ) -> Result<Self> {
         let source = repository::launch::committed_config(repository, revision, runner)?
             .map(|config| config.source)
             .unwrap_or_default();
+        // Checked here, on every path to a first transfer, since agents can reach some.
+        let packages = source
+            .packages
+            .as_ref()
+            .map(|packages| package_restore::restore(repository, revision, packages, approvals, root, runner))
+            .transpose()?;
         let mut auxiliary = Self {
             archive: None,
             repository: repository.to_owned(),
             revision: revision.to_owned(),
             root: root.to_owned(),
             source,
+            packages,
         };
         // Either way every source asset the transfer may need is verified before allocation.
         if auxiliary.source.is_default() {
@@ -88,8 +118,16 @@ impl Auxiliary {
     /// Packs a waiting archive with what `contract` supports of the configured packaging.
     fn settle(&mut self, contract: &WorkerContract, runner: &Runner<'_>) -> Result<()> {
         if self.archive.is_none() {
+            refuse_unsupported(&self.source, contract)?;
             self.source = supported(&self.source, contract);
-            let archive = repository::auxiliary(&self.repository, &self.revision, &self.root, &self.source, runner)?;
+            let archive = repository::auxiliary_with_packages(
+                &self.repository,
+                &self.revision,
+                &self.root,
+                &self.source,
+                self.packages.as_ref(),
+                runner,
+            )?;
             self.archive = Some(archive);
         }
         Ok(())
@@ -99,6 +137,7 @@ impl Auxiliary {
     /// more than the worker reports is packed again; this only guards a mismatch, since
     /// [`Packed::settle`] decides from the image before allocation.
     fn for_worker(mut self, contract: &WorkerContract, runner: &Runner<'_>, emit: &dyn Fn(Event)) -> Result<PathBuf> {
+        refuse_unsupported(&self.source, contract)?;
         if let Some(archive) = &self.archive
             && let Some(note) = fallback_note(&self.source, &supported(&self.source, contract))
         {
@@ -124,7 +163,13 @@ impl Packed {
     }
 }
 
-pub(super) fn pack(state: &Deployment, pack_root: &Path, runner: &Runner<'_>) -> Result<Packed> {
+/// `approvals` are the package restores the owner allowed on this computer.
+pub(super) fn pack(
+    state: &Deployment,
+    pack_root: &Path,
+    approvals: &[Approval],
+    runner: &Runner<'_>,
+) -> Result<Packed> {
     let pack = pack_root.join("source.pack");
     let mut auxiliary = None;
     let mut siblings = Vec::new();
@@ -135,14 +180,20 @@ pub(super) fn pack(state: &Deployment, pack_root: &Path, runner: &Runner<'_>) ->
             .as_ref()
             .map(super::siblings::Set::manifest)
             .transpose()?;
-        auxiliary = Some(Auxiliary::pack(&state.repository, &state.revision, pack_root, runner)?);
+        auxiliary = Some(Auxiliary::pack(
+            &state.repository,
+            &state.revision,
+            pack_root,
+            approvals,
+            runner,
+        )?);
         repository::pack(&state.repository, &state.revision, &pack, runner)?;
         for (index, sibling) in state.siblings.iter().flat_map(|set| &set.members).enumerate() {
             let checkout = sibling.checkout()?;
             let root = pack_root.join(format!("sibling-{index}"));
             std::fs::create_dir(&root)?;
             let pack = root.join("source.pack");
-            let auxiliary = Auxiliary::pack(checkout, &sibling.revision, &root, runner)?;
+            let auxiliary = Auxiliary::pack(checkout, &sibling.revision, &root, approvals, runner)?;
             repository::pack(checkout, &sibling.revision, &pack, runner)?;
             siblings.push(Sibling {
                 alias: sibling.alias.clone(),
@@ -244,7 +295,7 @@ mod tests {
             secrets: Vec::new(),
         };
         let packs = tempfile::tempdir().unwrap();
-        let packed = pack(&state, packs.path(), &runner).unwrap();
+        let packed = pack(&state, packs.path(), &[], &runner).unwrap();
         assert!(packed.pack.is_file());
         let [sibling] = packed.siblings.as_slice() else {
             panic!("expected one sibling");
@@ -273,13 +324,36 @@ mod tests {
 
         state.source_ready = true;
         let again = tempfile::tempdir().unwrap();
-        assert!(pack(&state, again.path(), &runner).unwrap().siblings.is_empty());
+        assert!(pack(&state, again.path(), &[], &runner).unwrap().siblings.is_empty());
         state.source_ready = false;
         state.siblings.as_mut().unwrap().members[0].local_repository = root.path().join("moved");
         assert!(
-            pack(&state, again.path(), &runner).is_err(),
+            pack(&state, again.path(), &[], &runner).is_err(),
             "a moved checkout is named"
         );
+    }
+
+    #[test]
+    fn packages_are_never_dropped_for_an_image_that_cannot_keep_them() {
+        let restoring = Source {
+            packages: Some(horizon_cloud::Packages {
+                restore: vec!["dotnet".into(), "restore".into(), "--packages".into(), "{dir}".into()],
+                env: "NUGET_PACKAGES".into(),
+            }),
+            ..Source::default()
+        };
+        let older = WorkerContract::default();
+        let current = WorkerContract {
+            packages: true,
+            ..WorkerContract::default()
+        };
+        assert_eq!(supported(&restoring, &older).packages, restoring.packages);
+        assert!(matches!(
+            refuse_unsupported(&restoring, &older),
+            Err(super::super::Error::Invalid(message)) if message.contains("source.packages")
+        ));
+        assert!(refuse_unsupported(&restoring, &current).is_ok());
+        assert!(refuse_unsupported(&Source::default(), &older).is_ok());
     }
 
     /// The commits in an archive's first submodule pack, read with `repository`'s Git.
@@ -370,7 +444,7 @@ mod tests {
             let packs = tempfile::tempdir().unwrap();
             let mut packed = Packed {
                 pack: packs.path().join("source.pack"),
-                auxiliary: Some(Auxiliary::pack(&app, &revision, packs.path(), &runner).unwrap()),
+                auxiliary: Some(Auxiliary::pack(&app, &revision, packs.path(), &[], &runner).unwrap()),
                 siblings: Vec::new(),
                 manifest: None,
             };

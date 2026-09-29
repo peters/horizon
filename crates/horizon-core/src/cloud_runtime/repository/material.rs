@@ -1,5 +1,5 @@
 //! Selected-commit LFS objects and recursively pinned local submodules.
-use super::super::{Event, progress::Progress};
+use super::super::{Event, package_restore::Restored, progress::Progress};
 use super::{Error, Result, Runner};
 use git2::{ObjectType, Repository, TreeWalkMode, TreeWalkResult};
 use horizon_cloud::{Lfs, Source, SubmoduleHistory};
@@ -20,8 +20,19 @@ pub(super) struct Material {
     /// left them out; absent when every LFS object is sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     lfs: Option<Selection>,
+    /// The package folder restored on this computer, sent under `packages/`; absent
+    /// when the repository restores none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    packages: Option<Packages>,
     #[serde(skip)]
     budget: Option<CollectionBudget>,
+}
+/// What the worker checks a received package folder against.
+#[derive(Serialize)]
+struct Packages {
+    env: String,
+    files: usize,
+    bytes: u64,
 }
 #[derive(Serialize)]
 struct Selection {
@@ -442,9 +453,18 @@ pub(super) fn archive(
     revision: &str,
     root: &Path,
     source: &Source,
+    packages: Option<&Restored>,
     runner: &Runner<'_>,
 ) -> Result<PathBuf> {
-    archive_within(repository, revision, root, source, runner, super::archive::TIMEOUT)
+    archive_within(
+        repository,
+        revision,
+        root,
+        source,
+        packages,
+        runner,
+        super::archive::TIMEOUT,
+    )
 }
 
 impl Material {
@@ -530,10 +550,16 @@ pub(super) fn archive_within(
     revision: &str,
     root: &Path,
     source: &Source,
+    packages: Option<&Restored>,
     runner: &Runner<'_>,
     timeout: Duration,
 ) -> Result<PathBuf> {
-    let material = Material::collect_selecting(repository, revision, &source.lfs, runner)?;
+    let mut material = Material::collect_selecting(repository, revision, &source.lfs, runner)?;
+    material.packages = packages.map(|restored| Packages {
+        env: restored.env.clone(),
+        files: restored.files(),
+        bytes: restored.bytes,
+    });
     let packs = root.join("material");
     std::fs::create_dir(&packs)?;
     for (index, module) in material.modules.iter().enumerate() {
@@ -551,7 +577,7 @@ pub(super) fn archive_within(
     let manifest = serde_json::to_vec(&material).map_err(|_| Error::Json)?;
     let archive = root.join("source-material.tar");
     let mut output = std::io::BufWriter::new(std::fs::File::create_new(&archive)?);
-    let written = super::archive::write(&material, &manifest, &packs, &mut output, runner, timeout)
+    let written = super::archive::write(&material, &manifest, &packs, packages, &mut output, runner, timeout)
         .and_then(|()| Ok(std::io::Write::flush(&mut output)?));
     drop(output);
     if let Err(error) = written {

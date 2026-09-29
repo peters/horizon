@@ -1,5 +1,5 @@
 //! The source material archive workers import, streamed from verified sources.
-use super::super::{Event, command::TIMED_OUT, progress::Progress};
+use super::super::{Event, command::TIMED_OUT, package_restore::Restored, progress::Progress};
 use super::material::{Material, Verified};
 use super::{Error, Result, Runner};
 use std::{
@@ -12,8 +12,9 @@ use std::{
 /// The bound the `tar` process this replaces ran under.
 pub(super) const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Writes `./`, `manifest.json`, `lfs/`, one `lfs/<oid>` per distinct object and each
-/// `module-<index>.pack` from `packs`. LFS content is read from the local store and
+/// Writes `./`, `manifest.json`, `lfs/`, one `lfs/<oid>` per distinct object, each
+/// `module-<index>.pack` from `packs` and, when a package folder was restored, `packages/`
+/// with its folders and files. LFS content is read from the local store and
 /// verified as it is written, so it is never staged as a second copy. Every write
 /// stops on cancellation or once `timeout`, counted from here, has passed; the caller
 /// discards the output.
@@ -21,6 +22,7 @@ pub(super) fn write(
     material: &Material,
     manifest: &[u8],
     packs: &Path,
+    packages: Option<&Restored>,
     output: impl Write,
     runner: &Runner<'_>,
     timeout: Duration,
@@ -32,7 +34,7 @@ pub(super) fn write(
         deadline: Instant::now() + timeout,
         failure: None,
     };
-    let written = append(material, manifest, packs, &mut output, runner);
+    let written = append(material, manifest, packs, packages, &mut output, runner);
     output.failure.take().map_or(written, Err)
 }
 
@@ -40,6 +42,7 @@ fn append(
     material: &Material,
     manifest: &[u8],
     packs: &Path,
+    packages: Option<&Restored>,
     output: &mut Checked<'_, '_, impl Write>,
     runner: &Runner<'_>,
 ) -> Result<()> {
@@ -63,8 +66,54 @@ fn append(
         let length = pack.metadata()?.len();
         archive.append_data(&mut file(length), name, std::io::Read::take(pack, length))?;
     }
+    if let Some(packages) = packages {
+        directory(&mut archive, "packages/")?;
+        for entry in &packages.entries {
+            runner.cancel.check()?;
+            let name = format!("packages/{}", entry.name);
+            let Some(size) = entry.size else {
+                directory(&mut archive, &format!("{name}/"))?;
+                continue;
+            };
+            let mut header = file(size);
+            if entry.executable {
+                header.set_mode(0o700);
+            }
+            let content = Exact {
+                content: std::fs::File::open(&entry.path)?,
+                remaining: size,
+            };
+            archive.append_data(&mut header, name, content)?;
+        }
+    }
     archive.into_inner()?.flush()?;
     Ok(())
+}
+
+/// Exactly `remaining` bytes of a file listed with that size: one that changed since
+/// is refused rather than archived short or long.
+struct Exact {
+    content: std::fs::File,
+    remaining: u64,
+}
+impl std::io::Read for Exact {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let changed = || std::io::Error::other("A restored package file changed while it was archived");
+        if self.remaining == 0 {
+            return if self.content.read(&mut [0])? == 0 {
+                Ok(0)
+            } else {
+                Err(changed())
+            };
+        }
+        let limit = buffer.len().min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
+        let read = self.content.read(&mut buffer[..limit])?;
+        if read == 0 {
+            return Err(changed());
+        }
+        self.remaining -= read as u64;
+        Ok(read)
+    }
 }
 
 /// Checks cancellation and the deadline before each write; a failure is kept so the

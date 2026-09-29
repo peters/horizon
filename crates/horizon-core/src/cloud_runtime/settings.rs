@@ -34,6 +34,9 @@ pub struct Settings {
     pub git_credentials: Vec<super::git_auth::Binding>,
     #[serde(default)]
     pub browserstack_credentials: Vec<super::browser_auth::Binding>,
+    /// Restore commands the owner allowed per local checkout; never loaded from repository YAML.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub package_restores: Vec<super::package_restore::Approval>,
     /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hetzner: Option<Hetzner>,
@@ -126,6 +129,9 @@ impl Settings {
         }
         for binding in &self.git_credentials {
             binding.validate()?;
+        }
+        for approval in &self.package_restores {
+            approval.validate()?;
         }
         if let Some(hetzner) = &self.hetzner {
             hetzner.validate()?;

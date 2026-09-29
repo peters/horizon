@@ -202,7 +202,7 @@ fn deploy_with(
     validate_agent_auth(&request.settings, &state.profile.capabilities)?;
     refresh_allocation(request, store, &mut state)?;
     let pack_root = tempfile::tempdir_in(store.root())?;
-    let mut packed = source::pack(&state, pack_root.path(), &runner)?;
+    let mut packed = source::pack(&state, pack_root.path(), &request.settings.package_restores, &runner)?;
     if state.spec.is_none() {
         prepare_image(request, store, &runner, &mut state, registry.as_ref())?;
     }

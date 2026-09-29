@@ -17,6 +17,7 @@ pub(crate) mod mutation;
 pub use horizon_cloud::{offers, provider};
 pub mod offer_publication;
 pub mod owner;
+pub mod package_restore;
 pub mod prices;
 pub mod progress;
 pub mod project_reservations;
@@ -54,6 +55,10 @@ pub enum Error {
     Cleanup { primary: Box<Self>, cleanup: Box<Self> },
     #[error(transparent)]
     Sibling(#[from] siblings::SiblingError),
+    #[error(
+        "This repository restores its packages on this computer; allow its restore command on the cloud card first"
+    )]
+    PackageRestoreNotApproved,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]

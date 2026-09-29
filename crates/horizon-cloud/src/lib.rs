@@ -20,8 +20,8 @@ pub use startup::StartupMetadata;
 pub mod runpod;
 mod worker;
 pub use profile::{
-    Bootstrap, Build, CloudConfig, DESIGN_EXAMPLE, EXAMPLE, IDLE_STOP_ENVIRONMENT_KEY, IDLE_STOP_MINUTES, Lfs, Profile,
-    ProfileError, Source, Storage, SubmoduleHistory, valid_id, valid_image,
+    Bootstrap, Build, CloudConfig, DESIGN_EXAMPLE, EXAMPLE, IDLE_STOP_ENVIRONMENT_KEY, IDLE_STOP_MINUTES, Lfs,
+    Packages, Profile, ProfileError, Source, Storage, SubmoduleHistory, valid_id, valid_image,
 };
 pub use worker::*;
 

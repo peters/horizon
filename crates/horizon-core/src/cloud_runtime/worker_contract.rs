@@ -10,6 +10,7 @@ const LAST_SELF_STOP_MARKER: &str = "horizon-last-self-stop=";
 const SELF_STOP_MARKER: &str = "horizon-self-stop-contract=1";
 const PINNED_SUBMODULES_MARKER: &str = "horizon-source-shallow-contract=1";
 const LFS_SELECTION_MARKER: &str = "horizon-source-lfs-selection-contract=1";
+const PACKAGES_MARKER: &str = "horizon-source-packages-contract=1";
 /// A reason longer than this was not written by `horizon-worker-stop`.
 const SELF_STOP_REASON_LIMIT: usize = 200;
 
@@ -65,6 +66,10 @@ pub struct WorkerContract {
     /// The source importer keeps LFS paths a selection leaves out as pointers. Older
     /// images need every LFS object.
     pub lfs_selection: bool,
+    /// The source importer keeps a restored package folder and points each session at
+    /// its own copy. Older images would drop it, so a repository that restores packages
+    /// needs this.
+    pub packages: bool,
 }
 
 impl WorkerContract {
@@ -85,6 +90,7 @@ impl WorkerContract {
             self_stop_reported: reports(output, SELF_STOP_MARKER),
             pinned_submodules: reports(output, PINNED_SUBMODULES_MARKER),
             lfs_selection: reports(output, LFS_SELECTION_MARKER),
+            packages: reports(output, PACKAGES_MARKER),
         }
     }
 }

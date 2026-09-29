@@ -265,6 +265,51 @@ saving. Images without `horizon-source-lfs-selection-contract=1` receive every L
 object; Horizon decides that from the image contract before allocation, as for pinned
 submodule history.
 
+A repository whose build needs packages from a private feed can restore them on this
+computer, with your own feed credentials, and send the restored folder with the source,
+so no package credential reaches the worker:
+
+```yaml
+source:
+  packages:
+    restore: [dotnet, restore, --packages, '{dir}']   # program and arguments, no shell
+    env: NUGET_PACKAGES                               # what a session reads the folder from
+```
+
+Before any worker is allocated, Horizon exports the committed tree (without submodules,
+LFS content as pointers) into a scratch folder and runs the command there, with `{dir}`
+replaced by an empty folder next to it. A program given as a relative path, such as
+`./restore.sh`, is the committed one. The restore may run for 30 minutes. Horizon then
+refuses the folder if it holds a link, a special file or a package manager settings
+file that can hold feed credentials (`nuget.config`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`,
+`.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.dockercfg`), more than 500,000
+entries or more than 32 GiB. The folder travels inside the source archive, and a
+same-worker sibling restores its own with its own committed configuration. The command
+may have at most 31 arguments of at most 1,024 characters each; `env` is a plain
+variable name that the worker does not set itself (not `PATH`, `HOME`, `DISPLAY`,
+`HORIZON*`, `LD_*` or an agent key).
+
+The command runs on your computer, so a repository can ask for it but never allow it.
+Horizon runs it only when this computer's cloud settings allow exactly that command and
+variable for that checkout; otherwise the deployment stops before allocation with
+"allow its restore command on the cloud card first". An agent cannot allow it either,
+including one that asks for a companion cloud. Until the card offers the approval, add
+it to `~/.horizon/cloud/settings.json` yourself:
+
+```json
+"package_restores": [
+  {
+    "local_repository": "/home/you/src/app",
+    "restore": ["dotnet", "restore", "--packages", "{dir}"],
+    "env": "NUGET_PACKAGES"
+  }
+]
+```
+
+A change to the committed command or variable needs a new approval. The worker image
+must report `horizon-source-packages-contract=1`; with an older image the deployment
+stops before allocation instead of sending source without its packages.
+
 A GPU profile whose image needs a recent CUDA can set `min_cuda_version` as
 `major.minor`, for example `min_cuda_version: "12.8"`. A host's driver limits the
 newest CUDA it runs (CUDA 13 needs driver 580 or newer), so without the field a

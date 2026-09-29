@@ -94,6 +94,26 @@ pub fn snapshot(repository: &Path, revision: &str, root: &Path, runner: &Runner<
     material.hydrate(&path, runner)?;
     Ok(path)
 }
+/// Exports the committed tree at `revision` into the existing, empty `destination`, without
+/// submodules and with LFS content as pointers.
+///
+/// # Errors
+/// Reports export and extraction failures.
+pub(super) fn export_tree(repository: &Path, revision: &str, destination: &Path, runner: &Runner<'_>) -> Result<()> {
+    let archive = destination.with_extension("tar");
+    runner.run(
+        "git archive",
+        archive_command(repository).arg(&archive).arg(revision),
+        Duration::from_secs(120),
+    )?;
+    let extracted = runner.run(
+        "extract committed source",
+        Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(destination),
+        Duration::from_secs(120),
+    );
+    std::fs::remove_file(&archive)?;
+    extracted.map(|_| ())
+}
 /// `git archive` converts line endings the way a checkout on this host would.
 /// The Linux worker builds the snapshot, so pin the conversion to a Linux
 /// checkout's: Windows defaults (`core.autocrlf=true`, a CRLF `core.eol`) would
@@ -179,7 +199,18 @@ pub fn auxiliary(
     source: &Source,
     runner: &Runner<'_>,
 ) -> Result<PathBuf> {
-    material::archive(repository, revision, root, source, runner)
+    auxiliary_with_packages(repository, revision, root, source, None, runner)
+}
+/// As [`auxiliary`], also carrying a package folder restored on this computer.
+pub(crate) fn auxiliary_with_packages(
+    repository: &Path,
+    revision: &str,
+    root: &Path,
+    source: &Source,
+    packages: Option<&super::package_restore::Restored>,
+    runner: &Runner<'_>,
+) -> Result<PathBuf> {
+    material::archive(repository, revision, root, source, packages, runner)
 }
 
 /// Reserves the transfer frame while counting retained output and disposable material.
@@ -220,7 +251,15 @@ pub(super) fn bounded_source(
         written: 0,
         exceeded: false,
     };
-    let result = archive::write(&selected, &manifest, &directory, &mut output, runner, archive::TIMEOUT);
+    let result = archive::write(
+        &selected,
+        &manifest,
+        &directory,
+        None,
+        &mut output,
+        runner,
+        archive::TIMEOUT,
+    );
     let (exceeded, written) = (output.exceeded, output.written);
     drop(output);
     if exceeded || result.is_err() {

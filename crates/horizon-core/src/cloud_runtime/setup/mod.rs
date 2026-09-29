@@ -235,6 +235,7 @@ fn defaults(root: &Path) -> Settings {
         openai_api_key_file: None,
         anthropic_workspace_id: None,
         git_credentials: Vec::new(),
+        package_restores: Vec::new(),
         browserstack_credentials: Vec::new(),
         hetzner: None,
         placement: None,

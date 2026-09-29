@@ -5,6 +5,9 @@ use std::{
     path::{Component, Path},
 };
 
+mod packages;
+pub use packages::Packages;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudConfig {
@@ -27,6 +30,9 @@ pub struct Source {
     pub submodule_history: SubmoduleHistory,
     #[serde(default, skip_serializing_if = "Lfs::is_empty")]
     pub lfs: Lfs,
+    /// Private dependency packages restored on the owner's computer and sent with the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packages: Option<Packages>,
 }
 
 impl Source {
@@ -45,7 +51,7 @@ impl Source {
                 "source.lfs allows at most 64 patterns and 8,192 characters in all, each non-empty, at most 256 characters, without commas or Unicode control, format, surrogate or private-use characters",
             ));
         }
-        Ok(())
+        self.packages.as_ref().map_or(Ok(()), Packages::validate)
     }
 }
 
@@ -451,7 +457,31 @@ mod tests {
         let config = CloudConfig::parse(&example).unwrap();
         assert_eq!(config.source.submodule_history, SubmoduleHistory::Pinned);
         assert_eq!(config.source.lfs.exclude, ["fixtures/video/**"]);
+        let packages = config.source.packages.unwrap();
+        assert_eq!(
+            (packages.restore.join(" "), packages.env.as_str()),
+            ("dotnet restore --packages {dir}".to_owned(), "NUGET_PACKAGES")
+        );
         assert!(CloudConfig::parse(&documented).unwrap().source.is_default());
+        let restore = |line: &str| {
+            CloudConfig::parse(&format!(
+                "{}\nsource:\n  packages: {line}\n",
+                EXAMPLE.replace("\r\n", "\n")
+            ))
+        };
+        assert!(restore("{restore: [tool, '{dir}'], env: CACHE}").is_ok());
+        assert!(
+            matches!(restore("{restore: [tool], env: CACHE}"), Err(ProfileError::Invalid(_))),
+            "the command must name the folder"
+        );
+        assert!(matches!(
+            restore("{restore: [tool, '{dir}'], env: PATH}"),
+            Err(ProfileError::Invalid(_))
+        ));
+        assert!(matches!(
+            restore("{restore: [tool, '{dir}'], env: CACHE, shell: true}"),
+            Err(ProfileError::Yaml)
+        ));
     }
 
     #[test]
