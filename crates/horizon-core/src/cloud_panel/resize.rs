@@ -297,7 +297,11 @@ mod tests {
             groups.0[0].reconcile(&mut board);
             assert!(groups.resize_frame(&mut board, 1, [820.0, 900.0], [180.0, 180.0]));
             let group = &groups.0[0];
-            let (_, toolbar_max) = group.runtime_bounds();
+            let (toolbar_min, toolbar_max) = group.runtime_bounds();
+            assert!(
+                (toolbar_max[1] - toolbar_min[1]).abs() < f32::EPSILON,
+                "with panels the status is part of the header, not a routed runtime area"
+            );
             let (min, max) = group.bounds();
             assert_eq!(group.overview_bounds(), (min, max));
             for id in &ids {
@@ -314,31 +318,86 @@ mod tests {
         }
     }
 
+    /// A record saved while the summary card reserved space above the sessions.
+    fn legacy_record(group: &CloudGroup, expanded: bool) -> CloudGroup {
+        let mut value = serde_json::to_value(group).unwrap();
+        value["toolbar_expanded"] = serde_json::Value::Bool(expanded);
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
-    fn toolbar_disclosure_preserves_visible_sessions_and_manual_spacing() {
-        let (mut board, mut groups, ids) = cloud_with_members(WorkspaceLayout::Rows, 2);
-        let group = &mut groups.0[0];
-        group.remote = Some(production_launch());
-        group.reconcile(&mut board);
-        group.layout = None;
-        assert!(!group.toolbar_expanded);
-        let original_size = group.size;
-        let positions: Vec<_> = ids.iter().map(|id| board.panel(*id).unwrap().layout.position).collect();
-        for expanded in [true, false, true, false] {
-            group.set_toolbar_expanded(&mut board, expanded);
-            group.reconcile(&mut board);
-            let shift = if expanded {
-                crate::cloud_panel::TOOLBAR_CONTROLS_HEIGHT
-            } else {
-                0.0
-            };
-            assert!((group.size[1] - original_size[1] - shift).abs() < 0.01);
-            for (id, position) in ids.iter().zip(&positions) {
-                let panel = board.panel(*id).unwrap();
-                assert!(panel.visible);
-                assert!(near(panel.layout.position, [position[0], position[1] + shift]));
+    fn saved_toolbar_space_is_released_once_and_manual_spacing_is_kept() {
+        for (expanded, legacy_top) in [(false, 84.0 + 224.0 + 14.0), (true, 84.0 + 224.0 + 14.0 + 76.0)] {
+            for gap in [0.0, 60.0] {
+                let (mut board, mut groups, ids) = cloud_with_members(WorkspaceLayout::Rows, 2);
+                let group = &mut groups.0[0];
+                group.remote = Some(production_launch());
+                group.layout = None;
+                group.size = [548.0, legacy_top + 420.0 + gap];
+                for (index, id) in ids.iter().enumerate() {
+                    let panel = board.panel_mut(*id).unwrap();
+                    panel.layout.position = [
+                        group.position[0] + 14.0,
+                        group.position[1] + legacy_top + gap + f32::from(u16::try_from(index).unwrap()) * 200.0,
+                    ];
+                    panel.layout.size = [400.0, 180.0];
+                }
+                let mut restored = legacy_record(group, expanded);
+                restored.reconcile(&mut board);
+                let content_top = restored.position[1] + restored.header_height();
+                let tops: Vec<_> = ids
+                    .iter()
+                    .map(|id| board.panel(*id).unwrap().layout.position[1])
+                    .collect();
+                assert!(
+                    (tops[0] - content_top - gap).abs() < 0.01,
+                    "expanded {expanded}, gap {gap}: {tops:?}"
+                );
+                assert!((tops[1] - tops[0] - 200.0).abs() < 0.01, "members move together");
+                let released = legacy_top - restored.header_height();
+                assert!((restored.size[1] - (legacy_top + 420.0 + gap - released)).abs() < 0.01);
+                // Saving and restoring again does not move anything a second time.
+                let again: CloudGroup = serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+                let mut again = again;
+                again.reconcile(&mut board);
+                assert!(
+                    ids.iter()
+                        .zip(&tops)
+                        .all(|(id, top)| (board.panel(*id).unwrap().layout.position[1] - top).abs() < 0.01)
+                );
+                assert!(!serde_json::to_string(&again).unwrap().contains("toolbar_expanded"));
             }
         }
+    }
+
+    #[test]
+    fn an_empty_cloud_saved_with_the_toolbar_keeps_a_full_waiting_area() {
+        let mut board = Board::new();
+        let mut group = CloudGroup::new(
+            1,
+            "Cloud".into(),
+            "workspace".into(),
+            std::path::PathBuf::new(),
+            [0.0, 0.0],
+        );
+        group.remote = Some(production_launch());
+        group.layout = None;
+        group.size = [548.0, 84.0 + 224.0 + 14.0 + 76.0 + 514.0];
+        let mut restored = legacy_record(&group, true);
+        restored.reconcile(&mut board);
+        let body = restored.bounds().1[1] - restored.position[1] - restored.header_height();
+        assert!(body >= 500.0, "{body}");
+        assert!(restored.size[1] < group.size[1], "the reserved band is released");
+    }
+
+    #[test]
+    fn a_local_cloud_ignores_a_saved_toolbar_flag() {
+        let (mut board, mut groups, ids) = cloud_with_members(WorkspaceLayout::Rows, 1);
+        groups.0[0].layout = None;
+        let before = board.panel(ids[0]).unwrap().layout.position;
+        let mut restored = legacy_record(&groups.0[0], true);
+        restored.reconcile(&mut board);
+        assert!(near(board.panel(ids[0]).unwrap().layout.position, before));
     }
 
     #[test]
@@ -394,9 +453,12 @@ mod tests {
         let encoded = serde_json::to_string(&group).unwrap();
         let mut restored: CloudGroup = serde_json::from_str(&encoded).unwrap();
         restored.reconcile(&mut board);
-        let (toolbar_min, toolbar_max) = restored.runtime_bounds();
-        assert!(toolbar_max[0] - toolbar_min[0] >= 520.0);
-        assert!(restored.bounds().1[1] - toolbar_max[1] >= 500.0);
+        let (runtime_min, runtime_max) = restored.runtime_bounds();
+        assert!(runtime_max[0] - runtime_min[0] >= 520.0);
+        let body_top = restored.position[1] + restored.header_height();
+        assert!(restored.bounds().1[1] - body_top >= 500.0, "a readable waiting area");
+        // Without panels the steps and output fill the body, so it routes to the runtime.
+        assert!((runtime_max[1] - restored.bounds().1[1]).abs() < 0.01);
         assert_eq!(restored.overview_bounds(), restored.bounds());
     }
 }

@@ -642,7 +642,10 @@ fn deletion_offers_cancel_only_while_hosted_devices_can_still_be_released() {
 
 #[test]
 fn another_operation_after_a_failed_deletion_drops_its_steps() {
-    for (action, name) in [(Action::Stop, "Stop"), (Action::Resume, "Resume")] {
+    for (action, name, first) in [
+        (Action::Stop, "Stop", Stage::Stopping),
+        (Action::Resume, "Resume", Stage::Provision),
+    ] {
         let mut runtime = Runtime::default();
         runtime.progress.begin_deletion();
         runtime.progress.stage(Stage::DeleteWorker, std::time::Instant::now());
@@ -650,7 +653,7 @@ fn another_operation_after_a_failed_deletion_drops_its_steps() {
         assert!(runtime.progress.is_deletion());
         super::begin_operation(&mut runtime, action);
         assert!(!runtime.progress.is_deletion(), "{name} shows its own progress");
-        assert_eq!(runtime.stage, Some(Stage::Provision));
+        assert_eq!(runtime.stage, Some(first), "{name}");
     }
     let mut runtime = Runtime::default();
     super::begin_operation(&mut runtime, Action::Delete);
@@ -676,4 +679,144 @@ fn deletion_time_ends_when_the_worker_finished_not_when_the_ui_caught_up() {
     let runtime = &app.cloud_prototype.production.runtimes[&1];
     assert_eq!(runtime.stage, Some(Stage::Deleted));
     assert_eq!(runtime.progress.ended_in(Stage::Deleted), Some(Duration::from_secs(12)));
+}
+
+#[test]
+fn every_worker_operation_starts_its_own_attempt() {
+    let mut runtime = Runtime::default();
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_hours(3))
+        .unwrap();
+    runtime.progress.stage(Stage::Validate, long_ago);
+    let before = runtime.progress.attempt();
+    for (action, first) in [(Action::Resume, Stage::Provision), (Action::Stop, Stage::Stopping)] {
+        let previous = runtime.progress.attempt();
+        begin_operation(&mut runtime, action);
+        assert_eq!(runtime.progress.attempt(), previous + 1, "{action:?}");
+        assert_eq!(
+            runtime.stage,
+            Some(first),
+            "{action:?} reports its own step from the start"
+        );
+        assert_eq!(
+            runtime.progress.elapsed(),
+            None,
+            "{action:?} does not time from the deployment"
+        );
+    }
+    begin_operation(&mut runtime, Action::Delete);
+    assert!(runtime.progress.attempt() > before + 2);
+    assert!(runtime.progress.is_deletion());
+}
+
+#[test]
+fn an_operation_that_fails_its_preflight_is_still_its_own_attempt() {
+    for (action, first) in [(Action::Stop, Stage::Stopping), (Action::Resume, Stage::Provision)] {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Ready),
+            ..Runtime::default()
+        };
+        runtime.push_log("error: from the previous operation".into());
+        let before = runtime.progress.attempt();
+        super::fail_before_start(&mut runtime, action, "settings.json could not be read".into());
+        assert_eq!(
+            runtime.progress.attempt(),
+            before + 1,
+            "{action:?}: diagnosis ignores older output"
+        );
+        assert_eq!(runtime.stage, Some(first), "{action:?} names itself");
+        assert_eq!(runtime.operation, Some(action));
+        assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
+    }
+    let mut runtime = Runtime::default();
+    super::fail_before_start(&mut runtime, Action::Delete, "unreadable".into());
+    assert!(runtime.progress.is_deletion());
+    assert_eq!(runtime.error.as_deref(), Some("unreadable"));
+}
+
+#[test]
+fn a_device_release_that_fails_its_preflight_is_reported_as_one() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        ..Runtime::default()
+    };
+    super::fail_before_start(
+        &mut runtime,
+        Action::RevokeBrowserstack,
+        "settings.json could not be read".into(),
+    );
+    assert_eq!(
+        runtime.remote_release_error.as_deref(),
+        Some("settings.json could not be read")
+    );
+    assert_eq!(runtime.error, None, "not a deployment failure");
+    assert_eq!(runtime.stage, Some(Stage::Ready));
+}
+
+#[test]
+#[cfg(unix)] // The deployment store needs a Unix host.
+fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let root = temp.path();
+    let workspace = app.board.create_workspace("cloud fixture");
+    let mut group = CloudGroup::new(
+        1,
+        "Fixture".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        root.into(),
+        [0.0, 0.0],
+    );
+    let profile = CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap()
+    .profiles["dev"]
+    .clone();
+    let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"fixture","repository":root,"revision":"a".repeat(40),
+        "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+        "spec":null,"sessions":[],"worker":null
+    }))
+    .unwrap();
+    Store::lock(&root.join("fixture")).unwrap().save(&state).unwrap();
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype.root = Some(root.into());
+    // The owner repaired the record; settings.json is still missing.
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.state_unavailable = true;
+    runtime.error = Some("Deployment record is unreadable".into());
+    app.start_production_deployment(1, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(!runtime.state_unavailable, "the record read");
+    let error = runtime.error.as_deref().unwrap_or_default();
+    assert!(error.contains("settings.json"), "{error}");
+    let kept = runtime.state.as_ref().expect("the repaired record is kept");
+    assert_eq!(kept.stage, Stage::Ready);
+    assert!(
+        matches!(kept.operation, cloud_runtime::CreateState::Bound { .. }),
+        "its worker, billing and Reconnect follow from it"
+    );
+}
+
+#[test]
+fn a_stop_that_fails_its_preflight_leaves_a_connected_cloud_ready() {
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        receiver: Some(receiver),
+        ..Runtime::default()
+    };
+    super::fail_before_start(&mut runtime, Action::Stop, "settings.json could not be read".into());
+    assert_eq!(runtime.stage, Some(Stage::Ready), "not stuck at Stopping");
+    assert!(runtime.receiver.is_some());
+    assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
 }

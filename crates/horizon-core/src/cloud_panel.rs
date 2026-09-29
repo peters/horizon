@@ -21,9 +21,13 @@ pub const HEADER: f32 = 84.0;
 pub const PAD: f32 = 14.0;
 pub const RUNTIME_WIDTH: f32 = 300.0;
 pub const RUNTIME_HEIGHT: f32 = 740.0;
-/// Persistent summary above the sessions in a production cloud.
-pub const TOOLBAR_HEIGHT: f32 = 224.0;
-pub const TOOLBAR_CONTROLS_HEIGHT: f32 = 76.0;
+/// The status strip a production cloud adds under its title: one status line
+/// and the stage track along the header's bottom edge.
+pub const STATUS_HEIGHT: f32 = 34.0;
+/// Space the earlier summary card reserved above the sessions, and what its
+/// disclosed controls added; saved clouds from then are moved up once.
+const LEGACY_TOOLBAR_HEIGHT: f32 = 224.0;
+const LEGACY_TOOLBAR_CONTROLS_HEIGHT: f32 = 76.0;
 pub const CHILD_SIZE: [f32; 2] = [520.0, 500.0];
 pub const CLOUDS: [(u32, &str); 5] = [
     (101, "Web preview"),
@@ -52,9 +56,11 @@ pub struct CloudGroup {
     workspace_position: [f32; 2],
     pub size: [f32; 2],
     pub collapsed: bool,
-    /// Ordinary controls are disclosed separately from the session panels.
-    #[serde(default)]
-    pub toolbar_expanded: bool,
+    /// Present only in records saved while the summary card reserved space
+    /// above the sessions: whether its controls were disclosed. Reconcile moves
+    /// those sessions up under the status strip once, then drops it.
+    #[serde(default, rename = "toolbar_expanded", skip_serializing)]
+    legacy_toolbar: Option<bool>,
     /// `None` is manual placement. New clouds start with the default preset;
     /// a saved cloud without a stored layout stays manual.
     #[serde(default)]
@@ -71,7 +77,6 @@ struct CloudGeometry {
     size: [f32; 2],
     workspace_position: [f32; 2],
     collapsed: bool,
-    toolbar_expanded: bool,
     /// Membership already matched `self.panels` when this snapshot was taken.
     panels_matched: bool,
     panel_count: usize,
@@ -85,7 +90,6 @@ impl CloudGeometry {
             || self.size.map(f32::to_bits) != group.size.map(f32::to_bits)
             || self.workspace_position.map(f32::to_bits) != group.workspace_position.map(f32::to_bits)
             || self.collapsed != group.collapsed
-            || self.toolbar_expanded != group.toolbar_expanded
     }
 }
 

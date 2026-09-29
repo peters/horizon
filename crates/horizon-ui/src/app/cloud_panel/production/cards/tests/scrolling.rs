@@ -39,15 +39,10 @@ fn phased_frame(
 }
 
 #[test]
-fn toolbar_controls_stay_visible_without_scrolling_or_panning_at_scaled_zoom() {
+fn the_empty_cloud_body_stays_put_without_panning_at_scaled_zoom() {
     for zoom in [1.0, 1.797] {
         let (_temp, ctx, mut app) = verbose_card();
-        app.cloud_prototype
-            .production
-            .runtimes
-            .entry(901)
-            .or_default()
-            .detail_view = toolbar::View::Closed;
+        app.cloud_prototype.production.runtimes.entry(901).or_default().drawer = None;
         app.canvas_view = CanvasViewState::new([0.0, 0.0], zoom);
         for step in 0..3 {
             frame(&ctx, &mut app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
@@ -57,11 +52,11 @@ fn toolbar_controls_stay_visible_without_scrolling_or_panning_at_scaled_zoom() {
         let point = transform * (Pos2::from(min) + Vec2::new(100.0, 100.0));
         assert!(app.pointer_over_cloud_runtime(&ctx, point));
         let before = frame(&ctx, &mut app, 0.5, point, 0.0);
-        let control = label_pos(&before, "▸  Show controls").expect("disclosure remains visible");
+        let control = label_pos(&before, "Steps").expect("the step list is visible");
         let pan = app.canvas_view.pan_offset;
         phased_frame(&ctx, &mut app, 0.6, point, -800.0, TouchPhase::Start);
         let after = frame(&ctx, &mut app, 0.7, point, 0.0);
-        assert_eq!(label_pos(&after, "▸  Show controls"), Some(control));
+        assert_eq!(label_pos(&after, "Steps"), Some(control));
         assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
     }
 }
@@ -80,14 +75,9 @@ fn label_center(output: &egui::FullOutput, label: &str) -> Option<(Pos2, egui::R
 }
 
 #[test]
-fn moving_a_scroll_contact_between_toolbars_does_not_move_either_cloud() {
+fn moving_a_scroll_contact_between_cloud_bodies_does_not_move_either_cloud() {
     let (_temp, ctx, mut app) = verbose_card();
-    app.cloud_prototype
-        .production
-        .runtimes
-        .entry(901)
-        .or_default()
-        .detail_view = toolbar::View::Closed;
+    app.cloud_prototype.production.runtimes.entry(901).or_default().drawer = None;
     let mut second = app.cloud_prototype.groups.0[0].clone();
     second.issue = 902;
     second.position[0] += 900.0;
@@ -112,30 +102,6 @@ fn moving_a_scroll_contact_between_toolbars_does_not_move_either_cloud() {
     phased_frame(&ctx, &mut app, 1.048, points[1], 0.0, TouchPhase::Start);
     frame(&ctx, &mut app, 1.064, points[1], -4000.0);
     assert_eq!(app.canvas_view.pan_offset.map(f32::to_bits), pan.map(f32::to_bits));
-}
-
-fn click_frame(ctx: &Context, app: &mut HorizonApp, time: f64, position: Pos2, pressed: bool) -> egui::FullOutput {
-    ctx.run_ui(
-        RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(3000.0, 2200.0))),
-            time: Some(time),
-            events: vec![
-                Event::PointerMoved(position),
-                Event::PointerButton {
-                    pos: position,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Modifiers::NONE,
-                },
-            ],
-            ..RawInput::default()
-        },
-        |ui| {
-            app.handle_canvas_pan(ui.ctx());
-            app.render_production_runtimes(ui.ctx());
-        },
-    )
-    .discard_textures()
 }
 
 fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
@@ -166,44 +132,31 @@ fn verbose_card() -> (tempfile::TempDir, Context, HorizonApp) {
         placement: horizon_core::cloud_panel::Placement::default(),
     });
     app.cloud_prototype.groups.0.push(group);
-    app.cloud_prototype
-        .production
-        .runtimes
-        .entry(901)
-        .or_default()
-        .detail_view = toolbar::View::Activity;
+    app.cloud_prototype.production.runtimes.entry(901).or_default().drawer = None;
     (temp, ctx, app)
 }
 
+/// Renders until the body's output is laid out and returns a point over the log.
 fn open_verbose(ctx: &Context, app: &mut HorizonApp) -> (Pos2, egui::FullOutput) {
-    for step in 0..3 {
-        frame(ctx, app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
+    let mut latest = frame(ctx, app, 0.0, Pos2::ZERO, 0.0);
+    for step in 1..6 {
+        latest = frame(ctx, app, f64::from(step) * 0.02, Pos2::ZERO, 0.0);
     }
-    let opened = frame(ctx, app, 0.2, Pos2::new(80.0, 400.0), 0.0);
-    let header = label_pos(&opened, "Verbose output").expect("verbose header is visible");
-    frame(ctx, app, 0.21, header, 0.0);
-    click_frame(ctx, app, 0.22, header, true);
-    let mut latest = click_frame(ctx, app, 0.24, header, false);
-    let mut time = 0.24;
-    for _ in 0..24 {
-        time += 0.02;
-        latest = frame(ctx, app, time, header, 0.0);
-    }
-    (header, latest)
+    let pointer = label_pos(&latest, "LOG-LINE-079").expect("the log opens on its latest line");
+    (pointer, latest)
 }
 
 #[test]
-fn expanded_verbose_output_scrolls_back_to_its_first_line_and_the_heading() {
+fn the_body_output_scrolls_back_to_its_first_line_and_the_heading() {
     let (_temp, ctx, mut app) = verbose_card();
     {
         let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
-        runtime.logs = (0..80).map(|index| format!("LOG-LINE-{index:03}")).collect();
+        runtime.logs = (0..80)
+            .map(|index| super::super::super::LogLine::new(format!("LOG-LINE-{index:03}"), Some(Stage::Build), None))
+            .collect();
     }
     let (header, opened) = open_verbose(&ctx, &mut app);
-    assert!(
-        label_pos(&opened, "Scroll fixture — Activity").is_some(),
-        "expanding the log keeps the heading"
-    );
+    assert!(label_pos(&opened, "Output").is_some(), "the log keeps its heading");
     assert!(
         label_pos(&opened, "LOG-LINE-000").is_none(),
         "a long log opens on its latest line"
@@ -238,17 +191,19 @@ fn expanded_verbose_output_scrolls_back_to_its_first_line_and_the_heading() {
         "scrolling up through verbose output returns to its first line"
     );
     assert!(
-        label_pos(&latest, "Scroll fixture — Activity").is_some(),
-        "scrolling the log back up does not lose the card heading"
+        label_pos(&latest, "Output").is_some(),
+        "scrolling the log back up does not lose its heading"
     );
 }
 
 #[test]
-fn scrolled_up_verbose_output_keeps_its_first_line_while_more_lines_arrive() {
+fn scrolled_up_output_keeps_its_first_line_while_more_lines_arrive() {
     let (_temp, ctx, mut app) = verbose_card();
     {
         let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
-        runtime.logs = (0..80).map(|index| format!("LOG-LINE-{index:03}")).collect();
+        runtime.logs = (0..80)
+            .map(|index| super::super::super::LogLine::new(format!("LOG-LINE-{index:03}"), Some(Stage::Build), None))
+            .collect();
     }
     let (header, opened) = open_verbose(&ctx, &mut app);
     let mut time = 1.0;
@@ -279,7 +234,10 @@ fn scrolled_up_verbose_output_keeps_its_first_line_while_more_lines_arrive() {
         for line in 0..100 {
             runtime.push_log(format!("BURST-{line}"));
         }
-        assert_eq!(runtime.logs.front().map(String::as_str), Some("LOG-LINE-000"));
+        assert_eq!(
+            runtime.logs.front().map(|line| line.text.as_str()),
+            Some("LOG-LINE-000")
+        );
         assert_eq!(runtime.logs.len(), 80);
         assert_eq!(runtime.pending_logs.len(), 100);
     }
@@ -289,5 +247,31 @@ fn scrolled_up_verbose_output_keeps_its_first_line_while_more_lines_arrive() {
         label_pos(&latest, "LOG-LINE-000").is_some(),
         "new verbose lines must not pull a scrolled-up log back to the end or drop its first line"
     );
-    assert!(label_pos(&latest, "Scroll fixture — Activity").is_some());
+    assert!(label_pos(&latest, "Output").is_some());
+}
+
+#[test]
+fn a_cloud_hidden_by_another_clouds_full_screen_keeps_its_output_joining() {
+    let (_temp, ctx, mut app) = verbose_card();
+    app.cloud_prototype.groups.0.push(CloudGroup::new(
+        902,
+        "Other".into(),
+        "workspace".into(),
+        "/synthetic".into(),
+        [2000.0, 10.0],
+    ));
+    {
+        // Its reader was scrolled up when the other cloud filled the screen.
+        let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+        runtime.verbose_unpinned = true;
+        runtime.push_log("HELD".into());
+        assert_eq!(runtime.pending_logs.len(), 1);
+    }
+    app.toggle_cloud_fullscreen(&ctx, 902);
+    frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&901).unwrap();
+    runtime.push_log("AFTER".into());
+    let shown: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(shown, ["HELD", "AFTER"], "no hidden reader holds the output");
+    assert!(runtime.pending_logs.is_empty());
 }

@@ -1,6 +1,6 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
 mod capabilities;
-mod cards;
+pub(super) mod cards;
 mod close;
 mod companions;
 mod creation;
@@ -93,9 +93,77 @@ pub(super) enum Confirmation {
     Rebuild,
     CancelRebuild,
 }
+/// One line of a cloud operation's output, with the step that printed it and when.
+pub(super) struct LogLine {
+    pub text: String,
+    pub stage: Option<Stage>,
+    /// Time into the attempt; `None` for lines outside one, such as idle reports.
+    pub at: Option<std::time::Duration>,
+    /// Classified once on arrival, so drawing the log does not re-scan each line.
+    pub kind: LineKind,
+    /// The operation that printed it (`progress::Timeline::attempt`).
+    pub attempt: u64,
+    /// Which run of its step within the attempt: a step revisited later (Validate
+    /// after Build) is a second visit with its own heading and time.
+    pub visit: usize,
+    /// A note outside any operation (`Runtime::push_note`): shown, never diagnosed.
+    pub note: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineKind {
+    Plain,
+    Warning,
+    Failure,
+}
+
+impl LogLine {
+    pub(super) fn new(text: String, stage: Option<Stage>, at: Option<std::time::Duration>) -> Self {
+        let kind = if cloud_runtime::diagnosis::is_failure(&text) {
+            LineKind::Failure
+        } else if text
+            .trim_start()
+            .get(..7)
+            .is_some_and(|start| start.eq_ignore_ascii_case("warning"))
+        {
+            LineKind::Warning
+        } else {
+            LineKind::Plain
+        };
+        Self {
+            text,
+            stage,
+            at,
+            kind,
+            attempt: 0,
+            visit: 0,
+            note: false,
+        }
+    }
+}
+
+/// Whether `previous` is an earlier update of `line`'s layer in the same step of the same
+/// attempt; a retry pushing the same image keeps the earlier attempt's lines.
+fn same_layer(previous: &LogLine, line: &LogLine, layer: &str) -> bool {
+    // A failure is never merged: it keeps its place in arrival order, where diagnosis
+    // reads newest first, and a later progress update does not overwrite it.
+    previous.kind != LineKind::Failure
+        && line.kind != LineKind::Failure
+        && previous.attempt == line.attempt
+        && previous.stage == line.stage
+        && previous.visit == line.visit
+        && layer_id(&previous.text) == Some(layer)
+}
+
+/// The layer a Docker progress line such as `5f70bf18a086: Pushing [==>  ]` reports on.
+fn layer_id(line: &str) -> Option<&str> {
+    let (id, rest) = line.split_once(": ")?;
+    (id.len() == 12 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) && !rest.starts_with("digest")).then_some(id)
+}
+
 #[derive(Default)]
 pub(super) struct Runtime {
-    detail_view: cards::DetailView,
+    drawer: Option<cards::Tab>,
     receiver: Option<Receiver<Event>>,
     recovery_receiver: Option<Receiver<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>>,
     recovery_worker_id: String,
@@ -106,12 +174,29 @@ pub(super) struct Runtime {
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     stage: Option<Stage>,
     progress: progress::Timeline,
-    logs: std::collections::VecDeque<String>,
+    logs: std::collections::VecDeque<LogLine>,
     /// Lines that arrived after the reader scrolled up. They join `logs` when
     /// follow mode resumes, so the visible history does not shift.
-    pending_logs: std::collections::VecDeque<String>,
-    /// The reader scrolled away from the latest line.
+    pending_logs: std::collections::VecDeque<LogLine>,
+    /// A reader scrolled away from the latest line in an output view last frame.
     verbose_unpinned: bool,
+    /// Output views scrolled up this frame, one bit per place; folded into
+    /// `verbose_unpinned` at the next frame, so a view no longer shown stops holding lines.
+    unpinned_views: u8,
+    /// The views that were scrolled up last frame. Only they keep the held-still list;
+    /// a view still following shows the newest lines, held ones included.
+    unpinned_last: u8,
+    /// The worker operation running or last run. A failure reloads the saved record, so
+    /// the stage alone may no longer say whether a stop or a resume was tried.
+    operation: Option<lifecycle::Action>,
+    /// The header asked for a confirmation; Manage scrolls it into view once.
+    reveal_confirmation: bool,
+    /// The status the header computed this frame, reused by the body and drawer.
+    frame_status: Option<(u64, cards::Status)>,
+    /// Counts every change to the output, including lines replaced in place.
+    log_generation: u64,
+    /// The last failure diagnosis and the output it was read from.
+    diagnosis: std::cell::RefCell<Option<(cards::DiagnosisKey, cards::Failure)>>,
     state: Option<Deployment>,
     error: Option<String>,
     confirmation: Confirmation,
@@ -151,7 +236,62 @@ impl Runtime {
 
     /// Follow mode keeps a short tail. While the reader is scrolled up, new
     /// lines wait aside so the lines on screen are neither dropped nor shifted.
-    fn push_log(&mut self, line: String) {
+    fn push_log(&mut self, text: String) {
+        let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
+        line.attempt = self.progress.attempt();
+        line.visit = line.stage.map_or(0, |stage| self.progress.visit(stage));
+        self.append_log(line);
+    }
+
+    /// A deployment, reconnect, rebuild or resize that failed before it started: that is
+    /// this attempt's failure at its `first` step, with its own output, not an earlier
+    /// stop's or resume's, nor the step the cloud reached before.
+    fn fail_preflight(&mut self, first: Stage, error: String) {
+        if self.connected_ready() {
+            // Nothing started: the connected cloud and its watch stay as they are.
+            self.error = Some(error);
+            return;
+        }
+        self.progress.reset();
+        self.operation = None;
+        // A redeploy of a deleted cloud that could not start leaves it deleted, so
+        // Redeploy stays its way forward; the record's termination is not cleanup to finish.
+        if self.stage != Some(Stage::Deleted) {
+            self.stage = Some(first);
+        }
+        self.error = Some(error);
+    }
+
+    /// Ready with its connection watch running: an operation that fails before it starts
+    /// leaves this as it is and only reports why.
+    fn connected_ready(&self) -> bool {
+        self.receiver.is_some() && self.stage == Some(Stage::Ready)
+    }
+
+    /// A line outside any operation's steps: an idle report, a provider check or a device
+    /// release. It has no step or time, so it is not filed under the last step's heading.
+    fn push_note(&mut self, text: String) {
+        let mut line = LogLine::new(text, None, None);
+        line.attempt = self.progress.attempt();
+        line.note = true;
+        self.append_log(line);
+    }
+
+    fn append_log(&mut self, line: LogLine) {
+        self.log_generation += 1;
+        // An update replaces its layer's line wherever it is: in place, it moves nothing
+        // on a scrolled-up screen, and a following view never shows the layer twice.
+        if let Some(layer) = layer_id(&line.text)
+            && let Some(previous) = self
+                .logs
+                .iter_mut()
+                .chain(self.pending_logs.iter_mut())
+                .rev()
+                .find(|previous| same_layer(previous, &line, layer))
+        {
+            *previous = line;
+            return;
+        }
         if self.verbose_unpinned {
             self.pending_logs.push_back(line);
             while self.pending_logs.len() > Self::PENDING_LOG_LINES {
@@ -169,7 +309,20 @@ impl Runtime {
             return;
         }
         let pending = std::mem::take(&mut self.pending_logs);
-        self.logs.extend(pending);
+        for line in pending {
+            // A layer updated while the reader was scrolled up replaces its visible line.
+            if let Some(layer) = layer_id(&line.text)
+                && let Some(previous) = self
+                    .logs
+                    .iter_mut()
+                    .rev()
+                    .find(|previous| same_layer(previous, &line, layer))
+            {
+                *previous = line;
+            } else {
+                self.logs.push_back(line);
+            }
+        }
         self.trim_followed_logs();
     }
 
@@ -217,6 +370,9 @@ impl Runtime {
         }
         self.desktop = None;
         self.progress.reset();
+        // A deployment or reconnect is its own operation; an earlier stop or resume that
+        // failed no longer names this attempt's failure.
+        self.operation = None;
         self.rebuild = None;
         self.sharing.await_ready();
         let (tx, rx) = channel();
@@ -236,10 +392,21 @@ impl Runtime {
         &self,
         now: std::time::SystemTime,
     ) -> Option<cloud_runtime::cost::RunCost> {
-        if self.stage != Some(Stage::Ready) {
+        if self.stage != Some(Stage::Ready) || self.worker_terminated() {
             return None;
         }
         cloud_runtime::cost::current_run(self.state.as_ref()?.worker.as_ref()?, now)
+    }
+
+    /// The provider confirmed the worker deleted (storage cleanup may still be pending);
+    /// the saved stage and worker snapshot can still read as running. A redeploy keeps
+    /// that record until Ready, so while one runs it is history.
+    pub(in crate::app::cloud_panel) fn worker_terminated(&self) -> bool {
+        (self.receiver.is_none() || self.progress.is_deletion())
+            && self
+                .state
+                .as_ref()
+                .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
     }
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
@@ -359,9 +526,7 @@ impl HorizonApp {
         self.finish_failed_cloud_operations(finished);
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
-        for id in resumed {
-            self.start_production_deployment(id, ctx);
-        }
+        self.reconnect_resumed(resumed, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
         self.sync_cloud_presentations();
@@ -486,6 +651,17 @@ impl HorizonApp {
             }
         }
     }
+    /// Reconnects each resumed worker. The reconnect that finishes a resume is still that
+    /// resume, so a failure there offers Resume worker.
+    fn reconnect_resumed(&mut self, resumed: Vec<u32>, ctx: &egui::Context) {
+        for id in resumed {
+            self.start_production_deployment(id, ctx);
+            if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+                runtime.operation = Some(lifecycle::Action::Resume);
+            }
+        }
+    }
+
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
         if let Some((request, siblings)) = self.prepare_production_deployment(id) {
             self.cloud_prototype

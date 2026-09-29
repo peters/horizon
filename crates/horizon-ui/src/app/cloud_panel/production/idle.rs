@@ -253,7 +253,7 @@ impl Runtime {
     fn show_idle(&mut self, report: Report) {
         match report {
             Report::Checked => {}
-            Report::Failed(message) => self.push_log(message),
+            Report::Failed(message) => self.push_note(message),
             // Only the watch of the current operation reports here: every new
             // operation replaces or drops the channel, and the watch already ended
             // its presentation, whose token is the one this card holds.
@@ -277,7 +277,7 @@ impl Runtime {
                 self.error = None;
                 self.receiver = None;
                 self.idle_reports = None;
-                self.push_log(line);
+                self.push_note(line);
             }
         }
     }

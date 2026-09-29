@@ -1,5 +1,5 @@
 use egui::{Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
-use horizon_core::cloud_panel::{CloudGroup, HEADER};
+use horizon_core::cloud_panel::CloudGroup;
 
 use super::super::HorizonApp;
 use crate::app::view::canvas_scene_transform;
@@ -40,12 +40,23 @@ impl HorizonApp {
                 return false;
             }
             let (min, max) = group.runtime_bounds();
+            let drawer = if fixture_mode {
+                None
+            } else {
+                self.cloud_drawer_rect(group)
+            };
             (transform * Rect::from_min_max(Pos2::from(min), Pos2::from(max))).contains(position)
+                || drawer.is_some_and(|drawer| (transform * drawer).contains(position))
         });
         let layer = ctx.layer_id_at(position);
         candidates
             .clone()
-            .find(|group| layer.is_some_and(|layer| layer.id == Id::new(("cloud-runtime", group.issue))))
+            .find(|group| {
+                layer.is_some_and(|layer| {
+                    layer.id == Id::new(("cloud-drawer", group.issue))
+                        || layer.id == Id::new(("cloud-runtime", group.issue))
+                })
+            })
             .or_else(|| candidates.next_back())
             .map(|group| group.issue)
     }
@@ -65,6 +76,7 @@ impl HorizonApp {
         let mut action = None;
         let mut title_action = RenameEditAction::None;
         let mut moved = false;
+        let mut strip_actions = Vec::new();
         let now = std::time::SystemTime::now();
         for group in &mut self.cloud_prototype.groups.0 {
             if self
@@ -83,11 +95,12 @@ impl HorizonApp {
             let accent = cloud_accent(group.issue);
             frame_background(ctx, group.issue, rect, transform, clip, accent);
             let editing = self.cloud_prototype.renaming == Some(group.issue);
-            let cost = self
-                .cloud_prototype
-                .production
-                .runtimes
-                .get(&group.issue)
+            // A production cloud shows its spend in the status strip instead.
+            let cost = group
+                .remote
+                .is_none()
+                .then(|| self.cloud_prototype.production.runtimes.get(&group.issue))
+                .flatten()
                 .and_then(|runtime| runtime.cost_badge(now));
             let response = egui::Area::new(Id::new(("cloud-header", group.issue)))
                 .order(Order::Middle)
@@ -96,41 +109,31 @@ impl HorizonApp {
                 .show(ctx, |ui| {
                     ui.ctx().set_transform_layer(ui.layer_id(), transform);
                     ui.set_clip_rect(clip);
-                    let (header, _) = ui.allocate_exact_size(Vec2::new(rect.width(), HEADER), Sense::hover());
-                    let cost_width = paint_header(ui, group, header, accent, editing, cost);
+                    let (header, _) =
+                        ui.allocate_exact_size(Vec2::new(rect.width(), group.header_height()), Sense::hover());
+                    paint_header_base(ui, header, accent);
+                    let drag_rect =
+                        Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom()));
+                    // Production clouds register the drag first so the strip's controls sit above it.
+                    let early_drag = group.remote.is_some().then(|| drag_area(ui, drag_rect, editing));
+                    let trailing = trailing(
+                        &mut self.cloud_prototype.production,
+                        ui,
+                        header,
+                        group,
+                        &self.board,
+                        cost,
+                        &mut strip_actions,
+                    );
+                    let cost_width = paint_header(ui, group, header, accent, editing, trailing);
                     if group.remote.is_some() && close_button(ui, header) {
                         action = Some(Action::Close(group.issue));
                     }
                     if editing {
-                        let field = Rect::from_min_size(
-                            header.min + Vec2::new(64.0, 16.0),
-                            Vec2::new(header.width() - 220.0 - cost_width, 32.0),
-                        );
-                        title_action = show_inline_rename_editor(
-                            ui,
-                            field,
-                            &mut self.cloud_prototype.title_draft,
-                            FontId::proportional(21.0),
-                        );
-                        if ui.input(|input| {
-                            input.pointer.any_pressed()
-                                && input
-                                    .pointer
-                                    .interact_pos()
-                                    .is_some_and(|p| !(transform * field).contains(p))
-                        }) {
-                            title_action = RenameEditAction::Commit;
-                        }
+                        title_action =
+                            rename_field(ui, header, cost_width, &mut self.cloud_prototype.title_draft, transform);
                     }
-                    let drag = ui.interact(
-                        Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom())),
-                        ui.id().with("drag"),
-                        if editing {
-                            Sense::hover()
-                        } else {
-                            Sense::click_and_drag()
-                        },
-                    );
+                    let drag = early_drag.unwrap_or_else(|| drag_area(ui, drag_rect, editing));
                     cloud_context(&drag, group, &mut action);
                     drag.on_hover_text("Double-click to rename. Drag to move this cloud.")
                 })
@@ -143,13 +146,17 @@ impl HorizonApp {
             if response.double_clicked() {
                 action = Some(Action::Rename(group.issue));
             }
-            if group.panels.is_empty() && !group.collapsed {
+            // A production cloud shows its steps and output there instead.
+            if group.panels.is_empty() && !group.collapsed && group.remote.is_none() {
                 let ready = self.cloud_prototype.production.accepts_panels(group);
                 empty_group(ctx, group, rect, transform, clip, ready);
             }
         }
         if moved {
             self.save_cloud_prototype();
+        }
+        for (id, chosen) in strip_actions {
+            self.apply_strip_action(id, chosen, ctx);
         }
         self.apply_cloud_title_edit(title_action);
         if let Some(action) = action {
@@ -303,19 +310,82 @@ fn close_button(ui: &egui::Ui, header: Rect) -> bool {
     response.on_hover_text("Close cloud…").clicked()
 }
 
+/// The title editor over the title; a press outside it commits the edit.
+fn rename_field(
+    ui: &mut egui::Ui,
+    header: Rect,
+    reserved: f32,
+    draft: &mut String,
+    transform: egui::emath::TSTransform,
+) -> RenameEditAction {
+    let field = Rect::from_min_size(
+        header.min + Vec2::new(64.0, 16.0),
+        Vec2::new((header.width() - 64.0 - reserved).max(120.0), 32.0),
+    );
+    let edit = show_inline_rename_editor(ui, field, draft, FontId::proportional(21.0));
+    let pressed_outside = ui.input(|input| {
+        input.pointer.any_pressed()
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|p| !(transform * field).contains(p))
+    });
+    if pressed_outside {
+        RenameEditAction::Commit
+    } else {
+        edit
+    }
+}
+
+fn drag_area(ui: &egui::Ui, rect: Rect, editing: bool) -> egui::Response {
+    ui.interact(
+        rect,
+        ui.id().with("drag"),
+        if editing {
+            Sense::hover()
+        } else {
+            Sense::click_and_drag()
+        },
+    )
+}
+
+/// A production cloud's status strip, or a local cloud's badges.
+fn trailing(
+    production: &mut super::production::Production,
+    ui: &mut egui::Ui,
+    header: Rect,
+    group: &CloudGroup,
+    board: &horizon_core::Board,
+    cost: Option<String>,
+    actions: &mut Vec<(u32, super::production::cards::strip::StripAction)>,
+) -> Trailing {
+    if group.remote.is_none() {
+        return Trailing::Badges { cost };
+    }
+    let strip = production.header_strip(ui, header, group, board);
+    if let Some(chosen) = strip.action {
+        actions.push((group.issue, chosen));
+    }
+    Trailing::Strip {
+        reserved: strip.reserved,
+        subtitle: strip.subtitle,
+    }
+}
+
+/// What the header shows right of the title.
+enum Trailing {
+    /// A local or design cloud: its panel count and optional cost badge.
+    Badges { cost: Option<String> },
+    /// A production cloud: the status strip already painted, and its subtitle.
+    Strip { reserved: f32, subtitle: String },
+}
+
 fn close_rect(header: Rect) -> Rect {
     Rect::from_center_size(header.right_top() + Vec2::new(-24.0, 35.0), Vec2::splat(28.0))
 }
 
-/// Returns the width the optional cost badge takes from the title.
-fn paint_header(
-    ui: &egui::Ui,
-    group: &CloudGroup,
-    rect: Rect,
-    accent: Color32,
-    editing: bool,
-    cost: Option<String>,
-) -> f32 {
+/// The header's fill, bottom rule and cloud mark, under everything else in it.
+fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32) {
     let painter = ui.painter();
     painter.rect_filled(
         rect,
@@ -338,13 +408,32 @@ fn paint_header(
         theme::blend(theme::PANEL_BG(), accent, 0.15),
     );
     cloud_glyph(painter, mark, accent);
+}
+
+/// Title, subtitle and what sits right of them. Returns the width taken from the
+/// title there: the badges or the status strip.
+fn paint_header(
+    ui: &egui::Ui,
+    group: &CloudGroup,
+    rect: Rect,
+    accent: Color32,
+    editing: bool,
+    trailing: Trailing,
+) -> f32 {
+    let painter = ui.painter();
     let badge = Rect::from_min_size(rect.right_top() + Vec2::new(-150.0, 23.0), Vec2::new(90.0, 25.0));
     let fill = theme::blend(theme::PANEL_BG(), accent, 0.09);
-    let reserved = cost.map_or(0.0, |cost| cost_badge(painter, badge, cost, fill));
+    let (reserved, subtitle) = match trailing {
+        Trailing::Badges { cost } => (
+            cost.map_or(0.0, |cost| cost_badge(painter, badge, cost, fill)) + 154.0,
+            None,
+        ),
+        Trailing::Strip { reserved, subtitle } => (reserved, Some(subtitle)),
+    };
     if !editing {
         let title_rect = Rect::from_min_size(
             rect.min + Vec2::new(64.0, 16.0),
-            Vec2::new(rect.width() - 218.0 - reserved, 30.0),
+            Vec2::new((rect.width() - 64.0 - reserved).max(0.0), 30.0),
         );
         painter.with_clip_rect(title_rect).text(
             title_rect.left_center(),
@@ -354,40 +443,51 @@ fn paint_header(
             theme::FG(),
         );
     }
-    let provider = group.environment.provider.as_deref().unwrap_or("Local");
-    // Providers Horizon deploys on are named by their description; the rest are the
-    // prototype's design fixtures.
-    let provider = match horizon_core::cloud_runtime::provider::by_id(provider) {
-        Some(described) => described.label,
-        None => match provider {
-            "daytona" => "Daytona",
-            "fly" => "Fly.io",
-            "local" => "Local",
-            other => other,
-        },
-    };
-    let profile = group.environment.profile.as_deref().unwrap_or("Development");
-    painter.text(
-        rect.min + Vec2::new(64.0, 59.0),
-        Align2::LEFT_CENTER,
-        format!("{provider}  /  {profile}"),
-        FontId::proportional(13.0),
+    let subtitle = subtitle.unwrap_or_else(|| {
+        let provider = group.environment.provider.as_deref().unwrap_or("Local");
+        // Providers Horizon deploys on are named by their description; the rest are the
+        // prototype's design fixtures.
+        let provider = match horizon_core::cloud_runtime::provider::by_id(provider) {
+            Some(described) => described.label,
+            None => match provider {
+                "daytona" => "Daytona",
+                "fly" => "Fly.io",
+                "local" => "Local",
+                other => other,
+            },
+        };
+        let profile = group.environment.profile.as_deref().unwrap_or("Development");
+        format!("{provider}  /  {profile}")
+    });
+    let subtitle_rect = Rect::from_min_max(
+        rect.min + Vec2::new(64.0, 48.0),
+        Pos2::new((rect.right() - reserved).max(rect.left() + 64.0), rect.top() + 70.0),
+    );
+    // Too long for the room left beside the strip: end it with an ellipsis, not a cut.
+    let mut job = egui::text::LayoutJob::simple_singleline(subtitle, FontId::proportional(13.0), theme::FG_SOFT());
+    job.wrap = egui::text::TextWrapping::truncate_at_width(subtitle_rect.width());
+    let galley = painter.layout_job(job);
+    painter.galley(
+        Pos2::new(subtitle_rect.left(), rect.top() + 59.0 - galley.size().y / 2.0),
+        galley,
         theme::FG_SOFT(),
     );
-    painter.rect_filled(badge, 12, fill);
-    painter.circle_filled(badge.left_center() + Vec2::new(12.0, 0.0), 3.0, accent);
-    let label = match group.panels.len() {
-        0 => "Empty".to_string(),
-        1 => "1 panel".to_string(),
-        count => format!("{count} panels"),
-    };
-    painter.text(
-        badge.center() + Vec2::new(5.0, 0.0),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(12.0),
-        theme::FG_SOFT(),
-    );
+    if group.remote.is_none() {
+        painter.rect_filled(badge, 12, fill);
+        painter.circle_filled(badge.left_center() + Vec2::new(12.0, 0.0), 3.0, accent);
+        let label = match group.panels.len() {
+            0 => "Empty".to_string(),
+            1 => "1 panel".to_string(),
+            count => format!("{count} panels"),
+        };
+        painter.text(
+            badge.center() + Vec2::new(5.0, 0.0),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(12.0),
+            theme::FG_SOFT(),
+        );
+    }
     reserved
 }
 
@@ -561,8 +661,18 @@ mod tests {
         let mut reserved = f32::NAN;
         let output = egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(900.0, HEADER), Sense::hover());
-                reserved = paint_header(ui, &group, rect, cloud_accent(101), false, cost.map(str::to_owned));
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(900.0, horizon_core::cloud_panel::HEADER), Sense::hover());
+                reserved = paint_header(
+                    ui,
+                    &group,
+                    rect,
+                    cloud_accent(101),
+                    false,
+                    Trailing::Badges {
+                        cost: cost.map(str::to_owned),
+                    },
+                );
             })
             .discard_textures();
         let texts = output
@@ -590,7 +700,7 @@ mod tests {
     #[test]
     fn cost_badge_sits_before_the_panel_badge_and_narrows_the_title() {
         let (plain, none) = header(None);
-        assert!(none.abs() < f32::EPSILON);
+        assert!((none - 154.0).abs() < f32::EPSILON, "the panel badge keeps its place");
         assert!(!plain.iter().any(|(text, ..)| text.starts_with('$')));
         let mut widths = Vec::new();
         for badge in ["$0.83 run", "$4.20 total", "$0.83 run · $4.20 total"] {
@@ -603,7 +713,7 @@ mod tests {
                 title_clip(&costed).right() < cost.left(),
                 "the title never runs under the cost"
             );
-            assert!((title_clip(&plain).right() - title_clip(&costed).right() - reserved).abs() < 0.5);
+            assert!((title_clip(&plain).right() - title_clip(&costed).right() - (reserved - none)).abs() < 0.5);
             assert!(reserved > cost.width());
             widths.push(reserved);
         }

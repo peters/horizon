@@ -96,6 +96,7 @@ impl HorizonApp {
             zones.extend(self.preset_picker_rect(ctx));
             zones.extend(self.settings_panel_rect(ctx, viewport));
             zones.extend(self.settings_bar_rect(ctx, viewport));
+            zones.extend(self.cloud_drawer_screen_rects(ctx));
             return OverlayExclusion::new(zones);
         }
         let mut zones: Vec<_> = self.preset_picker_rect(ctx).into_iter().collect();
@@ -137,6 +138,8 @@ impl HorizonApp {
         if let Some(rect) = self.work_resume_overlay_rect(ctx) {
             zones.push(rect);
         }
+        #[cfg(feature = "cloud-workspaces")]
+        zones.extend(self.cloud_drawer_screen_rects(ctx));
 
         OverlayExclusion::new(zones)
     }

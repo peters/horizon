@@ -242,7 +242,7 @@ impl HorizonApp {
         let (root, settings) = match setup {
             Ok(setup) => setup,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                runtime.fail_preflight(Stage::Provision, error.to_string());
                 return;
             }
         };
@@ -254,6 +254,7 @@ impl HorizonApp {
         runtime.rebuild = None;
         runtime.confirmation = super::Confirmation::None;
         runtime.progress.reset();
+        runtime.operation = None;
         runtime.stage = Some(Stage::Provision);
         runtime.error = None;
         runtime.resize.notice = None;

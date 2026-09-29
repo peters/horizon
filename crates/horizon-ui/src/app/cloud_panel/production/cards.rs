@@ -1,149 +1,51 @@
 use super::{Confirmation, DELETED_RESOURCES_MESSAGE, HorizonApp, Stage, cloud_runtime, lifecycle::Action};
 use crate::app::cloud_panel::runtime::{action_button, danger_button};
-use crate::{app::view::canvas_scene_transform, theme};
-use egui::{Id, Order, Pos2, RichText, Vec2};
-mod details;
-mod placement;
+use crate::theme;
+use egui::{RichText, Vec2};
+use horizon_core::{Board, cloud_panel::CloudGroup};
+mod body;
+mod cost;
+mod drawer;
+mod machine;
+mod output;
+pub(super) mod placement;
 mod rebuild;
 mod self_stop;
 mod sizing;
-mod toolbar;
-use sizing::profile_details;
-pub(super) use toolbar::View as DetailView;
+mod status;
+mod steps;
+pub(in crate::app::cloud_panel) mod strip;
 #[cfg(test)]
 mod tests;
 mod timeline;
+mod view;
 pub(super) mod wording;
-impl HorizonApp {
-    pub(in crate::app) fn cloud_details_open(&self) -> bool {
-        self.cloud_prototype.groups.0.iter().any(|group| {
-            self.cloud_prototype
-                .fullscreen
-                .as_ref()
-                .is_none_or(|view| view.id == group.issue)
-                && self
-                    .cloud_prototype
-                    .production
-                    .runtimes
-                    .get(&group.issue)
-                    .is_some_and(|runtime| runtime.detail_view != DetailView::Closed)
-        })
-    }
+pub(super) use drawer::Tab;
+use sizing::profile_details;
+pub(super) use status::{DiagnosisKey, Failure, Status};
 
-    pub(in crate::app::cloud_panel) fn render_production_runtimes(&mut self, ctx: &egui::Context) {
-        self.ensure_cloud_provider_logo(ctx);
-        let canvas = self.canvas_rect(ctx);
-        let transform = canvas_scene_transform(canvas, self.canvas_view);
-        let clip = transform.inverse() * canvas;
-        let mut action = None;
-        let mut fullscreen = None;
-        let mut layout = None;
-        let mut expanded = None;
-        let mut resize = None;
-        self.request_landed_regions(ctx);
-        let prices = &self.cloud_prototype.production.prices;
-        let region_of = |center: &str| prices.region_of(center).map(str::to_owned);
-        for group in &self.cloud_prototype.groups.0 {
-            let Some(launch) = &group.remote else { continue };
-            if self
-                .cloud_prototype
-                .fullscreen
-                .as_ref()
-                .is_some_and(|f| f.id != group.issue)
-            {
-                continue;
-            }
-            let runtime = self.cloud_prototype.production.runtimes.entry(group.issue).or_default();
-            egui::Area::new(Id::new(("cloud-runtime", group.issue)))
-                .order(Order::Middle)
-                .fixed_pos(Pos2::from(group.runtime_bounds().0))
-                .constrain(false)
-                .show(ctx, |ui| {
-                    ctx.set_transform_layer(ui.layer_id(), transform);
-                    ui.set_clip_rect(clip);
-                    runtime_frame(ui, group, |ui| {
-                        let result = toolbar::show(
-                            ui,
-                            group,
-                            runtime,
-                            &self.board,
-                            self.cloud_prototype.fullscreen.is_some(),
-                        );
-                        if let toolbar::LayoutChange::Set(selected) = result.layout {
-                            layout = Some((group.issue, selected));
-                        }
-                        if result.fullscreen {
-                            fullscreen = Some(group.issue);
-                        }
-                        if result.toggle_controls {
-                            expanded = Some((group.issue, !group.toolbar_expanded));
-                        }
-                    });
-                });
-            let result = details::show(
-                ctx,
-                group,
-                launch,
-                runtime,
-                &mut self.cloud_prototype.production.companions,
-                &region_of,
-            );
-            if let Some(next) = result.action {
-                action = Some((group.issue, next));
-            }
-            if let Some(size) = result.resize {
-                resize = Some((group.issue, size));
-            }
-        }
-        if let Some((id, action)) = action {
-            match action {
-                Action::Deploy => self.start_production_deployment(id, ctx),
-                Action::Desktop => self.cloud_add_panel(ctx, id, horizon_core::PanelKind::Device, None),
-                Action::Remove => self.remove_deleted_cloud(id, ctx),
-                Action::ShareLocalNetwork => self.share_local_network(id, true),
-                Action::StopSharingLocalNetwork => self.share_local_network(id, false),
-                _ => self.change_production_worker(id, action, ctx),
-            }
-        }
-        if let Some((id, expanded)) = expanded
-            && let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id)
-        {
-            self.cloud_prototype.groups.0[index].set_toolbar_expanded(&mut self.board, expanded);
-            self.cloud_prototype.groups.make_room(&mut self.board, index);
-            self.save_cloud_prototype();
-        }
-        if let Some(id) = fullscreen {
-            self.toggle_cloud_fullscreen(ctx, id);
-        }
-        if let Some((id, size)) = resize {
-            self.resize_production_cloud(id, size);
-        }
-        if let Some((id, layout)) = layout
-            && let Some(index) = self.cloud_prototype.groups.0.iter().position(|g| g.issue == id)
-        {
-            self.cloud_prototype.groups.0[index].set_layout(&mut self.board, layout);
-            self.cloud_prototype.groups.make_room(&mut self.board, index);
-            self.save_cloud_prototype();
-        }
+/// Terminal liveness for the Connections tab. A running process alone does not
+/// confirm the remote connection; browser and desktop connections are on their panels.
+pub(super) fn attachment_summary(group: &CloudGroup, runtime: &super::Runtime, board: &Board) -> String {
+    if runtime.needs_attach
+        || !runtime.pending_session_attachments.is_empty()
+        || !runtime.pending_member_attachments.is_empty()
+        || !runtime.pending_browser_attachments.is_empty()
+    {
+        return "Sessions: attaching…".into();
     }
+    let occupancy = view::occupancy(group, board);
+    if occupancy.terminals == 0 {
+        return "Terminals: none attached".into();
+    }
+    format!("Terminals: {}/{} running", occupancy.running, occupancy.terminals)
 }
 
-fn runtime_frame(
-    ui: &mut egui::Ui,
-    group: &horizon_core::cloud_panel::CloudGroup,
-    contents: impl FnOnce(&mut egui::Ui),
-) -> egui::InnerResponse<()> {
-    let (min, max) = group.runtime_bounds();
-    let frame = egui::Frame::new()
-        .fill(theme::BG_ELEVATED())
-        .corner_radius(10)
-        .inner_margin(14);
-    let inner = Vec2::new(max[0] - min[0], max[1] - min[1]) - frame.total_margin().sum();
-    frame.show(ui, |ui| {
-        ui.set_width(inner.x);
-        ui.set_min_height(inner.y);
-        contents(ui);
-    })
+/// A confirmation asked for from the header opens Manage with its button in view.
+fn reveal_confirmation(runtime: &mut super::Runtime, button: &egui::Response) {
+    if std::mem::take(&mut runtime.reveal_confirmation) {
+        button.scroll_to_me(Some(egui::Align::Center));
+    }
 }
 
 fn accent_button<'a>(ui: &egui::Ui, label: &'a str) -> egui::Button<'a> {
@@ -169,10 +71,9 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
     }
     if runtime.confirmation == Confirmation::Redeploy {
         ui.label("Redeploy this cloud? A new worker and managed workspace storage will be allocated. Files from the deleted worker are gone.");
-        let action = ui
-            .add(accent_button(ui, "Redeploy cloud"))
-            .clicked()
-            .then_some(Action::Deploy);
+        let redeploy = ui.add(accent_button(ui, "Redeploy cloud"));
+        reveal_confirmation(runtime, &redeploy);
+        let action = redeploy.clicked().then_some(Action::Deploy);
         if ui.add(action_button("Keep removed")).clicked() {
             runtime.confirmation = Confirmation::None;
         }
@@ -187,7 +88,6 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
 }
 
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
-    let mut action = None;
     ui.separator();
     if deleting(runtime) {
         deletion_progress(ui, id, runtime);
@@ -219,8 +119,12 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     if let Some(next) = rebuild::pending_notice(ui, runtime) {
         return Some(next);
     }
-    progress_output(ui, id, runtime);
-    ui.add_space(8.0);
+    // Steps and progress are in the header, body and Overview; Manage keeps the actions,
+    // what went wrong and what the last rebuild reported.
+    rebuild::notes(ui, runtime);
+    for error in runtime.error.iter().chain(&runtime.remote_release_error) {
+        ui.colored_label(egui::Color32::LIGHT_RED, error);
+    }
     if let Some(action) = super::resize::controls(ui, id, runtime) {
         return Some(action);
     }
@@ -247,6 +151,22 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         return Some(Action::Remove);
     }
+    let mut action = operation_action(ui, runtime);
+
+    if runtime.stage == Some(Stage::Ready) {
+        action = ready_actions(ui, runtime).or(action);
+    }
+    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
+    action = super::local_network::show(ui, runtime).or(action);
+    bound_provider_check(ui, runtime)
+        .or_else(|| deletion_action(ui, runtime))
+        .or(action)
+}
+
+/// The one lifecycle action the cloud's state allows: cancel, confirm a stop, resume,
+/// read an unreadable record again, or deploy/reconnect.
+fn operation_action(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
+    let mut action = None;
     if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
         if ui.add(danger_button("Cancel operation")).clicked()
             && let Some(cancel) = &runtime.cancel
@@ -263,6 +183,13 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         if ui.add(action_button("Resume worker")).clicked() {
             action = Some(Action::Resume);
         }
+    } else if runtime.state_unavailable {
+        // Deploy reads the record first and stops again while it stays unreadable, so it
+        // never deploys over a record it cannot see.
+        ui.small("Horizon continues only once it can read this cloud's deployment record.");
+        if ui.add(accent_button(ui, "Read record again")).clicked() {
+            action = Some(Action::Deploy);
+        }
     } else if ui
         .add(accent_button(
             ui,
@@ -276,25 +203,26 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         action = Some(Action::Deploy);
     }
-
-    worker_cost(ui, runtime, std::time::SystemTime::now());
-    ui.small("Sessions continue while disconnected.");
-    if runtime.stage == Some(Stage::Ready) {
-        action = ready_actions(ui, runtime).or(action);
-    }
-    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
-    action = super::local_network::show(ui, runtime).or(action);
-    bound_provider_check(ui, runtime)
-        .or_else(|| deletion_action(ui, runtime))
-        .or(action)
+    action
 }
 
 impl super::Runtime {
     /// A lifetime total requires a reported billing period, not just an empty response.
     fn total_cost(&self, now: std::time::SystemTime) -> Option<cloud_runtime::cost::TotalCost> {
-        self.billing
+        let total = self
+            .billing
             .total(self.state.as_ref()?.worker.as_ref()?, now)
-            .filter(|total| total.billed_through.is_some())
+            .filter(|total| total.billed_through.is_some())?;
+        // A deleted worker's snapshot can still read as running: its live estimate stops,
+        // and billing reports what it was charged at the next refresh.
+        Some(if self.worker_terminated() {
+            cloud_runtime::cost::TotalCost {
+                estimated: 0.0,
+                ..total
+            }
+        } else {
+            total
+        })
     }
 
     /// Frame header text, for example `$0.83 run · $4.20 total`.
@@ -314,6 +242,8 @@ fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syst
         .as_ref()
         .and_then(|state| state.worker.as_ref())
         .and_then(cloud_runtime::cost::hourly_rate)
+        // A stopped or deleted worker's last rate is not what bills now.
+        .filter(|_| !cost::compute_idle(runtime))
     {
         ui.label(format!("Worker rate: {}", cloud_runtime::cost::format_rate(rate)));
     }
@@ -344,7 +274,9 @@ fn ready_actions(ui: &mut egui::Ui, runtime: &mut super::Runtime) -> Option<Acti
     let stoppable = !rebuild::blocks_stop(runtime);
     if stoppable && runtime.confirmation == Confirmation::Stop {
         ui.label(wording::stop_confirmation(runtime));
-        if ui.add(danger_button("Stop worker")).clicked() {
+        let stop = ui.add(danger_button("Stop worker"));
+        reveal_confirmation(runtime, &stop);
+        if stop.clicked() {
             action = Some(Action::Stop);
         }
         if ui.add(action_button("Keep running")).clicked() {
@@ -493,27 +425,9 @@ fn stage_rows(ui: &mut egui::Ui, runtime: &super::Runtime, stages: &[Stage]) {
 }
 
 fn verbose_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {
-    egui::CollapsingHeader::new("Verbose output")
-        .id_salt(("cloud-verbose", id))
-        .show(ui, |ui| {
-            // The painted log stays at the follow-mode tail. Newer lines wait in
-            // `pending_logs` until the reader returns to the end, so this frame
-            // does not lay out the unread tail or shift the lines on screen.
-            if !runtime.verbose_unpinned {
-                runtime.accept_followed_logs();
-            }
-            let log = egui::ScrollArea::vertical()
-                .id_salt(("cloud-verbose-log", id))
-                .max_height(220.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for line in &runtime.logs {
-                        ui.label(RichText::new(line).monospace().size(14.0));
-                    }
-                });
-            let max_offset = (log.content_size.y - log.inner_rect.height()).max(0.0);
-            runtime.verbose_unpinned = log.state.offset.y + 1.0 < max_offset;
-        });
+    ui.add_space(4.0);
+    ui.label(RichText::new("Output").size(12.0).color(theme::FG_DIM()));
+    output::show(ui, id, "manage", runtime, 260.0, None);
 }
 
 fn progress_output(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) {

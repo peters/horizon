@@ -81,14 +81,30 @@ pub(super) fn progress(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime) {
     super::verbose_output(ui, id, runtime);
 }
 
-fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
+/// A running rebuild can be cancelled only before the worker's image switch is
+/// requested, and a cancelling attempt cannot itself be cancelled.
+pub(super) fn cancellable(runtime: &Runtime) -> bool {
     // The record shown during an attempt is the one it started from: a switch
     // requested before it began may already be applied.
     let requested_before = runtime
         .state
         .as_ref()
         .is_some_and(|state| state.stage == Stage::Replace);
-    if requested_before || !matches!(runtime.stage, Some(Stage::Validate | Stage::Build | Stage::Push)) {
+    runtime
+        .rebuild
+        .as_ref()
+        .is_some_and(|attempt| attempt.kind != Kind::Cancel)
+        && !requested_before
+        && matches!(runtime.stage, Some(Stage::Validate | Stage::Build | Stage::Push))
+}
+
+/// A replacement left pending, shown in Manage with its continue and cancel choices.
+pub(super) fn has_pending(runtime: &Runtime) -> bool {
+    pending(runtime.state.as_ref()).is_some() && !in_progress(runtime)
+}
+
+fn cancel_before_switch(ui: &mut egui::Ui, runtime: &Runtime) {
+    if !cancellable(runtime) {
         ui.small("The worker is switching images and restarting; this step cannot be cancelled.");
     } else if let Some(cancel) = &runtime.cancel {
         if cancel.is_cancelled() {

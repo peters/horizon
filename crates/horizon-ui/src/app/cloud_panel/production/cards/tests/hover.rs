@@ -27,13 +27,13 @@ fn management_wheel_scrolls_with_the_complete_canvas_render_path() {
         render(Pos2::ZERO, Vec::new());
     }
     let center = ctx
-        .memory(|memory| memory.area_rect(Id::new(("cloud-details", ID))))
+        .memory(|memory| memory.area_rect(Id::new(("cloud-drawer", ID))))
         .unwrap()
         .center();
     let before = render(center, Vec::new());
     let marker = |output: &egui::FullOutput| {
         output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text().starts_with("Agents:") => Some(text.pos.y),
+            egui::Shape::Text(text) if text.galley.text() == "Workspace" => Some(text.pos.y),
             _ => None,
         })
     };
@@ -53,7 +53,7 @@ fn management_wheel_scrolls_with_the_complete_canvas_render_path() {
     }
     assert!(
         marker(&after).is_none_or(|last| last < first - 10.0),
-        "wheel moves the management content"
+        "wheel moves the Manage tab's content"
     );
 }
 
@@ -92,7 +92,9 @@ fn ready_card(zoom: f32) -> (tempfile::TempDir, Context, HorizonApp) {
     let runtime = app.cloud_prototype.production.runtimes.entry(ID).or_default();
     runtime.stage = Some(Stage::Ready);
     runtime.state = Some(state);
-    runtime.detail_view = toolbar::View::Management;
+    runtime.drawer = Some(super::super::Tab::Manage);
+    // The long confirmation keeps Manage taller than the drawer at every zoom.
+    runtime.confirmation = super::super::super::Confirmation::Delete;
     (temp, ctx, app)
 }
 
@@ -100,7 +102,7 @@ fn ready_card(zoom: f32) -> (tempfile::TempDir, Context, HorizonApp) {
 fn entering_the_card_scroll_area_keeps_lower_controls_under_the_pointer() {
     for zoom in [1.0_f32, 1.797] {
         let (_temp, ctx, mut app) = ready_card(zoom);
-        let layer = LayerId::new(Order::Foreground, Id::new(("cloud-details", ID)));
+        let layer = LayerId::new(Order::Foreground, Id::new(("cloud-drawer", ID)));
         let mut time = 0.0;
         for _ in 0..3 {
             time += 0.05;
@@ -108,7 +110,7 @@ fn entering_the_card_scroll_area_keeps_lower_controls_under_the_pointer() {
         }
         let body = ctx
             .memory(|memory| memory.area_rect(layer.id))
-            .expect("details window")
+            .expect("drawer")
             .center();
         assert_press_reaches_lower_control(
             &ctx,

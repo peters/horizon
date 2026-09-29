@@ -5,6 +5,57 @@ use horizon_core::cloud_runtime::{
 };
 use std::time::{Duration, Instant};
 
+/// A step's reported progress and what can be derived from it.
+pub(super) struct Measured<'a> {
+    pub detail: &'a str,
+    pub completed: u64,
+    pub total: Option<u64>,
+    pub unit: Unit,
+    /// Set only when bytes were reported as sent; an activity alone moves nothing.
+    pub transferred: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub remaining: Option<Duration>,
+    pub estimable: bool,
+}
+
+impl Measured<'_> {
+    /// Share done, when a total is known.
+    pub fn fraction(&self) -> Option<f32> {
+        let total = self.total?;
+        let permille = u128::from(self.completed.min(total)) * 1000 / u128::from(total);
+        Some(f32::from(u16::try_from(permille).unwrap_or(1000)) / 1000.0)
+    }
+
+    /// "612 MB / 1.84 GB · 41 MB/s" or "24/26 steps".
+    pub fn numbers(&self) -> String {
+        let amount = |value| match self.unit {
+            Unit::Bytes => progress::bytes(value),
+            Unit::Steps => value.to_string(),
+        };
+        let mut text = match (self.unit, self.total) {
+            (Unit::Steps, Some(total)) => format!("{}/{total} steps", self.completed),
+            (_, Some(total)) => format!("{} / {}", amount(self.completed), amount(total)),
+            (Unit::Bytes, None) if self.transferred.is_some() => format!("{} transferred", amount(self.completed)),
+            (_, None) => String::new(),
+        };
+        if let Some(speed) = self.bytes_per_second {
+            text.push_str(" · ");
+            text.push_str(&progress::bytes(speed));
+            text.push_str("/s");
+        }
+        text
+    }
+
+    /// "~40s left", or what is missing for an estimate.
+    pub fn eta(&self) -> Option<String> {
+        if let Some(remaining) = self.remaining {
+            Some(format!("~{} left", progress::duration(remaining)))
+        } else {
+            self.estimable.then(|| "ETA once measurable".to_owned())
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Timeline {
     started: Option<Instant>,
@@ -16,18 +67,29 @@ pub(super) struct Timeline {
     /// Set when a deletion starts, so a deletion that fails before its first step
     /// still presents as one.
     deletion: bool,
+    /// Which operation this is; output lines carry it so a failure is read from its own.
+    attempt: u64,
 }
 
 impl Timeline {
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            attempt: self.attempt + 1,
+            ..Self::default()
+        };
     }
 
     pub fn begin_deletion(&mut self) {
         *self = Self {
             deletion: true,
+            attempt: self.attempt + 1,
             ..Self::default()
         };
+    }
+
+    /// Advances with every reset, so each operation's output is told apart.
+    pub fn attempt(&self) -> u64 {
+        self.attempt
     }
 
     pub fn stage(&mut self, stage: Stage, observed_at: Instant) {
@@ -94,6 +156,66 @@ impl Timeline {
         } else {
             None
         }
+    }
+
+    /// How long `stage` ran in this attempt: live while it runs, frozen once finished.
+    pub fn stage_duration(&self, stage: Stage) -> Option<Duration> {
+        if let Some((_, start)) = self.active.filter(|(current, _)| *current == stage) {
+            return Some(start.elapsed());
+        }
+        self.finished
+            .iter()
+            .rev()
+            .find(|(current, _)| *current == stage)
+            .map(|(_, elapsed)| *elapsed)
+    }
+
+    /// Which run of `stage` this attempt is on: 0 for its first, 1 once it is revisited.
+    pub fn visit(&self, stage: Stage) -> usize {
+        self.visits(stage).count().saturating_sub(1)
+    }
+
+    /// How long the `visit`th run of `stage` took in this attempt, live while it runs.
+    pub fn visit_duration(&self, stage: Stage, visit: usize) -> Option<Duration> {
+        self.visits(stage).nth(visit)
+    }
+
+    /// Each run of `stage` in order, the running one last with its time so far.
+    fn visits(&self, stage: Stage) -> impl Iterator<Item = Duration> + '_ {
+        self.finished
+            .iter()
+            .filter(move |(current, _)| *current == stage)
+            .map(|(_, elapsed)| *elapsed)
+            .chain(
+                self.active
+                    .filter(|(current, _)| *current == stage)
+                    .map(|(_, start)| start.elapsed()),
+            )
+    }
+
+    /// The step running now, else the last one this attempt reported.
+    pub fn last_stage(&self) -> Option<Stage> {
+        self.active
+            .map(|(stage, _)| stage)
+            .or_else(|| self.finished.last().map(|(stage, _)| *stage))
+    }
+
+    /// The running step's measured progress, for the one-line status.
+    pub fn measured(&self) -> Option<Measured<'_>> {
+        let detail = self.detail.as_ref()?;
+        let running = self.active.is_some();
+        let remaining = self.rate.remaining(detail).filter(|_| running);
+        Some(Measured {
+            detail: &detail.detail,
+            completed: detail.completed,
+            total: detail.total.filter(|total| *total > 0),
+            unit: detail.unit,
+            transferred: detail.transferred,
+            bytes_per_second: self.rate.bytes_per_second().filter(|_| running),
+            remaining,
+            // Only a byte transfer has a rate to estimate from; complete work has nothing left.
+            estimable: detail.unit == Unit::Bytes && detail.total.is_some_and(|total| detail.completed < total),
+        })
     }
 
     pub fn activity(&self) -> Option<&str> {
@@ -181,6 +303,21 @@ mod tests {
         assert_eq!(timeline.rate.bytes_per_second(), Some(100));
         timeline.stage(Stage::Provision, start + Duration::from_secs(3));
         assert_eq!(timeline.stage_label(Stage::Push), "Push image · 0m 03s");
+    }
+    #[test]
+    fn only_a_byte_transfer_promises_an_eta() {
+        let mut timeline = Timeline::default();
+        timeline.stage(Stage::Build, Instant::now());
+        let steps = |unit| Progress {
+            completed: 1,
+            total: Some(3),
+            unit,
+            ..Progress::default()
+        };
+        timeline.update(steps(Unit::Steps));
+        assert!(!timeline.measured().unwrap().estimable, "no rate is measured for steps");
+        timeline.update(steps(Unit::Bytes));
+        assert!(timeline.measured().unwrap().estimable);
     }
     #[test]
     fn preceding_stages_do_not_inflate_transfer_rate_or_eta() {

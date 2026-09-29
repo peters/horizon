@@ -145,7 +145,13 @@ fn the_card_shows_an_idle_stop_as_a_finished_stop() {
     assert!(runtime.cancel.is_none() && !cancel.is_cancelled());
     assert!(runtime.receiver.is_none() && runtime.idle_reports.is_none() && runtime.error.is_none());
     assert_eq!(
-        runtime.logs.iter().rev().take(2).collect::<Vec<_>>(),
+        runtime
+            .logs
+            .iter()
+            .rev()
+            .take(2)
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
         ["stopped when idle", "Idle check failed: busy"]
     );
 }

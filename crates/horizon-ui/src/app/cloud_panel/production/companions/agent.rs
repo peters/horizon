@@ -369,11 +369,17 @@ impl HorizonApp {
                 runtime.desktop = None;
                 runtime.confirmation = super::super::Confirmation::None;
                 runtime.rebuild = None;
-                if runtime.progress.is_deletion() {
-                    runtime.progress.reset();
-                }
+                // Like the card's own operations: timed and diagnosed from its own start.
+                runtime.progress.reset();
                 runtime.error = None;
                 runtime.stage = Some(if stop { Stage::Stopping } else { Stage::Provision });
+                // As `begin_operation`: a failure that reloads the saved record still
+                // offers the stop or resume that was tried.
+                runtime.operation = Some(if stop {
+                    super::super::lifecycle::Action::Stop
+                } else {
+                    super::super::lifecycle::Action::Resume
+                });
                 let (tx, rx) = channel();
                 runtime.receiver = Some(rx);
                 runtime.sender = Some(tx.clone());

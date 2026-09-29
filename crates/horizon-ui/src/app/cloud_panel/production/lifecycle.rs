@@ -77,7 +77,7 @@ impl Runtime {
                 self.state_unavailable = false;
                 self.error = (recovered.report.outcome.needs_attention() && !stopped)
                     .then(|| recovered.report.outcome.explanation().into());
-                self.push_log(if stopped {
+                self.push_note(if stopped {
                     format!("The provider confirmed this worker is stopped. {resume}")
                 } else {
                     recovered.report.outcome.explanation().into()
@@ -143,11 +143,25 @@ impl Runtime {
             Ok(state) => {
                 self.remote_release_error = None;
                 self.state = Some(state);
-                self.push_log("Remote devices released and copied credentials removed".into());
+                self.push_note("Remote devices released and copied credentials removed".into());
             }
             Err(error) => self.remote_release_error = Some(error.to_string()),
         }
     }
+}
+
+/// A worker operation that failed its preflight is still that operation's failure: it
+/// gets its own attempt, so the status names it and diagnosis ignores earlier output.
+fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
+    if action == Action::RevokeBrowserstack {
+        // Reported as the device release it was, which Manage finishes; not as a deployment.
+        runtime.remote_release_error = Some(error);
+        return;
+    }
+    if matches!(action, Action::Stop | Action::Resume | Action::Delete) && !runtime.connected_ready() {
+        begin_operation(runtime, action);
+    }
+    runtime.error = Some(error);
 }
 
 /// Resets what the card shows for a newly started worker operation.
@@ -156,16 +170,22 @@ fn begin_operation(runtime: &mut Runtime, action: Action) {
         // Until core reports its first step, the step it will start with stands
         // in, so Cancel shows only when that step can still be cancelled.
         runtime.progress.begin_deletion();
+        runtime.operation = Some(action);
         // Both error channels the card shows belong to earlier attempts.
         runtime.error = None;
         runtime.remote_release_error = None;
         runtime.stage = Some(first_deletion_step(runtime.state.as_ref()));
     } else {
-        // A failed deletion's frozen steps must not stand in for another operation.
-        if runtime.progress.is_deletion() {
-            runtime.progress.reset();
-        }
-        runtime.stage = Some(Stage::Provision);
+        // Every operation times and diagnoses its own output: a failed deletion's
+        // frozen steps and an earlier deployment's clock do not carry over.
+        runtime.progress.reset();
+        runtime.operation = Some(action);
+        // A stop reports as stopping from its start; its failure is a stop's, not a provision's.
+        runtime.stage = Some(if action == Action::Stop {
+            Stage::Stopping
+        } else {
+            Stage::Provision
+        });
     }
 }
 
@@ -210,14 +230,14 @@ impl HorizonApp {
         let settings = match Settings::load(&root.join("settings.json")) {
             Ok(settings) => settings,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                fail_before_start(runtime, action, error.to_string());
                 return;
             }
         };
         let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
             Ok(path) => path,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                fail_before_start(runtime, action, error.to_string());
                 runtime.state_unavailable = true;
                 return;
             }

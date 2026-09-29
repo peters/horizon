@@ -43,15 +43,11 @@ fn deletion_replaces_deployment_actions_with_its_steps_and_total_time() {
     let ctx = egui::Context::default();
     let mut runtime = ready_bound_runtime();
     let ready = action_texts(&ctx, &mut runtime);
-    for shown in [
-        "Delete cloud resources…",
-        "Reconnect cloud",
-        "Stop worker…",
-        "Worker rate",
-        "Provision worker",
-    ] {
+    for shown in ["Delete cloud resources…", "Reconnect cloud", "Stop worker…"] {
         assert!(has(&ready, shown), "{shown} is shown before deletion");
     }
+    // Rate and steps live in the header, Cost and Overview; Manage holds the actions.
+    assert!(!has(&ready, "Provision worker"));
 
     let (_sender, receiver) = std::sync::mpsc::channel();
     runtime.receiver = Some(receiver);
@@ -94,22 +90,30 @@ fn deletion_replaces_deployment_actions_with_its_steps_and_total_time() {
         assert!(!has(&deleting, hidden), "{hidden} is hidden while deleting");
     }
 
-    // A failed deletion keeps its frozen steps beside the error and offers a retry.
+    // A failed deletion keeps its steps, the failed one red, and offers a retry.
     runtime.receiver = None;
     runtime.stage = Some(Stage::Ready);
     runtime.progress.finish(Instant::now());
     runtime.error = Some("Provider transport failed; reconcile before retrying".into());
     let failed = action_texts(&ctx, &mut runtime);
-    for shown in [
-        "Delete worker · 0m",
-        "Deleting the worker and confirming its removal",
-        "Provider transport failed",
-        "Delete cloud resources…",
-    ] {
+    for shown in ["Provider transport failed", "Delete cloud resources…"] {
         assert!(has(&failed, shown), "{shown} is shown after a failed deletion");
     }
     assert!(!has(&failed, "Provision worker"));
     assert!(!has(&failed, "Deleting cloud resources"));
+    let status = super::super::status::of(
+        &runtime,
+        super::super::status::Occupancy::default(),
+        std::time::SystemTime::now(),
+    );
+    assert_eq!(status.verb, "Deletion failed");
+    assert_eq!(status.track.stages, &Stage::DELETION);
+    assert_eq!(status.track.current, Some(1), "stopped at Delete worker");
+    assert!(status.track.failed);
+    assert!(
+        runtime.progress.stage_duration(Stage::DeleteWorker).is_some(),
+        "its time is frozen"
+    );
 
     runtime.stage = Some(Stage::Deleted);
     runtime.progress.reset();
@@ -140,8 +144,19 @@ fn deletion_that_fails_before_its_first_step_keeps_its_steps() {
     runtime.stage = Some(Stage::Provision);
     runtime.error = Some("No worker was requested".into());
     let early = action_texts(&ctx, &mut runtime);
-    for shown in ["Release hosted devices", "Delete worker", "No worker was requested"] {
-        assert!(has(&early, shown), "{shown} is shown after an early deletion failure");
-    }
+    assert!(has(&early, "No worker was requested"));
     assert!(!has(&early, "Provision worker"));
+    let status = super::super::status::of(
+        &runtime,
+        super::super::status::Occupancy::default(),
+        std::time::SystemTime::now(),
+    );
+    assert_eq!(status.verb, "Deletion failed");
+    assert_eq!(
+        status.track.stages,
+        &Stage::DELETION,
+        "the deletion's steps, not the deployment's"
+    );
+    assert_eq!(status.track.current, Some(0));
+    assert!(status.track.failed);
 }

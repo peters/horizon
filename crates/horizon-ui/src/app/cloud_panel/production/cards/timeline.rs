@@ -137,7 +137,7 @@ fn color(phase: Phase) -> Color32 {
     theme::blend(hue, theme::PANEL_BG(), shade)
 }
 
-fn short(value: Duration) -> String {
+pub(super) fn short(value: Duration) -> String {
     let whole = (value.as_millis() + 500) / 1000;
     if value < Duration::from_millis(9_950) {
         format!("{:.1}s", value.as_secs_f32())
