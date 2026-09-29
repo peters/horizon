@@ -244,17 +244,26 @@ impl State {
         self.note = None;
         self.job = Some(job);
         std::thread::spawn(move || {
-            let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress).map(|()| {
-                let kept = token
-                    .as_ref()
-                    .filter(|_| remember && !cancel.is_cancelled())
-                    .map(|token| source::remember(token, &cancel));
-                Cloned {
-                    path: destination,
-                    note: (kept == Some(false))
-                        .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
-                }
-            });
+            let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress)
+                .and_then(|()| {
+                    if cancel.is_cancelled() {
+                        // Cancelled just as it finished: the folder it made goes with it.
+                        let _ = std::fs::remove_dir_all(&destination);
+                        return Err(Failure::Cancelled);
+                    }
+                    Ok(())
+                })
+                .map(|()| {
+                    let kept = token
+                        .as_ref()
+                        .filter(|_| remember && !cancel.is_cancelled())
+                        .map(|token| source::remember(token, &cancel));
+                    Cloned {
+                        path: destination,
+                        note: (kept == Some(false))
+                            .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
+                    }
+                });
             let _ = sender.send(result);
             ctx.request_repaint();
         });
@@ -381,6 +390,10 @@ impl Drop for State {
     fn drop(&mut self) {
         if let Some(job) = &self.job {
             job.cancel.cancel();
+            // A clone that finished between two frames was never handed over: it is not wanted now.
+            if let Ok(Ok(Cloned { path, .. })) = job.receiver.try_recv() {
+                let _ = std::fs::remove_dir_all(path);
+            }
         }
         self.probe_cancel.cancel();
         self.token.zeroize();
@@ -554,6 +567,28 @@ mod tests {
         assert_eq!(state.poll(&Context::default()), None);
         assert!(!state.public, "tokens are sent again");
         assert_eq!(state.failure, Some(Failure::SignIn("github.com".into())));
+    }
+
+    #[test]
+    fn a_clone_finished_but_never_handed_over_is_removed_when_the_dialog_closes() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir(&checkout).unwrap();
+        let mut state = State::default();
+        let (sender, receiver) = channel();
+        state.job = Some(Job {
+            receiver,
+            cancel: Cancellation::default(),
+            progress: Progress::default(),
+        });
+        sender
+            .send(Ok(Cloned {
+                path: checkout.clone(),
+                note: None,
+            }))
+            .unwrap();
+        drop(state);
+        assert!(!checkout.exists(), "the orphan checkout goes with the cancelled dialog");
     }
 
     #[test]
