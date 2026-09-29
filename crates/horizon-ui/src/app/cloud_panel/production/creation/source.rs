@@ -247,6 +247,10 @@ impl State {
             }
             Ok(Err(failure)) => {
                 self.finish();
+                // Asked for a sign-in after all: what the probe read no longer counts.
+                if matches!(failure, Failure::SignIn(_)) {
+                    self.public = false;
+                }
                 self.failure = Some(failure);
                 None
             }
@@ -440,6 +444,22 @@ mod tests {
             state.token.is_empty() && !state.token_tried,
             "another host starts clean"
         );
+    }
+
+    #[test]
+    fn a_clone_that_asks_for_a_sign_in_after_an_open_probe_takes_the_token() {
+        let mut state = State::default();
+        state.public = true;
+        let (sender, receiver) = channel();
+        state.job = Some(Job {
+            receiver,
+            cancel: Cancellation::default(),
+            progress: Progress::default(),
+        });
+        sender.send(Err(Failure::SignIn("github.com".into()))).unwrap();
+        assert_eq!(state.poll(&Context::default()), None);
+        assert!(!state.public, "tokens are sent again");
+        assert_eq!(state.failure, Some(Failure::SignIn("github.com".into())));
     }
 
     #[test]
