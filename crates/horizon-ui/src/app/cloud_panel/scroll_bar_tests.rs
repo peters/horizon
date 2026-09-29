@@ -164,6 +164,8 @@ fn demo_card_press_on_a_lower_control_reaches_it() {
 fn new_cloud_dialog_press_on_a_lower_control_reaches_it() {
     let (_temp, ctx, mut app) = app();
     app.cloud_prototype.production.creating = true;
+    // With a repository chosen, the fields below the title are what scrolls.
+    app.set_cloud_repository(std::path::Path::new("/work/atlas"));
     // A short screen leaves the dialog body too little height for its fields.
     let size = Vec2::new(900.0, 520.0);
     let mut time = 0.0;

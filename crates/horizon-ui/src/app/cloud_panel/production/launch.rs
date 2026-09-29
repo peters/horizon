@@ -2,7 +2,10 @@
 use super::{HorizonApp, cloud_runtime};
 use egui::Context;
 use horizon_core::{WorkspaceId, cloud_panel::Placement, cloud_runtime::repository::launch::Prepared};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::{
+    path::Path,
+    sync::mpsc::{Receiver, TryRecvError, channel},
+};
 
 struct Loaded {
     prepared: Prepared,
@@ -54,14 +57,15 @@ impl HorizonApp {
             return;
         };
         let local = source.local_id.clone();
-        let repository = source
-            .cwd
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let repository = workspace_repository(source.cwd.as_deref());
         let form = &mut self.cloud_prototype.production;
         form.pending_creation = None;
         form.launch = State::default();
+        // A new dialog starts from nothing: no clone, token, typed key or earlier check carries over.
+        form.source = super::creation::source::State::default();
+        form.checks = super::creation::checks::State::default();
+        // Prices answered to an earlier credential prove nothing about the one there is now.
+        form.prices.restart();
         form.launch.workspace = Some(local);
         form.launch.session = self.active_session.as_ref().map(|session| session.session_id.clone());
         form.title.clear();
@@ -74,7 +78,10 @@ impl HorizonApp {
         form.provider = None;
         form.creating = true;
         form.focus_title_on_open = true;
-        self.read_cloud_profiles(ctx);
+        // With no repository yet, the dialog asks where the code is instead of reading nothing.
+        if !form.repository.trim().is_empty() {
+            self.read_cloud_profiles(ctx);
+        }
     }
 
     pub(super) fn read_cloud_profiles(&mut self, ctx: &Context) {
@@ -121,8 +128,9 @@ impl HorizonApp {
         if form.launch.workspace.is_some()
             && form.launch.session != self.active_session.as_ref().map(|session| session.session_id.clone())
         {
-            form.launch = State::default();
-            form.creating = false;
+            // The other session's dialog closes like any other: its clone stops and its secrets go
+            // (a creation still being validated stops when its handle is dropped).
+            self.close_cloud_creation();
             return;
         }
         if let Some(receiver) = &form.launch.receiver {
@@ -172,13 +180,30 @@ impl HorizonApp {
                 self.open_cloud_accounts(ctx, true);
                 self.cloud_prototype.production.launch.submitted = true;
             } else if !super::creation_job::awaits_runpod(form) {
-                form.launch.submitted = false;
-                if let Err(error) = self.create_production_cloud(ctx) {
-                    self.cloud_prototype.error = Some(error.to_string());
+                // A start queued while the checks are still running waits for them; one they turned
+                // down is dropped, so it has to be asked for again once the problem is fixed.
+                match super::creation::checks::verdict(form) {
+                    super::creation::checks::Verdict::Waiting => {}
+                    super::creation::checks::Verdict::Failed => form.launch.submitted = false,
+                    super::creation::checks::Verdict::Ready => {
+                        form.launch.submitted = false;
+                        if let Err(error) = self.create_production_cloud(ctx) {
+                            self.cloud_prototype.error = Some(error.to_string());
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// The repository a workspace's folder stands for. A folder that is not inside a checkout (a
+/// workspace's folder is also just where its terminals start) stands for nothing: the dialog then
+/// asks where the code is.
+fn workspace_repository(cwd: Option<&Path>) -> String {
+    cwd.filter(|cwd| cwd.ancestors().any(|folder| folder.join(".git").exists()))
+        .map(|cwd| cwd.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(all(test, unix))]
@@ -272,6 +297,22 @@ mod tests {
         assert!((position[0] - 2024.0).abs() < f32::EPSILON);
         assert!((position[1] - 3128.0).abs() < f32::EPSILON);
         assert!(!app.cloud_prototype.production.creating);
+    }
+
+    #[test]
+    fn only_a_folder_inside_a_checkout_stands_for_a_repository() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = temp.path().join("notes");
+        std::fs::create_dir(&plain).unwrap();
+        assert_eq!(workspace_repository(None), "");
+        // Not a checkout: where terminals start is not what the cloud is made from.
+        assert_eq!(workspace_repository(Some(&plain)), "");
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        assert_eq!(workspace_repository(Some(&checkout)), checkout.to_string_lossy());
+        let inside = checkout.join("crates");
+        std::fs::create_dir(&inside).unwrap();
+        assert_eq!(workspace_repository(Some(&inside)), inside.to_string_lossy());
     }
 
     #[test]
@@ -454,6 +495,54 @@ mod tests {
     }
 
     #[test]
+    fn enter_in_title_does_not_launch_while_another_repository_is_being_asked_for() {
+        use crate::test_egui::DiscardTextures;
+        let (temp, mut app) = test_app();
+        let session = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .unwrap();
+        app.activate_persistent_session(&session);
+        let ctx = Context::default();
+        let workspace = app.board.ensure_workspace();
+        app.open_workspace_cloud(&ctx, workspace);
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.launch.receiver = Some(receiver);
+        app.cloud_prototype.production.prices.runpod_answered();
+        sender.send(Ok(loaded(temp.path()))).unwrap();
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            let _ = ctx
+                .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
+                .discard_textures();
+        }
+        app.cloud_prototype.production.title = "Title only".into();
+        app.cloud_prototype
+            .production
+            .source
+            .edit_for_test("github.com/demo-org/other");
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        let mut event = input();
+        event.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx
+            .run_ui(event, |ui| app.render_cloud_creation(ui.ctx()))
+            .discard_textures();
+        assert!(
+            app.cloud_prototype.production.pending_creation.is_none(),
+            "the repository loaded is not the one being asked for"
+        );
+    }
+
+    #[test]
     fn enter_after_failed_preparation_leaves_the_form_editable() {
         use crate::test_egui::DiscardTextures;
         let (_temp, mut app) = test_app();
@@ -524,10 +613,18 @@ mod tests {
         app.open_workspace_cloud(&ctx, workspace);
         assert!(cancel.is_cancelled());
         assert!(sender.send(Ok(loaded(temp.path()))).is_err());
+        app.cloud_prototype
+            .production
+            .source
+            .edit_for_test("github.com/demo-org/demo-atlas");
         app.cloud_prototype.production.launch.session = Some("other session".into());
         app.poll_cloud_launch(&ctx);
         assert!(!app.cloud_prototype.production.creating);
         assert!(!app.cloud_prototype.production.launch.loading());
+        assert!(
+            app.cloud_prototype.production.source.input().is_empty(),
+            "the closed dialog's source field, clone and token go with it"
+        );
     }
     #[test]
     fn unsaved_workspace_launch_keeps_title_without_creating_a_cloud() {

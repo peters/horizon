@@ -80,6 +80,16 @@ impl State {
         }
     }
 
+    /// Forgets the catalog and a fetch still running: both were made with the credential that
+    /// was just replaced, and the next request asks with the new one.
+    pub(super) fn restart(&mut self) {
+        self.job = None;
+        self.started = None;
+        self.fetched = None;
+        self.error = None;
+        self.failed_at = None;
+    }
+
     /// Saved settings can add, change or remove the binding, so a catalog or failure from
     /// earlier settings is fetched again. The binding found is kept until then.
     fn forget_if_settings_changed(&mut self, saved: Option<SystemTime>) {

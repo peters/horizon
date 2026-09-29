@@ -295,3 +295,42 @@ fn saved_credential_hints_require_available_files_when_reopened() {
     assert!(reopened.settings.openai_api_key_file.is_some());
     assert!(reopened.validate().is_err());
 }
+
+#[test]
+#[cfg(unix)]
+fn a_first_cloud_needs_only_one_provider_key() {
+    // The SSH identity is made by the platform's ssh-keygen; without it there is nothing to check.
+    if std::process::Command::new("ssh-keygen").arg("-?").output().is_err() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let saved = save_provider_key(root.path(), Provider::RunPod, " synthetic-compute-key\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&saved.runpod_key_file).unwrap(),
+        "synthetic-compute-key"
+    );
+    assert!(saved.ssh_identity_file.is_file());
+    let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
+    assert!(!raw.contains("synthetic"));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_hetzner_token_saved_alone_turns_hetzner_on_without_a_runpod_key() {
+    if std::process::Command::new("ssh-keygen").arg("-?").output().is_err() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let saved = save_provider_key(root.path(), Provider::Hetzner, "synthetic-hetzner-token").unwrap();
+    let hetzner = saved.hetzner.as_ref().expect("Hetzner is bound");
+    assert_eq!(
+        std::fs::read_to_string(&hetzner.token_file).unwrap(),
+        "synthetic-hetzner-token"
+    );
+    assert!(!saved.runpod_configured());
+    assert!(
+        !std::fs::read_to_string(root.path().join("settings.json"))
+            .unwrap()
+            .contains("synthetic")
+    );
+}

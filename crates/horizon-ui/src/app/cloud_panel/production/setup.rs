@@ -221,6 +221,9 @@ impl HorizonApp {
             }
             Completion::Saved(_) => {
                 state.open = false;
+                // Prices answered to the credentials before these were saved prove nothing now.
+                self.cloud_prototype.production.prices.restart();
+                self.cloud_prototype.production.checks = super::creation::checks::State::default();
                 state.continue_creation
             }
             Completion::Failed(error) => {

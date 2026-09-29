@@ -3,6 +3,7 @@ mod archive;
 mod attributes;
 pub mod launch;
 mod material;
+pub mod source;
 use super::{Error, Result, command::Runner};
 use horizon_cloud::Source;
 use std::{
