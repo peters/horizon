@@ -50,10 +50,11 @@ const STEPS: u8 = 5;
 /// and one that is ours to remove.
 const MARKER: &str = "horizon-clone";
 
-/// A file inside `.git` that a running clone holds an exclusive lock on, so that a second Horizon
-/// process cannot resume or remove the same folder underneath it. The system drops the lock when
-/// the process ends, however it ends.
-const CLAIM: &str = "horizon-clone.claim";
+/// The ending of a file, kept beside the folder being cloned rather than in it, that a running clone
+/// holds an exclusive lock on: a second Horizon process then cannot resume or remove the folder
+/// underneath it, and the lock stays put while the folder is deleted. The system drops the lock
+/// when the process ends, however it ends.
+const CLAIM: &str = ".horizon-clone.claim";
 
 /// How often, and how far apart, a folder that is held is tried before it is called busy.
 const CLAIM_TRIES: u32 = 30;
@@ -61,6 +62,9 @@ const CLAIM_WAIT: Duration = Duration::from_millis(10);
 
 /// How long a finished clone waits for what Git said last; a helper it left behind may hold the pipe.
 const CLONE_GRACE: Duration = Duration::from_secs(2);
+
+/// The most of a command's stdout that is read; what a probe asks for is a line or two.
+const STDOUT_LIMIT: u64 = 64 * 1024;
 
 /// The longest a probe may take before the host is taken to be out of reach.
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
@@ -261,12 +265,13 @@ fn bounded(mut command: Command, remote: &Remote, cancel: &Cancellation, limit: 
         .spawn()
         .map_err(|error| Failure::Other(format!("Cannot run git: {error}")))?;
     let mut stdout = child.stdout.take();
-    let out = std::thread::spawn(move || {
+    let (out_sender, out) = mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
         if let Some(pipe) = stdout.as_mut() {
-            let _ = pipe.read_to_string(&mut text);
+            let _ = pipe.take(STDOUT_LIMIT).read_to_string(&mut text);
         }
-        text
+        let _ = out_sender.send(text);
     });
     let mut stderr = child.stderr.take();
     let (sender, reader) = mpsc::channel();
@@ -301,9 +306,10 @@ fn bounded(mut command: Command, remote: &Remote, cancel: &Cancellation, limit: 
             }
         }
     };
+    // A helper Git started may keep either pipe open past its own end: neither is waited for beyond the limit.
     let stderr = collected(&reader, limit.saturating_sub(started.elapsed()));
     if status.success() {
-        Ok(out.join().unwrap_or_default())
+        Ok(collected(&out, limit.saturating_sub(started.elapsed())))
     } else {
         Err(classify(remote, &stderr))
     }
@@ -350,6 +356,14 @@ fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
         .map_err(|error| Failure::Other(error.to_string()))
 }
 
+/// Where the claim on `folder` lives: a hidden file beside it, named for it.
+fn claim_path(folder: &Path) -> Option<PathBuf> {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(folder.file_name()?);
+    name.push(CLAIM);
+    Some(folder.parent()?.join(name))
+}
+
 /// The hold a running clone keeps on its folder.
 struct Claim {
     file: File,
@@ -359,7 +373,11 @@ struct Claim {
 impl Claim {
     /// Takes the folder for this process, or says another one has it.
     fn take(folder: &Path) -> Result<Self, Failure> {
-        let path = folder.join(".git").join(CLAIM);
+        let path =
+            claim_path(folder).ok_or_else(|| Failure::Other("That folder has no place to be cloned into.".into()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -381,7 +399,7 @@ impl Claim {
         ))
     }
 
-    /// The clone is finished: nothing of it stays in the checkout.
+    /// Lets go of the folder and removes the file that held it.
     fn release(self) {
         let Self { file, path } = self;
         drop(file);
@@ -407,21 +425,20 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
 /// and did not finish is touched, and not one that another Horizon window is working on.
 ///
 /// # Errors
-/// Says so when another process holds the folder.
+/// Says so when another process holds the folder, or when it could not be removed.
 pub fn discard(folder: &Path) -> Result<(), Failure> {
     if marker(folder).is_none() {
         return Ok(());
     }
     let claim = Claim::take(folder)?;
-    // Removed while held where the platform allows, so nothing starts in the folder in between.
-    if cfg!(windows) {
-        drop(claim);
-        let _ = std::fs::remove_dir_all(folder);
+    // Asked again once held: another window may have finished or removed it in the meantime.
+    let removed = if marker(folder).is_some() {
+        std::fs::remove_dir_all(folder)
     } else {
-        let _ = std::fs::remove_dir_all(folder);
-        drop(claim);
-    }
-    Ok(())
+        Ok(())
+    };
+    claim.release();
+    removed.map_err(|error| Failure::Other(format!("Could not remove {}: {error}", folder.display())))
 }
 
 /// Removes what a Git process that was ended mid-step leaves in a clone's own folder: lock files
@@ -554,21 +571,33 @@ fn in_steps(
     progress: &Progress,
     last_step: u8,
 ) -> Result<(), Failure> {
-    let ours = |folder: &Path| marker(folder).filter(|marker| marker.url == remote.url);
-    let resumed = ours(destination).is_some();
-    announce(progress, 1, resumed);
-    let (claim, marker) = if resumed {
-        // Only a folder that says it is a clone of ours is held, and it is asked again once held.
-        let claim = Claim::take(destination)?;
-        let Some(marker) = ours(destination) else {
-            claim.release();
-            return Err(Failure::Other(
-                "That clone changed while it was being resumed. Continue again.".into(),
-            ));
-        };
+    let claim = Claim::take(destination)?;
+    let outcome = claimed_steps(remote, destination, token, cancel, progress, last_step);
+    // A finished clone, one that left nothing, and a folder that was never ours keep nothing of the
+    // claim; a stopped one keeps its file for the next try.
+    if unfinished(destination) {
+        drop(claim);
+    } else {
+        claim.release();
+    }
+    outcome
+}
+
+/// [`in_steps`] once the folder is held.
+fn claimed_steps(
+    remote: &Remote,
+    destination: &Path,
+    token: Option<&Token>,
+    cancel: &Cancellation,
+    progress: &Progress,
+    last_step: u8,
+) -> Result<(), Failure> {
+    let earlier = marker(destination).filter(|marker| marker.url == remote.url);
+    announce(progress, 1, earlier.is_some());
+    let marker = if let Some(marker) = earlier {
         // The try before may have been ended by a crash or a kill, mid-write.
         clear_leftovers(destination);
-        (claim, marker)
+        marker
     } else {
         let branch = default_branch(remote, token, cancel)?;
         begin(remote, destination, &branch, cancel)?
@@ -577,15 +606,10 @@ fn in_steps(
     match outcome {
         Ok(()) => {
             let _ = std::fs::remove_file(destination.join(".git").join(MARKER));
-            claim.release();
             Ok(())
         }
-        Err(failure) if marker_done(destination) > 0 => {
-            drop(claim);
-            Err(interrupted(failure))
-        }
+        Err(failure) if marker_done(destination) > 0 => Err(interrupted(failure)),
         Err(failure) => {
-            drop(claim);
             let _ = std::fs::remove_dir_all(destination);
             Err(failure)
         }
@@ -599,10 +623,7 @@ fn marker_done(folder: &Path) -> usize {
 
 /// Makes the folder a clone starts in, claiming it: creating it is what makes it this clone's to
 /// remove, and a folder that is already there is refused.
-fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<(Claim, Marker), Failure> {
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
-    }
+fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<Marker, Failure> {
     match std::fs::create_dir(destination) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -619,14 +640,12 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
         let mut add = git(None);
         add.args(["remote", "add", "origin", "--", &remote.url]);
         quietly(add, destination, remote, cancel)?;
-        // Held before the marker is written: from then on the folder can be found and resumed.
-        let claim = Claim::take(destination)?;
         let marker = Marker {
             url: remote.url.clone(),
             branch: branch.to_owned(),
             done: 0,
         };
-        write_marker(destination, &marker).map(|()| (claim, marker))
+        write_marker(destination, &marker).map(|()| marker)
     })();
     if ready.is_err() {
         let _ = std::fs::remove_dir_all(destination);

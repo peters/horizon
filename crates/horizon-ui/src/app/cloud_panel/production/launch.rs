@@ -2,7 +2,10 @@
 use super::{HorizonApp, cloud_runtime};
 use egui::Context;
 use horizon_core::{WorkspaceId, cloud_panel::Placement, cloud_runtime::repository::launch::Prepared};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::{
+    path::Path,
+    sync::mpsc::{Receiver, TryRecvError, channel},
+};
 
 struct Loaded {
     prepared: Prepared,
@@ -54,11 +57,7 @@ impl HorizonApp {
             return;
         };
         let local = source.local_id.clone();
-        let repository = source
-            .cwd
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let repository = workspace_repository(source.cwd.as_deref());
         let form = &mut self.cloud_prototype.production;
         form.pending_creation = None;
         form.launch = State::default();
@@ -198,6 +197,15 @@ impl HorizonApp {
     }
 }
 
+/// The repository a workspace's folder stands for. A folder that is not inside a checkout (a
+/// workspace's folder is also just where its terminals start) stands for nothing: the dialog then
+/// asks where the code is.
+fn workspace_repository(cwd: Option<&Path>) -> String {
+    cwd.filter(|cwd| cwd.ancestors().any(|folder| folder.join(".git").exists()))
+        .map(|cwd| cwd.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -289,6 +297,22 @@ mod tests {
         assert!((position[0] - 2024.0).abs() < f32::EPSILON);
         assert!((position[1] - 3128.0).abs() < f32::EPSILON);
         assert!(!app.cloud_prototype.production.creating);
+    }
+
+    #[test]
+    fn only_a_folder_inside_a_checkout_stands_for_a_repository() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = temp.path().join("notes");
+        std::fs::create_dir(&plain).unwrap();
+        assert_eq!(workspace_repository(None), "");
+        // Not a checkout: where terminals start is not what the cloud is made from.
+        assert_eq!(workspace_repository(Some(&plain)), "");
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        assert_eq!(workspace_repository(Some(&checkout)), checkout.to_string_lossy());
+        let inside = checkout.join("crates");
+        std::fs::create_dir(&inside).unwrap();
+        assert_eq!(workspace_repository(Some(&inside)), inside.to_string_lossy());
     }
 
     #[test]

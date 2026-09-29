@@ -208,6 +208,10 @@ impl State {
 
     pub fn set_parent(&mut self, path: &Path) {
         self.parent = Some(path.to_owned());
+        // What a stopped clone said was about the folder it was in, not the one chosen now.
+        if matches!(self.failure, Some(Failure::Interrupted(_))) {
+            self.failure = None;
+        }
     }
 
     /// Whether the folder picker was choosing the clone folder; that ends its errand.
@@ -687,6 +691,22 @@ mod tests {
         );
         std::fs::create_dir(plain.join(".git")).unwrap();
         assert!(holds_repository(&plain));
+    }
+
+    #[test]
+    fn choosing_another_folder_drops_what_a_stopped_clone_said_about_the_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = State::default();
+        state.failure = Some(Failure::Interrupted("Stopped. What was received is kept.".into()));
+        state.set_parent(temp.path());
+        assert_eq!(state.failure, None);
+        state.failure = Some(Failure::SignIn("github.com".into()));
+        state.set_parent(temp.path());
+        assert_eq!(
+            state.failure,
+            Some(Failure::SignIn("github.com".into())),
+            "a sign-in is about the host, not the folder"
+        );
     }
 
     #[test]

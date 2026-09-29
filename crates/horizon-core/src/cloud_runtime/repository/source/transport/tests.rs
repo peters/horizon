@@ -135,7 +135,7 @@ fn a_clone_that_stops_after_a_step_is_picked_up_where_it_stopped() {
     assert!(super::super::is_checkout(&target));
     assert!(!target.join(".git").join(MARKER).exists(), "finished");
     assert!(
-        !target.join(".git").join(CLAIM).exists(),
+        !claim_path(&target).unwrap().exists(),
         "a finished checkout keeps nothing of the clone"
     );
     assert!(!target.join(".git").join("shallow").exists(), "the whole history");
@@ -274,7 +274,13 @@ fn a_folder_another_process_is_cloning_into_is_neither_resumed_nor_discarded() {
     drop(other);
     clone(&remote, &target, None, &cancel, &progress).unwrap();
     assert!(super::super::is_checkout(&target));
-    assert!(!target.join(".git").join(CLAIM).exists());
+    assert!(!claim_path(&target).unwrap().exists());
+    assert!(
+        std::fs::read_dir(target.join(".git"))
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().contains("claim"))
+    );
 }
 
 #[test]
@@ -284,10 +290,12 @@ fn a_folder_that_is_not_a_clone_is_never_claimed() {
     let theirs = temp.path().join("theirs");
     std::fs::create_dir_all(theirs.join(".git")).unwrap();
     assert!(clone(&remote, &theirs, None, &Cancellation::default(), &Progress::default()).is_err());
-    assert!(
-        !theirs.join(".git").join(CLAIM).exists(),
+    assert_eq!(
+        std::fs::read_dir(theirs.join(".git")).unwrap().count(),
+        0,
         "no file is added to a repository that is not ours"
     );
+    assert!(!claim_path(&theirs).unwrap().exists(), "and the hold on it is let go");
 }
 
 #[test]
@@ -364,5 +372,53 @@ fn a_clone_that_never_received_anything_leaves_no_folder_and_a_discard_removes_a
     assert!(
         theirs.is_dir(),
         "a folder that is not an unfinished clone is left alone"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_helper_that_keeps_stdout_open_cannot_hold_a_command_past_its_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = origin(temp.path());
+    // The shell ends at once, but a process it started keeps both pipes open for far longer.
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "sleep 20 & echo 'ref: refs/heads/main\tHEAD'"])
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    let result = bounded(command, &remote, &Cancellation::default(), Duration::from_millis(600));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        result.is_ok(),
+        "a command that ended well is not failed for a pipe left open: {result:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_that_cannot_be_removed_says_so_instead_of_reporting_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let remote = origin(temp.path());
+    let parent = temp.path().join("clones");
+    let target = parent.join("stuck");
+    let (cancel, progress) = (Cancellation::default(), Progress::default());
+    assert!(in_steps(&remote, &target, None, &cancel, &progress, 1).is_err());
+    // The hold is made once, so that it can be taken again in a folder that can no longer be written to.
+    drop(Claim::take(&target).unwrap());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let writable = std::fs::write(parent.join("probe"), "").is_ok();
+    let result = discard(&target);
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if writable {
+        return; // Permissions do not bind this user (root), so there is nothing to refuse.
+    }
+    assert!(
+        matches!(&result, Err(Failure::Other(text)) if text.contains("Could not remove")),
+        "{result:?}"
     );
 }

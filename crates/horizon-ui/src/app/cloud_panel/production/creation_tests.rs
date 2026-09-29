@@ -154,7 +154,7 @@ fn opening_a_cloud_for_a_repository_focuses_the_title_without_an_extra_click() {
     app.root_viewport_stabilizer = None;
     app.cloud_prototype.root = Some(temp.path().join("clouds"));
     let repository = temp.path().join("repository");
-    std::fs::create_dir(&repository).unwrap();
+    std::fs::create_dir_all(repository.join(".git")).unwrap();
     let workspace = app.board.create_workspace("Sample project");
     app.board.workspace_mut(workspace).unwrap().cwd = Some(repository);
     app.open_workspace_cloud(&ctx, workspace);
