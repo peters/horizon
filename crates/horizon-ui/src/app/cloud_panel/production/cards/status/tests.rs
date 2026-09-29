@@ -671,3 +671,22 @@ fn a_note_is_never_an_operations_root_cause() {
         None
     );
 }
+
+#[test]
+fn a_redeploy_of_a_deleted_cloud_that_cannot_start_stays_deleted_and_offers_redeploy() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Deleted),
+        state: Some(deployment(
+            "Deleted",
+            &serde_json::json!({"state": "terminated", "worker_id": "k3x9"}),
+            &serde_json::Value::Null,
+        )),
+        ..Runtime::default()
+    };
+    runtime.fail_preflight(Stage::Validate, "settings.json could not be read".into());
+    assert_eq!(runtime.stage, Some(Stage::Deleted), "not reread as unfinished cleanup");
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Redeploy failed");
+    assert_eq!(status.numbers, "settings.json could not be read");
+    assert_eq!(status.primary, Some(Primary::Redeploy));
+}

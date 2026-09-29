@@ -250,7 +250,11 @@ impl Runtime {
         }
         self.progress.reset();
         self.operation = None;
-        self.stage = Some(first);
+        // A redeploy of a deleted cloud that could not start leaves it deleted, so
+        // Redeploy stays its way forward; the record's termination is not cleanup to finish.
+        if self.stage != Some(Stage::Deleted) {
+            self.stage = Some(first);
+        }
         self.error = Some(error);
     }
 

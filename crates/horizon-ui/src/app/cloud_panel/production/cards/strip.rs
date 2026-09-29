@@ -185,51 +185,51 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
     ];
     let start = header.left() + 40.0;
     let end = header.right() - 26.0;
-    let width = |text: &str, size: f32| {
-        painter
-            .layout_no_wrap(text.to_owned(), FontId::proportional(size), theme::FG())
-            .size()
-            .x
-    };
-    // The sentence comes first: the right-hand summary shows only beside its verb and numbers.
-    let lead = parts[..2]
+    // Each part is laid out once: its width decides the fit, and it is painted as is
+    // unless it must be cut.
+    let laid: Vec<_> = parts
         .iter()
-        .filter(|(text, ..)| !text.is_empty())
-        .map(|(text, size, _)| width(text, *size) + 12.0)
+        .enumerate()
+        .filter(|(_, (text, ..))| !text.is_empty())
+        .map(|(index, (text, size, color))| {
+            let galley = painter.layout_no_wrap((*text).to_owned(), FontId::proportional(*size), *color);
+            (index, *text, *size, *color, galley)
+        })
+        .collect();
+    // The sentence comes first: the right-hand summary shows only beside its verb and numbers.
+    let lead = laid
+        .iter()
+        .filter(|(index, ..)| *index < 2)
+        .map(|(.., galley)| galley.size().x + 12.0)
         .sum::<f32>();
-    let right_width = if status.right.is_empty() {
-        0.0
-    } else {
-        width(&status.right, 13.0)
-    };
-    let limit = if right_width > 0.0 && start + lead + 20.0 + right_width <= end {
-        painter.text(
-            pos2(end, y),
-            Align2::RIGHT_CENTER,
-            &status.right,
-            FontId::proportional(13.0),
-            theme::FG_DIM(),
-        );
-        end - right_width - 20.0
-    } else {
-        end
+    let right = (!status.right.is_empty())
+        .then(|| painter.layout_no_wrap(status.right.clone(), FontId::proportional(13.0), theme::FG_DIM()));
+    let limit = match right {
+        Some(right) if start + lead + 20.0 + right.size().x <= end => {
+            let width = right.size().x;
+            painter.galley(pos2(end - width, y - right.size().y / 2.0), right, theme::FG_DIM());
+            end - width - 20.0
+        }
+        _ => end,
     };
     let mut x = start;
-    for (text, size, color) in parts {
+    for (_, text, size, color, galley) in laid {
         let room = limit - x;
-        if text.is_empty() {
-            continue;
-        }
         if room < 28.0 {
             break;
         }
-        // Too long for the room left: end with an ellipsis rather than a cut.
-        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(size), color);
-        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-        let galley = painter.layout_job(job);
-        let size = galley.size();
-        painter.galley(pos2(x, y - size.y / 2.0), galley, color);
-        x += size.x + 12.0;
+        let galley = if galley.size().x <= room {
+            galley
+        } else {
+            // Too long for the room left: end with an ellipsis rather than a cut.
+            let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(size), color);
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            painter.layout_job(job)
+        };
+        let height = galley.size().y;
+        let width = galley.size().x;
+        painter.galley(pos2(x, y - height / 2.0), galley, color);
+        x += width + 12.0;
     }
     // Painted, so it is registered once as the whole sentence, cut or not.
     ui.interact(

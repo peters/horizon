@@ -271,6 +271,22 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
         return Some(deletion(runtime, base));
     }
     if deleted_or_redeploying(runtime) && runtime.receiver.is_none() {
+        if let Some(error) = &runtime.error {
+            // A redeploy that could not start: still deleted, and why it did not start.
+            return Some(Status {
+                tone: Tone::Failed,
+                verb: "Redeploy failed".into(),
+                numbers: error.clone(),
+                failure: Some(Failure {
+                    summary: error.clone(),
+                    cause: None,
+                    meaning: diagnosis::meaning(error),
+                }),
+                track: Track::complete(&Stage::DELETION, true),
+                primary: Some(Primary::Redeploy),
+                ..base
+            });
+        }
         return Some(Status {
             tone: Tone::Attention,
             verb: "Worker deleted".into(),
