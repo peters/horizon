@@ -690,3 +690,20 @@ fn a_redeploy_of_a_deleted_cloud_that_cannot_start_stays_deleted_and_offers_rede
     assert_eq!(status.numbers, "settings.json could not be read");
     assert_eq!(status.primary, Some(Primary::Redeploy));
 }
+
+#[test]
+fn a_finished_deletion_reads_as_deleted_not_as_a_failed_redeploy() {
+    let runtime = Runtime {
+        stage: Some(Stage::Deleted),
+        error: Some(super::super::super::DELETED_RESOURCES_MESSAGE.into()),
+        state: Some(deployment(
+            "Deleted",
+            &serde_json::json!({"state": "terminated", "worker_id": "k3x9"}),
+            &serde_json::Value::Null,
+        )),
+        ..Runtime::default()
+    };
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Worker deleted");
+    assert_ne!(status.tone, Tone::Failed);
+}

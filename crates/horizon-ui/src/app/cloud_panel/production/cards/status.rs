@@ -271,7 +271,12 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
         return Some(deletion(runtime, base));
     }
     if deleted_or_redeploying(runtime) && runtime.receiver.is_none() {
-        if let Some(error) = &runtime.error {
+        // A finished deletion leaves its summary in the error slot; that is not a failure.
+        if let Some(error) = runtime
+            .error
+            .as_ref()
+            .filter(|error| error.as_str() != super::super::DELETED_RESOURCES_MESSAGE)
+        {
             // A redeploy that could not start: still deleted, and why it did not start.
             return Some(Status {
                 tone: Tone::Failed,

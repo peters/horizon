@@ -392,10 +392,21 @@ impl Runtime {
         &self,
         now: std::time::SystemTime,
     ) -> Option<cloud_runtime::cost::RunCost> {
-        if self.stage != Some(Stage::Ready) {
+        if self.stage != Some(Stage::Ready) || self.worker_terminated() {
             return None;
         }
         cloud_runtime::cost::current_run(self.state.as_ref()?.worker.as_ref()?, now)
+    }
+
+    /// The provider confirmed the worker deleted (storage cleanup may still be pending);
+    /// the saved stage and worker snapshot can still read as running. A redeploy keeps
+    /// that record until Ready, so while one runs it is history.
+    pub(in crate::app::cloud_panel) fn worker_terminated(&self) -> bool {
+        (self.receiver.is_none() || self.progress.is_deletion())
+            && self
+                .state
+                .as_ref()
+                .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
     }
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {

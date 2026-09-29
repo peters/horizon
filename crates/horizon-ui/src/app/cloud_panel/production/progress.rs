@@ -213,8 +213,8 @@ impl Timeline {
             transferred: detail.transferred,
             bytes_per_second: self.rate.bytes_per_second().filter(|_| running),
             remaining,
-            // Complete work has nothing left to estimate.
-            estimable: detail.total.is_some_and(|total| detail.completed < total),
+            // Only a byte transfer has a rate to estimate from; complete work has nothing left.
+            estimable: detail.unit == Unit::Bytes && detail.total.is_some_and(|total| detail.completed < total),
         })
     }
 
@@ -303,6 +303,21 @@ mod tests {
         assert_eq!(timeline.rate.bytes_per_second(), Some(100));
         timeline.stage(Stage::Provision, start + Duration::from_secs(3));
         assert_eq!(timeline.stage_label(Stage::Push), "Push image · 0m 03s");
+    }
+    #[test]
+    fn only_a_byte_transfer_promises_an_eta() {
+        let mut timeline = Timeline::default();
+        timeline.stage(Stage::Build, Instant::now());
+        let steps = |unit| Progress {
+            completed: 1,
+            total: Some(3),
+            unit,
+            ..Progress::default()
+        };
+        timeline.update(steps(Unit::Steps));
+        assert!(!timeline.measured().unwrap().estimable, "no rate is measured for steps");
+        timeline.update(steps(Unit::Bytes));
+        assert!(timeline.measured().unwrap().estimable);
     }
     #[test]
     fn preceding_stages_do_not_inflate_transfer_rate_or_eta() {

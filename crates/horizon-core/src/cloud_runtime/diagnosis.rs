@@ -123,7 +123,14 @@ const MEANINGS: [Known; 12] = [
         "The registry has no image with this name and tag.",
     ),
     known(
-        &["too many requests", "rate limit", "toomanyrequests"],
+        &[
+            "too many requests",
+            "rate limit",
+            "toomanyrequests",
+            "rate limit exceeded",
+            "rate limit reached",
+            "rate limited",
+        ],
         "The service is rate limiting requests. Wait a little, then retry.",
     ),
     known(
@@ -301,6 +308,8 @@ mod tests {
             "manifest unknown: manifest unknown",
             "disk full",
             "Your token has expired",
+            "error: rate limit exceeded",
+            "API rate limit reached for this account",
             "toomanyrequests: You have reached your pull rate limit",
             "insufficient capacity in the selected data center",
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",

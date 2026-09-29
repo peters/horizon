@@ -601,4 +601,21 @@ mod tests {
         failed_resume.state.as_mut().unwrap().worker = None;
         assert_eq!(teaser(&failed_resume), "stopped", "with or without a reported rate");
     }
+
+    #[test]
+    fn a_terminated_worker_stops_accruing_a_run() {
+        let mut deleted = runtime();
+        deleted.state.as_mut().unwrap().operation =
+            serde_json::from_value(serde_json::json!({"state": "terminated", "worker_id": "worker1"})).unwrap();
+        assert!(
+            deleted.current_run_cost(SystemTime::now()).is_none(),
+            "the worker is gone"
+        );
+        let line = spend(&deleted, SystemTime::now()).line;
+        assert!(!line.contains(" run"), "{line}");
+        assert!(
+            runtime().current_run_cost(SystemTime::now()).is_some(),
+            "a running worker still accrues"
+        );
+    }
 }

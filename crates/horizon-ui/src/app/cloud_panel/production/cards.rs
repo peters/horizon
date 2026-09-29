@@ -209,9 +209,20 @@ fn operation_action(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Actio
 impl super::Runtime {
     /// A lifetime total requires a reported billing period, not just an empty response.
     fn total_cost(&self, now: std::time::SystemTime) -> Option<cloud_runtime::cost::TotalCost> {
-        self.billing
+        let total = self
+            .billing
             .total(self.state.as_ref()?.worker.as_ref()?, now)
-            .filter(|total| total.billed_through.is_some())
+            .filter(|total| total.billed_through.is_some())?;
+        // A deleted worker's snapshot can still read as running: its live estimate stops,
+        // and billing reports what it was charged at the next refresh.
+        Some(if self.worker_terminated() {
+            cloud_runtime::cost::TotalCost {
+                estimated: 0.0,
+                ..total
+            }
+        } else {
+            total
+        })
     }
 
     /// Frame header text, for example `$0.83 run · $4.20 total`.
