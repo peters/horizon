@@ -146,10 +146,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
         return;
     };
     if catalog.offers.is_empty() {
-        widgets::note(
-            ui,
-            "No worker the provider lists meets this profile's minimums in the allowed data centers.",
-        );
+        widgets::note(ui, super::storage::empty_catalog_reason(form, &profile));
         return;
     }
     // A GPU profile always requests one explicit type, the cheapest to start with. A

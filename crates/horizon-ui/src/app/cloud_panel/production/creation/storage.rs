@@ -21,7 +21,7 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         // preferences, and any fetched catalog must offer the chosen worker.
         let catalog = super::selector::catalog(form);
         if catalog.as_ref().is_some_and(|catalog| catalog.offers.is_empty()) {
-            return Some("No worker the provider lists meets this profile's minimums.");
+            return Some(empty_catalog_reason(form, profile));
         }
         if profile.gpu && form.placement.gpu_types.len() != 1 {
             return Some("Choose a GPU type for this cloud.");
@@ -58,6 +58,25 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         return None;
     }
     size_reason(form)
+}
+
+/// Why no worker is offered: no allowed data center holds the chosen kind of workspace
+/// volume, or else nothing meets the profile's minimums.
+pub(super) fn empty_catalog_reason(form: &super::Production, profile: &Profile) -> &'static str {
+    let holds_volume = profile.gpu
+        || form.prices.list.as_ref().is_none_or(|fetched| {
+            fetched
+                .value
+                .0
+                .data_centers
+                .iter()
+                .any(|center| center.holds(profile.storage.volume_tier))
+        });
+    if holds_volume {
+        "No worker the provider lists meets this profile's minimums."
+    } else {
+        "No allowed data center can hold this kind of workspace volume. Choose another storage type."
+    }
 }
 
 pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {

@@ -48,16 +48,22 @@ pub(super) fn poll(form: &mut Production) {
         || form.pending_creation.is_some()
         || form.launch.submitted
         || form.launch.siblings.blocks_launch()
-        || super::storage::launch_reason(form).is_some()
     {
         form.launch.watch = None;
         form.launch.watch_quote = None;
         form.launch.price_rose = None;
         return;
     }
+    // Old or failed catalogs make the watch wait; only a fresh one can end it.
     let Some(fetched) = form.prices.fresh_list() else {
         return;
     };
+    if super::storage::launch_reason(form).is_some() {
+        form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
+        return;
+    }
     // A price above the one shown when the watch started waits for a person.
     let (list, preferences) = &fetched.value;
     let hourly = watch.hourly(list, preferences);

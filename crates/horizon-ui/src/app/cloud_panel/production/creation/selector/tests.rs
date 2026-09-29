@@ -525,3 +525,39 @@ fn a_vanished_data_center_or_price_ends_what_depends_on_it() {
     let labels = render(&mut watched);
     assert!(labels.iter().any(|label| label == "a5000 (not offered)"));
 }
+
+#[test]
+fn an_old_catalog_keeps_a_watch_waiting_and_a_volume_nobody_holds_is_named() {
+    let mut watched = form("gpu");
+    watched.placement = Placement {
+        region: Some("Europe".into()),
+        data_centers: vec!["EU-1".into()],
+        gpu_types: vec!["a5000".into()],
+    };
+    watch::arm(&mut watched);
+    let fetched = watched.prices.list.as_mut().unwrap();
+    fetched.at = Instant::now().checked_sub(std::time::Duration::from_hours(2)).unwrap();
+    watch::poll(&mut watched);
+    assert!(
+        watched.launch.watch.is_some(),
+        "an old catalog makes the watch wait, not end"
+    );
+    watched
+        .prices
+        .answered(list(Some((Availability::High, 0.27))), preferences(), Vec::new());
+    watch::poll(&mut watched);
+    assert!(watched.launch.submitted);
+    // No allowed data center holds a high-performance volume for these flavors.
+    let mut fast = form("cpu");
+    let mut standard_only = list(None);
+    for center in &mut standard_only.data_centers {
+        center.high_performance_storage = false;
+    }
+    fast.prices.answered(standard_only, preferences(), Vec::new());
+    let profiles = &mut fast.profiles.as_mut().unwrap().profiles;
+    profiles.get_mut("cpu").unwrap().storage.volume_tier = StorageTier::HighPerformance;
+    assert_eq!(
+        submit_reason(&fast),
+        Some("No allowed data center can hold this kind of workspace volume. Choose another storage type.")
+    );
+}
