@@ -7,14 +7,15 @@ use std::time::Duration;
 /// The time left in the words a person would use: coarse, and never more exact than it is.
 pub(super) fn left(eta: Duration) -> String {
     let seconds = eta.as_secs().max(1);
-    match seconds {
-        0..=59 => format!("about {seconds} s left"),
-        60..=3599 => format!("about {} min left", seconds.div_ceil(60)),
-        _ => format!(
-            "about {} h {} min left",
-            seconds / 3600,
-            (seconds % 3600).div_ceil(60) % 60
-        ),
+    if seconds < 60 {
+        return format!("about {seconds} s left");
+    }
+    // Round the whole to minutes first, so that 59 min 50 s becomes an hour and not "0 min".
+    let minutes = seconds.div_ceil(60);
+    match (minutes / 60, minutes % 60) {
+        (0, minutes) => format!("about {minutes} min left"),
+        (hours, 0) => format!("about {hours} h left"),
+        (hours, minutes) => format!("about {hours} h {minutes} min left"),
     }
 }
 
@@ -83,6 +84,12 @@ mod tests {
         assert_eq!(left(Duration::from_secs(42)), "about 42 s left");
         assert_eq!(left(Duration::from_secs(61)), "about 2 min left");
         assert_eq!(left(Duration::from_mins(70)), "about 1 h 10 min left");
+        assert_eq!(
+            left(Duration::from_secs(7199)),
+            "about 2 h left",
+            "the carry is not dropped"
+        );
+        assert_eq!(left(Duration::from_secs(3599)), "about 1 h left");
     }
 
     #[test]

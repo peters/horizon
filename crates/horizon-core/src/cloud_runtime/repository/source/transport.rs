@@ -153,45 +153,66 @@ fn keep_tail(tail: &mut String, text: &str) {
     }
 }
 
+/// What `watch` has seen of one Git process: the phase under way, since when, and what Git said
+/// beyond progress.
+struct Watched {
+    phase: String,
+    phase_started: Instant,
+    said: String,
+}
+
+impl Watched {
+    /// Takes one whole line of Git's stderr: progress is shown, chatter dropped, and anything
+    /// else kept as what Git said.
+    fn line(&mut self, line: &str, progress: &Progress) {
+        if line.trim().is_empty() {
+            return;
+        }
+        if let Some((name, percent, detail)) = parse_progress(line) {
+            // Progress is not a reason for anything: only what Git says otherwise is kept.
+            if name != self.phase {
+                self.phase.clone_from(&name);
+                self.phase_started = Instant::now();
+            }
+            let left = eta(self.phase_started.elapsed(), percent);
+            update(progress, |snapshot| {
+                snapshot.phase = name;
+                snapshot.percent = Some(percent);
+                snapshot.detail = detail;
+                snapshot.eta = left;
+            });
+        } else if !is_chatter(line) {
+            keep_tail(&mut self.said, line);
+            keep_tail(&mut self.said, "\n");
+        }
+    }
+}
+
 /// Reads Git's stderr to its end, showing what it says about progress and keeping the tail of it.
 fn watch(mut stderr: Option<std::process::ChildStderr>, progress: &Progress, done: &mpsc::Sender<String>) {
-    let (mut all, mut line, mut buffer) = (String::new(), String::new(), [0_u8; 512]);
-    let (mut phase, mut phase_started) = (String::new(), Instant::now());
+    let (mut line, mut buffer) = (String::new(), [0_u8; 512]);
+    let mut watched = Watched {
+        phase: String::new(),
+        phase_started: Instant::now(),
+        said: String::new(),
+    };
     while let Some(read) = stderr
         .as_mut()
         .and_then(|pipe| pipe.read(&mut buffer).ok())
         .filter(|n| *n > 0)
     {
         for character in String::from_utf8_lossy(&buffer[..read]).chars() {
-            if !matches!(character, '\r' | '\n') {
-                if line.len() < LINE_LIMIT {
-                    line.push(character);
-                }
-                continue;
+            if matches!(character, '\r' | '\n') {
+                watched.line(&line, progress);
+                line.clear();
+            } else if line.len() < LINE_LIMIT {
+                line.push(character);
             }
-            if !line.trim().is_empty() {
-                if let Some((name, percent, detail)) = parse_progress(&line) {
-                    // Progress is not a reason for anything: only what Git says otherwise is kept.
-                    if name != phase {
-                        phase.clone_from(&name);
-                        phase_started = Instant::now();
-                    }
-                    let left = eta(phase_started.elapsed(), percent);
-                    update(progress, |snapshot| {
-                        snapshot.phase = name;
-                        snapshot.percent = Some(percent);
-                        snapshot.detail = detail;
-                        snapshot.eta = left;
-                    });
-                } else if !is_chatter(&line) {
-                    keep_tail(&mut all, &line);
-                    keep_tail(&mut all, "\n");
-                }
-            }
-            line.clear();
         }
     }
-    let _ = done.send(all);
+    // A last word without a line end is still a word: it is often the reason.
+    watched.line(&line, progress);
+    let _ = done.send(watched.said);
 }
 
 /// Ends `child` and lets go of its stderr reader. A transport helper that Git started may
@@ -309,12 +330,14 @@ fn marker(folder: &Path) -> Option<Marker> {
     })
 }
 
+/// Writes the marker whole or not at all: a process ended in the middle of a write leaves the
+/// marker before it, never half of the one after.
 fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
-    std::fs::write(
-        folder.join(".git").join(MARKER),
-        format!("{}\n{}\n{}\n", marker.url, marker.branch, marker.done),
-    )
-    .map_err(|error| Failure::Other(error.to_string()))
+    let git = folder.join(".git");
+    let staged = git.join(format!("{MARKER}.tmp"));
+    std::fs::write(&staged, format!("{}\n{}\n{}\n", marker.url, marker.branch, marker.done))
+        .and_then(|()| std::fs::rename(&staged, git.join(MARKER)))
+        .map_err(|error| Failure::Other(error.to_string()))
 }
 
 /// Whether `folder` is a clone that was started and not finished.
@@ -360,6 +383,7 @@ fn clear_leftovers(folder: &Path) {
         "HEAD.lock",
         "config.lock",
         "packed-refs.lock",
+        "horizon-clone.tmp",
     ] {
         let _ = std::fs::remove_file(git.join(name));
     }
@@ -557,7 +581,8 @@ fn steps(
             if folder.join(".git").join("shallow").exists() {
                 fetch.arg("--unshallow");
             }
-            fetch.arg("origin");
+            // Every tag, also one on a commit no branch reaches, which Git's own following of tags skips.
+            fetch.args(["--tags", "origin"]);
         }
         run(fetch, folder, remote, cancel, progress)?;
         write_marker(
@@ -580,7 +605,14 @@ fn steps(
         &format!("refs/remotes/origin/{branch}"),
     ]);
     quietly(head, folder, remote, cancel)?;
-    let mut checkout = git(None);
+    let checkout = checkout_command(branch, token);
+    run(checkout, folder, remote, cancel, progress)
+}
+
+/// The checkout of `branch`, run with the token like the fetches: a repository whose files live
+/// in a filter that reads from the origin, such as Git LFS, needs it here as well.
+fn checkout_command(branch: &str, token: Option<&Token>) -> Command {
+    let mut checkout = git(token);
     checkout.args([
         "checkout",
         "--progress",
@@ -589,7 +621,7 @@ fn steps(
         branch,
         &format!("origin/{branch}"),
     ]);
-    run(checkout, folder, remote, cancel, progress)
+    checkout
 }
 
 /// A failure of a clone that kept what it received: the same reason, with the way on.
@@ -691,6 +723,11 @@ mod tests {
             git(&["commit", "-q", "--allow-empty", "-m", &format!("commit {number}")]);
         }
         git(&["branch", "extra"]);
+        // A tag on a commit that no branch reaches, which Git does not follow on its own.
+        git(&["checkout", "-q", "--detach"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "off every branch"]);
+        git(&["tag", "lonely"]);
+        git(&["checkout", "-q", "main"]);
         Remote {
             url: {
                 let path = origin.to_string_lossy().replace('\\', "/");
@@ -775,6 +812,12 @@ mod tests {
         );
         let (result, _) = step("printf 'Receiving objects:  50%% (1/2)\\rfatal: early EOF\\n' >&2; exit 128");
         assert_eq!(result, Err(Failure::Other("fatal: early EOF".into())));
+        let (result, _) = step("printf 'fatal: no newline at the end' >&2; exit 128");
+        assert_eq!(
+            result,
+            Err(Failure::Other("fatal: no newline at the end".into())),
+            "the last word counts without a line end"
+        );
     }
 
     #[test]
@@ -798,6 +841,51 @@ mod tests {
         assert_eq!(count(&target, &["rev-list", "--count", "HEAD"]), "130");
         let shown = progress.lock().unwrap().clone();
         assert_eq!((shown.step, shown.steps, shown.resumed), (STEPS, STEPS, true));
+    }
+
+    #[test]
+    fn the_checkout_carries_the_token_like_the_fetches_do() {
+        let remote = super::super::parse("github.com/demo-org/demo").unwrap();
+        let token = Token::new(&remote, "demo_token").unwrap();
+        let envs = |command: &Command| {
+            command
+                .get_envs()
+                .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned())))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let with = envs(&checkout_command("main", Some(&token)));
+        assert_eq!(with.get("GIT_CONFIG_COUNT").map(String::as_str), Some("1"));
+        assert!(with["GIT_CONFIG_KEY_0"].starts_with("http.https://github.com"));
+        assert!(!envs(&checkout_command("main", None)).contains_key("GIT_CONFIG_COUNT"));
+        let args: Vec<_> = checkout_command("main", Some(&token))
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().all(|arg| !arg.contains("demo_token")), "never argv");
+    }
+
+    #[test]
+    fn the_marker_is_replaced_whole_and_a_leftover_staging_file_changes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join(".git")).unwrap();
+        let first = Marker {
+            url: "https://github.com/demo-org/demo.git".into(),
+            branch: "main".into(),
+            done: 1,
+        };
+        write_marker(temp.path(), &first).unwrap();
+        // A write cut off half way only ever touches the staging file.
+        std::fs::write(
+            temp.path().join(".git").join("horizon-clone.tmp"),
+            "https://github.com/demo-or",
+        )
+        .unwrap();
+        assert_eq!(marker_done(temp.path()), 1);
+        clear_leftovers(temp.path());
+        assert!(!temp.path().join(".git").join("horizon-clone.tmp").exists());
+        write_marker(temp.path(), &Marker { done: 3, ..first }).unwrap();
+        assert_eq!(marker_done(temp.path()), 3);
+        assert!(!temp.path().join(".git").join("horizon-clone.tmp").exists());
     }
 
     #[test]

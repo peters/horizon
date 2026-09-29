@@ -10,7 +10,7 @@ use horizon_core::cloud_runtime::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::{Receiver, TryRecvError, channel},
+    sync::mpsc::{Receiver, SyncSender, TryRecvError, channel, sync_channel},
     time::{Duration, Instant},
 };
 use zeroize::Zeroize;
@@ -238,7 +238,9 @@ impl State {
         self.token_tried = token.is_some();
         self.token_focused = false;
         let remember = token.is_some() && self.remember;
-        let (sender, receiver) = channel();
+        // Delivery meets polling: a result nobody has taken is held by the worker, and goes back to it
+        // when the dialog is gone, so a finished checkout is always either handed over or cleaned up.
+        let (sender, receiver) = sync_channel(0);
         let job = Job {
             receiver,
             cancel: Cancellation::default(),
@@ -249,33 +251,19 @@ impl State {
         self.note = None;
         self.job = Some(job);
         std::thread::spawn(move || {
-            let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress)
-                .and_then(|()| {
-                    if cancel.is_cancelled() {
-                        // Cancelled just as it finished: the folder it made goes with it.
-                        let _ = std::fs::remove_dir_all(&destination);
-                        return Err(Failure::Cancelled);
-                    }
-                    Ok(())
-                })
-                .map(|()| {
-                    let kept = token
-                        .as_ref()
-                        .filter(|_| remember && !cancel.is_cancelled())
-                        .map(|token| source::remember(token, &cancel));
-                    Cloned {
-                        path: destination,
-                        note: (kept == Some(false))
-                            .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
-                    }
-                });
-            // Nobody is listening once the dialog is gone: a checkout that was made is not wanted.
-            if let Err(unheard) = sender.send(result)
-                && let Ok(Cloned { path, .. }) = unheard.0
-            {
-                let _ = std::fs::remove_dir_all(path);
-            }
-            ctx.request_repaint();
+            let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress).map(|()| {
+                // A clone that finished wins over a Cancel that came too late: its work is kept.
+                let kept = token
+                    .as_ref()
+                    .filter(|_| remember && !cancel.is_cancelled())
+                    .map(|token| source::remember(token, &cancel));
+                Cloned {
+                    path: destination,
+                    note: (kept == Some(false))
+                        .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
+                }
+            });
+            deliver(&sender, result, &ctx);
         });
     }
 
@@ -384,6 +372,17 @@ impl State {
             return Ok("Continue resumes the clone, then you choose where it runs.");
         }
         Ok("Continue clones the repository, then you choose where it runs.")
+    }
+}
+
+/// Hands the outcome of a clone to the dialog. Nobody is listening once the dialog is gone, and then
+/// a checkout that was made is not wanted.
+fn deliver(sender: &SyncSender<Result<Cloned, Failure>>, result: Result<Cloned, Failure>, ctx: &Context) {
+    ctx.request_repaint();
+    if let Err(unheard) = sender.send(result)
+        && let Ok(Cloned { path, .. }) = unheard.0
+    {
+        let _ = std::fs::remove_dir_all(path);
     }
 }
 
@@ -615,6 +614,58 @@ mod tests {
             .unwrap();
         drop(state);
         assert!(!checkout.exists(), "the orphan checkout goes with the cancelled dialog");
+    }
+
+    #[test]
+    fn a_checkout_finished_as_the_dialog_closes_is_never_left_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir(&checkout).unwrap();
+        let mut state = State::default();
+        let (sender, receiver) = sync_channel(0);
+        state.job = Some(Job {
+            receiver,
+            cancel: Cancellation::default(),
+            progress: Progress::default(),
+        });
+        let worker = std::thread::spawn({
+            let path = checkout.clone();
+            move || deliver(&sender, Ok(Cloned { path, note: None }), &Context::default())
+        });
+        // Whether the worker is waiting yet or not, closing the dialog removes what it made.
+        drop(state);
+        worker.join().unwrap();
+        assert!(!checkout.exists());
+    }
+
+    #[test]
+    fn a_checkout_that_finishes_after_a_late_cancel_is_kept_and_handed_over() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir(&checkout).unwrap();
+        let mut state = State::default();
+        let (sender, receiver) = sync_channel(0);
+        let cancel = Cancellation::default();
+        cancel.cancel();
+        state.job = Some(Job {
+            receiver,
+            cancel,
+            progress: Progress::default(),
+        });
+        let worker = std::thread::spawn({
+            let path = checkout.clone();
+            move || deliver(&sender, Ok(Cloned { path, note: None }), &Context::default())
+        });
+        let ctx = Context::default();
+        let handed = loop {
+            if let Some(path) = state.poll(&ctx) {
+                break path;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        worker.join().unwrap();
+        assert_eq!(handed, checkout);
+        assert!(checkout.is_dir());
     }
 
     #[test]
