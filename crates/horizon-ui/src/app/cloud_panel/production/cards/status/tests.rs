@@ -538,3 +538,19 @@ fn a_failed_deletion_leads_to_manage_where_deleting_again_is_confirmed() {
     assert_eq!(status.verb, "Deletion failed");
     assert_eq!(status.primary, Some(Primary::Manage));
 }
+
+#[test]
+fn a_failure_is_retried_as_the_operation_that_failed() {
+    use super::super::Action;
+    for (primary, retry) in [
+        (Primary::Retry, Some(Action::Deploy)),
+        (Primary::Reconnect, Some(Action::Deploy)),
+        (Primary::Resume, Some(Action::Resume)),
+        (Primary::ReconcileStop, Some(Action::Stop)),
+        (Primary::Manage, None),
+        (Primary::Stop, None),
+    ] {
+        assert_eq!(primary.retries(), retry, "{primary:?}");
+        assert_eq!(primary.retry_label().is_some(), retry.is_some(), "{primary:?}");
+    }
+}

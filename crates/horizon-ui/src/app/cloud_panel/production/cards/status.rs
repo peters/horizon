@@ -53,7 +53,18 @@ impl Primary {
 
     /// The label of a retry offered beside a failure, when this action retries it.
     pub(super) fn retry_label(self) -> Option<&'static str> {
-        matches!(self, Self::Retry | Self::Reconnect).then(|| self.label())
+        self.retries().map(|_| self.label())
+    }
+
+    /// The operation that retries a failure, as the header's own button does: a resume or
+    /// stop is retried as itself, never as a new deployment.
+    pub(super) fn retries(self) -> Option<super::Action> {
+        match self {
+            Self::Retry | Self::Reconnect => Some(super::Action::Deploy),
+            Self::Resume => Some(super::Action::Resume),
+            Self::ReconcileStop => Some(super::Action::Stop),
+            _ => None,
+        }
     }
 
     /// Filled for the step forward, outlined for the rest.
