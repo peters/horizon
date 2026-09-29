@@ -248,7 +248,7 @@ impl State {
                 let kept = token
                     .as_ref()
                     .filter(|_| remember && !cancel.is_cancelled())
-                    .map(source::remember);
+                    .map(|token| source::remember(token, &cancel));
                 Cloned {
                     path: destination,
                     note: (kept == Some(false))

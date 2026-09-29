@@ -242,14 +242,19 @@ fn helper_configured(listing: &str, scope: &str) -> bool {
 /// Asks the person's configured Git credential helper to keep `token` for the host it was pasted for.
 /// Returns whether a helper is configured to receive it.
 #[must_use]
-pub fn remember(token: &Token) -> bool {
+pub fn remember(token: &Token, cancel: &Cancellation) -> bool {
     let configured = git_output(
         Path::new("."),
         &["config", "--get-regexp", r"^credential\.(.*\.)?helper$"],
     )
     .is_some_and(|listing| helper_configured(&listing, &token.scope));
+    if !configured {
+        return false;
+    }
     let Ok(mut child) = Command::new("git")
         .args(["credential", "approve"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -266,7 +271,21 @@ pub fn remember(token: &Token) -> bool {
             token.secret.as_str()
         );
     }
-    child.wait().is_ok_and(|status| status.success()) && configured
+    // A helper that waits for an unlock prompt is given a while, and never past a cancel.
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if !cancel.is_cancelled() && started.elapsed() < REMEMBER_LIMIT => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -365,6 +384,9 @@ fn git(token: Option<&Token>) -> Command {
 
 /// How long a finished clone waits for what Git said last; a helper it left behind may hold the pipe.
 const CLONE_GRACE: Duration = Duration::from_secs(2);
+
+/// The longest Git's credential helper is given to keep a token.
+const REMEMBER_LIMIT: Duration = Duration::from_secs(10);
 
 /// The longest a probe may take before the host is taken to be out of reach.
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
