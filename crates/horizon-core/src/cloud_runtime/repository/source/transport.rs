@@ -50,11 +50,12 @@ const STEPS: u8 = 5;
 /// and one that is ours to remove.
 const MARKER: &str = "horizon-clone";
 
-/// The ending of a file, kept beside the folder being cloned rather than in it, that a running clone
-/// holds an exclusive lock on: a second Horizon process then cannot resume or remove the folder
-/// underneath it, and the lock stays put while the folder is deleted. The system drops the lock
-/// when the process ends, however it ends.
-const CLAIM: &str = ".horizon-clone.claim";
+/// The hidden folder, beside the folders being cloned, that holds one small file for each of them.
+/// A running clone holds an exclusive lock on its file: a second Horizon process then cannot resume
+/// or remove the folder underneath it, and the lock stays put while the folder is deleted. The
+/// system drops the lock when the process ends, however it ends. The files are never removed: a
+/// lock file that is unlinked while another process waits on it stops excluding anything.
+const CLAIMS: &str = ".horizon-clone-claims";
 
 /// How often, and how far apart, a folder that is held is tried before it is called busy.
 const CLAIM_TRIES: u32 = 30;
@@ -356,18 +357,15 @@ fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
         .map_err(|error| Failure::Other(error.to_string()))
 }
 
-/// Where the claim on `folder` lives: a hidden file beside it, named for it.
+/// Where the claim on `folder` lives: a file named for it, in a hidden folder beside it.
 fn claim_path(folder: &Path) -> Option<PathBuf> {
-    let mut name = std::ffi::OsString::from(".");
-    name.push(folder.file_name()?);
-    name.push(CLAIM);
-    Some(folder.parent()?.join(name))
+    Some(folder.parent()?.join(CLAIMS).join(folder.file_name()?))
 }
 
 /// The hold a running clone keeps on its folder.
 struct Claim {
-    file: File,
-    path: PathBuf,
+    /// Held open for as long as the clone runs.
+    _file: File,
 }
 
 impl Claim {
@@ -388,7 +386,7 @@ impl Claim {
         // its owner let go, so "busy" is only said after waiting that long.
         for attempt in 0..CLAIM_TRIES {
             match file.try_lock() {
-                Ok(()) => return Ok(Self { file, path }),
+                Ok(()) => return Ok(Self { _file: file }),
                 Err(TryLockError::WouldBlock) if attempt + 1 < CLAIM_TRIES => std::thread::sleep(CLAIM_WAIT),
                 Err(TryLockError::WouldBlock) => break,
                 Err(TryLockError::Error(error)) => return Err(Failure::Other(error.to_string())),
@@ -397,13 +395,6 @@ impl Claim {
         Err(Failure::Other(
             "Another Horizon window is cloning into that folder. Wait for it, or choose another folder.".into(),
         ))
-    }
-
-    /// Lets go of the folder and removes the file that held it.
-    fn release(self) {
-        let Self { file, path } = self;
-        drop(file);
-        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -439,7 +430,7 @@ pub fn discard(folder: &Path) -> Result<(), Failure> {
     } else {
         Ok(())
     };
-    claim.release();
+    drop(claim);
     removed.map_err(|error| Failure::Other(format!("Could not remove {}: {error}", folder.display())))
 }
 
@@ -575,13 +566,7 @@ fn in_steps(
 ) -> Result<(), Failure> {
     let claim = Claim::take(destination)?;
     let outcome = claimed_steps(remote, destination, token, cancel, progress, last_step);
-    // A finished clone, one that left nothing, and a folder that was never ours keep nothing of the
-    // claim; a stopped one keeps its file for the next try.
-    if unfinished(destination) {
-        drop(claim);
-    } else {
-        claim.release();
-    }
+    drop(claim);
     outcome
 }
 

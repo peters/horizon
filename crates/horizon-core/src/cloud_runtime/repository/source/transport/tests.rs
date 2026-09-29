@@ -135,7 +135,10 @@ fn a_clone_that_stops_after_a_step_is_picked_up_where_it_stopped() {
     assert!(super::super::is_checkout(&target));
     assert!(!target.join(".git").join(MARKER).exists(), "finished");
     assert!(
-        !claim_path(&target).unwrap().exists(),
+        std::fs::read_dir(target.join(".git"))
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().contains("claim")),
         "a finished checkout keeps nothing of the clone"
     );
     assert!(!target.join(".git").join("shallow").exists(), "the whole history");
@@ -274,7 +277,6 @@ fn a_folder_another_process_is_cloning_into_is_neither_resumed_nor_discarded() {
     drop(other);
     clone(&remote, &target, None, &cancel, &progress).unwrap();
     assert!(super::super::is_checkout(&target));
-    assert!(!claim_path(&target).unwrap().exists());
     assert!(
         std::fs::read_dir(target.join(".git"))
             .unwrap()
@@ -295,7 +297,8 @@ fn a_folder_that_is_not_a_clone_is_never_claimed() {
         0,
         "no file is added to a repository that is not ours"
     );
-    assert!(!claim_path(&theirs).unwrap().exists(), "and the hold on it is let go");
+    // The hold on it is let go: another try takes it at once.
+    drop(Claim::take(&theirs).unwrap());
 }
 
 #[test]
