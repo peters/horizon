@@ -46,7 +46,7 @@ connection, so no model key is placed on the worker.
    `curl` through it return the dev server's listing. `forward localhost 22` is
    still refused.
 5. Pause and resume: press **Reconnect cloud** and wait for Ready. Sharing shows
-   **Sharing paused: cloud disconnected** while it reconnects, then comes back on
+   **Sharing paused: the cloud disconnected or this computer slept** while it reconnects, then comes back on
    with the header still reading **Scope: 1 device · 1 port on this computer**.
    `forward 192.168.1.50 80` is still refused, and `forward localhost 8765` still
    works: the resumed bridge kept the owner's scope.
