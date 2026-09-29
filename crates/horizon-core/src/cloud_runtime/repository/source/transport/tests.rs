@@ -527,13 +527,20 @@ fn a_failed_step_that_cannot_clean_up_after_itself_says_where_it_left_the_folder
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
     let writable = std::fs::write(parent.join("probe"), "").is_ok();
     let said = removed(&folder, Failure::Network);
+    let signed_out = removed(&folder, Failure::SignIn("github.com".into()));
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     if writable {
         return; // Permissions do not bind this user (root), so removal cannot fail here.
     }
     assert!(
-        matches!(&said, Failure::Other(text) if text.contains("could not be removed") && text.contains("Cannot reach the host")),
+        matches!(&said, Failure::Interrupted(text)
+            if text.contains("could not be removed") && text.contains("Cannot reach the host") && text.contains("Continue resumes")),
         "{said:?}"
+    );
+    assert_eq!(
+        signed_out,
+        Failure::SignIn("github.com".into()),
+        "a refusal to sign in stays one, so that its prompt still appears"
     );
     assert_eq!(
         removed(&temp.path().join("gone"), Failure::Network),
