@@ -369,6 +369,37 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_that_is_already_there_is_the_plan() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let checkout = temp.path().join("demo-atlas");
+        std::fs::create_dir(&checkout).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&checkout)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(&["remote", "add", "origin", &remote.url]);
+        let mut state = State::default();
+        state.set_parent(temp.path());
+        let plan = state.plan(&remote);
+        assert_eq!(plan.existing.as_deref(), Some(checkout.as_path()));
+        assert_eq!(
+            plan.destination,
+            temp.path().join("demo-atlas-2"),
+            "a fresh clone would go beside it"
+        );
+    }
+
+    #[test]
     fn a_path_written_another_way_is_still_the_repository_chosen() {
         let mut state = State::default();
         state.mirror("/tmp/demo/atlas");

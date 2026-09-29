@@ -411,7 +411,13 @@ pub fn clone(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => return Err(Failure::Other(error.to_string())),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                let _ = std::fs::remove_dir_all(destination);
+                return Err(Failure::Other(error.to_string()));
+            }
         }
     };
     let stderr = reader.join().unwrap_or_default();

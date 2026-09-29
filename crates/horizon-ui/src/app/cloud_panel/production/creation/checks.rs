@@ -212,7 +212,14 @@ pub(super) fn blocked(form: &Production) -> Option<&'static str> {
 }
 
 fn blocked_given(form: &Production, checking: bool) -> Option<&'static str> {
-    (checking && ready(form) && unfinished(&rows(form))).then_some("Start unlocks when every check above passes.")
+    if !checking {
+        return None;
+    }
+    // A Start queued while the profile is read would be launched without ever being checked.
+    if form.launch.loading() && !form.repository.trim().is_empty() {
+        return Some("Start unlocks once the repository’s cloud settings are read and checked.");
+    }
+    (ready(form) && unfinished(&rows(form))).then_some("Start unlocks when every check above passes.")
 }
 
 /// The footer: Continue while the repository is still being chosen, Start cloud after.
@@ -373,6 +380,14 @@ mod tests {
                 ..
             }])
         ));
+    }
+
+    #[test]
+    fn start_cannot_be_queued_while_the_profile_is_read() {
+        let mut form = form_with(Vec::new());
+        let _reading = form.launch.hold_loading_for_test();
+        assert!(blocked_given(&form, true).is_some());
+        assert_eq!(blocked_given(&form, false), None);
     }
 
     #[test]

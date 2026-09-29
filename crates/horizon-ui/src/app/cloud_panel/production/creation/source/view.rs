@@ -38,23 +38,27 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
         form.focus_title_on_open = false;
     }
     let browse = 96.0;
+    // While a clone runs the field is not a request for something else.
     let response = ui
-        .horizontal(|ui| {
-            let edit = ui.add_sized(
-                [ui.available_width() - browse - ui.spacing().item_spacing.x, 38.0],
-                TextEdit::singleline(&mut form.source.input)
-                    .id(id)
-                    .font(egui::FontId::proportional(15.0))
-                    .margin(Vec2::new(12.0, 10.0))
-                    .hint_text("github.com/owner/repo  ·  gitlab.com/group/repo  ·  ~/code/project"),
-            );
-            step.browse = ui
-                .add_sized(
-                    [browse, 38.0],
-                    Button::new(RichText::new("Browse…").size(13.0)).corner_radius(8),
-                )
-                .clicked();
-            edit
+        .add_enabled_ui(form.source.job.is_none(), |ui| {
+            ui.horizontal(|ui| {
+                let edit = ui.add_sized(
+                    [ui.available_width() - browse - ui.spacing().item_spacing.x, 38.0],
+                    TextEdit::singleline(&mut form.source.input)
+                        .id(id)
+                        .font(egui::FontId::proportional(15.0))
+                        .margin(Vec2::new(12.0, 10.0))
+                        .hint_text("github.com/owner/repo  ·  gitlab.com/group/repo  ·  ~/code/project"),
+                );
+                step.browse = ui
+                    .add_sized(
+                        [browse, 38.0],
+                        Button::new(RichText::new("Browse…").size(13.0)).corner_radius(8),
+                    )
+                    .clicked();
+                edit
+            })
+            .inner
         })
         .inner;
     if refocus {
@@ -148,8 +152,13 @@ impl State {
 
     /// Where the clone will land, with a button that is hard to miss. True when it was pressed.
     fn destination_row(&mut self, ui: &mut Ui, remote: &Remote) -> bool {
-        let target = self.plan(remote).destination.clone();
-        widgets::caption(ui, "CLONE INTO");
+        let plan = self.plan(remote);
+        // A checkout of this link that is already there is used as it is, wherever it sits.
+        let (caption, target) = match &plan.existing {
+            Some(existing) => ("ALREADY CLONED, CONTINUE USES IT", existing.clone()),
+            None => ("CLONE INTO", plan.destination.clone()),
+        };
+        widgets::caption(ui, caption);
         ui.horizontal(|ui| {
             let button = 150.0;
             Frame::new()
