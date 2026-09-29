@@ -93,15 +93,32 @@ fn git(token: Option<&Token>) -> Command {
             .env("GIT_CONFIG_VALUE_0", token.header());
     }
     // Never ask questions over SSH, but keep a command the person has set up themselves.
-    if std::env::var_os("GIT_SSH_COMMAND").is_none()
-        && git_output(Path::new("."), &["config", "--get", "core.sshCommand"]).is_none_or(|set| set.trim().is_empty())
-    {
+    if !ssh_command_is_set() {
         command.env(
             "GIT_SSH_COMMAND",
             "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15",
         );
     }
     command
+}
+
+/// Whether the person has an SSH command of their own, in the environment or in Git's system or
+/// user configuration. A repository's own configuration is not looked at: a new clone has none, and
+/// the folder Horizon happens to run in is not where the clone runs.
+fn ssh_command_is_set() -> bool {
+    static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SET.get_or_init(|| {
+        ssh_command_in(std::env::var_os("GIT_SSH_COMMAND"), |scope| {
+            git_output(Path::new("."), &["config", scope, "--get", "core.sshCommand"])
+        })
+    })
+}
+
+fn ssh_command_in(environment: Option<std::ffi::OsString>, configured: impl Fn(&str) -> Option<String>) -> bool {
+    environment.is_some()
+        || ["--system", "--global"]
+            .iter()
+            .any(|scope| configured(scope).is_some_and(|set| !set.trim().is_empty()))
 }
 
 /// What Git's stderr line says about progress: its phase, how far, and the size and speed.
@@ -349,6 +366,13 @@ fn marker(folder: &Path) -> Option<Marker> {
 
 /// Writes the marker whole or not at all: a process ended in the middle of a write leaves the
 /// marker before it, never half of the one after.
+impl Marker {
+    /// Every fetch and the checkout are done; only the removal of the marker was left.
+    fn complete(&self) -> bool {
+        self.done > DEPTHS.len()
+    }
+}
+
 fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
     let git = folder.join(".git");
     let staged = git.join(format!("{MARKER}.tmp"));
@@ -400,7 +424,7 @@ impl Claim {
 
 /// Whether `folder` is a clone that was started and not finished.
 pub(super) fn unfinished(folder: &Path) -> bool {
-    marker(folder).is_some()
+    marker(folder).is_some_and(|marker| !marker.complete())
 }
 
 /// A folder under `parent` where an earlier try at cloning `remote` stopped, and that a new try
@@ -411,7 +435,7 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
     // claim on it is kept by name.
     candidates(parent, remote)
         .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()))
-        .find(|path| marker(path).is_some_and(|marker| marker.url == remote.url))
+        .find(|path| marker(path).is_some_and(|marker| marker.url == remote.url && !marker.complete()))
 }
 
 /// Gives up on a clone that stopped, removing what it received. Only a folder a clone started
@@ -420,12 +444,12 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
 /// # Errors
 /// Says so when another process holds the folder, or when it could not be removed.
 pub fn discard(folder: &Path) -> Result<(), Failure> {
-    if marker(folder).is_none() {
+    if !unfinished(folder) {
         return Ok(());
     }
     let claim = Claim::take(folder)?;
     // Asked again once held: another window may have finished or removed it in the meantime.
-    let removed = if marker(folder).is_some() {
+    let removed = if unfinished(folder) {
         std::fs::remove_dir_all(folder)
     } else {
         Ok(())
@@ -580,6 +604,11 @@ fn claimed_steps(
     last_step: u8,
 ) -> Result<(), Failure> {
     let earlier = marker(destination).filter(|marker| marker.url == remote.url);
+    if earlier.as_ref().is_some_and(Marker::complete) {
+        // A clone that was finished, and ended before it took its marker away.
+        let _ = std::fs::remove_file(destination.join(".git").join(MARKER));
+        return Ok(());
+    }
     announce(progress, 1, earlier.is_some());
     let marker = if let Some(marker) = earlier {
         // The try before may have been ended by a crash or a kill, mid-write.
@@ -694,7 +723,17 @@ fn steps(
     ]);
     quietly(head, folder, remote, cancel)?;
     let checkout = checkout_command(branch, token);
-    run(checkout, folder, remote, cancel, progress)
+    run(checkout, folder, remote, cancel, progress)?;
+    // Written before the marker goes: a process ended in between leaves a clone that says it is
+    // finished, which nothing resumes and nothing discards.
+    write_marker(
+        folder,
+        &Marker {
+            url: marker.url.clone(),
+            branch: marker.branch.clone(),
+            done: DEPTHS.len() + 1,
+        },
+    )
 }
 
 /// The checkout of `branch`, run with the token like the fetches: a repository whose files live

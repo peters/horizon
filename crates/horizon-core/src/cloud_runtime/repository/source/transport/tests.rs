@@ -462,3 +462,45 @@ fn a_parent_that_does_not_exist_yet_is_made_for_the_clone() {
     clone(&remote, &target, None, &Cancellation::default(), &Progress::default()).unwrap();
     assert!(super::super::is_checkout(&target));
 }
+
+#[test]
+fn a_clone_that_ended_before_its_marker_was_removed_is_finished_and_never_discarded() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = origin(temp.path());
+    let parent = temp.path().join("clones");
+    let target = parent.join(&remote.name);
+    let (cancel, progress) = (Cancellation::default(), Progress::default());
+    clone(&remote, &target, None, &cancel, &progress).unwrap();
+    // As if the process ended right after the checkout: the marker says every step is done.
+    write_marker(
+        &target,
+        &Marker {
+            url: remote.url.clone(),
+            branch: "main".into(),
+            done: DEPTHS.len() + 1,
+        },
+    )
+    .unwrap();
+    assert!(!unfinished(&target), "the checkout is complete");
+    assert_eq!(resumable(&parent, &remote), None, "there is nothing to resume");
+    assert_eq!(discard(&target), Ok(()));
+    assert!(
+        super::super::is_checkout(&target),
+        "Start over never removes a finished checkout"
+    );
+    // Continuing only takes the marker away.
+    clone(&remote, &target, None, &cancel, &progress).unwrap();
+    assert!(marker(&target).is_none());
+    assert!(super::super::is_checkout(&target));
+}
+
+#[test]
+fn a_persons_own_ssh_command_is_kept_wherever_it_is_set() {
+    let set = |scope: &str| (scope == "--global").then(|| "ssh -i ~/.ssh/work\n".to_owned());
+    let none = |_: &str| None;
+    let blank = |_: &str| Some("  \n".to_owned());
+    assert!(ssh_command_in(Some("ssh".into()), none), "the environment");
+    assert!(ssh_command_in(None, set), "the user's configuration");
+    assert!(!ssh_command_in(None, none));
+    assert!(!ssh_command_in(None, blank), "an empty one is not a command");
+}
