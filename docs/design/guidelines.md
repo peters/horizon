@@ -423,8 +423,8 @@ Rules of thumb:
 |---|---|
 | 22 / 20 | Overlay cards (command palette, directory picker; 22 is the outer glow ring), workspace frames on the canvas, session manager |
 | 18 | Focus ring around a focused panel |
-| 16 | Terminal panel body and titlebar, modal frame, egui windows, file-drop highlight on a panel |
-| 14 | Search overlay, upload dialog, session manager card |
+| 16 | Terminal panel body and titlebar, large form dialogs' modal frame, egui windows, file-drop highlight on a panel |
+| 14 | Search dropdown (15 for its outer ring), upload dialog, session manager card |
 | 12 | Default widget radius in the egui style, overlay input wells, summary cards |
 | 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, sidebar rows, workspace labels, pills |
 | 8 | Tabs, chips, toggle buttons, status frames, palette rows, preset cards |
@@ -440,7 +440,7 @@ Nested shapes step down: an outer 16 modal holds 10 cards, which hold 8 chips.
 | 8 x 8 | Global egui `item_spacing` |
 | 12 x 6 | Global egui `button_padding` |
 | 10 x 8 | `item_spacing` inside dialogs |
-| 24 | Modal `inner_margin`; dialog column gutter; settings panel horizontal margin |
+| 24 | Large form dialogs' `inner_margin`; dialog column gutter; settings panel horizontal margin |
 | 16 | Vertical gap after a dialog heading or settings heading; settings section-card margin; settings panel vertical margin |
 | 12 | Gap between a scroll body and its action bar; gap after a settings card |
 | 8 | Gap between form rows in a dialog |
@@ -462,6 +462,7 @@ Fixed metrics:
 | Dialog button | at least 120 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
+| Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
 | Directory picker | 520 wide, 34 row, at most 460 tall |
 | Dialog width | viewport width minus 64, clamped to 240-1180; two columns from 800 (summary column 330, gutter 24) |
 
@@ -492,15 +493,19 @@ There are four levels, from back to front:
 3. **Chrome**: toolbar and sidebar, drawn over the canvas.
 4. **Overlays and modals**: dimmed backdrop (`black` alpha 140 for pickers),
    then the card. Overlay cards use `PANEL_BG` with a 1.5 px `ACCENT` alpha-80
-   outline and a soft 2 px alpha-25 outer ring; modals use `BG_ELEVATED` with a
-   1 px `BORDER_STRONG` outline. Shadows come from the egui style
+   outline and a soft 2 px alpha-25 outer ring; large form dialogs use
+   `BG_ELEVATED` with a 1 px `BORDER_STRONG` outline. Shadows come from the egui style
    ([Themes](#themes)).
 
 ## Components
 
 ### Modal dialog
 
-Recipe used by dialogs built on `egui::Modal`:
+Recipe used by the large form dialogs, the cloud creation dialog and the cloud
+accounts dialog (up to 1180 and 580 wide respectively). Small confirmations
+(such as closing a cloud) and the browser file chooser keep egui's default modal
+frame from the theme instead: window fill `PANEL_BG`, 1 px `BORDER_SUBTLE`
+outline and the popup shadow, without the 24 px margin below.
 
 - Frame: fill `BG_ELEVATED`, stroke 1 px `BORDER_STRONG`, corner radius 16,
   inner margin 24. Raise it above the toolbar with `Order::Tooltip`.
@@ -516,15 +521,15 @@ Recipe used by dialogs built on `egui::Modal`:
   submits when the form is valid. While a child picker is open, the dialog is
   disabled and the picker owns Escape and outside clicks.
 
-### Overlay card (command palette, pickers, search)
+### Overlay card (command palette and pickers)
 
 - Card: `PANEL_BG`, radius 20, 1.5 px `ACCENT` alpha 80 outline, plus a 2 px
   alpha 25 ring at radius 22. Placed a quarter of the way down the window,
   centered horizontally.
 - Heading (pickers): 15 strong `FG`, then 10 of space.
 - Input: `BG_ELEVATED` well, radius 12, 44 high, 1 px `ACCENT` alpha 70 outline,
-  typed text 13-14 (proportional in the command palette, monospace in the
-  pickers and search), 13 `FG_DIM` hint, no frame on the inner text edit.
+  typed text 14 (proportional in the command palette, monospace in the
+  pickers), 13 `FG_DIM` hint, no frame on the inner text edit.
 - Rows: 34-36 high, radius 8. Selected row `alpha(blend(PANEL_BG_ALT, ACCENT, 0.28), 200)`
   with `FG` label; other rows `FG_SOFT`, with an `alpha(PANEL_BG_ALT, 160)` hover
   fill. Label 13, detail 11 `FG_DIM`. A 4.5 px dot in the workspace accent may
@@ -532,6 +537,19 @@ Recipe used by dialogs built on `egui::Modal`:
 - Section headers 10.5 `FG_DIM`. Key hints at the bottom are 10 monospace in
   `BG_ELEVATED` chips (radius 4, margin 5 x 2, 1 px `BORDER_SUBTLE` alpha 160)
   followed by a 10.5 `FG_DIM` description.
+
+### Search overlay
+
+Toolbar search is a separate pattern, not the overlay card above. The input
+lives inline in the toolbar (36 high, monospace 13 text). Its results open in a
+dropdown below it:
+
+- Frame: `PANEL_BG`, radius 14, 1 px `ACCENT` alpha 60 outline, plus a 1.5 px
+  alpha 18 ring at radius 15. 600 wide, at most 12 rows.
+- Rows 32 high with a 24 high section header; label 12 proportional, detail
+  10.5 monospace `FG_DIM`. The selected result uses
+  `blend(PANEL_BG_ALT, ACCENT, 0.35)` with `FG` text; row separators are 0.5 px
+  `BORDER_SUBTLE` alpha 180.
 
 ### Text field
 
@@ -725,7 +743,7 @@ Don't:
 - Don't hand-mix a disabled color; use egui's disabled rendering.
 - Don't add a repaint loop, a per-frame per-panel scan, or an eager layout in
   hover paths for polish.
-- Don't add a second modal or overlay style; reuse the modal and overlay
+- Don't add a new modal or overlay style; reuse the modal, overlay and search
   recipes above.
 
 ## Reproducing the numbers
@@ -738,6 +756,9 @@ Token values come straight from the `DARK_THEME` and `LIGHT_THEME` constants in
 ratio:
 
 ```python
+import math
+
+
 def lin(c):
     s = c / 255
     return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
@@ -751,7 +772,10 @@ def contrast(a, b):
     return (hi + 0.05) / (lo + 0.05)
 
 def blend(base, tint, amount):  # same as theme::blend
-    return tuple(round(base[i] * (1 - amount) + tint[i] * amount) for i in range(3))
+    amount = min(max(amount, 0.0), 1.0)
+    # Rust's f32::round rounds halves away from zero; Python's round() does not.
+    mix = lambda b, t: min(max(math.floor(b * (1 - amount) + t * amount + 0.5), 0), 255)
+    return tuple(mix(base[i], tint[i]) for i in range(3))
 
 # Example: FG_SOFT on PANEL_BG_ALT in light mode
 print(round(contrast((80, 89, 100), (240, 236, 228)), 2))  # 6.03
