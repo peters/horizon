@@ -20,8 +20,9 @@ use std::{
     sync::mpsc::{Receiver, channel},
 };
 
-/// The profile and provider the last answer was for, so changing either asks again.
-type Key = (String, &'static str, String);
+/// What the last answer was for: the profile as it would start (its provider and size as chosen
+/// here) and the repository. Changing either asks again.
+type Key = (Result<Profile, String>, String);
 
 #[derive(Default)]
 pub(in crate::app::cloud_panel::production) struct State {
@@ -40,19 +41,28 @@ enum Row {
 
 impl State {
     /// Starts a check when the chosen profile or provider changed since the last one.
-    fn update(&mut self, root: Option<&Path>, chosen: Option<(Key, Profile)>, ctx: &Context) {
+    fn update(&mut self, root: Option<&Path>, chosen: Option<Key>, ctx: &Context) {
         if let Some(problems) = self.job.as_ref().and_then(|job| job.try_recv().ok()) {
             self.problems = Some(problems);
             self.job = None;
         }
-        let (Some(root), Some((key, profile))) = (root, chosen) else {
+        let (Some(root), Some(key)) = (root, chosen) else {
             return;
         };
         if self.key.as_ref() == Some(&key) {
             return;
         }
+        let profile = match &key.0 {
+            Ok(profile) => profile.clone(),
+            Err(reason) => {
+                // The profile cannot run on the provider chosen here; there is nothing to ask it.
+                self.problems = Some(vec![problem("Provider account", reason.clone())]);
+                self.key = Some(key);
+                return;
+            }
+        };
         // The tab offered for a key is the account this profile runs on.
-        self.account.prefer(key.1 == "hetzner");
+        self.account.prefer(profile.provider == "hetzner");
         self.key = Some(key);
         self.problems = None;
         let (sender, receiver) = channel();
@@ -100,19 +110,17 @@ pub(super) fn update(form: &mut Production, root: Option<&Path>, ctx: &Context) 
     if cfg!(test) || !ready(form) {
         return;
     }
-    let chosen = form.profiles.as_ref().and_then(|config| {
-        let profile = config.profiles.get(&form.selected_profile)?;
-        Some((
-            (
-                form.selected_profile.clone(),
-                provider::current(form.provider, profile).id,
-                form.repository.clone(),
-            ),
-            profile.clone(),
-        ))
-    });
+    let chosen = chosen(form);
     let root = settings_root(root);
     form.checks.update(Some(&root), chosen, ctx);
+}
+
+/// What Start would launch, asked about: the profile with the provider and size chosen here.
+fn chosen(form: &Production) -> Option<Key> {
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    let provider = provider::current(form.provider, profile);
+    let effective = provider::sized(provider, profile, form.size).map_err(|error| error.to_string());
+    Some((effective, form.repository.clone()))
 }
 
 /// The folder the machine's cloud settings live in, whether or not the app has named it yet.
@@ -316,6 +324,30 @@ mod tests {
         form.selected_profile = "cpu".into();
         assert!(blocked_given(&form, true).is_some(), "the account is not confirmed yet");
         assert_eq!(blocked_given(&form, false), None);
+    }
+
+    #[test]
+    fn the_checks_ask_about_the_provider_and_size_chosen_here() {
+        let mut form = form_with(Vec::new());
+        form.profiles = Some(
+            horizon_core::cloud_panel::CloudConfig::parse(
+                "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: ghcr.io/demo-org/dev-image\n    cpu: 4\n    memory_gb: 16\n    gpu: false\n    storage:\n      container_gb: 20\n      volume_gb: 60\n",
+            )
+            .unwrap(),
+        );
+        form.selected_profile = "cpu".into();
+        form.provider = Some(&horizon_core::cloud_runtime::provider::HETZNER);
+        form.size = Some((8, 32));
+        let (profile, repository) = chosen(&form).unwrap();
+        let profile = profile.unwrap();
+        assert_eq!(
+            (profile.provider.as_str(), profile.cpu, profile.memory_gb),
+            ("hetzner", 8, 32)
+        );
+        assert_eq!(repository, "/work/demo-atlas");
+        let first = chosen(&form);
+        form.size = Some((4, 16));
+        assert_ne!(first, chosen(&form), "another size is another question");
     }
 
     #[test]

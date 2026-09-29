@@ -72,7 +72,7 @@ pub fn parse(input: &str) -> Option<Remote> {
     };
     let path = repository_path(&host, path);
     let name = path.rsplit('/').next()?.to_owned();
-    if !valid_host(&host) || path.split('/').count() < 2 || path.split('/').any(str::is_empty) {
+    if !valid_host(&host) || path.split('/').count() < 2 || !path.split('/').all(valid_segment) {
         return None;
     }
     Some(Remote {
@@ -85,6 +85,15 @@ pub fn parse(input: &str) -> Option<Remote> {
 /// A host name Git can be handed safely: dotted, and never something it would read as an option.
 fn valid_host(host: &str) -> bool {
     host.contains('.') && valid_name(host)
+}
+
+/// One folder of the repository's path, which also names the clone's folder: no separators,
+/// drive letters or dot components, whatever the platform.
+fn valid_segment(segment: &str) -> bool {
+    !matches!(segment, "" | "." | "..")
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 fn valid_name(name: &str) -> bool {
@@ -336,8 +345,13 @@ pub fn clone(
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
     }
-    // A folder that was there before is not this clone's to remove.
-    let created = !destination.exists();
+    // Only a folder this call makes is this clone's to remove: creating it is the claim, so a
+    // folder someone else made in the meantime is never taken for ours.
+    let created = match std::fs::create_dir(destination) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => return Err(Failure::Other(error.to_string())),
+    };
     let mut command = git(token);
     command
         .args(["clone", "--progress", "--", &remote.url])
@@ -531,6 +545,23 @@ mod tests {
         assert_eq!(parse("ssh://-oProxyCommand=a.b/demo-org/demo"), None);
         assert_eq!(parse("https://-bad.example.org/demo-org/demo"), None);
         assert_eq!(parse("-o@github.com:demo-org/demo"), None);
+    }
+
+    #[test]
+    fn a_name_that_could_leave_the_clone_folder_is_refused() {
+        for input in [
+            r"github.com/demo-org/..\\victim",
+            r"github.com/demo-org/C:\\victim",
+            "github.com/demo-org/..",
+            "https://github.com/demo-org/a%2Fb",
+            "https://gitlab.com/group/../demo",
+        ] {
+            assert_eq!(parse(input), None, "{input}");
+        }
+        assert!(
+            parse("github.com/demo-org/.github").is_some(),
+            "a leading dot is a real name"
+        );
     }
 
     #[test]
