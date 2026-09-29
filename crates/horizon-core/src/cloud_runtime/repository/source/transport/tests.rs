@@ -451,3 +451,14 @@ fn a_link_to_a_stopped_clone_is_not_a_place_to_resume_it() {
     std::os::unix::fs::symlink(&target, other.join(&remote.name)).unwrap();
     assert_eq!(resumable(&other, &remote), None);
 }
+
+#[test]
+fn a_parent_that_does_not_exist_yet_is_made_for_the_clone() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = origin(temp.path());
+    // As on a fresh machine, where the default `~/Horizon` is not there until the first clone.
+    let target = temp.path().join("home").join("Horizon").join(&remote.name);
+    assert!(!target.parent().unwrap().exists());
+    clone(&remote, &target, None, &Cancellation::default(), &Progress::default()).unwrap();
+    assert!(super::super::is_checkout(&target));
+}

@@ -611,6 +611,10 @@ fn marker_done(folder: &Path) -> usize {
 /// Makes the folder a clone starts in, claiming it: creating it is what makes it this clone's to
 /// remove, and a folder that is already there is refused.
 fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<Marker, Failure> {
+    // A default parent such as `~/Horizon` does not exist on a fresh machine.
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
+    }
     match std::fs::create_dir(destination) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
