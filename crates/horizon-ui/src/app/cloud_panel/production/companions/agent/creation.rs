@@ -38,6 +38,8 @@ pub(in crate::app::cloud_panel::production::companions) struct State {
     /// A source cloud and alias whose checkout the owner wants to choose.
     picker: Option<(String, String)>,
     actions: Vec<(String, String, Choice)>,
+    /// Background steps a session change left running; shutdown waits for them.
+    draining: Vec<Step>,
 }
 
 struct Declined {
@@ -170,25 +172,6 @@ impl State {
             id: pending.id,
             kept: pending.card.and(pending.cloud_id),
         });
-    }
-
-    /// Discards every pending creation, as a session change does. Returns the sources
-    /// whose refresh a creation in progress was holding.
-    pub(in crate::app::cloud_panel::production::companions::agent) fn discard(&mut self) -> Vec<String> {
-        self.actions.clear();
-        self.picker = None;
-        // A declined operation ID is only final within its session's journal.
-        self.declined.clear();
-        self.pending
-            .drain(..)
-            .filter(|pending| {
-                matches!(
-                    pending.step,
-                    Step::Reserving(_) | Step::Selecting { .. } | Step::Starting { .. }
-                )
-            })
-            .map(|pending| pending.source)
-            .collect()
     }
 }
 

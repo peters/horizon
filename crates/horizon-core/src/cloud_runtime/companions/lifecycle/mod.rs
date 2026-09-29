@@ -59,6 +59,34 @@ impl Request<'_> {
     }
 
     fn authorize(&self, state: &journal::State) -> Result<Binding> {
+        let (binding, declaration) = self.bound(state)?;
+        // A reserved identity has no selection to check while its creation runs. Once an
+        // operation on it has settled, the owner's checkbox governs it like any other.
+        let creating =
+            binding.origin() == intent::Origin::Reserved && !state.intents.settled_on(&binding.target().cloud_id);
+        if !creating {
+            self.require_selected(state, binding, declaration)?;
+        }
+        Ok(binding.clone())
+    }
+
+    /// Like `authorize`, except that an operation that already started may always be
+    /// reconciled: revoking access after it began must never strand its provider
+    /// outcome. The caller still requires the operation to own its target claim.
+    fn authorize_execution(&self, state: &journal::State, id: OperationId) -> Result<Binding> {
+        let started = state
+            .intents
+            .operation(id)
+            .is_some_and(|intent| matches!(intent.state, State::Executing | State::Uncertain));
+        if started {
+            Ok(self.bound(state)?.0.clone())
+        } else {
+            self.authorize(state)
+        }
+    }
+
+    /// The alias's binding, validated against the current owner and declaration.
+    fn bound<'a>(&'a self, state: &'a journal::State) -> Result<(&'a Binding, &'a super::Declaration)> {
         let binding = state
             .intents
             .binding(self.alias)
@@ -69,14 +97,7 @@ impl Request<'_> {
             .get(self.alias)
             .ok_or(Error::Invalid("Companion declaration is missing"))?;
         binding.validate(self.owner, self.alias, declaration)?;
-        // A reserved identity has no selection to check while its creation runs. Once an
-        // operation on it has settled, the owner's checkbox governs it like any other.
-        let creating =
-            binding.origin() == intent::Origin::Reserved && !state.intents.settled_on(&binding.target().cloud_id);
-        if !creating {
-            self.require_selected(state, binding, declaration)?;
-        }
-        Ok(binding.clone())
+        Ok((binding, declaration))
     }
 
     /// The owner's checkbox grant for exactly this binding's target, resolved against
@@ -318,7 +339,7 @@ pub fn execute(
 
 fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execution::Backend) -> Result<Operation> {
     let (source, mut journal) = request.load()?;
-    let binding = request.authorize(&journal)?;
+    let binding = request.authorize_execution(&journal, id)?;
     let intent = journal
         .intents
         .operation(id)

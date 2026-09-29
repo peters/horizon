@@ -2,8 +2,9 @@
 //! it and recording the confirmation. Each is idempotent for a retry.
 use super::{
     Binding, Cancellation, Checkout, CloudGroups, Context, Declaration, OperationId, Origin, Owner, Path, Settings,
-    Snapshot, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
+    Snapshot, State, Step, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
 };
+use std::sync::mpsc::TryRecvError;
 
 /// Idempotent for the same cloud ID, checkout and operation, so a retry after a
 /// partial failure records nothing twice.
@@ -139,5 +140,45 @@ pub(super) fn cancel(
             Err("The companion cloud is already starting; it can no longer be declined".into())
         }
         Ok(_) => Ok(()),
+    }
+}
+
+impl State {
+    /// Discards every pending creation, as a session change does, keeping its running
+    /// background step until that reports. Returns the sources whose refresh a creation
+    /// in progress was holding.
+    pub(in crate::app::cloud_panel::production::companions::agent) fn discard(&mut self) -> Vec<String> {
+        self.actions.clear();
+        self.picker = None;
+        // A declined operation ID is only final within its session's journal.
+        self.declined.clear();
+        let mut held = Vec::new();
+        for pending in self.pending.drain(..) {
+            if matches!(
+                pending.step,
+                Step::Reserving(_) | Step::Selecting { .. } | Step::Starting { .. }
+            ) {
+                held.push(pending.source);
+            }
+            if matches!(
+                pending.step,
+                Step::Reserving(_) | Step::Selecting { .. } | Step::Declining(_)
+            ) {
+                self.draining.push(pending.step);
+            }
+        }
+        held
+    }
+
+    /// Whether every step a session change left running has reported, so its journal
+    /// writes, a decline's among them, are durable before Horizon closes.
+    pub(in crate::app::cloud_panel::production::companions) fn drained(&mut self) -> bool {
+        self.draining.retain(|step| match step {
+            Step::Reserving(receiver) => matches!(receiver.try_recv(), Err(TryRecvError::Empty)),
+            Step::Selecting { receiver, .. } => matches!(receiver.try_recv(), Err(TryRecvError::Empty)),
+            Step::Declining(receiver) => matches!(receiver.try_recv(), Err(TryRecvError::Empty)),
+            Step::Waiting | Step::Starting { .. } => false,
+        });
+        self.draining.is_empty()
     }
 }

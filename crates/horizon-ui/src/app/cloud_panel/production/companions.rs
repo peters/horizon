@@ -233,7 +233,9 @@ impl State {
         }
         self.retiring
             .retain(|entry| entry.job.is_some() || !entry.clearing.is_empty());
-        if self.retiring.is_empty() {
+        // A creation step still running, a decline among them, must reach its journal.
+        let drained = self.agent.creation.drained();
+        if self.retiring.is_empty() && drained {
             return true;
         }
         ctx.request_repaint_after(Duration::from_millis(100));

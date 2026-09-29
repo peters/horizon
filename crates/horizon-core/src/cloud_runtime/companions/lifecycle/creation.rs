@@ -52,6 +52,19 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
                 if binding.origin() != intent::Origin::Reserved {
                     return Err(Error::Invalid("Only a fresh cloud identity can be reserved"));
                 }
+                // Serialized by the source journal lock, so two aliases declaring the same
+                // repository and profile never both reserve a paid cloud.
+                let creating = state.intents.bindings().any(|(alias, bound)| {
+                    alias != request.alias
+                        && bound.origin() == intent::Origin::Reserved
+                        && !state.intents.settled_on(&bound.target().cloud_id)
+                        && bound.target().declaration.matches(declaration)
+                });
+                if creating {
+                    return Err(Error::Invalid(
+                        "Another companion with the same repository and profile is being created; use that cloud once it is ready",
+                    ));
+                }
                 // Submit's lock order: source journal, execution, then target.
                 let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
                 let _execution = receipt::execution_lock(&root)?;
@@ -114,7 +127,7 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     // Held through the write, in execution's lock order (source, execution, target),
     // so an uncheck cannot land between the checks and the recorded confirmation.
     let (_source, state) = request.load()?;
-    let binding = request.authorize(&state)?;
+    let binding = request.authorize_execution(&state, id)?;
     // An operation that already started under this confirmation, then lost its card to
     // a crash, needs none again: execution reconciles it, and an uncheck never blocks that.
     let started = state.intents.operation(id).is_some_and(|intent| {

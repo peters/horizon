@@ -572,3 +572,19 @@ fn a_confirmed_creation_shows_its_checked_row_even_before_any_refresh_listed_it(
     assert!(row.selected);
     assert_eq!(row.target_cloud_id.as_deref(), Some("target"));
 }
+
+#[test]
+fn shutdown_waits_for_a_decline_that_is_still_being_saved() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    app.cloud_prototype.production.companions.set_session(Some("session"));
+    app.request_companion_creation(owner(), "consumer", declaration(), OperationId::generate());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    creation(&mut app).pending[0].step = Step::Declining(receiver);
+    let companions = &mut app.cloud_prototype.production.companions;
+    // Closing forgets the prompt, but not the decline's journal write in flight.
+    assert!(!companions.finish_shutdown(None, &ctx));
+    assert!(companions.agent.creation.pending.is_empty());
+    sender.send(Ok(())).unwrap();
+    assert!(companions.finish_shutdown(None, &ctx));
+}

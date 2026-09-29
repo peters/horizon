@@ -156,6 +156,11 @@ impl Journal {
         self.intents.values().any(|intent| intent.state.pending())
     }
 
+    /// Every alias's binding.
+    pub fn bindings(&self) -> impl Iterator<Item = (&str, &Binding)> {
+        self.bindings.iter().map(|(alias, binding)| (alias.as_str(), binding))
+    }
+
     /// Whether an operation on this cloud has settled while none is still pending on it.
     #[must_use]
     pub fn settled_on(&self, target_cloud_id: &str) -> bool {

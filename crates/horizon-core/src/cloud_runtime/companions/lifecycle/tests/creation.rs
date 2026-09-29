@@ -361,9 +361,11 @@ fn an_uncheck_after_execution_started_never_blocks_reconciling_it() {
     save_reserved(&fixture, &prepared(&fixture));
     select_reserved(&mut fixture);
     confirm_creation(&fixture.request(), id).unwrap();
-    // The start began, then Horizon stopped before the outcome was recorded.
+    // The start began, then Horizon stopped before the outcome was recorded. As in a
+    // real start, the binding already counts as an existing cloud.
     let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
     let mut state = store.load().unwrap();
+    state.intents.mark_existing("reserved");
     state.intents.transition(id, State::Executing).unwrap();
     // The owner unchecked the companion meanwhile.
     state.grants.get_mut("consumer").unwrap().selected = false;
@@ -439,9 +441,11 @@ fn a_recovered_card_for_a_started_operation_continues_without_confirming_again()
     save_reserved(&fixture, &prepared(&fixture));
     select_reserved(&mut fixture);
     confirm_creation(&fixture.request(), id).unwrap();
-    // Horizon stopped after the start began; the owner has since unchecked it.
+    // Horizon stopped after the start began, with the binding already marked existing
+    // as a real start does; the owner has since unchecked it.
     let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
     let mut state = store.load().unwrap();
+    state.intents.mark_existing("reserved");
     state.intents.transition(id, State::Executing).unwrap();
     state.grants.get_mut("consumer").unwrap().selected = false;
     store.save(&state).unwrap();
@@ -459,4 +463,35 @@ fn a_recovered_card_for_a_started_operation_continues_without_confirming_again()
     store.save(&state).unwrap();
     drop(store);
     assert!(confirm_creation(&fixture.request(), other).is_err());
+}
+
+#[test]
+fn two_aliases_with_the_same_declaration_never_both_reserve_a_cloud() {
+    let (mut fixture, binding) = fresh("reserved");
+    let declaration = fixture.context.declarations["consumer"].clone();
+    fixture.context.declarations.insert("second".into(), declaration);
+    reserve(&fixture.request(), binding, OperationId::generate()).unwrap();
+    let mut target = fixture.binding.target().clone();
+    target.cloud_id = "reserved-second".into();
+    let second = Binding::new(
+        &fixture.owner,
+        "second",
+        target,
+        fixture.binding.checkout().into(),
+        Origin::Reserved,
+    )
+    .unwrap();
+    let request = Request {
+        alias: "second",
+        ..fixture.request()
+    };
+    let refused = reserve(&request, second, OperationId::generate()).unwrap_err();
+    assert!(refused.to_string().contains("being created"), "{refused}");
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("reserved-second/companion-operation.json")
+            .exists()
+    );
 }
