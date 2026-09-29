@@ -50,6 +50,8 @@ pub struct CommandPalette {
     query: String,
     selected: usize,
     opened_at: Instant,
+    /// Whether the search field has had focus since the palette opened.
+    focused: bool,
 }
 
 pub enum PaletteAction {
@@ -84,6 +86,7 @@ impl CommandPalette {
             query: String::new(),
             selected: 0,
             opened_at: Instant::now(),
+            focused: false,
         }
     }
 
@@ -226,9 +229,7 @@ impl CommandPalette {
                 )
                 .margin(Margin::ZERO),
         );
-        if !response.has_focus() && self.opened_at.elapsed().as_millis() < 100 {
-            response.request_focus();
-        }
+        render::focus_once(&response, &mut self.focused);
         if response.changed() {
             self.selected = 0;
         }
@@ -464,6 +465,35 @@ mod tests {
     use horizon_core::AppShortcuts;
 
     use super::*;
+    use crate::test_egui::DiscardTextures;
+
+    fn show(ctx: &Context, palette: &mut CommandPalette, events: Vec<egui::Event>) {
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    palette.show(ui.ctx(), &[], &[], &[], &[]);
+                },
+            )
+            .discard_textures();
+    }
+
+    #[test]
+    fn a_slow_first_frame_still_focuses_the_search_field() {
+        let ctx = Context::default();
+        let mut palette = CommandPalette::new();
+        // A first frame drawn a second after opening, as under heavy load.
+        palette.opened_at = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("the process started more than a second ago");
+        show(&ctx, &mut palette, Vec::new());
+        show(&ctx, &mut palette, vec![egui::Event::Text("zsh".into())]);
+        assert_eq!(palette.query, "zsh");
+    }
 
     #[test]
     fn parse_mode_default_is_all() {
