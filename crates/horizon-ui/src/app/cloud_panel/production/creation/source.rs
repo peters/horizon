@@ -637,7 +637,7 @@ mod tests {
         std::fs::create_dir_all(folder.join(".git")).unwrap();
         std::fs::write(
             folder.join(".git").join("horizon-clone"),
-            format!("{}\nmain\n", remote.url),
+            format!("{}\nmain\n1\n", remote.url),
         )
         .unwrap();
         folder

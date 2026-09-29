@@ -660,12 +660,15 @@ Cloud close confirmation and session-local close intent live in
 channels, and removal rechecks durable resource ownership before discarding panels.
 The New cloud dialog asks where the code is before anything else.
 `cloud_runtime::repository::source` reads links, probes whether a repository can be read without a token,
-and clones with system Git without ever prompting; a personal access token reaches Git
+and clones with system Git without ever prompting. `repository::source::transport` runs the
+clone in steps (latest commit, the history in growing pieces, the checkout) behind a marker in
+`.git`, so a cancelled or dropped clone keeps every finished step and the next try resumes it,
+and it reports the step, phase, percent, speed and time left. A personal access token reaches Git
 only through its environment and is remembered only through the user's Git credential
 helper. `cloud_runtime::deployment::admission` runs deployment's own first checks
 (provider credential, SSH identity) without side effects, and `setup::save_provider_key`
 saves one RunPod key or Hetzner token the way the settings form does.
-`production/creation/source` renders the source step and owns the clone; `production/creation/checks`
+`production/creation/source` renders the source step (progress, cancel, resume, start over) and owns the clone; `production/creation/checks`
 lists what Start depends on and keeps Start locked until each check passes.
 `production/readiness` shares the add-panel menu and empty-state readiness gate;
 it checks the targeted cloud's current runtime before offering panel creation.
