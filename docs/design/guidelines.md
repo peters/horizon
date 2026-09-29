@@ -460,7 +460,7 @@ Fixed metrics:
 | Panel resize handle | 18 |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
-| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: "Save settings" 148 x 40, `Cancel` at least 80 x 40 |
+| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", or "Save and start" while continuing a first cloud) 148 x 40, `Cancel` at least 80 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
@@ -535,9 +535,10 @@ Cloud accounts dialog specifics:
 
 - Global 8 x 8 `item_spacing`, no info chip, the description at the default
   text size.
-- A separator sits above the footer. The primary ("Save settings") is 148 x 40
-  with a `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label;
-  `Cancel` is at least 80 x 40.
+- A separator sits above the footer. The primary ("Save settings", or
+  "Save and start" while continuing a first cloud) is 148 x 40 with a
+  `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label; `Cancel` is
+  at least 80 x 40.
 - Dismissal is ignored while a save is running.
 
 ### Overlay card (command palette and pickers)
@@ -594,7 +595,7 @@ backdrop dimming:
 |---|---|---|---|---|---|
 | Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar "update available" |
 | Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
-| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | "Save settings", 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
+| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | Accounts dialog save ("Save settings" / "Save and start"), 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
 | Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
 | Secondary (creation dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 (the accounts dialog's `Cancel` is min 80 x 40 with egui's default radius) |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |
@@ -704,8 +705,8 @@ Focus behavior:
 
 ## Motion and repaint rules
 
-Horizon is quiet at rest. Motion exists only where it reports a state or
-follows the person's input. Current cases:
+Horizon is quiet at rest. Motion is meant to report a state or follow the
+person's input. Examples in the current UI:
 
 - Canvas pan and zoom the person drives, and egui's own short hover and collapse
   transitions.
