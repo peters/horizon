@@ -366,7 +366,9 @@ fn button_width(ui: &egui::Ui, label: &str) -> f32 {
 }
 
 fn primary_button(ui: &egui::Ui, rect: Rect, primary: Primary) -> bool {
-    let response = ui.interact(rect, ui.id().with("primary"), Sense::click());
+    // Keyed by the action: a press begun on Cancel cannot complete as the Retry deploy
+    // that replaces it when the operation fails mid-click.
+    let response = ui.interact(rect, ui.id().with(("primary", primary)), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, primary.label()));
     let color = if primary.destructive() {
         theme::PALETTE_RED()

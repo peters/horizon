@@ -244,3 +244,82 @@ fn a_running_operation_keeps_the_header_quiet_between_its_once_a_second_ticks() 
         "no animation loop, only the clock: {delay:?}"
     );
 }
+
+#[test]
+fn a_press_on_cancel_does_not_complete_as_the_retry_that_replaces_it() {
+    use egui::{Event, PointerButton, Pos2, RawInput};
+    let ctx = egui::Context::default();
+    let header = egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(900.0, 118.0));
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let running = super::super::super::Runtime {
+        stage: Some(Stage::Build),
+        receiver: Some(receiver),
+        cancel: Some(horizon_core::cloud_runtime::Cancellation::default()),
+        ..Default::default()
+    };
+    let failed = super::super::super::Runtime {
+        stage: Some(Stage::Build),
+        error: Some("Build failed".into()),
+        ..Default::default()
+    };
+    let frame = |runtime: &super::super::super::Runtime, events: Vec<Event>| {
+        let status = status::of(runtime, status::Occupancy::default(), std::time::SystemTime::now());
+        let mut clicked = None;
+        let output = ctx
+            .run_ui(
+                RawInput {
+                    events,
+                    ..RawInput::default()
+                },
+                |ui| {
+                    let indicators = strip::Indicators {
+                        running: 0,
+                        terminals: 0,
+                        desktop: None,
+                        sharing: strip::Sharing::Off,
+                        companions: 0,
+                    };
+                    let spend = strip::Spend {
+                        line: String::new(),
+                        explanation: String::new(),
+                    };
+                    clicked = strip::show(ui, header, &status, &indicators, &spend, false).action;
+                },
+            )
+            .discard_textures();
+        let labels: Vec<(String, egui::Rect)> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect();
+        (clicked, labels)
+    };
+    let (_, labels) = frame(&running, vec![]);
+    let cancel = labels.iter().find(|(text, _)| text == "Cancel").map_or_else(
+        || panic!("a running build offers Cancel: {labels:?}"),
+        |(_, rect)| rect.center(),
+    );
+    let button = |pressed| Event::PointerButton {
+        pos: cancel,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = frame(&running, vec![Event::PointerMoved(cancel)]);
+    let _ = frame(&running, vec![button(true)]);
+    // The build fails between the press and the release: the button is now Retry deploy.
+    let (clicked, labels) = frame(&failed, vec![button(false)]);
+    assert!(
+        labels
+            .iter()
+            .any(|(text, rect)| text == "Retry deploy" && rect.expand(8.0).contains(cancel)),
+        "the release lands on Retry deploy: {labels:?}"
+    );
+    assert!(
+        !matches!(clicked, Some(strip::StripAction::Primary(status::Primary::Retry))),
+        "a click begun on Cancel became Retry deploy"
+    );
+}

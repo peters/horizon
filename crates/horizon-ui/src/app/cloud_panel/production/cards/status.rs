@@ -18,7 +18,7 @@ pub(super) enum Tone {
 }
 
 /// The one action the header offers for the cloud's state. Everything else is in Manage.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::app::cloud_panel) enum Primary {
     Deploy,
     Reconnect,
