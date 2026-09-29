@@ -81,7 +81,7 @@ crates/
 - `remote_hosts_overlay.rs` + `remote_hosts_overlay/` — remote SSH chooser state/input shell with dedicated query, layout, and paint helpers
 - `terminal_widget/` — Terminal widget split by layout, input, render, scrollbar logic
 - `input/` — Keyboard translation, mouse reporting, escape-sequence building
-- `theme.rs` — Color palette (Catppuccin Mocha), styling constants
+- `theme.rs` — Dark and light color palettes, terminal palette, styling constants; see the [design guidelines](docs/design/guidelines.md)
 
 ## Development Workflow
 
