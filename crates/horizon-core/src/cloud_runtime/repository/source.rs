@@ -6,11 +6,14 @@
 //! which serves that one clone and may be handed to Git's own credential helper to keep.
 use base64::Engine;
 use horizon_cloud::Cancellation;
+mod transport;
+
+pub use transport::{Progress, Snapshot, clone, discard, probe, resumable};
+
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -160,6 +163,7 @@ pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
             .and_then(|origin| parse(&origin))
             .is_some_and(|origin| origin.url == remote.url)
             && is_checkout(path)
+            && !transport::unfinished(path)
     })
 }
 
@@ -257,6 +261,9 @@ fn helper_configured(listing: &str, scope: &str) -> bool {
     configured
 }
 
+/// The longest Git's credential helper is given to keep a token.
+const REMEMBER_LIMIT: Duration = Duration::from_secs(10);
+
 /// Asks the person's configured Git credential helper to keep `token` for the host it was pasted for.
 /// Returns whether a helper is configured to receive it.
 #[must_use]
@@ -317,6 +324,9 @@ pub enum Failure {
     Network,
     #[error("Clone cancelled.")]
     Cancelled,
+    /// A clone that stopped after receiving part of the repository, which it kept.
+    #[error("{0}")]
+    Interrupted(String),
     #[error("{0}")]
     Other(String),
 }
@@ -374,217 +384,6 @@ fn classify(remote: &Remote, stderr: &str) -> Failure {
                 .trim()
                 .to_owned(),
         )
-    }
-}
-
-/// Git's latest progress line, shared with the UI while the clone runs.
-pub type Progress = Arc<Mutex<String>>;
-
-/// `git` set up never to prompt, and to carry `token` when there is one.
-fn git(token: Option<&Token>) -> Command {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped());
-    if let Some(token) = token {
-        command
-            .env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", format!("http.{}.extraHeader", token.scope))
-            .env("GIT_CONFIG_VALUE_0", token.header());
-    }
-    // Never ask questions over SSH, but keep a command the person has set up themselves.
-    if std::env::var_os("GIT_SSH_COMMAND").is_none()
-        && git_output(Path::new("."), &["config", "--get", "core.sshCommand"]).is_none_or(|set| set.trim().is_empty())
-    {
-        command.env(
-            "GIT_SSH_COMMAND",
-            "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15",
-        );
-    }
-    command
-}
-
-/// How long a finished clone waits for what Git said last; a helper it left behind may hold the pipe.
-const CLONE_GRACE: Duration = Duration::from_secs(2);
-
-/// The longest Git's credential helper is given to keep a token.
-const REMEMBER_LIMIT: Duration = Duration::from_secs(10);
-
-/// The longest a probe may take before the host is taken to be out of reach.
-const PROBE_LIMIT: Duration = Duration::from_secs(20);
-
-/// Whether `remote` can be read without signing in, before anything is cloned. It ends when
-/// `cancel` is raised and after [`PROBE_LIMIT`], whatever the network is doing.
-///
-/// # Errors
-/// [`Failure::SignIn`] when it is private, or when the host hides a missing one the same way.
-pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> Result<(), Failure> {
-    let mut child = git(token)
-        .args(["ls-remote", "--", &remote.url, "HEAD"])
-        .stdout(Stdio::null())
-        .spawn()
-        .map_err(|error| Failure::Other(format!("Cannot run git: {error}")))?;
-    let mut stderr = child.stderr.take();
-    let (sender, reader) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut tail = String::new();
-        let mut buffer = [0_u8; 512];
-        while let Some(read) = stderr
-            .as_mut()
-            .and_then(|pipe| pipe.read(&mut buffer).ok())
-            .filter(|n| *n > 0)
-        {
-            keep_tail(&mut tail, &String::from_utf8_lossy(&buffer[..read]));
-        }
-        let _ = sender.send(tail);
-    });
-    let started = std::time::Instant::now();
-    let status = loop {
-        let over = cancel.is_cancelled() || started.elapsed() >= PROBE_LIMIT;
-        if over {
-            stop(&mut child, reader);
-            return Err(if cancel.is_cancelled() {
-                Failure::Cancelled
-            } else {
-                Failure::Network
-            });
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => {
-                stop(&mut child, reader);
-                return Err(Failure::Other(error.to_string()));
-            }
-        }
-    };
-    let stderr = collected(&reader, PROBE_LIMIT.saturating_sub(started.elapsed()));
-    if status.success() {
-        Ok(())
-    } else {
-        Err(classify(remote, &stderr))
-    }
-}
-
-/// The longest line of Git's progress kept; a remote that never ends one cannot grow it further.
-const LINE_LIMIT: usize = 4096;
-
-/// The most of Git's stderr that is kept: enough to name a failure, and all a host that never
-/// stops talking can make Horizon hold.
-const STDERR_TAIL: usize = 16 * 1024;
-
-/// Appends `text` to `tail` and drops the oldest text beyond [`STDERR_TAIL`].
-fn keep_tail(tail: &mut String, text: &str) {
-    tail.push_str(text);
-    if tail.len() > STDERR_TAIL {
-        let mut cut = tail.len() - STDERR_TAIL;
-        while !tail.is_char_boundary(cut) {
-            cut += 1;
-        }
-        tail.drain(..cut);
-    }
-}
-
-/// Ends `child` and lets go of its stderr reader. A transport helper that Git started may
-/// outlive it and keep the pipe open, so waiting for the reader could outlast any deadline;
-/// the reader ends on its own when the pipe closes.
-fn stop(child: &mut std::process::Child, reader: std::sync::mpsc::Receiver<String>) {
-    let _ = child.kill();
-    let _ = child.wait();
-    drop(reader);
-}
-
-/// What Git wrote to stderr, waiting no longer than `wait` for the reader to reach the end of
-/// the pipe: a helper Git left behind can hold it open, and then there is nothing more to read.
-fn collected(reader: &std::sync::mpsc::Receiver<String>, wait: Duration) -> String {
-    reader.recv_timeout(wait).unwrap_or_default()
-}
-
-/// Clones `remote` into `destination` without ever prompting.
-///
-/// # Errors
-/// Names why the clone failed; a partial checkout is removed.
-pub fn clone(
-    remote: &Remote,
-    destination: &Path,
-    token: Option<&Token>,
-    cancel: &Cancellation,
-    progress: &Progress,
-) -> Result<(), Failure> {
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
-    }
-    // Only a folder this call makes is this clone's to remove: creating it is the claim, and a
-    // folder that is already there is refused rather than cloned into.
-    match std::fs::create_dir(destination) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(Failure::Other(
-                "That folder already exists. Choose another clone folder and continue again.".into(),
-            ));
-        }
-        Err(error) => return Err(Failure::Other(error.to_string())),
-    }
-    let mut command = git(token);
-    command
-        .args(["clone", "--progress", "--", &remote.url])
-        .arg(destination)
-        .stdout(Stdio::null());
-    let mut child = command.spawn().map_err(|error| {
-        let _ = std::fs::remove_dir_all(destination);
-        Failure::Other(format!("Cannot run git: {error}"))
-    })?;
-    let mut stderr = child.stderr.take();
-    let sink = Arc::clone(progress);
-    let (sender, reader) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let (mut all, mut line, mut buffer) = (String::new(), String::new(), [0_u8; 512]);
-        while let Some(read) = stderr
-            .as_mut()
-            .and_then(|pipe| pipe.read(&mut buffer).ok())
-            .filter(|n| *n > 0)
-        {
-            for character in String::from_utf8_lossy(&buffer[..read]).chars() {
-                if matches!(character, '\r' | '\n') {
-                    if !line.trim().is_empty() {
-                        line.trim()
-                            .clone_into(&mut sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-                        keep_tail(&mut all, &line);
-                        keep_tail(&mut all, "\n");
-                    }
-                    line.clear();
-                } else if line.len() < LINE_LIMIT {
-                    line.push(character);
-                }
-            }
-        }
-        let _ = sender.send(all);
-    });
-    let status = loop {
-        if cancel.is_cancelled() {
-            stop(&mut child, reader);
-            let _ = std::fs::remove_dir_all(destination);
-            return Err(Failure::Cancelled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => {
-                stop(&mut child, reader);
-                let _ = std::fs::remove_dir_all(destination);
-                return Err(Failure::Other(error.to_string()));
-            }
-        }
-    };
-    let stderr = collected(&reader, CLONE_GRACE);
-    if status.success() {
-        Ok(())
-    } else {
-        let _ = std::fs::remove_dir_all(destination);
-        Err(classify(remote, &stderr))
     }
 }
 
@@ -698,20 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn a_host_that_never_stops_talking_leaves_only_a_bounded_tail() {
-        let mut tail = String::new();
-        for _ in 0..10_000 {
-            keep_tail(&mut tail, "fatal: a very talkative remote, éééé\n");
-        }
-        keep_tail(&mut tail, "fatal: could not read Username");
-        assert!(tail.len() <= STDERR_TAIL);
-        assert!(
-            tail.ends_with("could not read Username"),
-            "the end is what names the failure"
-        );
-    }
-
-    #[test]
     fn an_origin_is_read_from_the_config_file() {
         let temp = tempfile::tempdir().unwrap();
         assert_eq!(origin_url(temp.path()), None);
@@ -725,14 +510,6 @@ mod tests {
             origin_url(temp.path()).as_deref(),
             Some("https://github.com/demo-org/demo.git")
         );
-    }
-
-    #[test]
-    fn a_pipe_that_never_closes_cannot_hold_the_deadline() {
-        let (_sender, reader) = std::sync::mpsc::channel::<String>();
-        let started = std::time::Instant::now();
-        assert_eq!(collected(&reader, Duration::from_millis(100)), "");
-        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

@@ -84,22 +84,12 @@ impl State {
     /// The clone's status in one place. True when the folder for clones is to be chosen.
     fn status(&mut self, ui: &mut Ui, enter: bool) -> bool {
         if let Some(job) = &self.job {
-            let line = job
+            let snapshot = job
                 .progress
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    RichText::new(if line.is_empty() { "Connecting…" } else { &line })
-                        .size(13.5)
-                        .color(theme::FG_SOFT()),
-                );
-                if ui.small_button("Cancel").clicked() {
-                    job.cancel.cancel();
-                }
-            });
+            super::progress::show(ui, &snapshot, &job.cancel);
             return false;
         }
         // What was said about the last clone is over once another repository is being asked for.
@@ -133,16 +123,29 @@ impl State {
             });
             return choose_folder;
         }
+        let unfinished = self.plan(&remote).resumable.clone();
         match self.failure.clone() {
             Some(Failure::SignIn(host)) => {
                 let origin = super::origin(&remote.url).to_owned();
                 self.sign_in(ui, &host, &origin, enter);
+            }
+            Some(Failure::Interrupted(text)) => {
+                ui.label(RichText::new(text).size(13.0).color(theme::PALETTE_YELLOW()));
             }
             Some(failure) => {
                 ui.label(
                     RichText::new(failure.to_string())
                         .size(13.0)
                         .color(theme::PALETTE_RED()),
+                );
+            }
+            None if unfinished.is_some() => {
+                ui.label(
+                    RichText::new(
+                        "An earlier clone of this repository stopped here. Continue resumes from what it received.",
+                    )
+                    .size(13.0)
+                    .color(theme::PALETTE_YELLOW()),
                 );
             }
             None if self.public => {
@@ -154,6 +157,11 @@ impl State {
             }
             None => {}
         }
+        if let Some(folder) = unfinished
+            && ui.small_button("Start over").clicked()
+        {
+            self.start_over(&folder);
+        }
         choose_folder
     }
 
@@ -161,9 +169,10 @@ impl State {
     fn destination_row(&mut self, ui: &mut Ui, remote: &Remote) -> bool {
         let plan = self.plan(remote);
         // A checkout of this link that is already there is used as it is, wherever it sits.
-        let (caption, target) = match &plan.existing {
-            Some(existing) => ("ALREADY CLONED, CONTINUE USES IT", existing.clone()),
-            None => ("CLONE INTO", plan.destination.clone()),
+        let (caption, target) = match (&plan.existing, &plan.resumable) {
+            (Some(existing), _) => ("ALREADY CLONED, CONTINUE USES IT", existing.clone()),
+            (None, Some(stopped)) => ("UNFINISHED CLONE, CONTINUE RESUMES IT", stopped.clone()),
+            (None, None) => ("CLONE INTO", plan.destination.clone()),
         };
         widgets::caption(ui, caption);
         ui.horizontal(|ui| {

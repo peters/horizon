@@ -1,5 +1,6 @@
 //! Where a new cloud's code comes from: a pasted link is cloned, a folder is used as it is.
 //! Git's own credentials do the signing in; a token is asked for only when Git has none.
+mod progress;
 mod view;
 
 use egui::Context;
@@ -21,6 +22,8 @@ struct Plan {
     url: String,
     parent: PathBuf,
     existing: Option<PathBuf>,
+    /// A folder where an earlier try at this link stopped, and that a new try picks up from.
+    resumable: Option<PathBuf>,
     destination: PathBuf,
 }
 
@@ -195,6 +198,7 @@ impl State {
         self.plan.get_or_insert_with(|| Plan {
             url: remote.url.clone(),
             existing: source::existing(&parent, remote),
+            resumable: source::resumable(&parent, remote),
             destination: source::destination(&parent, remote),
             parent,
         })
@@ -227,7 +231,8 @@ impl State {
             self.ready = Some(path);
             return;
         }
-        let destination = source::destination(&parent, &remote);
+        // A clone that stopped is picked up from what it received, not started again.
+        let destination = source::resumable(&parent, &remote).unwrap_or_else(|| source::destination(&parent, &remote));
         // What the probe read without one needs no token, whatever was typed before.
         let token = (!self.public).then(|| Token::new(&remote, &self.token)).flatten();
         self.token_tried = token.is_some();
@@ -286,12 +291,13 @@ impl State {
                 None
             }
             Ok(Ok(Cloned { path, note })) => {
-                self.finish();
+                self.finish(false);
                 self.note = note;
                 Some(path)
             }
             Ok(Err(failure)) => {
-                self.finish();
+                // What was received is kept, so a private repository needs its token again.
+                self.finish(matches!(failure, Failure::Interrupted(_)));
                 // Asked for a sign-in after all: what the probe read no longer counts.
                 if matches!(failure, Failure::SignIn(_)) {
                     self.public = false;
@@ -300,7 +306,7 @@ impl State {
                 None
             }
             Err(TryRecvError::Disconnected) => {
-                self.finish();
+                self.finish(false);
                 self.failure = Some(Failure::Other("The clone stopped unexpectedly.".into()));
                 None
             }
@@ -341,9 +347,21 @@ impl State {
         self.probe = Some(receiver);
     }
 
-    fn finish(&mut self) {
+    /// The clone is over. Its token goes with it unless the clone can be resumed.
+    fn finish(&mut self, keep_token: bool) {
         self.job = None;
-        self.token.zeroize();
+        // What is on disk changed: a stopped clone is there to resume, a finished one is used.
+        self.plan = None;
+        if !keep_token {
+            self.token.zeroize();
+        }
+    }
+
+    /// Gives up on a clone that stopped, removing what it received.
+    fn start_over(&mut self, folder: &Path) {
+        source::discard(folder);
+        self.plan = None;
+        self.failure = None;
     }
 
     /// What Continue would do now, or what is missing before it can.
@@ -361,6 +379,9 @@ impl State {
         }
         if matches!(self.failure, Some(Failure::SignIn(_))) && self.token.trim().is_empty() {
             return Err("Paste a token with read access to continue.");
+        }
+        if self.plan(&remote).resumable.is_some() {
+            return Ok("Continue resumes the clone, then you choose where it runs.");
         }
         Ok("Continue clones the repository, then you choose where it runs.")
     }
@@ -608,5 +629,75 @@ mod tests {
         });
         drop(state);
         assert!(cancel.is_cancelled());
+    }
+
+    /// A folder as an interrupted clone of `remote` leaves it.
+    fn stopped_clone(parent: &Path, remote: &Remote) -> PathBuf {
+        let folder = parent.join(&remote.name);
+        std::fs::create_dir_all(folder.join(".git")).unwrap();
+        std::fs::write(
+            folder.join(".git").join("horizon-clone"),
+            format!("{}\nmain\n", remote.url),
+        )
+        .unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_stopped_clone_is_the_plan_and_continue_resumes_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let folder = stopped_clone(temp.path(), &remote);
+        let mut state = typed("github.com/demo-org/demo-atlas");
+        state.set_parent(temp.path());
+        state.remote();
+        state.probed = Some(remote.url.clone());
+        assert_eq!(state.plan(&remote).resumable.as_deref(), Some(folder.as_path()));
+        assert_eq!(
+            state.next_step(),
+            Ok("Continue resumes the clone, then you choose where it runs.")
+        );
+    }
+
+    #[test]
+    fn starting_over_removes_only_what_a_clone_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let folder = stopped_clone(temp.path(), &remote);
+        let mut state = State::default();
+        state.set_parent(temp.path());
+        state.failure = Some(Failure::Interrupted("Stopped.".into()));
+        state.start_over(&folder);
+        assert!(!folder.exists() && state.failure.is_none());
+        assert_eq!(state.plan(&remote).resumable, None);
+        let theirs = temp.path().join("theirs");
+        std::fs::create_dir(&theirs).unwrap();
+        state.start_over(&theirs);
+        assert!(theirs.is_dir(), "a folder that is not an unfinished clone stays");
+    }
+
+    #[test]
+    fn a_clone_that_stopped_keeps_its_token_for_the_resume() {
+        let mut state = State::default();
+        state.token = "ghp_demo".into();
+        let (sender, receiver) = channel();
+        state.job = Some(Job {
+            receiver,
+            cancel: Cancellation::default(),
+            progress: Progress::default(),
+        });
+        sender.send(Err(Failure::Interrupted("Stopped.".into()))).unwrap();
+        assert_eq!(state.poll(&Context::default()), None);
+        assert_eq!(state.token, "ghp_demo");
+        assert_eq!(state.failure, Some(Failure::Interrupted("Stopped.".into())));
+        let (sender, receiver) = channel();
+        state.job = Some(Job {
+            receiver,
+            cancel: Cancellation::default(),
+            progress: Progress::default(),
+        });
+        sender.send(Err(Failure::Network)).unwrap();
+        state.poll(&Context::default());
+        assert!(state.token.is_empty(), "any other end forgets it");
     }
 }
