@@ -2,6 +2,45 @@
 use super::{Confirmation, HorizonApp, Request, Settings, Stage, Store, cloud_runtime, deployment};
 
 impl HorizonApp {
+    /// Reads the cloud's record: whether it holds a requested or bound worker, and pinned
+    /// siblings. `None` when it cannot be read; the card says why. A record that reads
+    /// again after it could not is what the card shows from now on (its worker, stage and
+    /// billing), so a later preflight failure is that failure, not the record's.
+    fn read_record(&mut self, id: u32, state_root: &std::path::Path, started: bool) -> Option<(bool, bool)> {
+        let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
+        let record = match Store::lock(state_root).and_then(|store| store.load()) {
+            Ok(Some(state)) => Some(state),
+            Ok(None) if !started => None,
+            other => {
+                runtime.state_unavailable = true;
+                runtime.fail_preflight(
+                    Stage::Validate,
+                    other.err().map_or_else(
+                        || "Deployment record is missing; reconcile its worker before continuing".into(),
+                        |error| error.to_string(),
+                    ),
+                );
+                return None;
+            }
+        };
+        let found = record.as_ref().map_or((false, false), |state| {
+            (
+                matches!(
+                    state.operation,
+                    cloud_runtime::CreateState::Bound { .. } | cloud_runtime::CreateState::Requested
+                ),
+                state.siblings.is_some(),
+            )
+        });
+        if std::mem::take(&mut runtime.state_unavailable)
+            && let Some(record) = record
+        {
+            runtime.stage = Some(record.stage);
+            runtime.state = Some(record);
+        }
+        Some(found)
+    }
+
     /// Saves the cloud and its prepared deployment record before any allocation, and
     /// returns what its deployment needs. `None` when refused; the card shows why.
     pub(super) fn prepare_production_deployment(
@@ -40,33 +79,7 @@ impl HorizonApp {
                 return None;
             }
         };
-        let loaded = Store::lock(&state_root).and_then(|store| store.load());
-        let (existing, pinned) = match loaded {
-            Ok(Some(state)) => (
-                matches!(
-                    state.operation,
-                    cloud_runtime::CreateState::Bound { .. } | cloud_runtime::CreateState::Requested
-                ),
-                state.siblings.is_some(),
-            ),
-            Ok(None) if !launch.deployment_started => (false, false),
-            other => {
-                let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
-                runtime.state_unavailable = true;
-                runtime.fail_preflight(
-                    Stage::Validate,
-                    other.err().map_or_else(
-                        || "Deployment record is missing; reconcile its worker before continuing".into(),
-                        |error| error.to_string(),
-                    ),
-                );
-                return None;
-            }
-        };
-        // The record reads again: a later preflight failure is that failure, not the record's.
-        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.state_unavailable = false;
-        }
+        let (existing, pinned) = self.read_record(id, &state_root, launch.deployment_started)?;
         let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
             Ok(settings) => settings,
             Err(error) => {

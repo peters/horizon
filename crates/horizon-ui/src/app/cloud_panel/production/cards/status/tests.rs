@@ -602,3 +602,22 @@ fn a_stop_in_progress_keeps_the_deployment_it_stops_drawn() {
     assert_eq!(status.track.finished, Stage::ALL.len(), "not redrawn as pending");
     assert!(status.track.faded);
 }
+
+#[test]
+fn a_failure_over_a_stopped_record_offers_resume_not_a_new_deployment() {
+    let runtime = Runtime {
+        stage: Some(Stage::Validate),
+        error: Some("settings.json could not be read".into()),
+        state: Some(deployment("Stopped", &bound(), &serde_json::Value::Null)),
+        ..Runtime::default()
+    };
+    assert_eq!(of(&runtime, Occupancy::default(), now()).primary, Some(Primary::Resume));
+    let ready = Runtime {
+        state: Some(deployment("Ready", &bound(), &running_worker())),
+        ..runtime
+    };
+    assert_eq!(
+        of(&ready, Occupancy::default(), now()).primary,
+        Some(Primary::Reconnect)
+    );
+}

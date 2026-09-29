@@ -799,4 +799,10 @@ fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
     assert!(!runtime.state_unavailable, "the record read");
     let error = runtime.error.as_deref().unwrap_or_default();
     assert!(error.contains("settings.json"), "{error}");
+    let kept = runtime.state.as_ref().expect("the repaired record is kept");
+    assert_eq!(kept.stage, Stage::Ready);
+    assert!(
+        matches!(kept.operation, cloud_runtime::CreateState::Bound { .. }),
+        "its worker, billing and Reconnect follow from it"
+    );
 }

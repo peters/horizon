@@ -670,8 +670,13 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
     let primary = if runtime.progress.is_deletion() {
         // Deleting again needs Manage's confirmation.
         Some(Primary::Manage)
-    } else if resume_failed(runtime) {
-        // The worker is still stopped: resuming again, not a new deployment.
+    } else if resume_failed(runtime)
+        || runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| state.stage == Stage::Stopped)
+    {
+        // The worker is still stopped: resuming it, not a new deployment.
         Some(Primary::Resume)
     } else if stop_failed(runtime) {
         // A failed stop is finished by confirming it, not by reconnecting the worker.
