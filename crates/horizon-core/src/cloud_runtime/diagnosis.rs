@@ -174,8 +174,15 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
     let lower = without_zero_counts(&line.to_ascii_lowercase());
-    FAILURE_MARKERS.iter().any(|marker| lower.contains(marker))
+    FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker))
         && !TRANSIENT_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Whether `marker` begins a word of `text`: "error:" and "errors" count, the
+/// "error" in a crate named "thiserror" does not.
+fn starts_a_word(text: &str, marker: &str) -> bool {
+    text.match_indices(marker)
+        .any(|(index, _)| !text[..index].ends_with(|c: char| c.is_ascii_alphanumeric()))
 }
 
 /// Counts of nothing, such as `0 failed` in `test result: ok. 214 passed; 0 failed`,
@@ -243,6 +250,7 @@ mod tests {
             "No errors detected",
             "Validation finished with no failures",
             "completed without errors",
+            "   Compiling thiserror v2.0.12",
         ] {
             assert!(!is_failure(success), "{success}");
         }

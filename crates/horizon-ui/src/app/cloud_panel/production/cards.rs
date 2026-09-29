@@ -88,7 +88,6 @@ fn deleted_runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runt
 }
 
 fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> Option<Action> {
-    let mut action = None;
     ui.separator();
     if deleting(runtime) {
         deletion_progress(ui, id, runtime);
@@ -152,6 +151,22 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         return Some(Action::Remove);
     }
+    let mut action = operation_action(ui, runtime);
+
+    if runtime.stage == Some(Stage::Ready) {
+        action = ready_actions(ui, runtime).or(action);
+    }
+    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
+    action = super::local_network::show(ui, runtime).or(action);
+    bound_provider_check(ui, runtime)
+        .or_else(|| deletion_action(ui, runtime))
+        .or(action)
+}
+
+/// The one lifecycle action the cloud's state allows: cancel, confirm a stop, resume,
+/// read an unreadable record again, or deploy/reconnect.
+fn operation_action(ui: &mut egui::Ui, runtime: &super::Runtime) -> Option<Action> {
+    let mut action = None;
     if runtime.receiver.is_some() && runtime.stage != Some(Stage::Ready) {
         if ui.add(danger_button("Cancel operation")).clicked()
             && let Some(cancel) = &runtime.cancel
@@ -168,6 +183,13 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
         if ui.add(action_button("Resume worker")).clicked() {
             action = Some(Action::Resume);
         }
+    } else if runtime.state_unavailable {
+        // Deploy reads the record first and stops again while it stays unreadable, so it
+        // never deploys over a record it cannot see.
+        ui.small("Horizon continues only once it can read this cloud's deployment record.");
+        if ui.add(accent_button(ui, "Read record again")).clicked() {
+            action = Some(Action::Deploy);
+        }
     } else if ui
         .add(accent_button(
             ui,
@@ -181,15 +203,7 @@ fn runtime_actions(ui: &mut egui::Ui, id: u32, runtime: &mut super::Runtime) -> 
     {
         action = Some(Action::Deploy);
     }
-
-    if runtime.stage == Some(Stage::Ready) {
-        action = ready_actions(ui, runtime).or(action);
-    }
-    // Also shown while sharing is paused by a disconnect, so the owner can switch it off.
-    action = super::local_network::show(ui, runtime).or(action);
-    bound_provider_check(ui, runtime)
-        .or_else(|| deletion_action(ui, runtime))
-        .or(action)
+    action
 }
 
 impl super::Runtime {

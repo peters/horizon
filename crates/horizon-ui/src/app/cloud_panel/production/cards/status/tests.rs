@@ -160,6 +160,16 @@ fn a_cloud_that_was_ready_retries_by_reconnecting() {
         of(&runtime, Occupancy::default(), now()).primary,
         Some(Primary::Reconnect)
     );
+    let failed_stop = Runtime {
+        stage: Some(Stage::Stopping),
+        error: Some("Stop request failed: provider timed out".into()),
+        ..runtime
+    };
+    assert_eq!(
+        of(&failed_stop, Occupancy::default(), now()).primary,
+        Some(Primary::ReconcileStop),
+        "a failed stop is confirmed, not answered by reconnecting the worker"
+    );
 }
 
 #[test]
@@ -230,6 +240,11 @@ fn an_unreadable_record_offers_no_shortcut() {
     assert_eq!(status.tone, Tone::Failed);
     assert_eq!(status.primary, None);
     assert_eq!(status.numbers, "Deployment state could not be read");
+    assert!(
+        !status.tail.contains("provider"),
+        "a provider check needs the record too: {}",
+        status.tail
+    );
     let with_reason = Runtime {
         state_unavailable: true,
         error: Some("Deployment record is missing; reconcile its worker before continuing".into()),

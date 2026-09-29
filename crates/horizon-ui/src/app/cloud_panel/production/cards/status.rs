@@ -250,7 +250,8 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
                 .error
                 .clone()
                 .unwrap_or_else(|| "Deployment state could not be read".into()),
-            tail: "Open Manage to check the provider".into(),
+            // A provider check needs the record too; reading it again is what Manage offers.
+            tail: "Repair or restore the record, then read it again in Manage".into(),
             ..base
         });
     }
@@ -611,6 +612,9 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
     let never_ready = runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready);
     let primary = if runtime.progress.is_deletion() {
         None
+    } else if runtime.stage == Some(Stage::Stopping) {
+        // A failed stop is finished by confirming it, not by reconnecting the worker.
+        Some(Primary::ReconcileStop)
     } else if never_ready {
         Some(Primary::Retry)
     } else {
