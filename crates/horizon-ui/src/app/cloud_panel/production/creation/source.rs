@@ -117,6 +117,7 @@ impl State {
     /// The repository a pasted link names, unless the text is a folder that exists.
     fn remote(&mut self) -> Option<&Remote> {
         if self.parsed_for != self.input {
+            let mut pasted = self.take_credentials();
             self.parsed_for.clone_from(&self.input);
             let path = horizon_core::dir_search::expand_tilde(self.input.trim());
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
@@ -127,6 +128,11 @@ impl State {
                 self.token_tried = false;
                 self.token_focused = false;
             }
+            if !pasted.is_empty() {
+                self.token.zeroize();
+                self.token.push_str(&pasted);
+                pasted.zeroize();
+            }
             self.folder = (!self.input.trim().is_empty() && path.join(".git").exists()).then_some(path);
             self.failure = None;
             self.public = false;
@@ -136,6 +142,17 @@ impl State {
             self.changed = Some(Instant::now());
         }
         self.remote.as_ref()
+    }
+
+    /// A password or token written into a pasted address (`https://user:token@host/…`) is taken
+    /// out of the field, and out of every copy of it, and handed back to become the token.
+    fn take_credentials(&mut self) -> String {
+        let Some((clean, secret)) = split_credentials(&self.input) else {
+            return String::new();
+        };
+        self.input.zeroize();
+        self.input = clean;
+        secret
     }
 
     /// The typed text, when it is a folder that holds a repository and the text has stood still:
@@ -335,6 +352,25 @@ impl State {
     }
 }
 
+/// The address with any password removed, and that password, when one is written into it:
+/// `https://user:secret@host/path` gives `https://host/path` and `secret`. A user name alone is
+/// dropped for https and kept for ssh, where it is how the account is named.
+fn split_credentials(input: &str) -> Option<(String, String)> {
+    let (scheme, rest) = input.trim().split_once("://")?;
+    let (authority, path) = rest.split_once('/')?;
+    let (userinfo, hostport) = authority.rsplit_once('@')?;
+    if hostport.is_empty() {
+        return None;
+    }
+    let (user, secret) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    let keep = if scheme == "ssh" && !user.is_empty() {
+        format!("{user}@")
+    } else {
+        String::new()
+    };
+    Some((format!("{scheme}://{keep}{hostport}/{path}"), secret.to_owned()))
+}
+
 /// `scheme://host[:port]` of a repository address: the part a token is good for.
 fn origin(url: &str) -> &str {
     url.match_indices('/').nth(2).map_or(url, |(end, _)| &url[..end])
@@ -453,6 +489,28 @@ mod tests {
         state.mirror("/tmp/demo/atlas");
         assert!(!state.editing());
         assert!(state.input.ends_with("atlas"));
+    }
+
+    #[test]
+    fn a_password_written_into_the_address_becomes_the_token_and_leaves_the_field() {
+        let mut state = typed("https://user:ghp_secret@github.com/demo-org/demo-atlas");
+        assert_eq!(
+            state.remote().map(|remote| remote.url.as_str()),
+            Some("https://github.com/demo-org/demo-atlas.git")
+        );
+        assert_eq!(state.input, "https://github.com/demo-org/demo-atlas");
+        assert_eq!(state.parsed_for, "https://github.com/demo-org/demo-atlas");
+        assert_eq!(state.token, "ghp_secret");
+        assert_eq!(
+            split_credentials("ssh://git:pw@github.com/demo-org/demo").unwrap().0,
+            "ssh://git@github.com/demo-org/demo"
+        );
+        assert_eq!(split_credentials("https://github.com/demo-org/demo"), None);
+        assert_eq!(
+            split_credentials("https://user:half@/demo"),
+            None,
+            "not until a host follows"
+        );
     }
 
     #[test]

@@ -218,6 +218,27 @@ impl Token {
     }
 }
 
+/// Whether the `git config --get-regexp` `listing` leaves a credential helper in force for the
+/// origin `scope`: the last applicable setting decides, and an empty one is Git's way to switch
+/// the helpers before it off.
+fn helper_configured(listing: &str, scope: &str) -> bool {
+    let mut configured = false;
+    for line in listing.lines() {
+        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+        let applies = match key
+            .strip_prefix("credential.")
+            .and_then(|rest| rest.strip_suffix(".helper"))
+        {
+            Some(url) => scope.starts_with(url),
+            None => key == "credential.helper",
+        };
+        if applies {
+            configured = !value.trim().is_empty();
+        }
+    }
+    configured
+}
+
 /// Asks the person's configured Git credential helper to keep `token` for the host it was pasted for.
 /// Returns whether a helper is configured to receive it.
 #[must_use]
@@ -226,7 +247,7 @@ pub fn remember(token: &Token) -> bool {
         Path::new("."),
         &["config", "--get-regexp", r"^credential\.(.*\.)?helper$"],
     )
-    .is_some_and(|helpers| !helpers.trim().is_empty());
+    .is_some_and(|listing| helper_configured(&listing, &token.scope));
     let Ok(mut child) = Command::new("git")
         .args(["credential", "approve"])
         .stdin(Stdio::piped())
@@ -699,6 +720,26 @@ mod tests {
             parse("github.com/demo-org/.github").is_some(),
             "a leading dot is a real name"
         );
+    }
+
+    #[test]
+    fn a_helper_counts_only_while_it_is_in_force_for_the_origin() {
+        let scope = "https://github.com/";
+        assert!(!helper_configured("", scope));
+        assert!(helper_configured("credential.helper store\n", scope));
+        assert!(
+            !helper_configured("credential.helper store\ncredential.helper \n", scope),
+            "an empty one resets"
+        );
+        assert!(helper_configured("credential.https://github.com.helper cache\n", scope));
+        assert!(
+            !helper_configured("credential.https://gitlab.com.helper cache\n", scope),
+            "another host's helper"
+        );
+        assert!(helper_configured(
+            "credential.helper \ncredential.helper store\n",
+            scope
+        ));
     }
 
     #[test]
