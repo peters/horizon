@@ -251,6 +251,10 @@ impl HorizonApp {
         let fullscreen_active = self.cloud_prototype.fullscreen.is_some();
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
+            let runtime = production.runtimes.entry(group.issue).or_default();
+            // Before any skip: a view hidden by another cloud's full screen reports no
+            // scrolled-up reader, so its output keeps joining instead of piling up held.
+            super::output::begin_frame(runtime);
             if self
                 .cloud_prototype
                 .fullscreen
@@ -259,11 +263,9 @@ impl HorizonApp {
             {
                 continue;
             }
-            let runtime = production.runtimes.entry(group.issue).or_default();
             if group.collapsed {
                 runtime.drawer = None;
             }
-            super::output::begin_frame(runtime);
             let occupancy = occupancy(group, &self.board);
             let frame = ctx.cumulative_frame_nr();
             let status = status::for_frame(runtime, occupancy, now, frame);

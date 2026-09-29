@@ -13,7 +13,7 @@ pub(super) fn facts(runtime: &Runtime) -> Vec<(&'static str, String)> {
         format!("{} · {} (last observed)", worker.id, worker.desired_status),
     )];
     if let Some(endpoint) = worker.ssh_endpoint() {
-        rows.push(("SSH", format!("{}:{}", endpoint.host().as_str(), endpoint.port())));
+        rows.push(("SSH", host_port(endpoint.host().as_str(), endpoint.port())));
     }
     let disks = [
         worker.container_disk_in_gb.map(|gb| format!("{gb} GB container")),
@@ -59,6 +59,15 @@ pub(super) fn worker(ui: &mut egui::Ui, runtime: &Runtime) {
         });
 }
 
+/// `host:port`, with an IPv6 host bracketed so its colons do not run into the port's.
+fn host_port(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +99,12 @@ mod tests {
         assert_eq!(find("Storage"), Some("20 GB container · 50 GB volume at /workspace"));
         assert_eq!(find("Last start"), Some("2026-09-28T09:00:00Z"));
         assert!(facts(&Runtime::default()).is_empty());
+    }
+
+    #[test]
+    fn an_ipv6_ssh_host_is_bracketed_before_its_port() {
+        assert_eq!(host_port("2001:db8::1", 22), "[2001:db8::1]:22");
+        assert_eq!(host_port("203.0.113.24", 22041), "203.0.113.24:22041");
+        assert_eq!(host_port("worker.example", 22), "worker.example:22");
     }
 }

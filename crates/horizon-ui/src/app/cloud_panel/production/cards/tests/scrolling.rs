@@ -249,3 +249,29 @@ fn scrolled_up_output_keeps_its_first_line_while_more_lines_arrive() {
     );
     assert!(label_pos(&latest, "Output").is_some());
 }
+
+#[test]
+fn a_cloud_hidden_by_another_clouds_full_screen_keeps_its_output_joining() {
+    let (_temp, ctx, mut app) = verbose_card();
+    app.cloud_prototype.groups.0.push(CloudGroup::new(
+        902,
+        "Other".into(),
+        "workspace".into(),
+        "/synthetic".into(),
+        [2000.0, 10.0],
+    ));
+    {
+        // Its reader was scrolled up when the other cloud filled the screen.
+        let runtime = app.cloud_prototype.production.runtimes.entry(901).or_default();
+        runtime.verbose_unpinned = true;
+        runtime.push_log("HELD".into());
+        assert_eq!(runtime.pending_logs.len(), 1);
+    }
+    app.toggle_cloud_fullscreen(&ctx, 902);
+    frame(&ctx, &mut app, 0.0, Pos2::ZERO, 0.0);
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&901).unwrap();
+    runtime.push_log("AFTER".into());
+    let shown: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(shown, ["HELD", "AFTER"], "no hidden reader holds the output");
+    assert!(runtime.pending_logs.is_empty());
+}

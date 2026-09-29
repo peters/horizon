@@ -642,7 +642,10 @@ fn deletion_offers_cancel_only_while_hosted_devices_can_still_be_released() {
 
 #[test]
 fn another_operation_after_a_failed_deletion_drops_its_steps() {
-    for (action, name) in [(Action::Stop, "Stop"), (Action::Resume, "Resume")] {
+    for (action, name, first) in [
+        (Action::Stop, "Stop", Stage::Stopping),
+        (Action::Resume, "Resume", Stage::Provision),
+    ] {
         let mut runtime = Runtime::default();
         runtime.progress.begin_deletion();
         runtime.progress.stage(Stage::DeleteWorker, std::time::Instant::now());
@@ -650,7 +653,7 @@ fn another_operation_after_a_failed_deletion_drops_its_steps() {
         assert!(runtime.progress.is_deletion());
         super::begin_operation(&mut runtime, action);
         assert!(!runtime.progress.is_deletion(), "{name} shows its own progress");
-        assert_eq!(runtime.stage, Some(Stage::Provision));
+        assert_eq!(runtime.stage, Some(first), "{name}");
     }
     let mut runtime = Runtime::default();
     super::begin_operation(&mut runtime, Action::Delete);
@@ -686,10 +689,15 @@ fn every_worker_operation_starts_its_own_attempt() {
         .unwrap();
     runtime.progress.stage(Stage::Validate, long_ago);
     let before = runtime.progress.attempt();
-    for action in [Action::Resume, Action::Stop] {
+    for (action, first) in [(Action::Resume, Stage::Provision), (Action::Stop, Stage::Stopping)] {
         let previous = runtime.progress.attempt();
         begin_operation(&mut runtime, action);
         assert_eq!(runtime.progress.attempt(), previous + 1, "{action:?}");
+        assert_eq!(
+            runtime.stage,
+            Some(first),
+            "{action:?} reports its own step from the start"
+        );
         assert_eq!(
             runtime.progress.elapsed(),
             None,
