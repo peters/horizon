@@ -190,7 +190,7 @@ resulting hex values below are computed from the token values above.
 | Widget pressed fill (egui `active.bg_fill`) | `blend(PANEL_BG_ALT, ACCENT, 0.22)` | `#283557` | `#C8CBE0` |
 | Text selection fill (egui) | `alpha(ACCENT, 54)` with 1 px `ACCENT` stroke | | |
 | Selected tab fill | `blend(PANEL_BG_ALT, ACCENT, 0.20)` | `#273252` | `#CCCEE1` |
-| Selected tab outline | `blend(BORDER_SUBTLE, ACCENT, 0.5)` | `#4860A0` | `#8A95CE` |
+| Selected tab outline | `blend(BORDER_SUBTLE, ACCENT, 0.5)` | `#4960A1` | `#8B95CE` |
 | Selected worker card fill | `blend(PANEL_BG_ALT, ACCENT, 0.14)` | `#222B45` | `#D7D7E2` |
 | Selected chip fill | `blend(PANEL_BG_ALT, ACCENT, 0.22)` | `#283557` | `#C8CBE0` |
 | Chip hover fill | `blend(PANEL_BG_ALT, FG, 0.06)` | `#222733` | `#E3E0D9` |
@@ -458,7 +458,7 @@ Fixed metrics:
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
 | Panel resize handle | 18 |
-| Canvas dot grid | 22 spacing, 2.3 dot diameter, hidden when the on-screen spacing would fall under 14 |
+| Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Dialog button | at least 120 x 40 |
 | Overlay text input | 44 high |
@@ -502,25 +502,41 @@ There are four levels, from back to front:
 
 ### Modal dialog
 
-Recipe used by the large form dialogs, the cloud creation dialog and the cloud
-accounts dialog (up to 1180 and 580 wide respectively). Small confirmations
-(such as closing a cloud) and the browser file chooser keep egui's default modal
-frame from the theme instead: window fill `PANEL_BG`, 1 px `BORDER_SUBTLE`
-outline and the popup shadow, without the 24 px margin below.
+Two form dialogs share one frame: the cloud creation dialog (up to 1180 wide)
+and the cloud accounts dialog (up to 580 wide). Small confirmations (such as
+closing a cloud) and the browser file chooser keep egui's default modal frame
+from the theme instead: window fill `PANEL_BG`, 1 px `BORDER_SUBTLE` outline and
+the popup shadow, without the 24 px margin below.
+
+Shared by both form dialogs:
 
 - Frame: fill `BG_ELEVATED`, stroke 1 px `BORDER_STRONG`, corner radius 16,
   inner margin 24. Raise it above the toolbar with `Order::Tooltip`.
-- `item_spacing` (10, 8). Heading at 26 strong `FG` on the left, a
-  `PANEL_BG_ALT` info chip (radius 8, margin 12 x 6, 13 `FG_SOFT`) on the right,
-  a one-line description at 14 `FG_SOFT`, then 16 of space.
-- Body scrolls; the action bar stays pinned below it with 12 of space between.
-  Keep the dialog height steady as choices change so it does not jump.
-- Footer: right-aligned `Cancel` and the primary action, both at least
-  120 x 40, radius 10, label 14. A short reason or hint (13 `FG` or 11.5
-  `FG_DIM`) sits to the left when the primary is disabled.
-- Escape and a click on the backdrop dismiss; Enter in the first text field
-  submits when the form is valid. While a child picker is open, the dialog is
-  disabled and the picker owns Escape and outside clicks.
+- Heading at 26 strong, then a one-line description in `FG_SOFT`, then 16 of
+  space.
+- Body scrolls; the action bar stays pinned below it.
+- Escape and a click on the backdrop dismiss. While a child picker is open, the
+  dialog is disabled and the picker owns Escape and outside clicks.
+- Footer: right-aligned primary and `Cancel`, 40 high, primary radius 10.
+
+Cloud creation dialog specifics:
+
+- `item_spacing` (10, 8); the heading has a `PANEL_BG_ALT` info chip on the
+  right (radius 8, margin 12 x 6, 13 `FG_SOFT`); the description is 14.
+- 12 of space between the scroll body and the action bar. Keep the dialog height
+  steady as choices change so it does not jump.
+- Footer buttons are at least 120 x 40 with a 14 label; the primary is a solid
+  `ACCENT` fill. A short reason or hint (13 `FG` or 11.5 `FG_DIM`) sits to the
+  left when the primary is disabled.
+- Enter in the first text field submits when the form is valid.
+
+Cloud accounts dialog specifics:
+
+- Global 8 x 8 `item_spacing`, no info chip, the description at the default
+  text size.
+- A separator sits above the footer. The primary ("Save settings") is 148 x 40
+  with a `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label;
+  `Cancel` is at least 80 x 40.
 
 ### Overlay card (command palette and pickers)
 
@@ -575,7 +591,8 @@ backdrop dimming:
 | Kind | Fill | Outline | Label | Radius | Where |
 |---|---|---|---|---|---|
 | Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar "update available" |
-| Primary (dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
+| Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
+| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | "Save settings", 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
 | Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
 | Secondary (dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |
@@ -685,11 +702,22 @@ Focus behavior:
 
 ## Motion and repaint rules
 
-Horizon is quiet at rest. Beyond egui's own short hover and collapse
-transitions, motion is limited to: the canvas pan and zoom the person drives,
-the loading spinner (1.2 s per turn, repainting about every 32 ms while
-visible), and the three-dot "working" indicator on an agent panel (1 Hz pulse).
-There are no decorative transitions; do not add any without a redraw budget.
+Horizon is quiet at rest. Motion exists only where it reports a state or
+follows the person's input. Current cases:
+
+- Canvas pan and zoom the person drives, and egui's own short hover and collapse
+  transitions.
+- The loading spinner (1.2 s per turn, repainting about every 32 ms while
+  visible).
+- The three-dot "working" indicator on an agent panel (1 Hz pulse).
+- The microphone glyph in a panel titlebar: a slow pulse (about 0.8 Hz) in red
+  with an expanding ring while recording, and in `PALETTE_YELLOW` while a
+  transcription is in flight.
+- The history meter in a panel titlebar, which eases to its new fill over
+  0.16 s.
+
+Motion is not decoration: a new animation needs a state to report and a redraw
+budget, and must stop repainting when that state ends.
 
 Rules from the [UI Feature Perf Checklist](../../AGENTS.md#ui-feature-perf-checklist)
 that apply to design decisions:
