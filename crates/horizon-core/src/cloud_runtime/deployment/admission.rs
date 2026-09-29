@@ -52,7 +52,9 @@ pub fn problems(profile: &horizon_cloud::Profile, settings: &Settings) -> Vec<Pr
 /// deployment sends to the provider, which must be a supported Ed25519 key.
 fn ssh_key(settings: &Settings) -> crate::cloud_runtime::Result<()> {
     validate_ssh_identity(&settings.ssh_identity_file)?;
-    let public = format!("{}.pub", settings.ssh_identity_file.display());
+    // Appended to the path itself: a name that is not valid UTF-8 keeps its own bytes.
+    let mut public = settings.ssh_identity_file.clone().into_os_string();
+    public.push(".pub");
     let key = std::fs::read_to_string(&public)?;
     if !horizon_cloud::valid_public_key(key.trim()) {
         return Err(Error::Invalid(
@@ -193,5 +195,19 @@ mod tests {
         private_file(&root.path().join("ssh"), "-----BEGIN-----");
         let found = problems(&profile(), &settings(root.path()));
         assert!(found.iter().any(|problem| problem.what == "SSH key"), "{found:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_identity_whose_name_is_not_utf8_finds_its_public_key() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = tempfile::tempdir().unwrap();
+        private_file(&root.path().join("runpod"), "key");
+        let name = std::ffi::OsString::from_vec(b"id-\xff".to_vec());
+        let path = root.path().join(name);
+        keygen(&path);
+        let mut settings = settings(root.path());
+        settings.ssh_identity_file = path;
+        assert!(problems(&profile(), &settings).is_empty());
     }
 }

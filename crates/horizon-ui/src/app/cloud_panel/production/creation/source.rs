@@ -124,7 +124,9 @@ impl State {
             self.parsed_for.clone_from(&self.input);
             let path = horizon_core::dir_search::expand_tilde(self.input.trim());
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
-            self.remote = source::parse(&self.input).filter(|_| !path.exists());
+            // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
+            // folder that happens to have that name.
+            self.remote = source::parse(&self.input).filter(|_| !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
                 self.token.zeroize();
@@ -136,7 +138,7 @@ impl State {
                 self.token.push_str(&pasted);
                 pasted.zeroize();
             }
-            self.folder = (!self.input.trim().is_empty() && path.join(".git").exists()).then_some(path);
+            self.folder = (!self.input.trim().is_empty() && holds_repository(&path)).then_some(path);
             self.failure = None;
             self.public = false;
             self.probe_cancel.cancel();
@@ -384,6 +386,11 @@ fn deliver(sender: &SyncSender<Result<Cloned, Failure>>, result: Result<Cloned, 
     {
         let _ = std::fs::remove_dir_all(path);
     }
+}
+
+/// Whether `path` is a folder with a repository in it.
+fn holds_repository(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
 /// The address with any password removed, and that password, when one is written into it:
@@ -666,6 +673,20 @@ mod tests {
         worker.join().unwrap();
         assert_eq!(handed, checkout);
         assert!(checkout.is_dir());
+    }
+
+    #[test]
+    fn a_plain_folder_named_like_a_link_does_not_shadow_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = temp.path().join("owner").join("repo");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(!holds_repository(&plain), "an ordinary folder is not a checkout");
+        assert!(
+            source::parse("owner/repo").is_some(),
+            "so the shorthand is still a link"
+        );
+        std::fs::create_dir(plain.join(".git")).unwrap();
+        assert!(holds_repository(&plain));
     }
 
     #[test]

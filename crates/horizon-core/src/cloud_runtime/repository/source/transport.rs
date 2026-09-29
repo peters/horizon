@@ -369,10 +369,13 @@ fn clear_leftovers(folder: &Path) {
     fn locks(dir: &Path) {
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                locks(&path);
-            } else if path.extension().is_some_and(|extension| extension == "lock") {
-                let _ = std::fs::remove_file(path);
+            // A link is never followed: only what the checkout itself holds is ours to clean.
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => locks(&path),
+                Ok(kind) if kind.is_file() && path.extension().is_some_and(|extension| extension == "lock") => {
+                    let _ = std::fs::remove_file(path);
+                }
+                _ => {}
             }
         }
     }
@@ -904,6 +907,32 @@ mod tests {
         clone(&remote, &target, None, &cancel, &progress).unwrap();
         assert!(super::super::is_checkout(&target));
         assert!(!git.join("shallow.lock").exists() && !git.join("objects/pack/tmp_pack_abc123").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_leftovers_never_follows_a_link_out_of_the_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("theirs.lock"), "not ours").unwrap();
+        let folder = temp.path().join("checkout");
+        std::fs::create_dir_all(folder.join(".git").join("refs").join("heads")).unwrap();
+        std::fs::write(folder.join(".git").join("refs").join("heads").join("main.lock"), "").unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join(".git").join("refs").join("link")).unwrap();
+        clear_leftovers(&folder);
+        assert!(
+            outside.join("theirs.lock").is_file(),
+            "a link leads outside, and is left alone"
+        );
+        assert!(
+            !folder
+                .join(".git")
+                .join("refs")
+                .join("heads")
+                .join("main.lock")
+                .exists()
+        );
     }
 
     #[test]

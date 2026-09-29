@@ -56,16 +56,20 @@ pub fn parse(input: &str) -> Option<Remote> {
         } else {
             format!("{user}@")
         };
-        (host_of(hostport), path, format!("{scheme}://{at}{hostport}/"))
+        // Host names are not case sensitive; one spelling keeps a link, its token and its checkout together.
+        let hostport = hostport.to_ascii_lowercase();
+        (host_of(&hostport), path, format!("{scheme}://{at}{hostport}/"))
     } else if let Some((account, path)) = input.split_once(':')
         && let Some((user, host)) = account.split_once('@')
         && valid_name(user)
     {
-        (host.to_owned(), path, format!("{account}:"))
+        let host = host.to_ascii_lowercase();
+        (host.clone(), path, format!("{user}@{host}:"))
     } else {
         let (first, rest) = input.split_once('/')?;
         if first.contains('.') && rest.contains('/') {
-            (first.to_owned(), rest, format!("https://{first}/"))
+            let host = first.to_ascii_lowercase();
+            (host.clone(), rest, format!("https://{host}/"))
         } else if !first.contains('.') && !rest.contains('/') {
             ("github.com".to_owned(), input, "https://github.com/".to_owned())
         } else {
@@ -423,9 +427,20 @@ mod tests {
             "https://github.com/peters/horizon.git",
             "https://github.com/peters/horizon/tree/main/crates",
             " https://github.com/peters/horizon/  ",
+            "https://GitHub.com/peters/horizon/tree/main/crates",
+            "GITHUB.COM/peters/horizon",
         ] {
             assert_eq!(remote(input), expected, "{input}");
         }
+        assert_eq!(
+            remote("git@GitHub.COM:peters/horizon.git"),
+            Some((
+                "git@github.com:peters/horizon.git".into(),
+                "github.com".into(),
+                "horizon".into()
+            )),
+            "the host is one spelling, the path keeps its own"
+        );
         assert_eq!(
             remote("git@github.com:peters/horizon.git"),
             Some((
