@@ -62,12 +62,6 @@ pub(super) fn cycle(time: f64, rate: f64) -> f32 {
     (time * rate).fract() as f32
 }
 
-/// A smooth 0..1 breathing value at `rate` radians per second.
-#[expect(clippy::cast_possible_truncation, reason = "a value in [0, 1] fits f32")]
-pub(super) fn breathe(time: f64, rate: f64) -> f32 {
-    ((time * rate).sin() * 0.5 + 0.5).clamp(0.0, 1.0) as f32
-}
-
 pub(super) fn tone_color(tone: Tone) -> Color32 {
     match tone {
         Tone::Idle => theme::FG_DIM(),
@@ -155,7 +149,7 @@ pub(super) fn show(
         pos2(header.left() + 1.0, header.bottom() - TRACK_HEIGHT),
         pos2(header.right() - 1.0, header.bottom()),
     );
-    paint_track(ui, track, &status.track, status.live());
+    paint_track(ui, track, &status.track);
     Strip {
         reserved: header.right() - left,
         action,
@@ -169,14 +163,8 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
     let color = tone_color(status.tone);
     let dot = pos2(header.left() + 26.0, y);
     if status.live() {
-        // The dot breathes while an operation runs.
-        let pulse = breathe(ui.input(|input| input.time), 2.2);
-        painter.circle_filled(
-            dot,
-            4.0 + 5.0 * pulse,
-            theme::alpha(color, 60).gamma_multiply(1.0 - pulse),
-        );
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        // Quiet while it runs: the elapsed time and ETA tick once a second.
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
     }
     painter.circle_filled(dot, 4.0, color);
     let failed = status.tone == Tone::Failed;
@@ -270,14 +258,13 @@ fn spoken(status: &Status, meaning: Option<&str>) -> String {
 
 /// Segments with the finished stages in their colours, the running one filled to its
 /// measured share with a travelling sheen, and a failed one red.
-pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track, live: bool) {
+pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track) {
     let painter = ui.painter();
     let count = track.stages.len().max(1);
     let gap = 2.0;
     let slots = crate::app::util::usize_to_f32(count);
     let width = (rect.width() - gap * (slots - 1.0)) / slots;
     let radius = CornerRadius::same(if rect.height() >= 8.0 { 4 } else { 2 });
-    let time = ui.input(|input| input.time);
     let mut segments = Vec::with_capacity(count);
     for (index, stage) in track.stages.iter().enumerate() {
         let segment = Rect::from_min_size(
@@ -303,20 +290,8 @@ pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track, live: bool) 
                 let filled = Rect::from_min_size(segment.min, vec2(width * fraction.clamp(0.04, 1.0), rect.height()));
                 painter.rect_filled(filled, radius, color);
             } else {
-                let pulse = breathe(time, 2.5);
-                painter.rect_filled(
-                    segment,
-                    radius,
-                    theme::blend(theme::BORDER_SUBTLE(), color, 0.35 + 0.4 * pulse),
-                );
-            }
-            if live && !track.failed {
-                let x = segment.left() + width * cycle(time, 0.6);
-                let sheen = Rect::from_min_max(
-                    pos2((x - 14.0).max(segment.left()), segment.top()),
-                    pos2((x + 14.0).min(segment.right()), segment.bottom()),
-                );
-                painter.rect_filled(sheen, radius, theme::alpha(Color32::WHITE, 28));
+                // Unmeasured: a half-tone segment, still, rather than a pulse.
+                painter.rect_filled(segment, radius, theme::blend(theme::BORDER_SUBTLE(), color, 0.35));
             }
         }
         segments.push(segment);

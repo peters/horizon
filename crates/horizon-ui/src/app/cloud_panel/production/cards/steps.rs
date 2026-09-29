@@ -51,7 +51,9 @@ fn paint_mark(ui: &egui::Ui, center: Pos2, mark: &Mark, stage: Stage, faded: boo
             cross(painter, center, 9.0, theme::PANEL_BG());
         }
         Mark::Running => {
-            let turn = super::strip::cycle(ui.input(|input| input.time), 5.0 / std::f64::consts::TAU);
+            // The loading spinner: one turn per 1.2 s, repainted only while it is drawn.
+            let turn = super::strip::cycle(ui.input(|input| input.time), 1.0 / 1.2);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(32));
             let points: Vec<Pos2> = (0..=20_u8)
                 .map(|step| {
                     let angle = turn * std::f32::consts::TAU + f32::from(step) / 20.0 * 4.2;
@@ -236,18 +238,6 @@ pub(super) fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
     ui.painter().rect_filled(rect, 3, theme::BORDER_SUBTLE());
     let filled = Rect::from_min_size(rect.min, vec2(rect.width() * fraction.clamp(0.0, 1.0), rect.height()));
     ui.painter().rect_filled(filled, 3, color);
-    let time = ui.input(|input| input.time);
-    let x = filled.left() + filled.width() * super::strip::cycle(time, 0.7);
-    if filled.width() > 10.0 {
-        ui.painter().rect_filled(
-            Rect::from_min_max(
-                pos2((x - 20.0).max(filled.left()), filled.top()),
-                pos2((x + 20.0).min(filled.right()), filled.bottom()),
-            ),
-            3,
-            theme::alpha(Color32::WHITE, 30),
-        );
-    }
 }
 
 /// A step's name that fits `room`: its label, else its short name; when neither fits,

@@ -4,9 +4,8 @@ use super::super::{LineKind, LogLine, Runtime, Stage};
 use super::status::Failure;
 use super::strip::stage_color;
 use crate::theme;
-use egui::{Color32, FontId, RichText, Stroke, Vec2};
+use egui::{FontId, RichText, Stroke, Vec2};
 
-const LOG_BG: Color32 = Color32::from_rgb(9, 12, 19);
 const TEXT_SIZE: f32 = 13.0;
 /// The pinned root cause keeps this height; a longer cause scrolls inside it, so the
 /// view never grows past the height it was given.
@@ -24,7 +23,7 @@ pub(super) fn show(
 ) {
     let pinned = failure.map_or(0.0, |_| ROOT_CAUSE_HEIGHT + 6.0);
     let frame = egui::Frame::new()
-        .fill(LOG_BG)
+        .fill(theme::BG())
         .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 10));
@@ -155,7 +154,7 @@ fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage, attempt: u6
         rect.left_top() + Vec2::new(52.0, (rect.height() - galley.size().y) / 2.0),
         galley.size() + Vec2::new(8.0, 0.0),
     );
-    ui.painter().rect_filled(label_rect, 3, LOG_BG);
+    ui.painter().rect_filled(label_rect, 3, theme::BG());
     ui.painter().galley(label_rect.min + Vec2::new(4.0, 0.0), galley, color);
 }
 
@@ -205,7 +204,7 @@ fn row(ui: &mut egui::Ui, line: &LogLine) {
 /// The cause, what it means, and Horizon's own summary when the cause is a different line.
 fn root_cause(ui: &mut egui::Ui, failure: &Failure) {
     egui::Frame::new()
-        .fill(theme::blend(LOG_BG, theme::PALETTE_RED(), 0.16))
+        .fill(theme::blend(theme::BG(), theme::PALETTE_RED(), 0.16))
         .stroke(Stroke::new(1.0, theme::alpha(theme::PALETTE_RED(), 120)))
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 8))

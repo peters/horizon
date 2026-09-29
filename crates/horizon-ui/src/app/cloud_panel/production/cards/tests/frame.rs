@@ -205,3 +205,42 @@ fn the_header_names_a_move_to_another_network_and_follows_a_running_bridge() {
     assert_eq!(off, Sharing::Off);
     assert!(idle > std::time::Duration::from_secs(1), "{idle:?}");
 }
+
+#[test]
+fn a_running_operation_keeps_the_header_quiet_between_its_once_a_second_ticks() {
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let runtime = super::super::super::Runtime {
+        stage: Some(Stage::Build),
+        receiver: Some(receiver),
+        ..Default::default()
+    };
+    let status = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+    assert!(status.live());
+    let ctx = egui::Context::default();
+    let header = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::new(900.0, 118.0));
+    let frame = || {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let indicators = strip::Indicators {
+                running: 0,
+                terminals: 0,
+                desktop: None,
+                sharing: strip::Sharing::Off,
+                companions: 0,
+            };
+            let spend = strip::Spend {
+                line: String::new(),
+                explanation: String::new(),
+            };
+            strip::show(ui, header, &status, &indicators, &spend, false);
+        })
+        .discard_textures()
+    };
+    // A new context repaints at once for its first frames.
+    let _ = frame();
+    let _ = frame();
+    let delay = frame().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+    assert!(
+        delay >= std::time::Duration::from_millis(900) && delay <= std::time::Duration::from_secs(1),
+        "no animation loop, only the clock: {delay:?}"
+    );
+}
