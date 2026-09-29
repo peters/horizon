@@ -1,11 +1,15 @@
 //! "Share local network": the owner's switch for one cloud's Local Network Bridge. It is held in
 //! memory only, so it is never read from configuration or an agent and is off after a restart.
-//! When the cloud disconnects, sharing pauses; it resumes by itself once that cloud has been
-//! made ready again in this run of Horizon, until the owner switches it off.
+//! When the cloud disconnects or this computer sleeps, sharing pauses; it resumes by itself once
+//! that cloud is ready again in this run of Horizon, but only on the network it started on. On
+//! another network, such as a new Wi-Fi, sharing stops and the card asks the owner again.
 use super::{Connection, HorizonApp, Runtime, Settings, Stage, cloud_runtime, lifecycle::Action};
 mod editor;
+mod watch;
 pub(super) use editor::Editor;
-use horizon_core::cloud_runtime::local_network::{BYTE_BUDGET, Bridge, Destination, Relay, Rules, State, Status};
+use horizon_core::cloud_runtime::local_network::{
+    BYTE_BUDGET, Bridge, Destination, Network, Relay, Rules, StartError, State, Status, Subnet,
+};
 use std::{
     sync::{
         Mutex, MutexGuard, OnceLock, PoisonError,
@@ -13,6 +17,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use watch::Clock;
+pub(super) use watch::Watch;
 
 #[derive(Default)]
 pub(super) enum Sharing {
@@ -23,6 +29,15 @@ pub(super) enum Sharing {
     /// `ready_again` is set once the cloud has completed readiness again.
     Paused {
         ready_again: bool,
+    },
+    /// This computer left the network sharing started on; the bridge is stopped and nothing
+    /// resumes until the owner shares the network it is on now (`to`, when there is one). A
+    /// start from here must find exactly that network.
+    Moved {
+        to: Option<Network>,
+        /// As `Paused::ready_again`: set once the cloud is Ready on its current connection, so
+        /// a reconnect in progress, which still looks Ready, does not offer the new network.
+        ready: bool,
     },
     /// Why the bridge could not start, shown until the owner tries again.
     Refused(String),
@@ -37,14 +52,14 @@ impl Sharing {
 
     /// The cloud completed readiness (after a reconnect, resume or rebuild).
     pub(super) fn ready_again(&mut self) {
-        if let Self::Paused { ready_again } = self {
+        if let Self::Paused { ready_again } | Self::Moved { ready: ready_again, .. } = self {
             *ready_again = true;
         }
     }
 
     /// Forgets earlier readiness, so only the readiness of the connection that follows counts.
     pub(super) fn await_ready(&mut self) {
-        if let Self::Paused { ready_again } = self {
+        if let Self::Paused { ready_again } | Self::Moved { ready: ready_again, .. } = self {
             *ready_again = false;
         }
     }
@@ -59,8 +74,15 @@ impl Sharing {
     }
 
     fn intended(&self) -> bool {
-        matches!(self, Self::On(_) | Self::Paused { .. })
+        matches!(self, Self::On(_) | Self::Paused { .. } | Self::Moved { .. })
     }
+}
+
+/// Why a bridge did not start.
+enum NotStarted {
+    /// This computer is on another network than the one the start was approved for, or on none.
+    Moved(Option<Network>),
+    Refused(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,8 +98,9 @@ enum Step {
 pub(super) struct Running {
     bridge: Option<Bridge>,
     /// The bridge's last status and when it was read. A snapshot copies every open relay, so
-    /// frames between refreshes reuse it instead of taking their own.
-    status: Mutex<Option<(Instant, Status)>>,
+    /// frames between refreshes reuse it instead of taking their own. Boxed, as it is most of
+    /// a running bridge's size.
+    status: Box<Mutex<Option<(Instant, Status)>>>,
 }
 
 /// How often the card reads the bridge's status; it repaints at the same cadence.
@@ -87,7 +110,7 @@ impl Running {
     fn new(bridge: Option<Bridge>) -> Self {
         Self {
             bridge,
-            status: Mutex::new(None),
+            status: Box::new(Mutex::new(None)),
         }
     }
 
@@ -141,7 +164,7 @@ impl HorizonApp {
     /// A bridge lives only while this Horizon is connected to the Ready cloud: it pauses when the
     /// cloud disconnects and restarts once the cloud is ready again. Runs after failed
     /// operations dropped their receivers, so a disconnect in this frame counts.
-    pub(super) fn reconcile_sharing(&mut self) {
+    pub(super) fn reconcile_sharing(&mut self, ctx: &egui::Context) {
         let resume: Vec<_> = self
             .cloud_prototype
             .production
@@ -151,6 +174,17 @@ impl HorizonApp {
             .collect();
         for id in resume {
             self.share_local_network(id, true);
+        }
+        // Sharing that is on, paused or waiting for the owner keeps watching the network even
+        // when nothing else repaints, for example with its card hidden or the cloud idle.
+        if self
+            .cloud_prototype
+            .production
+            .runtimes
+            .values()
+            .any(|runtime| runtime.sharing.intended())
+        {
+            ctx.request_repaint_after(watch::NETWORK_CHECK);
         }
     }
 }
@@ -163,38 +197,117 @@ impl Runtime {
     fn start_sharing<T, E: std::fmt::Display>(
         &mut self,
         connection: Option<Result<T, E>>,
-        start: impl FnOnce(&T, Rules) -> Result<Running, String>,
+        start: impl FnOnce(&T, Rules, Option<&Network>) -> Result<Running, NotStarted>,
     ) {
+        // A resume may only share the network sharing started on, and the owner's answer to a
+        // move only the network offered; switching on anew shares whatever network this is.
+        let expected = match &self.sharing {
+            Sharing::Paused { .. } => self.shared.clone(),
+            Sharing::Moved { to, .. } => to.clone(),
+            Sharing::Off | Sharing::On(_) | Sharing::Refused(_) => None,
+        };
         self.sharing.stop();
         self.sharing = match connection {
             None => Sharing::Off,
             Some(Err(error)) => Sharing::Refused(error.to_string()),
-            Some(Ok(connection)) => match start(&connection, self.scope.applied.clone()) {
+            Some(Ok(connection)) => match start(&connection, self.scope.applied.clone(), expected.as_ref()) {
                 Ok(running) => Sharing::On(running),
-                Err(error) => Sharing::Refused(error),
+                Err(NotStarted::Moved(now)) => {
+                    self.moved(now);
+                    return;
+                }
+                Err(NotStarted::Refused(error)) => Sharing::Refused(error),
             },
+        };
+        self.shared = match &self.sharing {
+            Sharing::On(running) => running.bridge.as_ref().and_then(Bridge::network),
+            _ => None,
         };
         if !matches!(self.sharing, Sharing::On(_)) {
             self.scope.reset();
         }
     }
 
-    /// Pauses a running bridge whose cloud left Connected+Ready, which revokes it at once, and
-    /// says whether a paused one should restart now.
+    /// Pauses a running bridge whose cloud left Connected+Ready or whose computer slept, which
+    /// revokes it at once, stops one whose computer moved to another network, and says whether
+    /// a paused one should restart now.
     fn reconcile_sharing(&mut self) -> bool {
+        self.reconcile_sharing_with(Clock::now(), watch::current)
+    }
+
+    /// As [`Self::reconcile_sharing`], with the clocks and the current network given.
+    /// `current` is read only when the network is compared. When it cannot read the interfaces,
+    /// which says nothing about a move, nothing changes and the next comparison tries again.
+    fn reconcile_sharing_with(
+        &mut self,
+        now: Clock,
+        current: impl Fn() -> Result<Option<Network>, StartError>,
+    ) -> bool {
         let connected = self.connected_and_ready();
         if !connected {
             // Readiness seen before this disconnect says nothing about the next connection.
             self.sharing.await_ready();
+        }
+        // The clocks are read every frame, so a wake is measured from the last frame before it.
+        let slept = self.watch.slept(now) && matches!(self.sharing, Sharing::On(_));
+        let check = self.watch.check_due(now.monotonic);
+        if slept {
+            // Resumed below at once when the cloud is still ready, after the network check.
+            self.sharing = Sharing::Paused { ready_again: connected };
+        } else if check {
+            match &self.sharing {
+                // A paused bridge stops waiting as soon as this computer is elsewhere.
+                Sharing::On(_) | Sharing::Paused { .. } => {
+                    if let Ok(on) = current()
+                        && !watch::same_network(self.shared.as_ref(), on.as_ref())
+                    {
+                        self.moved(on);
+                        return false;
+                    }
+                }
+                // The offer always names the network this computer is on now.
+                Sharing::Moved { to, ready } => {
+                    if let Ok(on) = current()
+                        && on != *to
+                    {
+                        self.sharing = Sharing::Moved { to: on, ready: *ready };
+                    }
+                }
+                Sharing::Off | Sharing::Refused(_) => {}
+            }
         }
         match self.sharing.step(connected) {
             Step::Pause => {
                 self.sharing = Sharing::Paused { ready_again: false };
                 false
             }
-            Step::Resume => true,
+            Step::Resume => match current() {
+                Ok(on) if watch::same_network(self.shared.as_ref(), on.as_ref()) => true,
+                Ok(on) => {
+                    self.moved(on);
+                    false
+                }
+                // Keeps waiting, and tries again on the next frame.
+                Err(_) => false,
+            },
             Step::Keep => false,
         }
+    }
+
+    /// Stops sharing because this computer is no longer on the network it shared. The scope
+    /// belonged to that network, so it is forgotten; the owner decides whether to share `to`.
+    fn moved(&mut self, to: Option<Network>) {
+        // The cloud is as ready as it was: a running bridge's cloud is, a paused one's only once
+        // it completed readiness on its new connection.
+        let ready = self.connected_and_ready()
+            && match self.sharing {
+                Sharing::On(_) => true,
+                Sharing::Paused { ready_again } | Sharing::Moved { ready: ready_again, .. } => ready_again,
+                Sharing::Off | Sharing::Refused(_) => false,
+            };
+        self.sharing = Sharing::Moved { to, ready };
+        self.scope.reset();
+        self.shared = None;
     }
 
     fn connected_and_ready(&self) -> bool {
@@ -208,10 +321,13 @@ impl HorizonApp {
         let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) else {
             return;
         };
-        runtime.start_sharing(connection, |connection, rules| {
-            Bridge::start_with(connection, rules)
+        runtime.start_sharing(connection, |connection, rules, expected| {
+            Bridge::start_with(connection, rules, expected)
                 .map(|bridge| Running::new(Some(bridge)))
-                .map_err(|error| error.to_string())
+                .map_err(|error| match error {
+                    StartError::Moved(now) => NotStarted::Moved(now),
+                    error => NotStarted::Refused(error.to_string()),
+                })
         });
     }
 
@@ -246,7 +362,7 @@ impl HorizonApp {
 /// The switch and, while it is on, what the bridge is doing.
 pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     // A disconnected card offers Reconnect instead; a paused switch stays so it can be turned off.
-    let paused = matches!(runtime.sharing, Sharing::Paused { .. });
+    let paused = matches!(runtime.sharing, Sharing::Paused { .. } | Sharing::Moved { .. });
     if !runtime.connected_and_ready() && !paused {
         return None;
     }
@@ -276,6 +392,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
         Sharing::Off => None,
         Sharing::Refused(error) => Some(error.clone()),
         Sharing::Paused { .. } => Some(PAUSED.to_owned()),
+        Sharing::Moved { to, .. } => Some(moved(to.as_ref().map(Network::subnet))),
         Sharing::On(_) => status.map(describe),
     };
     if let Some(line) = line {
@@ -291,6 +408,12 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
             runtime.scope.outcome(rules, applied);
         }
     }
+    // Sharing a new network is the owner's decision, made here, never by resuming.
+    if let Some(subnet) = move_offer(runtime)
+        && ui.button(format!("Share {subnet}")).clicked()
+    {
+        return Some(Action::ShareLocalNetwork);
+    }
     changed.then_some(if sharing {
         Action::ShareLocalNetwork
     } else {
@@ -298,7 +421,30 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
     })
 }
 
-const PAUSED: &str = "Sharing paused: cloud disconnected. It resumes when the cloud is connected again.";
+const PAUSED: &str = "Sharing paused: the cloud disconnected or this computer slept. It resumes when the cloud is \
+     connected again, if this computer is still on the same network.";
+
+/// The network the card offers to share after a move: only once the cloud is connected and
+/// has completed readiness on that connection, since a bridge needs it. The switch stays either way, to stop sharing.
+fn move_offer(runtime: &Runtime) -> Option<Subnet> {
+    match &runtime.sharing {
+        Sharing::Moved {
+            to: Some(network),
+            ready: true,
+        } if runtime.connected_and_ready() => Some(network.subnet()),
+        _ => None,
+    }
+}
+
+/// Why sharing stopped after a move to another network, and what the owner can do.
+fn moved(to: Option<Subnet>) -> String {
+    match to {
+        Some(subnet) => format!(
+            "Sharing stopped: this computer moved to another network ({subnet}). Nothing is shared until you share it."
+        ),
+        None => "Sharing stopped: this computer left the shared network and is on none it can share.".to_owned(),
+    }
+}
 
 fn describe(status: &Status) -> String {
     match &status.state {
@@ -672,7 +818,7 @@ mod tests {
         runtime.scope.outcome(narrowed(), Ok(()));
         runtime.sharing = Sharing::Paused { ready_again: true };
         let mut given = None;
-        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules, _| {
             given = Some(rules);
             Ok(Running::new(None))
         });
@@ -682,9 +828,11 @@ mod tests {
         // The network changed while paused: the saved scope no longer fits, so sharing is
         // refused rather than started wider, and the scope is forgotten.
         runtime.sharing = Sharing::Paused { ready_again: true };
-        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules, _| {
             assert_eq!(rules, narrowed());
-            Err("The saved scope does not fit the current network".into())
+            Err(NotStarted::Refused(
+                "The saved scope does not fit the current network".into(),
+            ))
         });
         assert!(matches!(&runtime.sharing, Sharing::Refused(why) if why.contains("does not fit")));
         assert_eq!(runtime.scope.applied, Rules::default());
@@ -696,17 +844,221 @@ mod tests {
             let mut runtime = Runtime::default();
             runtime.scope.outcome(narrowed(), Ok(()));
             runtime.sharing = Sharing::On(Running::new(None));
-            runtime.start_sharing(connection, |(), _| panic!("nothing starts without a connection"));
+            runtime.start_sharing(connection, |(), _, _| panic!("nothing starts without a connection"));
             assert!(!matches!(runtime.sharing, Sharing::On(_)));
             assert_eq!(runtime.scope.applied, Rules::default());
         }
         let mut runtime = Runtime::default();
         let mut given = None;
-        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules| {
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), rules, _| {
             given = Some(rules);
             Ok(Running::new(None))
         });
         assert_eq!(given, Some(Rules::default()), "switched on anew, the whole network");
+    }
+
+    fn home() -> Network {
+        Network::new(
+            "192.168.1.0/24".parse().unwrap(),
+            "192.168.1.20".parse().unwrap(),
+            "wlan0",
+        )
+    }
+
+    fn office() -> Network {
+        Network::new("10.0.0.0/24".parse().unwrap(), "10.0.0.7".parse().unwrap(), "wlan0")
+    }
+
+    /// A runtime whose cloud is connected and Ready, sharing `home`.
+    fn sharing_home() -> (Runtime, std::sync::mpsc::Sender<cloud_runtime::Event>) {
+        let mut runtime = Runtime::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        runtime.receiver = Some(receiver);
+        runtime.stage = Some(Stage::Ready);
+        runtime.sharing = Sharing::On(Running::new(None));
+        runtime.shared = Some(home());
+        runtime.scope.outcome(narrowed(), Ok(()));
+        (runtime, sender)
+    }
+
+    /// The clocks `seconds` from now, with the wall clock `slept` seconds further ahead.
+    fn later(seconds: u64, slept: u64) -> Clock {
+        Clock {
+            monotonic: Instant::now() + Duration::from_secs(seconds),
+            wall: std::time::SystemTime::now() + Duration::from_secs(seconds + slept),
+        }
+    }
+
+    #[test]
+    fn a_computer_that_moved_to_another_network_stops_sharing_and_forgets_its_scope() {
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Ok(Some(home()))));
+        assert!(matches!(runtime.sharing, Sharing::On(_)), "still on the shared network");
+        assert!(!runtime.reconcile_sharing_with(later(6, 0), || Ok(Some(office()))));
+        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == office()));
+        assert_eq!(
+            (runtime.scope.applied.clone(), runtime.shared.clone()),
+            (Rules::default(), None)
+        );
+        // Nothing resumes by itself on the new network.
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), || Ok(Some(office()))));
+        assert!(matches!(runtime.sharing, Sharing::Moved { .. }));
+        // Leaving every network stops sharing too.
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Ok(None)));
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
+    }
+
+    #[test]
+    fn sharing_resumes_after_sleep_only_on_the_network_it_started_on() {
+        let (mut runtime, _sender) = sharing_home();
+        assert!(
+            runtime.reconcile_sharing_with(later(1, 600), || Ok(Some(home()))),
+            "ten minutes asleep, same network: the bridge restarts"
+        );
+        assert!(matches!(runtime.sharing, Sharing::Paused { ready_again: true }));
+        assert_eq!(runtime.scope.applied, narrowed(), "and keeps the owner's scope");
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(1, 600), || Ok(Some(office()))));
+        assert!(
+            matches!(runtime.sharing, Sharing::Moved { .. }),
+            "woke on another network"
+        );
+    }
+
+    #[test]
+    fn a_paused_bridge_stops_waiting_when_this_computer_moves() {
+        let (mut runtime, _sender) = sharing_home();
+        runtime.receiver = None;
+        runtime.sharing = Sharing::Paused { ready_again: false };
+        assert!(!runtime.reconcile_sharing_with(later(1, 0), || Ok(Some(office()))));
+        assert!(
+            matches!(runtime.sharing, Sharing::Paused { .. }),
+            "checked every few seconds"
+        );
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Ok(Some(office()))));
+        assert!(
+            matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == office()),
+            "moved while still disconnected"
+        );
+    }
+
+    #[test]
+    fn the_move_offer_follows_this_computer_and_waits_for_a_ready_cloud() {
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Ok(Some(office()))));
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        let cafe = Network::new("172.20.0.0/24".parse().unwrap(), "172.20.0.9".parse().unwrap(), "wlan0");
+        assert!(!runtime.reconcile_sharing_with(later(6, 0), || Ok(Some(cafe.clone()))));
+        assert_eq!(move_offer(&runtime), Some(cafe.subnet()), "moved again before sharing");
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), || Ok(None)));
+        assert_eq!(move_offer(&runtime), None, "no network to offer");
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
+        assert!(!runtime.reconcile_sharing_with(later(12, 0), || Ok(Some(cafe.clone()))));
+        runtime.receiver = None;
+        assert_eq!(
+            move_offer(&runtime),
+            None,
+            "not offered while the cloud is disconnected"
+        );
+    }
+
+    #[test]
+    fn every_start_is_bound_to_the_network_it_was_approved_for() {
+        // A resume expects the network sharing started on.
+        let (mut runtime, _sender) = sharing_home();
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        let mut expected = None;
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, network| {
+            expected = network.cloned();
+            Ok(Running::new(None))
+        });
+        assert_eq!(expected, Some(home()));
+        // The owner's answer to a move expects exactly the network offered; finding another
+        // one at start asks again about that one instead of sharing it.
+        runtime.sharing = Sharing::Moved {
+            to: Some(office()),
+            ready: true,
+        };
+        let cafe = Network::new("172.20.0.0/24".parse().unwrap(), "172.20.0.9".parse().unwrap(), "wlan0");
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, network| {
+            assert_eq!(network, Some(&office()));
+            Err(NotStarted::Moved(Some(cafe.clone())))
+        });
+        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == cafe));
+        assert_eq!(
+            move_offer(&runtime),
+            Some(cafe.subnet()),
+            "still ready, so asked at once"
+        );
+        // A resume that finds no network at all is a move too, not a refusal.
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        runtime.shared = Some(home());
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, _| Err(NotStarted::Moved(None)));
+        assert!(matches!(runtime.sharing, Sharing::Moved { to: None, .. }));
+        // Switching on anew shares whatever network this is.
+        runtime.sharing = Sharing::Off;
+        runtime.start_sharing(Some(Ok::<_, String>(())), |(), _, network| {
+            assert_eq!(network, None);
+            Ok(Running::new(None))
+        });
+    }
+
+    #[test]
+    fn a_move_during_a_reconnect_is_offered_only_once_that_reconnect_is_ready() {
+        // A reconnect in progress still looks connected and Ready.
+        let (mut runtime, _sender) = sharing_home();
+        runtime.sharing = Sharing::Paused { ready_again: false };
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), || Ok(Some(office()))));
+        assert!(matches!(runtime.sharing, Sharing::Moved { ready: false, .. }));
+        assert_eq!(move_offer(&runtime), None, "offered before the reconnect was ready");
+        runtime.sharing.ready_again();
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        // Another reconnect forgets that readiness until its own Ready.
+        runtime.sharing.await_ready();
+        assert_eq!(move_offer(&runtime), None);
+        runtime.sharing.ready_again();
+        assert!(!runtime.reconcile_sharing_with(later(6, 0), || Ok(Some(office()))));
+        assert_eq!(move_offer(&runtime), Some(office().subnet()));
+        // A disconnect forgets it as well.
+        runtime.receiver = None;
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), || Ok(Some(office()))));
+        assert!(matches!(runtime.sharing, Sharing::Moved { ready: false, .. }));
+    }
+
+    #[test]
+    fn unreadable_interfaces_are_not_a_move() {
+        let unreadable = || Err(StartError::Io(std::io::Error::other("unreadable")));
+        let (mut runtime, _sender) = sharing_home();
+        assert!(!runtime.reconcile_sharing_with(later(3, 0), unreadable));
+        assert!(
+            matches!(runtime.sharing, Sharing::On(_)),
+            "a running bridge keeps running"
+        );
+        assert_eq!(
+            (runtime.scope.applied.clone(), runtime.shared.clone()),
+            (narrowed(), Some(home()))
+        );
+        // A resume waits for a readable network instead of stopping or starting blind.
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        assert!(!runtime.reconcile_sharing_with(later(4, 0), unreadable));
+        assert!(matches!(runtime.sharing, Sharing::Paused { ready_again: true }));
+        assert!(runtime.reconcile_sharing_with(later(5, 0), || Ok(Some(home()))));
+        // The offer after a move keeps naming the network it last saw.
+        runtime.moved(Some(office()));
+        assert!(!runtime.reconcile_sharing_with(later(9, 0), unreadable));
+        assert!(matches!(&runtime.sharing, Sharing::Moved { to: Some(to), .. } if *to == office()));
+    }
+
+    #[test]
+    fn a_reconnect_on_another_network_asks_instead_of_resuming() {
+        let (mut runtime, _sender) = sharing_home();
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        assert!(!runtime.reconcile_sharing_with(later(1, 0), || Ok(Some(office()))));
+        assert!(matches!(runtime.sharing, Sharing::Moved { .. }));
+        let (mut runtime, _sender) = sharing_home();
+        runtime.sharing = Sharing::Paused { ready_again: true };
+        assert!(runtime.reconcile_sharing_with(later(1, 0), || Ok(Some(home()))));
     }
 
     #[test]

@@ -190,6 +190,39 @@ fn a_changed_network_is_reported_instead_of_connecting() {
 }
 
 #[test]
+fn a_start_approved_for_one_network_finds_it_or_reports_the_move() {
+    let scope = || Ok(gate(Box::new(|_, _| Ok(Vec::new()))));
+    let home = Network(network());
+    let office = Network::new("10.0.0.0/24".parse().unwrap(), "10.0.0.7".parse().unwrap(), "wlan0");
+    assert!(
+        approved(scope(), None).is_ok(),
+        "switching on shares whatever network this is"
+    );
+    assert!(approved(scope(), Some(&home)).is_ok());
+    assert!(matches!(approved(scope(), Some(&office)), Err(StartError::Moved(Some(now))) if now == home));
+    for gone in [ScopeError::NoNetwork, ScopeError::PointToPoint] {
+        assert!(matches!(
+            approved(Err(gone.into()), Some(&home)),
+            Err(StartError::Moved(None))
+        ));
+    }
+    assert!(
+        matches!(
+            approved(Err(ScopeError::NoNetwork.into()), None),
+            Err(StartError::Scope(ScopeError::NoNetwork))
+        ),
+        "without an approved network, no network is a refusal"
+    );
+    assert!(
+        matches!(
+            approved(Err(io::Error::other("unreadable").into()), Some(&home)),
+            Err(StartError::Io(_))
+        ),
+        "unreadable interfaces are not a move"
+    );
+}
+
+#[test]
 fn the_current_scope_and_the_resolver_work_on_this_computer() {
     assert_eq!(gate(Box::new(|_, _| Ok(Vec::new()))).subnet(), subnet());
     // This computer's own network decides whether a real scope exists here.
@@ -197,7 +230,7 @@ fn the_current_scope_and_the_resolver_work_on_this_computer() {
         Ok(scope) => assert!(scope.subnet().prefix() >= 16),
         // No shareable network, or interfaces a sandbox does not let the test read.
         Err(StartError::Scope(_) | StartError::Io(_)) => {}
-        Err(StartError::Rules(_)) => panic!("no rules were given"),
+        Err(StartError::Rules(_) | StartError::Moved(_)) => panic!("no rules or network were given"),
     }
     let lookups = Arc::new(AtomicUsize::new(0));
     assert!(

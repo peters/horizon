@@ -474,7 +474,7 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
         runtime.sharing = Sharing::Paused { ready_again: false };
         let shown = texts(&ctx, runtime);
         assert!(has(&shown, "Share local network"), "{case}");
-        assert!(has(&shown, "Sharing paused: cloud disconnected"), "{case}");
+        assert!(has(&shown, "Sharing paused: the cloud disconnected"), "{case}");
         assert!(
             matches!(
                 click(&ctx, runtime, "Share local network"),
@@ -485,5 +485,31 @@ fn a_paused_share_stays_visible_and_can_be_switched_off_while_a_rebuild_runs_or_
         // Without an intent to keep, a cloud that is not connected and Ready offers no switch.
         runtime.sharing = Sharing::Off;
         assert!(!has(&texts(&ctx, runtime), "Share local network"), "{case}");
+        // After a move to another network the owner is asked, but the new network is offered only
+        // once the cloud is Ready again; the switch still stops sharing meanwhile.
+        runtime.sharing = Sharing::Moved {
+            to: Some(horizon_core::cloud_runtime::local_network::Network::new(
+                "10.0.3.0/24".parse().unwrap(),
+                "10.0.3.100".parse().unwrap(),
+                "tap1",
+            )),
+            ready: true,
+        };
+        let shown = texts(&ctx, runtime);
+        assert!(
+            has(
+                &shown,
+                "Sharing stopped: this computer moved to another network (10.0.3.0/24)"
+            ),
+            "{case}"
+        );
+        assert!(!has(&shown, "Share 10.0.3.0/24"), "{case}");
+        assert!(
+            matches!(
+                click(&ctx, runtime, "Share local network"),
+                Some(Action::StopSharingLocalNetwork)
+            ),
+            "{case}"
+        );
     }
 }

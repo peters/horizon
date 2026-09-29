@@ -12,8 +12,9 @@ mod socks;
 
 use super::{Cancellation, ssh::Connection};
 pub use discovery::Discoverer;
+pub use horizon_cloud_protocol::local_network::Subnet;
 use horizon_cloud_protocol::local_network::{
-    Reply, Subnet,
+    Reply,
     discovery::{Answer, Hello, Request},
 };
 pub use rules::{Device, MAX_DEVICES, MAX_PORTS, Rules, RulesError};
@@ -44,8 +45,44 @@ pub enum StartError {
     Scope(#[from] ScopeError),
     #[error("The saved scope does not fit the current network: {0}")]
     Rules(#[from] RulesError),
+    /// The network this computer is on is not the one the start was approved for; `None` when
+    /// it is on no shareable network at all.
+    #[error("This computer is no longer on the network sharing was approved for")]
+    Moved(Option<Network>),
     #[error("Local Network Bridge could not start: {0}")]
     Io(#[from] io::Error),
+}
+
+/// Which network this computer is on: the subnet that carries its default route, and its own
+/// address and interface there. A bridge shares only the network it started on, so comparing
+/// this with [`Bridge::network`] tells a move to another network, such as a new Wi-Fi.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Network(scope::Network);
+
+impl Network {
+    /// The network that carries this computer's default route now.
+    ///
+    /// # Errors
+    /// Fails when there is no shareable network or the interfaces cannot be read.
+    pub fn current() -> Result<Self, StartError> {
+        Ok(Self(scope::Host::read()?.current_network()?))
+    }
+
+    /// A network described by its parts, for code that compares networks without reading
+    /// this computer's interfaces.
+    #[must_use]
+    pub fn new(subnet: Subnet, address: Ipv4Addr, interface: impl Into<String>) -> Self {
+        Self(scope::Network {
+            subnet,
+            address,
+            interface: interface.into(),
+        })
+    }
+
+    #[must_use]
+    pub const fn subnet(&self) -> Subnet {
+        self.0.subnet
+    }
 }
 
 /// A requested destination, before any policy decision.
@@ -161,7 +198,7 @@ impl Bridge {
     /// # Errors
     /// Fails when there is no shareable network or the local proxy cannot start.
     pub fn start(connection: &Connection) -> Result<Self, StartError> {
-        Self::start_with(connection, Rules::default())
+        Self::start_with(connection, Rules::default(), None)
     }
 
     /// As [`Self::start`], narrowed by `rules` before the worker can reach the proxy: a bridge
@@ -169,9 +206,11 @@ impl Bridge {
     ///
     /// # Errors
     /// Also fails when `rules` do not fit the current network, for example after a move to
-    /// another Wi-Fi.
-    pub fn start_with(connection: &Connection, rules: Rules) -> Result<Self, StartError> {
-        let scope = Arc::new(Scope::current()?);
+    /// another Wi-Fi, and with [`StartError::Moved`] when `expected` names a network other than
+    /// the one this computer is on now, or when there is none it can share now: a start approved
+    /// for one network never shares another.
+    pub fn start_with(connection: &Connection, rules: Rules, expected: Option<&Network>) -> Result<Self, StartError> {
+        let scope = Arc::new(approved(Scope::current(), expected)?);
         // Switching the bridge off also stops a probe or browse an agent asked for.
         let cancel = Cancellation::default();
         let answers = Arc::new(Discoverer::new(Arc::clone(&scope), cancel.clone()));
@@ -228,6 +267,12 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// The network this bridge shares; absent only for the session tests' fixture gate.
+    #[must_use]
+    pub fn network(&self) -> Option<Network> {
+        self.scope.as_ref().map(|scope| Network(scope.network.clone()))
+    }
+
     /// The owner's current narrowing of the scope.
     #[must_use]
     pub fn rules(&self) -> Rules {
@@ -272,6 +317,22 @@ pub(super) trait Answers: Send + Sync + 'static {
     /// What this computer answers, told to the helper once per session.
     fn hello(&self) -> Hello;
     fn answer(&self, request: Request) -> Answer;
+}
+
+/// The scope a start may use: `current`, unless the start was approved for another network.
+/// No shareable network then is a move away from the approved one, not a refusal; failing to
+/// read the interfaces stays an error.
+fn approved(current: Result<Scope, StartError>, expected: Option<&Network>) -> Result<Scope, StartError> {
+    let scope = match current {
+        Err(StartError::Scope(ScopeError::NoNetwork | ScopeError::PointToPoint)) if expected.is_some() => {
+            return Err(StartError::Moved(None));
+        }
+        current => current?,
+    };
+    match expected {
+        Some(expected) if expected.0 != scope.network => Err(StartError::Moved(Some(Network(scope.network.clone())))),
+        _ => Ok(scope),
+    }
 }
 
 type Resolve = Box<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, Reply> + Send + Sync>;

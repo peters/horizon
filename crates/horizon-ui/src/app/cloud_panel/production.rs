@@ -133,6 +133,10 @@ pub(super) struct Runtime {
     sharing: local_network::Sharing,
     /// The owner's scope for that sharing, kept while it pauses.
     scope: local_network::Editor,
+    /// The network that sharing started on; a paused bridge resumes only on it.
+    shared: Option<horizon_core::cloud_runtime::local_network::Network>,
+    /// When sharing last looked at the clocks and at the network, running or not.
+    watch: local_network::Watch,
 }
 impl Runtime {
     const FOLLOW_LOG_LINES: usize = 150;
@@ -353,7 +357,7 @@ impl HorizonApp {
         }
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished);
-        self.reconcile_sharing();
+        self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
         for id in resumed {
             self.start_production_deployment(id, ctx);
