@@ -626,15 +626,25 @@ fn finished_after(runtime: &Runtime, track: &Track) -> Option<usize> {
 /// A resume that failed before the provider acted: the record is still the stopped one,
 /// whether it was reloaded or the resume never got past its preflight.
 fn resume_failed(runtime: &Runtime) -> bool {
-    runtime.resuming
+    runtime.operation == Some(super::Action::Resume)
         && runtime
             .state
             .as_ref()
             .is_some_and(|state| state.stage == Stage::Stopped)
 }
 
+/// A stop that failed, whether or not the provider recorded it as stopping first: a
+/// failure before that reloads the record that was Ready.
+fn stop_failed(runtime: &Runtime) -> bool {
+    runtime.stage == Some(Stage::Stopping) || runtime.operation == Some(super::Action::Stop)
+}
+
 fn failed(runtime: &Runtime, error: &str) -> Status {
     let mut track = track(runtime);
+    if stop_failed(runtime) {
+        // The worker got as far as Ready; the stop is not a deployment step.
+        track = Track::complete(&Stage::ALL, true);
+    }
     // A reloaded record whose stage is off the track (a stopped one after a failed
     // resume) does not erase the step this attempt tried.
     let attempted = runtime
@@ -658,7 +668,7 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
     } else if resume_failed(runtime) {
         // The worker is still stopped: resuming again, not a new deployment.
         Some(Primary::Resume)
-    } else if runtime.stage == Some(Stage::Stopping) {
+    } else if stop_failed(runtime) {
         // A failed stop is finished by confirming it, not by reconnecting the worker.
         Some(Primary::ReconcileStop)
     } else if never_ready {
@@ -672,6 +682,8 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
             "Deletion failed".into()
         } else if resume_failed(runtime) {
             "Resume failed".into()
+        } else if stop_failed(runtime) {
+            "Stop failed".into()
         } else {
             failed_verb(runtime.stage)
         },

@@ -52,7 +52,7 @@ const REGISTRY_CONTEXT: &[&str] = &[
 ];
 
 const REGISTRY_REFUSED: &str =
-    "The registry refused the request. Its saved credentials have expired or lack push rights to this image.";
+    "The registry refused the request. Its saved credentials have expired or lack access to this image.";
 
 /// A well-known cause: any of `patterns`, and when `context` is not empty, one of
 /// those words in the line or the failure summary too.

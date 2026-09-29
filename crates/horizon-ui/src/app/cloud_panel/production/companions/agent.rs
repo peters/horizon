@@ -373,9 +373,13 @@ impl HorizonApp {
                 runtime.progress.reset();
                 runtime.error = None;
                 runtime.stage = Some(if stop { Stage::Stopping } else { Stage::Provision });
-                // As `begin_operation`: a failed resume that reloads the stopped record
-                // still offers Resume worker.
-                runtime.resuming = !stop;
+                // As `begin_operation`: a failure that reloads the saved record still
+                // offers the stop or resume that was tried.
+                runtime.operation = Some(if stop {
+                    super::super::lifecycle::Action::Stop
+                } else {
+                    super::super::lifecycle::Action::Resume
+                });
                 let (tx, rx) = channel();
                 runtime.receiver = Some(rx);
                 runtime.sender = Some(tx.clone());

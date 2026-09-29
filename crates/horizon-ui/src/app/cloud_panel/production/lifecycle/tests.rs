@@ -725,11 +725,30 @@ fn an_operation_that_fails_its_preflight_is_still_its_own_attempt() {
             "{action:?}: diagnosis ignores older output"
         );
         assert_eq!(runtime.stage, Some(first), "{action:?} names itself");
-        assert_eq!(runtime.resuming, action == Action::Resume);
+        assert_eq!(runtime.operation, Some(action));
         assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
     }
     let mut runtime = Runtime::default();
     super::fail_before_start(&mut runtime, Action::Delete, "unreadable".into());
     assert!(runtime.progress.is_deletion());
     assert_eq!(runtime.error.as_deref(), Some("unreadable"));
+}
+
+#[test]
+fn a_device_release_that_fails_its_preflight_is_reported_as_one() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        ..Runtime::default()
+    };
+    super::fail_before_start(
+        &mut runtime,
+        Action::RevokeBrowserstack,
+        "settings.json could not be read".into(),
+    );
+    assert_eq!(
+        runtime.remote_release_error.as_deref(),
+        Some("settings.json could not be read")
+    );
+    assert_eq!(runtime.error, None, "not a deployment failure");
+    assert_eq!(runtime.stage, Some(Stage::Ready));
 }

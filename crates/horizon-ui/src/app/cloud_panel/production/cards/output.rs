@@ -255,7 +255,7 @@ mod tests {
             summary: "Uploading image failed; inspect deployment output".into(),
             cause: Some("error from registry: ".to_owned() + &"denied because of a very long reason ".repeat(20)),
             meaning: Some(
-                "The registry refused the request. Its saved credentials have expired or lack push rights to this image.",
+                "The registry refused the request. Its saved credentials have expired or lack access to this image.",
             ),
         };
         let mut used = 0.0;

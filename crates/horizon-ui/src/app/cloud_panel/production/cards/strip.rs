@@ -22,6 +22,8 @@ pub(in crate::app::cloud_panel) enum Sharing {
     Moved,
     Starting,
     Open(usize),
+    /// The bridge lost its connection and is trying again.
+    Reconnecting,
     Failed,
 }
 
@@ -481,6 +483,12 @@ fn items(indicators: &Indicators) -> Vec<Item> {
             true,
             None,
             "Connecting the local network bridge".to_owned(),
+        ),
+        Sharing::Reconnecting => (
+            String::new(),
+            true,
+            Some(theme::PALETTE_YELLOW()),
+            "Local network bridge reconnecting; see Connections".to_owned(),
         ),
         Sharing::Open(count) => (
             count.to_string(),

@@ -30,7 +30,7 @@ pub(super) fn occupancy(group: &CloudGroup, board: &Board) -> Occupancy {
 /// The bridge's indicator. The header is its one always-visible reader, so while
 /// the bridge runs it repaints at the bridge's refresh to follow starts and relays.
 pub(super) fn sharing(ctx: &egui::Context, runtime: &Runtime) -> Sharing {
-    use super::super::local_network::{STATUS_REFRESH, Sharing as State};
+    use super::super::local_network::{Phase, STATUS_REFRESH, Sharing as State};
     if matches!(runtime.sharing, State::On(_)) {
         ctx.request_repaint_after(STATUS_REFRESH);
     }
@@ -39,7 +39,12 @@ pub(super) fn sharing(ctx: &egui::Context, runtime: &Runtime) -> Sharing {
         State::Paused { .. } => Sharing::Paused,
         State::Moved { .. } => Sharing::Moved,
         State::Refused(_) => Sharing::Failed,
-        State::On(bridge) => bridge.open_connections().map_or(Sharing::Starting, Sharing::Open),
+        State::On(bridge) => match bridge.phase() {
+            Phase::Starting => Sharing::Starting,
+            Phase::Open(count) => Sharing::Open(count),
+            Phase::Reconnecting => Sharing::Reconnecting,
+            Phase::Failed => Sharing::Failed,
+        },
     }
 }
 

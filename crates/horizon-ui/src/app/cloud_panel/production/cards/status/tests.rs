@@ -513,7 +513,7 @@ fn a_resume_that_fails_before_the_provider_acts_offers_resume_again() {
     // The failed resume reloaded the still-stopped record before reporting.
     let runtime = Runtime {
         stage: Some(Stage::Stopped),
-        resuming: true,
+        operation: Some(super::super::Action::Resume),
         error: Some("Provider API unavailable".into()),
         state: Some(deployment("Stopped", &bound(), &serde_json::Value::Null)),
         ..Runtime::default()
@@ -553,4 +553,20 @@ fn a_failure_is_retried_as_the_operation_that_failed() {
         assert_eq!(primary.retries(), retry, "{primary:?}");
         assert_eq!(primary.retry_label().is_some(), retry.is_some(), "{primary:?}");
     }
+}
+
+#[test]
+fn a_stop_that_fails_before_the_provider_records_it_offers_reconcile_stop() {
+    // The failure reloaded the record that was Ready.
+    let runtime = Runtime {
+        stage: Some(Stage::Ready),
+        operation: Some(super::super::Action::Stop),
+        error: Some("Worker specification is missing".into()),
+        state: Some(deployment("Ready", &bound(), &running_worker())),
+        ..Runtime::default()
+    };
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Stop failed");
+    assert_eq!(status.primary, Some(Primary::ReconcileStop), "not a reconnect");
+    assert!(!status.track.failed, "no deployment step failed");
 }

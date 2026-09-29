@@ -136,17 +136,38 @@ impl Running {
     }
 }
 
+/// Where a running bridge is, for the header's indicator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Phase {
+    Starting,
+    /// Sharing, with this many connections relayed now.
+    Open(usize),
+    Reconnecting,
+    Failed,
+}
+
 impl Running {
-    /// Connections the bridge relays now, once it is sharing; `None` while it starts or reconnects.
-    pub(super) fn open_connections(&self) -> Option<usize> {
+    /// The bridge's phase; a bridge not read yet is starting.
+    pub(super) fn phase(&self) -> Phase {
         let status = self.status(Instant::now());
         match status.as_ref().map(|(_, status)| status) {
             Some(Status {
                 state: State::Active { .. },
                 relays,
                 ..
-            }) => Some(relays.len()),
-            _ => None,
+            }) => Phase::Open(relays.len()),
+            Some(Status {
+                state: State::Reconnecting { .. },
+                ..
+            }) => Phase::Reconnecting,
+            Some(Status {
+                state: State::Failed { .. },
+                ..
+            }) => Phase::Failed,
+            Some(Status {
+                state: State::Starting, ..
+            })
+            | None => Phase::Starting,
         }
     }
 }
@@ -558,6 +579,29 @@ mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
     use horizon_core::cloud_runtime::local_network::Counters;
+
+    #[test]
+    fn the_header_hears_a_reconnecting_or_failed_bridge_as_such() {
+        let running = Running::new(None);
+        assert_eq!(running.phase(), Phase::Starting, "not read yet");
+        for (state, phase) in [
+            (
+                State::Reconnecting {
+                    error: "ssh closed".into(),
+                },
+                Phase::Reconnecting,
+            ),
+            (
+                State::Failed {
+                    error: "relay refused".into(),
+                },
+                Phase::Failed,
+            ),
+        ] {
+            *running.status.lock().unwrap() = Some((Instant::now(), status(state, 0, 0)));
+            assert_eq!(running.phase(), phase);
+        }
+    }
 
     /// A bridge relaying `connections` connections, with one more still negotiating.
     fn status(state: State, connections: usize, bytes: u64) -> Status {

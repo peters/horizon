@@ -153,6 +153,11 @@ impl Runtime {
 /// A worker operation that failed its preflight is still that operation's failure: it
 /// gets its own attempt, so the status names it and diagnosis ignores earlier output.
 fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
+    if action == Action::RevokeBrowserstack {
+        // Reported as the device release it was, which Manage finishes; not as a deployment.
+        runtime.remote_release_error = Some(error);
+        return;
+    }
     if matches!(action, Action::Stop | Action::Resume | Action::Delete) {
         begin_operation(runtime, action);
     }
@@ -165,7 +170,7 @@ fn begin_operation(runtime: &mut Runtime, action: Action) {
         // Until core reports its first step, the step it will start with stands
         // in, so Cancel shows only when that step can still be cancelled.
         runtime.progress.begin_deletion();
-        runtime.resuming = false;
+        runtime.operation = Some(action);
         // Both error channels the card shows belong to earlier attempts.
         runtime.error = None;
         runtime.remote_release_error = None;
@@ -174,7 +179,7 @@ fn begin_operation(runtime: &mut Runtime, action: Action) {
         // Every operation times and diagnoses its own output: a failed deletion's
         // frozen steps and an earlier deployment's clock do not carry over.
         runtime.progress.reset();
-        runtime.resuming = action == Action::Resume;
+        runtime.operation = Some(action);
         // A stop reports as stopping from its start; its failure is a stop's, not a provision's.
         runtime.stage = Some(if action == Action::Stop {
             Stage::Stopping
