@@ -29,18 +29,18 @@ fn the_header_status_and_every_step_reach_a_screen_reader() {
         ..Default::default()
     };
     let failed = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
-    let header = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::new(548.0, 118.0));
+    let header = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::new(1400.0, 118.0));
     let labels = spoken(|ui| {
         let indicators = strip::Indicators {
-            running: 0,
-            terminals: 0,
-            desktop: None,
-            sharing: strip::Sharing::Off,
+            running: 1,
+            terminals: 2,
+            desktop: Some(false),
+            sharing: strip::Sharing::Open(3),
             companions: 0,
         };
         let spend = strip::Spend {
-            line: "No charges yet".into(),
-            explanation: String::new(),
+            line: "$0.320/h · $1.02 run".into(),
+            explanation: "Estimated from the worker's rate.".into(),
         };
         strip::show(ui, header, &failed, &indicators, &spend, false);
         steps::vertical(ui, &runtime, &failed);
@@ -54,6 +54,14 @@ fn the_header_status_and_every_step_reach_a_screen_reader() {
         "the whole cause, however cut on screen: {sentence}"
     );
     assert!(sentence.contains("registry refused"), "{sentence}");
+    assert!(!sentence.contains(".."), "{sentence}");
+    for said in [
+        "$0.320/h · $1.02 run. Estimated from the worker's rate",
+        "Desktop tunnel not connected",
+        "Sharing the local network · 3 open",
+    ] {
+        assert!(labels.iter().any(|label| label == said), "{said} in {labels:?}");
+    }
     for step in ["Validate: done", "Push image: failed", "Ready: pending"] {
         assert!(labels.iter().any(|label| label == step), "{step} in {labels:?}");
     }

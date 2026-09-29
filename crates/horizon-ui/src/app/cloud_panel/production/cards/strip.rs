@@ -140,8 +140,12 @@ pub(super) fn show(
             spend_galley.size(),
         );
         ui.painter().galley(rect.min, spend_galley, theme::FG_SOFT());
+        let spoken = format!("{}. {}", spend.line, spend.explanation);
         ui.interact(rect, ui.id().with("spend"), Sense::hover())
-            .on_hover_text(&spend.explanation);
+            .on_hover_text(&spend.explanation)
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.trim_end_matches(['.', ' ']))
+            });
         left = rect.left() - 24.0;
     }
     status_line(ui, header, status);
@@ -256,6 +260,7 @@ fn spoken(status: &Status, meaning: Option<&str>) -> String {
         status.right.as_str(),
     ]
     .into_iter()
+    .map(|part| part.trim().trim_end_matches('.'))
     .filter(|part| !part.is_empty())
     .collect::<Vec<_>>()
     .join(". ")
@@ -556,8 +561,10 @@ fn paint_indicators(ui: &egui::Ui, left_center: Pos2, placed: Vec<Placed>) {
             ui.painter().galley(pos2(x + 20.0, top), galley, placed.color);
         }
         let rect = Rect::from_min_size(pos2(x, left_center.y - 11.0), vec2(placed.width, 22.0));
+        let tip = placed.item.tip;
         ui.interact(rect, ui.id().with(("indicator", index)), Sense::hover())
-            .on_hover_text(placed.item.tip);
+            .on_hover_text(&tip)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &tip));
         x += placed.width;
     }
 }

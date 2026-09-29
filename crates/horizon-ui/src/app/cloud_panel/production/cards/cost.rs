@@ -21,6 +21,16 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
         .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
 }
 
+/// Whether the worker is gone: deleted, or its deletion confirmed by the provider while
+/// storage cleanup is still pending and the saved stage reads as before.
+fn worker_deleted(runtime: &Runtime) -> bool {
+    runtime.stage == Some(super::super::Stage::Deleted)
+        || runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
+}
+
 /// Whether a worker was requested, so the provider may bill it even before Horizon
 /// has read its record.
 fn worker_requested(runtime: &Runtime) -> bool {
@@ -65,7 +75,7 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let run = runtime.current_run_cost(now);
     let total = runtime.total_cost(now);
     let idle = compute_idle(runtime);
-    let deleted = runtime.stage == Some(super::super::Stage::Deleted);
+    let deleted = worker_deleted(runtime);
     let mut parts = Vec::new();
     // A deleted worker bills nothing now; its history can still follow.
     if deleted {
@@ -127,9 +137,7 @@ fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
 /// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
 fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     match rate {
-        Some(_) if runtime.stage == Some(super::super::Stage::Deleted) => {
-            ("—".into(), "worker deleted; nothing billing")
-        }
+        Some(_) if worker_deleted(runtime) => ("—".into(), "worker deleted; nothing billing"),
         Some(_) if compute_idle(runtime) => ("Stopped".into(), "compute stopped; storage may still bill"),
         Some(rate) => (cloud_runtime::cost::format_rate(rate), "last reported worker rate"),
         None => ("—".into(), "known once a worker is requested"),
@@ -214,7 +222,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
 
 /// What still bills, for the state the worker is in.
 fn billing_note(runtime: &Runtime) -> &'static str {
-    if runtime.stage == Some(super::super::Stage::Deleted) {
+    if worker_deleted(runtime) {
         "The worker is deleted; it bills no compute. Past periods stay listed above."
     } else if compute_idle(runtime) {
         "Compute is stopped. Storage kept for resuming may still bill until the cloud is deleted."
@@ -457,5 +465,26 @@ mod tests {
             assert!(shown.iter().any(|text| text == wanted), "{stage:?}: {shown:?}");
             assert!(!shown.iter().any(|text| text.contains("/h")), "{stage:?}: {shown:?}");
         }
+    }
+
+    #[test]
+    fn a_worker_deleted_while_storage_cleanup_is_pending_reads_as_deleted() {
+        let mut pending_cleanup = runtime();
+        let state = pending_cleanup.state.as_mut().unwrap();
+        state.operation =
+            serde_json::from_value(serde_json::json!({"state": "terminated", "worker_id": "worker1"})).unwrap();
+        assert_eq!(
+            pending_cleanup.stage,
+            Some(Stage::Ready),
+            "the saved stage still reads as before"
+        );
+        let line = spend(&pending_cleanup, SystemTime::now()).line;
+        assert!(line.starts_with("Nothing billing now"), "{line}");
+        let shown = texts(&pending_cleanup);
+        assert!(
+            shown.iter().any(|text| text == "worker deleted; nothing billing"),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text.contains("resuming")), "{shown:?}");
     }
 }

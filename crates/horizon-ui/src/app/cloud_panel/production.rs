@@ -176,6 +176,9 @@ pub(super) struct Runtime {
     /// Output views scrolled up this frame, one bit per place; folded into
     /// `verbose_unpinned` at the next frame, so a view no longer shown stops holding lines.
     unpinned_views: u8,
+    /// The views that were scrolled up last frame. Only they keep the held-still list;
+    /// a view still following shows the newest lines, held ones included.
+    unpinned_last: u8,
     /// The header asked for a confirmation; Manage scrolls it into view once.
     reveal_confirmation: bool,
     /// The status the header computed this frame, reused by the body and drawer.
@@ -228,14 +231,13 @@ impl Runtime {
         line.attempt = self.progress.attempt();
         line.visit = line.stage.map_or(0, |stage| self.progress.visit(stage));
         self.log_generation += 1;
-        let target = if self.verbose_unpinned {
-            &mut self.pending_logs
-        } else {
-            &mut self.logs
-        };
+        // An update replaces its layer's line wherever it is: in place, it moves nothing
+        // on a scrolled-up screen, and a following view never shows the layer twice.
         if let Some(layer) = layer_id(&line.text)
-            && let Some(previous) = target
+            && let Some(previous) = self
+                .logs
                 .iter_mut()
+                .chain(self.pending_logs.iter_mut())
                 .rev()
                 .find(|previous| same_layer(previous, &line, layer))
         {

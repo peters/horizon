@@ -29,6 +29,8 @@ pub(super) fn show(
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 10));
     let inner = (height - pinned - frame.total_margin().sum().y).max(60.0);
+    // Another view scrolled up holds new lines aside; this one, still at the end, shows them.
+    let follows = runtime.unpinned_last & view_bit(place) == 0;
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         // The painted log stays at the follow-mode tail. Newer lines wait in
@@ -43,7 +45,7 @@ pub(super) fn show(
             .min_scrolled_height(inner)
             .auto_shrink([false, false])
             .stick_to_bottom(true)
-            .show(ui, |ui| lines(ui, runtime));
+            .show(ui, |ui| lines(ui, runtime, follows));
         let max_offset = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
         if scroll.state.offset.y + 1.0 < max_offset {
             runtime.unpinned_views |= view_bit(place);
@@ -67,23 +69,40 @@ fn view_bit(place: &str) -> u8 {
 /// Called once per cloud per frame before its output views are drawn: lines are held
 /// aside only while a view shown last frame was scrolled up.
 pub(super) fn begin_frame(runtime: &mut Runtime) {
-    runtime.verbose_unpinned = std::mem::take(&mut runtime.unpinned_views) != 0;
+    runtime.unpinned_last = std::mem::take(&mut runtime.unpinned_views);
+    runtime.verbose_unpinned = runtime.unpinned_last != 0;
     if !runtime.verbose_unpinned {
         // Held lines join now, before newer ones, so the output stays in order.
         runtime.accept_followed_logs();
     }
 }
 
-fn lines(ui: &mut egui::Ui, runtime: &Runtime) {
+/// The lines a view shows: a scrolled-up view the still list, a following view the
+/// newest follow-length tail with held lines included.
+fn shown(runtime: &Runtime, follows: bool) -> Vec<&LogLine> {
+    if !follows {
+        return runtime.logs.iter().collect();
+    }
+    let total = runtime.logs.len() + runtime.pending_logs.len();
+    runtime
+        .logs
+        .iter()
+        .chain(&runtime.pending_logs)
+        .skip(total.saturating_sub(Runtime::FOLLOW_LOG_LINES))
+        .collect()
+}
+
+fn lines(ui: &mut egui::Ui, runtime: &Runtime, follows: bool) {
     ui.spacing_mut().item_spacing.y = 3.0;
-    if runtime.logs.is_empty() {
+    let shown = shown(runtime, follows);
+    if shown.is_empty() {
         ui.label(RichText::new("No output yet.").size(TEXT_SIZE).color(theme::FG_DIM()));
         return;
     }
     // A heading per step of each attempt: a retry of the same step starts its own.
     let mut previous: Option<(Option<Stage>, u64, usize)> = None;
     // Tools print blank separator lines; they only spread the log out.
-    for line in runtime.logs.iter().filter(|line| !line.text.trim().is_empty()) {
+    for line in shown.into_iter().filter(|line| !line.text.trim().is_empty()) {
         let group = (line.stage, line.attempt, line.visit);
         if previous != Some(group) {
             if let Some(stage) = line.stage {
@@ -316,6 +335,37 @@ mod tests {
             shown,
             ["Validate · 0m 05s", "Validate · 0m 03s"],
             "each visit keeps its own time"
+        );
+    }
+
+    #[test]
+    fn a_view_still_following_shows_lines_another_scrolled_up_view_holds() {
+        let mut runtime = Runtime::default();
+        runtime.push_log("first".into());
+        runtime.push_log("5f70bf18a086: Pushing [=>   ]".into());
+        // The drawer's reader scrolled up last frame; the body is still at the end.
+        runtime.unpinned_views = view_bit("drawer");
+        begin_frame(&mut runtime);
+        runtime.push_log("second".into());
+        runtime.push_log("5f70bf18a086: Pushed".into());
+        let text = |follows| -> Vec<String> {
+            shown(&runtime, follows)
+                .into_iter()
+                .map(|line| line.text.clone())
+                .collect()
+        };
+        let body = runtime.unpinned_last & view_bit("body") == 0;
+        let drawer = runtime.unpinned_last & view_bit("drawer") == 0;
+        assert!(body && !drawer);
+        assert_eq!(
+            text(body),
+            ["first", "5f70bf18a086: Pushed", "second"],
+            "the following view is current"
+        );
+        assert_eq!(
+            text(drawer),
+            ["first", "5f70bf18a086: Pushed"],
+            "the scrolled-up view keeps its lines where they are; a layer updates in place"
         );
     }
 }
