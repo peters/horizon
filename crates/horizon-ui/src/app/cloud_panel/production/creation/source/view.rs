@@ -60,13 +60,16 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     if refocus {
         response.request_focus();
     }
-    if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
+    // Enter does what Continue would, and nothing while Continue waits for something.
+    if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) && form.source.next_step().is_ok() {
         form.source.start(ui.ctx());
     }
-    if let Some(folder) = form.source.folder_settled(ui.ctx())
-        && std::path::Path::new(&form.repository) != folder
-    {
-        step.adopt = Some(folder);
+    if let Some(folder) = form.source.folder_settled(ui.ctx()) {
+        if std::path::Path::new(&form.repository) == folder {
+            form.source.accept_text();
+        } else {
+            step.adopt = Some(folder);
+        }
     }
     let enter = ui.input(|input| input.key_pressed(Key::Enter));
     step.choose_folder = form.source.status(ui, enter);

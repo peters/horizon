@@ -81,9 +81,16 @@ impl State {
         &self.input
     }
 
-    /// The text differs from the repository chosen, so another one is being asked for.
+    /// The text differs from the repository chosen, so another one is being asked for. A field
+    /// that was cleared is no exception: the old repository is not what it shows.
     pub fn editing(&self) -> bool {
-        !self.input.trim().is_empty() && self.input.trim() != self.mirrored.trim()
+        self.input.trim() != self.mirrored.trim()
+    }
+
+    /// The text names the repository already chosen, only written another way (`~/x` for its
+    /// full path): it is what the field shows now, not a request for another repository.
+    fn accept_text(&mut self) {
+        self.mirrored.clone_from(&self.input);
     }
 
     /// The repository a pasted link names, unless the text is a folder that exists.
@@ -91,10 +98,10 @@ impl State {
         if self.parsed_for != self.input {
             self.parsed_for.clone_from(&self.input);
             let path = horizon_core::dir_search::expand_tilde(self.input.trim());
-            let before = self.remote.as_ref().map(|remote| remote.host.clone());
+            let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
             self.remote = source::parse(&self.input).filter(|_| !path.exists());
-            // A token was pasted for one host and is never carried to another.
-            if before != self.remote.as_ref().map(|remote| remote.host.clone()) {
+            // A token was pasted for one origin (scheme, host and port) and goes to no other.
+            if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
                 self.token.zeroize();
                 self.token_tried = false;
                 self.token_focused = false;
@@ -291,6 +298,11 @@ impl State {
     }
 }
 
+/// `scheme://host[:port]` of a repository address: the part a token is good for.
+fn origin(url: &str) -> &str {
+    url.match_indices('/').nth(2).map_or(url, |(end, _)| &url[..end])
+}
+
 impl Drop for State {
     /// Closing the dialog ends a running clone and forgets a token that was never used.
     fn drop(&mut self) {
@@ -352,6 +364,18 @@ mod tests {
         );
         state.mirror("/tmp/demo/other");
         assert!(!state.editing(), "a new repository replaces the text");
+        state.input.clear();
+        assert!(state.editing(), "clearing the field leaves the old repository behind");
+    }
+
+    #[test]
+    fn a_path_written_another_way_is_still_the_repository_chosen() {
+        let mut state = State::default();
+        state.mirror("/tmp/demo/atlas");
+        state.input = "/tmp/demo/atlas/".into();
+        assert!(state.editing());
+        state.accept_text();
+        assert!(!state.editing());
     }
 
     #[test]

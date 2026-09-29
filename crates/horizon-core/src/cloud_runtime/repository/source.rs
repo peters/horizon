@@ -258,16 +258,17 @@ fn classify(remote: &Remote, stderr: &str) -> Failure {
     let text = stderr.to_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
     let web = remote.url.starts_with("https://");
-    if has(&[
+    let refused = has(&[
         "terminal prompts disabled",
         "could not read username",
         "could not read password",
         "authentication failed",
         "requested url returned error: 401",
         "requested url returned error: 403",
-    ]) {
+    ]);
+    if web && refused {
         Failure::SignIn(remote.host.clone())
-    } else if !web && has(&["permission denied (", "host key verification failed"]) {
+    } else if !web && (refused || has(&["permission denied (", "host key verification failed"])) {
         // A token cannot help over SSH: the key, or trust in the host, is what is missing.
         Failure::Other(format!(
             "Git could not sign in over SSH. Give your SSH key access to this repository and trust {} once with `ssh`, or paste its https link.",
@@ -537,6 +538,7 @@ mod tests {
         for stderr in [
             "git@github.com: Permission denied (publickey).",
             "Host key verification failed.",
+            "fatal: Authentication failed for 'ssh://git@github.com/demo-org/demo.git'",
         ] {
             assert!(
                 matches!(classify(&ssh, stderr), Failure::Other(text) if text.contains("over SSH")),
