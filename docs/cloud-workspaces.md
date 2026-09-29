@@ -282,7 +282,9 @@ replaced by an empty folder next to it. A program given as a relative path, such
 `./restore.sh`, is the committed one. The restore may run for 30 minutes. Horizon then
 refuses the folder if it holds a link, a special file or a package manager settings
 file that can hold feed credentials (`nuget.config`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`,
-`.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.dockercfg`), more than 500,000
+`.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.dockercfg`, and `.docker/config.json`,
+`.m2/settings.xml`, `.gradle/gradle.properties`, `.cargo/credentials`, `.gem/credentials`,
+`.composer/auth.json` in their managers' folders), more than 500,000
 entries or more than 32 GiB. The folder travels inside the source archive, and a
 same-worker sibling restores its own with its own committed configuration. The command
 may have at most 31 arguments of at most 1,024 characters each; `env` is a plain

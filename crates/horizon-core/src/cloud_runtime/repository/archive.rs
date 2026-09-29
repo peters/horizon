@@ -79,11 +79,12 @@ fn append(
             if entry.executable {
                 header.set_mode(0o700);
             }
-            let content = Exact {
+            let mut content = Exact {
                 content: std::fs::File::open(&entry.path)?,
                 remaining: size,
             };
-            archive.append_data(&mut header, name, content)?;
+            archive.append_data(&mut header, name, &mut content)?;
+            content.finish()?;
         }
     }
     archive.into_inner()?.flush()?;
@@ -92,24 +93,29 @@ fn append(
 
 /// Exactly `remaining` bytes of a file listed with that size: one that changed since
 /// is refused rather than archived short or long.
-struct Exact {
-    content: std::fs::File,
+struct Exact<R> {
+    content: R,
     remaining: u64,
 }
-impl std::io::Read for Exact {
+const CHANGED: &str = "A restored package file changed while it was archived";
+impl<R: std::io::Read> Exact<R> {
+    /// Once the archive took the listed size, a file with more left grew.
+    fn finish(mut self) -> Result<()> {
+        if self.remaining != 0 || self.content.read(&mut [0u8; 1])? != 0 {
+            return Err(Error::Invalid(CHANGED));
+        }
+        Ok(())
+    }
+}
+impl<R: std::io::Read> std::io::Read for Exact<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let changed = || std::io::Error::other("A restored package file changed while it was archived");
-        if self.remaining == 0 {
-            return if self.content.read(&mut [0])? == 0 {
-                Ok(0)
-            } else {
-                Err(changed())
-            };
+        if self.remaining == 0 || buffer.is_empty() {
+            return Ok(0);
         }
         let limit = buffer.len().min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
         let read = self.content.read(&mut buffer[..limit])?;
         if read == 0 {
-            return Err(changed());
+            return Err(std::io::Error::other(CHANGED));
         }
         self.remaining -= read as u64;
         Ok(read)
@@ -166,4 +172,28 @@ fn header(kind: tar::EntryType, mode: u32) -> tar::Header {
     header.set_mode(mode);
     header.set_mtime(0);
     header
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CHANGED, Error, Exact};
+    use std::io::Read;
+
+    #[test]
+    fn a_file_that_grew_or_shrank_since_it_was_listed_is_refused() {
+        let exact = |content: &'static [u8], listed| Exact {
+            content: std::io::Cursor::new(content),
+            remaining: listed,
+        };
+        let mut same = exact(b"package", 7);
+        let mut read = Vec::new();
+        same.read_to_end(&mut read).unwrap();
+        assert_eq!(read, b"package");
+        assert!(same.finish().is_ok());
+        let mut grew = exact(b"package+", 7);
+        grew.read_to_end(&mut Vec::new()).unwrap();
+        assert!(matches!(grew.finish(), Err(Error::Invalid(CHANGED))));
+        let mut shrank = exact(b"pack", 7);
+        assert!(shrank.read_to_end(&mut Vec::new()).is_err());
+    }
 }

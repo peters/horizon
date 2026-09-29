@@ -148,6 +148,10 @@ fn a_failed_restore_and_a_folder_with_credentials_or_links_are_refused() {
             "mkdir \"$1/a\" && printf 'token' > \"$1/a/.npmrc\"\n",
         ),
         ("link", "ln -s /etc/hostname \"$1/hostname\"\n"),
+        (
+            "docker",
+            "mkdir \"$1/.docker\" && printf '{}' > \"$1/.docker/config.json\"\n",
+        ),
     ] {
         let case_root = temp.path().join(case);
         let (app, revision) = repository(&case_root, script);
@@ -233,4 +237,20 @@ fn approvals_need_an_absolute_checkout_path() {
     let packages = packages(&["sh", "restore.sh", "{dir}"]);
     assert!(Approval::new(PathBuf::from("app"), &packages).validate().is_err());
     assert!(Approval::new(PathBuf::from("/work/app"), &packages).validate().is_ok());
+}
+
+#[test]
+fn credential_paths_count_only_in_their_managers_folder() {
+    assert!(credential("", "NuGet.Config") && credential("deep", ".npmrc"));
+    assert!(credential(".docker", "config.json") && credential(".M2", "settings.xml"));
+    assert!(!credential("example.package", "config.json") && !credential("lib", "settings.xml"));
+}
+
+#[test]
+fn a_cancelled_deployment_stops_the_scan() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("folder")).unwrap();
+    let cancel = Cancellation::default();
+    cancel.cancel();
+    assert!(scan(temp.path(), &cancel).is_err());
 }

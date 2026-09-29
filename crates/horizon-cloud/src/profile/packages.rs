@@ -68,7 +68,7 @@ impl Packages {
             && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
             && name.len() <= Self::MAX_ENV_CHARS
             && !Self::WORKER_OWNED.contains(&name)
-            && !name.starts_with("HORIZON_")
+            && !name.starts_with("HORIZON")
             && !name.starts_with("LD_")
     }
 
@@ -139,6 +139,7 @@ mod tests {
             "HOME",
             "HORIZON",
             "HORIZON_SESSION_DIR",
+            "HORIZONFOO",
             "LD_PRELOAD",
             "ANTHROPIC_API_KEY",
         ] {

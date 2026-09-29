@@ -1,7 +1,7 @@
 //! Private dependency packages a repository restores on this computer before a worker is
 //! allocated. The restore runs with the owner's own credentials, so no package credential
 //! reaches the worker, which receives only the restored folder with the source.
-use super::{Error, Event, Result, command::Runner, progress::Progress};
+use super::{Cancellation, Error, Event, Result, command::Runner, progress::Progress};
 use horizon_cloud::Packages;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,7 +14,8 @@ use std::{
 const TIMEOUT: Duration = Duration::from_mins(30);
 const MAX_ENTRIES: usize = 500_000;
 const MAX_BYTES: u64 = 32 * 1024 * 1024 * 1024;
-/// Package manager settings files, which hold feed credentials rather than packages.
+/// Package manager settings files, which hold feed credentials rather than packages,
+/// wherever they appear.
 const CREDENTIAL_FILES: [&str; 9] = [
     "nuget.config",
     ".npmrc",
@@ -25,6 +26,17 @@ const CREDENTIAL_FILES: [&str; 9] = [
     "_netrc",
     ".git-credentials",
     ".dockercfg",
+];
+/// Credential-bearing settings that only count in their manager's folder, so an
+/// unrelated `config.json` or `settings.xml` inside a package is still sent.
+const CREDENTIAL_PATHS: [(&str, &str); 7] = [
+    (".docker", "config.json"),
+    (".m2", "settings.xml"),
+    (".gradle", "gradle.properties"),
+    (".cargo", "credentials"),
+    (".cargo", "credentials.toml"),
+    (".gem", "credentials"),
+    (".composer", "auth.json"),
 ];
 
 /// The owner's permission for one local checkout to run exactly this restore command on
@@ -127,7 +139,7 @@ pub(crate) fn restore(
     let restored = runner.run("Package restore", &mut command, TIMEOUT);
     let _ = std::fs::remove_dir_all(&tree);
     restored?;
-    let (entries, bytes) = scan(&directory)?;
+    let (entries, bytes) = scan(&directory, runner.cancel)?;
     Ok(Restored {
         env: packages.env.clone(),
         entries,
@@ -145,12 +157,22 @@ fn program(tree: &Path, program: &str) -> PathBuf {
     }
 }
 
+/// Whether a file named `name` in the folder named `parent` holds credentials.
+fn credential(parent: &str, name: &str) -> bool {
+    let (parent, name) = (parent.to_ascii_lowercase(), name.to_ascii_lowercase());
+    CREDENTIAL_FILES.contains(&name.as_str())
+        || CREDENTIAL_PATHS
+            .iter()
+            .any(|(folder, file)| parent == *folder && name == *file)
+}
+
 /// Lists `directory` in a stable order, refusing what a package folder must not send.
-fn scan(directory: &Path) -> Result<(Vec<Entry>, u64)> {
+fn scan(directory: &Path, cancel: &Cancellation) -> Result<(Vec<Entry>, u64)> {
     let mut entries = Vec::new();
     let mut bytes = 0u64;
-    let mut pending = vec![(directory.to_owned(), String::new())];
-    while let Some((folder, prefix)) = pending.pop() {
+    let mut pending = vec![(directory.to_owned(), String::new(), String::new())];
+    while let Some((folder, prefix, parent)) = pending.pop() {
+        cancel.check()?;
         let mut children = std::fs::read_dir(&folder)?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children.into_iter().rev() {
@@ -158,7 +180,7 @@ fn scan(directory: &Path) -> Result<(Vec<Entry>, u64)> {
                 .file_name()
                 .into_string()
                 .map_err(|_| Error::Invalid("A restored package path is not valid Unicode"))?;
-            if CREDENTIAL_FILES.contains(&name.to_ascii_lowercase().as_str()) {
+            if credential(&parent, &name) {
                 return Err(Error::Invalid(
                     "The restored package folder holds a package manager settings file, which can hold feed credentials; restore only packages into {dir}",
                 ));
@@ -171,7 +193,7 @@ fn scan(directory: &Path) -> Result<(Vec<Entry>, u64)> {
                 ));
             }
             if metadata.is_dir() {
-                pending.push((child.path(), format!("{relative}/")));
+                pending.push((child.path(), format!("{relative}/"), name.clone()));
                 entries.push(Entry {
                     name: relative,
                     path: child.path(),
