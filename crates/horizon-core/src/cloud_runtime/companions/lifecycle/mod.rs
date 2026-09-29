@@ -11,7 +11,7 @@ use horizon_cloud_protocol::OperationId;
 use intent::{Action, Binding, Intent, State};
 use std::path::Path;
 
-pub use creation::{bound_checkout, confirm_creation, reserve};
+pub use creation::{bound_checkout, card_recoverable, confirm_creation, reserve, selects_a_cloud};
 
 /// Trusted owning-controller inputs, refreshed from the current workspace before each call.
 /// Never construct this from an agent's claimed workspace, inventory or credentials.
@@ -448,7 +448,7 @@ fn confirmed(
     if !same_grant || request.require_selected(journal, binding, declaration).is_err() {
         receipt::withdraw(target, request.owner, intent.operation_id)?;
         return Err(Error::Invalid(
-            "The new companion cloud is no longer selected as it was when confirmed; its creation needs confirming again and nothing was created",
+            "The new companion cloud is no longer selected as it was when confirmed; its creation needs confirming again and no worker was allocated",
         ));
     }
     Ok(true)

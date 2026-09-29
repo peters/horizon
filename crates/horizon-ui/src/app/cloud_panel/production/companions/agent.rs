@@ -425,8 +425,10 @@ fn submit(
     if companion.action == CompanionAction::EnsureReady
         && let Err(error) = retry_busy(|| lifecycle::bind_selected(&request))
     {
-        // No cloud matches the declaration: the owner may create one on the card.
-        return match missing(&context, &alias) {
+        // No cloud matches the declaration and none is selected: the owner may create
+        // one on the card. A selected cloud that cannot be bound is reported instead.
+        let selected = retry_busy(|| lifecycle::selects_a_cloud(&request)).unwrap_or(true);
+        return match missing(&context, &alias).filter(|_| !selected) {
             Some(declaration) => Ok(Answer::Missing(owner.clone(), declaration)),
             None => Err(error.to_string()),
         };

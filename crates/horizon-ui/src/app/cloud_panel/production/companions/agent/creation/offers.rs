@@ -1,6 +1,6 @@
 //! Requests the owner decides on the source cloud's card besides a plain creation: a
 //! checked cloud that never started, and a reservation Horizon closed before finishing.
-use super::{Action, Checkout, Context, HorizonApp, PathBuf, Pending, SEARCHED, Step, Value, cloud_runtime, lifecycle};
+use super::{Action, Checkout, Context, HorizonApp, PathBuf, Pending, SEARCHED, Step, Value, lifecycle};
 
 impl HorizonApp {
     /// Asks the owner to start a checked companion whose cloud was created but never
@@ -60,9 +60,9 @@ impl HorizonApp {
         Some(answer)
     }
 
-    /// Offers a reservation again when Horizon closed after recording it but before
-    /// adding its cloud: the operation waits and no card or record exists here. The
-    /// owner's Create continues from the checkout the binding recorded.
+    /// Offers a reservation again when its card is missing: Horizon closed before adding
+    /// it, or it was removed while only prepared. The operation waits, and the owner's
+    /// Retry adds the card again from the checkout the binding recorded.
     pub(in crate::app::cloud_panel::production::companions::agent) fn request_companion_recovery(
         &mut self,
         source: &str,
@@ -83,11 +83,6 @@ impl HorizonApp {
             return None;
         }
         let root = self.cloud_prototype.root.clone()?;
-        if cloud_runtime::state::cloud_directory(&root, target)
-            .map_or(true, |directory| directory.join("deployment.json").exists())
-        {
-            return None;
-        }
         let owner = self
             .cloud_prototype
             .production
@@ -113,6 +108,11 @@ impl HorizonApp {
             context,
             alias,
         };
+        // Its card may also have been removed while still only prepared; a record that
+        // could own a worker or provider resources is never offered again.
+        if !lifecycle::card_recoverable(&request).unwrap_or(false) {
+            return None;
+        }
         let checkout = lifecycle::bound_checkout(&request).ok().flatten()?;
         let pending = Pending {
             source: source.to_owned(),

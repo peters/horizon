@@ -176,3 +176,45 @@ pub fn bound_checkout(request: &Request<'_>) -> Result<Option<std::path::PathBuf
         .binding(request.alias)
         .map(|binding| binding.checkout().to_owned()))
 }
+
+/// Whether the owner's checkbox currently selects a cloud for this companion. Reads
+/// only: a selected cloud that cannot be bound is an error to report, never a missing
+/// companion to create.
+/// # Errors
+/// Refuses changed ownership and corrupt durable state.
+pub fn selects_a_cloud(request: &Request<'_>) -> Result<bool> {
+    let (_, state) = request.load()?;
+    Ok(state.grants.get(request.alias).is_some_and(|grant| grant.selected))
+}
+
+/// Whether a reserved companion's card can be added again from its binding: its cloud
+/// has no record, or only the prepared one a card saved before any worker was
+/// requested, and no provider resources. Reads only.
+/// # Errors
+/// Refuses changed ownership and corrupt durable state.
+pub fn card_recoverable(request: &Request<'_>) -> Result<bool> {
+    let (_, state) = request.load()?;
+    let Some(binding) = state.intents.binding(request.alias) else {
+        return Ok(false);
+    };
+    if binding.origin() != intent::Origin::Reserved {
+        return Ok(false);
+    }
+    let target = request.target_store(binding)?;
+    let provider_resources = ["hetzner.json", "workspace-volume.json", "workspace-volume.required"]
+        .iter()
+        .map(|file| target.root().join(file).try_exists())
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .any(|exists| exists);
+    if provider_resources {
+        return Ok(false);
+    }
+    Ok(target.load()?.is_none_or(|record| {
+        record.cloud_id == binding.target().cloud_id
+            && record.repository == binding.checkout()
+            && record.operation == crate::cloud_runtime::CreateState::Prepared
+            && record.worker.is_none()
+            && !record.stop_requested
+    }))
+}

@@ -52,28 +52,36 @@ pub(super) fn select_and_confirm(
     alias: &str,
     target: &str,
     id: OperationId,
+    select: bool,
 ) -> Result<Selected, String> {
     let cancel = Cancellation::default();
     let context = inventory::prepare(owner, groups, &cancel).map_err(|error| error.to_string())?;
     let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
     // The selection is saved before any SSH work; the new cloud has no worker to reach yet.
-    let selected = retry_busy(|| {
-        companions::refresh(
-            &companions::Request {
-                root: root.to_owned(),
-                owner: owner.clone(),
-                context: Some(context.clone()),
-                action: companions::Action::Select {
-                    alias: alias.to_owned(),
-                    target_cloud_id: target.to_owned(),
+    // A cloud that already existed is confirmed only under the selection the owner
+    // still holds: selecting it again here could undo an uncheck made meanwhile.
+    let selected = if select {
+        retry_busy(|| {
+            companions::refresh(
+                &companions::Request {
+                    root: root.to_owned(),
+                    owner: owner.clone(),
+                    context: Some(context.clone()),
+                    action: companions::Action::Select {
+                        alias: alias.to_owned(),
+                        target_cloud_id: target.to_owned(),
+                    },
+                    settings: settings.clone(),
                 },
-                settings: settings.clone(),
-            },
-            &cancel,
-        )
-    });
+                &cancel,
+            )
+        })
+        .map(Some)
+    } else {
+        Ok(None)
+    };
     let snapshot = match selected {
-        Ok(snapshot) => Some(snapshot),
+        Ok(snapshot) => snapshot,
         Err(error) => {
             tracing::info!(%error, "selected the new companion cloud before it has a worker");
             None

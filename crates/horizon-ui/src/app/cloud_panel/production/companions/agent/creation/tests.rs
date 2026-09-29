@@ -490,3 +490,18 @@ fn a_confirmed_creation_shows_its_checkbox_waits_for_an_uncheck_and_ends_with_it
     assert!(companions.agent.creation.declined.is_empty());
     assert!(!companions.agent.holds("source"));
 }
+
+#[test]
+fn a_checkout_search_that_ends_without_an_answer_stops_showing_as_running() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    app.request_companion_creation(owner(), "consumer", declaration(), OperationId::generate());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    creation(&mut app).pending[0].search = Some(receiver);
+    app.poll_companion_creations(&ctx);
+    assert!(creation(&mut app).pending[0].search.is_some());
+    drop(sender);
+    app.poll_companion_creations(&ctx);
+    let pending = &creation(&mut app).pending[0];
+    assert!(pending.search.is_none() && pending.waiting());
+}

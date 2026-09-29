@@ -376,3 +376,33 @@ fn an_uncheck_after_execution_started_never_blocks_reconciling_it() {
     let claim = receipt::load(&fixture.root.path().join("reserved")).unwrap().unwrap();
     assert_eq!(claim.confirmed, Some(id));
 }
+
+#[test]
+fn only_an_owner_selection_counts_as_a_selected_cloud() {
+    let fixture = Fixture::unbound();
+    assert!(selects_a_cloud(&fixture.request()).unwrap());
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.grants.get_mut("consumer").unwrap().selected = false;
+    store.save(&state).unwrap();
+    drop(store);
+    assert!(!selects_a_cloud(&fixture.request()).unwrap());
+}
+
+#[test]
+fn a_reserved_card_is_recoverable_only_before_any_worker_or_provider_resource() {
+    // An existing companion's card is never recreated from its binding.
+    assert!(!card_recoverable(&Fixture::new().request()).unwrap());
+    let (fixture, _) = reserved();
+    // No record yet, then the prepared record a removed card left behind.
+    assert!(card_recoverable(&fixture.request()).unwrap());
+    save_reserved(&fixture, &prepared(&fixture));
+    assert!(card_recoverable(&fixture.request()).unwrap());
+    let mut started = prepared(&fixture);
+    started.worker = fixture.ready().worker;
+    save_reserved(&fixture, &started);
+    assert!(!card_recoverable(&fixture.request()).unwrap());
+    save_reserved(&fixture, &prepared(&fixture));
+    std::fs::write(fixture.root.path().join("reserved/hetzner.json"), "{}").unwrap();
+    assert!(!card_recoverable(&fixture.request()).unwrap());
+}

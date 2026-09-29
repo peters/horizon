@@ -2,6 +2,7 @@
 //! source cloud's card, and what the agent's polls answer while it waits.
 use super::{Choice, Pending, State, Step};
 use serde_json::{Value, json};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 impl State {
     /// The owner's view of each request for `cloud`, with Create, Decline and a checkout choice.
@@ -43,6 +44,23 @@ impl Pending {
             "resend": false,
             "message": message,
         })
+    }
+
+    /// Takes the checkout search's result once it arrives; a single match is chosen,
+    /// and the owner still decides with Create.
+    pub(super) fn poll_search(&mut self) {
+        match self.search.as_ref().map(Receiver::try_recv) {
+            Some(Ok(found)) => {
+                self.search = None;
+                if self.chosen.is_none() && found.len() == 1 {
+                    self.chosen = found.first().cloned();
+                }
+                self.checkouts = found;
+            }
+            // The search ended without an answer: the owner can still choose one.
+            Some(Err(TryRecvError::Disconnected)) => self.search = None,
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
     }
 
     pub(super) fn render(&mut self, ui: &mut egui::Ui) -> Option<Choice> {

@@ -275,13 +275,7 @@ impl HorizonApp {
     pub(super) fn poll_companion_creations(&mut self, ctx: &egui::Context) {
         let creation = &mut self.cloud_prototype.production.companions.agent.creation;
         for pending in &mut creation.pending {
-            if let Some(Ok(found)) = pending.search.as_ref().map(Receiver::try_recv) {
-                pending.search = None;
-                if pending.chosen.is_none() && found.len() == 1 {
-                    pending.chosen = found.first().cloned();
-                }
-                pending.checkouts = found;
-            }
+            pending.poll_search();
         }
         for (source, alias, choice) in std::mem::take(&mut creation.actions) {
             let creation = &mut self.cloud_prototype.production.companions.agent.creation;
@@ -465,6 +459,8 @@ impl HorizonApp {
     fn add_companion_cloud(&mut self, index: usize, ctx: &egui::Context) {
         let pending = &self.cloud_prototype.production.companions.agent.creation.pending[index];
         let (owner, alias, id) = (pending.owner.clone(), pending.alias.clone(), pending.id);
+        // Only a newly created cloud is selected here; an existing one keeps the owner's.
+        let select = !pending.existing;
         let (Some(cloud_id), Some(checkout)) = (pending.cloud_id.clone(), pending.checkout.clone()) else {
             return;
         };
@@ -522,7 +518,7 @@ impl HorizonApp {
         };
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = sender.send(select_and_confirm(&root, &owner, &groups, &alias, &target, id));
+            let _ = sender.send(select_and_confirm(&root, &owner, &groups, &alias, &target, id, select));
             ctx.request_repaint();
         });
     }
