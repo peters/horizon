@@ -442,6 +442,19 @@ fn a_check_core_reports_under_an_earlier_step_keeps_the_later_step_finished() {
 }
 
 #[test]
+fn a_check_running_under_an_earlier_step_keeps_the_later_step_finished() {
+    let start = Instant::now().checked_sub(Duration::from_secs(30)).unwrap();
+    let (mut runtime, _sender) = live(Stage::Validate);
+    runtime.progress.stage(Stage::Validate, start);
+    runtime.progress.stage(Stage::Build, start + Duration::from_secs(1));
+    runtime.progress.stage(Stage::Validate, start + Duration::from_secs(21));
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.track.current, Some(0));
+    assert!(!status.track.failed);
+    assert_eq!(status.track.finished, 2, "Build stays finished while the check runs");
+}
+
+#[test]
 fn a_detail_that_repeats_the_verb_is_not_said_twice() {
     let (mut runtime, _sender) = live(Stage::Build);
     runtime

@@ -464,7 +464,13 @@ fn track(runtime: &Runtime) -> Track {
                 .is_deletion()
                 .then(|| runtime.progress.last_stage().unwrap_or(Stage::ReleaseDevices))
         });
-    Track::at(stages, stage)
+    let mut track = Track::at(stages, stage);
+    // A step revisited after a later one (the image contract checked under Validate
+    // after Build) keeps the later one finished while it runs, not only once it fails.
+    if let Some(later) = finished_after(runtime, &track) {
+        track.finished = track.finished.max(later + 1);
+    }
+    track
 }
 
 fn verb(stage: Stage) -> &'static str {
@@ -605,9 +611,6 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
     let mut track = track(runtime);
     track.failed = track.current.is_some();
     let later = finished_after(runtime, &track);
-    if let Some(later) = later {
-        track.finished = later + 1;
-    }
     let failure = Failure::of(runtime, error);
     let never_ready = runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready);
     let primary = if runtime.progress.is_deletion() {

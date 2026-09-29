@@ -174,8 +174,19 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
     let lower = without_zero_counts(&line.to_ascii_lowercase());
-    FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker))
+    (FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker)) || known_cause(&lower))
         && !TRANSIENT_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Well-known causes that name no failure word ("manifest unknown", "toomanyrequests").
+/// Patterns as likely in settings or progress as in failures are left to the markers.
+fn known_cause(lower: &str) -> bool {
+    const AMBIGUOUS: [&str; 2] = ["timeout", "rate limit"];
+    MEANINGS
+        .iter()
+        .flat_map(|known| known.patterns)
+        .filter(|pattern| !AMBIGUOUS.contains(pattern))
+        .any(|pattern| starts_a_word(lower, pattern))
 }
 
 /// Whether `marker` begins a word of `text`: "error:" and "errors" count, the
@@ -248,6 +259,8 @@ mod tests {
             "Finished with 0 errors and 0 warnings",
             "build: 0 failures",
             "No errors detected",
+            "request timeout: 30s",
+            "rate limit: 100 requests per minute",
             "Validation finished with no failures",
             "completed without errors",
             "   Compiling thiserror v2.0.12",
@@ -260,6 +273,10 @@ mod tests {
             "error: 0 bytes written",
             "no errors in the plan, but the build failed",
             "piano error: string snapped",
+            "manifest unknown: manifest unknown",
+            "toomanyrequests: You have reached your pull rate limit",
+            "insufficient capacity in the selected data center",
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
         ] {
             assert!(is_failure(failure), "{failure}");
         }
