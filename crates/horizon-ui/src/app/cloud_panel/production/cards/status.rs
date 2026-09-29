@@ -282,7 +282,12 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
             verb: "Worker deleted".into(),
             numbers: "Storage cleanup unfinished · still billable".into(),
             tail: "Open Manage to finish it".into(),
-            track: Track::at(&Stage::DELETION, Some(Stage::DeleteStorage)),
+            // The earlier steps are done; cleanup waits for the owner, it is not running.
+            track: Track {
+                current: None,
+                ..Track::at(&Stage::DELETION, Some(Stage::DeleteStorage))
+            },
+            primary: Some(Primary::Manage),
             ..base
         });
     }

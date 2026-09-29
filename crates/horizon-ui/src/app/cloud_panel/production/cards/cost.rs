@@ -21,14 +21,24 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
         .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
 }
 
-/// Whether the worker is gone: deleted, or its deletion confirmed by the provider while
-/// storage cleanup is still pending and the saved stage reads as before.
-fn worker_deleted(runtime: &Runtime) -> bool {
-    runtime.stage == Some(super::super::Stage::Deleted)
-        || runtime
+/// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
+/// unfinished (the provider confirmed the worker's deletion; the saved stage reads as before).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Deleted {
+    Fully,
+    StorageLeft,
+}
+
+fn worker_deleted(runtime: &Runtime) -> Option<Deleted> {
+    if runtime.stage == Some(super::super::Stage::Deleted) {
+        Some(Deleted::Fully)
+    } else {
+        runtime
             .state
             .as_ref()
             .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
+            .then_some(Deleted::StorageLeft)
+    }
 }
 
 /// Whether a worker was requested, so the provider may bill it even before Horizon
@@ -77,9 +87,12 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     let idle = compute_idle(runtime);
     let deleted = worker_deleted(runtime);
     let mut parts = Vec::new();
-    // A deleted worker bills nothing now; its history can still follow.
-    if deleted {
-        parts.push("Nothing billing now".to_owned());
+    // A deleted worker bills no compute; its history can still follow.
+    if let Some(deleted) = deleted {
+        parts.push(match deleted {
+            Deleted::Fully => "Nothing billing now".to_owned(),
+            Deleted::StorageLeft => "Worker deleted · storage may still bill".to_owned(),
+        });
     } else {
         match rate {
             Some(_) if idle => parts.push("compute stopped".to_owned()),
@@ -137,7 +150,8 @@ fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
 /// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
 fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     match rate {
-        Some(_) if worker_deleted(runtime) => ("—".into(), "worker deleted; nothing billing"),
+        Some(_) if worker_deleted(runtime) == Some(Deleted::Fully) => ("—".into(), "worker deleted; nothing billing"),
+        Some(_) if worker_deleted(runtime).is_some() => ("—".into(), "worker deleted; storage may still bill"),
         Some(_) if compute_idle(runtime) => ("Stopped".into(), "compute stopped; storage may still bill"),
         Some(rate) => (cloud_runtime::cost::format_rate(rate), "last reported worker rate"),
         None => ("—".into(), "known once a worker is requested"),
@@ -222,9 +236,14 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
 
 /// What still bills, for the state the worker is in.
 fn billing_note(runtime: &Runtime) -> &'static str {
-    if worker_deleted(runtime) {
-        "The worker is deleted; it bills no compute. Past periods stay listed above."
-    } else if compute_idle(runtime) {
+    match worker_deleted(runtime) {
+        Some(Deleted::Fully) => return "The worker is deleted; it bills no compute. Past periods stay listed above.",
+        Some(Deleted::StorageLeft) => {
+            return "The worker is deleted, but its workspace storage may still bill until cleanup finishes in Manage.";
+        }
+        None => {}
+    }
+    if compute_idle(runtime) {
         "Compute is stopped. Storage kept for resuming may still bill until the cloud is deleted."
     } else {
         "Disconnecting does not stop compute or storage charges. Stop the worker to end compute charges."
@@ -468,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_deleted_while_storage_cleanup_is_pending_reads_as_deleted() {
+    fn a_worker_deleted_while_storage_cleanup_is_pending_says_storage_may_bill() {
         let mut pending_cleanup = runtime();
         let state = pending_cleanup.state.as_mut().unwrap();
         state.operation =
@@ -479,11 +498,17 @@ mod tests {
             "the saved stage still reads as before"
         );
         let line = spend(&pending_cleanup, SystemTime::now()).line;
-        assert!(line.starts_with("Nothing billing now"), "{line}");
+        assert!(line.starts_with("Worker deleted · storage may still bill"), "{line}");
         let shown = texts(&pending_cleanup);
         assert!(
-            shown.iter().any(|text| text == "worker deleted; nothing billing"),
+            shown
+                .iter()
+                .any(|text| text == "worker deleted; storage may still bill"),
             "{shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text.contains("nothing billing")),
+            "storage can still bill: {shown:?}"
         );
         assert!(!shown.iter().any(|text| text.contains("resuming")), "{shown:?}");
     }

@@ -481,3 +481,29 @@ fn a_reconnected_cloud_says_how_long_the_reconnect_took() {
     let status = of(&runtime, Occupancy::default(), now());
     assert_eq!(status.right, "Reconnected in 0m 07s · No panels");
 }
+
+#[test]
+fn a_half_deleted_cloud_waits_for_its_owner_and_offers_manage() {
+    let runtime = Runtime {
+        stage: Some(Stage::Stopped),
+        state: Some(deployment(
+            "Stopped",
+            &serde_json::json!({"state": "terminated", "worker_id": "k3x9"}),
+            &serde_json::Value::Null,
+        )),
+        ..Runtime::default()
+    };
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Worker deleted");
+    assert_eq!(
+        status.primary,
+        Some(Primary::Manage),
+        "the header leads to the cleanup controls"
+    );
+    assert_eq!(status.track.current, None, "cleanup is not running");
+    let storage = Stage::DELETION
+        .iter()
+        .position(|stage| *stage == Stage::DeleteStorage)
+        .unwrap();
+    assert_eq!(status.track.finished, storage, "the steps before cleanup are done");
+}
