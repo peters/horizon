@@ -36,8 +36,13 @@ fn update(progress: &Progress, change: impl FnOnce(&mut Snapshot)) {
     change(&mut progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
 }
 
-/// The steps of a clone: the latest commit, the rest of the history, the checkout.
-const STEPS: u8 = 3;
+/// How far back each fetch of a clone reaches into the history, the last one (0) taking all of it
+/// with every branch and tag. Git cannot resume inside one download, so the history comes in
+/// pieces: each finished piece is kept when a later one fails.
+const DEPTHS: [u32; 4] = [1, 100, 3000, 0];
+
+/// The steps of a clone: one fetch for each of [`DEPTHS`], then the checkout.
+const STEPS: u8 = 5;
 
 /// A file inside `.git` that says a clone was started here and not finished: the address and the
 /// branch it is fetching. Its presence is what makes the folder one that a later try may resume,
@@ -286,10 +291,12 @@ fn default_branch(remote: &Remote, token: Option<&Token>, cancel: &Cancellation)
         .ok_or_else(|| Failure::Other("This repository has no commits to clone yet.".into()))
 }
 
-/// What a folder's marker says: the address being cloned and the branch.
+/// What a folder's marker says: the address being cloned, the branch, and how many of the fetches
+/// in [`DEPTHS`] are done.
 struct Marker {
     url: String,
     branch: String,
+    done: usize,
 }
 
 fn marker(folder: &Path) -> Option<Marker> {
@@ -298,7 +305,16 @@ fn marker(folder: &Path) -> Option<Marker> {
     Some(Marker {
         url: lines.next()?.to_owned(),
         branch: lines.next()?.to_owned(),
+        done: lines.next()?.parse().ok()?,
     })
+}
+
+fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
+    std::fs::write(
+        folder.join(".git").join(MARKER),
+        format!("{}\n{}\n{}\n", marker.url, marker.branch, marker.done),
+    )
+    .map_err(|error| Failure::Other(error.to_string()))
 }
 
 /// Whether `folder` is a clone that was started and not finished.
@@ -423,22 +439,8 @@ fn announce(progress: &Progress, step: u8, resumed: bool) {
     });
 }
 
-/// Whether the latest commit of `branch` is already here: the first step is done.
-fn has_tip(folder: &Path, branch: &str) -> bool {
-    git_output(
-        folder,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/remotes/origin/{branch}"),
-        ],
-    )
-    .is_some()
-}
-
-/// Clones `remote` into `destination` without ever prompting, in steps: the latest commit, the rest
-/// of the history, then the checkout. A folder an earlier try left behind is picked up from what it
+/// Clones `remote` into `destination` without ever prompting, in steps: the latest commit, the
+/// history a piece at a time, then the checkout. A folder an earlier try left behind is picked up from what it
 /// received.
 ///
 /// # Errors
@@ -470,28 +472,19 @@ fn in_steps(
         clear_leftovers(destination);
     }
     announce(progress, 1, resumed);
-    let branch = if let Some(marker) = earlier {
-        marker.branch
+    let marker = if let Some(marker) = earlier {
+        marker
     } else {
         let branch = default_branch(remote, token, cancel)?;
-        begin(remote, destination, &branch, cancel)?;
-        branch
+        begin(remote, destination, &branch, cancel)?
     };
-    match steps(
-        remote,
-        destination,
-        &branch,
-        token,
-        cancel,
-        progress,
-        last_step,
-        resumed,
-    ) {
+    let outcome = steps(remote, destination, &marker, token, cancel, progress, last_step);
+    match outcome {
         Ok(()) => {
             let _ = std::fs::remove_file(destination.join(".git").join(MARKER));
             Ok(())
         }
-        Err(failure) if has_tip(destination, &branch) => Err(interrupted(failure)),
+        Err(failure) if marker_done(destination) > 0 => Err(interrupted(failure)),
         Err(failure) => {
             let _ = std::fs::remove_dir_all(destination);
             Err(failure)
@@ -499,9 +492,14 @@ fn in_steps(
     }
 }
 
+/// How many fetches of a clone in `folder` are done.
+fn marker_done(folder: &Path) -> usize {
+    marker(folder).map_or(0, |marker| marker.done)
+}
+
 /// Makes the folder a clone starts in, claiming it: creating it is what makes it this clone's to
 /// remove, and a folder that is already there is refused.
-fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<(), Failure> {
+fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<Marker, Failure> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
     }
@@ -521,11 +519,12 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
         let mut add = git(None);
         add.args(["remote", "add", "origin", "--", &remote.url]);
         quietly(add, destination, remote, cancel)?;
-        std::fs::write(
-            destination.join(".git").join(MARKER),
-            format!("{}\n{branch}\n", remote.url),
-        )
-        .map_err(|error| Failure::Other(error.to_string()))
+        let marker = Marker {
+            url: remote.url.clone(),
+            branch: branch.to_owned(),
+            done: 0,
+        };
+        write_marker(destination, &marker).map(|()| marker)
     })();
     if ready.is_err() {
         let _ = std::fs::remove_dir_all(destination);
@@ -533,39 +532,47 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
     ready
 }
 
-#[allow(clippy::too_many_arguments)]
 fn steps(
     remote: &Remote,
     folder: &Path,
-    branch: &str,
+    marker: &Marker,
     token: Option<&Token>,
     cancel: &Cancellation,
     progress: &Progress,
     last_step: u8,
-    resumed: bool,
 ) -> Result<(), Failure> {
-    if !has_tip(folder, branch) {
-        announce(progress, 1, resumed);
+    let branch = &marker.branch;
+    for (index, depth) in DEPTHS.iter().enumerate().skip(marker.done) {
+        let step = u8::try_from(index + 1).unwrap_or(STEPS);
+        if last_step < step {
+            return Err(Failure::Network);
+        }
+        announce(progress, step, marker.done > 0);
         let mut fetch = git(token);
-        fetch.args(["fetch", "--progress", "--depth=1", "--no-tags", "origin"]);
-        fetch.arg(format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"));
+        fetch.args(["fetch", "--progress"]);
+        if *depth > 0 {
+            fetch.arg(format!("--depth={depth}")).arg("--no-tags").arg("origin");
+            fetch.arg(format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"));
+        } else {
+            if folder.join(".git").join("shallow").exists() {
+                fetch.arg("--unshallow");
+            }
+            fetch.arg("origin");
+        }
         run(fetch, folder, remote, cancel, progress)?;
+        write_marker(
+            folder,
+            &Marker {
+                url: marker.url.clone(),
+                branch: marker.branch.clone(),
+                done: index + 1,
+            },
+        )?;
     }
-    if last_step < 2 {
+    if last_step < STEPS {
         return Err(Failure::Network);
     }
-    announce(progress, 2, resumed);
-    let mut fetch = git(token);
-    fetch.args(["fetch", "--progress"]);
-    if folder.join(".git").join("shallow").exists() {
-        fetch.arg("--unshallow");
-    }
-    fetch.arg("origin");
-    run(fetch, folder, remote, cancel, progress)?;
-    if last_step < 3 {
-        return Err(Failure::Network);
-    }
-    announce(progress, 3, resumed);
+    announce(progress, STEPS, marker.done > 0);
     let mut head = git(None);
     head.args([
         "symbolic-ref",
@@ -661,6 +668,10 @@ mod tests {
     /// A repository with a few commits and a second branch, reachable by a `file://` address so
     /// that Git honours a depth.
     fn origin(temp: &Path) -> Remote {
+        origin_with(temp, 3)
+    }
+
+    fn origin_with(temp: &Path, commits: usize) -> Remote {
         let origin = temp.join("origin");
         std::fs::create_dir(&origin).unwrap();
         let git = |args: &[&str]| {
@@ -676,8 +687,8 @@ mod tests {
             assert!(status.success(), "{args:?}");
         };
         git(&["init", "-q", "-b", "main"]);
-        for message in ["first", "second", "third"] {
-            git(&["commit", "-q", "--allow-empty", "-m", message]);
+        for number in 1..=commits {
+            git(&["commit", "-q", "--allow-empty", "-m", &format!("commit {number}")]);
         }
         git(&["branch", "extra"]);
         Remote {
@@ -764,6 +775,29 @@ mod tests {
         );
         let (result, _) = step("printf 'Receiving objects:  50%% (1/2)\\rfatal: early EOF\\n' >&2; exit 128");
         assert_eq!(result, Err(Failure::Other("fatal: early EOF".into())));
+    }
+
+    #[test]
+    fn the_history_comes_in_pieces_and_each_finished_piece_is_kept() {
+        assert_eq!(usize::from(STEPS), DEPTHS.len() + 1);
+        let temp = tempfile::tempdir().unwrap();
+        let remote = origin_with(temp.path(), 130);
+        let target = temp.path().join("deep");
+        let (cancel, progress) = (Cancellation::default(), Progress::default());
+        let commits = |folder: &Path| count(folder, &["rev-list", "--count", "refs/remotes/origin/main"]);
+        assert!(in_steps(&remote, &target, None, &cancel, &progress, 1).is_err());
+        assert_eq!((commits(&target), marker_done(&target)), ("1".to_owned(), 1));
+        assert!(in_steps(&remote, &target, None, &cancel, &progress, 2).is_err());
+        assert_eq!((commits(&target), marker_done(&target)), ("100".to_owned(), 2));
+        // A drop during the third piece keeps the two before it, and the try after starts at the third.
+        assert!(in_steps(&remote, &target, None, &cancel, &progress, 3).is_err());
+        assert_eq!((commits(&target), marker_done(&target)), ("130".to_owned(), 3));
+        clone(&remote, &target, None, &cancel, &progress).unwrap();
+        assert!(super::super::is_checkout(&target) && !target.join(".git").join(MARKER).exists());
+        assert!(!target.join(".git").join("shallow").exists());
+        assert_eq!(count(&target, &["rev-list", "--count", "HEAD"]), "130");
+        let shown = progress.lock().unwrap().clone();
+        assert_eq!((shown.step, shown.steps, shown.resumed), (STEPS, STEPS, true));
     }
 
     #[test]
