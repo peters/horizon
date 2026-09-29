@@ -65,6 +65,8 @@ impl HorizonApp {
         // A new dialog starts from nothing: no clone, token, typed key or earlier check carries over.
         form.source = super::creation::source::State::default();
         form.checks = super::creation::checks::State::default();
+        // Prices answered to an earlier credential prove nothing about the one there is now.
+        form.prices.restart();
         form.launch.workspace = Some(local);
         form.launch.session = self.active_session.as_ref().map(|session| session.session_id.clone());
         form.title.clear();

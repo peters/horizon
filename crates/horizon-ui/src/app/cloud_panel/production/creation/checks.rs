@@ -98,6 +98,12 @@ fn problem(what: &'static str, reason: String) -> Problem {
 
 /// Keeps the checks current for the chosen profile; called once per frame with the dialog.
 pub(super) fn update(form: &mut Production, root: Option<&Path>, ctx: &Context) {
+    // UI tests resolve the developer's real Horizon home; they never look at its settings.
+    keep_current(form, root, ctx, !cfg!(test));
+}
+
+/// [`update`], with the asking switched on or off.
+fn keep_current(form: &mut Production, root: Option<&Path>, ctx: &Context, asking: bool) {
     if let Some(saved) = form.checks.account.poll() {
         match saved {
             Ok(()) => {
@@ -108,8 +114,7 @@ pub(super) fn update(form: &mut Production, root: Option<&Path>, ctx: &Context) 
             Err(error) => form.checks.account.fail(error),
         }
     }
-    // UI tests resolve the developer's real Horizon home; they never look at its settings.
-    if cfg!(test) || !ready(form) {
+    if !asking || !ready(form) {
         return;
     }
     let chosen = chosen(form);
@@ -393,6 +398,75 @@ mod tests {
         let _reading = form.launch.hold_loading_for_test();
         assert!(blocked_given(&form, true).is_some());
         assert_eq!(blocked_given(&form, false), None);
+    }
+
+    fn loaded(form: &mut Production) {
+        form.profiles = Some(
+            horizon_core::cloud_panel::CloudConfig::parse(
+                "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: ghcr.io/demo-org/dev-image\n    cpu: 4\n    memory_gb: 16\n    gpu: false\n    storage:\n      container_gb: 20\n      volume_gb: 60\n",
+            )
+            .unwrap(),
+        );
+        form.selected_profile = "cpu".into();
+    }
+
+    /// Runs the real check against `root` and waits for its answer.
+    fn answered(form: &mut Production, root: &Path) {
+        let ctx = Context::default();
+        for _ in 0..200 {
+            keep_current(form, Some(root), &ctx, true);
+            if form.checks.problems.is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("the checks never answered");
+    }
+
+    #[test]
+    fn a_machine_with_no_settings_is_asked_for_a_key() {
+        let root = tempfile::tempdir().unwrap();
+        let mut form = form_with(Vec::new());
+        loaded(&mut form);
+        answered(&mut form, root.path());
+        assert!(matches!(
+            form.checks.problems.as_deref(),
+            Some([Problem {
+                what: "Cloud settings",
+                ..
+            }])
+        ));
+        assert!(needs_account(&form), "the key form is offered");
+        assert!(rows(&form).iter().any(|row| matches!(row, Row::Fail(_))));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn saved_settings_pass_the_real_admission_and_a_saved_key_asks_again() {
+        // The SSH identity is made by the platform's ssh-keygen; without it there is nothing to check.
+        if std::process::Command::new("ssh-keygen").arg("-?").output().is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut form = form_with(Vec::new());
+        loaded(&mut form);
+        answered(&mut form, root.path());
+        assert!(needs_account(&form));
+        horizon_core::cloud_runtime::setup::save_provider_key(
+            root.path(),
+            horizon_core::cloud_runtime::setup::Provider::RunPod,
+            "synthetic-compute-key",
+        )
+        .unwrap();
+        form.checks.key = None;
+        form.checks.problems = None;
+        answered(&mut form, root.path());
+        assert_eq!(
+            form.checks.problems.as_deref(),
+            Some(&[][..]),
+            "settings, key and SSH identity are usable"
+        );
+        assert!(!needs_account(&form));
     }
 
     #[test]
