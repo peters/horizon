@@ -401,6 +401,9 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
     }
 }
 
+/// The longest line of Git's progress kept; a remote that never ends one cannot grow it further.
+const LINE_LIMIT: usize = 4096;
+
 /// The most of Git's stderr that is kept: enough to name a failure, and all a host that never
 /// stops talking can make Horizon hold.
 const STDERR_TAIL: usize = 16 * 1024;
@@ -485,7 +488,7 @@ pub fn clone(
                         keep_tail(&mut all, "\n");
                     }
                     line.clear();
-                } else {
+                } else if line.len() < LINE_LIMIT {
                     line.push(character);
                 }
             }
