@@ -54,11 +54,18 @@ fn ssh_key(settings: &Settings) -> crate::cloud_runtime::Result<()> {
     validate_ssh_identity(&settings.ssh_identity_file)?;
     let public = format!("{}.pub", settings.ssh_identity_file.display());
     let key = std::fs::read_to_string(&public)?;
-    if horizon_cloud::valid_public_key(key.trim()) {
+    if !horizon_cloud::valid_public_key(key.trim()) {
+        return Err(Error::Invalid(
+            "The SSH public key beside the identity is not a supported Ed25519 key; Cloud settings can make a new pair",
+        ));
+    }
+    // The same test that decides whether a profile is ready to launch: the private key must be
+    // readable without a passphrase and be the pair of the public key deployment sends.
+    if crate::cloud_runtime::repository::launch::ssh_ready(&settings.ssh_identity_file) {
         Ok(())
     } else {
         Err(Error::Invalid(
-            "The SSH public key beside the identity is not a supported Ed25519 key; Cloud settings can make a new pair",
+            "The SSH private key is not the pair of the public key beside it, has a passphrase, or ssh-keygen is missing; Cloud settings can make a new pair",
         ))
     }
 }
@@ -73,17 +80,20 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 
-    /// A private identity file with a supported public key beside it.
+    /// A real key pair, as Cloud settings makes one.
+    fn keygen(path: &std::path::Path) {
+        let status = std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    /// A private identity file with its public key beside it.
     fn identity(root: &std::path::Path) {
-        use base64::Engine;
-        private_file(&root.join("ssh"), "-----BEGIN-----");
-        let mut wire = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
-        wire.extend([7_u8; 32]);
-        let key = format!(
-            "ssh-ed25519 {} demo",
-            base64::engine::general_purpose::STANDARD.encode(wire)
-        );
-        std::fs::write(root.join("ssh.pub"), key).unwrap();
+        let _ = std::fs::remove_file(root.join("ssh"));
+        keygen(&root.join("ssh"));
     }
 
     fn settings(root: &std::path::Path) -> Settings {
@@ -160,5 +170,28 @@ mod tests {
         );
         identity(root.path());
         assert!(problems(&profile(), &settings(root.path())).is_empty());
+    }
+
+    #[test]
+    fn a_private_key_that_is_not_the_pair_of_its_public_key_is_not_usable() {
+        let root = tempfile::tempdir().unwrap();
+        private_file(&root.path().join("runpod"), "key");
+        identity(root.path());
+        assert!(problems(&profile(), &settings(root.path())).is_empty());
+        // A valid Ed25519 public key that belongs to another private key.
+        let other = root.path().join("other");
+        keygen(&other);
+        std::fs::copy(root.path().join("other.pub"), root.path().join("ssh.pub")).unwrap();
+        let found = problems(&profile(), &settings(root.path()));
+        assert!(
+            found
+                .iter()
+                .any(|problem| problem.what == "SSH key" && problem.reason.contains("not the pair")),
+            "{found:?}"
+        );
+        // A private file that is not a key at all, beside a well-formed public key.
+        private_file(&root.path().join("ssh"), "-----BEGIN-----");
+        let found = problems(&profile(), &settings(root.path()));
+        assert!(found.iter().any(|problem| problem.what == "SSH key"), "{found:?}");
     }
 }
