@@ -217,6 +217,8 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
         .args(["run", plan.to_str().expect("UTF-8 path")])
         .current_dir(current_dir.path())
         .env_remove("HOME")
+        // Windows falls back to the user profile; this covers having neither.
+        .env_remove("USERPROFILE")
         .env_remove("HORIZON")
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
