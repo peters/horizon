@@ -91,6 +91,11 @@ impl State {
         &self.input
     }
 
+    #[cfg(all(test, unix))]
+    pub fn edit_for_test(&mut self, text: &str) {
+        self.input = text.into();
+    }
+
     /// The text differs from the repository chosen, so another one is being asked for. A field
     /// that was cleared is no exception: the old repository is not what it shows.
     pub fn editing(&self) -> bool {

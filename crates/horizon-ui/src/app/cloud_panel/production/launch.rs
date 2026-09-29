@@ -460,6 +460,54 @@ mod tests {
     }
 
     #[test]
+    fn enter_in_title_does_not_launch_while_another_repository_is_being_asked_for() {
+        use crate::test_egui::DiscardTextures;
+        let (temp, mut app) = test_app();
+        let session = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .unwrap();
+        app.activate_persistent_session(&session);
+        let ctx = Context::default();
+        let workspace = app.board.ensure_workspace();
+        app.open_workspace_cloud(&ctx, workspace);
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.launch.receiver = Some(receiver);
+        app.cloud_prototype.production.prices.runpod_answered();
+        sender.send(Ok(loaded(temp.path()))).unwrap();
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            let _ = ctx
+                .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
+                .discard_textures();
+        }
+        app.cloud_prototype.production.title = "Title only".into();
+        app.cloud_prototype
+            .production
+            .source
+            .edit_for_test("github.com/demo-org/other");
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        let mut event = input();
+        event.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx
+            .run_ui(event, |ui| app.render_cloud_creation(ui.ctx()))
+            .discard_textures();
+        assert!(
+            app.cloud_prototype.production.pending_creation.is_none(),
+            "the repository loaded is not the one being asked for"
+        );
+    }
+
+    #[test]
     fn enter_after_failed_preparation_leaves_the_form_editable() {
         use crate::test_egui::DiscardTextures;
         let (_temp, mut app) = test_app();

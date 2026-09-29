@@ -284,7 +284,13 @@ fn classify(remote: &Remote, stderr: &str) -> Failure {
             remote.host
         ))
     } else if has(&["not found", "does not exist", "returned error: 404"]) {
-        Failure::NotFound
+        // Hosts answer a private repository, or one a stale credential cannot read, the same way
+        // as a missing one; only for https can a token change that.
+        if web {
+            Failure::SignIn(remote.host.clone())
+        } else {
+            Failure::NotFound
+        }
     } else if has(&[
         "could not resolve host",
         "timed out",
@@ -572,7 +578,7 @@ mod tests {
             ),
             (
                 "remote: Repository not found.\nfatal: repository 'x' not found",
-                Failure::NotFound,
+                Failure::SignIn("github.com".into()),
             ),
             (
                 "fatal: unable to access 'x': Could not resolve host: github.com",
@@ -586,6 +592,12 @@ mod tests {
         ] {
             assert_eq!(classify(&github, stderr), expected, "{stderr}");
         }
+    }
+
+    #[test]
+    fn a_missing_repository_over_ssh_is_not_found_not_a_sign_in() {
+        let ssh = parse("git@github.com:demo-org/demo").unwrap();
+        assert_eq!(classify(&ssh, "ERROR: Repository not found."), Failure::NotFound);
     }
 
     #[test]

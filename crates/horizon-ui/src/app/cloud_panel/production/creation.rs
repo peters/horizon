@@ -595,7 +595,9 @@ fn can_submit(form: &Production) -> bool {
 
 /// [`can_submit`] with the chosen worker's launch reason already worked out.
 fn can_submit_given(form: &Production, blocked: Option<&'static str>) -> bool {
-    !form.title.trim().is_empty()
+    // While another repository is being asked for, the one loaded is not what would start.
+    !form.source.editing()
+        && !form.title.trim().is_empty()
         && (form.profiles.is_some() || form.launch.loading())
         && form.pending_creation.is_none()
         && !form.launch.submitted
