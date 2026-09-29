@@ -591,8 +591,10 @@ fn ready_card_shows_the_live_cost_of_the_current_run() {
 
 #[test]
 fn card_falls_back_to_the_hourly_rate_without_a_live_run() {
+    // A stopped worker's last rate is not what bills now.
+    let stopped = cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({})));
+    assert!(cost_texts(&stopped, std::time::Duration::from_secs(60)).is_empty());
     for runtime in [
-        cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
         cost_runtime(Stage::Readiness, &cost_worker("RUNNING", &serde_json::json!({}))),
         cost_runtime(
             Stage::Ready,
@@ -721,10 +723,7 @@ fn a_stopped_cloud_keeps_showing_its_billed_total() {
     let elapsed = std::time::Duration::from_hours(3);
     assert_eq!(
         cost_texts(&stopped, elapsed),
-        [
-            "Worker rate: $0.690/h",
-            "Since creation · $2.79 (billed $2.79 + $0.00 estimated)"
-        ]
+        ["Since creation · $2.79 (billed $2.79 + $0.00 estimated)"]
     );
     assert_eq!(badge(&stopped, elapsed).as_deref(), Some("$2.79 total"));
     assert_eq!(
@@ -745,10 +744,7 @@ fn a_worker_billed_before_the_read_window_shows_the_window_instead_of_a_lifetime
     );
     assert_eq!(
         cost_texts(&stopped, elapsed),
-        [
-            "Worker rate: $0.690/h",
-            "Past 12 months · $2.79 (billed $2.79 + $0.00 estimated)"
-        ]
+        ["Past 12 months · $2.79 (billed $2.79 + $0.00 estimated)"]
     );
     assert_eq!(badge(&stopped, elapsed).as_deref(), Some("$2.79 12 mo"));
     let running = billed_since(

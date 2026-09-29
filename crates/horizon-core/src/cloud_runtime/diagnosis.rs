@@ -28,28 +28,73 @@ const FAILURE_MARKERS: [&str; 10] = [
 /// Lines that mention a failure while the operation keeps going.
 const TRANSIENT_MARKERS: [&str; 2] = ["retrying", "will retry"];
 
+/// Authentication refusals any service can print; only registry output makes them a registry's.
+const AUTHENTICATION: &[&str] = &[
+    "unauthorized",
+    "unauthenticated",
+    "cannot be authenticated",
+    "authentication required",
+];
+
+/// Words that place a failure in image transfer: the line's or the summary's.
+const REGISTRY_CONTEXT: &[&str] = &[
+    "registry",
+    "image",
+    "docker push",
+    "docker pull",
+    "azurecr.io",
+    "ghcr.io",
+    "docker.io",
+];
+
+const REGISTRY_REFUSED: &str =
+    "The registry refused the request. Its saved credentials have expired or lack push rights to this image.";
+
+/// A well-known cause: any of `patterns`, and when `context` is not empty, one of
+/// those words in the line or the failure summary too.
+struct Known {
+    patterns: &'static [&'static str],
+    context: &'static [&'static str],
+    meaning: &'static str,
+}
+
+const fn known(patterns: &'static [&'static str], meaning: &'static str) -> Known {
+    Known {
+        patterns,
+        context: &[],
+        meaning,
+    }
+}
+
 /// Well-known causes, first match wins. Keep patterns lowercase.
-const MEANINGS: [(&[&str], &str); 9] = [
-    (
+const MEANINGS: [Known; 11] = [
+    known(
         &["no space left on device"],
         "The disk filled up. Free space on this computer or the worker, or grow the workspace.",
     ),
-    (
+    known(
         &["permission denied (publickey"],
         "The SSH key was refused. The worker does not trust this cloud's key.",
     ),
-    (
+    known(
         &[
             "from registry: denied",
-            "unauthorized",
-            "unauthenticated",
-            "cannot be authenticated",
-            "authentication required",
+            "from registry: unauthorized",
+            "from registry: unauthenticated",
             "requested access to the resource is denied",
         ],
-        "The registry refused the request. Its saved credentials have expired or lack push rights to this image.",
+        REGISTRY_REFUSED,
     ),
-    (
+    Known {
+        patterns: AUTHENTICATION,
+        context: REGISTRY_CONTEXT,
+        meaning: REGISTRY_REFUSED,
+    },
+    known(
+        AUTHENTICATION,
+        "The service refused the credentials Horizon sent. They may have expired or lack the rights this step needs.",
+    ),
+    known(
         &[
             "no such host",
             "server misbehaving",
@@ -57,15 +102,15 @@ const MEANINGS: [(&[&str], &str); 9] = [
         ],
         "The host name does not resolve. Check the registry address in cloud settings and this computer's network.",
     ),
-    (
+    known(
         &["manifest unknown", "not found: manifest"],
         "The registry has no image with this name and tag.",
     ),
-    (
+    known(
         &["too many requests", "rate limit", "toomanyrequests"],
         "The service is rate limiting requests. Wait a little, then retry.",
     ),
-    (
+    known(
         &[
             "no instances available",
             "insufficient capacity",
@@ -74,11 +119,11 @@ const MEANINGS: [(&[&str], &str); 9] = [
         ],
         "The provider has no capacity for this size right now. Try another size or data center.",
     ),
-    (
+    known(
         &["timed out", "timeout"],
         "The operation timed out. The provider or network may be slow; retrying often works.",
     ),
-    (
+    known(
         &["cannot connect to the docker daemon", "is the docker daemon running"],
         "Docker is not running on this computer. Start it, then retry.",
     ),
@@ -96,18 +141,33 @@ pub fn diagnose<'a>(lines: impl DoubleEndedIterator<Item = &'a str>, summary: &s
         .find(|line| is_failure(line))?;
     Some(Diagnosis {
         cause: cause.to_owned(),
-        meaning: meaning(cause).or_else(|| meaning(summary)),
+        meaning: meaning_in(cause, summary).or_else(|| meaning(summary)),
     })
 }
 
 /// What a failure line usually means, when it is a well-known one.
 #[must_use]
 pub fn meaning(line: &str) -> Option<&'static str> {
+    meaning_in(line, "")
+}
+
+/// What `line` means, where `summary` names the step that failed (for example
+/// "Uploading image failed") and so supplies context the line lacks.
+#[must_use]
+pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
+    let summary = summary.to_ascii_lowercase();
     MEANINGS
         .iter()
-        .find(|(patterns, _)| patterns.iter().any(|pattern| lower.contains(pattern)))
-        .map(|(_, meaning)| *meaning)
+        .find(|known| {
+            known.patterns.iter().any(|pattern| lower.contains(pattern))
+                && (known.context.is_empty()
+                    || known
+                        .context
+                        .iter()
+                        .any(|word| lower.contains(word) || summary.contains(word)))
+        })
+        .map(|known| known.meaning)
 }
 
 /// Whether a line reports a failure rather than progress or a retry.
@@ -251,5 +311,30 @@ mod tests {
     fn no_output_gives_no_diagnosis() {
         assert_eq!(diagnose(std::iter::empty(), SUMMARY), None);
         assert_eq!(diagnose([SUMMARY].into_iter(), SUMMARY), None);
+    }
+
+    #[test]
+    fn an_authentication_refusal_is_a_registry_one_only_in_image_transfer() {
+        const SERVICE: &str = "service refused";
+        for (line, summary, wanted) in [
+            ("provider API: unauthorized", "Requesting a worker failed", SERVICE),
+            (
+                "fatal: remote: authentication required",
+                "Preparing worktrees failed",
+                SERVICE,
+            ),
+            ("unauthorized: authentication required", SUMMARY, "registry refused"),
+            (
+                "docker pull ghcr.io/example/worker: unauthorized",
+                "Readiness failed",
+                "registry refused",
+            ),
+        ] {
+            let found = diagnose([line].into_iter(), summary).unwrap();
+            assert!(
+                found.meaning.is_some_and(|text| text.contains(wanted)),
+                "{line}: {found:?}"
+            );
+        }
     }
 }

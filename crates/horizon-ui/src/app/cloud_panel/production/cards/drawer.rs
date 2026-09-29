@@ -47,6 +47,8 @@ impl Tab {
     /// The drawer's height for this tab; content taller than this scrolls.
     /// The tallest tab; the drawer may reach below a short cloud to fit it.
     const TALLEST: f32 = 580.0;
+    /// The least height the drawer keeps on a cloud too short for more: tabs and a few rows.
+    const SHORTEST: f32 = 240.0;
 
     pub(super) fn height(self) -> f32 {
         match self {
@@ -428,8 +430,11 @@ pub(super) fn step_action(action: StepAction, status: &Status, ctx: &egui::Conte
 pub(super) fn placement(group: &CloudGroup) -> Rect {
     let (min, max) = group.bounds();
     let top = min[1] + group.header_height() + 6.0;
-    // An overlay: on a short cloud it reaches below the frame rather than squeezing a tab.
-    Rect::from_min_max(pos2(min[0] + 12.0, top), pos2(max[0] - 12.0, top + Tab::TALLEST))
+    // Inside the frame, so fitting or filling the screen with the cloud shows all of
+    // it and a tall tab scrolls within. Only a cloud shorter than a usable drawer
+    // lets it reach below.
+    let height = (max[1] - 12.0 - top).clamp(Tab::SHORTEST, Tab::TALLEST);
+    Rect::from_min_max(pos2(min[0] + 12.0, top), pos2(max[0] - 12.0, top + height))
 }
 
 #[cfg(test)]
@@ -470,5 +475,22 @@ mod tests {
             })
             .discard_textures();
         assert_eq!(checked, 8);
+    }
+
+    #[test]
+    fn the_drawer_stays_inside_the_cloud_unless_the_cloud_is_too_short() {
+        let mut group = CloudGroup::new(1, "Fixture".into(), "w".into(), "/synthetic".into(), [40.0, 30.0]);
+        for (height, inside) in [(632.0, true), (1400.0, true), (180.0, false)] {
+            group.size = [900.0, height];
+            let rect = placement(&group);
+            let (min, max) = group.bounds();
+            assert!(rect.top() > min[1] && rect.left() > min[0] && rect.right() < max[0]);
+            assert!(rect.height() <= Tab::TALLEST, "{height}: {rect:?}");
+            if inside {
+                assert!(rect.bottom() <= max[1], "{height}: {rect:?} below {max:?}");
+            } else {
+                assert!((rect.height() - Tab::SHORTEST).abs() < 0.5, "{height}: {rect:?}");
+            }
+        }
     }
 }

@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime};
 const BARS: usize = 24;
 
 /// A stopped or deleted worker bills no compute; its last rate would read as if it did.
-fn compute_idle(runtime: &Runtime) -> bool {
+pub(super) fn compute_idle(runtime: &Runtime) -> bool {
     matches!(
         runtime.stage,
         Some(super::super::Stage::Stopped | super::super::Stage::Deleted)
@@ -112,22 +112,31 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     Spend { line, explanation }
 }
 
+/// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
+fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
+    match rate {
+        Some(_) if runtime.stage == Some(super::super::Stage::Deleted) => {
+            ("—".into(), "worker deleted; nothing billing")
+        }
+        Some(_) if compute_idle(runtime) => ("Stopped".into(), "compute stopped; storage may still bill"),
+        Some(rate) => (cloud_runtime::cost::format_rate(rate), "last reported worker rate"),
+        None => ("—".into(), "known once a worker is requested"),
+    }
+}
+
 pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
     let now = SystemTime::now();
     let worker = runtime.state.as_ref().and_then(|state| state.worker.as_ref());
     let rate = worker.and_then(cloud_runtime::cost::hourly_rate);
     let run = runtime.current_run_cost(now);
     let total = runtime.total_cost(now);
+    let (rate_value, rate_note) = rate_metric(runtime, rate);
     ui.columns(3, |columns| {
         metric(
             &mut columns[0],
             "Rate",
-            &rate.map_or_else(|| "—".into(), cloud_runtime::cost::format_rate),
-            if rate.is_some() {
-                "last reported worker rate"
-            } else {
-                "known once a worker is requested"
-            },
+            &rate_value,
+            rate_note,
             "Last reported worker hourly rate. Storage and other provider charges may be additional.",
         );
         metric(
@@ -188,13 +197,18 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
         bars(ui, &sample.history.buckets);
     }
     ui.add_space(8.0);
-    ui.label(
-        RichText::new(
-            "Disconnecting does not stop compute or storage charges. Stop the worker to end compute charges.",
-        )
-        .size(13.0)
-        .color(theme::FG_DIM()),
-    );
+    ui.label(RichText::new(billing_note(runtime)).size(13.0).color(theme::FG_DIM()));
+}
+
+/// What still bills, for the state the worker is in.
+fn billing_note(runtime: &Runtime) -> &'static str {
+    if runtime.stage == Some(super::super::Stage::Deleted) {
+        "The worker is deleted; it bills no compute. Past periods stay listed above."
+    } else if compute_idle(runtime) {
+        "Compute is stopped. Storage kept for resuming may still bill until the cloud is deleted."
+    } else {
+        "Disconnecting does not stop compute or storage charges. Stop the worker to end compute charges."
+    }
 }
 
 fn metric(ui: &mut egui::Ui, title: &str, value: &str, note: &str, hover: &str) {
@@ -395,5 +409,22 @@ mod tests {
             ..Runtime::default()
         };
         assert_eq!(spend(&stopped, SystemTime::now()).line, "compute stopped");
+    }
+
+    #[test]
+    fn the_cost_tab_rate_is_not_a_stopped_or_deleted_workers_last_rate() {
+        assert!(texts(&runtime()).iter().any(|text| text.ends_with("/h")));
+        for (stage, wanted) in [
+            (Stage::Stopped, "Stopped"),
+            (Stage::Deleted, "worker deleted; nothing billing"),
+        ] {
+            let idle = Runtime {
+                stage: Some(stage),
+                ..runtime()
+            };
+            let shown = texts(&idle);
+            assert!(shown.iter().any(|text| text == wanted), "{stage:?}: {shown:?}");
+            assert!(!shown.iter().any(|text| text.contains("/h")), "{stage:?}: {shown:?}");
+        }
     }
 }

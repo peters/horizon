@@ -217,6 +217,8 @@ fn worker_cost(ui: &mut egui::Ui, runtime: &super::Runtime, now: std::time::Syst
         .as_ref()
         .and_then(|state| state.worker.as_ref())
         .and_then(cloud_runtime::cost::hourly_rate)
+        // A stopped or deleted worker's last rate is not what bills now.
+        .filter(|_| !cost::compute_idle(runtime))
     {
         ui.label(format!("Worker rate: {}", cloud_runtime::cost::format_rate(rate)));
     }
