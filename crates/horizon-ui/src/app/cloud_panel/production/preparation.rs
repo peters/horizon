@@ -60,6 +60,10 @@ impl HorizonApp {
                 return None;
             }
         };
+        // The record reads again: a later preflight failure is that failure, not the record's.
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+            runtime.state_unavailable = false;
+        }
         let settings = match Settings::for_cloud(&root.join("settings.json"), &launch.placement) {
             Ok(settings) => settings,
             Err(error) => {

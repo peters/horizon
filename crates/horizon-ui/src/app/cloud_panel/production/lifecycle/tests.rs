@@ -752,3 +752,50 @@ fn a_device_release_that_fails_its_preflight_is_reported_as_one() {
     assert_eq!(runtime.error, None, "not a deployment failure");
     assert_eq!(runtime.stage, Some(Stage::Ready));
 }
+
+#[test]
+fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let root = temp.path();
+    let workspace = app.board.create_workspace("cloud fixture");
+    let mut group = CloudGroup::new(
+        1,
+        "Fixture".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        root.into(),
+        [0.0, 0.0],
+    );
+    let profile = CloudConfig::parse(
+        "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n",
+    )
+    .unwrap()
+    .profiles["dev"]
+    .clone();
+    let state: cloud_runtime::state::Deployment = serde_json::from_value(serde_json::json!({
+        "version":1,"cloud_id":"fixture","repository":root,"revision":"a".repeat(40),
+        "profile":profile,"stage":"Ready","operation":{"state":"bound","worker_id":"worker1"},
+        "spec":null,"sessions":[],"worker":null
+    }))
+    .unwrap();
+    Store::lock(&root.join("fixture")).unwrap().save(&state).unwrap();
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: "fixture".into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile,
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    app.cloud_prototype.root = Some(root.into());
+    // The owner repaired the record; settings.json is still missing.
+    let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
+    runtime.state_unavailable = true;
+    runtime.error = Some("Deployment record is unreadable".into());
+    app.start_production_deployment(1, &ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(!runtime.state_unavailable, "the record read");
+    let error = runtime.error.as_deref().unwrap_or_default();
+    assert!(error.contains("settings.json"), "{error}");
+}
