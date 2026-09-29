@@ -460,7 +460,7 @@ Fixed metrics:
 | Panel resize handle | 18 |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
-| Dialog button | at least 120 x 40 |
+| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: "Save settings" 148 x 40, `Cancel` at least 80 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
@@ -515,8 +515,7 @@ Shared by both form dialogs:
 - Heading at 26 strong, then a one-line description in `FG_SOFT`, then 16 of
   space.
 - Body scrolls; the action bar stays pinned below it.
-- Escape and a click on the backdrop dismiss. While a child picker is open, the
-  dialog is disabled and the picker owns Escape and outside clicks.
+- Escape and a click on the backdrop dismiss.
 - Footer: right-aligned primary and `Cancel`, 40 high, primary radius 10.
 
 Cloud creation dialog specifics:
@@ -529,6 +528,8 @@ Cloud creation dialog specifics:
   `ACCENT` fill. A short reason or hint (13 `FG` or 11.5 `FG_DIM`) sits to the
   left when the primary is disabled.
 - Enter in the first text field submits when the form is valid.
+- While the repository picker is open above it, the dialog is disabled and the
+  picker owns Escape and outside clicks.
 
 Cloud accounts dialog specifics:
 
@@ -537,6 +538,7 @@ Cloud accounts dialog specifics:
 - A separator sits above the footer. The primary ("Save settings") is 148 x 40
   with a `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label;
   `Cancel` is at least 80 x 40.
+- Dismissal is ignored while a save is running.
 
 ### Overlay card (command palette and pickers)
 
@@ -594,7 +596,7 @@ backdrop dimming:
 | Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
 | Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | "Save settings", 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
 | Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
-| Secondary (dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 |
+| Secondary (creation dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 (the accounts dialog's `Cancel` is min 80 x 40 with egui's default radius) |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |
 | Destructive confirm | `BTN_CLOSE` | default | default | default | Final "Close ..." confirmation |
 | Quiet text button | none (`frame(false)`) | none | `FG_DIM` / `FG_SOFT`, `PALETTE_RED` for destructive | none | Sidebar row actions, "x" close (16, `FG_DIM`) |
@@ -602,7 +604,7 @@ backdrop dimming:
 
 Use one primary per view. Buttons are never wider than their content plus the
 12 x 6 padding unless a `min_size` gives them a consistent rhythm (toolbar 30
-high; dialog 120 x 40). Icon-only buttons need a tooltip.
+high; creation dialog 120 x 40). Icon-only buttons need a tooltip.
 
 ### Segmented control / tabs
 
