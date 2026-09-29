@@ -543,14 +543,13 @@ mod tests {
         .unwrap();
         let linked = temp.path().join("linked");
         std::fs::create_dir(&linked).unwrap();
-        // The pointer is absolute for a worktree Git made, and may be relative for a moved one.
-        for pointer in [main.join(".git").join("worktrees").join("wt").display().to_string()] {
-            std::fs::write(linked.join(".git"), format!("gitdir: {pointer}\n")).unwrap();
-            assert_eq!(
-                origin_url(&linked).as_deref(),
-                Some("https://github.com/demo-org/demo.git")
-            );
-        }
+        // The pointer is absolute for a worktree Git made.
+        let pointer = main.join(".git").join("worktrees").join("wt");
+        std::fs::write(linked.join(".git"), format!("gitdir: {}\n", pointer.display())).unwrap();
+        assert_eq!(
+            origin_url(&linked).as_deref(),
+            Some("https://github.com/demo-org/demo.git")
+        );
         assert_eq!(origin_url(temp.path()), None);
     }
 
