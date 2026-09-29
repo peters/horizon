@@ -15,10 +15,14 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
     matches!(
         runtime.stage,
         Some(super::super::Stage::Stopped | super::super::Stage::Deleted)
-    ) || runtime
-        .state
-        .as_ref()
-        .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
+    ) || (runtime.receiver.is_none()
+        // A saved stopped worker stays stopped until an operation actually runs, even when
+        // a resume that failed its preflight moved the card's stage.
+        && runtime.state.as_ref().is_some_and(|state| state.stage == super::super::Stage::Stopped))
+        || runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
 }
 
 /// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
@@ -65,11 +69,14 @@ pub(super) fn teaser(runtime: &Runtime) -> String {
         .as_ref()
         .and_then(|state| state.worker.as_ref())
         .and_then(cloud_runtime::cost::hourly_rate);
-    match rate {
-        Some(_) if compute_idle(runtime) => "stopped".into(),
-        Some(rate) => format!("${rate:.2}/h"),
-        None => "—".into(),
+    // The worker's state first: it does not depend on whether a rate was ever reported.
+    if worker_deleted(runtime).is_some() {
+        return "deleted".into();
     }
+    if compute_idle(runtime) {
+        return "stopped".into();
+    }
+    rate.map_or_else(|| "—".into(), |rate| format!("${rate:.2}/h"))
 }
 
 pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
@@ -570,5 +577,19 @@ mod tests {
             !shown.iter().any(|text| text == "known once a worker is requested"),
             "{shown:?}"
         );
+    }
+
+    #[test]
+    fn a_saved_stopped_worker_reads_as_stopped_after_a_resume_fails_its_preflight() {
+        let mut failed_resume = Runtime {
+            stage: Some(Stage::Provision),
+            ..runtime()
+        };
+        failed_resume.state.as_mut().unwrap().stage = Stage::Stopped;
+        let line = spend(&failed_resume, SystemTime::now()).line;
+        assert!(line.starts_with("compute stopped"), "{line}");
+        assert_eq!(teaser(&failed_resume), "stopped");
+        failed_resume.state.as_mut().unwrap().worker = None;
+        assert_eq!(teaser(&failed_resume), "stopped", "with or without a reported rate");
     }
 }

@@ -271,19 +271,22 @@ impl HorizonApp {
             if group.collapsed {
                 runtime.drawer = None;
             }
+            let body = body_visible(group);
+            // Nothing is scanned or laid out for a cloud whose body and drawer are both
+            // hidden or off screen; its header already has its status.
+            let on_screen = |rect: Rect| rect.intersects(layer.clip);
+            let body_shown = body && on_screen(body_rect(group));
+            let drawer_shown = runtime.drawer.is_some() && on_screen(drawer::placement(group));
+            if !body_shown && !drawer_shown {
+                continue;
+            }
             let occupancy = occupancy(group, &self.board);
             let frame = ctx.cumulative_frame_nr();
             let status = status::for_frame(runtime, occupancy, now, frame);
-            let body = body_visible(group);
-            // Nothing is laid out for a cloud whose body and drawer are both off screen.
-            let on_screen = |rect: Rect| rect.intersects(layer.clip);
-            if body
-                && on_screen(body_rect(group))
-                && let Some(action) = body_area(ctx, &layer, group, runtime, &status)
-            {
+            if body_shown && let Some(action) = body_area(ctx, &layer, group, runtime, &status) {
                 chosen.actions.push((group.issue, action));
             }
-            if runtime.drawer.is_some() && on_screen(drawer::placement(group)) {
+            if drawer_shown {
                 let teasers = teasers(group, runtime, &status, occupancy);
                 let context = drawer::Context {
                     group,

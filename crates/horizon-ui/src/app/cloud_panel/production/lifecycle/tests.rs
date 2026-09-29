@@ -806,3 +806,17 @@ fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
         "its worker, billing and Reconnect follow from it"
     );
 }
+
+#[test]
+fn a_stop_that_fails_its_preflight_leaves_a_connected_cloud_ready() {
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = Runtime {
+        stage: Some(Stage::Ready),
+        receiver: Some(receiver),
+        ..Runtime::default()
+    };
+    super::fail_before_start(&mut runtime, Action::Stop, "settings.json could not be read".into());
+    assert_eq!(runtime.stage, Some(Stage::Ready), "not stuck at Stopping");
+    assert!(runtime.receiver.is_some());
+    assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
+}

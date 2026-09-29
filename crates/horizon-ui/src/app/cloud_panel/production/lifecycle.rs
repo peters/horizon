@@ -158,7 +158,7 @@ fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
         runtime.remote_release_error = Some(error);
         return;
     }
-    if matches!(action, Action::Stop | Action::Resume | Action::Delete) {
+    if matches!(action, Action::Stop | Action::Resume | Action::Delete) && !runtime.connected_ready() {
         begin_operation(runtime, action);
     }
     runtime.error = Some(error);

@@ -240,10 +240,21 @@ impl Runtime {
     /// this attempt's failure at its `first` step, with its own output, not an earlier
     /// stop's or resume's, nor the step the cloud reached before.
     fn fail_preflight(&mut self, first: Stage, error: String) {
+        if self.connected_ready() {
+            // Nothing started: the connected cloud and its watch stay as they are.
+            self.error = Some(error);
+            return;
+        }
         self.progress.reset();
         self.operation = None;
         self.stage = Some(first);
         self.error = Some(error);
+    }
+
+    /// Ready with its connection watch running: an operation that fails before it starts
+    /// leaves this as it is and only reports why.
+    fn connected_ready(&self) -> bool {
+        self.receiver.is_some() && self.stage == Some(Stage::Ready)
     }
 
     /// A line outside any operation's steps: an idle report, a provider check or a device

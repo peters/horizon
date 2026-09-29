@@ -37,6 +37,8 @@ impl HorizonApp {
         {
             runtime.stage = Some(record.stage);
             runtime.state = Some(record);
+            // The unreadable record's error is no longer true.
+            runtime.error = None;
         }
         Some(found)
     }

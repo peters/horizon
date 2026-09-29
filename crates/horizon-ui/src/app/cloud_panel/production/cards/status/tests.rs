@@ -621,3 +621,20 @@ fn a_failure_over_a_stopped_record_offers_resume_not_a_new_deployment() {
         Some(Primary::Reconnect)
     );
 }
+
+#[test]
+fn a_connected_cloud_whose_next_operation_cannot_start_stays_ready_and_says_why() {
+    let (mut runtime, _sender) = live(Stage::Ready);
+    runtime.state = Some(deployment("Ready", &bound(), &running_worker()));
+    let attempt = runtime.progress.attempt();
+    runtime.fail_preflight(Stage::Validate, "settings.json could not be read".into());
+    assert_eq!(runtime.stage, Some(Stage::Ready), "the connected cloud is untouched");
+    assert!(runtime.receiver.is_some(), "its watch keeps running");
+    assert_eq!(runtime.progress.attempt(), attempt, "nothing started");
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Ready");
+    assert_eq!(
+        status.tail, "settings.json could not be read",
+        "the error is shown, not hidden"
+    );
+}
