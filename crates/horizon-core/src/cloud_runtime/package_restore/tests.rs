@@ -30,6 +30,7 @@ fn repository(root: &Path, script: &str) -> (PathBuf, String) {
     (path, revision)
 }
 
+#[cfg(unix)]
 const RESTORE: &str = "set -e\n\
 test -f app.csproj\n\
 test ! -e local-only\n\
@@ -62,6 +63,7 @@ fn run(
 }
 
 #[test]
+#[cfg(unix)]
 fn only_an_approved_restore_runs_and_it_sees_only_the_committed_tree() {
     let temp = tempfile::tempdir().unwrap();
     let (app, revision) = repository(temp.path(), RESTORE);
@@ -120,6 +122,7 @@ fn only_an_approved_restore_runs_and_it_sees_only_the_committed_tree() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_committed_program_path_runs_the_committed_program() {
     let temp = tempfile::tempdir().unwrap();
     let (app, revision) = repository(temp.path(), &format!("#!/bin/sh\n{RESTORE}"));
@@ -138,6 +141,7 @@ fn a_committed_program_path_runs_the_committed_program() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_failed_restore_and_a_folder_with_credentials_or_links_are_refused() {
     let temp = tempfile::tempdir().unwrap();
     for (case, script) in [
@@ -180,6 +184,7 @@ fn a_failed_restore_and_a_folder_with_credentials_or_links_are_refused() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_archive_carries_the_folder_and_the_manifest_names_it() {
     let temp = tempfile::tempdir().unwrap();
     let (app, revision) = repository(temp.path(), RESTORE);
@@ -235,8 +240,29 @@ fn the_archive_carries_the_folder_and_the_manifest_names_it() {
 #[test]
 fn approvals_need_an_absolute_checkout_path() {
     let packages = packages(&["sh", "restore.sh", "{dir}"]);
+    let absolute = tempfile::tempdir().unwrap();
     assert!(Approval::new(PathBuf::from("app"), &packages).validate().is_err());
-    assert!(Approval::new(PathBuf::from("/work/app"), &packages).validate().is_ok());
+    assert!(Approval::new(absolute.path().join("app"), &packages).validate().is_ok());
+}
+
+#[test]
+fn a_restore_runs_on_every_platform() {
+    // Git is on every host Horizon deploys from, so it stands in for a package manager.
+    let temp = tempfile::tempdir().unwrap();
+    let (app, revision) = repository(temp.path(), "unused\n");
+    let packages = packages(&["git", "-C", "{dir}", "init", "--quiet"]);
+    let root = temp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let restored = run(
+        &app,
+        &revision,
+        &packages,
+        &[Approval::new(app.clone(), &packages)],
+        &root,
+    )
+    .unwrap();
+    assert!(restored.entries.iter().any(|entry| entry.name == ".git/HEAD"));
+    assert!(restored.files() > 0 && restored.bytes > 0);
 }
 
 #[test]
@@ -256,6 +282,7 @@ fn a_cancelled_deployment_stops_the_scan() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_relative_program_never_leaves_the_exported_tree() {
     let temp = tempfile::tempdir().unwrap();
     let tree = temp.path().join("tree");

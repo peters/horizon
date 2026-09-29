@@ -67,8 +67,9 @@ profiles:
 #   # git-lfs fetch patterns for this repository's own LFS paths; others stay pointers.
 #   lfs:
 #     exclude: ['fixtures/video/**']
-#   # Private packages restored on your computer, once you allow the command on the
-#   # card, and sent with the source; no package credential reaches the worker.
+#   # Private packages restored on your computer, once you allow the command for this
+#   # checkout in your cloud settings (package_restores), and sent with the source; no
+#   # package credential reaches the worker.
 #   packages:
 #     restore: [dotnet, restore, --packages, '{dir}']
 #     env: NUGET_PACKAGES

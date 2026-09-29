@@ -255,5 +255,5 @@ fn executable(_: &std::fs::Metadata) -> bool {
     false
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
