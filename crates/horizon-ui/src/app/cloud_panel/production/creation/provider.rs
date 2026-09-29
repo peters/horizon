@@ -183,7 +183,7 @@ pub(super) fn size_field(ui: &mut Ui, prices: &State, profile: &Profile, current
 /// profile's container disk.
 fn server_sizes(prices: &State, profile: &Profile) -> Vec<Size> {
     let hetzner = &prices.hetzner;
-    let Some(catalog) = hetzner.fresh().and_then(|fetched| fetched.value.as_ref()) else {
+    let Some(catalog) = hetzner.displayed().and_then(|fetched| fetched.value.as_ref()) else {
         return Vec::new();
     };
     let mut sizes: Vec<Size> = catalog
@@ -232,7 +232,7 @@ pub(super) struct LocationOffer {
 /// catalog's order. Empty without a catalog.
 pub(super) fn location_offers(prices: &State, profile: &Profile) -> Vec<LocationOffer> {
     let hetzner = &prices.hetzner;
-    let Some(catalog) = hetzner.fresh().and_then(|fetched| fetched.value.as_ref()) else {
+    let Some(catalog) = hetzner.displayed().and_then(|fetched| fetched.value.as_ref()) else {
         return Vec::new();
     };
     let stopped_month = catalog.volume_gb_month_eur * f64::from(profile.storage.volume_gb);
@@ -291,6 +291,30 @@ pub(super) fn euros(value: f64) -> String {
 
 /// The offers of a provider that places workers in named locations, for `profile`, and
 /// the location choice. Returns a newly chosen placement.
+/// Says why the catalog could not be refreshed. A failed refresh keeps the last catalog
+/// on show with its age; returns false when there is no catalog to show at all.
+fn refresh_notice(ui: &mut Ui, hetzner: &super::super::prices::hetzner::State, provider: &Description) -> bool {
+    let Some(error) = hetzner.error() else {
+        return true;
+    };
+    let Some(fetched) = hetzner.displayed() else {
+        ui.colored_label(
+            theme::PALETTE_RED(),
+            format!("{} prices unavailable: {error}", provider.label),
+        );
+        return false;
+    };
+    ui.colored_label(
+        theme::PALETTE_YELLOW(),
+        format!(
+            "Could not refresh {} prices ({error}). Showing prices from {} ago.",
+            provider.label,
+            super::selector::ago(fetched.at.elapsed())
+        ),
+    );
+    true
+}
+
 pub(super) fn card(
     ui: &mut Ui,
     prices: &State,
@@ -306,14 +330,10 @@ pub(super) fn card(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let hetzner = &prices.hetzner;
-            if let Some(error) = hetzner.error() {
-                ui.colored_label(
-                    theme::PALETTE_RED(),
-                    format!("{} prices unavailable: {error}", provider.label),
-                );
+            if !refresh_notice(ui, hetzner, provider) {
                 return;
             }
-            let Some(fetched) = hetzner.fresh() else {
+            let Some(fetched) = hetzner.displayed() else {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(format!("Checking {} prices…", provider.label));

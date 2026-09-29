@@ -1,5 +1,6 @@
-//! Where a new cloud lives: a region with live stock, or one data center under
-//! Advanced. A cloud's workspace stays where it first starts, so the choice outlives it.
+//! Where a new cloud lives: any data center, a region, or one exact data center, each
+//! with live stock. A cloud's workspace stays where it first starts, so the choice
+//! outlives it.
 use super::{
     super::prices::{State, region_name},
     pricing::{option, requested_gpus},
@@ -30,7 +31,7 @@ struct Candidate<'a> {
     stock: Stock,
 }
 
-/// The data centers `profile` can use: CPU clouds need workspace storage there.
+/// The data centers `profile` can use: CPU clouds need their kind of workspace volume there.
 /// GPU profiles count data centers with any of `gpu_types` in stock.
 fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], profile: &Profile) -> Vec<Candidate<'a>> {
     let size = if profile.gpu {
@@ -41,14 +42,7 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
     let mut candidates: Vec<_> = list
         .data_centers
         .iter()
-        .filter(|center| {
-            profile.gpu
-                || if profile.storage.standard_tier() {
-                    center.workspace_storage
-                } else {
-                    size.is_some_and(|size| size.is_ok_and(|size| size.centers.iter().any(|(id, _)| *id == center.id)))
-                }
-        })
+        .filter(|center| profile.gpu || center.holds(profile.storage.volume_tier))
         .map(|center| {
             let here = std::slice::from_ref(&center.id);
             let stocked = if profile.gpu {
@@ -149,30 +143,36 @@ fn stock_label(in_stock: Count) -> (String, Color32) {
     }
 }
 
-/// Region buttons with live stock, once prices are known and there is a choice to make.
-/// Returns a newly chosen placement.
-pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Placement) -> Option<Placement> {
+/// Any data center, a region, or one exact data center, all with live stock for the
+/// chosen worker. Sold-out places stay selectable. Returns a newly chosen placement.
+pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Placement) -> Option<Placement> {
     let (list, preferences) = &prices.list.as_ref()?.value;
     let candidates = candidates(prices, list, requested_gpus(preferences, current), profile);
-    let regions = regions(&candidates);
-    if regions.len() < 2 && current.is_any() {
+    if candidates.is_empty() {
+        ui.label(
+            RichText::new("No allowed data center can hold this worker's workspace.")
+                .size(13.0)
+                .color(theme::FG_SOFT()),
+        );
         return None;
     }
-    ui.add_space(6.0);
-    ui.label(RichText::new("Region").size(14.0).strong().color(theme::FG()));
+    let regions = regions(&candidates);
     let mut chosen = None;
     ui.horizontal_wrapped(|ui| {
         let total = regions
             .iter()
             .fold(Count::Known(0), |total, region| total.with(region.in_stock));
         let (detail, tint) = stock_label(total);
-        if option(ui, "Any region", current.is_any(), Some(&detail), Some(tint)) {
+        if option(ui, "Any data center", current.is_any(), Some(&detail), Some(tint)) {
             chosen = Some(Placement {
                 gpu_types: current.gpu_types.clone(),
                 ..Placement::default()
             });
         }
-        for region in &regions {
+        for region in regions
+            .iter()
+            .filter(|region| regions.len() > 1 || region.data_centers.len() > 1)
+        {
             let selected = current.data_centers == region.data_centers;
             let (detail, tint) = stock_label(region.in_stock);
             if option(ui, &region.name, selected, Some(&detail), Some(tint)) {
@@ -184,43 +184,15 @@ pub(super) fn region_field(ui: &mut Ui, prices: &State, profile: &Profile, curre
             }
         }
     });
-    ui.small(where_it_lives(current));
-    chosen.filter(|placement| placement != current)
-}
-
-fn where_it_lives(placement: &Placement) -> String {
-    let place = match (placement.data_centers.as_slice(), placement.region.as_deref()) {
-        ([], _) => return "Horizon picks a data center with stock. The workspace stays there, and a stopped cloud resumes there.".to_owned(),
-        ([one], _) => one.clone(),
-        (_, Some(region)) => region.to_owned(),
-        (_, None) => "the chosen data centers".to_owned(),
-    };
-    format!("The workspace stays in {place}, and a stopped cloud resumes there.")
-}
-
-/// Every compatible allowed data center, including sold-out choices, for Advanced.
-/// Returns a newly chosen placement.
-pub(super) fn data_center_field(
-    ui: &mut Ui,
-    prices: &State,
-    profile: &Profile,
-    current: &Placement,
-) -> Option<Placement> {
-    let (list, preferences) = &prices.list.as_ref()?.value;
-    let candidates = candidates(prices, list, requested_gpus(preferences, current), profile);
-    if candidates.is_empty() {
-        return None;
-    }
-    ui.add_space(6.0);
-    ui.label(RichText::new("Data center").size(14.0).strong().color(theme::FG()));
+    // Exact data centers appear once a region is chosen, or when there is only one.
+    let shown_region = current.region.as_deref().filter(|_| !current.is_any());
+    let exact = shown_region.is_some() || regions.len() == 1;
     ui.horizontal_wrapped(|ui| {
-        ui.colored_label(theme::PALETTE_GREEN(), "● In stock");
-        ui.colored_label(theme::PALETTE_RED(), "● Out of stock");
-        ui.colored_label(theme::FG_DIM(), "● Checking or unknown");
-    });
-    let mut chosen = None;
-    ui.horizontal_wrapped(|ui| {
-        for candidate in &candidates {
+        for candidate in candidates
+            .iter()
+            .filter(|_| exact)
+            .filter(|candidate| shown_region.is_none_or(|region| candidate.region == region))
+        {
             let selected = current.data_centers == [candidate.center.id.clone()];
             if chip(
                 ui,
@@ -237,18 +209,43 @@ pub(super) fn data_center_field(
             }
         }
     });
-    ui.small("Out-of-stock locations stay selectable. Selecting one does not start a cloud.");
     let excluded = list
         .regions
         .keys()
         .filter(|id| !list.data_centers.iter().any(|center| center.id == **id))
         .count();
+    let mut note = where_it_lives(current);
     if excluded > 0 {
-        ui.small(format!(
-            "Cloud settings exclude {excluded} other data centers from this list."
-        ));
+        use std::fmt::Write as _;
+        let _ = write!(note, " Cloud settings exclude {excluded} other data centers.");
     }
+    ui.label(RichText::new(note).size(12.0).color(theme::FG_DIM()));
     chosen.filter(|placement| placement != current)
+}
+
+pub(super) fn where_it_lives(placement: &Placement) -> String {
+    let place = match (placement.data_centers.as_slice(), placement.region.as_deref()) {
+        ([], _) => return "Horizon picks a data center with stock. The workspace stays there, and a stopped cloud resumes there.".to_owned(),
+        ([one], _) => one.clone(),
+        (_, Some(region)) => region.to_owned(),
+        (_, None) => "the chosen data centers".to_owned(),
+    };
+    format!("The workspace stays in {place}, and a stopped cloud resumes there.")
+}
+
+/// The stock of the chosen worker where `placement` allows: `None` while any place in
+/// scope is still being checked or unknown and none has stock.
+pub(super) fn in_stock(prices: &State, profile: &Profile, placement: &Placement) -> Option<bool> {
+    let (list, preferences) = &prices.list.as_ref()?.value;
+    let candidates = candidates(prices, list, requested_gpus(preferences, placement), profile);
+    let scoped = candidates
+        .iter()
+        .filter(|candidate| placement.is_any() || placement.data_centers.contains(&candidate.center.id));
+    let total = scoped.fold(Count::Known(0), |total, candidate| total.with(candidate.stock.into()));
+    match total {
+        Count::Known(count) => Some(count > 0),
+        Count::Checking | Count::Unknown => None,
+    }
 }
 
 /// A compact choice with a title, a line under it and an optional stock dot, painted at
@@ -326,6 +323,8 @@ mod tests {
             id: id.into(),
             region: region.into(),
             workspace_storage: storage,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: vec![("l4".into(), Availability::High)],
         }
     }
@@ -369,7 +368,7 @@ mod tests {
         (state, profile)
     }
 
-    fn choose_sold_out(region: bool, label: &str) -> Placement {
+    fn choose_sold_out(current: &Placement, label: &str) -> Placement {
         use crate::test_egui::DiscardTextures;
         let (prices, profile) = fixture();
         let ctx = egui::Context::default();
@@ -382,11 +381,7 @@ mod tests {
                 },
                 |ui| {
                     ui.set_width(600.0);
-                    selected = if region {
-                        region_field(ui, &prices, &profile, &Placement::default())
-                    } else {
-                        data_center_field(ui, &prices, &profile, &Placement::default())
-                    };
+                    selected = field(ui, &prices, &profile, current);
                 },
             )
             .discard_textures()
@@ -418,8 +413,30 @@ mod tests {
 
     #[test]
     fn sold_out_data_centers_and_regions_are_visible_and_selectable() {
-        assert_eq!(choose_sold_out(false, "EU-2").data_centers, ["EU-2"]);
-        assert_eq!(choose_sold_out(true, "Europe\nnone in stock").data_centers, ["EU-2"]);
+        let europe = choose_sold_out(&Placement::default(), "Europe\nnone in stock");
+        assert_eq!(europe.data_centers, ["EU-2"]);
+        // Exact data centers appear once their region is chosen.
+        let labels = |current: &Placement| {
+            use crate::test_egui::DiscardTextures;
+            let (prices, profile) = fixture();
+            egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    let _ = field(ui, &prices, &profile, current);
+                })
+                .discard_textures()
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(!labels(&Placement::default()).iter().any(|label| label == "EU-2"));
+        assert!(labels(&europe).iter().any(|label| label == "EU-2"));
+        assert!(!labels(&europe).iter().any(|label| label == "US-1"));
+        let any = choose_sold_out(&europe, "Any data center\n1 in stock");
+        assert!(any.is_any());
     }
 
     #[test]
@@ -447,6 +464,9 @@ mod tests {
         profile.storage.volume_tier = serde_json::from_value(serde_json::json!("HIGH_PERFORMANCE")).unwrap();
         let (mut list, preferences) = prices.list.as_ref().unwrap().value.clone();
         list.data_centers.push(center("EU-3", "EUROPE", false));
+        for center in &mut list.data_centers {
+            center.high_performance_storage = center.id != "US-1";
+        }
         let available = SizeAvailability {
             centers: vec![("EU-2".into(), Availability::High), ("EU-3".into(), Availability::None)],
         };

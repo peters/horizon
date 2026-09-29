@@ -16,7 +16,10 @@ fn label_rect(output: &egui::FullOutput, label: &str) -> Rect {
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == label => {
+            // A two-line choice, such as a profile with its size, is found by its first line.
+            Shape::Text(text)
+                if text.galley.job.text == label || text.galley.job.text.split('\n').next() == Some(label) =>
+            {
                 Some(Rect::from_min_size(text.pos, text.galley.size()))
             }
             _ => None,
@@ -145,25 +148,6 @@ fn pointer_selects_prebuilt_and_creates_it_inside_a_short_viewport() {
     );
 }
 
-fn scroll(ctx: &egui::Context, app: &mut HorizonApp, delta: f32) {
-    dialog_frame(
-        ctx,
-        app,
-        vec![
-            Event::PointerMoved(egui::pos2(450.0, 300.0)),
-            Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                phase: egui::TouchPhase::Move,
-                delta: egui::vec2(0.0, delta),
-                modifiers: Modifiers::NONE,
-            },
-        ],
-    );
-    for _ in 0..8 {
-        dialog_frame(ctx, app, Vec::new());
-    }
-}
-
 fn created_size(app: &HorizonApp) -> (u16, u16) {
     let profile = &app
         .cloud_prototype
@@ -178,48 +162,87 @@ fn created_size(app: &HorizonApp) -> (u16, u16) {
     (profile.cpu, profile.memory_gb)
 }
 
+/// A `RunPod` catalog with compute-optimized and general-purpose CPU flavors in stock in
+/// one European data center.
+fn answer_cpu_catalog(app: &mut HorizonApp) {
+    use horizon_core::cloud_runtime::prices::{
+        Availability, CpuFlavorPrice, DataCenter, Preferences, PriceList, RUNPOD_STORAGE,
+    };
+    let flavor = |id: &str, name: &str, per_vcpu_hour| CpuFlavorPrice {
+        id: id.into(),
+        name: name.into(),
+        per_vcpu_hour,
+    };
+    let list = PriceList {
+        provider: "RunPod",
+        cpu: vec![
+            flavor("cpu3c", "Compute-Optimized", 0.03),
+            flavor("cpu3g", "General Purpose", 0.04),
+        ],
+        gpus: Vec::new(),
+        data_centers: vec![DataCenter {
+            id: "EU-RO-1".into(),
+            region: "EUROPE".into(),
+            workspace_storage: true,
+            high_performance_storage: false,
+            cpus: vec![
+                ("cpu3c".into(), Availability::High),
+                ("cpu3g".into(), Availability::High),
+            ],
+            gpus: Vec::new(),
+        }],
+        regions: std::collections::BTreeMap::new(),
+        storage: RUNPOD_STORAGE,
+    };
+    let preferences = Preferences {
+        cpu_flavors: vec!["cpu3c".into()],
+        gpu_types: Vec::new(),
+    };
+    app.cloud_prototype
+        .production
+        .prices
+        .answered(list, preferences, Vec::new());
+}
+
+fn label_starting(output: &egui::FullOutput, prefix: &str) -> Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text.starts_with(prefix) => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing visible label starting with: {prefix}"))
+}
+
 #[test]
 fn chosen_size_starts_the_cloud_at_that_size() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    answer_cpu_catalog(&mut app);
     let output = tall_frame(&ctx, &mut app);
-    assert!(
-        has_label(&output, "CPU size"),
-        "the size row is outside the collapsed Advanced section"
-    );
-    assert!(has_label(&output, "development · 4 vCPU · 8 GB"));
-    assert!(has_label(&output, "8 GB · compute-optimized"));
-    // Tooltips would draw below this modal, so the offer rule is shown inline.
     assert!(has_label(
         &output,
-        "RunPod CPU sizes offered with this profile's 20 GB container disk."
+        "At least 4 vCPU and 8 GB memory, for the development profile"
     ));
+    assert!(has_label(&output, "CHEAPEST") && has_label(&output, "MOST POWERFUL"));
     assert!(
-        !has_label(&output, "1 vCPU"),
-        "RunPod CPU pods need a power of two from 2 vCPU"
+        !has_label(&output, "2 vCPU · 4 GB"),
+        "sizes below the profile are never offered"
     );
     assert_eq!(
         app.cloud_prototype.production.size, None,
         "the profile's size is the default"
     );
-    click(&ctx, &mut app, label_rect(&output, "16 vCPU").center());
-    assert_eq!(
-        app.cloud_prototype.production.size,
-        Some((16, 32)),
-        "vCPU changes keep the memory family"
-    );
+    click(&ctx, &mut app, label_starting(&output, "Show all ").center());
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "development · 16 vCPU · 32 GB"));
-    assert!(
-        !has_label(&output, "8 GB · compute-optimized"),
-        "memory choices follow the vCPU count"
-    );
-    click(&ctx, &mut app, label_rect(&output, "64 GB · general purpose").center());
+    click(&ctx, &mut app, label_rect(&output, "16 vCPU · 64 GB").center());
     assert_eq!(app.cloud_prototype.production.size, Some((16, 64)));
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "development · 16 vCPU · 64 GB"));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);
     assert!(!app.cloud_creation_open());
@@ -242,6 +265,8 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable()
         id: id.into(),
         region: region.into(),
         workspace_storage: true,
+        high_performance_storage: false,
+        cpus: Vec::new(),
         gpus: Vec::new(),
     };
     let list = PriceList {
@@ -271,8 +296,8 @@ fn chosen_region_places_the_cloud_there_and_sold_out_regions_remain_selectable()
     };
     production.prices.answered(list, preferences, vec![(profile, stock)]);
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "Region"));
-    assert!(has_label(&output, "Any region\n1 in stock"));
+    assert!(has_label(&output, "Data center"));
+    assert!(has_label(&output, "Any data center\n1 in stock"));
     assert!(has_label(
         &output,
         "Horizon picks a data center with stock. The workspace stays there, and a stopped cloud resumes there."
@@ -340,6 +365,8 @@ fn gpu_dialog(preferred: &[&str]) -> (tempfile::TempDir, egui::Context, HorizonA
             id: "EU-RO-1".into(),
             region: "EUROPE".into(),
             workspace_storage: true,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
         }],
         regions: std::collections::BTreeMap::new(),
@@ -369,22 +396,29 @@ fn tall_frame(ctx: &egui::Context, app: &mut HorizonApp) -> egui::FullOutput {
 }
 
 #[test]
-fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
+fn a_sold_out_gpu_preference_gives_way_to_one_in_stock_for_this_cloud() {
     let (_temp, ctx, mut app) = gpu_dialog(&["NVIDIA RTX A6000"]);
     tall_frame(&ctx, &mut app);
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "None of your preferred GPUs is in stock"));
-    click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
-    assert_eq!(
-        app.cloud_prototype.production.placement.gpu_types,
-        ["NVIDIA RTX A5000"],
-        "only this cloud changes"
-    );
+    // The cheapest type in stock is requested explicitly, for this cloud only.
+    assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
+    assert!(has_label(&output, "RTX A5000"));
+    // The sold-out preference stays in the list and can still be chosen.
+    click(&ctx, &mut app, label_starting(&output, "Show all ").center());
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(
-        &output,
-        "RTX A5000 · 24 GB · chosen for this cloud · Secure Cloud"
-    ));
+    let rows: Vec<_> = output
+        .shapes
+        .iter()
+        .filter(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.job.text == "RTX A6000"))
+        .collect();
+    assert!(!rows.is_empty());
+    click(&ctx, &mut app, label_rect(&output, "RTX A6000").center());
+    assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A6000"]);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(has_label(&output, "Start new cloud once available"));
+    click(&ctx, &mut app, label_rect(&output, "RTX A5000").center());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!has_label(&output, "Start new cloud once available"));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
     finish_creation(&ctx, &mut app);
     let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
@@ -392,11 +426,9 @@ fn a_sold_out_gpu_preference_can_be_swapped_for_one_in_stock_for_this_cloud() {
 }
 
 #[test]
-fn a_gpu_in_stock_is_offered_without_preferences_and_dropped_for_a_cpu_profile() {
+fn a_gpu_in_stock_is_chosen_without_preferences_and_dropped_for_a_cpu_profile() {
     let (_temp, ctx, mut app) = gpu_dialog(&[]);
     tall_frame(&ctx, &mut app);
-    let output = tall_frame(&ctx, &mut app);
-    click(&ctx, &mut app, label_rect(&output, "Use RTX A5000 instead").center());
     assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
     // Reread as a CPU profile, the GPU choice no longer applies.
     let config = app.cloud_prototype.production.profiles.as_mut().unwrap();
@@ -416,8 +448,8 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change
     accelerated.gpu = true;
     config.profiles.insert("accelerated".into(), accelerated);
     let output = dialog_frame(&ctx, &mut app, Vec::new());
-    assert!(has_label(&output, "CPU profiles"));
-    assert!(has_label(&output, "GPU profiles"));
+    assert!(has_label(&output, "Profile"));
+    assert!(has_label(&output, "accelerated\nGPU worker"));
     app.cloud_prototype.production.size = Some((16, 32));
     click(&ctx, &mut app, label_rect(&output, "development").center());
     assert_eq!(app.cloud_prototype.production.size, Some((16, 32)));
@@ -426,8 +458,11 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change
     assert_eq!(app.cloud_prototype.production.selected_profile, "accelerated");
     assert_eq!(app.cloud_prototype.production.size, None);
     let output = tall_frame(&ctx, &mut app);
-    assert!(has_label(&output, "Minimum resources per GPU"));
-    assert!(!has_label(&output, "CPU size"));
+    assert!(has_label(&output, "GPU workers for the accelerated profile"));
+    assert!(!has_label(
+        &output,
+        "At least 4 vCPU and 8 GB memory, for the accelerated profile"
+    ));
     app.cloud_prototype.production.size = Some((3, 17));
     let profile = &app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["accelerated"];
     let sized =
@@ -578,7 +613,7 @@ fn disk_edits_preserve_gpu_placement_and_survive_launch_capture() {
         .gpu = true;
     let selected = horizon_core::cloud_panel::Placement {
         region: Some("Chosen region".into()),
-        data_centers: vec!["chosen-dc".into()],
+        data_centers: vec!["EU-RO-1".into()],
         gpu_types: vec!["chosen-gpu".into()],
     };
     app.cloud_prototype.production.placement = selected.clone();
@@ -657,10 +692,13 @@ fn container_edit_requires_a_compatible_cpu_size_before_starting() {
         .storage
         .volume_gb = 25;
     let placement = horizon_core::cloud_panel::Placement {
-        data_centers: vec!["chosen-dc".into()],
+        data_centers: vec!["EU-RO-1".into()],
         ..Default::default()
     };
     app.cloud_prototype.production.placement = placement.clone();
+    answer_cpu_catalog(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "More options").center());
     let output = tall_frame(&ctx, &mut app);
     let at = label_rect(&output, "20").center();
     click(&ctx, &mut app, at);
@@ -700,8 +738,9 @@ fn container_edit_requires_a_compatible_cpu_size_before_starting() {
     assert!(app.cloud_creation_open());
     assert!(!app.cloud_prototype.production.launch.submitted);
     assert!(app.cloud_prototype.groups.0.is_empty());
+    // Sizes that cannot hold the disk are no longer offered; the cheapest left can.
     let output = tall_frame(&ctx, &mut app);
-    click(&ctx, &mut app, label_rect(&output, "8 vCPU").center());
+    click(&ctx, &mut app, label_rect(&output, "8 vCPU · 16 GB").center());
     let output = tall_frame(&ctx, &mut app);
     assert!(!has_label(&output, reason));
     click(&ctx, &mut app, label_rect(&output, "Start cloud").center());

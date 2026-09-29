@@ -7,11 +7,83 @@ use horizon_core::cloud_runtime::{
     provider::{Choice, Description, Kind},
 };
 
+/// Why the chosen worker cannot start now, if anything stands in the way.
+pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
+        return Some("Hetzner prices are over an hour old. Refresh them before starting.");
+    }
+    if super::provider::current(form.provider, profile).kind == Kind::RunPod {
+        if form.prices.too_old() {
+            return Some("Prices are over an hour old. Refresh them before starting.");
+        }
+        // A GPU cloud requests exactly the one type chosen for it, never the machine's
+        // preferences, and any fetched catalog must offer the chosen worker.
+        let catalog = super::selector::catalog(form);
+        if catalog.as_ref().is_some_and(|catalog| catalog.offers.is_empty()) {
+            return Some(empty_catalog_reason(form, profile));
+        }
+        if profile.gpu && form.placement.gpu_types.len() != 1 {
+            return Some("Choose a GPU type for this cloud.");
+        }
+        if profile.gpu && catalog.as_ref().is_some_and(|catalog| catalog.selected.is_none()) {
+            return Some("Choose a GPU type the catalog offers for this profile.");
+        }
+        // A chosen place must still be offered, and hold the chosen kind of workspace volume.
+        if let Some(fetched) = form.prices.list.as_ref().filter(|_| !form.placement.is_any()) {
+            let mut known = fetched
+                .value
+                .0
+                .data_centers
+                .iter()
+                .filter(|center| form.placement.data_centers.contains(&center.id))
+                .peekable();
+            if known.peek().is_none() {
+                return Some("The chosen data center is no longer offered. Choose another data center.");
+            }
+            if !profile.gpu && !known.any(|center| center.holds(profile.storage.volume_tier)) {
+                return Some(
+                    "The chosen data center cannot hold this kind of workspace volume. Choose another data center or storage type.",
+                );
+            }
+        }
+        // A CPU size also starts only as the catalog offers it; a size no flavor holds
+        // keeps its more specific reason.
+        if let Some(reason) = size_reason(form) {
+            return Some(reason);
+        }
+        if !profile.gpu && catalog.is_some_and(|catalog| catalog.selected.is_none()) {
+            return Some("Choose a CPU size the catalog offers for this profile.");
+        }
+        return None;
+    }
+    size_reason(form)
+}
+
+/// Why no worker is offered: no allowed data center holds the chosen kind of workspace
+/// volume, or else nothing meets the profile's minimums.
+pub(super) fn empty_catalog_reason(form: &super::Production, profile: &Profile) -> &'static str {
+    let holds_volume = profile.gpu
+        || form.prices.list.as_ref().is_none_or(|fetched| {
+            fetched
+                .value
+                .0
+                .data_centers
+                .iter()
+                .any(|center| center.holds(profile.storage.volume_tier))
+        });
+    if holds_volume {
+        "No worker the provider lists meets this profile's minimums."
+    } else {
+        "No allowed data center can hold this kind of workspace volume. Choose another storage type."
+    }
+}
+
 pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
     let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
     let provider = super::provider::current(form.provider, profile);
     if provider.kind == Kind::Hetzner {
-        form.prices.hetzner.fresh()?.value.as_ref()?;
+        form.prices.hetzner.displayed()?.value.as_ref()?;
         let sized = super::provider::sized(provider, profile, form.size).ok()?;
         return (!super::provider::location_offers(&form.prices, &sized)
             .iter()
@@ -25,6 +97,25 @@ pub(super) fn size_reason(form: &super::Production) -> Option<&'static str> {
             profile.storage.container_gb,
         ))
     .then_some("Choose a CPU and memory size that supports this container disk before starting.")
+}
+
+/// The container disk alone, for providers whose workspace volume the summary sets.
+pub(super) fn container_field(ui: &mut Ui, profile: &mut Profile, provider: &Description) {
+    let container_max = if provider.kind == Kind::RunPod && !profile.gpu {
+        flavors::max_container_gb()
+    } else {
+        u16::MAX
+    };
+    ui.horizontal(|ui| {
+        let label = ui.label("Container disk");
+        ui.add(
+            DragValue::new(&mut profile.storage.container_gb)
+                .range(1..=container_max)
+                .suffix(" GB"),
+        )
+        .labelled_by(label.id);
+    });
+    ui.small("Temporary storage for the image and installed tools; cleared when the worker stops.");
 }
 
 pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) -> bool {

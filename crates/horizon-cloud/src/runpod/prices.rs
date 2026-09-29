@@ -4,7 +4,7 @@ use super::{
     RunPod,
     flavors::{self, Flavor},
     stock::Level,
-    volumes::{Catalog, candidates},
+    volumes::{Capacity, Catalog, Tier, candidates},
 };
 use crate::{
     Cancellation, CloudError, Profile,
@@ -33,7 +33,7 @@ impl RunPod {
     pub fn price_list(&self, data_centers: &[String], cancel: &Cancellation) -> Result<PriceList, CloudError> {
         let cpus: CpuCatalog = self.catalog("/cpus", cancel)?;
         let gpus: GpuCatalog = self.catalog("/gpus", cancel)?;
-        let centers: Catalog = self.catalog("/datacenters?include=GPU_AVAILABILITY", cancel)?;
+        let centers: Catalog = self.catalog("/datacenters?include=GPU_AVAILABILITY,CPU_AVAILABILITY", cancel)?;
         let regions = centers
             .data_centers
             .iter()
@@ -45,16 +45,36 @@ impl RunPod {
             .into_iter()
             .filter(|center| valid_id(&center.id) && (data_centers.is_empty() || data_centers.contains(&center.id)))
             .map(|center| {
-                let gpus = center
-                    .gpu_availability
-                    .into_iter()
-                    .map(|gpu| Ok((gpu.id, availability(&gpu.availability)?)))
-                    .collect::<Result<_, CloudError>>()?;
+                let levels = |entries: Vec<Capacity>| {
+                    entries
+                        .into_iter()
+                        .map(|entry| Ok((entry.id, availability(&entry.availability)?)))
+                        .collect::<Result<Vec<_>, CloudError>>()
+                };
+                let holds = |tier: Tier| {
+                    center
+                        .network_volume_types
+                        .iter()
+                        .any(|value| value == tier.api_value())
+                };
                 Ok(DataCenter {
-                    workspace_storage: center.network_volume_types.iter().any(|tier| tier == "STANDARD"),
+                    workspace_storage: holds(Tier::Standard),
+                    high_performance_storage: holds(Tier::HighPerformance),
+                    gpus: levels(center.gpu_availability)?,
+                    // Family stock only narrows the offers, so a value RunPod adds later
+                    // reads as none there instead of failing every price.
+                    cpus: center
+                        .cpu_availability
+                        .into_iter()
+                        .map(|entry| {
+                            (
+                                entry.id,
+                                availability(&entry.availability).unwrap_or(Availability::None),
+                            )
+                        })
+                        .collect(),
                     id: center.id,
                     region: center.region,
-                    gpus,
                 })
             })
             .collect::<Result<Vec<_>, CloudError>>()?;
