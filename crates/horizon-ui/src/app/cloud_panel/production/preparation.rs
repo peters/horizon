@@ -1,5 +1,5 @@
 //! Everything a cloud's deployment needs before it may allocate a worker.
-use super::{Confirmation, HorizonApp, Request, Settings, Store, cloud_runtime, deployment};
+use super::{Confirmation, HorizonApp, Request, Settings, Stage, Store, cloud_runtime, deployment};
 
 impl HorizonApp {
     /// Saves the cloud and its prepared deployment record before any allocation, and
@@ -36,7 +36,7 @@ impl HorizonApp {
             Err(error) => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.state_unavailable = true;
-                runtime.fail_preflight(error.to_string());
+                runtime.fail_preflight(Stage::Validate, error.to_string());
                 return None;
             }
         };
@@ -53,10 +53,13 @@ impl HorizonApp {
             other => {
                 let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
                 runtime.state_unavailable = true;
-                runtime.fail_preflight(other.err().map_or_else(
-                    || "Deployment record is missing; reconcile its worker before continuing".into(),
-                    |error| error.to_string(),
-                ));
+                runtime.fail_preflight(
+                    Stage::Validate,
+                    other.err().map_or_else(
+                        || "Deployment record is missing; reconcile its worker before continuing".into(),
+                        |error| error.to_string(),
+                    ),
+                );
                 return None;
             }
         };
@@ -72,7 +75,10 @@ impl HorizonApp {
                     .runtimes
                     .entry(id)
                     .or_default()
-                    .fail_preflight(format!("{error}. Configure {}", root.join("settings.json").display()));
+                    .fail_preflight(
+                        Stage::Validate,
+                        format!("{error}. Configure {}", root.join("settings.json").display()),
+                    );
                 return None;
             }
         };

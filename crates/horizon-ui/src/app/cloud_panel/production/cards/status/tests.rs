@@ -581,7 +581,7 @@ fn a_reconnect_rebuild_or_resize_that_fails_its_preflight_is_not_the_earlier_sto
     };
     runtime.push_log("error: the stop's own output".into());
     let before = runtime.progress.attempt();
-    runtime.fail_preflight("settings.json could not be read".into());
+    runtime.fail_preflight(Stage::Validate, "settings.json could not be read".into());
     assert_eq!(
         runtime.progress.attempt(),
         before + 1,
@@ -591,4 +591,14 @@ fn a_reconnect_rebuild_or_resize_that_fails_its_preflight_is_not_the_earlier_sto
     assert_ne!(status.verb, "Stop failed");
     assert_ne!(status.primary, Some(Primary::ReconcileStop));
     assert_eq!(status.numbers, "settings.json could not be read");
+    assert_eq!(status.track.current, Some(0), "failed at its first step, not at Ready");
+}
+
+#[test]
+fn a_stop_in_progress_keeps_the_deployment_it_stops_drawn() {
+    let (mut runtime, _sender) = live(Stage::Stopping);
+    runtime.state = Some(deployment("Ready", &bound(), &running_worker()));
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.track.finished, Stage::ALL.len(), "not redrawn as pending");
+    assert!(status.track.faded);
 }

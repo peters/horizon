@@ -55,6 +55,13 @@ const REGISTRY_CONTEXT: &[&str] = &[
     "docker.io",
 ];
 
+/// Lookup failures any service can print; only registry output makes them a registry's.
+const HOST_NOT_FOUND: &[&str] = &[
+    "no such host",
+    "server misbehaving",
+    "temporary failure in name resolution",
+];
+
 const REGISTRY_REFUSED: &str =
     "The registry refused the request. Its saved credentials have expired or lack access to this image.";
 
@@ -75,7 +82,7 @@ const fn known(patterns: &'static [&'static str], meaning: &'static str) -> Know
 }
 
 /// Well-known causes, first match wins. Keep patterns lowercase.
-const MEANINGS: [Known; 11] = [
+const MEANINGS: [Known; 12] = [
     known(
         &["no space left on device", "disk full", "disk quota exceeded"],
         "The disk filled up. Free space on this computer or the worker, or grow the workspace.",
@@ -102,13 +109,14 @@ const MEANINGS: [Known; 11] = [
         AUTHENTICATION,
         "The service refused the credentials Horizon sent. They may have expired or lack the rights this step needs.",
     ),
+    Known {
+        patterns: HOST_NOT_FOUND,
+        context: REGISTRY_CONTEXT,
+        meaning: "The registry's host name does not resolve. Check the registry address in cloud settings and this computer's network.",
+    },
     known(
-        &[
-            "no such host",
-            "server misbehaving",
-            "temporary failure in name resolution",
-        ],
-        "The host name does not resolve. Check the registry address in cloud settings and this computer's network.",
+        HOST_NOT_FOUND,
+        "The host name does not resolve. Check the address the failing step uses and this computer's network.",
     ),
     known(
         &["manifest unknown", "not found: manifest"],
@@ -354,7 +362,14 @@ mod tests {
                 "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
                 "Docker is not running",
             ),
-            ("dial tcp: lookup registry.invalid: no such host", "does not resolve"),
+            (
+                "dial tcp: lookup registry.invalid: no such host",
+                "registry's host name does not resolve",
+            ),
+            (
+                "dial tcp: lookup api.runpod.io: no such host",
+                "address the failing step uses",
+            ),
             (
                 "error from registry: unauthenticated: User cannot be authenticated with the token provided.",
                 "registry refused",

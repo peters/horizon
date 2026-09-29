@@ -237,10 +237,12 @@ impl Runtime {
     }
 
     /// A deployment, reconnect, rebuild or resize that failed before it started: that is
-    /// this attempt's failure, with its own output, not an earlier stop's or resume's.
-    fn fail_preflight(&mut self, error: String) {
+    /// this attempt's failure at its `first` step, with its own output, not an earlier
+    /// stop's or resume's, nor the step the cloud reached before.
+    fn fail_preflight(&mut self, first: Stage, error: String) {
         self.progress.reset();
         self.operation = None;
+        self.stage = Some(first);
         self.error = Some(error);
     }
 

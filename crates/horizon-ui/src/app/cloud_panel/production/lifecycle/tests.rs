@@ -754,6 +754,7 @@ fn a_device_release_that_fails_its_preflight_is_reported_as_one() {
 }
 
 #[test]
+#[cfg(unix)] // The deployment store needs a Unix host.
 fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();

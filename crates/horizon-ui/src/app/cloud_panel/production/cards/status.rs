@@ -553,7 +553,12 @@ fn with_position(track: &Track, detail: Option<String>) -> String {
 }
 
 fn running(runtime: &Runtime, base: Status) -> Status {
-    let mut track = track(runtime);
+    let mut track = if runtime.stage == Some(Stage::Stopping) {
+        // Stopping is not a deployment step: the deployment it stops stays drawn, faded.
+        Track::complete(&Stage::ALL, true)
+    } else {
+        track(runtime)
+    };
     let measured = runtime.progress.measured();
     track.fraction = measured.as_ref().and_then(super::super::progress::Measured::fraction);
     let rebuilding = runtime.rebuild.is_some();
