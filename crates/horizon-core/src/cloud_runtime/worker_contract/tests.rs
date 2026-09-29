@@ -37,15 +37,20 @@ fn source_packaging_features_are_reported_only_by_their_exact_markers() {
     let current = "horizon-worker-contract=1\nhorizon-source-contract=1\nhorizon-capabilities-contract=1\n";
     let features = |output: &str| {
         let reported = WorkerContract::reported(output);
-        (reported.pinned_submodules, reported.lfs_selection)
+        (reported.pinned_submodules, reported.lfs_selection, reported.packages)
     };
-    assert_eq!(features(current), (false, false));
+    assert_eq!(features(current), (false, false, false));
     assert_eq!(
         features(&format!("{current}{PINNED_SUBMODULES_MARKER}\n")),
-        (true, false)
+        (true, false, false)
     );
-    assert_eq!(features(&format!("{current}{LFS_SELECTION_MARKER}\n")), (false, true));
-    for marker in [PINNED_SUBMODULES_MARKER, LFS_SELECTION_MARKER] {
+    assert_eq!(
+        features(&format!("{current}{LFS_SELECTION_MARKER}\n")),
+        (false, true, false)
+    );
+    assert_eq!(features(&format!("{current}{PACKAGES_MARKER}\n")), (false, false, true));
+    assert_eq!(PACKAGES_MARKER, "horizon-source-packages-contract=1");
+    for marker in [PINNED_SUBMODULES_MARKER, LFS_SELECTION_MARKER, PACKAGES_MARKER] {
         for incidental in [
             format!("prefix-{marker}"),
             format!("{marker}-suffix"),
@@ -54,7 +59,7 @@ fn source_packaging_features_are_reported_only_by_their_exact_markers() {
         ] {
             assert_eq!(
                 features(&format!("{current}{incidental}\n")),
-                (false, false),
+                (false, false, false),
                 "{incidental}"
             );
         }
