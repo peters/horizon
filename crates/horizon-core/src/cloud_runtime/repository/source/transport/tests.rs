@@ -532,9 +532,10 @@ fn a_failed_step_that_cannot_clean_up_after_itself_says_where_it_left_the_folder
     if writable {
         return; // Permissions do not bind this user (root), so removal cannot fail here.
     }
+    // Nothing here marks the folder as a clone, so it is not offered for resuming.
     assert!(
-        matches!(&said, Failure::Interrupted(text)
-            if text.contains("could not be removed") && text.contains("Cannot reach the host") && text.contains("Continue resumes")),
+        matches!(&said, Failure::Other(text)
+            if text.contains("could not be removed") && text.contains("Cannot reach the host") && text.contains("choose another folder")),
         "{said:?}"
     );
     assert_eq!(

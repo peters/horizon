@@ -668,22 +668,29 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
 }
 
 /// `failure`, after what the clone made in `folder` is taken away. When that cannot be done (files
-/// still open on Windows, say) the folder stays, marked as a clone that can be resumed, and the
-/// message says so. A refusal to sign in stays one, so that its prompt still appears.
+/// still open on Windows, say) the folder stays and the message says where. A refusal to sign in
+/// stays one, so that its prompt still appears: the folder is then offered for resuming, or
+/// refused as an occupied destination, by the dialog itself.
 fn removed(folder: &Path, failure: Failure) -> Failure {
     match std::fs::remove_dir_all(folder) {
         Ok(()) => failure,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => failure,
         Err(_) if matches!(failure, Failure::SignIn(_) | Failure::NotFound) => failure,
         Err(error) => {
-            let said = match failure {
-                Failure::Interrupted(text) => text,
+            let said = match &failure {
+                Failure::Interrupted(text) => text.clone(),
                 other => other.to_string(),
             };
-            Failure::Interrupted(format!(
-                "{said} What it made in {} could not be removed: {error}. Continue resumes from it.",
+            let left = format!(
+                "{said} What it made in {} could not be removed: {error}.",
                 folder.display()
-            ))
+            );
+            // Only a folder that still says it is an unfinished clone can be resumed.
+            if unfinished(folder) {
+                Failure::Interrupted(format!("{left} Continue resumes from it."))
+            } else {
+                Failure::Other(format!("{left} Remove it, or choose another folder."))
+            }
         }
     }
 }
