@@ -30,6 +30,17 @@ pub(super) fn palette_layout(screen: Rect) -> PaletteLayout {
     }
 }
 
+/// Asks for keyboard focus for an overlay's text field until the field has had it once. It
+/// counts frames, not time, so a slow first frame, such as under load, still focuses the field;
+/// once focused, the field never takes focus back from a control the user moved it to.
+pub(crate) fn focus_once(response: &egui::Response, focused: &mut bool) {
+    if response.has_focus() {
+        *focused = true;
+    } else if !*focused {
+        response.request_focus();
+    }
+}
+
 pub(crate) fn paint_card(ui: &egui::Ui, card_rect: Rect) {
     let painter = ui.painter();
     painter.rect_filled(card_rect, CornerRadius::same(20), theme::PANEL_BG());
