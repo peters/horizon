@@ -708,3 +708,28 @@ fn every_worker_operation_starts_its_own_attempt() {
     assert!(runtime.progress.attempt() > before + 2);
     assert!(runtime.progress.is_deletion());
 }
+
+#[test]
+fn an_operation_that_fails_its_preflight_is_still_its_own_attempt() {
+    for (action, first) in [(Action::Stop, Stage::Stopping), (Action::Resume, Stage::Provision)] {
+        let mut runtime = Runtime {
+            stage: Some(Stage::Ready),
+            ..Runtime::default()
+        };
+        runtime.push_log("error: from the previous operation".into());
+        let before = runtime.progress.attempt();
+        super::fail_before_start(&mut runtime, action, "settings.json could not be read".into());
+        assert_eq!(
+            runtime.progress.attempt(),
+            before + 1,
+            "{action:?}: diagnosis ignores older output"
+        );
+        assert_eq!(runtime.stage, Some(first), "{action:?} names itself");
+        assert_eq!(runtime.resuming, action == Action::Resume);
+        assert_eq!(runtime.error.as_deref(), Some("settings.json could not be read"));
+    }
+    let mut runtime = Runtime::default();
+    super::fail_before_start(&mut runtime, Action::Delete, "unreadable".into());
+    assert!(runtime.progress.is_deletion());
+    assert_eq!(runtime.error.as_deref(), Some("unreadable"));
+}

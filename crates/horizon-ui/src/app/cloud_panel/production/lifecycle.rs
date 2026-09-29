@@ -150,6 +150,15 @@ impl Runtime {
     }
 }
 
+/// A worker operation that failed its preflight is still that operation's failure: it
+/// gets its own attempt, so the status names it and diagnosis ignores earlier output.
+fn fail_before_start(runtime: &mut Runtime, action: Action, error: String) {
+    if matches!(action, Action::Stop | Action::Resume | Action::Delete) {
+        begin_operation(runtime, action);
+    }
+    runtime.error = Some(error);
+}
+
 /// Resets what the card shows for a newly started worker operation.
 fn begin_operation(runtime: &mut Runtime, action: Action) {
     if action == Action::Delete {
@@ -216,14 +225,14 @@ impl HorizonApp {
         let settings = match Settings::load(&root.join("settings.json")) {
             Ok(settings) => settings,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                fail_before_start(runtime, action, error.to_string());
                 return;
             }
         };
         let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
             Ok(path) => path,
             Err(error) => {
-                runtime.error = Some(error.to_string());
+                fail_before_start(runtime, action, error.to_string());
                 runtime.state_unavailable = true;
                 return;
             }

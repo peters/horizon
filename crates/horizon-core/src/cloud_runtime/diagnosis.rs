@@ -178,8 +178,15 @@ pub fn meaning_in(line: &str, summary: &str) -> Option<&'static str> {
 #[must_use]
 pub fn is_failure(line: &str) -> bool {
     let lower = without_zero_counts(&line.to_ascii_lowercase());
-    (FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker)) || known_cause(&lower))
-        && !TRANSIENT_MARKERS.iter().any(|marker| lower.contains(marker))
+    (FAILURE_MARKERS.iter().any(|marker| starts_a_word(&lower, marker)) || known_cause(&lower)) && !transient(&lower)
+}
+
+/// A line that reports a failure another try will follow. "Failed after retrying 5
+/// times" is the end of the retries, not one of them.
+fn transient(lower: &str) -> bool {
+    const EXHAUSTED: [&str; 4] = ["after retrying", "gave up", "giving up", "retries exhausted"];
+    TRANSIENT_MARKERS.iter().any(|marker| lower.contains(marker))
+        && !EXHAUSTED.iter().any(|marker| lower.contains(marker))
 }
 
 /// Well-known causes that name no failure word ("manifest unknown", "toomanyrequests").
@@ -276,6 +283,8 @@ mod tests {
             "20 errors generated",
             "error: 0 bytes written",
             "no errors in the plan, but the build failed",
+            "error: request failed after retrying 5 times",
+            "push failed: gave up retrying after 3 attempts",
             "piano error: string snapped",
             "manifest unknown: manifest unknown",
             "toomanyrequests: You have reached your pull rate limit",

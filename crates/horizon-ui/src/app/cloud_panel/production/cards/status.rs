@@ -612,9 +612,14 @@ fn finished_after(runtime: &Runtime, track: &Track) -> Option<usize> {
         .next_back()
 }
 
-/// A resume that failed before the provider acted: the record is still the stopped one.
+/// A resume that failed before the provider acted: the record is still the stopped one,
+/// whether it was reloaded or the resume never got past its preflight.
 fn resume_failed(runtime: &Runtime) -> bool {
-    runtime.resuming && runtime.stage == Some(Stage::Stopped)
+    runtime.resuming
+        && runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| state.stage == Stage::Stopped)
 }
 
 fn failed(runtime: &Runtime, error: &str) -> Status {
@@ -637,7 +642,8 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
     let failure = Failure::of(runtime, error);
     let never_ready = runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready);
     let primary = if runtime.progress.is_deletion() {
-        None
+        // Deleting again needs Manage's confirmation.
+        Some(Primary::Manage)
     } else if resume_failed(runtime) {
         // The worker is still stopped: resuming again, not a new deployment.
         Some(Primary::Resume)

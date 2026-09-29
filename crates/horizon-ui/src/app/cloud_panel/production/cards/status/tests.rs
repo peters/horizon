@@ -525,3 +525,16 @@ fn a_resume_that_fails_before_the_provider_acts_offers_resume_again() {
     assert_eq!(status.track.current, Some(provision), "the tried step is marked");
     assert!(status.track.failed);
 }
+
+#[test]
+fn a_failed_deletion_leads_to_manage_where_deleting_again_is_confirmed() {
+    let mut runtime = Runtime {
+        error: Some("Worker deletion failed: provider timed out".into()),
+        state: Some(deployment("Ready", &bound(), &running_worker())),
+        ..Runtime::default()
+    };
+    runtime.progress.begin_deletion();
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Deletion failed");
+    assert_eq!(status.primary, Some(Primary::Manage));
+}
