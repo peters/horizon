@@ -109,6 +109,25 @@ fn parse_progress(line: &str) -> Option<(String, u8, String)> {
     Some((phase.trim().to_owned(), percent.min(100), detail.to_owned()))
 }
 
+/// Whether `line` only reports how a transfer is going, which says nothing about why one failed.
+fn is_chatter(line: &str) -> bool {
+    let line = line.trim().trim_start_matches("remote:").trim();
+    [
+        "Enumerating objects",
+        "Counting objects",
+        "Compressing objects",
+        "Total ",
+        "Receiving objects",
+        "Resolving deltas",
+        "Updating files",
+        "Checking out",
+        "From ",
+        "* ",
+    ]
+    .iter()
+    .any(|start| line.starts_with(start))
+}
+
 /// How long a phase has left, judged by how long its first `percent` took. Too early to tell is `None`.
 fn eta(elapsed: Duration, percent: u8) -> Option<Duration> {
     if !(2..100).contains(&percent) || elapsed < Duration::from_secs(1) {
@@ -159,7 +178,7 @@ fn watch(mut stderr: Option<std::process::ChildStderr>, progress: &Progress, don
                         snapshot.detail = detail;
                         snapshot.eta = left;
                     });
-                } else {
+                } else if !is_chatter(&line) {
                     keep_tail(&mut all, &line);
                     keep_tail(&mut all, "\n");
                 }
@@ -598,6 +617,12 @@ mod tests {
             parse_progress("Resolving deltas: 100% (1234/1234), completed with 2710 local objects."),
             Some(("Resolving deltas".into(), 100, String::new()))
         );
+        assert!(is_chatter("remote: Enumerating objects: 34191, done."));
+        assert!(is_chatter(
+            "remote: Total 34191 (delta 0), reused 0 (delta 0), pack-reused 34191"
+        ));
+        assert!(!is_chatter("remote: Repository not found."));
+        assert!(!is_chatter("fatal: early EOF"));
         assert_eq!(parse_progress("fatal: repository not found"), None);
         assert_eq!(parse_progress("Cloning into 'x'..."), None);
     }
@@ -731,6 +756,12 @@ mod tests {
             step("printf 'Receiving objects:  50%% (1/2), 1.00 MiB | 1.00 MiB/s\\r' >&2; kill -KILL $$");
         assert_eq!(result, Err(Failure::Other("Git stopped before it finished.".into())));
         assert_eq!((shown.phase.as_str(), shown.percent), ("Receiving objects", Some(50)));
+        let (result, _) = step("printf 'remote: Enumerating objects: 5, done.\\n' >&2; kill -KILL $$");
+        assert_eq!(
+            result,
+            Err(Failure::Other("Git stopped before it finished.".into())),
+            "chatter is not a reason"
+        );
         let (result, _) = step("printf 'Receiving objects:  50%% (1/2)\\rfatal: early EOF\\n' >&2; exit 128");
         assert_eq!(result, Err(Failure::Other("fatal: early EOF".into())));
     }
