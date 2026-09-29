@@ -386,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn start_cannot_be_queued_while_the_profile_is_read() {
         let mut form = form_with(Vec::new());
         let _reading = form.launch.hold_loading_for_test();

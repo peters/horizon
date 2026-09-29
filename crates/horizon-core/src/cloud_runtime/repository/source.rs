@@ -330,25 +330,65 @@ fn git(token: Option<&Token>) -> Command {
     if std::env::var_os("GIT_SSH_COMMAND").is_none()
         && git_output(Path::new("."), &["config", "--get", "core.sshCommand"]).is_none_or(|set| set.trim().is_empty())
     {
-        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes");
+        command.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15",
+        );
     }
     command
 }
 
-/// Whether `remote` can be read without signing in, before anything is cloned.
+/// The longest a probe may take before the host is taken to be out of reach.
+const PROBE_LIMIT: Duration = Duration::from_secs(20);
+
+/// Whether `remote` can be read without signing in, before anything is cloned. It ends when
+/// `cancel` is raised and after [`PROBE_LIMIT`], whatever the network is doing.
 ///
 /// # Errors
 /// [`Failure::SignIn`] when it is private, or when the host hides a missing one the same way.
-pub fn probe(remote: &Remote, token: Option<&Token>) -> Result<(), Failure> {
-    let output = git(token)
+pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> Result<(), Failure> {
+    let mut child = git(token)
         .args(["ls-remote", "--", &remote.url, "HEAD"])
         .stdout(Stdio::null())
-        .output()
+        .spawn()
         .map_err(|error| Failure::Other(format!("Cannot run git: {error}")))?;
-    if output.status.success() {
+    let mut stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(pipe) = stderr.as_mut() {
+            let _ = pipe.read_to_string(&mut text);
+        }
+        text
+    });
+    let started = std::time::Instant::now();
+    let status = loop {
+        let over = cancel.is_cancelled() || started.elapsed() >= PROBE_LIMIT;
+        if over {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(if cancel.is_cancelled() {
+                Failure::Cancelled
+            } else {
+                Failure::Network
+            });
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(Failure::Other(error.to_string()));
+            }
+        }
+    };
+    let stderr = reader.join().unwrap_or_default();
+    if status.success() {
         Ok(())
     } else {
-        Err(classify(remote, &String::from_utf8_lossy(&output.stderr)))
+        Err(classify(remote, &stderr))
     }
 }
 
@@ -653,12 +693,15 @@ mod tests {
         };
         let target = temp.path().join("nested/clone");
         assert!(!is_checkout(&target));
-        assert_eq!(probe(&remote, None), Ok(()));
+        assert_eq!(probe(&remote, None, &Cancellation::default()), Ok(()));
         let missing = Remote {
             url: temp.path().join("missing").to_string_lossy().into_owned(),
             ..remote.clone()
         };
-        assert!(probe(&missing, None).is_err());
+        assert!(probe(&missing, None, &Cancellation::default()).is_err());
+        let cancelled = Cancellation::default();
+        cancelled.cancel();
+        assert_eq!(probe(&remote, None, &cancelled), Err(Failure::Cancelled));
         clone(&remote, &target, None, &Cancellation::default(), &Progress::default()).unwrap();
         assert!(is_checkout(&target));
     }

@@ -66,6 +66,8 @@ pub(in crate::app::cloud_panel::production) struct State {
     /// The link was read without signing in, so no token is asked for.
     public: bool,
     probe: Option<Receiver<Result<(), Failure>>>,
+    /// Ends the probe on its way when the link it asked about is gone.
+    probe_cancel: Cancellation,
     probed: Option<String>,
     changed: Option<Instant>,
 }
@@ -117,6 +119,7 @@ impl State {
             self.folder = (!self.input.trim().is_empty() && path.join(".git").exists()).then_some(path);
             self.failure = None;
             self.public = false;
+            self.probe_cancel.cancel();
             self.probe = None;
             self.probed = None;
             self.changed = Some(Instant::now());
@@ -287,9 +290,10 @@ impl State {
         }
         self.probed = Some(remote.url.clone());
         let (sender, receiver) = channel();
-        let (remote, ctx) = (remote.clone(), ctx.clone());
+        self.probe_cancel = Cancellation::default();
+        let (remote, ctx, cancel) = (remote.clone(), ctx.clone(), self.probe_cancel.clone());
         std::thread::spawn(move || {
-            let _ = sender.send(source::probe(&remote, None));
+            let _ = sender.send(source::probe(&remote, None, &cancel));
             ctx.request_repaint();
         });
         self.probe = Some(receiver);
@@ -329,6 +333,7 @@ impl Drop for State {
         if let Some(job) = &self.job {
             job.cancel.cancel();
         }
+        self.probe_cancel.cancel();
         self.token.zeroize();
     }
 }

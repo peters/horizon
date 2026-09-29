@@ -139,6 +139,7 @@ impl State {
         self.refresh();
         self.list_job = None;
         self.size_jobs.clear();
+        self.hetzner.restart();
     }
 
     /// Whether a price list the provider answered since prices were last asked for is on show.
@@ -513,6 +514,16 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    fn a_restart_forgets_what_hetzner_said_to_the_old_token() {
+        let mut state = State::default();
+        state.hetzner.failed("Hetzner refused the token");
+        assert_eq!(state.hetzner.error(), Some("Hetzner refused the token"));
+        state.restart();
+        assert_eq!(state.hetzner.error(), None);
+        assert!(state.hetzner.fresh().is_none());
     }
 
     #[test]
