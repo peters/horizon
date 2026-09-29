@@ -217,6 +217,9 @@ impl CanvasGesture {
         };
         match event {
             Event::ModifiersChanged(modifiers) if *modifiers == pending.modifiers => false,
+            // Wayland text-input round trips can clear an already empty preedit.
+            // Preserve those updates without ending the pending pointer gesture.
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty() => false,
             Event::MouseMoved(_) => false,
             Event::PointerMoved(pos) => pending.origin.distance(*pos) >= options.max_click_dist || !eligible(*pos),
             Event::PointerButton {
@@ -338,6 +341,7 @@ impl CanvasGesture {
             {
                 output.push(event);
             }
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty() => output.push(event),
             Event::MouseMoved(_) => output.push(event),
             _ => {
                 self.flush(output);
