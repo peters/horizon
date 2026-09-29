@@ -196,8 +196,8 @@ resulting hex values below are computed from the token values above.
 | Chip hover fill | `blend(PANEL_BG_ALT, FG, 0.06)` | `#222733` | `#E3E0D9` |
 | Primary button fill (toolbar) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | `#2E3C63` | `#BDC2E0` |
 | Primary button outline | `blend(BORDER_STRONG, ACCENT, 0.72)` | `#5F7FD7` | `#5C6DC2` |
-| Selected list row (palette, pickers) | `alpha(blend(PANEL_BG_ALT, ACCENT, 0.28), 200)` | | |
-| Selected search result | `blend(PANEL_BG_ALT, ACCENT, 0.35)` | `#334473` | `#B0B8DE` |
+| Selected list row (palette, pickers, search results) | `alpha(blend(PANEL_BG_ALT, ACCENT, 0.28), 200)` | | |
+| Active search toggle (`Aa`, `.*`) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` | `#334473` | `#B0B8DE` |
 | Hovered list row | `alpha(PANEL_BG_ALT, 160)` | | |
 | Danger button fill | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | `#473443` | `#E7BDBE` |
 | Danger button outline | `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `#BB7996` | `#C04554` |
@@ -281,7 +281,7 @@ What this means:
 | `FG_DIM` unselected tab label on `BG_ELEVATED` | 4.59 | 3.48 `*` |
 | `FG` on selected list row (`blend .28`) | 8.88 | 9.51 |
 | `FG_SOFT` on selected list row (`blend .28`) | 5.47 | 4.05 `*` |
-| `FG` on selected search result (`blend .35`) | 7.79 | 8.55 |
+| `FG` on active search toggle (`blend .35`) | 7.79 | 8.55 |
 | `FG` / `FG_SOFT` / `FG_DIM` on selected worker card | 11.51 / 7.08 / 3.38 `*` | 11.69 / 4.98 / 2.59 `*` |
 | `FG_SOFT` on hovered widget fill (`blend .16`) | 6.80 | 4.83 |
 | `ACCENT` text on `+ Add` button fill (`blend .08`) | 5.17 | 4.61 |
@@ -426,8 +426,9 @@ Rules of thumb:
 | 16 | Terminal panel body and titlebar, large form dialogs' modal frame, egui windows, file-drop highlight on a panel |
 | 14 | Search dropdown (15 for its outer ring), upload dialog, session manager card |
 | 12 | Default widget radius in the egui style, overlay input wells, summary cards |
-| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, sidebar rows, workspace labels, pills |
+| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, sidebar rows, workspace labels, pills, toolbar search input shell |
 | 8 | Tabs, chips, toggle buttons, status frames, palette rows, preset cards |
+| 6 | Search result rows |
 | 4 | Key-hint chips, checkbox box |
 | 1-2 | Thin indicator bars, cursor |
 
@@ -541,15 +542,23 @@ outline and the popup shadow, without the 24 px margin below.
 ### Search overlay
 
 Toolbar search is a separate pattern, not the overlay card above. The input
-lives inline in the toolbar (36 high, monospace 13 text). Its results open in a
-dropdown below it:
+lives inline in the toolbar (36 high, monospace 13 text, radius 10 shell with
+a radius 9 `BG_ELEVATED` core, a 3 px accent glow ring and a 22 px icon badge at
+the left; the border blends toward `ACCENT` by 0.32 idle, 0.5 hovered and 0.78
+focused). Its results open in a dropdown right-aligned below it, with no
+backdrop dimming:
 
 - Frame: `PANEL_BG`, radius 14, 1 px `ACCENT` alpha 60 outline, plus a 1.5 px
-  alpha 18 ring at radius 15. 600 wide, at most 12 rows.
-- Rows 32 high with a 24 high section header; label 12 proportional, detail
-  10.5 monospace `FG_DIM`. The selected result uses
-  `blend(PANEL_BG_ALT, ACCENT, 0.35)` with `FG` text; row separators are 0.5 px
-  `BORDER_SUBTLE` alpha 180.
+  alpha 18 ring at radius 15. 600 wide, at most 12 rows, inner padding 12 x 10.
+- Header: `Aa` and `.*` toggles (22 high, radius 5, 10 label; active fill
+  `blend(PANEL_BG_ALT, ACCENT, 0.35)` with `FG`, inactive `BG_ELEVATED` with
+  `FG_DIM`), then a 10 `FG_DIM` status line.
+- Rows 32 high, radius 6, with a 24 high section header in 9.5 monospace
+  `FG_DIM`; panel title 12 proportional (`ACCENT` when selected, `FG_SOFT`
+  otherwise), matching line 10.5 monospace `FG_DIM`, and a 9.5 monospace count
+  badge (radius 4, 0.5 px `BORDER_SUBTLE` alpha 180 outline). The selected row
+  fill is `alpha(blend(PANEL_BG_ALT, ACCENT, 0.28), 200)` and the hover fill is
+  `alpha(PANEL_BG_ALT, 160)`, as in the overlay card.
 
 ### Text field
 
