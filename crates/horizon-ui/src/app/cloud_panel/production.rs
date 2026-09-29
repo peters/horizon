@@ -106,6 +106,8 @@ pub(super) struct LogLine {
     /// Which run of its step within the attempt: a step revisited later (Validate
     /// after Build) is a second visit with its own heading and time.
     pub visit: usize,
+    /// A note outside any operation (`Runtime::push_note`): shown, never diagnosed.
+    pub note: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +137,7 @@ impl LogLine {
             kind,
             attempt: 0,
             visit: 0,
+            note: false,
         }
     }
 }
@@ -262,6 +265,7 @@ impl Runtime {
     fn push_note(&mut self, text: String) {
         let mut line = LogLine::new(text, None, None);
         line.attempt = self.progress.attempt();
+        line.note = true;
         self.append_log(line);
     }
 

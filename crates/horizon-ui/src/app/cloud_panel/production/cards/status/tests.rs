@@ -638,3 +638,36 @@ fn a_connected_cloud_whose_next_operation_cannot_start_stays_ready_and_says_why(
         "the error is shown, not hidden"
     );
 }
+
+#[test]
+fn a_redeploy_over_a_deleted_record_shows_its_own_progress() {
+    // The redeploy keeps the deleted record until it reaches Ready.
+    let (mut runtime, _sender) = live(Stage::Validate);
+    runtime.state = Some(deployment(
+        "Deleted",
+        &serde_json::json!({"state": "terminated", "worker_id": "k3x9"}),
+        &serde_json::Value::Null,
+    ));
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Validating", "not the old deletion");
+    let spend = super::super::cost::spend(&runtime, now());
+    assert!(!spend.line.contains("storage may still bill"), "{}", spend.line);
+    runtime.stage = Some(Stage::Provision);
+    let spend = super::super::cost::spend(&runtime, now());
+    assert_eq!(spend.line, "Worker billing · rate pending", "the new worker may bill");
+}
+
+#[test]
+fn a_note_is_never_an_operations_root_cause() {
+    let mut runtime = Runtime {
+        stage: Some(Stage::Readiness),
+        error: Some("Presentation failed".into()),
+        ..Runtime::default()
+    };
+    runtime.push_note("Idle check failed: busy".into());
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(
+        status.failure.as_ref().and_then(|failure| failure.cause.as_deref()),
+        None
+    );
+}

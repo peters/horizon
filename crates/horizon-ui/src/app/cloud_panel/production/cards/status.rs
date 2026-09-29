@@ -115,7 +115,8 @@ impl Failure {
             .logs
             .iter()
             .chain(&runtime.pending_logs)
-            .filter(|line| line.attempt == attempt);
+            // Notes (idle reports, provider checks) are not an operation's output.
+            .filter(|line| line.attempt == attempt && !line.note);
         let found = diagnosis::diagnose(lines.map(|line| line.text.as_str()), summary);
         let failure = Self {
             summary: summary.to_owned(),
@@ -283,10 +284,12 @@ fn exceptional(runtime: &Runtime) -> Option<Status> {
             ..base
         });
     }
-    if runtime
-        .state
-        .as_ref()
-        .is_some_and(|state| matches!(state.operation, CreateState::Terminated { .. }))
+    // A redeploy keeps the deleted record until Ready; while it runs, it is the status.
+    if super::cost::record_is_current(runtime)
+        && runtime
+            .state
+            .as_ref()
+            .is_some_and(|state| matches!(state.operation, CreateState::Terminated { .. }))
     {
         return Some(Status {
             tone: Tone::Attention,

@@ -10,6 +10,13 @@ use std::time::{Instant, SystemTime};
 /// Billing periods drawn in the Cost tab, newest last.
 const BARS: usize = 24;
 
+/// Whether the saved record describes the worker now. A deployment or redeploy keeps the
+/// previous record (a deleted one, say) until it reaches Ready, so while one runs its
+/// deletion state is history.
+pub(super) fn record_is_current(runtime: &Runtime) -> bool {
+    runtime.receiver.is_none() || runtime.progress.is_deletion()
+}
+
 /// A stopped or deleted worker bills no compute; its last rate would read as if it did.
 pub(super) fn compute_idle(runtime: &Runtime) -> bool {
     matches!(
@@ -19,10 +26,11 @@ pub(super) fn compute_idle(runtime: &Runtime) -> bool {
         // A saved stopped worker stays stopped until an operation actually runs, even when
         // a resume that failed its preflight moved the card's stage.
         && runtime.state.as_ref().is_some_and(|state| state.stage == super::super::Stage::Stopped))
-        || runtime
-            .state
-            .as_ref()
-            .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
+        || (record_is_current(runtime)
+            && runtime
+                .state
+                .as_ref()
+                .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. })))
 }
 
 /// What is left of a deleted worker: nothing, or its workspace storage while cleanup is
@@ -37,17 +45,18 @@ fn worker_deleted(runtime: &Runtime) -> Option<Deleted> {
     if runtime.stage == Some(super::super::Stage::Deleted) {
         Some(Deleted::Fully)
     } else {
-        runtime
-            .state
-            .as_ref()
-            .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. }))
-            .then_some(Deleted::StorageLeft)
+        (record_is_current(runtime)
+            && runtime
+                .state
+                .as_ref()
+                .is_some_and(|state| matches!(state.operation, cloud_runtime::CreateState::Terminated { .. })))
+        .then_some(Deleted::StorageLeft)
     }
 }
 
 /// Whether a worker was requested, so the provider may bill it even before Horizon
 /// has read its record.
-fn worker_requested(runtime: &Runtime) -> bool {
+pub(super) fn worker_requested(runtime: &Runtime) -> bool {
     runtime.state.as_ref().is_some_and(|state| {
         matches!(
             state.operation,

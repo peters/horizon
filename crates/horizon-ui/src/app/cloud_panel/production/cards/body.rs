@@ -160,14 +160,8 @@ fn worker(runtime: &Runtime) -> String {
         .and_then(|state| state.worker.as_ref())
         .map_or_else(
             || {
-                let requested = runtime.state.as_ref().is_some_and(|state| {
-                    matches!(
-                        state.operation,
-                        horizon_core::cloud_runtime::CreateState::Requested
-                            | horizon_core::cloud_runtime::CreateState::Bound { .. }
-                    )
-                });
-                if requested {
+                // The record is written at Ready; a step past Provision has requested one.
+                if super::cost::worker_requested(runtime) {
                     "Worker: requested · awaiting its details".to_owned()
                 } else {
                     "Worker: not requested yet".to_owned()
@@ -300,8 +294,21 @@ mod tests {
 
     #[test]
     fn a_sent_worker_request_is_not_called_unrequested() {
+        use super::super::super::Stage;
         let mut runtime = Runtime::default();
         assert_eq!(worker(&runtime), "Worker: not requested yet");
+        // Past Provision the worker was requested, though the record is written at Ready.
+        for stage in [Stage::Provision, Stage::Readiness, Stage::Worktrees, Stage::Sessions] {
+            let deploying = Runtime {
+                stage: Some(stage),
+                ..Runtime::default()
+            };
+            assert_eq!(
+                worker(&deploying),
+                "Worker: requested · awaiting its details",
+                "{stage:?}"
+            );
+        }
         runtime.state = Some(
             serde_json::from_value(serde_json::json!({
                 "version":1,"cloud_id":"requested","repository":"/synthetic","revision":"a",
