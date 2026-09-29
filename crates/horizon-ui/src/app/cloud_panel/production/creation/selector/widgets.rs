@@ -32,12 +32,17 @@ pub(super) fn pill(ui: &mut Ui, text: &str, color: Color32) {
 }
 
 /// Stock in words and colour; `None` is a worker not offered where the cloud may go.
-pub(super) fn stock(stock: Option<Availability>) -> (&'static str, Color32) {
-    match stock {
-        Some(Availability::High | Availability::Medium) => ("In stock", theme::PALETTE_GREEN()),
-        Some(Availability::Low) => ("Low stock", theme::PALETTE_YELLOW()),
-        Some(Availability::None) => ("Out of stock", theme::PALETTE_RED()),
-        None => ("Not offered here", theme::FG_DIM()),
+/// Stock known only for a CPU flavor family says "likely": its exact size may differ.
+pub(super) fn stock(stock: Option<super::Stock>) -> (&'static str, Color32) {
+    let Some(super::Stock { level, exact }) = stock else {
+        return ("Not offered here", theme::FG_DIM());
+    };
+    match (level, exact) {
+        (Availability::High | Availability::Medium, true) => ("In stock", theme::PALETTE_GREEN()),
+        (Availability::High | Availability::Medium, false) => ("Likely in stock", theme::PALETTE_GREEN()),
+        (Availability::Low, true) => ("Low stock", theme::PALETTE_YELLOW()),
+        (Availability::Low, false) => ("Likely low stock", theme::PALETTE_YELLOW()),
+        (Availability::None, _) => ("Out of stock", theme::PALETTE_RED()),
     }
 }
 
@@ -107,6 +112,14 @@ pub(super) fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Re
             theme::FG_DIM()
         };
         painter.rect_stroke(square, 4, Stroke::new(1.5, edge), egui::StrokeKind::Inside);
+    }
+    if response.has_focus() {
+        painter.rect_stroke(
+            square.expand(2.0),
+            5,
+            Stroke::new(1.5, theme::FG()),
+            egui::StrokeKind::Outside,
+        );
     }
     let color = if enabled { theme::FG() } else { theme::FG_DIM() };
     painter.galley(

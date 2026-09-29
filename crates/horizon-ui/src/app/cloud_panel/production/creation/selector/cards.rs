@@ -137,7 +137,7 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
             !in_stock_only
                 || catalog
                     .stock(index, form)
-                    .is_some_and(|stock| stock != horizon_core::cloud_runtime::prices::Availability::None)
+                    .is_some_and(|stock| stock.level != horizon_core::cloud_runtime::prices::Availability::None)
         })
         .collect();
     if rows.is_empty() {

@@ -32,6 +32,14 @@ impl State {
     }
 }
 
+/// A worker's stock where the cloud may go, and whether it is exact for that worker
+/// rather than its CPU flavor family's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Stock {
+    pub level: Availability,
+    pub exact: bool,
+}
+
 /// The workers a repository profile allows, from the latest catalog, current or not.
 pub(super) struct Catalog {
     pub offers: Vec<Offer>,
@@ -44,12 +52,26 @@ pub(super) struct Catalog {
 
 impl Catalog {
     /// Best stock among the places the placement allows; `None` where none is allowed.
-    pub fn stock(&self, index: usize, form: &Production) -> Option<Availability> {
+    ///
+    /// GPU stock is the type's own. A CPU offer's catalog stock is its flavor family's,
+    /// so only the chosen size, once its exact check has answered, reads as exact.
+    pub fn stock(&self, index: usize, form: &Production) -> Option<Stock> {
+        if !self.gpu
+            && self.selected == Some(index)
+            && let Some(profile) = profile(form)
+        {
+            let sized = sized(form, profile);
+            if let Some(Ok(size)) = form.prices.displayed_size(&sized, (sized.cpu, sized.memory_gb)) {
+                let level = size.best(&form.placement.data_centers);
+                return Some(Stock { level, exact: true });
+            }
+        }
         self.places[index]
             .iter()
             .filter(|place| form.placement.is_any() || form.placement.data_centers.contains(&place.id))
             .map(|place| place.availability)
             .min()
+            .map(|level| Stock { level, exact: self.gpu })
     }
 }
 

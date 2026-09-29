@@ -443,3 +443,35 @@ fn a_gpu_cloud_needs_one_chosen_type_and_an_empty_catalog_starts_nothing() {
         Some("No worker the provider lists meets this profile's minimums.")
     );
 }
+
+#[test]
+fn only_the_chosen_cpu_size_reads_exact_stock_and_the_rest_say_likely() {
+    use horizon_core::cloud_runtime::prices::SizeAvailability;
+    let mut form = form("cpu");
+    let profile = form.profiles.as_ref().unwrap().profiles["cpu"].clone();
+    // The family is in stock in EU-1, but the exact 4 vCPU / 8 GB size is sold out.
+    let sold_out = SizeAvailability {
+        centers: vec![("EU-1".into(), Availability::None)],
+    };
+    form.prices
+        .answered(list(None), preferences(), vec![(profile, sold_out)]);
+    let shown = catalog(&form).unwrap();
+    let chosen = shown.selected.unwrap();
+    assert_eq!(
+        shown.stock(chosen, &form),
+        Some(Stock {
+            level: Availability::None,
+            exact: true
+        })
+    );
+    let other = (0..shown.offers.len())
+        .find(|&index| {
+            index != chosen
+                && shown
+                    .stock(index, &form)
+                    .is_some_and(|stock| stock.level == Availability::High)
+        })
+        .unwrap();
+    assert_eq!(widgets::stock(shown.stock(other, &form)).0, "Likely in stock");
+    assert_eq!(widgets::stock(shown.stock(chosen, &form)).0, "Out of stock");
+}
