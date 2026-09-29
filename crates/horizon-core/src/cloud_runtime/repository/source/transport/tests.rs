@@ -422,3 +422,29 @@ fn a_folder_that_cannot_be_removed_says_so_instead_of_reporting_success() {
         "{result:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_stopped_clone_is_not_a_place_to_resume_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let remote = origin(temp.path());
+    let real = temp.path().join("real");
+    let target = real.join(&remote.name);
+    assert!(
+        in_steps(
+            &remote,
+            &target,
+            None,
+            &Cancellation::default(),
+            &Progress::default(),
+            1
+        )
+        .is_err()
+    );
+    assert_eq!(resumable(&real, &remote), Some(target.clone()));
+    // Reached by another name, it would be claimed under that name, and by two processes at once.
+    let other = temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&target, other.join(&remote.name)).unwrap();
+    assert_eq!(resumable(&other, &remote), None);
+}

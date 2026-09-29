@@ -10,7 +10,7 @@ use horizon_core::cloud_runtime::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::{Receiver, SyncSender, TryRecvError, channel, sync_channel},
+    sync::mpsc::{Receiver, TryRecvError, channel},
     time::{Duration, Instant},
 };
 use zeroize::Zeroize;
@@ -244,9 +244,7 @@ impl State {
         self.token_tried = token.is_some();
         self.token_focused = false;
         let remember = token.is_some() && self.remember;
-        // Delivery meets polling: a result nobody has taken is held by the worker, and goes back to it
-        // when the dialog is gone, so a finished checkout is always either handed over or cleaned up.
-        let (sender, receiver) = sync_channel(0);
+        let (sender, receiver) = channel();
         let job = Job {
             receiver,
             cancel: Cancellation::default(),
@@ -269,7 +267,10 @@ impl State {
                         .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
                 }
             });
-            deliver(&sender, result, &ctx);
+            // A checkout that finished is kept even when nobody is left to take it: it is a whole
+            // repository where the person asked for one, and the next dialog finds it as already cloned.
+            let _ = sender.send(result);
+            ctx.request_repaint();
         });
     }
 
@@ -381,17 +382,6 @@ impl State {
     }
 }
 
-/// Hands the outcome of a clone to the dialog. Nobody is listening once the dialog is gone, and then
-/// a checkout that was made is not wanted.
-fn deliver(sender: &SyncSender<Result<Cloned, Failure>>, result: Result<Cloned, Failure>, ctx: &Context) {
-    ctx.request_repaint();
-    if let Err(unheard) = sender.send(result)
-        && let Ok(Cloned { path, .. }) = unheard.0
-    {
-        let _ = std::fs::remove_dir_all(path);
-    }
-}
-
 /// Whether `path` is a folder with a repository in it.
 fn holds_repository(path: &Path) -> bool {
     path.join(".git").exists()
@@ -422,14 +412,11 @@ fn origin(url: &str) -> &str {
 }
 
 impl Drop for State {
-    /// Closing the dialog ends a running clone and forgets a token that was never used.
+    /// Closing the dialog ends a running clone, which keeps what it received, and forgets a token that
+    /// was never used.
     fn drop(&mut self) {
         if let Some(job) = &self.job {
             job.cancel.cancel();
-            // A clone that finished between two frames was never handed over: it is not wanted now.
-            if let Ok(Ok(Cloned { path, .. })) = job.receiver.try_recv() {
-                let _ = std::fs::remove_dir_all(path);
-            }
         }
         self.probe_cancel.cancel();
         self.token.zeroize();
@@ -606,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clone_finished_but_never_handed_over_is_removed_when_the_dialog_closes() {
+    fn a_clone_finished_but_never_handed_over_is_kept_when_the_dialog_closes() {
         let temp = tempfile::tempdir().unwrap();
         let checkout = temp.path().join("demo-atlas");
         std::fs::create_dir(&checkout).unwrap();
@@ -624,29 +611,11 @@ mod tests {
             }))
             .unwrap();
         drop(state);
-        assert!(!checkout.exists(), "the orphan checkout goes with the cancelled dialog");
-    }
-
-    #[test]
-    fn a_checkout_finished_as_the_dialog_closes_is_never_left_behind() {
-        let temp = tempfile::tempdir().unwrap();
-        let checkout = temp.path().join("demo-atlas");
-        std::fs::create_dir(&checkout).unwrap();
-        let mut state = State::default();
-        let (sender, receiver) = sync_channel(0);
-        state.job = Some(Job {
-            receiver,
-            cancel: Cancellation::default(),
-            progress: Progress::default(),
-        });
-        let worker = std::thread::spawn({
-            let path = checkout.clone();
-            move || deliver(&sender, Ok(Cloned { path, note: None }), &Context::default())
-        });
-        // Whether the worker is waiting yet or not, closing the dialog removes what it made.
-        drop(state);
-        worker.join().unwrap();
-        assert!(!checkout.exists());
+        // Another window may already be using it: it is a whole repository, found again next time.
+        assert!(
+            checkout.is_dir(),
+            "a finished checkout is never deleted for want of a taker"
+        );
     }
 
     #[test]
@@ -655,7 +624,7 @@ mod tests {
         let checkout = temp.path().join("demo-atlas");
         std::fs::create_dir(&checkout).unwrap();
         let mut state = State::default();
-        let (sender, receiver) = sync_channel(0);
+        let (sender, receiver) = channel();
         let cancel = Cancellation::default();
         cancel.cancel();
         state.job = Some(Job {
@@ -663,19 +632,13 @@ mod tests {
             cancel,
             progress: Progress::default(),
         });
-        let worker = std::thread::spawn({
-            let path = checkout.clone();
-            move || deliver(&sender, Ok(Cloned { path, note: None }), &Context::default())
-        });
-        let ctx = Context::default();
-        let handed = loop {
-            if let Some(path) = state.poll(&ctx) {
-                break path;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        };
-        worker.join().unwrap();
-        assert_eq!(handed, checkout);
+        sender
+            .send(Ok(Cloned {
+                path: checkout.clone(),
+                note: None,
+            }))
+            .unwrap();
+        assert_eq!(state.poll(&Context::default()), Some(checkout.clone()));
         assert!(checkout.is_dir());
     }
 

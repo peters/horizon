@@ -416,8 +416,10 @@ pub(super) fn unfinished(folder: &Path) -> bool {
 /// picks up from what it received.
 #[must_use]
 pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
+    // A link is not a candidate: two parents could reach one checkout by different names, and the
+    // claim on it is kept by name.
     candidates(parent, remote)
-        .filter(|path| path.is_dir())
+        .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()))
         .find(|path| marker(path).is_some_and(|marker| marker.url == remote.url))
 }
 

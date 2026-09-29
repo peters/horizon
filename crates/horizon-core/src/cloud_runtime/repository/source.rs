@@ -174,7 +174,7 @@ pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
 /// The address a checkout's `origin` was cloned from, read from its config file: a folder is
 /// looked at without starting a process, so a search can run while a dialog is drawn.
 fn origin_url(checkout: &Path) -> Option<String> {
-    let config = std::fs::read_to_string(checkout.join(".git").join("config")).ok()?;
+    let config = std::fs::read_to_string(common_git_dir(checkout)?.join("config")).ok()?;
     let mut in_origin = false;
     for line in config.lines() {
         let line = line.trim();
@@ -188,6 +188,21 @@ fn origin_url(checkout: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// The Git directory that holds a checkout's configuration. A linked worktree has a `.git` file
+/// that points at its own directory, which in turn names the common one.
+fn common_git_dir(checkout: &Path) -> Option<PathBuf> {
+    let dot_git = checkout.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    let own = checkout.join(pointer.lines().find_map(|line| line.strip_prefix("gitdir:"))?.trim());
+    match std::fs::read_to_string(own.join("commondir")) {
+        Ok(common) => Some(own.join(common.trim())),
+        Err(_) => Some(own),
+    }
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
@@ -509,6 +524,34 @@ mod tests {
         ] {
             assert_eq!(classify(&github, stderr), expected, "{stderr}");
         }
+    }
+
+    #[test]
+    fn a_linked_worktree_reads_the_origin_of_the_checkout_it_belongs_to() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("main");
+        std::fs::create_dir_all(main.join(".git").join("worktrees").join("wt")).unwrap();
+        std::fs::write(
+            main.join(".git").join("config"),
+            "[remote \"origin\"]\n\turl = https://github.com/demo-org/demo.git\n",
+        )
+        .unwrap();
+        std::fs::write(
+            main.join(".git").join("worktrees").join("wt").join("commondir"),
+            "../..\n",
+        )
+        .unwrap();
+        let linked = temp.path().join("linked");
+        std::fs::create_dir(&linked).unwrap();
+        // The pointer is absolute for a worktree Git made, and may be relative for a moved one.
+        for pointer in [main.join(".git").join("worktrees").join("wt").display().to_string()] {
+            std::fs::write(linked.join(".git"), format!("gitdir: {pointer}\n")).unwrap();
+            assert_eq!(
+                origin_url(&linked).as_deref(),
+                Some("https://github.com/demo-org/demo.git")
+            );
+        }
+        assert_eq!(origin_url(temp.path()), None);
     }
 
     #[test]
