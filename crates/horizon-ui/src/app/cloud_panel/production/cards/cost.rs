@@ -157,11 +157,20 @@ fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
 
 /// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
 fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
+    // The worker's state comes first: a stopped worker is stopped with or without a rate.
+    match worker_deleted(runtime) {
+        Some(Deleted::Fully) => return ("—".into(), "worker deleted; nothing billing"),
+        Some(Deleted::StorageLeft) => return ("—".into(), "worker deleted; storage may still bill"),
+        None => {}
+    }
+    if compute_idle(runtime) {
+        return ("Stopped".into(), "compute stopped; storage may still bill");
+    }
     match rate {
-        Some(_) if worker_deleted(runtime) == Some(Deleted::Fully) => ("—".into(), "worker deleted; nothing billing"),
-        Some(_) if worker_deleted(runtime).is_some() => ("—".into(), "worker deleted; storage may still bill"),
-        Some(_) if compute_idle(runtime) => ("Stopped".into(), "compute stopped; storage may still bill"),
         Some(rate) => (cloud_runtime::cost::format_rate(rate), "last reported worker rate"),
+        None if worker_requested(runtime) || runtime.state.as_ref().is_some_and(|state| state.worker.is_some()) => {
+            ("—".into(), "rate pending")
+        }
         None => ("—".into(), "known once a worker is requested"),
     }
 }
@@ -545,6 +554,21 @@ mod tests {
             spend_stopped.explanation.starts_with("Compute is stopped"),
             "{}",
             spend_stopped.explanation
+        );
+    }
+
+    #[test]
+    fn a_stopped_worker_without_a_reported_rate_still_reads_as_stopped() {
+        let mut stopped = Runtime {
+            stage: Some(Stage::Stopped),
+            ..runtime()
+        };
+        stopped.state.as_mut().unwrap().worker = None;
+        let shown = texts(&stopped);
+        assert!(shown.iter().any(|text| text == "Stopped"), "{shown:?}");
+        assert!(
+            !shown.iter().any(|text| text == "known once a worker is requested"),
+            "{shown:?}"
         );
     }
 }

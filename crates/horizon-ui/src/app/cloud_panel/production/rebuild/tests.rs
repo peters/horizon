@@ -282,6 +282,8 @@ fn rebuild_actions_start_their_own_core_operation() {
         let runtime = app.cloud_prototype.production.runtimes.entry(1).or_default();
         runtime.stage = Some(Stage::Ready);
         runtime.rebuild = Some(Attempt::new(Kind::Rebuild));
+        // As after a stop that failed before the provider recorded it.
+        runtime.operation = Some(Action::Stop);
         if stop {
             app.change_production_worker(1, Action::Stop, &ctx);
         } else {
@@ -289,6 +291,11 @@ fn rebuild_actions_start_their_own_core_operation() {
         }
         let runtime = &app.cloud_prototype.production.runtimes[&1];
         assert!(runtime.rebuild.is_none(), "stop: {stop}");
+        assert_eq!(
+            runtime.operation,
+            stop.then_some(Action::Stop),
+            "a reconnect is not named after the failed stop before it"
+        );
         assert!(runtime.receiver.is_some());
         let deadline = Instant::now() + Duration::from_secs(20);
         while app.cloud_prototype.production.runtimes[&1].receiver.is_some() {

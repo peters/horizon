@@ -254,6 +254,7 @@ impl HorizonApp {
         runtime.rebuild = None;
         runtime.confirmation = super::Confirmation::None;
         runtime.progress.reset();
+        runtime.operation = None;
         runtime.stage = Some(Stage::Provision);
         runtime.error = None;
         runtime.resize.notice = None;

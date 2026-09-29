@@ -34,6 +34,10 @@ const AUTHENTICATION: &[&str] = &[
     "unauthenticated",
     "cannot be authenticated",
     "authentication required",
+    "token has expired",
+    "token is expired",
+    "token expired",
+    "expired token",
 ];
 
 /// Words that place a failure in image transfer: the line's or the summary's. A plain
@@ -73,7 +77,7 @@ const fn known(patterns: &'static [&'static str], meaning: &'static str) -> Know
 /// Well-known causes, first match wins. Keep patterns lowercase.
 const MEANINGS: [Known; 11] = [
     known(
-        &["no space left on device"],
+        &["no space left on device", "disk full", "disk quota exceeded"],
         "The disk filled up. Free space on this computer or the worker, or grow the workspace.",
     ),
     known(
@@ -287,6 +291,8 @@ mod tests {
             "push failed: gave up retrying after 3 attempts",
             "piano error: string snapped",
             "manifest unknown: manifest unknown",
+            "disk full",
+            "Your token has expired",
             "toomanyrequests: You have reached your pull rate limit",
             "insufficient capacity in the selected data center",
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",

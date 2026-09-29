@@ -325,6 +325,9 @@ impl Runtime {
         }
         self.desktop = None;
         self.progress.reset();
+        // A deployment or reconnect is its own operation; an earlier stop or resume that
+        // failed no longer names this attempt's failure.
+        self.operation = None;
         self.rebuild = None;
         self.sharing.await_ready();
         let (tx, rx) = channel();
@@ -467,9 +470,7 @@ impl HorizonApp {
         self.finish_failed_cloud_operations(finished);
         self.reconcile_sharing(ctx);
         self.finish_closing_clouds(ctx);
-        for id in resumed {
-            self.start_production_deployment(id, ctx);
-        }
+        self.reconnect_resumed(resumed, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_resized_profiles();
         self.sync_cloud_presentations();
@@ -594,6 +595,17 @@ impl HorizonApp {
             }
         }
     }
+    /// Reconnects each resumed worker. The reconnect that finishes a resume is still that
+    /// resume, so a failure there offers Resume worker.
+    fn reconnect_resumed(&mut self, resumed: Vec<u32>, ctx: &egui::Context) {
+        for id in resumed {
+            self.start_production_deployment(id, ctx);
+            if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
+                runtime.operation = Some(lifecycle::Action::Resume);
+            }
+        }
+    }
+
     fn start_production_deployment(&mut self, id: u32, ctx: &egui::Context) {
         if let Some((request, siblings)) = self.prepare_production_deployment(id) {
             self.cloud_prototype

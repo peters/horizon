@@ -102,6 +102,7 @@ impl Runtime {
         self.desktop = None;
         self.confirmation = Confirmation::None;
         self.progress.reset();
+        self.operation = None;
         self.error = None;
         self.rebuild = Some(Attempt::new(kind));
         // Core reports its first stage at once; until then the first step stands in.
