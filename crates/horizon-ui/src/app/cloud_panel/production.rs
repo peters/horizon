@@ -179,6 +179,9 @@ pub(super) struct Runtime {
     /// The views that were scrolled up last frame. Only they keep the held-still list;
     /// a view still following shows the newest lines, held ones included.
     unpinned_last: u8,
+    /// The running or last operation is a Resume. A resume that fails before the provider
+    /// acts reloads the stopped record, so the stage alone no longer says what was tried.
+    resuming: bool,
     /// The header asked for a confirmation; Manage scrolls it into view once.
     reveal_confirmation: bool,
     /// The status the header computed this frame, reused by the body and drawer.

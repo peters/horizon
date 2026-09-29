@@ -612,14 +612,35 @@ fn finished_after(runtime: &Runtime, track: &Track) -> Option<usize> {
         .next_back()
 }
 
+/// A resume that failed before the provider acted: the record is still the stopped one.
+fn resume_failed(runtime: &Runtime) -> bool {
+    runtime.resuming && runtime.stage == Some(Stage::Stopped)
+}
+
 fn failed(runtime: &Runtime, error: &str) -> Status {
     let mut track = track(runtime);
+    // A reloaded record whose stage is off the track (a stopped one after a failed
+    // resume) does not erase the step this attempt tried.
+    let attempted = runtime
+        .progress
+        .last_stage()
+        .or_else(|| resume_failed(runtime).then_some(Stage::Provision))
+        .filter(|stage| track.stages.contains(stage));
+    if track.current.is_none()
+        && !runtime.progress.is_deletion()
+        && let Some(stage) = attempted
+    {
+        track = Track::at(track.stages, Some(stage));
+    }
     track.failed = track.current.is_some();
     let later = finished_after(runtime, &track);
     let failure = Failure::of(runtime, error);
     let never_ready = runtime.state.as_ref().is_none_or(|state| state.stage != Stage::Ready);
     let primary = if runtime.progress.is_deletion() {
         None
+    } else if resume_failed(runtime) {
+        // The worker is still stopped: resuming again, not a new deployment.
+        Some(Primary::Resume)
     } else if runtime.stage == Some(Stage::Stopping) {
         // A failed stop is finished by confirming it, not by reconnecting the worker.
         Some(Primary::ReconcileStop)
@@ -632,6 +653,8 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
         tone: Tone::Failed,
         verb: if runtime.progress.is_deletion() {
             "Deletion failed".into()
+        } else if resume_failed(runtime) {
+            "Resume failed".into()
         } else {
             failed_verb(runtime.stage)
         },

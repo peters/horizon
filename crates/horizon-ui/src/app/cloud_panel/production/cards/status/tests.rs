@@ -507,3 +507,21 @@ fn a_half_deleted_cloud_waits_for_its_owner_and_offers_manage() {
         .unwrap();
     assert_eq!(status.track.finished, storage, "the steps before cleanup are done");
 }
+
+#[test]
+fn a_resume_that_fails_before_the_provider_acts_offers_resume_again() {
+    // The failed resume reloaded the still-stopped record before reporting.
+    let runtime = Runtime {
+        stage: Some(Stage::Stopped),
+        resuming: true,
+        error: Some("Provider API unavailable".into()),
+        state: Some(deployment("Stopped", &bound(), &serde_json::Value::Null)),
+        ..Runtime::default()
+    };
+    let status = of(&runtime, Occupancy::default(), now());
+    assert_eq!(status.verb, "Resume failed");
+    assert_eq!(status.primary, Some(Primary::Resume), "not a new deployment");
+    let provision = Stage::ALL.iter().position(|stage| *stage == Stage::Provision).unwrap();
+    assert_eq!(status.track.current, Some(provision), "the tried step is marked");
+    assert!(status.track.failed);
+}

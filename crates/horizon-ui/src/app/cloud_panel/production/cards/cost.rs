@@ -126,6 +126,14 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
         Some(total) => runtime.billing.explanation(total, Instant::now()),
         None => match runtime.billing.error() {
             Some(error) => format!("Provider billing unavailable: {error}. Horizon tries again every few minutes."),
+            None if idle && (worker.is_some() || worker_requested(runtime)) => {
+                "Compute is stopped; the provider has not reported billed periods yet.".into()
+            }
+            // The rate shown is the worker's own; only billed periods are still missing.
+            None if rate.is_some() => {
+                "The rate is the worker's last reported hourly price; the provider has not reported billed periods yet."
+                    .into()
+            }
             None if worker.is_some() || worker_requested(runtime) => {
                 "A worker was requested; the provider has not reported its rate or billing yet.".into()
             }
@@ -511,5 +519,32 @@ mod tests {
             "storage can still bill: {shown:?}"
         );
         assert!(!shown.iter().any(|text| text.contains("resuming")), "{shown:?}");
+    }
+
+    #[test]
+    fn the_spend_explanation_never_contradicts_the_line_it_explains() {
+        let running = runtime();
+        let spend_now = spend(&running, SystemTime::now());
+        assert!(spend_now.line.contains("/h"), "{}", spend_now.line);
+        assert!(
+            !spend_now.explanation.contains("not reported its rate"),
+            "{}",
+            spend_now.explanation
+        );
+        let stopped = Runtime {
+            stage: Some(Stage::Stopped),
+            ..runtime()
+        };
+        let spend_stopped = spend(&stopped, SystemTime::now());
+        assert!(
+            spend_stopped.line.starts_with("compute stopped"),
+            "{}",
+            spend_stopped.line
+        );
+        assert!(
+            spend_stopped.explanation.starts_with("Compute is stopped"),
+            "{}",
+            spend_stopped.explanation
+        );
     }
 }
