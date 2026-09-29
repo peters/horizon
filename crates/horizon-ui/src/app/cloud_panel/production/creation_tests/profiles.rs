@@ -204,19 +204,6 @@ fn answer_cpu_catalog(app: &mut HorizonApp) {
         .answered(list, preferences, Vec::new());
 }
 
-fn label_starting(output: &egui::FullOutput, prefix: &str) -> Rect {
-    output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text.starts_with(prefix) => {
-                Some(Rect::from_min_size(text.pos, text.galley.size()))
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("Missing visible label starting with: {prefix}"))
-}
-
 #[test]
 fn chosen_size_starts_the_cloud_at_that_size() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
@@ -227,7 +214,7 @@ fn chosen_size_starts_the_cloud_at_that_size() {
     let output = tall_frame(&ctx, &mut app);
     assert!(has_label(
         &output,
-        "At least 4 vCPU and 8 GB memory, for the development profile"
+        "Profile development requires at least 4 vCPU and 8 GB memory"
     ));
     assert!(has_label(&output, "CHEAPEST") && has_label(&output, "MOST POWERFUL"));
     assert!(
@@ -238,7 +225,16 @@ fn chosen_size_starts_the_cloud_at_that_size() {
         app.cloud_prototype.production.size, None,
         "the profile's size is the default"
     );
-    click(&ctx, &mut app, label_starting(&output, "Show all ").center());
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Search, e.g. 4090 or 16 vCPU").center(),
+    );
+    let mut input = raw_input([1000.0, 2400.0], None);
+    input.events = vec![Event::Text("16 vCPU".into())];
+    let _ = ctx
+        .run_ui(input, |ui| app.render_cloud_creation(ui.ctx()))
+        .discard_textures();
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, label_rect(&output, "16 vCPU · 64 GB").center());
     assert_eq!(app.cloud_prototype.production.size, Some((16, 64)));
@@ -404,7 +400,6 @@ fn a_sold_out_gpu_preference_gives_way_to_one_in_stock_for_this_cloud() {
     assert_eq!(app.cloud_prototype.production.placement.gpu_types, ["NVIDIA RTX A5000"]);
     assert!(has_label(&output, "RTX A5000"));
     // The sold-out preference stays in the list and can still be chosen.
-    click(&ctx, &mut app, label_starting(&output, "Show all ").center());
     let output = tall_frame(&ctx, &mut app);
     let rows: Vec<_> = output
         .shapes
@@ -461,7 +456,7 @@ fn size_choice_resets_with_the_profile_or_repository_and_gpu_minimums_can_change
     assert!(has_label(&output, "GPU workers for the accelerated profile"));
     assert!(!has_label(
         &output,
-        "At least 4 vCPU and 8 GB memory, for the accelerated profile"
+        "Profile accelerated requires at least 4 vCPU and 8 GB memory"
     ));
     app.cloud_prototype.production.size = Some((3, 17));
     let profile = &app.cloud_prototype.production.profiles.as_ref().unwrap().profiles["accelerated"];

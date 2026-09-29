@@ -9,8 +9,8 @@ profiles:
       context: .
       dockerfile: .horizon/Dockerfile
       platform: linux/amd64
-    cpu: 4
-    memory_gb: 8
+    min_cpu: 4
+    min_memory_gb: 8
     gpu: false
     # Opt-in: the worker stops itself after this many minutes without agent activity.
     # idle_stop_minutes: 30
@@ -25,8 +25,8 @@ profiles:
       context: .
       dockerfile: .horizon/Dockerfile.gpu
       platform: linux/amd64
-    cpu: 8
-    memory_gb: 32
+    min_cpu: 8
+    min_memory_gb: 32
     gpu: true
     # Optional: only place the worker on hosts whose driver supports this CUDA version
     # or newer (major.minor, GPU profiles only), for images built against a recent CUDA.
@@ -39,21 +39,21 @@ profiles:
   image-only:
     provider: runpod
     image: registry.example.com/horizon/dev:tested
-    cpu: 4
-    memory_gb: 8
+    min_cpu: 4
+    min_memory_gb: 8
     gpu: false
   minimal:
     provider: runpod
     image: registry.example.com/horizon/minimal:tested
-    cpu: 2
-    memory_gb: 4
+    min_cpu: 2
+    min_memory_gb: 4
     capabilities: {}
 
   mobile-testing:
     provider: runpod
     image: registry.example.com/horizon/worker-mobile
-    cpu: 4
-    memory_gb: 8
+    min_cpu: 4
+    min_memory_gb: 8
     capabilities:
       agents: [codex, claude]
       browsers: []

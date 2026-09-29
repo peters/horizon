@@ -20,7 +20,7 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
         // A GPU cloud requests exactly the one type chosen for it, never the machine's
         // preferences, and any fetched catalog must offer the chosen worker.
         let catalog = super::selector::catalog(form);
-        if catalog.as_ref().is_some_and(|catalog| catalog.offers.is_empty()) {
+        if catalog.as_ref().is_some_and(|catalog| catalog.matching == 0) {
             return Some(empty_catalog_reason(form, profile));
         }
         if profile.gpu && form.placement.gpu_types.len() != 1 {

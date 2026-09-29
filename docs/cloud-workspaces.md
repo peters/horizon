@@ -325,17 +325,23 @@ persisted operation identity.
 New cloud is a wide dialog: the worker catalog on the left and a summary on the
 right, with **Start cloud** and **Cancel** in the action bar under both. Pick a
 **Profile** from `.horizon/cloud.yml`; its kind decides between CPU and GPU workers.
-The profile's `cpu` and `memory_gb` are minimums for CPU workers, and
-`min_gpu_memory_gb` is the minimum GPU memory for GPU workers, so workers below them
-are never offered.
+The profile's `min_cpu` and `min_memory_gb` are CPU resource minimums, and
+`min_gpu_memory_gb` is the GPU memory minimum. The picker names the limits and
+counts workers hidden by them. **Show workers below requirements** reveals those
+workers with a reason; they cannot be chosen. There are no separate default-size
+settings. Legacy `cpu` and `memory_gb` keys remain accepted as aliases with the
+same meaning. To migrate a profile, rename those keys without changing the values;
+do not specify both names for a resource. Saved worker records keep their existing
+CPU and memory keys and their allocated sizes.
 
 **Machine** shows three starting points from RunPod's current catalog: **Cheapest**,
 **Most powerful** and **Balanced**, priced between the two. They are chosen among
 workers in stock where the cloud may go, or among every matching worker when none
 is. CPU workers are more powerful with more vCPUs and then more memory; GPU types
 rank by price, which follows their performance more closely than their memory does.
-**Show all N workers** lists every match with search and an **In stock only**
-filter; sold-out GPU types are listed by default. A CPU size is offered only when a
+Search and the **In stock only** filter are always visible above the full worker
+list, with a count of the results and workers hidden by requirements. Sold-out GPU
+types are listed by default. A CPU size is offered only when a
 flavor can hold the profile's container disk. A GPU profile always requests one
 explicit GPU type, the cheapest in stock to start with, which replaces the
 `gpu_types` setting for every attempt, retry and redeploy of that cloud and is
@@ -413,10 +419,12 @@ worker images built before this refuse it and keep the old prices until they are
 
 **Data center** is part of the catalog, not an advanced setting: **Any data
 center** (the default, where Horizon picks one with stock) or a region, each with
-how many of its data centers have the chosen worker in stock. Choosing a region
-lists its data centers for choosing exactly one. Sold-out regions and data centers
-stay visible and selectable. CPU clouds are offered only data centers that hold
-their kind of workspace volume. The machine's `data_centers` setting still limits
+how many of its data centers have the chosen worker in stock. Every allowed data
+center is shown immediately, grouped by region, for choosing exactly one. Region
+choices select all compatible data centers in that region. Sold-out regions and
+data centers stay visible and selectable. Data centers that cannot hold the chosen
+workspace volume stay visible with **Storage unavailable**, and cannot be chosen.
+The machine's `data_centers` setting still limits
 what is offered, and the dialog says how many other data centers it excludes.
 
 The choice is saved with the cloud: every attempt, retry and redeploy asks the

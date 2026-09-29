@@ -113,7 +113,10 @@ pub enum SubmoduleHistory {
 pub struct Profile {
     pub provider: String,
     pub image: String,
+    // Stored workers keep their wire keys; repository YAML can name the minimums explicitly.
+    #[serde(alias = "min_cpu")]
     pub cpu: u16,
+    #[serde(alias = "min_memory_gb")]
     pub memory_gb: u16,
     #[serde(default)]
     pub gpu: bool,
@@ -396,6 +399,32 @@ pub const DESIGN_EXAMPLE: &str = include_str!("../examples/design-fixtures.yml")
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_minimums_accept_legacy_profiles_without_changing_worker_records() {
+        let explicit = EXAMPLE
+            .replace("    cpu:", "    min_cpu:")
+            .replace("    memory_gb:", "    min_memory_gb:");
+        let legacy = explicit
+            .replace("    min_cpu:", "    cpu:")
+            .replace("    min_memory_gb:", "    memory_gb:");
+        let config = CloudConfig::parse(&explicit).unwrap();
+        assert_eq!(config.profiles, CloudConfig::parse(&legacy).unwrap().profiles);
+        let profile = &config.profiles["development"];
+        let saved = serde_json::to_value(profile).unwrap();
+        assert_eq!(saved["cpu"], 4);
+        assert_eq!(saved["memory_gb"], 8);
+        assert!(saved.get("min_cpu").is_none());
+        assert_eq!(serde_json::from_value::<Profile>(saved).unwrap(), *profile);
+        for (field, old, value) in [("min_cpu", "cpu", 4), ("min_memory_gb", "memory_gb", 8)] {
+            let duplicated = explicit.replacen(
+                &format!("    {field}: {value}"),
+                &format!("    {field}: {value}\n    {old}: {value}"),
+                1,
+            );
+            assert!(CloudConfig::parse(&duplicated).is_err());
+        }
+    }
 
     #[test]
     fn source_block_defaults_to_everything_and_rejects_invalid_selections() {

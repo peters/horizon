@@ -17,9 +17,9 @@ mod widgets;
 /// How the catalog is being browsed; none of it is part of the cloud.
 #[derive(Default)]
 pub(in crate::app::cloud_panel::production) struct State {
-    show_all: bool,
     search: String,
     in_stock_only: bool,
+    show_below_minimums: bool,
     /// The person checked "Start new cloud once available".
     pub wait_for_stock: bool,
 }
@@ -28,6 +28,8 @@ impl State {
     /// A search for one kind of worker means nothing for another profile's.
     pub(super) fn profile_changed(&mut self) {
         self.search.clear();
+        self.in_stock_only = false;
+        self.show_below_minimums = false;
         self.wait_for_stock = false;
     }
 }
@@ -43,6 +45,8 @@ pub(super) struct Stock {
 /// The workers a repository profile allows, from the latest catalog, current or not.
 pub(super) struct Catalog {
     pub offers: Vec<Offer>,
+    /// Matching workers come first; remaining rows are for inspection only.
+    pub matching: usize,
     /// Where each offer can run, in the same order.
     pub places: Vec<Vec<Place>>,
     pub picks: Picks,
@@ -86,16 +90,24 @@ pub(super) fn catalog(form: &Production) -> Option<Catalog> {
     let tier = profile.storage.volume_tier;
     // CPU sizes request only flavors that hold the profile's container disk, as a
     // deployment of that size would.
-    let offers = offers::catalog(
-        list,
-        preferences,
-        &Requirements::for_profile(profile),
-        (tier, profile.storage.container_gb),
-    );
+    let requirements = Requirements::for_profile(profile);
+    let browsing = Requirements {
+        min_vcpu: None,
+        min_memory_gb: None,
+        min_gpu_memory_gb: None,
+        ..requirements.clone()
+    };
+    let all = offers::catalog(list, preferences, &browsing, (tier, profile.storage.container_gb));
+    let (mut offers, excluded): (Vec<_>, Vec<_>) = all
+        .into_iter()
+        .partition(|offer| requirements.resource_reason(offer).is_none());
+    let matching = offers.len();
+    offers.extend(excluded);
     let places: Vec<Vec<Place>> = offers.iter().map(|offer| offers::places(list, offer, tier)).collect();
     // Offer IDs are unique within one kind of worker.
     let stocked: std::collections::HashSet<&str> = offers
         .iter()
+        .take(matching)
         .zip(&places)
         .filter(|(_, places)| {
             places.iter().any(|place| {
@@ -105,10 +117,14 @@ pub(super) fn catalog(form: &Production) -> Option<Catalog> {
         })
         .map(|(offer, _)| offer.id.as_str())
         .collect();
-    let picks = offers::picks(&offers, |offer| stocked.contains(offer.id.as_str()));
-    let selected = offers.iter().position(|offer| is_selected(form, profile, offer));
+    let picks = offers::picks(&offers[..matching], |offer| stocked.contains(offer.id.as_str()));
+    let selected = offers
+        .iter()
+        .take(matching)
+        .position(|offer| is_selected(form, profile, offer));
     Some(Catalog {
         offers,
+        matching,
         places,
         picks,
         selected,
@@ -145,19 +161,19 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     let Some(catalog) = catalog(form) else {
         return;
     };
-    if catalog.offers.is_empty() {
+    if catalog.matching == 0 {
         widgets::note(ui, super::storage::empty_catalog_reason(form, &profile));
-        return;
     }
     // A GPU profile always requests one explicit type, the cheapest to start with. A
     // type the person chose is never replaced, even once it is no longer offered.
-    if catalog.gpu && form.placement.gpu_types.is_empty() {
-        if let Some(index) = catalog.picks.cheapest {
-            choose(form, true, &catalog.offers[index]);
-        }
+    if catalog.gpu
+        && form.placement.gpu_types.is_empty()
+        && let Some(index) = catalog.picks.cheapest
+    {
+        choose(form, true, &catalog.offers[index]);
         return;
     }
-    if catalog.gpu && catalog.selected.is_none() {
+    if catalog.gpu && catalog.selected.is_none() && !form.placement.gpu_types.is_empty() {
         widgets::note(
             ui,
             &format!(
@@ -169,7 +185,7 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     let mut chosen = cards::picks(ui, &catalog, form);
     ui.add_space(4.0);
     chosen = cards::all(ui, &catalog, form).or(chosen);
-    if let Some(index) = chosen {
+    if let Some(index) = chosen.filter(|&index| index < catalog.matching) {
         choose(form, catalog.gpu, &catalog.offers[index]);
     }
     ui.add_space(10.0);
@@ -198,7 +214,7 @@ fn requirement(profile: &Profile, name: &str) -> String {
         }
     } else {
         format!(
-            "At least {} vCPU and {} GB memory, for the {name} profile",
+            "Profile {name} requires at least {} vCPU and {} GB memory",
             profile.cpu, profile.memory_gb
         )
     }

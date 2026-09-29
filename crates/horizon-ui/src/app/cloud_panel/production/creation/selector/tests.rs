@@ -122,6 +122,7 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
         shown
             .offers
             .iter()
+            .take(shown.matching)
             .all(|offer| offer.vcpu.unwrap() >= 4 && offer.memory_gb.unwrap() >= 8)
     );
     // The profile's own size is the cheapest and starts selected.
@@ -139,8 +140,132 @@ fn cpu_workers_below_the_profile_are_hidden_and_picks_span_the_rest() {
     assert!(
         labels
             .iter()
-            .any(|label| label == "At least 4 vCPU and 8 GB memory, for the cpu profile")
+            .any(|label| label == "Profile cpu requires at least 4 vCPU and 8 GB memory")
     );
+}
+
+#[test]
+fn filters_are_discoverable_and_do_not_change_the_selection() {
+    let mut form = form("cpu");
+    let shown = catalog(&form).unwrap();
+    assert!(shown.matching < shown.offers.len());
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "In stock only"));
+    assert!(labels.iter().any(|label| label == "Show workers below requirements"));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("Showing ") && label.contains("below requirements hidden"))
+    );
+    assert!(labels.iter().any(|label| label == "EU-1"));
+    assert!(labels.iter().any(|label| label == "US-1"));
+    let before = (form.size, form.placement.clone());
+    form.launch.selector.search = "No such worker".into();
+    form.launch.selector.in_stock_only = true;
+    let labels = render(&mut form);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("No worker matches these filters."))
+    );
+    assert_eq!((form.size, form.placement.clone()), before);
+    form.launch.selector.profile_changed();
+    assert!(form.launch.selector.search.is_empty());
+    assert!(!form.launch.selector.in_stock_only && !form.launch.selector.show_below_minimums);
+}
+
+#[test]
+fn browsing_a_worker_below_requirements_never_selects_or_enables_it() {
+    let mut form = form("cpu");
+    form.launch.selector.show_below_minimums = true;
+    form.launch.selector.search = "2 vCPU".into();
+    let ctx = egui::Context::default();
+    let frame = |form: &mut Production, events| {
+        let catalog = catalog(form).unwrap();
+        let mut chosen = None;
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    ui.set_width(1000.0);
+                    chosen = cards::all(ui, &catalog, form);
+                },
+            )
+            .discard_textures();
+        assert!(chosen.is_none());
+        output
+    };
+    let output = frame(&mut form, Vec::new());
+    let text = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "2 vCPU · 4 GB" => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    let at = egui::Rect::from_min_size(text.pos, text.galley.size()).center();
+    for pressed in [true, false] {
+        let _ = frame(
+            &mut form,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(form.size.is_none());
+    form.size = Some((2, 4));
+    assert!(catalog(&form).unwrap().selected.is_none());
+    assert!(!can_submit(&form));
+}
+
+#[test]
+fn an_empty_matching_catalog_still_exposes_filters_and_excluded_workers() {
+    let mut form = form("gpu");
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("gpu")
+        .unwrap()
+        .min_gpu_memory_gb = Some(1000);
+    let shown = catalog(&form).unwrap();
+    assert_eq!(shown.matching, 0);
+    assert!(!shown.offers.is_empty());
+    form.launch.selector.show_below_minimums = true;
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label == "In stock only"));
+    assert!(labels.iter().any(|label| label == "Below requirements"));
+    assert!(form.placement.gpu_types.is_empty());
+    assert!(!can_submit(&form));
+}
+
+#[test]
+fn datacenter_stock_never_counts_a_preferred_gpu_below_the_profile_floor() {
+    let mut form = form("gpu");
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("gpu")
+        .unwrap()
+        .min_gpu_memory_gb = Some(1000);
+    let mut preferred = preferences();
+    preferred.gpu_types = vec!["small".into()];
+    form.prices.answered(list(None), preferred, Vec::new());
+    let labels = render(&mut form);
+    assert!(labels.iter().any(|label| label.contains("stock unknown")));
+    assert!(!labels.iter().any(|label| label.contains("1 in stock")));
+    assert!(!can_submit(&form));
 }
 
 #[test]
@@ -150,7 +275,11 @@ fn a_gpu_profile_requests_the_cheapest_in_stock_type_that_meets_its_memory_floor
     // "small" is cheaper and in stock, but below the 24 GB floor; A5000 is sold out.
     assert_eq!(form.placement.gpu_types, ["a6000"]);
     let shown = catalog(&form).unwrap();
-    assert!(shown.offers.iter().all(|offer| offer.gpu_memory_gb.unwrap() >= 24));
+    assert!(
+        shown.offers[..shown.matching]
+            .iter()
+            .all(|offer| offer.gpu_memory_gb.unwrap() >= 24)
+    );
     // Sold-out types stay listed.
     assert!(shown.offers.iter().any(|offer| offer.id == "a5000"));
 }

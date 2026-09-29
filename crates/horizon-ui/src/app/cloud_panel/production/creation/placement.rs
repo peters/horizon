@@ -3,7 +3,7 @@
 //! outlives it.
 use super::{
     super::prices::{State, region_name},
-    pricing::{option, requested_gpus},
+    pricing::{button, option, requested_gpus},
 };
 use crate::theme;
 use egui::{Color32, CornerRadius, FontId, RichText, Sense, Ui, Vec2};
@@ -29,10 +29,10 @@ struct Candidate<'a> {
     center: &'a DataCenter,
     region: String,
     stock: Stock,
+    compatible: bool,
 }
 
-/// The data centers `profile` can use: CPU clouds need their kind of workspace volume there.
-/// GPU profiles count data centers with any of `gpu_types` in stock.
+/// Every allowed data center, including places that cannot hold this workspace volume.
 fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], profile: &Profile) -> Vec<Candidate<'a>> {
     let size = if profile.gpu {
         None
@@ -42,15 +42,24 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
     let mut candidates: Vec<_> = list
         .data_centers
         .iter()
-        .filter(|center| profile.gpu || center.holds(profile.storage.volume_tier))
         .map(|center| {
+            let compatible = profile.gpu || center.holds(profile.storage.volume_tier);
             let here = std::slice::from_ref(&center.id);
-            let stocked = if profile.gpu {
-                Some(
-                    gpu_types
-                        .iter()
-                        .any(|gpu| list.gpu_availability(gpu, here) != Availability::None),
-                )
+            let stocked = if !compatible {
+                Some(false)
+            } else if profile.gpu {
+                let mut eligible = gpu_types
+                    .iter()
+                    .filter(|gpu| {
+                        profile
+                            .min_gpu_memory_gb
+                            .is_none_or(|minimum| list.gpu(gpu).is_some_and(|gpu| gpu.memory_gb >= minimum))
+                    })
+                    .peekable();
+                eligible
+                    .peek()
+                    .is_some()
+                    .then(|| eligible.any(|gpu| list.gpu_availability(gpu, here) != Availability::None))
             } else {
                 match size {
                     Some(Ok(size)) => Some(size.count(here) > 0),
@@ -60,6 +69,7 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
                             center,
                             region: region_name(&center.region),
                             stock: Stock::Checking,
+                            compatible,
                         };
                     }
                 }
@@ -67,6 +77,7 @@ fn candidates<'a>(prices: &State, list: &'a PriceList, gpu_types: &[String], pro
             Candidate {
                 center,
                 region: region_name(&center.region),
+                compatible,
                 stock: match stocked {
                     Some(true) => Stock::Yes,
                     Some(false) => Stock::No,
@@ -124,8 +135,10 @@ fn regions(candidates: &[Candidate<'_>]) -> Vec<Region> {
             data_centers: Vec::new(),
             in_stock: Count::Known(0),
         });
-        region.data_centers.push(candidate.center.id.clone());
-        region.in_stock = region.in_stock.with(candidate.stock.into());
+        if candidate.compatible {
+            region.data_centers.push(candidate.center.id.clone());
+            region.in_stock = region.in_stock.with(candidate.stock.into());
+        }
     }
     let mut regions: Vec<Region> = regions.into_values().collect();
     for region in &mut regions {
@@ -169,13 +182,16 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
                 ..Placement::default()
             });
         }
-        for region in regions
-            .iter()
-            .filter(|region| regions.len() > 1 || region.data_centers.len() > 1)
-        {
-            let selected = current.data_centers == region.data_centers;
+        for region in &regions {
+            let selected = !region.data_centers.is_empty() && current.data_centers == region.data_centers;
             let (detail, tint) = stock_label(region.in_stock);
-            if option(ui, &region.name, selected, Some(&detail), Some(tint)) {
+            if ui
+                .add_enabled(
+                    !region.data_centers.is_empty(),
+                    button(&region.name, selected, Some(&detail), Some(tint)),
+                )
+                .clicked()
+            {
                 chosen = Some(Placement {
                     region: Some(region.name.clone()),
                     data_centers: region.data_centers.clone(),
@@ -184,31 +200,7 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
             }
         }
     });
-    // Exact data centers appear once a region is chosen, or when there is only one.
-    let shown_region = current.region.as_deref().filter(|_| !current.is_any());
-    let exact = shown_region.is_some() || regions.len() == 1;
-    ui.horizontal_wrapped(|ui| {
-        for candidate in candidates
-            .iter()
-            .filter(|_| exact)
-            .filter(|candidate| shown_region.is_none_or(|region| candidate.region == region))
-        {
-            let selected = current.data_centers == [candidate.center.id.clone()];
-            if chip(
-                ui,
-                &candidate.center.id,
-                &candidate.region,
-                Some(candidate.stock),
-                selected,
-            ) {
-                chosen = Some(Placement {
-                    region: Some(candidate.region.clone()),
-                    data_centers: vec![candidate.center.id.clone()],
-                    gpu_types: current.gpu_types.clone(),
-                });
-            }
-        }
-    });
+    data_centers(ui, &candidates, &regions, current, &mut chosen);
     let excluded = list
         .regions
         .keys()
@@ -221,6 +213,52 @@ pub(super) fn field(ui: &mut Ui, prices: &State, profile: &Profile, current: &Pl
     }
     ui.label(RichText::new(note).size(12.0).color(theme::FG_DIM()));
     chosen.filter(|placement| placement != current)
+}
+
+fn data_centers(
+    ui: &mut Ui,
+    candidates: &[Candidate<'_>],
+    regions: &[Region],
+    current: &Placement,
+    chosen: &mut Option<Placement>,
+) {
+    let unavailable = candidates.iter().filter(|candidate| !candidate.compatible).count();
+    ui.small(format!(
+        "{} data centers · {unavailable} unavailable for this storage type",
+        candidates.len()
+    ));
+    for region in regions {
+        ui.add_space(4.0);
+        ui.label(RichText::new(&region.name).size(12.0).color(theme::FG_SOFT()));
+        ui.horizontal_wrapped(|ui| {
+            for candidate in candidates.iter().filter(|candidate| candidate.region == region.name) {
+                let selected = current.data_centers == [candidate.center.id.clone()];
+                let detail = if candidate.compatible {
+                    candidate.region.as_str()
+                } else {
+                    "Storage unavailable"
+                };
+                if ui
+                    .add_enabled(candidate.compatible, |ui: &mut Ui| {
+                        chip(
+                            ui,
+                            &candidate.center.id,
+                            detail,
+                            candidate.compatible.then_some(candidate.stock),
+                            selected,
+                        )
+                    })
+                    .clicked()
+                {
+                    *chosen = Some(Placement {
+                        region: Some(candidate.region.clone()),
+                        data_centers: vec![candidate.center.id.clone()],
+                        gpu_types: current.gpu_types.clone(),
+                    });
+                }
+            }
+        });
+    }
 }
 
 pub(super) fn where_it_lives(placement: &Placement) -> String {
@@ -240,6 +278,7 @@ pub(super) fn in_stock(prices: &State, profile: &Profile, placement: &Placement)
     let candidates = candidates(prices, list, requested_gpus(preferences, placement), profile);
     let scoped = candidates
         .iter()
+        .filter(|candidate| candidate.compatible)
         .filter(|candidate| placement.is_any() || placement.data_centers.contains(&candidate.center.id));
     let total = scoped.fold(Count::Known(0), |total, candidate| total.with(candidate.stock.into()));
     match total {
@@ -250,7 +289,7 @@ pub(super) fn in_stock(prices: &State, profile: &Profile, placement: &Placement)
 
 /// A compact choice with a title, a line under it and an optional stock dot, painted at
 /// its own size.
-pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, selected: bool) -> bool {
+pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, selected: bool) -> egui::Response {
     const DOT: f32 = 6.0;
     let color = match stock {
         Some(Stock::Yes) => theme::PALETTE_GREEN(),
@@ -281,6 +320,11 @@ pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, se
     } else {
         (theme::PANEL_BG_ALT(), egui::Stroke::new(1.0, theme::BORDER_SUBTLE()))
     };
+    let stroke = if response.has_focus() {
+        egui::Stroke::new(1.5, theme::FG())
+    } else {
+        stroke
+    };
     let painter = ui.painter();
     painter.rect(rect, CornerRadius::same(8), fill, stroke, egui::StrokeKind::Inside);
     let left = rect.left() + padding.x;
@@ -306,12 +350,12 @@ pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, se
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Button,
-            true,
+            ui.is_enabled(),
             selected,
             format!("{id}, {region}{stock}"),
         )
     });
-    response.clicked()
+    response
 }
 
 #[cfg(test)]
@@ -334,6 +378,7 @@ mod tests {
             region: region_name(&center.region),
             center,
             stock,
+            compatible: true,
         }
     }
 
@@ -412,10 +457,30 @@ mod tests {
     }
 
     #[test]
+    fn many_data_centers_wrap_inside_the_picker_column() {
+        use crate::test_egui::DiscardTextures;
+        let (mut state, profile) = fixture();
+        let list = &mut state.list.as_mut().unwrap().value.0;
+        list.data_centers = (0..30)
+            .map(|index| center(&format!("EU-{index}"), "EUROPE", true))
+            .collect();
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(640.0);
+                field(ui, &state, &profile, &Placement::default());
+                width = ui.min_rect().width();
+            })
+            .discard_textures();
+        assert!(width <= 640.0, "data centers expanded the column to {width}");
+    }
+
+    #[test]
     fn sold_out_data_centers_and_regions_are_visible_and_selectable() {
         let europe = choose_sold_out(&Placement::default(), "Europe\nnone in stock");
         assert_eq!(europe.data_centers, ["EU-2"]);
-        // Exact data centers appear once their region is chosen.
+        // Exact data centers are visible before choosing a region and stay visible afterward.
         let labels = |current: &Placement| {
             use crate::test_egui::DiscardTextures;
             let (prices, profile) = fixture();
@@ -432,9 +497,11 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert!(!labels(&Placement::default()).iter().any(|label| label == "EU-2"));
+        assert!(labels(&Placement::default()).iter().any(|label| label == "EU-2"));
         assert!(labels(&europe).iter().any(|label| label == "EU-2"));
-        assert!(!labels(&europe).iter().any(|label| label == "US-1"));
+        assert!(labels(&europe).iter().any(|label| label == "US-1"));
+        let exact = choose_sold_out(&Placement::default(), "EU-2");
+        assert_eq!(exact.data_centers, ["EU-2"]);
         let any = choose_sold_out(&europe, "Any data center\n1 in stock");
         assert!(any.is_any());
     }
@@ -452,8 +519,10 @@ mod tests {
         );
         profile.gpu = false;
         let cpu = candidates(&prices, list, &[], &profile);
-        assert_eq!(cpu.len(), 1);
-        assert_eq!(cpu[0].center.id, "US-1");
+        assert_eq!(cpu.len(), 2);
+        assert!(!cpu[0].compatible);
+        assert_eq!(cpu[1].center.id, "US-1");
+        assert!(cpu[1].compatible);
     }
 
     #[test]
@@ -475,6 +544,7 @@ mod tests {
         assert_eq!(
             choices
                 .iter()
+                .filter(|entry| entry.compatible)
                 .map(|entry| (entry.center.id.as_str(), entry.stock))
                 .collect::<Vec<_>>(),
             [("EU-2", Stock::Yes), ("EU-3", Stock::No)]

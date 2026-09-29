@@ -8,6 +8,29 @@ use crate::runpod::volumes::Tier;
 use std::cmp::Ordering;
 
 impl Requirements {
+    /// Why a listed worker falls below this request's resource minimums.
+    #[must_use]
+    pub fn resource_reason(&self, offer: &Offer) -> Option<&'static str> {
+        if self
+            .min_vcpu
+            .is_some_and(|minimum| offer.vcpu.is_none_or(|value| value < minimum))
+        {
+            Some("Below the profile's minimum CPU count")
+        } else if self
+            .min_memory_gb
+            .is_some_and(|minimum| offer.memory_gb.is_none_or(|value| value < minimum))
+        {
+            Some("Below the profile's minimum memory")
+        } else if self
+            .min_gpu_memory_gb
+            .is_some_and(|minimum| offer.gpu_memory_gb.is_none_or(|value| value < minimum))
+        {
+            Some("Below the profile's minimum GPU memory")
+        } else {
+            None
+        }
+    }
+
     /// What `profile` asks of a worker: its vCPU and memory are minimums for CPU
     /// workers, and its GPU memory floor applies to GPU workers. Its workspace storage
     /// is priced in, and every matching GPU type is listed, sold out or not.
@@ -223,6 +246,34 @@ mod tests {
             }
         );
         assert_eq!(picks(&[], |_| true), Picks::default());
+    }
+
+    #[test]
+    fn excluded_workers_explain_which_resource_is_below_the_minimum() {
+        let requirements = Requirements {
+            min_vcpu: Some(4),
+            min_memory_gb: Some(16),
+            ..Requirements::default()
+        };
+        assert_eq!(
+            requirements.resource_reason(&offer("cpu", "small", 0.1, (2, 4))),
+            Some("Below the profile's minimum CPU count")
+        );
+        assert_eq!(
+            requirements.resource_reason(&offer("cpu", "low-memory", 0.2, (4, 8))),
+            Some("Below the profile's minimum memory")
+        );
+        assert_eq!(requirements.resource_reason(&offer("cpu", "fits", 0.3, (4, 16))), None);
+        let gpu = Requirements {
+            gpu: true,
+            min_gpu_memory_gb: Some(24),
+            ..Requirements::default()
+        };
+        assert_eq!(
+            gpu.resource_reason(&offer("gpu", "small", 0.2, (0, 16))),
+            Some("Below the profile's minimum GPU memory")
+        );
+        assert_eq!(gpu.resource_reason(&offer("gpu", "fits", 0.4, (0, 24))), None);
     }
 
     #[test]

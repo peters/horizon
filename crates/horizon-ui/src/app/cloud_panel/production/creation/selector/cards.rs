@@ -99,25 +99,10 @@ fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool
     response.clicked()
 }
 
-/// Every worker the profile allows, behind a toggle. Sold-out workers are listed
-/// unless "In stock only" is checked. Returns the one clicked.
+/// The catalog and its visible filters. Excluded workers can be inspected, but never chosen.
 pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Option<usize> {
     let state = &mut form.launch.selector;
-    let label = if state.show_all {
-        "Hide the full list".to_owned()
-    } else {
-        format!("Show all {} workers", catalog.offers.len())
-    };
-    if ui
-        .link(RichText::new(label).size(13.0).color(theme::ACCENT()))
-        .clicked()
-    {
-        state.show_all = !state.show_all;
-    }
-    if !state.show_all {
-        return None;
-    }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut state.search)
                 .desired_width(220.0)
@@ -125,10 +110,16 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
         );
         widgets::checkbox(ui, &mut state.in_stock_only, "In stock only");
     });
+    let excluded = catalog.offers.len() - catalog.matching;
+    if excluded > 0 {
+        widgets::checkbox(ui, &mut state.show_below_minimums, "Show workers below requirements");
+    }
     let search = state.search.trim().to_lowercase();
     let in_stock_only = state.in_stock_only;
+    let show_below_minimums = state.show_below_minimums;
     let form = &*form;
     let rows: Vec<usize> = (0..catalog.offers.len())
+        .filter(|&index| show_below_minimums || index < catalog.matching)
         .filter(|&index| {
             let (name, detail) = title(&catalog.offers[index]);
             search.is_empty() || format!("{name} {detail}").to_lowercase().contains(&search)
@@ -140,16 +131,36 @@ pub(super) fn all(ui: &mut Ui, catalog: &Catalog, form: &mut Production) -> Opti
                     .is_some_and(|stock| stock.level != horizon_core::cloud_runtime::prices::Availability::None)
         })
         .collect();
+    let hidden = if show_below_minimums { 0 } else { excluded };
+    widgets::note(
+        ui,
+        &format!(
+            "Showing {} of {} workers · {hidden} below requirements hidden",
+            rows.len(),
+            catalog.offers.len()
+        ),
+    );
     if rows.is_empty() {
-        widgets::note(ui, "No worker matches.");
+        widgets::note(
+            ui,
+            "No worker matches these filters. Clear the search or change the filters.",
+        );
         return None;
     }
     let mut chosen = None;
-    for (stripe, index) in rows.into_iter().enumerate() {
-        if row(ui, catalog, form, index, stripe % 2 == 1) {
-            chosen = Some(index);
-        }
-    }
+    super::super::super::super::runtime::solid_scroll_area(ui)
+        .id_salt("cloud-worker-catalog")
+        .max_height(180.0)
+        .show(ui, |ui| {
+            for (stripe, index) in rows.into_iter().enumerate() {
+                let response = ui.add_enabled_ui(index < catalog.matching, |ui| {
+                    row(ui, catalog, form, index, stripe % 2 == 1)
+                });
+                if response.inner {
+                    chosen = Some(index);
+                }
+            }
+        });
     chosen
 }
 
@@ -160,7 +171,14 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let selected = catalog.selected == Some(index);
     let (name, detail) = title(offer);
-    let (stock, stock_color) = widgets::stock(catalog.stock(index, form));
+    let reason = super::profile(form).and_then(|profile| {
+        horizon_core::cloud_runtime::offers::Requirements::for_profile(profile).resource_reason(offer)
+    });
+    let (stock, stock_color) = if reason.is_some() {
+        ("Below requirements", theme::FG_DIM())
+    } else {
+        widgets::stock(catalog.stock(index, form))
+    };
     let painter = ui.painter();
     let fill = if selected {
         theme::alpha(theme::ACCENT(), 44)
@@ -182,20 +200,30 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     let font = FontId::proportional(13.0);
     let y = rect.center().y;
     let at = |fraction: f32| rect.left() + 12.0 + (width - 24.0) * fraction;
-    painter.text(
-        egui::pos2(at(0.0), y),
-        Align2::LEFT_CENTER,
-        &name,
-        font.clone(),
-        theme::FG(),
-    );
-    painter.text(
-        egui::pos2(at(0.34), y),
-        Align2::LEFT_CENTER,
-        &detail,
-        font.clone(),
-        theme::FG_DIM(),
-    );
+    painter
+        .with_clip_rect(painter.clip_rect().intersect(egui::Rect::from_min_max(
+            egui::pos2(at(0.0), rect.top()),
+            egui::pos2(at(0.33), rect.bottom()),
+        )))
+        .text(
+            egui::pos2(at(0.0), y),
+            Align2::LEFT_CENTER,
+            &name,
+            font.clone(),
+            theme::FG(),
+        );
+    painter
+        .with_clip_rect(painter.clip_rect().intersect(egui::Rect::from_min_max(
+            egui::pos2(at(0.34), rect.top()),
+            egui::pos2(at(0.65), rect.bottom()),
+        )))
+        .text(
+            egui::pos2(at(0.34), y),
+            Align2::LEFT_CENTER,
+            &detail,
+            font.clone(),
+            theme::FG_DIM(),
+        );
     painter.text(
         egui::pos2(at(0.66), y),
         Align2::LEFT_CENTER,
@@ -218,5 +246,10 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
             format!("{name}, {}, {stock}", price(offer)),
         )
     });
+    let response = if let Some(reason) = reason {
+        response.on_disabled_hover_text(reason)
+    } else {
+        response
+    };
     response.clicked()
 }
