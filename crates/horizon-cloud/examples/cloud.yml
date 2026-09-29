@@ -31,6 +31,8 @@ profiles:
     # Optional: only place the worker on hosts whose driver supports this CUDA version
     # or newer (major.minor, GPU profiles only), for images built against a recent CUDA.
     # min_cuda_version: "12.8"
+    # Optional: offer only GPU types with at least this much GPU memory (GPU profiles only).
+    # min_gpu_memory_gb: 24
     capabilities:
       agents: [codex, claude]
       desktop: true

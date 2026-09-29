@@ -25,6 +25,8 @@ fn snapshot(observed_at_millis: u64) -> Vec<u8> {
                 id: "EU-RO-1".into(),
                 region: "EUROPE".into(),
                 workspace_storage: true,
+                high_performance_storage: false,
+                cpus: Vec::new(),
                 gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
             }],
             regions: std::collections::BTreeMap::new(),

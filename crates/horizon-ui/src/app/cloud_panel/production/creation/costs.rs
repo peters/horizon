@@ -1,7 +1,5 @@
-//! What a new cloud costs: hours of compute, a month running, a month stopped, and
-//! every kind of storage it is billed for.
-use crate::theme;
-use egui::{RichText, Sense, Ui, Vec2};
+//! What a new cloud costs: a month running, a month stopped, and every kind of storage
+//! it is billed for.
 use horizon_core::cloud_runtime::prices::{PriceList, Profile};
 
 /// Hours in an average month, for monthly totals.
@@ -9,17 +7,17 @@ const MONTH_HOURS: f64 = 730.0;
 
 /// One kind of storage a cloud is billed for, per month.
 #[derive(Debug, PartialEq)]
-struct Storage {
-    kind: &'static str,
-    gb: u16,
-    running: f64,
-    quoted: bool,
+pub(super) struct Storage {
+    pub kind: &'static str,
+    pub gb: u16,
+    pub running: f64,
+    pub quoted: bool,
     /// `None` when it is not billed while the cloud is stopped.
-    stopped: Option<f64>,
-    note: &'static str,
+    pub stopped: Option<f64>,
+    pub note: &'static str,
 }
 
-fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
+pub(super) fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
     let rates = list.storage;
     let volume = profile.storage.volume_gb;
     let mut items = Vec::new();
@@ -71,7 +69,7 @@ fn storage(list: &PriceList, profile: &Profile) -> Vec<Storage> {
 }
 
 /// Monthly totals running all month and stopped all month, as low and high bounds.
-fn monthly(hourly: (f64, f64), storage: &[Storage]) -> Option<((f64, f64), f64)> {
+pub(super) fn monthly(hourly: (f64, f64), storage: &[Storage]) -> Option<((f64, f64), f64)> {
     if storage.iter().any(|item| !item.quoted) {
         return None;
     }
@@ -81,117 +79,9 @@ fn monthly(hourly: (f64, f64), storage: &[Storage]) -> Option<((f64, f64), f64)>
     Some(((low * MONTH_HOURS + running, high * MONTH_HOURS + running), stopped))
 }
 
-/// Totals for `hourly`, the lowest and highest price a deployment may be charged, and
-/// the storage `profile` keeps. Without an hourly price, such as when no preferred GPU
-/// is in stock, only the storage is shown.
-pub(super) fn show(ui: &mut Ui, list: &PriceList, profile: &Profile, hourly: Option<(f64, f64)>) {
-    let storage = storage(list, profile);
-    if hourly.is_none() && storage.is_empty() {
-        return;
-    }
-    let monthly = monthly(hourly.unwrap_or_default(), &storage);
-    divider(ui);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 28.0;
-        if let Some((low, high)) = hourly {
-            stat(ui, "8 HOURS", &range(low * 8.0, high * 8.0), "compute");
-            stat(ui, "24 HOURS", &range(low * 24.0, high * 24.0), "compute");
-            stat(
-                ui,
-                "RUNNING",
-                &monthly.map_or_else(
-                    || "Price unavailable".into(),
-                    |((low, high), _)| format!("{}/mo", range(low, high)),
-                ),
-                "compute and storage",
-            );
-        }
-        stat(
-            ui,
-            "STOPPED",
-            &monthly.map_or_else(
-                || "Price unavailable".into(),
-                |(_, stopped)| format!("{}/mo", money(stopped)),
-            ),
-            "storage it keeps",
-        );
-    });
-    if !storage.is_empty() {
-        ui.add_space(10.0);
-        breakdown(ui, &storage, list);
-    }
-}
-
-fn divider(ui: &mut Ui) {
-    ui.add_space(10.0);
-    let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(line, 0.0, theme::BORDER_SUBTLE());
-    ui.add_space(8.0);
-}
-
-fn breakdown(ui: &mut Ui, storage: &[Storage], list: &PriceList) {
-    let heading = |text: &str| RichText::new(text).size(10.5).color(theme::FG_DIM());
-    egui::Grid::new("cloud-creation-storage")
-        .num_columns(4)
-        .spacing([18.0, 5.0])
-        .show(ui, |ui| {
-            ui.label(heading("STORAGE"));
-            ui.label("");
-            ui.label(heading("RUNNING"));
-            ui.label(heading("STOPPED"));
-            ui.end_row();
-            for item in storage {
-                ui.label(RichText::new(item.kind).size(12.5).color(theme::FG_SOFT()));
-                ui.label(
-                    RichText::new(format!("{} GB", item.gb))
-                        .size(12.0)
-                        .color(theme::FG_DIM()),
-                );
-                if item.quoted {
-                    ui.label(amount(Some(item.running)));
-                    ui.label(amount(item.stopped));
-                } else {
-                    ui.label("Price unavailable");
-                    ui.label("Price unavailable");
-                }
-                ui.end_row();
-            }
-        });
-    // Said in words: hover text would draw below this modal.
-    let notes: Vec<&str> = storage.iter().map(|item| item.note).collect();
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(format!(
-            "{} {} storage list prices, checked {}.",
-            notes.join(" "),
-            list.provider,
-            list.storage.confirmed
-        ))
-        .size(11.0)
-        .color(theme::FG_DIM()),
-    );
-}
-
-fn amount(value: Option<f64>) -> RichText {
-    match value {
-        Some(value) => RichText::new(format!("{}/mo", money(value)))
-            .size(12.5)
-            .monospace()
-            .color(theme::FG()),
-        None => RichText::new("not billed").size(12.0).color(theme::FG_DIM()),
-    }
-}
-
-fn stat(ui: &mut Ui, label: &str, value: &str, caption: &str) {
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        ui.label(RichText::new(label).size(10.5).color(theme::FG_DIM()));
-        ui.label(RichText::new(value).size(16.0).color(theme::FG()));
-        ui.label(RichText::new(caption).size(10.5).color(theme::FG_DIM()));
-    });
-}
-
 pub(super) fn money(value: f64) -> String {
+    // An empty float sum is negative zero, which would read as "-$0.00".
+    let value = value + 0.0;
     if value >= 100.0 {
         format!("${value:.0}")
     } else {
@@ -253,6 +143,7 @@ mod tests {
         assert_eq!(money(0.24), "$0.24");
         assert_eq!(money(5.76), "$5.76");
         assert_eq!(money(242.0), "$242");
+        assert_eq!(money(Vec::<f64>::new().into_iter().sum()), "$0.00");
         assert_eq!(range(0.24, 0.24), "$0.24");
         assert_eq!(range(0.24, 0.28), "$0.24–0.28");
         assert_eq!(range(0.244, 0.248), "$0.24–0.25");

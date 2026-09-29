@@ -1,8 +1,8 @@
 //! Explicit opt-in to launch the fixed selection once fresh catalog stock returns.
-use super::{Production, can_submit, provider};
+use super::{Production, provider};
 use horizon_core::cloud_runtime::prices::watch::Selection;
 
-fn selection(form: &Production) -> Result<Selection, &'static str> {
+pub(super) fn selection(form: &Production) -> Result<Selection, &'static str> {
     if form.launch.loading() {
         return Err("Wait for the repository profile before watching stock.");
     }
@@ -16,38 +16,27 @@ fn selection(form: &Production) -> Result<Selection, &'static str> {
     Selection::new(profile, form.placement.clone())
 }
 
-pub(super) fn controls(ui: &mut egui::Ui, form: &mut Production) {
-    ui.add_space(16.0);
-    ui.separator();
-    ui.add_space(8.0);
-    if let Some(watch) = &form.launch.watch {
-        ui.label(format!(
-            "Watching {} · {} vCPU · {} GB memory. This cloud starts automatically when stock returns.",
-            watch.placement.data_centers.join(", "),
-            watch.profile.cpu,
-            watch.profile.memory_gb,
-        ));
-        ui.small("Keep this dialog open. Stop watching to edit the selection. Cancel closes the watch.");
-        if ui.button("Stop watching").clicked() {
-            form.launch.watch = None;
-        }
-    } else if form.pending_creation.is_none() && !form.launch.submitted {
-        let selected = selection(form);
-        if ui
-            .add_enabled(
-                can_submit(form) && selected.is_ok(),
-                egui::Button::new("Watch stock & start"),
-            )
-            .clicked()
-        {
-            form.launch.watch = selected.as_ref().ok().cloned();
-        }
-        if let Err(reason) = selected {
-            ui.small(reason);
-        } else {
-            ui.small("Checks every 15 seconds while this dialog stays open. Starts the selected cloud automatically at the current price when stock is available.");
-        }
-    }
+/// The current selection with the price on show now, which a watch never starts
+/// above. Without a known price there is no limit to hold it to, so it cannot arm.
+pub(super) fn armable(form: &Production) -> Result<(Selection, f64), &'static str> {
+    let selection = selection(form)?;
+    let quote = form
+        .prices
+        .list
+        .as_ref()
+        .and_then(|list| selection.hourly(&list.value.0, &list.value.1))
+        .ok_or("The price of this worker is unknown, so a watch has no price to hold it to.")?;
+    Ok((selection, quote))
+}
+
+/// Arms the watch on the current selection at the price on show now.
+pub(super) fn arm(form: &mut Production) {
+    let Ok((selection, quote)) = armable(form) else {
+        return;
+    };
+    form.launch.watch_quote = Some(quote);
+    form.launch.price_rose = None;
+    form.launch.watch = Some(selection);
 }
 
 pub(super) fn poll(form: &mut Production) {
@@ -61,17 +50,42 @@ pub(super) fn poll(form: &mut Production) {
         || form.launch.siblings.blocks_launch()
     {
         form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
         return;
     }
+    // Old or failed catalogs make the watch wait; only a fresh one can end it.
     let Some(fetched) = form.prices.fresh_list() else {
         return;
     };
+    if super::storage::launch_reason(form).is_some() {
+        form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
+        return;
+    }
+    // A price above the one shown when the watch started waits for a person.
+    let (list, preferences) = &fetched.value;
+    let hourly = watch.hourly(list, preferences);
+    // A worker the catalog no longer prices is no longer a stock wait: the watch ends
+    // and the dialog says what is wrong with the selection.
+    let (Some(now), Some(quoted)) = (hourly, form.launch.watch_quote) else {
+        form.launch.watch = None;
+        form.launch.watch_quote = None;
+        form.launch.price_rose = None;
+        return;
+    };
+    form.launch.price_rose = (now > quoted + 1e-9).then_some(now);
+    if form.launch.price_rose.is_some() {
+        return;
+    }
     let cpu = form
         .prices
         .size(&watch.profile, (watch.profile.cpu, watch.profile.memory_gb))
         .and_then(Result::ok);
-    if watch.available(&fetched.value.0, cpu) {
+    if watch.available(list, cpu) {
         form.launch.watch = None;
+        form.launch.watch_quote = None;
         form.launch.submitted = true;
     }
 }

@@ -17,6 +17,9 @@ pub(super) mod hetzner;
 
 /// Prices and stock older than this are fetched again while the dialog is open.
 pub(super) const FRESH: Duration = Duration::from_secs(15);
+/// A catalog older than this can no longer start a cloud: prices and stock may have
+/// changed too much since.
+pub(super) const START_LIMIT: Duration = Duration::from_hours(1);
 /// How long agents' requests get the same failed price fetch before one asks again.
 const RETRY_FAILED: Duration = Duration::from_secs(30);
 
@@ -130,6 +133,11 @@ impl State {
         !stale(at) && self.refreshed_after.is_none_or(|refresh| at >= refresh)
     }
 
+    /// Whether the catalog shown is older than [`START_LIMIT`], so it cannot start a cloud.
+    pub fn too_old(&self) -> bool {
+        self.list.as_ref().is_some_and(|list| list.at.elapsed() >= START_LIMIT)
+    }
+
     /// The region of `data_center` as people say it, once a price list has been fetched.
     pub fn region_of(&self, data_center: &str) -> Option<&str> {
         self.regions.get(data_center).map(String::as_str)
@@ -212,10 +220,16 @@ impl State {
                     self.list_failed_at = None;
                     self.runpod_missing = false;
                 }
-                // Prices that could not be refreshed are no longer shown as current.
+                // The last good catalog stays on show with its age; only current
+                // prices are ever treated as current.
                 Err(error) => {
-                    self.runpod_missing |= error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
-                    self.list = None;
+                    let key_missing = error == horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING;
+                    self.runpod_missing |= key_missing;
+                    // Without a key, RunPod's old prices are no longer this machine's to show.
+                    if key_missing {
+                        self.list = None;
+                    }
+                    self.refreshed_after = Some(Instant::now());
                     self.list_error = Some(error);
                     self.list_failed_at = Some(Instant::now());
                 }
@@ -394,15 +408,36 @@ impl State {
         self.list_error = Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.to_owned());
     }
 
-    /// As `RunPod` answers the first fetch with nothing on offer, so a `RunPod` cloud
-    /// can be submitted.
+    /// As `RunPod` answers the first fetch with a small catalog in stock in one data
+    /// center, every CPU flavor and one GPU type, so a `RunPod` cloud can be submitted.
     #[cfg(unix)]
     pub fn runpod_answered(&mut self) {
+        use horizon_core::cloud_runtime::prices::{Availability, CpuFlavorPrice, DataCenter, GpuPrice};
+        let families = ["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"];
         let list = PriceList {
             provider: "RunPod",
-            cpu: Vec::new(),
-            gpus: Vec::new(),
-            data_centers: Vec::new(),
+            cpu: families
+                .iter()
+                .map(|&id| CpuFlavorPrice {
+                    id: id.into(),
+                    name: id.into(),
+                    per_vcpu_hour: 0.03,
+                })
+                .collect(),
+            gpus: vec![GpuPrice {
+                id: "NVIDIA RTX A5000".into(),
+                name: "RTX A5000".into(),
+                memory_gb: 24,
+                hourly: 0.27,
+            }],
+            data_centers: vec![DataCenter {
+                id: "EU-RO-1".into(),
+                region: "EUROPE".into(),
+                workspace_storage: true,
+                high_performance_storage: false,
+                gpus: vec![("NVIDIA RTX A5000".into(), Availability::High)],
+                cpus: families.iter().map(|&id| (id.into(), Availability::High)).collect(),
+            }],
             regions: std::collections::BTreeMap::new(),
             storage: prices::RUNPOD_STORAGE,
         };
@@ -620,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_refresh_hides_old_prices_and_refresh_keeps_checks_in_flight() {
+    fn a_failed_refresh_keeps_old_prices_but_never_as_current_and_refresh_keeps_checks_in_flight() {
         let mut state = State {
             list: Some(Fetched {
                 value: (list(), Preferences::default()),
@@ -632,7 +667,8 @@ mod tests {
         state.list_job = Some(rx);
         tx.send(Err("RunPod is unreachable".into())).unwrap();
         state.poll();
-        assert!(state.list.is_none());
+        assert!(state.list.is_some(), "the last good catalog stays on show");
+        assert!(state.fresh_list().is_none());
         assert_eq!(state.list_error.as_deref(), Some("RunPod is unreachable"));
 
         let (list_tx, rx) = channel();
@@ -646,6 +682,20 @@ mod tests {
         state.poll();
         assert!(state.fresh_list().is_some());
         assert!(state.size(&profile(), (8, 32)).is_some());
+    }
+
+    #[test]
+    fn a_missing_runpod_key_drops_the_old_prices() {
+        let mut state = State {
+            list: Some(now((list(), Preferences::default()))),
+            ..State::default()
+        };
+        let (tx, rx) = channel();
+        state.list_job = Some(rx);
+        tx.send(Err(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING.into()))
+            .unwrap();
+        state.poll();
+        assert!(state.list.is_none() && !state.runpod_bound());
     }
 
     #[test]

@@ -36,8 +36,26 @@ pub struct DataCenter {
     pub region: String,
     /// Whether CPU clouds can keep their workspace volume here.
     pub workspace_storage: bool,
+    /// Whether CPU clouds can keep a high-performance workspace volume here.
+    #[serde(default)]
+    pub high_performance_storage: bool,
     /// Availability of each GPU type listed here.
     pub gpus: Vec<(String, Availability)>,
+    /// Availability of each CPU flavor family listed here, such as `cpu3c`. A family in
+    /// stock may still lack a particular size, whose exact stock is checked on its own.
+    #[serde(default)]
+    pub cpus: Vec<(String, Availability)>,
+}
+
+impl DataCenter {
+    /// Whether a CPU cloud's workspace volume of `tier` can be kept here.
+    #[must_use]
+    pub fn holds(&self, tier: crate::runpod::volumes::Tier) -> bool {
+        match tier {
+            crate::runpod::volumes::Tier::Standard => self.workspace_storage,
+            crate::runpod::volumes::Tier::HighPerformance => self.high_performance_storage,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -273,6 +291,8 @@ mod tests {
             id: id.into(),
             region: "EUROPE".into(),
             workspace_storage: true,
+            high_performance_storage: false,
+            cpus: Vec::new(),
             gpus: gpus.iter().map(|&(gpu, level)| (gpu.into(), level)).collect(),
         };
         PriceList {

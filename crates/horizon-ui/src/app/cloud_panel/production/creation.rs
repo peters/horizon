@@ -4,22 +4,26 @@ use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{
-    ShortcutBinding, ShortcutKey, ShortcutModifiers,
-    cloud_panel::Placement,
-    cloud_runtime::provider::{Choice, Placement as ProviderPlacement, Pricing},
-    dir_search,
+    ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
+    cloud_runtime::provider::Placement as ProviderPlacement, dir_search,
 };
 use std::path::Path;
 
 mod costs;
-mod gpu_choice;
 mod placement;
 mod pricing;
 mod profiles;
 pub(super) mod provider;
+pub(super) mod selector;
 pub(super) mod siblings;
 mod storage;
 mod watch;
+
+/// The configuration summary's width beside the catalog.
+const SUMMARY_WIDTH: f32 = 330.0;
+const GUTTER: f32 = 24.0;
+/// The narrowest dialog that still shows the summary beside the catalog.
+const TWO_COLUMNS: f32 = 800.0;
 
 #[derive(Default)]
 struct Actions {
@@ -45,13 +49,9 @@ impl HorizonApp {
             return;
         }
         let viewport = ctx.content_rect();
-        let width = (viewport.width() - 64.0).clamp(240.0, 640.0);
-        let reason_space = if submit_reason(&self.cloud_prototype.production).is_some() {
-            28.0
-        } else {
-            0.0
-        };
-        let body_height = (viewport.height() - 330.0 - reason_space).max(100.0);
+        let width = (viewport.width() - 64.0).clamp(240.0, 1180.0);
+        // Room for the heading and the action bar under the columns.
+        let body_height = (viewport.height() - 270.0).max(120.0);
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
@@ -91,36 +91,37 @@ impl HorizonApp {
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
                 heading(ui, provider::label(&self.cloud_prototype.production));
                 ui.add_space(16.0);
-                super::super::runtime::solid_scroll_area(ui)
-                    .id_salt("cloud-creation-body")
-                    .max_height(body_height)
-                    .show(ui, |ui| {
-                        ui.add_enabled_ui(
-                            self.cloud_prototype.production.pending_creation.is_none()
-                                && !self.cloud_prototype.production.launch.submitted
-                                && self.cloud_prototype.production.launch.watch.is_none(),
-                            |ui| {
-                                actions.repository = fields(
-                                    ui,
-                                    &mut self.cloud_prototype.production,
-                                    &mut actions.create,
-                                    refocus_repository,
-                                );
-                                if !self.cloud_prototype.production.launch.loading()
-                                    && self.cloud_prototype.production.profiles.is_none()
-                                    && super::repository_setup::render(ui, &mut self.cloud_prototype.production)
-                                {
-                                    actions.repository = RepositoryAction::Setup;
-                                }
-                            },
-                        );
-                        if let Some(error) = &self.cloud_prototype.error {
-                            ui.add_space(8.0);
-                            ui.colored_label(theme::PALETTE_RED(), error);
-                        }
+                if width >= TWO_COLUMNS {
+                    let left = width - SUMMARY_WIDTH - GUTTER;
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = GUTTER;
+                        column(ui, left, body_height, |ui| {
+                            super::super::runtime::solid_scroll_area(ui)
+                                .id_salt("cloud-creation-body")
+                                .max_height(body_height)
+                                .show(ui, |ui| self.cloud_creation_body(ui, &mut actions, refocus_repository));
+                        });
+                        column(ui, SUMMARY_WIDTH, body_height, |ui| {
+                            super::super::runtime::solid_scroll_area(ui)
+                                .id_salt("cloud-creation-summary")
+                                .max_height(body_height)
+                                .show(ui, |ui| {
+                                    selector::summary::show(ui, &mut self.cloud_prototype.production);
+                                });
+                        });
                     });
-                watch::controls(ui, &mut self.cloud_prototype.production);
-                footer(ui, &self.cloud_prototype.production, &mut actions);
+                } else {
+                    super::super::runtime::solid_scroll_area(ui)
+                        .id_salt("cloud-creation-body")
+                        .max_height(body_height)
+                        .show(ui, |ui| {
+                            self.cloud_creation_body(ui, &mut actions, refocus_repository);
+                            ui.add_space(12.0);
+                            selector::summary::show(ui, &mut self.cloud_prototype.production);
+                        });
+                }
+                ui.add_space(12.0);
+                selector::summary::footer(ui, &mut self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
@@ -137,12 +138,32 @@ impl HorizonApp {
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::None => {}
         }
+        // The Start button and Enter in the title take the same path: with "Start new
+        // cloud once available" checked for a sold-out worker, both arm the watch.
         if actions.create && !self.cloud_prototype.production.title.trim().is_empty() {
-            self.cloud_prototype.production.launch.submitted = true;
+            selector::summary::start(&mut self.cloud_prototype.production);
         }
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    /// Everything left of the summary: title, profile, worker, place and more options.
+    fn cloud_creation_body(&mut self, ui: &mut Ui, actions: &mut Actions, refocus_repository: bool) {
+        let form = &mut self.cloud_prototype.production;
+        ui.add_enabled_ui(
+            form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
+            |ui| {
+                actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
+                if !form.launch.loading() && form.profiles.is_none() && super::repository_setup::render(ui, form) {
+                    actions.repository = RepositoryAction::Setup;
+                }
+            },
+        );
+        if let Some(error) = &self.cloud_prototype.error {
+            ui.add_space(8.0);
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
     }
 
     /// Keeps prices and stock current for the size being chosen.
@@ -321,112 +342,119 @@ fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
     }
 }
 
+fn column(ui: &mut Ui, width: f32, height: f32, add: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui_with_layout(Vec2::new(width, height), Layout::top_down(Align::Min), |ui| {
+        ui.set_width(width);
+        ui.set_max_width(width);
+        // A steady height keeps the dialog from jumping as choices change.
+        ui.set_min_height(height);
+        add(ui);
+    });
+}
+
 fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_repository: bool) -> RepositoryAction {
     title_field(ui, form, submit);
-    if form.launch.loading() {
+    let listed = if form.launch.loading() {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label("Preparing cloud…");
         });
+        false
     } else if form.profiles.is_some() {
         profiles::field(ui, form);
-        ui.small(&form.repository);
-        let Some(config) = &mut form.profiles else {
-            return RepositoryAction::None;
-        };
-        if let Some(profile) = config.profiles.get_mut(&form.selected_profile) {
-            // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
-            if !profile.gpu {
-                form.placement.gpu_types.clear();
-            }
-            let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
-            ui.small(format!("{} · {cpu} vCPU · {memory_gb} GB", form.selected_profile));
-            let choices = provider::choices(&form.prices, profile);
-            // A provider chosen before the profile or the configured providers changed is
-            // dropped once it is no longer a choice, with the place it named.
-            if form.provider.is_some_and(|chosen| !choices.contains(&chosen)) {
-                form.provider = None;
-                form.placement = Placement::default();
-            }
-            let provider = provider::current(form.provider, profile);
-            // A profile naming a provider this machine cannot use is never moved on its
-            // own: the person picks one it can, even when there is only one.
-            let unusable = !choices.is_empty() && !choices.contains(&provider);
-            if unusable {
-                ui.small(format!(
-                    "This profile names {}, which this machine has no credentials for. Choose a provider it can use.",
-                    provider.label
-                ));
-            }
-            if (choices.len() > 1 || unusable)
-                && let Some(chosen) = provider::choice(ui, &choices, provider)
-            {
-                form.provider = Some(chosen);
-                // Each provider names places and sizes its own way.
-                form.placement = Placement::default();
-                form.size = None;
-            }
-            storage::field(ui, profile, provider);
-            // Providers that price flavors offer their flavor sizes with prices; others
-            // offer the sizes of their configured server types.
-            let size = if provider.pricing == Pricing::Flavors {
-                pricing::size_field(ui, &form.prices, profile, (cpu, memory_gb))
-            } else {
-                provider::size_field(ui, &form.prices, profile, (cpu, memory_gb))
-            };
-            if let Some(size) = size {
-                form.size = Some(size);
-            }
-            let sized = horizon_core::cloud_runtime::prices::Profile {
-                cpu,
-                memory_gb,
-                ..profile.clone()
-            };
-            if provider.offers(Choice::GpuType)
-                && let Some(placement) = gpu_choice::gpu_field(ui, &form.prices, &sized, &form.placement)
-            {
-                form.placement = placement;
-            }
-            match provider.placement {
-                ProviderPlacement::Locations => {
-                    ui.add_space(4.0);
-                    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
-                        form.placement = placement;
-                    }
-                }
-                ProviderPlacement::DataCenters => {
-                    if provider.offers(Choice::Region)
-                        && let Some(placement) = placement::region_field(ui, &form.prices, &sized, &form.placement)
-                    {
-                        form.placement = placement;
-                    }
-                    ui.add_space(4.0);
-                    match pricing::card(ui, &form.prices, &sized, &form.placement) {
-                        Some(pricing::CardAction::Refresh) => form.prices.refresh(),
-                        Some(pricing::CardAction::UseGpu(gpu)) if provider.offers(Choice::GpuType) => {
-                            form.placement.gpu_types = vec![gpu];
-                        }
-                        Some(pricing::CardAction::UseGpu(_)) | None => {}
-                    }
-                }
-            }
-        }
-    }
+        ui.add_space(8.0);
+        machine(ui, form)
+    } else {
+        false
+    };
     let mut action = RepositoryAction::None;
+    // Siblings can hold back Start, so they stay in view.
     if form.profiles.is_some()
         && !form.launch.loading()
         && let Some(alias) = siblings::section(ui, &mut form.launch.siblings)
     {
         action = RepositoryAction::ChooseSibling(alias);
     }
-    ui.small("Only committed files are transferred. Local changes stay on this computer.");
-    egui::CollapsingHeader::new("Advanced")
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(RichText::new("More options").size(14.0))
+        .id_salt("cloud-more-options")
         .default_open(form.profiles.is_none() && !form.launch.loading())
-        .show(ui, |ui| match advanced_fields(ui, form, refocus_repository) {
-            RepositoryAction::None => {}
-            chosen => action = chosen,
+        .show(ui, |ui| {
+            if listed
+                && let Some(profile) = form
+                    .profiles
+                    .as_mut()
+                    .and_then(|config| config.profiles.get_mut(&form.selected_profile))
+            {
+                storage::container_field(ui, profile, provider::current(form.provider, profile));
+            }
+            match advanced_fields(ui, form, refocus_repository) {
+                RepositoryAction::None => {}
+                chosen => action = chosen,
+            }
         });
     action
+}
+
+/// The worker for the selected profile: the wide selector where the provider lists its
+/// offers, and the provider's own size and location fields otherwise. Returns whether
+/// the selector was shown.
+fn machine(ui: &mut Ui, form: &mut Production) -> bool {
+    let Some(config) = &mut form.profiles else {
+        return false;
+    };
+    let Some(profile) = config.profiles.get_mut(&form.selected_profile) else {
+        return false;
+    };
+    // A profile reread as CPU only drops a GPU type chosen while it was a GPU profile.
+    if !profile.gpu {
+        form.placement.gpu_types.clear();
+    }
+    let choices = provider::choices(&form.prices, profile);
+    // A provider chosen before the profile or the configured providers changed is
+    // dropped once it is no longer a choice, with the place it named.
+    if form.provider.is_some_and(|chosen| !choices.contains(&chosen)) {
+        form.provider = None;
+        form.placement = Placement::default();
+    }
+    let provider = provider::current(form.provider, profile);
+    // A profile naming a provider this machine cannot use is never moved on its
+    // own: the person picks one it can, even when there is only one.
+    let unusable = !choices.is_empty() && !choices.contains(&provider);
+    if unusable {
+        ui.small(format!(
+            "This profile names {}, which this machine has no credentials for. Choose a provider it can use.",
+            provider.label
+        ));
+    }
+    if (choices.len() > 1 || unusable)
+        && let Some(chosen) = provider::choice(ui, &choices, provider)
+    {
+        form.provider = Some(chosen);
+        // Each provider names places and sizes its own way.
+        form.placement = Placement::default();
+        form.size = None;
+        return false;
+    }
+    if provider.placement == ProviderPlacement::DataCenters {
+        selector::section(ui, form);
+        return true;
+    }
+    let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
+    storage::field(ui, profile, provider);
+    if let Some(size) = provider::size_field(ui, &form.prices, profile, (cpu, memory_gb)) {
+        form.size = Some(size);
+    }
+    let sized = horizon_core::cloud_runtime::prices::Profile {
+        cpu,
+        memory_gb,
+        ..profile.clone()
+    };
+    ui.add_space(4.0);
+    if let Some(placement) = provider::card(ui, &form.prices, (provider, &sized), &form.placement) {
+        form.placement = placement;
+    }
+    false
 }
 
 fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool) -> RepositoryAction {
@@ -458,32 +486,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 .corner_radius(8),
         )
         .clicked();
-    ui.add_space(8.0);
-    if let Some(config) = &form.profiles {
-        if let Some(profile) = config.profiles.get(&form.selected_profile) {
-            let (cpu, memory_gb) = form.size.unwrap_or((profile.cpu, profile.memory_gb));
-            ui.label(
-                RichText::new(format!(
-                    "{cpu} vCPU · {memory_gb} GB memory · {}",
-                    if profile.gpu { "GPU" } else { "CPU only" }
-                ))
-                .size(13.0)
-                .color(theme::FG_SOFT()),
-            );
-            let sized = horizon_core::cloud_runtime::prices::Profile {
-                cpu,
-                memory_gb,
-                ..profile.clone()
-            };
-            // Data centers and GPU types are chosen only where the provider has them.
-            let provider = provider::current(form.provider, profile);
-            if provider.placement == ProviderPlacement::DataCenters
-                && let Some(placement) = placement::data_center_field(ui, &form.prices, &sized, &form.placement)
-            {
-                form.placement = placement;
-            }
-        }
-    } else {
+    if form.profiles.is_none() {
         ui.label(
             RichText::new("Read the repository settings to choose a profile.")
                 .size(13.0)
@@ -509,45 +512,15 @@ fn title_requirement(ui: &mut Ui, form: &Production) {
     }
 }
 
-fn footer(ui: &mut Ui, form: &Production, actions: &mut Actions) {
-    if let Some(reason) = submit_reason(form) {
-        ui.label(RichText::new(reason).size(14.0).color(theme::FG()));
-    }
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), 40.0),
-        Layout::right_to_left(Align::Center),
-        |ui| {
-            // A tooltip draws under this modal, so the reason is painted above the button.
-            actions.create |= ui
-                .add_enabled(
-                    can_submit(form),
-                    Button::new(
-                        RichText::new(if form.pending_creation.is_some() || form.launch.submitted {
-                            "Starting cloud…"
-                        } else {
-                            "Start cloud"
-                        })
-                        .size(14.0)
-                        .strong(),
-                    )
-                    .min_size(Vec2::new(136.0, 40.0))
-                    .fill(theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.35))
-                    .stroke(Stroke::new(1.0, theme::ACCENT()))
-                    .corner_radius(10),
-                )
-                .clicked();
-            actions.cancel = ui
-                .add(
-                    Button::new(RichText::new("Cancel").size(14.0))
-                        .min_size(Vec2::new(88.0, 40.0))
-                        .corner_radius(10),
-                )
-                .clicked();
-        },
-    );
+/// Why Start is unavailable, for the selector tests; the dialog works it out once per
+/// frame with [`submit_reason_given`].
+#[cfg(all(test, unix))]
+fn submit_reason(form: &Production) -> Option<&'static str> {
+    submit_reason_given(form, storage::launch_reason(form))
 }
 
-fn submit_reason(form: &Production) -> Option<&'static str> {
+/// [`submit_reason`] with the chosen worker's launch reason already worked out.
+fn submit_reason_given(form: &Production, blocked: Option<&'static str>) -> Option<&'static str> {
     if form.pending_creation.is_some() || form.launch.submitted {
         return None;
     }
@@ -555,7 +528,7 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
         form.title.trim().is_empty(),
         form.profiles.is_none() && !form.launch.loading(),
     ) {
-        (false, false) => storage::size_reason(form),
+        (false, false) => blocked,
         (true, false) => Some("Enter a cloud title to start this cloud."),
         (false, true) => Some("Read the repository profile before starting."),
         (true, true) => Some("Enter a cloud title and read the repository profile."),
@@ -563,11 +536,16 @@ fn submit_reason(form: &Production) -> Option<&'static str> {
 }
 
 fn can_submit(form: &Production) -> bool {
+    can_submit_given(form, storage::launch_reason(form))
+}
+
+/// [`can_submit`] with the chosen worker's launch reason already worked out.
+fn can_submit_given(form: &Production, blocked: Option<&'static str>) -> bool {
     !form.title.trim().is_empty()
         && (form.profiles.is_some() || form.launch.loading())
         && form.pending_creation.is_none()
         && !form.launch.submitted
         && form.launch.watch.is_none()
         && !form.launch.siblings.blocks_launch()
-        && storage::size_reason(form).is_none()
+        && blocked.is_none()
 }

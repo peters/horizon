@@ -116,9 +116,9 @@ impl State {
         }
     }
 
-    /// A catalog that could not be refreshed is no longer offered as current.
+    /// A catalog that could not be refreshed is kept, but it is never offered as
+    /// current: a refresh starts only once it has gone stale.
     fn fail(&mut self, error: String) {
-        self.fetched = None;
         self.error = Some(error);
         self.failed_at = Some(Instant::now());
     }
@@ -158,6 +158,19 @@ impl State {
     /// The current catalog, when this machine has a Hetzner binding.
     pub fn fresh(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
         self.fetched.as_ref().filter(|fetched| fetched.at.elapsed() < FRESH)
+    }
+
+    /// The last catalog fetched, however old, for showing choices while a refresh runs
+    /// or after it failed. Decisions that need current prices use [`Self::fresh`].
+    pub fn displayed(&self) -> Option<&Fetched<Option<HetznerCatalog>>> {
+        self.fetched.as_ref()
+    }
+
+    /// Whether the catalog shown is older than the limit for starting a cloud.
+    pub fn too_old(&self) -> bool {
+        self.fetched
+            .as_ref()
+            .is_some_and(|fetched| fetched.at.elapsed() >= super::START_LIMIT)
     }
 
     /// Time until this provider's current catalog needs another fetch.
@@ -211,6 +224,12 @@ impl State {
 /// only.
 #[cfg(all(test, unix))]
 impl State {
+    /// As a refresh fails after a catalog was fetched: the catalog stays on show.
+    pub fn refresh_failed(&mut self, error: &str) {
+        self.bound = true;
+        self.fail(error.to_owned());
+    }
+
     pub fn answered_with_types(&mut self, catalog: Option<HetznerCatalog>, server_types: &[&str]) {
         self.answered(catalog);
         self.server_types = server_types.iter().map(|&name| name.to_owned()).collect();

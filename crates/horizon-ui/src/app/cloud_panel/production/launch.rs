@@ -18,6 +18,12 @@ pub(super) struct State {
     pub revision: Option<String>,
     pub submitted: bool,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
+    /// The hourly compute price shown when the watch started.
+    pub watch_quote: Option<f64>,
+    /// The watched selection's current price, while it is above `watch_quote`.
+    pub price_rose: Option<f64>,
+    /// How the worker catalog is being browsed.
+    pub selector: super::creation::selector::State,
     pub accounts_checked: bool,
     ready_profiles: Vec<String>,
     /// Same-worker siblings chosen for this launch.
