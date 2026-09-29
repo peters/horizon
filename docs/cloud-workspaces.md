@@ -279,7 +279,8 @@ source:
 Before any worker is allocated, Horizon exports the committed tree (without submodules,
 LFS content as pointers) into a scratch folder and runs the command there, with `{dir}`
 replaced by an empty folder next to it. A program given as a relative path, such as
-`./restore.sh`, is the committed one. The restore may run for 30 minutes. Horizon then
+`./restore.sh`, is the committed one; it must resolve, links included, to a file inside
+the repository, so `..` is refused. The restore may run for 30 minutes. Horizon then
 refuses the folder if it holds a link, a special file or a package manager settings
 file that can hold feed credentials (`nuget.config`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`,
 `.pypirc`, `.netrc`, `_netrc`, `.git-credentials`, `.dockercfg`, and `.docker/config.json`,
@@ -294,9 +295,9 @@ variable name that the worker does not set itself (not `PATH`, `HOME`, `DISPLAY`
 The command runs on your computer, so a repository can ask for it but never allow it.
 Horizon runs it only when this computer's cloud settings allow exactly that command and
 variable for that checkout; otherwise the deployment stops before allocation with
-"allow its restore command on the cloud card first". An agent cannot allow it either,
-including one that asks for a companion cloud. Until the card offers the approval, add
-it to `~/.horizon/cloud/settings.json` yourself:
+"allow its restore command in the cloud settings (package_restores) first". An agent
+cannot allow it either, including one that asks for a companion cloud. Add the approval
+to `~/.horizon/cloud/settings.json`:
 
 ```json
 "package_restores": [

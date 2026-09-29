@@ -56,7 +56,7 @@ pub enum Error {
     #[error(transparent)]
     Sibling(#[from] siblings::SiblingError),
     #[error(
-        "This repository restores its packages on this computer; allow its restore command on the cloud card first"
+        "This repository restores its packages on this computer; allow its restore command in the cloud settings (package_restores) first"
     )]
     PackageRestoreNotApproved,
 }

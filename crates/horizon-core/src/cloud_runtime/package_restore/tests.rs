@@ -254,3 +254,45 @@ fn a_cancelled_deployment_stops_the_scan() {
     cancel.cancel();
     assert!(scan(temp.path(), &cancel).is_err());
 }
+
+#[test]
+fn a_relative_program_never_leaves_the_exported_tree() {
+    let temp = tempfile::tempdir().unwrap();
+    let tree = temp.path().join("tree");
+    std::fs::create_dir_all(tree.join("tools")).unwrap();
+    std::fs::write(tree.join("tools/restore.sh"), "").unwrap();
+    std::fs::write(temp.path().join("outside.sh"), "").unwrap();
+    std::os::unix::fs::symlink(temp.path().join("outside.sh"), tree.join("tools/linked.sh")).unwrap();
+    assert_eq!(program(&tree, "dotnet").unwrap(), PathBuf::from("dotnet"));
+    assert_eq!(
+        program(&tree, "/usr/bin/dotnet").unwrap(),
+        PathBuf::from("/usr/bin/dotnet")
+    );
+    assert_eq!(
+        program(&tree, "./tools/restore.sh").unwrap(),
+        tree.canonicalize().unwrap().join("tools/restore.sh")
+    );
+    for escaping in [
+        "../outside.sh",
+        "tools/../../outside.sh",
+        "./tools/linked.sh",
+        "./tools/missing.sh",
+        "./tools",
+    ] {
+        assert!(program(&tree, escaping).is_err(), "{escaping}");
+    }
+}
+
+#[test]
+fn a_folder_over_the_entry_limit_is_refused_while_it_is_listed() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..5 {
+        std::fs::write(temp.path().join(format!("file-{index}")), "x").unwrap();
+    }
+    let cancel = Cancellation::default();
+    assert_eq!(scan_within(temp.path(), &cancel, 5).unwrap().0.len(), 5);
+    assert!(matches!(
+        scan_within(temp.path(), &cancel, 4),
+        Err(Error::Invalid(message)) if message.contains("500,000")
+    ));
+}

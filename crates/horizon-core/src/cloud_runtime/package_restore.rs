@@ -134,7 +134,7 @@ pub(crate) fn restore(
         .to_str()
         .ok_or(Error::Invalid("The package folder path is not valid Unicode"))?;
     let arguments = packages.arguments(folder);
-    let mut command = Command::new(program(&tree, &arguments[0]));
+    let mut command = Command::new(program(&tree, &arguments[0])?);
     command.args(&arguments[1..]).current_dir(&tree);
     let restored = runner.run("Package restore", &mut command, TIMEOUT);
     let _ = std::fs::remove_dir_all(&tree);
@@ -147,14 +147,22 @@ pub(crate) fn restore(
     })
 }
 
-/// A program named by a relative path, such as `./restore.sh`, is the committed one.
-fn program(tree: &Path, program: &str) -> PathBuf {
+/// A program named by a relative path, such as `./restore.sh`, is the committed one: it
+/// must resolve, links included, to a file inside the exported tree.
+fn program(tree: &Path, program: &str) -> Result<PathBuf> {
     let path = Path::new(program);
-    if path.is_relative() && path.components().count() > 1 {
-        tree.join(path)
-    } else {
-        path.to_owned()
+    if path.is_absolute() || path.components().count() == 1 {
+        return Ok(path.to_owned());
     }
+    let outside = || Error::Invalid("A relative restore program must be a committed file inside the repository");
+    if path.components().any(|part| part == std::path::Component::ParentDir) {
+        return Err(outside());
+    }
+    let resolved = tree.join(path).canonicalize().map_err(|_| outside())?;
+    if !resolved.starts_with(tree.canonicalize()?) || !resolved.is_file() {
+        return Err(outside());
+    }
+    Ok(resolved)
 }
 
 /// Whether a file named `name` in the folder named `parent` holds credentials.
@@ -168,12 +176,26 @@ fn credential(parent: &str, name: &str) -> bool {
 
 /// Lists `directory` in a stable order, refusing what a package folder must not send.
 fn scan(directory: &Path, cancel: &Cancellation) -> Result<(Vec<Entry>, u64)> {
+    scan_within(directory, cancel, MAX_ENTRIES)
+}
+
+/// As [`scan`], with at most `limit` files and folders.
+fn scan_within(directory: &Path, cancel: &Cancellation, limit: usize) -> Result<(Vec<Entry>, u64)> {
     let mut entries = Vec::new();
     let mut bytes = 0u64;
     let mut pending = vec![(directory.to_owned(), String::new(), String::new())];
     while let Some((folder, prefix, parent)) = pending.pop() {
         cancel.check()?;
-        let mut children = std::fs::read_dir(&folder)?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = Vec::new();
+        for child in std::fs::read_dir(&folder)? {
+            // Refused before a huge folder is collected or sorted.
+            if entries.len() + children.len() >= limit {
+                return Err(Error::Invalid(
+                    "The restored package folder holds more than 500,000 files and folders",
+                ));
+            }
+            children.push(child?);
+        }
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children.into_iter().rev() {
             let name = child
@@ -187,7 +209,7 @@ fn scan(directory: &Path, cancel: &Cancellation) -> Result<(Vec<Entry>, u64)> {
             }
             let relative = format!("{prefix}{name}");
             let metadata = std::fs::symlink_metadata(child.path())?;
-            if entries.len() >= MAX_ENTRIES {
+            if entries.len() >= limit {
                 return Err(Error::Invalid(
                     "The restored package folder holds more than 500,000 files and folders",
                 ));

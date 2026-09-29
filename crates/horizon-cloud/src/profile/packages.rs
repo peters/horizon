@@ -46,10 +46,13 @@ impl Packages {
                     && !argument.chars().any(char::is_control)
             })
             && !self.restore[0].contains(Self::DIRECTORY)
+            && !std::path::Path::new(&self.restore[0])
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
             && self.restore.iter().any(|argument| argument.contains(Self::DIRECTORY));
         if !arguments_valid {
             return Err(ProfileError::Invalid(
-                "source.packages.restore must be a program and at most 31 arguments, each non-empty, at most 1,024 characters and without control characters, with {dir} in an argument",
+                "source.packages.restore must be a program (never outside the repository through ..) and at most 31 arguments, each non-empty, at most 1,024 characters and without control characters, with {dir} in an argument",
             ));
         }
         if !Self::valid_env(&self.env) {
@@ -111,6 +114,8 @@ mod tests {
             &["{dir}/restore"],
             &["dotnet", ""],
             &["dotnet", "restore\n--packages", "{dir}"],
+            &["../tools/restore.sh", "{dir}"],
+            &["./build/../../restore.sh", "{dir}"],
         ] {
             assert!(packages(restore, "NUGET_PACKAGES").validate().is_err(), "{restore:?}");
         }
