@@ -62,6 +62,9 @@ impl HorizonApp {
         let form = &mut self.cloud_prototype.production;
         form.pending_creation = None;
         form.launch = State::default();
+        // A new dialog starts from nothing: no clone, token, typed key or earlier check carries over.
+        form.source = super::creation::source::State::default();
+        form.checks = super::creation::checks::State::default();
         form.launch.workspace = Some(local);
         form.launch.session = self.active_session.as_ref().map(|session| session.session_id.clone());
         form.title.clear();

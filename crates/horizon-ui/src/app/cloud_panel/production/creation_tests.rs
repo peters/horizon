@@ -121,6 +121,32 @@ fn opening_a_cloud_without_a_repository_focuses_the_source_field_without_an_extr
 }
 
 #[test]
+fn a_new_dialog_starts_without_what_the_last_one_held() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
+    let workspace = app.board.create_workspace("Sample project");
+    app.open_workspace_cloud(&ctx, workspace);
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("github.com/demo-org/demo-atlas".into())],
+        Modifiers::NONE,
+    );
+    assert!(!app.cloud_prototype.production.source.input().is_empty());
+    app.open_workspace_cloud(&ctx, workspace);
+    assert!(
+        app.cloud_prototype.production.source.input().is_empty(),
+        "the next dialog does not inherit the last one's source field"
+    );
+}
+
+#[test]
 fn opening_a_cloud_for_a_repository_focuses_the_title_without_an_extra_click() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

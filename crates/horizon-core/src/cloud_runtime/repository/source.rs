@@ -131,10 +131,14 @@ pub fn default_parent(home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join("Horizon"))
 }
 
-/// The folders a clone of `remote` can land in under `parent`, in the order they are tried:
-/// the repository's name, then that name with `-2`, `-3` and so on.
+/// How many folders a clone of one repository can land in under a parent: the repository's
+/// name, then that name with `-2`, `-3` and so on. A search for an earlier clone looks in
+/// every one of them, and a new clone never goes beyond them, so the two always agree.
+const CANDIDATES: u32 = 25;
+
+/// The folders a clone of `remote` can land in under `parent`, in the order they are tried.
 fn candidates<'a>(parent: &'a Path, remote: &'a Remote) -> impl Iterator<Item = PathBuf> + 'a {
-    (1..=1000).map(move |n| match n {
+    (1..=CANDIDATES).map(move |n| match n {
         1 => parent.join(&remote.name),
         n => parent.join(format!("{}-{n}", remote.name)),
     })
@@ -148,22 +152,16 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
         .unwrap_or_else(|| parent.join(&remote.name))
 }
 
-/// How many folders under `parent` are asked about their origin: each asks a `git` process.
-const INSPECTED: usize = 20;
-
 /// The checkout of `remote` already under `parent`, so a second request reuses it: any of the
-/// folders [`destination`] would have chosen for an earlier clone, the first few that exist.
+/// folders [`destination`] can choose from, each asked about its origin only if it exists.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
-    candidates(parent, remote)
-        .filter(|path| path.is_dir())
-        .take(INSPECTED)
-        .find(|path| {
-            git_output(path, &["config", "--get", "remote.origin.url"])
-                .and_then(|origin| parse(origin.trim()))
-                .is_some_and(|origin| origin.url == remote.url)
-                && is_checkout(path)
-        })
+    candidates(parent, remote).filter(|path| path.is_dir()).find(|path| {
+        git_output(path, &["config", "--get", "remote.origin.url"])
+            .and_then(|origin| parse(origin.trim()))
+            .is_some_and(|origin| origin.url == remote.url)
+            && is_checkout(path)
+    })
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
@@ -655,6 +653,21 @@ mod tests {
         assert!(Token::new(&gitlab, "  ").is_none());
         let ssh = parse("git@github.com:demo-org/demo").unwrap();
         assert!(Token::new(&ssh, "ghp_demo").is_none(), "a token never applies over SSH");
+    }
+
+    #[test]
+    fn a_new_clone_never_goes_beyond_the_folders_a_search_looks_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = parse("peters/horizon").unwrap();
+        std::fs::create_dir(temp.path().join("horizon")).unwrap();
+        for n in 2..=CANDIDATES {
+            std::fs::create_dir(temp.path().join(format!("horizon-{n}"))).unwrap();
+        }
+        assert_eq!(
+            destination(temp.path(), &remote),
+            temp.path().join("horizon"),
+            "with every candidate taken there is no later one to hide a checkout in"
+        );
     }
 
     #[test]
