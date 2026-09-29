@@ -18,6 +18,8 @@ const TITLE_LEFT: f32 = 64.0;
 pub(in crate::app::cloud_panel) enum Sharing {
     Off,
     Paused,
+    /// This computer moved to another network; nothing is shared until the owner shares it.
+    Moved,
     Starting,
     Open(usize),
     Failed,
@@ -439,6 +441,13 @@ fn items(indicators: &Indicators) -> Vec<Item> {
             false,
             Some(theme::PALETTE_YELLOW()),
             "Local network sharing paused while disconnected".to_owned(),
+        ),
+        Sharing::Moved => (
+            String::new(),
+            false,
+            Some(theme::PALETTE_YELLOW()),
+            "Local network sharing stopped: this computer moved to another network. Share it again in Connections"
+                .to_owned(),
         ),
         Sharing::Starting => (
             String::new(),

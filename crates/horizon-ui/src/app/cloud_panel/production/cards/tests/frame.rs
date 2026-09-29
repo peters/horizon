@@ -169,3 +169,39 @@ fn held_lines_join_in_order_when_no_view_is_scrolled_up_any_more() {
     assert_eq!(texts, ["first", "second"]);
     assert!(runtime.pending_logs.is_empty());
 }
+
+#[test]
+fn the_header_names_a_move_to_another_network_and_follows_a_running_bridge() {
+    use super::super::super::local_network::{Running, Sharing as State};
+    use super::super::strip::Sharing;
+    let delay = |sharing: State| {
+        let runtime = super::super::super::Runtime {
+            sharing,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut shown = None;
+        let mut frame = || {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                shown = Some(super::super::view::sharing(ui.ctx(), &runtime));
+            })
+            .discard_textures()
+        };
+        // A new context repaints at once for its first frames; the third shows the request.
+        let _ = frame();
+        let _ = frame();
+        let output = frame();
+        (
+            shown.unwrap(),
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+        )
+    };
+    let (moved, _) = delay(State::Moved { to: None, ready: true });
+    assert_eq!(moved, Sharing::Moved);
+    let (starting, repaint) = delay(State::On(Running::starting()));
+    assert_eq!(starting, Sharing::Starting);
+    assert!(repaint <= std::time::Duration::from_secs(1), "{repaint:?}");
+    let (off, idle) = delay(State::Off);
+    assert_eq!(off, Sharing::Off);
+    assert!(idle > std::time::Duration::from_secs(1), "{idle:?}");
+}

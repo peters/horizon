@@ -181,22 +181,31 @@ pub fn is_failure(line: &str) -> bool {
 /// Counts of nothing, such as `0 failed` in `test result: ok. 214 passed; 0 failed`,
 /// report success; drop them before looking for failure words. `10 failed` stays.
 fn without_zero_counts(lower: &str) -> String {
+    const NONE: [&str; 4] = ["0 ", "no ", "zero ", "without "];
+    const COUNTED: [&str; 6] = ["failed", "failures", "failure", "errors", "error", "warnings"];
     let mut kept = String::with_capacity(lower.len());
     let mut rest = lower;
-    while let Some(index) = rest.find("0 ") {
-        let after = &rest[index + 2..];
-        let counted = ["failed", "failures", "failure", "errors", "error", "warnings"]
-            .iter()
-            .find(|word| after.starts_with(*word));
-        let preceded_by_digit = rest[..index].ends_with(|c: char| c.is_ascii_digit())
-            || (index == 0 && kept.ends_with(|c: char| c.is_ascii_digit()));
+    while let Some((index, none)) = NONE
+        .iter()
+        .filter_map(|none| rest.find(none).map(|index| (index, *none)))
+        .min_by_key(|(index, _)| *index)
+    {
+        let after = &rest[index + none.len()..];
+        let counted = COUNTED.iter().find(|word| after.starts_with(*word));
+        // "10 errors" and "piano error" are not counts of nothing.
+        let inside_word = |text: &str| text.ends_with(|c: char| c.is_ascii_alphanumeric());
+        let starts_word = if index == 0 {
+            !inside_word(&kept)
+        } else {
+            !inside_word(&rest[..index])
+        };
         match counted {
-            Some(word) if !preceded_by_digit => {
+            Some(word) if starts_word => {
                 kept.push_str(&rest[..index]);
                 rest = &after[word.len()..];
             }
             _ => {
-                kept.push_str(&rest[..index + 2]);
+                kept.push_str(&rest[..index + none.len()]);
                 rest = after;
             }
         }
@@ -231,6 +240,9 @@ mod tests {
             "test result: ok. 214 passed; 0 failed; 0 ignored",
             "Finished with 0 errors and 0 warnings",
             "build: 0 failures",
+            "No errors detected",
+            "Validation finished with no failures",
+            "completed without errors",
         ] {
             assert!(!is_failure(success), "{success}");
         }
@@ -238,6 +250,8 @@ mod tests {
             "test result: FAILED. 3 passed; 10 failed",
             "20 errors generated",
             "error: 0 bytes written",
+            "no errors in the plan, but the build failed",
+            "piano error: string snapped",
         ] {
             assert!(is_failure(failure), "{failure}");
         }

@@ -104,7 +104,7 @@ pub(super) struct Running {
 }
 
 /// How often the card reads the bridge's status; it repaints at the same cadence.
-const STATUS_REFRESH: Duration = Duration::from_secs(1);
+pub(super) const STATUS_REFRESH: Duration = Duration::from_secs(1);
 
 impl Running {
     fn new(bridge: Option<Bridge>) -> Self {
@@ -125,6 +125,14 @@ impl Running {
             *status = Some((now, bridge.status()));
         }
         status
+    }
+}
+
+#[cfg(test)]
+impl Running {
+    /// A bridge still starting, as far as a reader of its status can tell.
+    pub(super) fn starting() -> Self {
+        Self::new(None)
     }
 }
 
