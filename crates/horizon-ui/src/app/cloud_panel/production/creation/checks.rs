@@ -199,7 +199,24 @@ fn needs_account(form: &Production) -> bool {
             .iter()
             .any(|problem| matches!(problem.what, "Cloud settings" | "Provider account"))
     });
-    missing || provider_error(form).is_some()
+    missing || provider_error(form).is_some_and(turned_down)
+}
+
+/// Whether a provider's answer says it does not accept the credential, as opposed to a timeout or
+/// an outage that a new key cannot mend and a valid key must not be replaced for.
+fn turned_down(error: &str) -> bool {
+    let error = error.to_lowercase();
+    [
+        "authentication",
+        "credential",
+        "api key",
+        "token",
+        "unauthorized",
+        "forbidden",
+        "invalid key",
+    ]
+    .iter()
+    .any(|word| error.contains(word))
 }
 
 fn provider_error(form: &Production) -> Option<&str> {
@@ -509,6 +526,21 @@ mod tests {
         assert_eq!(verdict_given(&form, true), Verdict::Waiting, "nothing answered yet");
         form.checks.problems = Some(vec![problem("Cloud settings", "No key yet.".into())]);
         assert_eq!(verdict_given(&form, true), Verdict::Failed);
+    }
+
+    #[test]
+    fn a_key_is_offered_for_a_refused_credential_and_not_for_an_outage() {
+        assert!(turned_down(
+            "Provider authentication failed; check the machine-local credential"
+        ));
+        assert!(turned_down(
+            "This machine has no RunPod API key; add one in cloud settings to use RunPod"
+        ));
+        assert!(!turned_down("Request timed out"));
+        assert!(!turned_down(
+            "Cloud state I/O failed: No such file or directory (os error 2)"
+        ));
+        assert!(!turned_down("RunPod is unavailable, try again later"));
     }
 
     #[test]

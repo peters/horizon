@@ -46,6 +46,11 @@ impl State {
 
 pub(super) fn form(ui: &mut Ui, state: &mut State, root: &Path) {
     ui.add_space(6.0);
+    // While a key is being saved nothing here is edited: the save has already taken what was typed.
+    ui.add_enabled_ui(state.saving.is_none(), |ui| inputs(ui, state, root));
+}
+
+fn inputs(ui: &mut Ui, state: &mut State, root: &Path) {
     ui.horizontal(|ui| {
         ui.selectable_value(&mut state.hetzner, false, "RunPod");
         ui.selectable_value(&mut state.hetzner, true, "Hetzner");
