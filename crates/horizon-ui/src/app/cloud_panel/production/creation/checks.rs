@@ -57,7 +57,7 @@ impl State {
             Err(reason) => {
                 // The profile cannot run on the provider chosen here; there is nothing to ask it,
                 // and an answer still on its way was for another question.
-                self.problems = Some(vec![problem("Provider account", reason.clone())]);
+                self.problems = Some(vec![problem("Provider profile", reason.clone())]);
                 self.job = None;
                 self.key = Some(key);
                 return;
@@ -103,7 +103,7 @@ pub(super) fn update(form: &mut Production, root: Option<&Path>, ctx: &Context) 
             Ok(()) => {
                 // The key just saved is asked about again, by the checks and by the provider.
                 form.checks.key = None;
-                form.prices.refresh();
+                form.prices.restart();
             }
             Err(error) => form.checks.account.fail(error),
         }
@@ -167,7 +167,10 @@ fn rows(form: &Production) -> Vec<Row> {
             form.prices.hetzner.error(),
         ),
     };
-    rows.push(if let Some(problem) = problem("Provider account") {
+    rows.push(if let Some(problem) = problem("Provider profile") {
+        // What no key can fix: the profile asks for something this provider cannot give.
+        Row::Fail(problem.reason.clone())
+    } else if let Some(problem) = problem("Provider account") {
         Row::Fail(problem.reason.clone())
     } else if let Some(error) = error {
         Row::Fail(error.to_owned())
@@ -376,7 +379,7 @@ mod tests {
         assert!(matches!(
             state.problems.as_deref(),
             Some([Problem {
-                what: "Provider account",
+                what: "Provider profile",
                 ..
             }])
         ));

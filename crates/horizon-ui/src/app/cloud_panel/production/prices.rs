@@ -133,6 +133,14 @@ impl State {
         !stale(at) && self.refreshed_after.is_none_or(|refresh| at >= refresh)
     }
 
+    /// As [`Self::refresh`], for a machine whose credentials just changed: a request that was
+    /// already on its way used the old ones, and its answer proves nothing about the new.
+    pub fn restart(&mut self) {
+        self.refresh();
+        self.list_job = None;
+        self.size_jobs.clear();
+    }
+
     /// Whether a price list the provider answered since prices were last asked for is on show.
     pub fn list_is_current(&self) -> bool {
         self.list.as_ref().is_some_and(|list| self.current(list.at))
@@ -505,6 +513,21 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_restart_drops_the_request_that_used_the_old_key() {
+        let mut state = State::default();
+        state.runpod_checking();
+        assert!(state.loading());
+        state.refresh();
+        assert!(state.loading(), "a refresh keeps the request in flight");
+        state.restart();
+        assert!(
+            !state.loading(),
+            "a restart forgets it, so only an answer to the new key counts"
+        );
     }
 
     #[test]

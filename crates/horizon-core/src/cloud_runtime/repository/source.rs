@@ -148,16 +148,22 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
         .unwrap_or_else(|| parent.join(&remote.name))
 }
 
+/// How many folders under `parent` are asked about their origin: each asks a `git` process.
+const INSPECTED: usize = 20;
+
 /// The checkout of `remote` already under `parent`, so a second request reuses it: any of the
-/// folders [`destination`] would have chosen for an earlier clone.
+/// folders [`destination`] would have chosen for an earlier clone, the first few that exist.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
-    candidates(parent, remote).filter(|path| path.is_dir()).find(|path| {
-        git_output(path, &["config", "--get", "remote.origin.url"])
-            .and_then(|origin| parse(origin.trim()))
-            .is_some_and(|origin| origin.url == remote.url)
-            && is_checkout(path)
-    })
+    candidates(parent, remote)
+        .filter(|path| path.is_dir())
+        .take(INSPECTED)
+        .find(|path| {
+            git_output(path, &["config", "--get", "remote.origin.url"])
+                .and_then(|origin| parse(origin.trim()))
+                .is_some_and(|origin| origin.url == remote.url)
+                && is_checkout(path)
+        })
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {

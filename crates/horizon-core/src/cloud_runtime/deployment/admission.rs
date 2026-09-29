@@ -14,7 +14,8 @@ pub struct Problem {
 }
 
 /// Runs the checks deployment starts with, against nothing but this machine's settings:
-/// the provider's account and credential, and the SSH key the worker is reached with.
+/// what the provider needs of the profile, the provider's account and credential, and the SSH key
+/// the worker is reached with.
 #[must_use]
 pub fn problems(profile: &horizon_cloud::Profile, settings: &Settings) -> Vec<Problem> {
     let request = Request::new(
@@ -34,11 +35,15 @@ pub fn problems(profile: &horizon_cloud::Profile, settings: &Settings) -> Vec<Pr
             });
         }
     };
-    note(
-        "Provider account",
-        providers::preflight(&request.cloud_id, profile, settings)
-            .and_then(|()| providers::compute(&request).map(drop)),
-    );
+    // A missing or unusable account comes first; only with one does a refusal of the profile
+    // itself (which no key can fix) stand on its own.
+    match providers::compute(&request) {
+        Err(error) => note("Provider account", Err(error)),
+        Ok(_) => note(
+            "Provider profile",
+            providers::preflight(&request.cloud_id, profile, settings),
+        ),
+    }
     note("SSH key", validate_ssh_identity(&settings.ssh_identity_file));
     found
 }
