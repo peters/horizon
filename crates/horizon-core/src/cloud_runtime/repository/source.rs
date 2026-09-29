@@ -38,7 +38,6 @@ pub fn parse(input: &str) -> Option<Remote> {
             return None;
         }
         let (authority, path) = rest.split_once('/')?;
-        let scheme = if scheme == "http" { "https" } else { scheme };
         // A password or token in the address would reach argv and the checkout's config.
         let (userinfo, hostport) = authority.rsplit_once('@').unwrap_or(("", authority));
         let user = if scheme == "ssh" {
@@ -326,6 +325,7 @@ fn classify(remote: &Remote, stderr: &str) -> Failure {
     let text = stderr.to_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
     let web = remote.url.starts_with("https://");
+    let plain = remote.url.starts_with("http://");
     let refused = has(&[
         "terminal prompts disabled",
         "could not read username",
@@ -336,7 +336,13 @@ fn classify(remote: &Remote, stderr: &str) -> Failure {
     ]);
     if web && refused {
         Failure::SignIn(remote.host.clone())
-    } else if !web && (refused || has(&["permission denied (", "host key verification failed"])) {
+    } else if plain && refused {
+        // A token is never sent over plain http, so asking for one would lead nowhere.
+        Failure::Other(format!(
+            "{} asks for a sign-in but this link is plain http, so no token can be sent. Use its https link.",
+            remote.host
+        ))
+    } else if !web && !plain && (refused || has(&["permission denied (", "host key verification failed"])) {
         // A token cannot help over SSH: the key, or trust in the host, is what is missing.
         Failure::Other(format!(
             "Git could not sign in over SSH. Give your SSH key access to this repository and trust {} once with `ssh`, or paste its https link.",
@@ -727,6 +733,18 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(collected(&reader, Duration::from_millis(100)), "");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_plain_http_link_stays_plain_and_never_asks_for_a_token() {
+        let plain = parse("http://git.example.org/group/demo").unwrap();
+        assert_eq!(plain.url, "http://git.example.org/group/demo.git");
+        assert!(Token::new(&plain, "glpat_demo").is_none(), "no token over plain http");
+        assert!(matches!(
+            classify(&plain, "fatal: could not read Username for 'http://git.example.org'"),
+            Failure::Other(text) if text.contains("plain http")
+        ));
+        assert_eq!(classify(&plain, "remote: Repository not found."), Failure::NotFound);
     }
 
     #[test]

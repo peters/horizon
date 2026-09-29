@@ -264,7 +264,12 @@ impl State {
                             .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
                     }
                 });
-            let _ = sender.send(result);
+            // Nobody is listening once the dialog is gone: a checkout that was made is not wanted.
+            if let Err(unheard) = sender.send(result)
+                && let Ok(Cloned { path, .. }) = unheard.0
+            {
+                let _ = std::fs::remove_dir_all(path);
+            }
             ctx.request_repaint();
         });
     }
