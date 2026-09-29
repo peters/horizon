@@ -132,11 +132,7 @@ impl HorizonApp {
         ctx.move_to_top(response.response.layer_id);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
         if dismissed || actions.cancel {
-            self.cloud_prototype.production.creating = false;
-            self.cloud_prototype.production.pending_creation = None;
-            self.cloud_prototype.production.launch = super::launch::State::default();
-            // A clone still running stops, and a token that was not used is forgotten.
-            self.cloud_prototype.production.source = source::State::default();
+            self.close_cloud_creation();
             return;
         }
         match actions.repository {
@@ -156,6 +152,17 @@ impl HorizonApp {
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
+    /// used is forgotten.
+    fn close_cloud_creation(&mut self) {
+        let form = &mut self.cloud_prototype.production;
+        form.creating = false;
+        form.pending_creation = None;
+        form.launch = super::launch::State::default();
+        form.source = source::State::default();
+        form.checks = checks::State::default();
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the

@@ -123,7 +123,10 @@ impl State {
             return choose_folder;
         }
         match self.failure.clone() {
-            Some(Failure::SignIn(host)) => self.sign_in(ui, &host, enter),
+            Some(Failure::SignIn(host)) => {
+                let origin = super::origin(&remote.url).to_owned();
+                self.sign_in(ui, &host, &origin, enter);
+            }
             Some(failure) => {
                 ui.label(
                     RichText::new(failure.to_string())
@@ -133,7 +136,7 @@ impl State {
             }
             None if self.public => {
                 ui.label(
-                    RichText::new("Public repository. No token needed.")
+                    RichText::new("Git can read this repository. No token needed.")
                         .size(13.0)
                         .color(theme::PALETTE_GREEN()),
                 );
@@ -174,7 +177,7 @@ impl State {
     }
 
     /// Git had no credential for this host: ask for a token instead of a terminal.
-    fn sign_in(&mut self, ui: &mut Ui, host: &str, enter: bool) {
+    fn sign_in(&mut self, ui: &mut Ui, host: &str, origin: &str, enter: bool) {
         Frame::new()
             .fill(theme::PANEL_BG_ALT())
             .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -216,7 +219,7 @@ impl State {
                 }
                 ui.horizontal(|ui| {
                     widgets::checkbox(ui, &mut self.remember, "Save it in Git’s credential helper");
-                    ui.hyperlink_to(RichText::new("Create a token").size(13.0), token_page(host));
+                    ui.hyperlink_to(RichText::new("Create a token").size(13.0), token_page(host, origin));
                 });
                 if field.lost_focus() && enter && !self.token.trim().is_empty() {
                     self.start(ui.ctx());
@@ -225,10 +228,11 @@ impl State {
     }
 }
 
-fn token_page(host: &str) -> String {
+fn token_page(host: &str, origin: &str) -> String {
     match host {
         "github.com" => "https://github.com/settings/personal-access-tokens/new".into(),
-        host => format!("https://{host}/-/user_settings/personal_access_tokens"),
+        // A self-hosted GitLab may listen on a port of its own.
+        _ => format!("{origin}/-/user_settings/personal_access_tokens"),
     }
 }
 
@@ -284,4 +288,21 @@ pub(in super::super) fn continue_footer(ui: &mut Ui, form: &mut Production, acti
                 .clicked();
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_page;
+
+    #[test]
+    fn a_self_hosted_gitlab_keeps_its_port_in_the_token_page() {
+        assert_eq!(
+            token_page("gitlab.example.org", "https://gitlab.example.org:8443"),
+            "https://gitlab.example.org:8443/-/user_settings/personal_access_tokens"
+        );
+        assert_eq!(
+            token_page("github.com", "https://github.com"),
+            "https://github.com/settings/personal-access-tokens/new"
+        );
+    }
 }

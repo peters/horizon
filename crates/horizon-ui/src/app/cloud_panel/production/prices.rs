@@ -133,6 +133,11 @@ impl State {
         !stale(at) && self.refreshed_after.is_none_or(|refresh| at >= refresh)
     }
 
+    /// Whether a price list the provider answered since prices were last asked for is on show.
+    pub fn list_is_current(&self) -> bool {
+        self.list.as_ref().is_some_and(|list| self.current(list.at))
+    }
+
     /// Whether the catalog shown is older than [`START_LIMIT`], so it cannot start a cloud.
     pub fn too_old(&self) -> bool {
         self.list.as_ref().is_some_and(|list| list.at.elapsed() >= START_LIMIT)

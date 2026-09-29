@@ -17,6 +17,13 @@ pub(super) struct State {
     error: Option<String>,
 }
 
+impl Drop for State {
+    /// A key typed here and never saved does not outlive the dialog.
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
 impl State {
     /// The result of a save that has finished.
     pub fn poll(&mut self) -> Option<Result<(), String>> {

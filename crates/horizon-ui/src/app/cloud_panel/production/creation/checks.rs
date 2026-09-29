@@ -55,8 +55,10 @@ impl State {
         let profile = match &key.0 {
             Ok(profile) => profile.clone(),
             Err(reason) => {
-                // The profile cannot run on the provider chosen here; there is nothing to ask it.
+                // The profile cannot run on the provider chosen here; there is nothing to ask it,
+                // and an answer still on its way was for another question.
                 self.problems = Some(vec![problem("Provider account", reason.clone())]);
+                self.job = None;
                 self.key = Some(key);
                 return;
             }
@@ -156,7 +158,7 @@ fn rows(form: &Production) -> Vec<Row> {
     };
     let provider = provider::current(form.provider, profile);
     let (live, error) = match provider.kind {
-        Kind::RunPod => (form.prices.list.is_some(), form.prices.list_error.as_deref()),
+        Kind::RunPod => (form.prices.list_is_current(), form.prices.list_error.as_deref()),
         Kind::Hetzner => (
             form.prices
                 .hetzner
@@ -348,6 +350,29 @@ mod tests {
         let first = chosen(&form);
         form.size = Some((4, 16));
         assert_ne!(first, chosen(&form), "another size is another question");
+    }
+
+    #[test]
+    fn an_answer_still_on_its_way_is_dropped_when_the_profile_cannot_run() {
+        let mut state = State::default();
+        let (_sender, receiver) = channel();
+        state.job = Some(receiver);
+        state.update(
+            Some(Path::new("/work")),
+            Some((
+                Err("This profile cannot run on the chosen provider".into()),
+                "/work/demo-atlas".into(),
+            )),
+            &Context::default(),
+        );
+        assert!(state.job.is_none(), "the old question is no longer asked");
+        assert!(matches!(
+            state.problems.as_deref(),
+            Some([Problem {
+                what: "Provider account",
+                ..
+            }])
+        ));
     }
 
     #[test]
