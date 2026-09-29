@@ -504,3 +504,40 @@ fn a_persons_own_ssh_command_is_kept_wherever_it_is_set() {
     assert!(!ssh_command_in(false, none));
     assert!(!ssh_command_in(false, blank), "an empty one is not a command");
 }
+
+#[test]
+fn the_checkout_tracks_its_branch_whatever_the_machines_git_settings_say() {
+    let args: Vec<_> = checkout_command("main", None)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.contains(&"--track".to_owned()), "{args:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_step_that_cannot_clean_up_after_itself_says_where_it_left_the_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("clones");
+    std::fs::create_dir(&parent).unwrap();
+    let folder = parent.join("stuck");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("file"), "x").unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let writable = std::fs::write(parent.join("probe"), "").is_ok();
+    let said = removed(&folder, Failure::Network);
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if writable {
+        return; // Permissions do not bind this user (root), so removal cannot fail here.
+    }
+    assert!(
+        matches!(&said, Failure::Other(text) if text.contains("could not be removed") && text.contains("Cannot reach the host")),
+        "{said:?}"
+    );
+    assert_eq!(
+        removed(&temp.path().join("gone"), Failure::Network),
+        Failure::Network,
+        "nothing to remove is no news"
+    );
+}

@@ -124,12 +124,19 @@ impl State {
             self.parsed_for.clone_from(&self.input);
             let path = horizon_core::dir_search::expand_tilde(self.input.trim());
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
+            let before_url = self.remote.as_ref().map(|remote| remote.url.clone());
             // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
             // folder that happens to have that name.
             self.remote = source::parse(&self.input).filter(|_| !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
                 self.token.zeroize();
+                self.token_tried = false;
+                self.token_focused = false;
+            }
+            // The token stays for its origin, but a rejection was of one repository: another one has
+            // not turned it down yet.
+            if before_url != self.remote.as_ref().map(|remote| remote.url.clone()) {
                 self.token_tried = false;
                 self.token_focused = false;
             }
@@ -574,6 +581,18 @@ mod tests {
             state.token.is_empty() && !state.token_tried,
             "another host starts clean"
         );
+    }
+
+    #[test]
+    fn another_repository_on_the_same_host_keeps_the_token_but_not_the_rejection() {
+        let mut state = typed("github.com/demo-org/demo-atlas");
+        assert!(state.remote().is_some());
+        state.token.push_str("ghp_demo");
+        state.token_tried = true;
+        state.input = "github.com/demo-org/other".into();
+        state.remote();
+        assert_eq!(state.token, "ghp_demo", "the same host keeps its token");
+        assert!(!state.token_tried, "and has not turned it down for this repository yet");
     }
 
     #[test]
