@@ -4,6 +4,7 @@
 //! commit first, then the rest of the history, then the checkout.
 use super::{Cancellation, Failure, Remote, Token, candidates, classify, git_output};
 use std::{
+    fs::{File, OpenOptions, TryLockError},
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -48,6 +49,15 @@ const STEPS: u8 = 5;
 /// branch it is fetching. Its presence is what makes the folder one that a later try may resume,
 /// and one that is ours to remove.
 const MARKER: &str = "horizon-clone";
+
+/// A file inside `.git` that a running clone holds an exclusive lock on, so that a second Horizon
+/// process cannot resume or remove the same folder underneath it. The system drops the lock when
+/// the process ends, however it ends.
+const CLAIM: &str = "horizon-clone.claim";
+
+/// How often, and how far apart, a folder that is held is tried before it is called busy.
+const CLAIM_TRIES: u32 = 30;
+const CLAIM_WAIT: Duration = Duration::from_millis(10);
 
 /// How long a finished clone waits for what Git said last; a helper it left behind may hold the pipe.
 const CLONE_GRACE: Duration = Duration::from_secs(2);
@@ -340,6 +350,45 @@ fn write_marker(folder: &Path, marker: &Marker) -> Result<(), Failure> {
         .map_err(|error| Failure::Other(error.to_string()))
 }
 
+/// The hold a running clone keeps on its folder.
+struct Claim {
+    file: File,
+    path: PathBuf,
+}
+
+impl Claim {
+    /// Takes the folder for this process, or says another one has it.
+    fn take(folder: &Path) -> Result<Self, Failure> {
+        let path = folder.join(".git").join(CLAIM);
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| Failure::Other(error.to_string()))?;
+        // A process that is being started elsewhere can hold a copy of the lock for a moment after
+        // its owner let go, so "busy" is only said after waiting that long.
+        for attempt in 0..CLAIM_TRIES {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { file, path }),
+                Err(TryLockError::WouldBlock) if attempt + 1 < CLAIM_TRIES => std::thread::sleep(CLAIM_WAIT),
+                Err(TryLockError::WouldBlock) => break,
+                Err(TryLockError::Error(error)) => return Err(Failure::Other(error.to_string())),
+            }
+        }
+        Err(Failure::Other(
+            "Another Horizon window is cloning into that folder. Wait for it, or choose another folder.".into(),
+        ))
+    }
+
+    /// The clone is finished: nothing of it stays in the checkout.
+    fn release(self) {
+        let Self { file, path } = self;
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Whether `folder` is a clone that was started and not finished.
 pub(super) fn unfinished(folder: &Path) -> bool {
     marker(folder).is_some()
@@ -355,11 +404,24 @@ pub fn resumable(parent: &Path, remote: &Remote) -> Option<PathBuf> {
 }
 
 /// Gives up on a clone that stopped, removing what it received. Only a folder a clone started
-/// and did not finish is touched.
-pub fn discard(folder: &Path) {
-    if marker(folder).is_some() {
-        let _ = std::fs::remove_dir_all(folder);
+/// and did not finish is touched, and not one that another Horizon window is working on.
+///
+/// # Errors
+/// Says so when another process holds the folder.
+pub fn discard(folder: &Path) -> Result<(), Failure> {
+    if marker(folder).is_none() {
+        return Ok(());
     }
+    let claim = Claim::take(folder)?;
+    // Removed while held where the platform allows, so nothing starts in the folder in between.
+    if cfg!(windows) {
+        drop(claim);
+        let _ = std::fs::remove_dir_all(folder);
+    } else {
+        let _ = std::fs::remove_dir_all(folder);
+        drop(claim);
+    }
+    Ok(())
 }
 
 /// Removes what a Git process that was ended mid-step leaves in a clone's own folder: lock files
@@ -492,15 +554,21 @@ fn in_steps(
     progress: &Progress,
     last_step: u8,
 ) -> Result<(), Failure> {
-    let earlier = marker(destination).filter(|marker| marker.url == remote.url);
-    let resumed = earlier.is_some();
-    if resumed {
+    let ours = |folder: &Path| marker(folder).filter(|marker| marker.url == remote.url);
+    let resumed = ours(destination).is_some();
+    announce(progress, 1, resumed);
+    let (claim, marker) = if resumed {
+        // Only a folder that says it is a clone of ours is held, and it is asked again once held.
+        let claim = Claim::take(destination)?;
+        let Some(marker) = ours(destination) else {
+            claim.release();
+            return Err(Failure::Other(
+                "That clone changed while it was being resumed. Continue again.".into(),
+            ));
+        };
         // The try before may have been ended by a crash or a kill, mid-write.
         clear_leftovers(destination);
-    }
-    announce(progress, 1, resumed);
-    let marker = if let Some(marker) = earlier {
-        marker
+        (claim, marker)
     } else {
         let branch = default_branch(remote, token, cancel)?;
         begin(remote, destination, &branch, cancel)?
@@ -509,10 +577,15 @@ fn in_steps(
     match outcome {
         Ok(()) => {
             let _ = std::fs::remove_file(destination.join(".git").join(MARKER));
+            claim.release();
             Ok(())
         }
-        Err(failure) if marker_done(destination) > 0 => Err(interrupted(failure)),
+        Err(failure) if marker_done(destination) > 0 => {
+            drop(claim);
+            Err(interrupted(failure))
+        }
         Err(failure) => {
+            drop(claim);
             let _ = std::fs::remove_dir_all(destination);
             Err(failure)
         }
@@ -526,7 +599,7 @@ fn marker_done(folder: &Path) -> usize {
 
 /// Makes the folder a clone starts in, claiming it: creating it is what makes it this clone's to
 /// remove, and a folder that is already there is refused.
-fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<Marker, Failure> {
+fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellation) -> Result<(Claim, Marker), Failure> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
     }
@@ -546,12 +619,14 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
         let mut add = git(None);
         add.args(["remote", "add", "origin", "--", &remote.url]);
         quietly(add, destination, remote, cancel)?;
+        // Held before the marker is written: from then on the folder can be found and resumed.
+        let claim = Claim::take(destination)?;
         let marker = Marker {
             url: remote.url.clone(),
             branch: branch.to_owned(),
             done: 0,
         };
-        write_marker(destination, &marker).map(|()| marker)
+        write_marker(destination, &marker).map(|()| (claim, marker))
     })();
     if ready.is_err() {
         let _ = std::fs::remove_dir_all(destination);
@@ -638,333 +713,4 @@ fn interrupted(failure: Failure) -> Failure {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn git_progress_is_read_for_its_phase_how_far_and_the_speed() {
-        assert_eq!(
-            parse_progress("Receiving objects:  45% (450/1000), 12.30 MiB | 4.50 MiB/s"),
-            Some(("Receiving objects".into(), 45, "12.30 MiB | 4.50 MiB/s".into()))
-        );
-        assert_eq!(
-            parse_progress("remote: Counting objects: 100% (5/5), done."),
-            Some(("Counting objects".into(), 100, String::new()))
-        );
-        assert_eq!(
-            parse_progress("Resolving deltas: 100% (10/10), done."),
-            Some(("Resolving deltas".into(), 100, String::new()))
-        );
-        assert_eq!(
-            parse_progress("Resolving deltas: 100% (1234/1234), completed with 2710 local objects."),
-            Some(("Resolving deltas".into(), 100, String::new()))
-        );
-        assert!(is_chatter("remote: Enumerating objects: 34191, done."));
-        assert!(is_chatter(
-            "remote: Total 34191 (delta 0), reused 0 (delta 0), pack-reused 34191"
-        ));
-        assert!(!is_chatter("remote: Repository not found."));
-        assert!(!is_chatter("fatal: early EOF"));
-        assert_eq!(parse_progress("fatal: repository not found"), None);
-        assert_eq!(parse_progress("Cloning into 'x'..."), None);
-    }
-
-    #[test]
-    fn the_time_left_follows_the_pace_and_waits_for_one() {
-        assert_eq!(eta(Duration::from_secs(10), 50), Some(Duration::from_secs(10)));
-        assert_eq!(eta(Duration::from_secs(9), 90), Some(Duration::from_secs(1)));
-        assert_eq!(eta(Duration::from_millis(500), 50), None, "too early to know");
-        assert_eq!(eta(Duration::from_secs(10), 1), None);
-        assert_eq!(eta(Duration::from_secs(10), 100), None, "nothing left");
-    }
-
-    #[test]
-    fn a_host_that_never_stops_talking_leaves_only_a_bounded_tail() {
-        let mut tail = String::new();
-        for _ in 0..10_000 {
-            keep_tail(&mut tail, "fatal: a very talkative remote, éééé\n");
-        }
-        keep_tail(&mut tail, "fatal: could not read Username");
-        assert!(tail.len() <= STDERR_TAIL);
-        assert!(
-            tail.ends_with("could not read Username"),
-            "the end is what names the failure"
-        );
-    }
-
-    #[test]
-    fn a_pipe_that_never_closes_cannot_hold_the_deadline() {
-        let (_sender, reader) = mpsc::channel::<String>();
-        let started = Instant::now();
-        assert_eq!(collected(&reader, Duration::from_millis(100)), "");
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
-
-    /// A repository with a few commits and a second branch, reachable by a `file://` address so
-    /// that Git honours a depth.
-    fn origin(temp: &Path) -> Remote {
-        origin_with(temp, 3)
-    }
-
-    fn origin_with(temp: &Path, commits: usize) -> Remote {
-        let origin = temp.join("origin");
-        std::fs::create_dir(&origin).unwrap();
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(&origin)
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-                .args(args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .unwrap();
-            assert!(status.success(), "{args:?}");
-        };
-        git(&["init", "-q", "-b", "main"]);
-        for number in 1..=commits {
-            git(&["commit", "-q", "--allow-empty", "-m", &format!("commit {number}")]);
-        }
-        git(&["branch", "extra"]);
-        // A tag on a commit that no branch reaches, which Git does not follow on its own.
-        git(&["checkout", "-q", "--detach"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "off every branch"]);
-        git(&["tag", "lonely"]);
-        git(&["checkout", "-q", "main"]);
-        Remote {
-            url: {
-                let path = origin.to_string_lossy().replace('\\', "/");
-                if path.starts_with('/') {
-                    format!("file://{path}")
-                } else {
-                    format!("file:///{path}")
-                }
-            },
-            host: "example.com".into(),
-            name: "origin".into(),
-        }
-    }
-
-    fn count(folder: &Path, args: &[&str]) -> String {
-        git_output(folder, args).unwrap().trim().to_owned()
-    }
-
-    #[test]
-    fn a_clone_that_stops_after_a_step_is_picked_up_where_it_stopped() {
-        let temp = tempfile::tempdir().unwrap();
-        let remote = origin(temp.path());
-        let target = temp.path().join("clones").join("origin");
-        let (cancel, progress) = (Cancellation::default(), Progress::default());
-        let stopped = in_steps(&remote, &target, None, &cancel, &progress, 1);
-        assert!(
-            matches!(&stopped, Err(Failure::Interrupted(text)) if text.contains("Continue resumes")),
-            "{stopped:?}"
-        );
-        assert!(
-            target.join(".git").join(MARKER).is_file(),
-            "the folder says it is unfinished"
-        );
-        assert_eq!(resumable(target.parent().unwrap(), &remote), Some(target.clone()));
-        assert!(!super::super::is_checkout(&target));
-        assert_eq!(
-            count(&target, &["rev-list", "--count", "refs/remotes/origin/main"]),
-            "1",
-            "the latest commit only"
-        );
-
-        clone(&remote, &target, None, &cancel, &progress).unwrap();
-        assert!(super::super::is_checkout(&target));
-        assert!(!target.join(".git").join(MARKER).exists(), "finished");
-        assert!(!target.join(".git").join("shallow").exists(), "the whole history");
-        assert_eq!(count(&target, &["rev-list", "--count", "HEAD"]), "3");
-        assert_eq!(count(&target, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-        assert_eq!(
-            count(&target, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
-            "origin/main"
-        );
-        assert_eq!(
-            count(&target, &["rev-parse", "--verify", "refs/remotes/origin/extra"]).len(),
-            40,
-            "every branch"
-        );
-        assert!(progress.lock().unwrap().resumed || progress.lock().unwrap().step == STEPS);
-        assert_eq!(resumable(target.parent().unwrap(), &remote), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn progress_is_shown_but_never_becomes_the_reason_a_step_failed() {
-        let temp = tempfile::tempdir().unwrap();
-        let remote = origin(temp.path());
-        let step = |script: &str| {
-            let mut command = Command::new("sh");
-            command.args(["-c", script]).stderr(Stdio::piped());
-            let progress = Progress::default();
-            let result = run(command, temp.path(), &remote, &Cancellation::default(), &progress);
-            (result, progress.lock().unwrap().clone())
-        };
-        let (result, shown) =
-            step("printf 'Receiving objects:  50%% (1/2), 1.00 MiB | 1.00 MiB/s\\r' >&2; kill -KILL $$");
-        assert_eq!(result, Err(Failure::Other("Git stopped before it finished.".into())));
-        assert_eq!((shown.phase.as_str(), shown.percent), ("Receiving objects", Some(50)));
-        let (result, _) = step("printf 'remote: Enumerating objects: 5, done.\\n' >&2; kill -KILL $$");
-        assert_eq!(
-            result,
-            Err(Failure::Other("Git stopped before it finished.".into())),
-            "chatter is not a reason"
-        );
-        let (result, _) = step("printf 'Receiving objects:  50%% (1/2)\\rfatal: early EOF\\n' >&2; exit 128");
-        assert_eq!(result, Err(Failure::Other("fatal: early EOF".into())));
-        let (result, _) = step("printf 'fatal: no newline at the end' >&2; exit 128");
-        assert_eq!(
-            result,
-            Err(Failure::Other("fatal: no newline at the end".into())),
-            "the last word counts without a line end"
-        );
-    }
-
-    #[test]
-    fn the_history_comes_in_pieces_and_each_finished_piece_is_kept() {
-        assert_eq!(usize::from(STEPS), DEPTHS.len() + 1);
-        let temp = tempfile::tempdir().unwrap();
-        let remote = origin_with(temp.path(), 130);
-        let target = temp.path().join("deep");
-        let (cancel, progress) = (Cancellation::default(), Progress::default());
-        let commits = |folder: &Path| count(folder, &["rev-list", "--count", "refs/remotes/origin/main"]);
-        assert!(in_steps(&remote, &target, None, &cancel, &progress, 1).is_err());
-        assert_eq!((commits(&target), marker_done(&target)), ("1".to_owned(), 1));
-        assert!(in_steps(&remote, &target, None, &cancel, &progress, 2).is_err());
-        assert_eq!((commits(&target), marker_done(&target)), ("100".to_owned(), 2));
-        // A drop during the third piece keeps the two before it, and the try after starts at the third.
-        assert!(in_steps(&remote, &target, None, &cancel, &progress, 3).is_err());
-        assert_eq!((commits(&target), marker_done(&target)), ("130".to_owned(), 3));
-        clone(&remote, &target, None, &cancel, &progress).unwrap();
-        assert!(super::super::is_checkout(&target) && !target.join(".git").join(MARKER).exists());
-        assert!(!target.join(".git").join("shallow").exists());
-        assert_eq!(count(&target, &["rev-list", "--count", "HEAD"]), "130");
-        let shown = progress.lock().unwrap().clone();
-        assert_eq!((shown.step, shown.steps, shown.resumed), (STEPS, STEPS, true));
-    }
-
-    #[test]
-    fn the_checkout_carries_the_token_like_the_fetches_do() {
-        let remote = super::super::parse("github.com/demo-org/demo").unwrap();
-        let token = Token::new(&remote, "demo_token").unwrap();
-        let envs = |command: &Command| {
-            command
-                .get_envs()
-                .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned())))
-                .collect::<std::collections::HashMap<_, _>>()
-        };
-        let with = envs(&checkout_command("main", Some(&token)));
-        assert_eq!(with.get("GIT_CONFIG_COUNT").map(String::as_str), Some("1"));
-        assert!(with["GIT_CONFIG_KEY_0"].starts_with("http.https://github.com"));
-        assert!(!envs(&checkout_command("main", None)).contains_key("GIT_CONFIG_COUNT"));
-        let args: Vec<_> = checkout_command("main", Some(&token))
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert!(args.iter().all(|arg| !arg.contains("demo_token")), "never argv");
-    }
-
-    #[test]
-    fn the_marker_is_replaced_whole_and_a_leftover_staging_file_changes_nothing() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(temp.path().join(".git")).unwrap();
-        let first = Marker {
-            url: "https://github.com/demo-org/demo.git".into(),
-            branch: "main".into(),
-            done: 1,
-        };
-        write_marker(temp.path(), &first).unwrap();
-        // A write cut off half way only ever touches the staging file.
-        std::fs::write(
-            temp.path().join(".git").join("horizon-clone.tmp"),
-            "https://github.com/demo-or",
-        )
-        .unwrap();
-        assert_eq!(marker_done(temp.path()), 1);
-        clear_leftovers(temp.path());
-        assert!(!temp.path().join(".git").join("horizon-clone.tmp").exists());
-        write_marker(temp.path(), &Marker { done: 3, ..first }).unwrap();
-        assert_eq!(marker_done(temp.path()), 3);
-        assert!(!temp.path().join(".git").join("horizon-clone.tmp").exists());
-    }
-
-    #[test]
-    fn a_resume_clears_the_locks_a_killed_git_left_behind() {
-        let temp = tempfile::tempdir().unwrap();
-        let remote = origin(temp.path());
-        let target = temp.path().join("origin-clone");
-        let (cancel, progress) = (Cancellation::default(), Progress::default());
-        assert!(in_steps(&remote, &target, None, &cancel, &progress, 1).is_err());
-        let git = target.join(".git");
-        for stale in ["shallow.lock", "index.lock", "HEAD.lock"] {
-            std::fs::write(git.join(stale), "").unwrap();
-        }
-        std::fs::write(git.join("refs/remotes/origin/main.lock"), "").unwrap();
-        std::fs::write(git.join("objects/pack/tmp_pack_abc123"), "partial").unwrap();
-        clone(&remote, &target, None, &cancel, &progress).unwrap();
-        assert!(super::super::is_checkout(&target));
-        assert!(!git.join("shallow.lock").exists() && !git.join("objects/pack/tmp_pack_abc123").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn clearing_leftovers_never_follows_a_link_out_of_the_checkout() {
-        let temp = tempfile::tempdir().unwrap();
-        let outside = temp.path().join("outside");
-        std::fs::create_dir(&outside).unwrap();
-        std::fs::write(outside.join("theirs.lock"), "not ours").unwrap();
-        let folder = temp.path().join("checkout");
-        std::fs::create_dir_all(folder.join(".git").join("refs").join("heads")).unwrap();
-        std::fs::write(folder.join(".git").join("refs").join("heads").join("main.lock"), "").unwrap();
-        std::os::unix::fs::symlink(&outside, folder.join(".git").join("refs").join("link")).unwrap();
-        clear_leftovers(&folder);
-        assert!(
-            outside.join("theirs.lock").is_file(),
-            "a link leads outside, and is left alone"
-        );
-        assert!(
-            !folder
-                .join(".git")
-                .join("refs")
-                .join("heads")
-                .join("main.lock")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn a_clone_that_never_received_anything_leaves_no_folder_and_a_discard_removes_a_stopped_one() {
-        let temp = tempfile::tempdir().unwrap();
-        let remote = origin(temp.path());
-        let cancelled = Cancellation::default();
-        cancelled.cancel();
-        let target = temp.path().join("early");
-        assert_eq!(
-            clone(&remote, &target, None, &cancelled, &Progress::default()),
-            Err(Failure::Cancelled)
-        );
-        assert!(!target.exists());
-        let stopped = temp.path().join("stopped");
-        let _ = in_steps(
-            &remote,
-            &stopped,
-            None,
-            &Cancellation::default(),
-            &Progress::default(),
-            1,
-        );
-        assert!(stopped.is_dir());
-        discard(&stopped);
-        assert!(!stopped.exists());
-        let theirs = temp.path().join("theirs");
-        std::fs::create_dir(&theirs).unwrap();
-        discard(&theirs);
-        assert!(
-            theirs.is_dir(),
-            "a folder that is not an unfinished clone is left alone"
-        );
-    }
-}
+mod tests;

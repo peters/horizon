@@ -349,9 +349,9 @@ impl State {
 
     /// Gives up on a clone that stopped, removing what it received.
     fn start_over(&mut self, folder: &Path) {
-        source::discard(folder);
+        // Another Horizon window may be cloning into it: then it stays, and the reason is shown.
+        self.failure = source::discard(folder).err();
         self.plan = None;
-        self.failure = None;
     }
 
     /// What Continue would do now, or what is missing before it can.

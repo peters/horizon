@@ -197,7 +197,8 @@ mod tests {
         assert!(found.iter().any(|problem| problem.what == "SSH key"), "{found:?}");
     }
 
-    #[cfg(unix)]
+    // Only some file systems keep a name that is not valid UTF-8; macOS's do not.
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_identity_whose_name_is_not_utf8_finds_its_public_key() {
         use std::os::unix::ffi::OsStringExt;
