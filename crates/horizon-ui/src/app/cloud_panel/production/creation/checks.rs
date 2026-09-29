@@ -230,6 +230,38 @@ fn blocked_given(form: &Production, checking: bool) -> Option<&'static str> {
     (ready(form) && unfinished(&rows(form))).then_some("Start unlocks when every check above passes.")
 }
 
+/// What the checks say about a start that was already asked for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::app::cloud_panel::production) enum Verdict {
+    /// Every check passed, or none is being made.
+    Ready,
+    /// Some are still being made.
+    Waiting,
+    /// One was turned down.
+    Failed,
+}
+
+pub(in crate::app::cloud_panel::production) fn verdict(form: &Production) -> Verdict {
+    verdict_given(form, !cfg!(test))
+}
+
+fn verdict_given(form: &Production, checking: bool) -> Verdict {
+    if !checking {
+        return Verdict::Ready;
+    }
+    if !ready(form) {
+        return Verdict::Waiting;
+    }
+    let rows = rows(form);
+    if rows.iter().any(|row| matches!(row, Row::Fail(_))) {
+        Verdict::Failed
+    } else if unfinished(&rows) {
+        Verdict::Waiting
+    } else {
+        Verdict::Ready
+    }
+}
+
 /// The footer: Continue while the repository is still being chosen, Start cloud after.
 pub(super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut super::Actions) {
     if source_step(form) {
@@ -467,6 +499,16 @@ mod tests {
             "settings, key and SSH identity are usable"
         );
         assert!(!needs_account(&form));
+    }
+
+    #[test]
+    fn a_start_already_asked_for_waits_for_the_checks_and_is_dropped_when_one_fails() {
+        let mut form = form_with(Vec::new());
+        loaded(&mut form);
+        assert_eq!(verdict_given(&form, false), Verdict::Ready);
+        assert_eq!(verdict_given(&form, true), Verdict::Waiting, "nothing answered yet");
+        form.checks.problems = Some(vec![problem("Cloud settings", "No key yet.".into())]);
+        assert_eq!(verdict_given(&form, true), Verdict::Failed);
     }
 
     #[test]

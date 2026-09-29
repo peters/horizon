@@ -129,8 +129,9 @@ impl HorizonApp {
         if form.launch.workspace.is_some()
             && form.launch.session != self.active_session.as_ref().map(|session| session.session_id.clone())
         {
-            form.launch = State::default();
-            form.creating = false;
+            // The other session's dialog closes like any other: its clone stops and its secrets go
+            // (a creation still being validated stops when its handle is dropped).
+            self.close_cloud_creation();
             return;
         }
         if let Some(receiver) = &form.launch.receiver {
@@ -180,9 +181,17 @@ impl HorizonApp {
                 self.open_cloud_accounts(ctx, true);
                 self.cloud_prototype.production.launch.submitted = true;
             } else if !super::creation_job::awaits_runpod(form) {
-                form.launch.submitted = false;
-                if let Err(error) = self.create_production_cloud(ctx) {
-                    self.cloud_prototype.error = Some(error.to_string());
+                // A start queued while the checks are still running waits for them; one they turned
+                // down is dropped, so it has to be asked for again once the problem is fixed.
+                match super::creation::checks::verdict(form) {
+                    super::creation::checks::Verdict::Waiting => {}
+                    super::creation::checks::Verdict::Failed => form.launch.submitted = false,
+                    super::creation::checks::Verdict::Ready => {
+                        form.launch.submitted = false;
+                        if let Err(error) = self.create_production_cloud(ctx) {
+                            self.cloud_prototype.error = Some(error.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -580,10 +589,18 @@ mod tests {
         app.open_workspace_cloud(&ctx, workspace);
         assert!(cancel.is_cancelled());
         assert!(sender.send(Ok(loaded(temp.path()))).is_err());
+        app.cloud_prototype
+            .production
+            .source
+            .edit_for_test("github.com/demo-org/demo-atlas");
         app.cloud_prototype.production.launch.session = Some("other session".into());
         app.poll_cloud_launch(&ctx);
         assert!(!app.cloud_prototype.production.creating);
         assert!(!app.cloud_prototype.production.launch.loading());
+        assert!(
+            app.cloud_prototype.production.source.input().is_empty(),
+            "the closed dialog's source field, clone and token go with it"
+        );
     }
     #[test]
     fn unsaved_workspace_launch_keeps_title_without_creating_a_cloud() {

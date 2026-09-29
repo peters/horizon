@@ -156,7 +156,7 @@ impl HorizonApp {
 
     /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
     /// used is forgotten.
-    fn close_cloud_creation(&mut self) {
+    pub(in crate::app::cloud_panel::production) fn close_cloud_creation(&mut self) {
         let form = &mut self.cloud_prototype.production;
         form.creating = false;
         form.pending_creation = None;
