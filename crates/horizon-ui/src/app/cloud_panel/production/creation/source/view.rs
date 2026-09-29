@@ -102,6 +102,13 @@ impl State {
             });
             return false;
         }
+        // What was said about the last clone is over once another repository is being asked for.
+        if self.editing() {
+            self.note = None;
+        }
+        if let Some(note) = self.note {
+            ui.label(RichText::new(note).size(13.0).color(theme::FG_DIM()));
+        }
         let Some(remote) = self.remote().cloned() else {
             if self.unrecognised() {
                 ui.label(

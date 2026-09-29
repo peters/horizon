@@ -152,14 +152,12 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
 /// folders [`destination`] would have chosen for an earlier clone.
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
-    candidates(parent, remote)
-        .take_while(|path| path.is_dir())
-        .find(|path| {
-            git_output(path, &["config", "--get", "remote.origin.url"])
-                .and_then(|origin| parse(origin.trim()))
-                .is_some_and(|origin| origin.url == remote.url)
-                && is_checkout(path)
-        })
+    candidates(parent, remote).filter(|path| path.is_dir()).find(|path| {
+        git_output(path, &["config", "--get", "remote.origin.url"])
+            .and_then(|origin| parse(origin.trim()))
+            .is_some_and(|origin| origin.url == remote.url)
+            && is_checkout(path)
+    })
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
@@ -326,7 +324,7 @@ fn git(token: Option<&Token>) -> Command {
     if std::env::var_os("GIT_SSH_COMMAND").is_none()
         && git_output(Path::new("."), &["config", "--get", "core.sshCommand"]).is_none_or(|set| set.trim().is_empty())
     {
-        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes");
     }
     command
 }
@@ -721,6 +719,10 @@ mod tests {
             &["remote", "set-url", "origin", "https://github.com/demo-org/other.git"],
         );
         git(&beside, &["remote", "set-url", "origin", &remote.url]);
+        assert_eq!(existing(temp.path(), &remote), Some(beside.clone()));
+        // A gap before it (the first name taken by a file) does not hide it.
+        std::fs::remove_dir_all(&checkout).unwrap();
+        std::fs::write(&checkout, "not a folder").unwrap();
         assert_eq!(existing(temp.path(), &remote), Some(beside));
     }
 }

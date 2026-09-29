@@ -27,8 +27,14 @@ struct Plan {
 /// How long a link must stand still before its access is looked up.
 const SETTLE: Duration = Duration::from_millis(500);
 
+/// A finished clone: where it is, and what to tell about keeping the token, if that was asked.
+struct Cloned {
+    path: PathBuf,
+    note: Option<&'static str>,
+}
+
 struct Job {
-    receiver: Receiver<Result<PathBuf, Failure>>,
+    receiver: Receiver<Result<Cloned, Failure>>,
     cancel: Cancellation,
     progress: Progress,
 }
@@ -48,6 +54,8 @@ pub(in crate::app::cloud_panel::production) struct State {
     job: Option<Job>,
     ready: Option<PathBuf>,
     failure: Option<Failure>,
+    /// Something about the last clone worth saying once it is done.
+    note: Option<&'static str>,
     token: String,
     token_tried: bool,
     token_focused: bool,
@@ -202,13 +210,19 @@ impl State {
         };
         let (cancel, progress, ctx) = (job.cancel.clone(), job.progress.clone(), ctx.clone());
         self.failure = None;
+        self.note = None;
         self.job = Some(job);
         std::thread::spawn(move || {
             let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress).map(|()| {
-                if let Some(token) = token.as_ref().filter(|_| remember && !cancel.is_cancelled()) {
-                    let _ = source::remember(token);
+                let kept = token
+                    .as_ref()
+                    .filter(|_| remember && !cancel.is_cancelled())
+                    .map(source::remember);
+                Cloned {
+                    path: destination,
+                    note: (kept == Some(false))
+                        .then_some("Cloned. Git has no credential helper to keep the token, so it was not saved."),
                 }
-                destination
             });
             let _ = sender.send(result);
             ctx.request_repaint();
@@ -226,8 +240,9 @@ impl State {
                 ctx.request_repaint_after(Duration::from_millis(100));
                 None
             }
-            Ok(Ok(path)) => {
+            Ok(Ok(Cloned { path, note })) => {
                 self.finish();
+                self.note = note;
                 Some(path)
             }
             Ok(Err(failure)) => {
