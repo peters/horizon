@@ -67,6 +67,7 @@ fn inputs(ui: &mut Ui, state: &mut State, root: &Path) {
                 "Paste RunPod API key"
             }),
     );
+    super::super::forget_undo(ui.ctx(), field.id);
     let saving = state.saving.is_some();
     let ready = !saving && !state.secret.trim().is_empty();
     let go = ui

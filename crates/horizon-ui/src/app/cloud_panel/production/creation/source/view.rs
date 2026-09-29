@@ -61,6 +61,8 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
             .inner
         })
         .inner;
+    // A link may carry a token; what was typed is not kept for undoing.
+    super::super::forget_undo(ui.ctx(), response.id);
     if refocus {
         response.request_focus();
     }
@@ -239,6 +241,7 @@ impl State {
                         .margin(Vec2::new(12.0, 9.0))
                         .hint_text("Access token"),
                 );
+                super::super::forget_undo(ui.ctx(), field.id);
                 if !std::mem::replace(&mut self.token_focused, true) {
                     field.request_focus();
                 }

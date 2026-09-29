@@ -337,6 +337,15 @@ impl HorizonApp {
     }
 }
 
+/// Drops what egui remembers of the edits made in a field. It records every one, in plaintext even
+/// for a password field, so a secret typed or pasted there would outlive the string that held it.
+pub(super) fn forget_undo(ctx: &Context, id: Id) {
+    if let Some(mut state) = TextEdit::load_state(ctx, id) {
+        state.clear_undoer();
+        state.store(ctx, id);
+    }
+}
+
 fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
     ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
