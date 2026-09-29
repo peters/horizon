@@ -104,6 +104,8 @@ pub(super) fn require_fresh(request: &Request<'_>, binding: &Binding, target: &S
 /// checkout; `execute` then allocates its first worker through the ordinary deployment.
 /// Confirming the same unstarted operation again, as the card's Retry does after a
 /// failed start, is idempotent: it records nothing new and never runs anything twice.
+/// An operation that already started under its confirmation is accepted as it is, so
+/// a recovered card's Retry continues to its reconciliation.
 /// # Errors
 /// Refuses anything but an unstarted Ensure Ready whose target record, reserved or
 /// existing, is prepared with no worker ever requested and matches the binding's
@@ -113,6 +115,25 @@ pub fn confirm_creation(request: &Request<'_>, id: OperationId) -> Result<()> {
     // so an uncheck cannot land between the checks and the recorded confirmation.
     let (_source, state) = request.load()?;
     let binding = request.authorize(&state)?;
+    // An operation that already started under this confirmation, then lost its card to
+    // a crash, needs none again: execution reconciles it, and an uncheck never blocks that.
+    let started = state.intents.operation(id).is_some_and(|intent| {
+        matches!(intent.state, State::Executing | State::Uncertain)
+            && intent.action == Action::EnsureReady
+            && intent.target_cloud_id == binding.target().cloud_id
+    });
+    if started {
+        let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+        let _execution = receipt::execution_lock(&root)?;
+        let target = request.target_store(&binding)?;
+        let confirmed = receipt::load(target.root())?
+            .is_some_and(|claim| claim.owner == *request.owner && claim.id == id && claim.confirmed == Some(id));
+        return if confirmed {
+            Ok(())
+        } else {
+            Err(Error::Invalid("The operation no longer owns the companion target"))
+        };
+    }
     // Access is verified once the worker is ready, so the owner's selection must
     // already cover the new cloud; otherwise the paid worker could never become Ready.
     let declaration = request

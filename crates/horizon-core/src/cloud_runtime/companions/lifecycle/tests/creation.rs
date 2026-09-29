@@ -432,3 +432,31 @@ fn a_created_companion_needs_the_owners_selection_like_any_other_once_created() 
         assert!(refused.to_string().contains("no longer selected"), "{refused}");
     }
 }
+
+#[test]
+fn a_recovered_card_for_a_started_operation_continues_without_confirming_again() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    // Horizon stopped after the start began; the owner has since unchecked it.
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.intents.transition(id, State::Executing).unwrap();
+    state.grants.get_mut("consumer").unwrap().selected = false;
+    store.save(&state).unwrap();
+    drop(store);
+    // The card's Retry confirms again; that changes nothing, so execution reconciles it.
+    let claim = || std::fs::read(fixture.root.path().join("reserved/companion-operation.json")).unwrap();
+    let before = claim();
+    confirm_creation(&fixture.request(), id).unwrap();
+    assert_eq!(claim(), before);
+    // An operation that was never confirmed is not treated as started under one.
+    let (fixture, other) = reserved();
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.intents.transition(other, State::Executing).unwrap();
+    store.save(&state).unwrap();
+    drop(store);
+    assert!(confirm_creation(&fixture.request(), other).is_err());
+}
