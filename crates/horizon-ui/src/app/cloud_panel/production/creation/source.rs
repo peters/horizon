@@ -182,7 +182,7 @@ impl State {
             return;
         }
         let destination = source::destination(&parent, &remote);
-        let token = Token::new(&remote.host, &self.token);
+        let token = Token::new(&remote, &self.token);
         self.token_tried = token.is_some();
         self.token_focused = false;
         let remember = token.is_some() && self.remember;
@@ -198,7 +198,7 @@ impl State {
         std::thread::spawn(move || {
             let result = source::clone(&remote, &destination, token.as_ref(), &cancel, &progress).map(|()| {
                 if let Some(token) = token.as_ref().filter(|_| remember && !cancel.is_cancelled()) {
-                    let _ = source::remember(&remote, token);
+                    let _ = source::remember(token);
                 }
                 destination
             });

@@ -175,19 +175,28 @@ fn git_output(path: &Path, args: &[&str]) -> Option<String> {
 pub struct Token {
     username: &'static str,
     secret: zeroize::Zeroizing<String>,
+    /// `scheme://host[:port]/` of the repository it was pasted for: Git sends the header there only.
+    scope: String,
 }
 
 impl Token {
     #[must_use]
-    pub fn new(host: &str, secret: &str) -> Option<Self> {
+    pub fn new(remote: &Remote, secret: &str) -> Option<Self> {
         let secret = secret.trim();
-        (!secret.is_empty() && secret.bytes().all(|byte| byte.is_ascii_graphic())).then(|| Self {
-            username: if host == "github.com" {
+        let origin: Vec<&str> = remote.url.splitn(4, '/').collect();
+        let (true, [scheme, "", authority, _]) =
+            (secret.bytes().all(|byte| byte.is_ascii_graphic()), origin.as_slice())
+        else {
+            return None;
+        };
+        (!secret.is_empty() && *scheme == "https:").then(|| Self {
+            username: if remote.host == "github.com" {
                 "x-access-token"
             } else {
                 "oauth2"
             },
             secret: zeroize::Zeroizing::new(secret.to_owned()),
+            scope: format!("https://{authority}/"),
         })
     }
 
@@ -200,10 +209,10 @@ impl Token {
     }
 }
 
-/// Asks the person's configured Git credential helper to keep `token` for `remote`'s host.
+/// Asks the person's configured Git credential helper to keep `token` for the host it was pasted for.
 /// Returns whether a helper is configured to receive it.
 #[must_use]
-pub fn remember(remote: &Remote, token: &Token) -> bool {
+pub fn remember(token: &Token) -> bool {
     let configured = git_output(
         Path::new("."),
         &["config", "--get-regexp", r"^credential\.(.*\.)?helper$"],
@@ -222,7 +231,7 @@ pub fn remember(remote: &Remote, token: &Token) -> bool {
         let _ = write!(
             stdin,
             "protocol=https\nhost={}\nusername={}\npassword={}\n\n",
-            remote.host,
+            token.scope.trim_start_matches("https://").trim_end_matches('/'),
             token.username,
             token.secret.as_str()
         );
@@ -302,7 +311,7 @@ fn git(token: Option<&Token>) -> Command {
     if let Some(token) = token {
         command
             .env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+            .env("GIT_CONFIG_KEY_0", format!("http.{}.extraHeader", token.scope))
             .env("GIT_CONFIG_VALUE_0", token.header());
     }
     // Never ask questions over SSH, but keep a command the person has set up themselves.
@@ -345,21 +354,26 @@ pub fn clone(
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|error| Failure::Other(error.to_string()))?;
     }
-    // Only a folder this call makes is this clone's to remove: creating it is the claim, so a
-    // folder someone else made in the meantime is never taken for ours.
-    let created = match std::fs::create_dir(destination) {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+    // Only a folder this call makes is this clone's to remove: creating it is the claim, and a
+    // folder that is already there is refused rather than cloned into.
+    match std::fs::create_dir(destination) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(Failure::Other(
+                "That folder already exists. Choose another clone folder and continue again.".into(),
+            ));
+        }
         Err(error) => return Err(Failure::Other(error.to_string())),
-    };
+    }
     let mut command = git(token);
     command
         .args(["clone", "--progress", "--", &remote.url])
         .arg(destination)
         .stdout(Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|error| Failure::Other(format!("Cannot run git: {error}")))?;
+    let mut child = command.spawn().map_err(|error| {
+        let _ = std::fs::remove_dir_all(destination);
+        Failure::Other(format!("Cannot run git: {error}"))
+    })?;
     let mut stderr = child.stderr.take();
     let sink = Arc::clone(progress);
     let reader = std::thread::spawn(move || {
@@ -390,9 +404,7 @@ pub fn clone(
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();
-            if created {
-                let _ = std::fs::remove_dir_all(destination);
-            }
+            let _ = std::fs::remove_dir_all(destination);
             return Err(Failure::Cancelled);
         }
         match child.try_wait() {
@@ -405,9 +417,7 @@ pub fn clone(
     if status.success() {
         Ok(())
     } else {
-        if created {
-            let _ = std::fs::remove_dir_all(destination);
-        }
+        let _ = std::fs::remove_dir_all(destination);
         Err(classify(remote, &stderr))
     }
 }
@@ -566,7 +576,9 @@ mod tests {
 
     #[test]
     fn a_token_travels_as_a_basic_header_for_its_host_only() {
-        let github = Token::new("github.com", " ghp_demo \n").unwrap();
+        let github_remote = parse("github.com/demo-org/demo").unwrap();
+        let github = Token::new(&github_remote, " ghp_demo \n").unwrap();
+        assert_eq!(github.scope, "https://github.com/");
         assert_eq!(
             github.header(),
             format!(
@@ -574,8 +586,15 @@ mod tests {
                 base64::engine::general_purpose::STANDARD.encode("x-access-token:ghp_demo")
             )
         );
-        assert!(Token::new("gitlab.com", "with space").is_none());
-        assert!(Token::new("gitlab.com", "  ").is_none());
+        let gitlab = parse("https://gitlab.example.org:8443/group/demo").unwrap();
+        assert_eq!(
+            Token::new(&gitlab, "glpat_demo").unwrap().scope,
+            "https://gitlab.example.org:8443/"
+        );
+        assert!(Token::new(&gitlab, "with space").is_none());
+        assert!(Token::new(&gitlab, "  ").is_none());
+        let ssh = parse("git@github.com:demo-org/demo").unwrap();
+        assert!(Token::new(&ssh, "ghp_demo").is_none(), "a token never applies over SSH");
     }
 
     #[test]
