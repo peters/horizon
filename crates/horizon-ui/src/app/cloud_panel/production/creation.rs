@@ -174,7 +174,11 @@ impl HorizonApp {
             self.cloud_prototype.production.launch.siblings.stop_browsing();
             self.cloud_prototype.production.source.take_choosing_parent();
         }
-        if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
+        // A picker closed without a repository has nothing to read.
+        if refocus_repository
+            && self.cloud_prototype.production.profiles.is_none()
+            && !self.cloud_prototype.production.repository.trim().is_empty()
+        {
             self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);

@@ -342,6 +342,9 @@ fn git(token: Option<&Token>) -> Command {
     command
 }
 
+/// How long a finished clone waits for what Git said last; a helper it left behind may hold the pipe.
+const CLONE_GRACE: Duration = Duration::from_secs(2);
+
 /// The longest a probe may take before the host is taken to be out of reach.
 const PROBE_LIMIT: Duration = Duration::from_secs(20);
 
@@ -357,12 +360,13 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
         .spawn()
         .map_err(|error| Failure::Other(format!("Cannot run git: {error}")))?;
     let mut stderr = child.stderr.take();
-    let reader = std::thread::spawn(move || {
+    let (sender, reader) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
         if let Some(pipe) = stderr.as_mut() {
             let _ = pipe.read_to_string(&mut text);
         }
-        text
+        let _ = sender.send(text);
     });
     let started = std::time::Instant::now();
     let status = loop {
@@ -384,7 +388,7 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
             }
         }
     };
-    let stderr = reader.join().unwrap_or_default();
+    let stderr = collected(&reader, PROBE_LIMIT.saturating_sub(started.elapsed()));
     if status.success() {
         Ok(())
     } else {
@@ -395,10 +399,16 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
 /// Ends `child` and lets go of its stderr reader. A transport helper that Git started may
 /// outlive it and keep the pipe open, so waiting for the reader could outlast any deadline;
 /// the reader ends on its own when the pipe closes.
-fn stop(child: &mut std::process::Child, reader: std::thread::JoinHandle<String>) {
+fn stop(child: &mut std::process::Child, reader: std::sync::mpsc::Receiver<String>) {
     let _ = child.kill();
     let _ = child.wait();
     drop(reader);
+}
+
+/// What Git wrote to stderr, waiting no longer than `wait` for the reader to reach the end of
+/// the pipe: a helper Git left behind can hold it open, and then there is nothing more to read.
+fn collected(reader: &std::sync::mpsc::Receiver<String>, wait: Duration) -> String {
+    reader.recv_timeout(wait).unwrap_or_default()
 }
 
 /// Clones `remote` into `destination` without ever prompting.
@@ -437,7 +447,8 @@ pub fn clone(
     })?;
     let mut stderr = child.stderr.take();
     let sink = Arc::clone(progress);
-    let reader = std::thread::spawn(move || {
+    let (sender, reader) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let (mut all, mut line, mut buffer) = (String::new(), String::new(), [0_u8; 512]);
         while let Some(read) = stderr
             .as_mut()
@@ -458,7 +469,7 @@ pub fn clone(
                 }
             }
         }
-        all
+        let _ = sender.send(all);
     });
     let status = loop {
         if cancel.is_cancelled() {
@@ -476,7 +487,7 @@ pub fn clone(
             }
         }
     };
-    let stderr = reader.join().unwrap_or_default();
+    let stderr = collected(&reader, CLONE_GRACE);
     if status.success() {
         Ok(())
     } else {
@@ -592,6 +603,14 @@ mod tests {
         ] {
             assert_eq!(classify(&github, stderr), expected, "{stderr}");
         }
+    }
+
+    #[test]
+    fn a_pipe_that_never_closes_cannot_hold_the_deadline() {
+        let (_sender, reader) = std::sync::mpsc::channel::<String>();
+        let started = std::time::Instant::now();
+        assert_eq!(collected(&reader, Duration::from_millis(100)), "");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

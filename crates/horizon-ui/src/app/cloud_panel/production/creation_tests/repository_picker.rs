@@ -254,3 +254,20 @@ fn closing_the_dialog_forgets_what_was_typed_in_the_source_field() {
     assert!(!app.cloud_creation_open());
     assert!(app.cloud_prototype.production.source.input().is_empty());
 }
+
+#[test]
+fn a_picker_closed_without_a_repository_reads_nothing() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    open_creation(&ctx, &mut app, temp.path().join("clouds"));
+    app.cloud_prototype.production.choosing_repository = true;
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(
+        app.cloud_prototype.error.is_none(),
+        "no repository, so no error about reading one: {:?}",
+        app.cloud_prototype.error
+    );
+}

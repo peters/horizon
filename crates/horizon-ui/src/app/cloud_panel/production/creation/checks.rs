@@ -287,7 +287,8 @@ fn show(ui: &mut Ui, form: &mut Production, root: Option<&Path>) {
             .clicked()
     {
         form.checks.key = None;
-        form.prices.refresh();
+        // Both providers are asked again, whichever one failed.
+        form.prices.restart();
     }
     if needs_account(form) {
         account::form(ui, &mut form.checks.account, &settings_root(root));
