@@ -499,8 +499,8 @@ fn a_persons_own_ssh_command_is_kept_wherever_it_is_set() {
     let set = |scope: &str| (scope == "--global").then(|| "ssh -i ~/.ssh/work\n".to_owned());
     let none = |_: &str| None;
     let blank = |_: &str| Some("  \n".to_owned());
-    assert!(ssh_command_in(Some("ssh".into()), none), "the environment");
-    assert!(ssh_command_in(None, set), "the user's configuration");
-    assert!(!ssh_command_in(None, none));
-    assert!(!ssh_command_in(None, blank), "an empty one is not a command");
+    assert!(ssh_command_in(true, none), "the environment");
+    assert!(ssh_command_in(false, set), "the user's configuration");
+    assert!(!ssh_command_in(false, none));
+    assert!(!ssh_command_in(false, blank), "an empty one is not a command");
 }

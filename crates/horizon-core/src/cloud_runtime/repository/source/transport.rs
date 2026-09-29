@@ -108,14 +108,14 @@ fn git(token: Option<&Token>) -> Command {
 fn ssh_command_is_set() -> bool {
     static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SET.get_or_init(|| {
-        ssh_command_in(std::env::var_os("GIT_SSH_COMMAND"), |scope| {
+        ssh_command_in(std::env::var_os("GIT_SSH_COMMAND").is_some(), |scope| {
             git_output(Path::new("."), &["config", scope, "--get", "core.sshCommand"])
         })
     })
 }
 
-fn ssh_command_in(environment: Option<std::ffi::OsString>, configured: impl Fn(&str) -> Option<String>) -> bool {
-    environment.is_some()
+fn ssh_command_in(in_environment: bool, configured: impl Fn(&str) -> Option<String>) -> bool {
+    in_environment
         || ["--system", "--global"]
             .iter()
             .any(|scope| configured(scope).is_some_and(|set| !set.trim().is_empty()))
