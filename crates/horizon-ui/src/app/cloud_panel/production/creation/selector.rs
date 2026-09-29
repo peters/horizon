@@ -12,7 +12,7 @@ use std::time::Duration;
 
 mod cards;
 pub(super) mod summary;
-mod widgets;
+pub(super) mod widgets;
 
 /// How the catalog is being browsed; none of it is part of the cloud.
 #[derive(Default)]

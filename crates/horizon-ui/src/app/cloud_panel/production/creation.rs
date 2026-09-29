@@ -5,10 +5,11 @@ use crate::theme;
 use egui::{Align, Button, Context, Frame, Id, Key, Layout, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{
     ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
-    cloud_runtime::provider::Placement as ProviderPlacement, dir_search,
+    cloud_runtime::provider::Placement as ProviderPlacement,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+pub(super) mod checks;
 mod costs;
 mod placement;
 mod pricing;
@@ -16,6 +17,7 @@ mod profiles;
 pub(super) mod provider;
 pub(super) mod selector;
 pub(super) mod siblings;
+pub(super) mod source;
 mod storage;
 mod watch;
 
@@ -39,6 +41,10 @@ enum RepositoryAction {
     Choose,
     Load,
     Setup,
+    /// A folder or fresh clone to make the repository.
+    Adopt(PathBuf),
+    /// Choose the folder clones go into.
+    CloneFolder,
     /// The checkout of the named same-worker sibling.
     ChooseSibling(String),
 }
@@ -55,15 +61,7 @@ impl HorizonApp {
         let mut actions = Actions::default();
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
-        // Focus returns to the field when its picker closes, whether or not a directory was chosen.
-        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
-        if !picking {
-            self.cloud_prototype.production.launch.siblings.stop_browsing();
-        }
-        if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
-            self.read_cloud_profiles(ctx);
-        }
-        self.request_cloud_prices(ctx);
+        let refocus_repository = self.prepare_cloud_creation(ctx, picking);
         let form = &mut self.cloud_prototype.production;
         form.launch.siblings.sync(
             ctx,
@@ -106,7 +104,11 @@ impl HorizonApp {
                                 .id_salt("cloud-creation-summary")
                                 .max_height(body_height)
                                 .show(ui, |ui| {
-                                    selector::summary::show(ui, &mut self.cloud_prototype.production);
+                                    checks::with_summary(
+                                        ui,
+                                        &mut self.cloud_prototype.production,
+                                        self.cloud_prototype.root.as_deref(),
+                                    );
                                 });
                         });
                     });
@@ -117,11 +119,15 @@ impl HorizonApp {
                         .show(ui, |ui| {
                             self.cloud_creation_body(ui, &mut actions, refocus_repository);
                             ui.add_space(12.0);
-                            selector::summary::show(ui, &mut self.cloud_prototype.production);
+                            checks::with_summary(
+                                ui,
+                                &mut self.cloud_prototype.production,
+                                self.cloud_prototype.root.as_deref(),
+                            );
                         });
                 }
                 ui.add_space(12.0);
-                selector::summary::footer(ui, &mut self.cloud_prototype.production, &mut actions);
+                checks::footer(ui, &mut self.cloud_prototype.production, &mut actions);
             });
         ctx.move_to_top(response.response.layer_id);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
@@ -129,6 +135,8 @@ impl HorizonApp {
             self.cloud_prototype.production.creating = false;
             self.cloud_prototype.production.pending_creation = None;
             self.cloud_prototype.production.launch = super::launch::State::default();
+            // A clone still running stops, and a token that was not used is forgotten.
+            self.cloud_prototype.production.source = source::State::default();
             return;
         }
         match actions.repository {
@@ -136,6 +144,8 @@ impl HorizonApp {
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
+            RepositoryAction::Adopt(path) => self.adopt_cloud_source(ctx, &path),
+            RepositoryAction::CloneFolder => self.choose_clone_folder(ctx),
             RepositoryAction::None => {}
         }
         // The Start button and Enter in the title take the same path: with "Start new
@@ -148,6 +158,30 @@ impl HorizonApp {
         self.poll_cloud_creation(ctx);
     }
 
+    /// What the dialog settles before it draws: the pickers that closed, the prices and the
+    /// checks it keeps current, and a clone that finished. True when focus returns to the field.
+    fn prepare_cloud_creation(&mut self, ctx: &Context, picking: bool) -> bool {
+        // Focus returns to the field when its picker closes, whether or not a directory was chosen.
+        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
+        if !picking {
+            self.cloud_prototype.production.launch.siblings.stop_browsing();
+            self.cloud_prototype.production.source.take_choosing_parent();
+        }
+        if refocus_repository && self.cloud_prototype.production.profiles.is_none() {
+            self.read_cloud_profiles(ctx);
+        }
+        self.request_cloud_prices(ctx);
+        checks::update(
+            &mut self.cloud_prototype.production,
+            self.cloud_prototype.root.as_deref(),
+            ctx,
+        );
+        if let Some(path) = self.cloud_prototype.production.source.poll(ctx) {
+            self.adopt_cloud_source(ctx, &path);
+        }
+        refocus_repository
+    }
+
     /// Everything left of the summary: title, profile, worker, place and more options.
     fn cloud_creation_body(&mut self, ui: &mut Ui, actions: &mut Actions, refocus_repository: bool) {
         let form = &mut self.cloud_prototype.production;
@@ -155,7 +189,11 @@ impl HorizonApp {
             form.pending_creation.is_none() && !form.launch.submitted && form.launch.watch.is_none(),
             |ui| {
                 actions.repository = fields(ui, form, &mut actions.create, refocus_repository);
-                if !form.launch.loading() && form.profiles.is_none() && super::repository_setup::render(ui, form) {
+                if !form.launch.loading()
+                    && form.profiles.is_none()
+                    && !checks::source_step(form)
+                    && super::repository_setup::render(ui, form)
+                {
                     actions.repository = RepositoryAction::Setup;
                 }
             },
@@ -227,6 +265,20 @@ impl HorizonApp {
         self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
     }
 
+    /// Makes `path` the repository and reads its profiles: a folder that was typed, or a fresh clone.
+    fn adopt_cloud_source(&mut self, ctx: &Context, path: &Path) {
+        self.set_cloud_repository(path);
+        self.read_cloud_profiles(ctx);
+    }
+
+    /// Lets the person pick the folder clones go into, starting from the nearest one that exists.
+    fn choose_clone_folder(&mut self, ctx: &Context) {
+        self.consume_picker_activation(ctx);
+        let mut parent = self.cloud_prototype.production.source.clone_parent();
+        while !parent.is_dir() && parent.pop() {}
+        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, Some(&parent)));
+    }
+
     /// The repository picker also chooses a sibling's checkout, which it then returns.
     fn choose_cloud_sibling(&mut self, ctx: &Context, alias: String) {
         self.consume_picker_activation(ctx);
@@ -246,6 +298,10 @@ impl HorizonApp {
 
     pub(in crate::app) fn set_cloud_repository(&mut self, path: &Path) {
         let form = &mut self.cloud_prototype.production;
+        if form.source.take_choosing_parent() {
+            form.source.set_parent(path);
+            return;
+        }
         if form.launch.siblings.choose_checkout(path) {
             return;
         }
@@ -258,6 +314,12 @@ impl HorizonApp {
             form.placement = Placement::default();
             form.provider = None;
             form.launch.accounts_checked = false;
+            if form.title.trim().is_empty() {
+                form.title = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+            }
             self.cloud_prototype.error = None;
         }
     }
@@ -299,26 +361,6 @@ fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> 
     )
 }
 
-fn repository_field(ui: &mut Ui, repository: &str) -> egui::Response {
-    ui.label(RichText::new("Repository").size(14.0).strong().color(theme::FG()));
-    let path = if repository.trim().is_empty() {
-        RichText::new("Choose a local repository").color(theme::FG_DIM())
-    } else {
-        RichText::new(dir_search::abbreviate_home(Path::new(repository))).color(theme::FG())
-    };
-    ui.scope_builder(egui::UiBuilder::new().id(Id::new("cloud-repository")), |ui| {
-        ui.spacing_mut().button_padding = Vec2::new(12.0, 10.0);
-        ui.add(
-            Button::new(path.size(15.0))
-                .right_text(RichText::new("Browse…").size(13.0).color(theme::FG_SOFT()))
-                .truncate()
-                .fill(ui.visuals().text_edit_bg_color())
-                .min_size(Vec2::new(ui.available_width(), 38.0)),
-        )
-    })
-    .inner
-}
-
 /// The cloud title, focused when the form opens; Enter submits a complete form.
 fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
     if form.focus_title_on_open
@@ -353,7 +395,20 @@ fn column(ui: &mut Ui, width: f32, height: f32, add: impl FnOnce(&mut Ui)) {
 }
 
 fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_repository: bool) -> RepositoryAction {
+    let step = source::step(ui, form, refocus_repository);
+    let mut action = match step {
+        source::Step { adopt: Some(path), .. } => RepositoryAction::Adopt(path),
+        source::Step { browse: true, .. } => RepositoryAction::Choose,
+        source::Step {
+            choose_folder: true, ..
+        } => RepositoryAction::CloneFolder,
+        _ => RepositoryAction::None,
+    };
+    ui.add_space(8.0);
     title_field(ui, form, submit);
+    if checks::source_step(form) {
+        return action;
+    }
     let listed = if form.launch.loading() {
         ui.horizontal(|ui| {
             ui.spinner();
@@ -367,7 +422,6 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     } else {
         false
     };
-    let mut action = RepositoryAction::None;
     // Siblings can hold back Start, so they stay in view.
     if form.profiles.is_some()
         && !form.launch.loading()
@@ -388,7 +442,7 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
             {
                 storage::container_field(ui, profile, provider::current(form.provider, profile));
             }
-            match advanced_fields(ui, form, refocus_repository) {
+            match advanced_fields(ui, form) {
                 RepositoryAction::None => {}
                 chosen => action = chosen,
             }
@@ -457,14 +511,9 @@ fn machine(ui: &mut Ui, form: &mut Production) -> bool {
     false
 }
 
-fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool) -> RepositoryAction {
+fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
     let mut changed = false;
     ui.add_space(8.0);
-    let repository = repository_field(ui, &form.repository);
-    if refocus_repository {
-        repository.request_focus();
-    }
-    let choose = repository.clicked();
     ui.add_space(8.0);
     changed |= field(
         ui,
@@ -493,9 +542,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
                 .color(theme::FG_SOFT()),
         );
     }
-    if choose {
-        RepositoryAction::Choose
-    } else if load || changed {
+    if load || changed {
         RepositoryAction::Load
     } else {
         RepositoryAction::None
@@ -503,7 +550,7 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production, refocus_repository: bool)
 }
 
 fn title_requirement(ui: &mut Ui, form: &Production) {
-    if form.title.trim().is_empty() {
+    if form.title.trim().is_empty() && !checks::source_step(form) {
         ui.label(
             RichText::new("A cloud title is required before Start cloud can be used.")
                 .size(14.0)

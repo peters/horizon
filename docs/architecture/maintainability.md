@@ -658,6 +658,15 @@ placement. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
 channels, and removal rechecks durable resource ownership before discarding panels.
+The New cloud dialog asks where the code is before anything else.
+`cloud_runtime::repository::source` reads links, probes whether a repository is public,
+and clones with system Git without ever prompting; a personal access token reaches Git
+only through its environment and is remembered only through the user's Git credential
+helper. `cloud_runtime::deployment::admission` runs deployment's own first checks
+(provider credential, SSH identity) without side effects, and `setup::save_provider_key`
+saves one RunPod key or Hetzner token the way the settings form does.
+`production/creation/source` renders the source step and owns the clone; `production/creation/checks`
+lists what Start depends on and keeps Start locked until each check passes.
 `production/readiness` shares the add-panel menu and empty-state readiness gate;
 it checks the targeted cloud's current runtime before offering panel creation.
 UI modules render controls, consume progress and attach the

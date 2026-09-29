@@ -67,7 +67,7 @@ fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
 }
 
 #[test]
-fn opening_workspace_cloud_focuses_title_without_an_extra_click() {
+fn opening_a_cloud_without_a_repository_focuses_the_source_field_without_an_extra_click() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -116,6 +116,31 @@ fn opening_workspace_cloud_focuses_title_without_an_extra_click() {
         vec![Event::Text("Feature workspace".into())],
         Modifiers::NONE,
     );
+    assert_eq!(app.cloud_prototype.production.source.input(), "Feature workspace");
+    assert!(app.cloud_prototype.production.title.is_empty());
+}
+
+#[test]
+fn opening_a_cloud_for_a_repository_focuses_the_title_without_an_extra_click() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
+    let repository = temp.path().join("repository");
+    std::fs::create_dir(&repository).unwrap();
+    let workspace = app.board.create_workspace("Sample project");
+    app.board.workspace_mut(workspace).unwrap().cwd = Some(repository);
+    app.open_workspace_cloud(&ctx, workspace);
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    frame(
+        &ctx,
+        &mut app,
+        vec![Event::Text("Feature workspace".into())],
+        Modifiers::NONE,
+    );
     assert_eq!(app.cloud_prototype.production.title, "Feature workspace");
 }
 
@@ -138,6 +163,15 @@ fn start_cloud_says_why_it_is_disabled() {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let nothing_chosen = painted(&ctx, &mut app);
+    assert!(
+        nothing_chosen.contains("Paste a GitHub or GitLab link, or choose a folder."),
+        "{nothing_chosen}"
+    );
+    assert!(nothing_chosen.contains("Continue"), "{nothing_chosen}");
+    assert!(!nothing_chosen.contains("Start cloud"), "{nothing_chosen}");
+
+    app.cloud_prototype.production.repository = "/work/atlas".into();
     let both = painted(&ctx, &mut app);
     assert!(
         both.contains("A cloud title is required before Start cloud can be used."),
@@ -165,6 +199,7 @@ fn start_cloud_says_why_it_is_disabled() {
     titled.root_viewport_stabilizer = None;
     titled.cloud_prototype.production.creating = true;
     titled.cloud_prototype.production.title = "Feature".into();
+    titled.cloud_prototype.production.repository = "/work/atlas".into();
     let profile = painted(&ctx, &mut titled);
     assert!(!profile.contains("A cloud title is required"), "{profile}");
     assert!(
@@ -267,7 +302,8 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     frame(&ctx, &mut app, vec![Event::Text("Deployment".into())], Modifiers::NONE);
     let repository = temp.path().join("committed-repository");
     std::fs::create_dir(&repository).unwrap();
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     frame(
@@ -277,20 +313,18 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
         Modifiers::NONE,
     );
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-    frame(&ctx, &mut app, vec![Event::Text("HEAD".into())], Modifiers::NONE);
-    assert_eq!(app.cloud_prototype.production.title, "Deployment");
+    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+    frame(&ctx, &mut app, vec![Event::Text(" HEAD".into())], Modifiers::NONE);
+    assert_eq!(app.cloud_prototype.production.title, "Deployment HEAD");
     assert_eq!(
         std::path::Path::new(&app.cloud_prototype.production.repository),
         repository
     );
-    assert_eq!(app.cloud_prototype.production.revision, "HEAD");
-    key(&ctx, &mut app, Key::Tab, Modifiers::SHIFT);
+    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    assert!(
-        app.dir_picker.is_some(),
-        "Shift+Tab must return to the repository field"
-    );
+    assert!(app.dir_picker.is_some(), "Browse… opens the picker from the keyboard");
     key(&ctx, &mut app, Key::F11, Modifiers::NONE);
     assert!(app.fullscreen_panel.is_none());
     assert!(app.cloud_creation_open());

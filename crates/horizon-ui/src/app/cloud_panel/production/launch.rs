@@ -74,7 +74,10 @@ impl HorizonApp {
         form.provider = None;
         form.creating = true;
         form.focus_title_on_open = true;
-        self.read_cloud_profiles(ctx);
+        // With no repository yet, the dialog asks where the code is instead of reading nothing.
+        if !form.repository.trim().is_empty() {
+            self.read_cloud_profiles(ctx);
+        }
     }
 
     pub(super) fn read_cloud_profiles(&mut self, ctx: &Context) {
