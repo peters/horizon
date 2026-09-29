@@ -323,3 +323,32 @@ fn a_press_on_cancel_does_not_complete_as_the_retry_that_replaces_it() {
         "a click begun on Cancel became Retry deploy"
     );
 }
+
+#[test]
+fn a_layer_failure_keeps_its_arrival_order_for_the_root_cause() {
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(Stage::Push),
+        ..Default::default()
+    };
+    runtime.push_log("5f70bf18a086: Pushing [=>   ]".into());
+    runtime.push_log("error: an earlier failure".into());
+    runtime.push_log("5f70bf18a086: denied: requested access to the resource is denied".into());
+    runtime.push_log("5f70bf18a086: Pushing [==>  ]".into());
+    let texts: Vec<_> = runtime.logs.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "5f70bf18a086: Pushing [==>  ]",
+            "error: an earlier failure",
+            "5f70bf18a086: denied: requested access to the resource is denied",
+        ],
+        "progress still updates in place; the failure is appended and kept"
+    );
+    runtime.error = Some("Uploading image failed; inspect deployment output".into());
+    let status = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
+    assert_eq!(
+        status.failure.and_then(|failure| failure.cause).as_deref(),
+        Some("5f70bf18a086: denied: requested access to the resource is denied"),
+        "the newest failure is the cause"
+    );
+}

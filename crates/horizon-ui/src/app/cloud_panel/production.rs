@@ -145,7 +145,11 @@ impl LogLine {
 /// Whether `previous` is an earlier update of `line`'s layer in the same step of the same
 /// attempt; a retry pushing the same image keeps the earlier attempt's lines.
 fn same_layer(previous: &LogLine, line: &LogLine, layer: &str) -> bool {
-    previous.attempt == line.attempt
+    // A failure is never merged: it keeps its place in arrival order, where diagnosis
+    // reads newest first, and a later progress update does not overwrite it.
+    previous.kind != LineKind::Failure
+        && line.kind != LineKind::Failure
+        && previous.attempt == line.attempt
         && previous.stage == line.stage
         && previous.visit == line.visit
         && layer_id(&previous.text) == Some(layer)
