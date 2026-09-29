@@ -2,7 +2,9 @@
 use super::{Action, Entry};
 use horizon_core::cloud_runtime::companions::{Row, Status};
 
-pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
+/// `running` names clouds with an operation running on their card: an uncheck then can
+/// no longer stop what was started, so the checkbox waits until it finishes.
+pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry, running: &std::collections::BTreeSet<String>) {
     ui.separator();
     ui.label("Companion clouds");
     ui.small("Share access to selected clouds. Stopped clouds stay stopped.");
@@ -41,10 +43,21 @@ pub(super) fn render(ui: &mut egui::Ui, entry: &mut Entry) {
         ui.push_id(&companion.alias, |ui| {
             let clearing = entry.clearing.contains(&companion.alias);
             let selecting = entry.selecting.contains(&companion.alias);
-            if let Some(action) = render_row(ui, row, choice, busy, stale || clearing || selecting, selecting) {
+            let started = companion
+                .target_cloud_id
+                .as_ref()
+                .is_some_and(|id| running.contains(id));
+            let action = ui
+                .add_enabled_ui(!started, |ui| {
+                    render_row(ui, row, choice, busy, stale || clearing || selecting, selecting)
+                })
+                .inner;
+            if let Some(action) = action {
                 requested = Some(action);
             }
-            if clearing {
+            if started {
+                ui.small("Starting or stopping on its card; uncheck once that finishes");
+            } else if clearing {
                 ui.small("Removing access…");
             } else if selecting {
                 ui.small("Selection pending · uncheck to cancel");

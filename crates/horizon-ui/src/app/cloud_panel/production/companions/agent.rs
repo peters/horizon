@@ -103,6 +103,11 @@ impl State {
         }
     }
 
+    /// Target clouds with an operation running on their card.
+    pub(super) fn running(&self) -> &BTreeSet<String> {
+        &self.executing
+    }
+
     pub(super) fn holds(&self, source: &str) -> bool {
         self.held.contains_key(source)
     }

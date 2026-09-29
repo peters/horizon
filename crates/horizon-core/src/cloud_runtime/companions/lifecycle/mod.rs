@@ -416,10 +416,10 @@ fn execute_with(request: &Request<'_>, id: OperationId, backend: &mut impl execu
     )
 }
 
-/// Whether the owner confirmed this operation's creation. A confirmation stands only
-/// while the owner's selection does; the caller holds the source journal lock, so an
-/// uncheck after the confirmation withdraws it durably before any paid allocation,
-/// and checking the companion again later needs a fresh confirmation.
+/// Whether the owner confirmed this operation's creation. Until execution starts, a
+/// confirmation stands only while the owner's selection does; the caller holds the
+/// source journal lock, so an uncheck after the confirmation withdraws it durably
+/// before any paid allocation, and checking the companion again needs a fresh one.
 fn confirmed(
     request: &Request<'_>,
     (journal, binding): (&journal::State, &Binding),
@@ -428,6 +428,11 @@ fn confirmed(
 ) -> Result<bool> {
     if claim.confirmed != Some(intent.operation_id) {
         return Ok(false);
+    }
+    // Once execution began, the confirmation already authorized the allocation it
+    // started; a later uncheck revokes access but never blocks reconciling it.
+    if intent.state != State::Submitted {
+        return Ok(true);
     }
     let declaration = request
         .context

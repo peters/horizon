@@ -4,6 +4,8 @@ mod job;
 #[cfg(test)]
 mod tests;
 mod view;
+#[cfg(test)]
+mod view_tests;
 
 use super::HorizonApp;
 use horizon_core::{
@@ -438,7 +440,7 @@ impl State {
             ui.small("Open a saved session to select companion clouds.");
             return;
         };
-        view::render(ui, entry);
+        view::render(ui, entry, self.agent.running());
         self.agent.creation.render(ui, cloud);
     }
 }

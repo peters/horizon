@@ -353,3 +353,26 @@ fn a_retry_restores_the_claim_of_a_reservation_whose_claim_write_was_lost() {
     select_reserved(&mut fixture);
     confirm_creation(&fixture.request(), id).unwrap();
 }
+
+#[test]
+fn an_uncheck_after_execution_started_never_blocks_reconciling_it() {
+    let (mut fixture, id) = reserved();
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+    // The start began, then Horizon stopped before the outcome was recorded.
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.intents.transition(id, State::Executing).unwrap();
+    // The owner unchecked the companion meanwhile.
+    state.grants.get_mut("consumer").unwrap().selected = false;
+    store.save(&state).unwrap();
+    drop(store);
+    let mut backend = Fake::new(&fixture);
+    let reconciled = execute_with(&fixture.request(), id, &mut backend);
+    if let Err(error) = &reconciled {
+        assert!(!error.to_string().contains("no longer selected"), "{error}");
+    }
+    let claim = receipt::load(&fixture.root.path().join("reserved")).unwrap().unwrap();
+    assert_eq!(claim.confirmed, Some(id));
+}
