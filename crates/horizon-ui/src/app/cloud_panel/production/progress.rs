@@ -170,6 +170,29 @@ impl Timeline {
             .map(|(_, elapsed)| *elapsed)
     }
 
+    /// Which run of `stage` this attempt is on: 0 for its first, 1 once it is revisited.
+    pub fn visit(&self, stage: Stage) -> usize {
+        self.visits(stage).count().saturating_sub(1)
+    }
+
+    /// How long the `visit`th run of `stage` took in this attempt, live while it runs.
+    pub fn visit_duration(&self, stage: Stage, visit: usize) -> Option<Duration> {
+        self.visits(stage).nth(visit)
+    }
+
+    /// Each run of `stage` in order, the running one last with its time so far.
+    fn visits(&self, stage: Stage) -> impl Iterator<Item = Duration> + '_ {
+        self.finished
+            .iter()
+            .filter(move |(current, _)| *current == stage)
+            .map(|(_, elapsed)| *elapsed)
+            .chain(
+                self.active
+                    .filter(|(current, _)| *current == stage)
+                    .map(|(_, start)| start.elapsed()),
+            )
+    }
+
     /// The step running now, else the last one this attempt reported.
     pub fn last_stage(&self) -> Option<Stage> {
         self.active

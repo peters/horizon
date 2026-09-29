@@ -112,6 +112,18 @@ pub(super) fn spend(runtime: &Runtime, now: SystemTime) -> Spend {
     Spend { line, explanation }
 }
 
+/// The Cost tab's run note. The run is estimated once the worker is Ready; before that a
+/// requested worker may already bill, so it is pending rather than "not running".
+fn run_note(runtime: &Runtime, estimated: bool) -> &'static str {
+    if estimated {
+        "estimate since the last start"
+    } else if !compute_idle(runtime) && worker_requested(runtime) {
+        "estimate pending until ready"
+    } else {
+        "not running"
+    }
+}
+
 /// The Cost tab's rate: a stopped or deleted worker's last rate is history, not what bills now.
 fn rate_metric(runtime: &Runtime, rate: Option<f64>) -> (String, &'static str) {
     match rate {
@@ -144,7 +156,7 @@ pub(super) fn show(ui: &mut egui::Ui, runtime: &Runtime) {
             "This run",
             &run.as_ref()
                 .map_or_else(|| "—".into(), |run| horizon_core::format_cost(run.amount)),
-            if run.is_some() { "estimate since the last start" } else { "not running" },
+            run_note(runtime, run.is_some()),
             "Estimate from the last observed worker start and rate. Reconnect or check the provider to refresh worker state.",
         );
         let (title, value, note, hover) = match &total {
@@ -378,6 +390,25 @@ mod tests {
             ..Runtime::default()
         };
         assert_eq!(spend(&runtime, SystemTime::now()).line, "Worker billing · rate pending");
+    }
+
+    #[test]
+    fn a_worker_starting_up_is_pending_not_idle_in_the_cost_tab() {
+        let starting = Runtime {
+            stage: Some(Stage::Readiness),
+            ..runtime()
+        };
+        let shown = texts(&starting);
+        assert!(
+            shown.iter().any(|text| text == "estimate pending until ready"),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|text| text == "not running"), "{shown:?}");
+        let stopped = Runtime {
+            stage: Some(Stage::Stopped),
+            ..runtime()
+        };
+        assert!(texts(&stopped).iter().any(|text| text == "not running"));
     }
 
     #[test]

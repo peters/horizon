@@ -81,25 +81,26 @@ fn lines(ui: &mut egui::Ui, runtime: &Runtime) {
         return;
     }
     // A heading per step of each attempt: a retry of the same step starts its own.
-    let mut previous: Option<(Option<Stage>, u64)> = None;
+    let mut previous: Option<(Option<Stage>, u64, usize)> = None;
     // Tools print blank separator lines; they only spread the log out.
     for line in runtime.logs.iter().filter(|line| !line.text.trim().is_empty()) {
-        if previous != Some((line.stage, line.attempt)) {
+        let group = (line.stage, line.attempt, line.visit);
+        if previous != Some(group) {
             if let Some(stage) = line.stage {
-                stage_heading(ui, runtime, stage, line.attempt);
+                stage_heading(ui, runtime, stage, line.attempt, line.visit);
             }
-            previous = Some((line.stage, line.attempt));
+            previous = Some(group);
         }
         row(ui, line);
     }
 }
 
-/// Only the current attempt's step is timed from the timeline; an earlier attempt's is
-/// labelled as such rather than given the current attempt's time.
-fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage, attempt: u64) {
+/// Only the current attempt's steps are timed from the timeline, each visit with its own
+/// time; an earlier attempt's is labelled as such rather than given the current one's.
+fn stage_heading(ui: &mut egui::Ui, runtime: &Runtime, stage: Stage, attempt: u64, visit: usize) {
     let color = stage_color(stage);
     let current = attempt == runtime.progress.attempt();
-    let duration = runtime.progress.stage_duration(stage).filter(|_| current);
+    let duration = runtime.progress.visit_duration(stage, visit).filter(|_| current);
     let label = duration.map_or_else(
         || {
             if current {
@@ -254,6 +255,10 @@ mod tests {
     }
 
     fn headings(runtime: &mut Runtime) -> Vec<String> {
+        headings_of(runtime, "Push image")
+    }
+
+    fn headings_of(runtime: &mut Runtime, step: &str) -> Vec<String> {
         let mut shown = Vec::new();
         let output = egui::Context::default()
             .run_ui(egui::RawInput::default(), |ui| {
@@ -262,7 +267,7 @@ mod tests {
             .discard_textures();
         for shape in &output.shapes {
             if let egui::Shape::Text(text) = &shape.shape
-                && text.galley.text().contains("Push image")
+                && text.galley.text().starts_with(step)
             {
                 shown.push(text.galley.text().to_owned());
             }
@@ -285,5 +290,32 @@ mod tests {
         assert_eq!(shown.len(), 2, "{shown:?}");
         assert_eq!(shown[0], "Push image · earlier attempt");
         assert!(shown[1].starts_with("Push image · 0m"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_step_revisited_in_one_attempt_keeps_each_visits_own_time() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now().checked_sub(Duration::from_secs(300)).unwrap();
+        let mut runtime = Runtime::default();
+        let enter = |runtime: &mut Runtime, stage: Stage, at: Duration, text: &str| {
+            runtime.stage = Some(stage);
+            runtime.progress.stage(stage, start + at);
+            runtime.push_log(text.into());
+        };
+        enter(&mut runtime, Stage::Validate, Duration::ZERO, "checking the profile");
+        enter(&mut runtime, Stage::Build, Duration::from_secs(5), "#1 building");
+        enter(
+            &mut runtime,
+            Stage::Validate,
+            Duration::from_secs(125),
+            "checking the image contract",
+        );
+        runtime.progress.finish(start + Duration::from_secs(128));
+        let shown = headings_of(&mut runtime, "Validate");
+        assert_eq!(
+            shown,
+            ["Validate · 0m 05s", "Validate · 0m 03s"],
+            "each visit keeps its own time"
+        );
     }
 }

@@ -237,6 +237,28 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status) {
         painter.galley(pos2(x, y - size.y / 2.0), galley, color);
         x += size.x + 12.0;
     }
+    // Painted, so it is registered once as the whole sentence, cut or not.
+    ui.interact(
+        Rect::from_min_max(pos2(start, y - 9.0), pos2(end, y + 9.0)),
+        ui.id().with("status-line"),
+        Sense::hover(),
+    )
+    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken(status, meaning.as_deref())));
+}
+
+/// The status as one sentence for a screen reader.
+fn spoken(status: &Status, meaning: Option<&str>) -> String {
+    [
+        status.verb.as_str(),
+        status.numbers.as_str(),
+        status.tail.as_str(),
+        meaning.map_or("", |meaning| meaning.trim_start_matches(['—', ' '])),
+        status.right.as_str(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(". ")
 }
 
 /// Segments with the finished stages in their colours, the running one filled to its

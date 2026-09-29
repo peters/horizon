@@ -36,10 +36,14 @@ const AUTHENTICATION: &[&str] = &[
     "authentication required",
 ];
 
-/// Words that place a failure in image transfer: the line's or the summary's.
+/// Words that place a failure in image transfer: the line's or the summary's. A plain
+/// "image" is not one: a Git dependency fetched while building an image never meets a registry.
 const REGISTRY_CONTEXT: &[&str] = &[
     "registry",
-    "image",
+    "uploading image",
+    "pushing image",
+    "pulling image",
+    "pull credential",
     "docker push",
     "docker pull",
     "azurecr.io",
@@ -360,6 +364,12 @@ mod tests {
             (
                 "fatal: remote: authentication required",
                 "Preparing worktrees failed",
+                SERVICE,
+            ),
+            ("fatal: remote: authentication required", "Build failed", SERVICE),
+            (
+                "fatal: remote: authentication required",
+                "Building image failed",
                 SERVICE,
             ),
             ("unauthorized: authentication required", SUMMARY, "registry refused"),

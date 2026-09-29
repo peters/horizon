@@ -103,6 +103,9 @@ pub(super) struct LogLine {
     pub kind: LineKind,
     /// The operation that printed it (`progress::Timeline::attempt`).
     pub attempt: u64,
+    /// Which run of its step within the attempt: a step revisited later (Validate
+    /// after Build) is a second visit with its own heading and time.
+    pub visit: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +134,7 @@ impl LogLine {
             at,
             kind,
             attempt: 0,
+            visit: 0,
         }
     }
 }
@@ -138,7 +142,10 @@ impl LogLine {
 /// Whether `previous` is an earlier update of `line`'s layer in the same step of the same
 /// attempt; a retry pushing the same image keeps the earlier attempt's lines.
 fn same_layer(previous: &LogLine, line: &LogLine, layer: &str) -> bool {
-    previous.attempt == line.attempt && previous.stage == line.stage && layer_id(&previous.text) == Some(layer)
+    previous.attempt == line.attempt
+        && previous.stage == line.stage
+        && previous.visit == line.visit
+        && layer_id(&previous.text) == Some(layer)
 }
 
 /// The layer a Docker progress line such as `5f70bf18a086: Pushing [==>  ]` reports on.
@@ -219,6 +226,7 @@ impl Runtime {
     fn push_log(&mut self, text: String) {
         let mut line = LogLine::new(text, self.stage, self.progress.elapsed());
         line.attempt = self.progress.attempt();
+        line.visit = line.stage.map_or(0, |stage| self.progress.visit(stage));
         self.log_generation += 1;
         let target = if self.verbose_unpinned {
             &mut self.pending_logs

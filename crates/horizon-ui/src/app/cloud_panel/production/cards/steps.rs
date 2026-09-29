@@ -84,6 +84,25 @@ pub(super) fn cross(painter: &egui::Painter, center: Pos2, size: f32, color: Col
     painter.line_segment([center + vec2(-reach, reach), center + vec2(reach, -reach)], stroke);
 }
 
+/// What a screen reader says for a step: its name, state and time.
+fn spoken(stage: Stage, mark: &Mark, elapsed: Option<std::time::Duration>) -> String {
+    let progress = match mark {
+        Mark::Done => "done",
+        Mark::Running => "running",
+        Mark::Failed => "failed",
+        Mark::Pending => "pending",
+    };
+    match elapsed {
+        Some(elapsed) => format!("{}: {progress}, {}", stage.label(), short(elapsed)),
+        None => format!("{}: {progress}", stage.label()),
+    }
+}
+
+/// Registers a painted step with assistive technology.
+fn announce(response: &egui::Response, stage: Stage, mark: &Mark, elapsed: Option<std::time::Duration>) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken(stage, mark, elapsed)));
+}
+
 fn label_color(mark: &Mark) -> Color32 {
     match mark {
         Mark::Running => theme::FG(),
@@ -101,7 +120,8 @@ pub(super) fn vertical(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) ->
     ui.spacing_mut().item_spacing.y = 0.0;
     for (index, stage) in stages.iter().enumerate() {
         let mark = mark(status, index);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+        let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+        announce(&row, *stage, &mark, runtime.progress.stage_duration(*stage));
         let center = pos2(rect.left() + 8.0, rect.top() + 11.0);
         let open = matches!(mark, Mark::Running | Mark::Failed);
         let done = matches!(mark, Mark::Done);
@@ -282,6 +302,13 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
     for (index, stage) in stages.iter().enumerate() {
         let center = pos2(rect.left() + step * (crate::app::util::usize_to_f32(index) + 0.5), y);
         let mark = mark(status, index);
+        let node = Rect::from_center_size(pos2(center.x, rect.center().y), vec2(step, rect.height()));
+        announce(
+            &ui.interact(node, ui.id().with(("step", index)), Sense::hover()),
+            *stage,
+            &mark,
+            runtime.progress.stage_duration(*stage),
+        );
         if matches!(mark, Mark::Done) && index + 1 < stages.len() {
             ui.painter().line_segment(
                 [center, center + vec2(step, 0.0)],
