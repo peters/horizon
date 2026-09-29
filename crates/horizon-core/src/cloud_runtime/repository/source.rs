@@ -157,11 +157,30 @@ pub fn destination(parent: &Path, remote: &Remote) -> PathBuf {
 #[must_use]
 pub fn existing(parent: &Path, remote: &Remote) -> Option<PathBuf> {
     candidates(parent, remote).filter(|path| path.is_dir()).find(|path| {
-        git_output(path, &["config", "--get", "remote.origin.url"])
-            .and_then(|origin| parse(origin.trim()))
+        origin_url(path)
+            .and_then(|origin| parse(&origin))
             .is_some_and(|origin| origin.url == remote.url)
             && is_checkout(path)
     })
+}
+
+/// The address a checkout's `origin` was cloned from, read from its config file: a folder is
+/// looked at without starting a process, so a search can run while a dialog is drawn.
+fn origin_url(checkout: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(checkout.join(".git").join("config")).ok()?;
+    let mut in_origin = false;
+    for line in config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_origin = line.starts_with("[remote \"origin\"]");
+        } else if in_origin
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "url"
+        {
+            return Some(value.trim().to_owned());
+        }
+    }
+    None
 }
 
 fn git_output(path: &Path, args: &[&str]) -> Option<String> {
@@ -683,6 +702,22 @@ mod tests {
         assert!(
             tail.ends_with("could not read Username"),
             "the end is what names the failure"
+        );
+    }
+
+    #[test]
+    fn an_origin_is_read_from_the_config_file() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(origin_url(temp.path()), None);
+        std::fs::create_dir(temp.path().join(".git")).unwrap();
+        std::fs::write(
+            temp.path().join(".git").join("config"),
+            "[core]\n\turl = not-this\n[remote \"upstream\"]\n\turl = https://example.org/other.git\n[remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n\turl = https://github.com/demo-org/demo.git\n",
+        )
+        .unwrap();
+        assert_eq!(
+            origin_url(temp.path()).as_deref(),
+            Some("https://github.com/demo-org/demo.git")
         );
     }
 
