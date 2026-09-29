@@ -88,10 +88,10 @@ fn worker(ui: &mut Ui, form: &Production, profile: &Profile) {
         None => format!("{kind} profile {}", form.selected_profile),
     };
     ui.label(RichText::new(detail).size(12.5).color(theme::FG_SOFT()));
-    // GPU stock is the catalog's level; a CPU size's is its own exact check.
+    // The same exact stock the chosen card shows: a GPU type's, or a CPU size's own check.
     let level = catalog(form).and_then(|catalog| catalog.stock(catalog.selected?, form));
-    let (stock, color) = match (profile.gpu, placement::in_stock(&form.prices, &sized, &form.placement)) {
-        (true, _) if level.is_some() => widgets::stock(level),
+    let (stock, color) = match (level, placement::in_stock(&form.prices, &sized, &form.placement)) {
+        (Some(level), _) if level.exact => widgets::stock(Some(level)),
         (_, Some(true)) => ("In stock", theme::PALETTE_GREEN()),
         (_, Some(false)) => ("Out of stock", theme::PALETTE_RED()),
         (_, None) => ("Checking stock", theme::FG_DIM()),
