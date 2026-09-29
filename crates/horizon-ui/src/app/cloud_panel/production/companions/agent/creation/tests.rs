@@ -463,7 +463,13 @@ fn a_confirmed_creation_shows_its_checkbox_waits_for_an_uncheck_and_ends_with_it
         .unwrap()
         .clearing
         .clear();
-    // Once saved, the start runs; its card is not open here, so it pauses with an error.
+    // Once saved, one more input pass may still queue an uncheck of the shown box;
+    // then the start runs. Its card is not open here, so it pauses with an error.
+    app.poll_companion_creations(&ctx);
+    assert!(matches!(
+        creation(&mut app).pending[0].step,
+        Step::Starting { armed: true, .. }
+    ));
     app.poll_companion_creations(&ctx);
     let pending = &creation(&mut app).pending[0];
     assert!(pending.waiting() && pending.error.is_some());

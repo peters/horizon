@@ -336,3 +336,20 @@ fn a_reused_operation_id_is_refused_without_binding_the_companion() {
     assert_eq!(bound_checkout(&fixture.request()).unwrap(), None);
     assert!(!fixture.root.path().join("reserved/companion-operation.json").exists());
 }
+
+#[test]
+fn a_retry_restores_the_claim_of_a_reservation_whose_claim_write_was_lost() {
+    let (mut fixture, binding) = fresh("reserved");
+    let id = OperationId::generate();
+    reserve(&fixture.request(), binding.clone(), id).unwrap();
+    // Horizon stopped between the journal write and the target claim.
+    let claim = fixture.root.path().join("reserved/companion-operation.json");
+    std::fs::remove_file(&claim).unwrap();
+    reserve(&fixture.request(), binding, id).unwrap();
+    let restored = receipt::load(&fixture.root.path().join("reserved")).unwrap().unwrap();
+    assert_eq!((restored.id, restored.phase), (id, Phase::Submitted));
+    // So the owner's confirmation can still go through once the card exists.
+    save_reserved(&fixture, &prepared(&fixture));
+    select_reserved(&mut fixture);
+    confirm_creation(&fixture.request(), id).unwrap();
+}

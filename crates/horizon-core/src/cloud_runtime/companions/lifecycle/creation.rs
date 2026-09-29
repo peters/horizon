@@ -6,7 +6,7 @@ use crate::cloud_runtime::state::Store;
 /// Reserve a fresh cloud identity for a missing companion and record the agent's Ensure
 /// Ready on it in one journal write, so neither the binding nor the operation can exist
 /// without the other. Retrying with the same binding and operation ID returns the
-/// operation already recorded.
+/// operation already recorded, and restores its target claim if only that write was lost.
 /// # Errors
 /// Refuses an alias bound to another cloud or checkout, a target that already exists and
 /// an operation ID that belongs to another request, each before anything is written.
@@ -15,7 +15,23 @@ pub fn reserve(request: &Request<'_>, binding: Binding, id: OperationId) -> Resu
         let (store, mut state) = request.load()?;
         match state.intents.binding(request.alias) {
             // A retry of this reservation; submitting again records nothing twice.
-            Some(bound) if *bound == binding => {}
+            Some(bound) if *bound == binding => {
+                let unstarted = state.intents.operation(id).is_some_and(|intent| {
+                    intent.state == State::Submitted
+                        && intent.action == Action::EnsureReady
+                        && intent.target_cloud_id == binding.target().cloud_id
+                });
+                if unstarted {
+                    let root = crate::cloud_runtime::state::cloud_directory(request.root, &binding.target().cloud_id)?;
+                    let _execution = receipt::execution_lock(&root)?;
+                    let target = request.target_store(&binding)?;
+                    // The journal write landed but the claim did not: finish it, so the
+                    // owner can still confirm this reservation.
+                    if receipt::load(target.root())?.is_none() {
+                        receipt::save(&target, request.owner, id, Phase::Submitted)?;
+                    }
+                }
+            }
             Some(bound) if bound.target() == binding.target() => {
                 return Err(Error::Invalid(
                     "This companion is reserved for another checkout; choose that one",

@@ -315,3 +315,35 @@ fn an_expired_ensure_ready_or_stop_is_refused_but_a_poll_is_answered() {
     }
     assert!(expired(&request("status", past)).is_ok());
 }
+
+#[test]
+fn a_missing_companion_found_before_a_session_change_is_not_offered_after_it() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    app.cloud_prototype.groups = CloudGroups(vec![cloud(1, "source", "workspace")]);
+    let state = &mut app.cloud_prototype.production.companions;
+    state.sync(Some("session"), &app.cloud_prototype.groups);
+    let previous = state.entries["source"].owner.clone();
+    state.set_session(Some("other"));
+    state.sync(Some("other"), &app.cloud_prototype.groups);
+    let id = OperationId::generate();
+    let request: UsageRequest = serde_json::from_value(json!({
+        "request_id": "companion", "actor": "horizon:agent", "host_instance": "host",
+        "deadline_at_millis": i64::MAX, "claimed": true,
+        "cloud_companion": {"action": "ensure_ready", "cloud": "source", "alias": "consumer",
+            "operation_id": id}
+    }))
+    .unwrap();
+    let declaration = Declaration::new("example/consumer", "dev");
+    // The lookup ran for the previous session; its owner no longer matches the card.
+    let refused = app
+        .answer_missing(&request, "source", previous, declaration.clone())
+        .unwrap_err();
+    assert!(refused.starts_with("cloud_companion_unavailable"), "{refused}");
+    let creation = &mut app.cloud_prototype.production.companions.agent.creation;
+    assert!(creation.answer("source", "consumer", None, id).is_none());
+    let current = app.cloud_prototype.production.companions.entries["source"]
+        .owner
+        .clone();
+    let asked = app.answer_missing(&request, "source", current, declaration).unwrap();
+    assert_eq!(asked["phase"], "confirmation_required");
+}

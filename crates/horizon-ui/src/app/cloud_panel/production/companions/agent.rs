@@ -135,16 +135,7 @@ impl HorizonApp {
                                 (Ok(answer), started)
                             }
                             Answer::Missing(owner, declaration) => {
-                                let alias = request
-                                    .cloud_companion
-                                    .as_ref()
-                                    .and_then(|companion| companion.alias.clone())
-                                    .unwrap_or_default();
-                                let id = operation_id(&request);
-                                (
-                                    id.map(|id| self.request_companion_creation(owner, &alias, declaration, id)),
-                                    false,
-                                )
+                                (self.answer_missing(&request, &source, owner, declaration), false)
                             }
                         },
                         Err(error) => (Err(error), false),
@@ -169,6 +160,34 @@ impl HorizonApp {
         if !self.cloud_prototype.production.companions.agent.held.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+    }
+
+    /// Asks the owner to create a missing companion. A lookup that finished after the
+    /// session changed carries the previous owner and is refused, never shown.
+    fn answer_missing(
+        &mut self,
+        request: &UsageRequest,
+        source: &str,
+        owner: Owner,
+        declaration: companions::Declaration,
+    ) -> Result<Value, String> {
+        let current = self
+            .cloud_prototype
+            .production
+            .companions
+            .entries
+            .get(source)
+            .is_some_and(|entry| entry.owner == owner);
+        if !current {
+            return Err("cloud_companion_unavailable: the workspace session changed; send the request again".into());
+        }
+        let alias = request
+            .cloud_companion
+            .as_ref()
+            .and_then(|companion| companion.alias.clone())
+            .unwrap_or_default();
+        let id = operation_id(request)?;
+        Ok(self.request_companion_creation(owner, &alias, declaration, id))
     }
 
     /// The answer to a recorded request, continuing its operation unless it is a

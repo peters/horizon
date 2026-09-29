@@ -82,6 +82,9 @@ enum Step {
     Starting {
         target: String,
         context: Box<Context>,
+        /// Set once the card has shown the checked box through one input pass, so an
+        /// uncheck clicked right after confirming is queued before anything starts.
+        armed: bool,
     },
     /// The recorded operation is being cancelled; the decline is final once it is.
     Declining(Receiver<Result<(), String>>),
@@ -91,6 +94,7 @@ enum Progress {
     Reserved(Result<Box<Checkout>, String>),
     Selected(Result<Selected, String>),
     Declined(Result<(), String>),
+    Arm,
     Start,
 }
 
@@ -315,7 +319,9 @@ impl HorizonApp {
                     .map(|reserved| Progress::Reserved(reserved.map(Box::new))),
                 Step::Selecting { receiver, .. } => receiver.try_recv().ok().map(Progress::Selected),
                 Step::Declining(receiver) => receiver.try_recv().ok().map(Progress::Declined),
-                Step::Starting { .. } => (!clearing(&pending.source)).then_some(Progress::Start),
+                Step::Starting { armed, .. } => {
+                    (!clearing(&pending.source)).then_some(if *armed { Progress::Start } else { Progress::Arm })
+                }
             };
             steps.extend(progress.map(|progress| (index, progress)));
         }
@@ -329,22 +335,12 @@ impl HorizonApp {
                     pending.recorded = true;
                     self.add_companion_cloud(index, ctx);
                 }
-                Progress::Selected(Ok(selected)) => {
-                    let (context, snapshot) = *selected;
-                    let pending = &mut creation.pending[index];
-                    if let Step::Selecting { target, .. } = &pending.step {
-                        let target = target.clone();
-                        let (source, alias) = (pending.source.clone(), pending.alias.clone());
-                        pending.step = Step::Starting {
-                            target: target.clone(),
-                            context: Box::new(context),
-                        };
-                        // Show the checked box now: the source's refresh stays held until
-                        // the start, and the owner can still uncheck before allocation.
-                        if let Some(entry) = self.cloud_prototype.production.companions.entries.get_mut(&source) {
-                            entry.show_selected(&alias, &target, snapshot);
-                        }
+                Progress::Selected(Ok(selected)) => self.companion_selected(index, *selected),
+                Progress::Arm => {
+                    if let Step::Starting { armed, .. } = &mut creation.pending[index].step {
+                        *armed = true;
                     }
+                    ctx.request_repaint();
                 }
                 Progress::Start => self.run_companion_creation(index, ctx),
                 Progress::Declined(Ok(())) => creation.finish_decline(index),
@@ -531,10 +527,31 @@ impl HorizonApp {
         });
     }
 
+    /// A confirmed creation waits to start; the card shows its new cloud checked now,
+    /// while the source's refresh is still held.
+    fn companion_selected(&mut self, index: usize, (context, snapshot): (Context, Option<Snapshot>)) {
+        let pending = &mut self.cloud_prototype.production.companions.agent.creation.pending[index];
+        let Step::Selecting { target, .. } = &pending.step else {
+            return;
+        };
+        let target = target.clone();
+        let (source, alias) = (pending.source.clone(), pending.alias.clone());
+        pending.step = Step::Starting {
+            target: target.clone(),
+            context: Box::new(context),
+            armed: false,
+        };
+        // The source's refresh stays held until the start, and the owner can still
+        // uncheck before allocation.
+        if let Some(entry) = self.cloud_prototype.production.companions.entries.get_mut(&source) {
+            entry.show_selected(&alias, &target, snapshot);
+        }
+    }
+
     /// Runs the confirmed operation on the new cloud's card, which allocates its first worker.
     fn run_companion_creation(&mut self, index: usize, ctx: &egui::Context) {
         let pending = &mut self.cloud_prototype.production.companions.agent.creation.pending[index];
-        let Step::Starting { target, context } = std::mem::replace(&mut pending.step, Step::Waiting) else {
+        let Step::Starting { target, context, .. } = std::mem::replace(&mut pending.step, Step::Waiting) else {
             return;
         };
         let (source, alias, id) = (pending.source.clone(), pending.alias.clone(), pending.id);
