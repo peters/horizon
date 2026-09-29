@@ -16,12 +16,22 @@ pub enum RuntimePathError {
     AlreadyInUse,
 }
 
-/// The application home is independent of an explicitly configured browser root.
+/// The application home is independent of an explicitly configured browser root: `.horizon`
+/// in the user's home directory, from `HOME` or, where that is unset as on Windows, from
+/// `USERPROFILE`. Only without either is it `.horizon` in the working directory.
 #[must_use]
 pub fn default_horizon_root() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map_or_else(|| PathBuf::from(".horizon"), |home| home.join(".horizon"))
+    horizon_root_from(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+}
+
+fn horizon_root_from(home: Option<std::ffi::OsString>, profile: Option<std::ffi::OsString>) -> PathBuf {
+    home.into_iter()
+        .chain(profile)
+        .find(|value| !value.is_empty())
+        .map_or_else(
+            || PathBuf::from(".horizon"),
+            |home| PathBuf::from(home).join(".horizon"),
+        )
 }
 
 /// Freeze an absolute coordination root before using any default-path helpers.
@@ -165,6 +175,32 @@ pub fn safe_local_id(local_id: &str) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+#[cfg(test)]
+mod home_tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn the_home_comes_from_home_then_the_windows_profile() {
+        let root = |home: Option<&str>, profile: Option<&str>| {
+            super::horizon_root_from(home.map(OsString::from), profile.map(OsString::from))
+        };
+        let user = PathBuf::from("user");
+        assert_eq!(root(Some("user"), Some("profile")), user.join(".horizon"));
+        assert_eq!(
+            root(None, Some("profile")),
+            PathBuf::from("profile").join(".horizon"),
+            "Windows sets USERPROFILE and no HOME"
+        );
+        assert_eq!(
+            root(Some(""), Some("profile")),
+            PathBuf::from("profile").join(".horizon")
+        );
+        assert_eq!(root(None, None), PathBuf::from(".horizon"));
+        assert_eq!(root(Some(""), Some("")), PathBuf::from(".horizon"));
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
