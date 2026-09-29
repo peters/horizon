@@ -248,3 +248,91 @@ fn a_creation_that_failed_before_allocating_can_be_confirmed_again() {
     execute_with(&fixture.request(), retry, &mut backend).unwrap();
     assert_eq!(backend.decisions, [Decision::Reconnect]);
 }
+
+/// An unbound fixture and a fresh reserved identity for its companion.
+fn fresh(cloud_id: &str) -> (Fixture, Binding) {
+    let fixture = Fixture::unbound();
+    let mut target = fixture.binding.target().clone();
+    target.cloud_id = cloud_id.into();
+    let binding = Binding::new(
+        &fixture.owner,
+        "consumer",
+        target,
+        fixture.binding.checkout().into(),
+        Origin::Reserved,
+    )
+    .unwrap();
+    (fixture, binding)
+}
+
+#[test]
+fn a_reservation_records_its_binding_and_operation_together_and_a_retry_changes_nothing() {
+    let (fixture, binding) = fresh("reserved");
+    let id = OperationId::generate();
+    let first = reserve(&fixture.request(), binding.clone(), id).unwrap();
+    assert_eq!(first.intent.target_cloud_id, "reserved");
+    assert_eq!(first.phase, Phase::Submitted);
+    assert_eq!(
+        bound_checkout(&fixture.request()).unwrap().as_deref(),
+        Some(binding.checkout())
+    );
+    let claim = receipt::load(&fixture.root.path().join("reserved")).unwrap().unwrap();
+    assert_eq!(claim.id, id);
+    // The card's Retry reserves again with the same identity and operation.
+    let again = reserve(&fixture.request(), binding, id).unwrap();
+    assert_eq!(again.intent.operation_id, id);
+    assert_eq!(status(&fixture.request(), id).unwrap().intent.state, State::Submitted);
+}
+
+#[test]
+fn a_reservation_for_another_cloud_or_checkout_writes_nothing() {
+    let (fixture, binding) = fresh("reserved");
+    reserve(&fixture.request(), binding.clone(), OperationId::generate()).unwrap();
+    let journal = || std::fs::read(fixture.root.path().join("source/companions.json")).unwrap();
+    let before = journal();
+    let (_, other) = fresh("elsewhere");
+    let id = OperationId::generate();
+    let refused = reserve(&fixture.request(), other, id).unwrap_err();
+    assert!(refused.to_string().contains("another cloud"), "{refused}");
+    let moved = Binding::new(
+        &fixture.owner,
+        "consumer",
+        binding.target().clone(),
+        fixture.root.path().join("elsewhere"),
+        Origin::Reserved,
+    )
+    .unwrap();
+    let refused = reserve(&fixture.request(), moved, id).unwrap_err();
+    assert!(refused.to_string().contains("another checkout"), "{refused}");
+    assert_eq!(journal(), before);
+    assert!(status(&fixture.request(), id).is_err());
+    assert!(!fixture.root.path().join("elsewhere/companion-operation.json").exists());
+}
+
+#[test]
+fn a_reused_operation_id_is_refused_without_binding_the_companion() {
+    let fixture = Fixture::new();
+    // An operation of retired ownership: its ID is kept forever, and the alias is unbound.
+    let id = fixture.submit(Action::Stop).intent.operation_id;
+    execute_with(&fixture.request(), id, &mut Fake::new(&fixture)).unwrap();
+    let store = journal::Store::open(fixture.root.path(), &fixture.owner).unwrap();
+    let mut state = store.load().unwrap();
+    state.grants.clear();
+    assert!(state.intents.retire(&state.owner).unwrap());
+    store.save(&state).unwrap();
+    drop(store);
+    let mut target = fixture.binding.target().clone();
+    target.cloud_id = "reserved".into();
+    let binding = Binding::new(
+        &fixture.owner,
+        "consumer",
+        target,
+        fixture.binding.checkout().into(),
+        Origin::Reserved,
+    )
+    .unwrap();
+    let refused = reserve(&fixture.request(), binding, id).unwrap_err();
+    assert!(refused.to_string().contains("retired"), "{refused}");
+    assert_eq!(bound_checkout(&fixture.request()).unwrap(), None);
+    assert!(!fixture.root.path().join("reserved/companion-operation.json").exists());
+}

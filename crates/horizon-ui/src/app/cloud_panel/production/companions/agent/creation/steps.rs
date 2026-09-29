@@ -1,8 +1,8 @@
 //! The background steps of a confirmed creation: reserving the cloud, then selecting
 //! it and recording the confirmation. Each is idempotent for a retry.
 use super::{
-    Action, Binding, Cancellation, Checkout, CloudGroups, Context, Declaration, OperationId, Origin, Owner, Path,
-    Settings, Snapshot, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
+    Binding, Cancellation, Checkout, CloudGroups, Context, Declaration, OperationId, Origin, Owner, Path, Settings,
+    Snapshot, Target, cloud_runtime, companions, inventory, lifecycle, retry_busy,
 };
 
 /// Idempotent for the same cloud ID, checkout and operation, so a retry after a
@@ -35,24 +35,9 @@ pub(super) fn reserve(
     };
     let binding = Binding::new(owner, alias, target, checkout.repository.clone(), Origin::Reserved)
         .map_err(|error| error.to_string())?;
-    // A retry finds the binding and operation already recorded: the target then has a
-    // claim, so binding again is refused while submitting again returns the operation.
-    let recorded = retry_busy(|| {
-        let bound = lifecycle::bind(&request, binding.clone());
-        lifecycle::submit(&request, Action::EnsureReady, id).or_else(|error| bound.and(Err(error)))
-    })
-    .map_err(|error| error.to_string())?;
-    if recorded.intent.target_cloud_id != cloud_id {
-        return Err("This companion is already bound to another cloud; nothing was reserved".into());
-    }
-    // A reservation recorded earlier keeps its checkout; the card is built from it.
-    if lifecycle::bound_checkout(&request)
-        .map_err(|error| error.to_string())?
-        .as_ref()
-        != Some(&checkout.repository)
-    {
-        return Err("This companion is reserved for another checkout; choose that one".into());
-    }
+    // One journal write binds the fresh identity and records the agent's operation. A
+    // retry returns that operation; another cloud or checkout is refused, writing nothing.
+    retry_busy(|| lifecycle::reserve(&request, binding.clone(), id)).map_err(|error| error.to_string())?;
     Ok(checkout)
 }
 
