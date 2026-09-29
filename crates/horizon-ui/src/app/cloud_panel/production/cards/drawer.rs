@@ -107,11 +107,8 @@ pub(super) fn show(ui: &mut egui::Ui, rect: Rect, runtime: &mut Runtime, mut con
     let tab = Tab::resolve(wanted, context.body);
     let height = tab.height().min(rect.height());
     let area = Rect::from_min_size(rect.min, vec2(rect.width(), height));
-    ui.painter().rect_filled(
-        area.translate(vec2(0.0, 8.0)),
-        12,
-        theme::alpha(egui::Color32::BLACK, 110),
-    );
+    // The theme's popup shadow, so it stays soft in light mode.
+    ui.painter().add(ui.visuals().popup_shadow.as_shape(area, 12));
     let frame = egui::Frame::new()
         .fill(theme::PANEL_BG_ALT())
         .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
