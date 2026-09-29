@@ -364,9 +364,7 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
     let status = loop {
         let over = cancel.is_cancelled() || started.elapsed() >= PROBE_LIMIT;
         if over {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
+            stop(&mut child, reader);
             return Err(if cancel.is_cancelled() {
                 Failure::Cancelled
             } else {
@@ -377,9 +375,7 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
+                stop(&mut child, reader);
                 return Err(Failure::Other(error.to_string()));
             }
         }
@@ -390,6 +386,15 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
     } else {
         Err(classify(remote, &stderr))
     }
+}
+
+/// Ends `child` and lets go of its stderr reader. A transport helper that Git started may
+/// outlive it and keep the pipe open, so waiting for the reader could outlast any deadline;
+/// the reader ends on its own when the pipe closes.
+fn stop(child: &mut std::process::Child, reader: std::thread::JoinHandle<String>) {
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(reader);
 }
 
 /// Clones `remote` into `destination` without ever prompting.
@@ -453,9 +458,7 @@ pub fn clone(
     });
     let status = loop {
         if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
+            stop(&mut child, reader);
             let _ = std::fs::remove_dir_all(destination);
             return Err(Failure::Cancelled);
         }
@@ -463,9 +466,7 @@ pub fn clone(
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
+                stop(&mut child, reader);
                 let _ = std::fs::remove_dir_all(destination);
                 return Err(Failure::Other(error.to_string()));
             }

@@ -309,10 +309,12 @@ impl State {
         if self.job.is_some() {
             return Err("Cloning…");
         }
-        if self.remote().is_none() {
+        let Some(remote) = self.remote().cloned() else {
             return Err("Paste a GitHub or GitLab link, or choose a folder.");
-        }
-        if self.probe.is_some() {
+        };
+        // Nothing is cloned before the link has been looked up, unless it is already on disk.
+        let looked_up = self.probed.as_deref() == Some(remote.url.as_str()) && self.probe.is_none();
+        if !looked_up && self.plan(&remote).existing.is_none() {
             return Err("Checking access…");
         }
         if matches!(self.failure, Some(Failure::SignIn(_))) && self.token.trim().is_empty() {
@@ -355,6 +357,12 @@ mod tests {
             Err("Paste a GitHub or GitLab link, or choose a folder.")
         );
         let mut link = typed("github.com/demo-org/demo-atlas");
+        assert_eq!(
+            link.next_step(),
+            Err("Checking access…"),
+            "not before the link is looked up"
+        );
+        link.probed = link.remote().map(|remote| remote.url.clone());
         assert!(link.next_step().is_ok());
         link.failure = Some(Failure::SignIn("github.com".into()));
         assert_eq!(link.next_step(), Err("Paste a token with read access to continue."));
