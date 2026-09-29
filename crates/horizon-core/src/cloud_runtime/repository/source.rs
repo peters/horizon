@@ -362,11 +362,16 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
     let mut stderr = child.stderr.take();
     let (sender, reader) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(pipe) = stderr.as_mut() {
-            let _ = pipe.read_to_string(&mut text);
+        let mut tail = String::new();
+        let mut buffer = [0_u8; 512];
+        while let Some(read) = stderr
+            .as_mut()
+            .and_then(|pipe| pipe.read(&mut buffer).ok())
+            .filter(|n| *n > 0)
+        {
+            keep_tail(&mut tail, &String::from_utf8_lossy(&buffer[..read]));
         }
-        let _ = sender.send(text);
+        let _ = sender.send(tail);
     });
     let started = std::time::Instant::now();
     let status = loop {
@@ -393,6 +398,22 @@ pub fn probe(remote: &Remote, token: Option<&Token>, cancel: &Cancellation) -> R
         Ok(())
     } else {
         Err(classify(remote, &stderr))
+    }
+}
+
+/// The most of Git's stderr that is kept: enough to name a failure, and all a host that never
+/// stops talking can make Horizon hold.
+const STDERR_TAIL: usize = 16 * 1024;
+
+/// Appends `text` to `tail` and drops the oldest text beyond [`STDERR_TAIL`].
+fn keep_tail(tail: &mut String, text: &str) {
+    tail.push_str(text);
+    if tail.len() > STDERR_TAIL {
+        let mut cut = tail.len() - STDERR_TAIL;
+        while !tail.is_char_boundary(cut) {
+            cut += 1;
+        }
+        tail.drain(..cut);
     }
 }
 
@@ -460,8 +481,8 @@ pub fn clone(
                     if !line.trim().is_empty() {
                         line.trim()
                             .clone_into(&mut sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-                        all.push_str(&line);
-                        all.push('\n');
+                        keep_tail(&mut all, &line);
+                        keep_tail(&mut all, "\n");
                     }
                     line.clear();
                 } else {
@@ -603,6 +624,20 @@ mod tests {
         ] {
             assert_eq!(classify(&github, stderr), expected, "{stderr}");
         }
+    }
+
+    #[test]
+    fn a_host_that_never_stops_talking_leaves_only_a_bounded_tail() {
+        let mut tail = String::new();
+        for _ in 0..10_000 {
+            keep_tail(&mut tail, "fatal: a very talkative remote, éééé\n");
+        }
+        keep_tail(&mut tail, "fatal: could not read Username");
+        assert!(tail.len() <= STDERR_TAIL);
+        assert!(
+            tail.ends_with("could not read Username"),
+            "the end is what names the failure"
+        );
     }
 
     #[test]

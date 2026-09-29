@@ -73,6 +73,12 @@ pub(in crate::app::cloud_panel::production) struct State {
 }
 
 impl State {
+    /// A repository was chosen, possibly the one already loaded: the field shows it again, and
+    /// what was typed over it is dropped.
+    pub fn show_chosen_again(&mut self) {
+        self.repository.clear();
+    }
+
     /// Shows the chosen repository in the field, whoever chose it.
     fn mirror(&mut self, repository: &str) {
         if self.repository != repository {
@@ -435,6 +441,18 @@ mod tests {
             temp.path().join("demo-atlas-2"),
             "a fresh clone would go beside it"
         );
+    }
+
+    #[test]
+    fn choosing_the_loaded_repository_again_drops_what_was_typed_over_it() {
+        let mut state = State::default();
+        state.mirror("/tmp/demo/atlas");
+        state.input = "github.com/demo-org/other".into();
+        assert!(state.editing());
+        state.show_chosen_again();
+        state.mirror("/tmp/demo/atlas");
+        assert!(!state.editing());
+        assert!(state.input.ends_with("atlas"));
     }
 
     #[test]

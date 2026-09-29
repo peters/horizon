@@ -316,6 +316,7 @@ impl HorizonApp {
         if form.launch.siblings.choose_checkout(path) {
             return;
         }
+        form.source.show_chosen_again();
         let repository = path.to_string_lossy();
         if form.repository != repository {
             form.repository = repository.into_owned();
