@@ -1,4 +1,5 @@
 //! Machine account form; filesystem work and key generation run outside rendering.
+mod dashboard;
 mod fields;
 mod registry;
 #[cfg(all(test, unix))]
@@ -12,28 +13,40 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 const SAVED_SECRET_HINT: &str = "••••••••  Saved credential";
 
-#[derive(Default, PartialEq)]
-enum Section {
-    #[default]
-    Accounts,
-    Placement,
-    Agents,
-    Images,
+/// Everything the settings thread learns when the form opens.
+struct Loaded {
+    draft: Draft,
+    /// Whether the settings are complete enough to go straight on to a first cloud.
+    configured: bool,
+    ssh_ready: bool,
+    /// Saved validation results, read from each binding's journal without asking a provider.
+    verified: dashboard::Verified,
+}
+
+/// What a registry action found, reduced to what the form shows.
+struct RegistryOutcome {
+    message: String,
+    repository: String,
+    generation: String,
+    /// The validation saved for this pull grant while its provider access is active.
+    verified: Option<horizon_core::cloud_runtime::registry::Validation>,
 }
 
 enum Completion {
-    Loaded(Box<Draft>, bool),
+    Loaded(Box<Loaded>),
     Saved(Vec<horizon_core::cloud_runtime::setup::Agent>),
     Failed(String),
     Invalid(Box<Draft>, String),
-    Registry(std::result::Result<String, String>),
+    Registry(std::result::Result<RegistryOutcome, String>),
 }
 
 #[derive(Default)]
 pub(in crate::app::cloud_panel) struct State {
     pub(in crate::app::cloud_panel) open: bool,
     continue_creation: bool,
-    section: Section,
+    edits: fields::Edits,
+    verified: dashboard::Verified,
+    ssh_ready: Option<bool>,
     required_agents: Option<Vec<horizon_core::cloud_runtime::setup::Agent>>,
     receiver: Option<Receiver<Completion>>,
     draft: Option<Box<Draft>>,
@@ -43,23 +56,27 @@ pub(in crate::app::cloud_panel) struct State {
 }
 
 impl State {
-    fn render_navigation(&mut self, ui: &mut egui::Ui) -> f32 {
-        let navigation_top = ui.cursor().top();
-        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (section, label) in [
-                    (Section::Accounts, "Accounts"),
-                    (Section::Placement, "Placement"),
-                    (Section::Agents, "Agents"),
-                    (Section::Images, "Images & advanced"),
-                ] {
-                    ui.selectable_value(&mut self.section, section, label);
-                }
-            });
-            ui.separator();
-            ui.add_space(8.0);
+    /// Shows what a registry action found and keeps the proof, or drops it, for that grant.
+    fn record_registry(&mut self, outcome: RegistryOutcome) {
+        self.registry_status = Some(outcome.message);
+        let current = self.draft.as_ref().is_some_and(|draft| {
+            draft.registries.iter().any(|registry| {
+                registry.original.as_ref().is_some_and(|binding| {
+                    binding.repository == outcome.repository && binding.generation == outcome.generation
+                })
+            })
         });
-        ui.cursor().top() - navigation_top
+        if !current {
+            return;
+        }
+        match outcome.verified {
+            Some(validation) => {
+                self.verified.insert(outcome.repository, validation);
+            }
+            None => {
+                self.verified.remove(&outcome.repository);
+            }
+        }
     }
 
     /// Whether these settings resume a cloud creation once they are saved.
@@ -69,19 +86,9 @@ impl State {
 
     fn render_fields(&mut self, ui: &mut egui::Ui) -> Option<horizon_core::cloud_runtime::registry::Action> {
         let state = self;
-        let mut registry_action = None;
-        if let Some(draft) = &mut state.draft {
-            ui.add_enabled_ui(state.receiver.is_none(), |ui| match state.section {
-                Section::Accounts => fields::accounts(ui, draft),
-                Section::Placement => fields::placement(ui, draft),
-                Section::Agents => fields::agents(ui, draft, state.required_agents.is_some()),
-                Section::Images => {
-                    registry_action = registry::render(ui, draft);
-                    ui.add_space(12.0);
-                    fields::advanced(ui, draft);
-                }
-            });
-        }
+        let registry_action = ui
+            .add_enabled_ui(state.receiver.is_none(), |ui| dashboard::page(ui, state))
+            .inner;
         if let Some(status) = &state.registry_status {
             ui.label(status);
         }
@@ -178,10 +185,15 @@ impl HorizonApp {
                     if let Some(agents) = required_agents {
                         draft.select_profile_agents(agents);
                     }
-                    let configured =
-                        draft.validate().is_ok() && cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
-
-                    Completion::Loaded(Box::new(draft), configured)
+                    let ssh_ready = cloud_runtime_ssh_valid(&draft.settings.ssh_identity_file);
+                    let configured = draft.validate().is_ok() && ssh_ready;
+                    let verified = saved_validations(&draft);
+                    Completion::Loaded(Box::new(Loaded {
+                        draft,
+                        configured,
+                        ssh_ready,
+                        verified,
+                    }))
                 }
                 Err(error) => Completion::Failed(error.to_string()),
             };
@@ -203,20 +215,28 @@ impl HorizonApp {
         state.receiver = None;
         state.registry_cancel = None;
         let agents = match &completion {
-            Completion::Loaded(draft, _) => Some(draft.settings.default_agents.clone()),
+            Completion::Loaded(loaded) => Some(loaded.draft.settings.default_agents.clone()),
             Completion::Saved(agents) => Some(agents.clone()),
             _ => None,
         };
         let proceed = match completion {
             Completion::Registry(result) => {
                 match result {
-                    Ok(status) => state.registry_status = Some(status),
+                    Ok(outcome) => state.record_registry(outcome),
                     Err(error) => state.error = Some(error),
                 }
                 false
             }
-            Completion::Loaded(draft, configured) => {
-                state.draft = Some(draft);
+            Completion::Loaded(loaded) => {
+                let Loaded {
+                    draft,
+                    configured,
+                    ssh_ready,
+                    verified,
+                } = *loaded;
+                state.draft = Some(Box::new(draft));
+                state.ssh_ready = Some(ssh_ready);
+                state.verified = verified;
                 configured && state.continue_creation
             }
             Completion::Saved(_) => {
@@ -273,27 +293,30 @@ impl HorizonApp {
                     .inner_margin(24),
             )
             .show(ctx, |ui| {
-                ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 580.0));
+                ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 1060.0));
                 ui.label(
                     RichText::new(if state.continue_creation {
                         "Your first cloud"
                     } else {
                         "Cloud settings"
                     })
-                    .size(26.0)
-                    .strong(),
+                    .size(24.0)
+                    .strong()
+                    .color(theme::FG()),
                 );
-                ui.label(RichText::new("Connect your account. Choose who you work with.").color(theme::FG_SOFT()));
+                ui.label(
+                    RichText::new("What is connected, and what still needs you.")
+                        .size(13.0)
+                        .color(theme::FG_SOFT()),
+                );
                 ui.add_space(16.0);
-                let navigation_height = state.render_navigation(ui);
+                let banner_top = ui.cursor().top();
+                dashboard::readiness_banner(ui, state);
+                ui.add_space(16.0);
+                let banner_height = ui.cursor().top() - banner_top;
                 super::super::runtime::solid_scroll_area(ui)
-                    .id_salt(match state.section {
-                        Section::Accounts => "cloud-settings-accounts",
-                        Section::Placement => "cloud-settings-placement",
-                        Section::Agents => "cloud-settings-agents",
-                        Section::Images => "cloud-settings-images",
-                    })
-                    .max_height((ctx.content_rect().height() - 240.0 - navigation_height).max(100.0))
+                    .id_salt("cloud-settings-dashboard")
+                    .max_height((ctx.content_rect().height() - 240.0 - banner_height).max(100.0))
                     .show(ui, |ui| {
                         registry_action = state.render_fields(ui);
                     });
@@ -366,35 +389,7 @@ impl HorizonApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = horizon_core::cloud_runtime::registry::manage(&settings, &action, &cancellation)
-                .map(|status| {
-                    let state = match status.state {
-                        horizon_core::cloud_runtime::registry::State::Prepared => "Not prepared",
-                        horizon_core::cloud_runtime::registry::State::Requested { .. } => {
-                            "Creation uncertain; reconcile before retrying"
-                        }
-                        horizon_core::cloud_runtime::registry::State::Bound(_) => "Active",
-                        horizon_core::cloud_runtime::registry::State::Revoking(_) => {
-                            "Revocation pending; reconcile again"
-                        }
-                        horizon_core::cloud_runtime::registry::State::Revoked => "Revoked",
-                    };
-                    status.validation.map_or_else(
-                        || {
-                            format!(
-                                "{state}. Image access has not been validated. Configured pull expiry: {}.",
-                                status.configured_pull_expiry.as_deref().unwrap_or("Unknown")
-                            )
-                        },
-                        |validation| {
-                            format!(
-                                "{state}. Last verified image: {}. Scope: {}. Expiry: {}.",
-                                validation.image,
-                                validation.scope,
-                                validation.expires_at.as_deref().unwrap_or("Unknown")
-                            )
-                        },
-                    )
-                })
+                .map(|status| registry_outcome(&status, &action))
                 .map_err(|error| error.to_string());
             let _ = sender.send(Completion::Registry(result));
             ctx.request_repaint();
@@ -444,6 +439,71 @@ impl HorizonApp {
             ctx.request_repaint();
         });
     }
+}
+
+/// The message a registry action leaves in the form, and the validation it proves.
+fn registry_outcome(
+    status: &horizon_core::cloud_runtime::registry::Status,
+    action: &horizon_core::cloud_runtime::registry::Action,
+) -> RegistryOutcome {
+    use horizon_core::cloud_runtime::registry::{Action, State};
+    let label = match status.state {
+        State::Prepared => "Not prepared",
+        State::Requested { .. } => "Creation uncertain; reconcile before retrying",
+        State::Bound(_) => "Active",
+        State::Revoking(_) => "Revocation pending; reconcile again",
+        State::Revoked => "Revoked",
+    };
+    let message = status.validation.as_ref().map_or_else(
+        || {
+            format!(
+                "{label}. Image access has not been validated. Configured pull expiry: {}.",
+                status.configured_pull_expiry.as_deref().unwrap_or("Unknown")
+            )
+        },
+        |validation| {
+            format!(
+                "{label}. Last verified image: {}. Scope: {}. Expiry: {}.",
+                validation.image,
+                validation.scope,
+                validation.expires_at.as_deref().unwrap_or("Unknown")
+            )
+        },
+    );
+    // Only active provider access counts as verified; revoking it undoes the proof.
+    let verified = matches!(status.state, State::Bound(_))
+        .then(|| status.validation.clone())
+        .flatten()
+        .filter(|_| !matches!(action, Action::Revoke { .. }));
+    RegistryOutcome {
+        message,
+        repository: status.repository.clone(),
+        generation: status.generation.clone(),
+        verified,
+    }
+}
+
+/// Each binding's saved validation, from its journal; nothing is sent to a provider.
+fn saved_validations(draft: &Draft) -> dashboard::Verified {
+    use horizon_core::cloud_runtime::registry::{Action, manage};
+    let mut found = dashboard::Verified::new();
+    let Some(config) = &draft.settings.registries else {
+        return found;
+    };
+    for binding in &config.bindings {
+        let action = Action::Status {
+            repository: binding.repository.clone(),
+            generation: binding.generation.clone(),
+        };
+        let cancellation = horizon_core::cloud_runtime::Cancellation::default();
+        if let Ok(outcome) =
+            manage(&draft.settings, &action, &cancellation).map(|status| registry_outcome(&status, &action))
+            && let Some(validation) = outcome.verified
+        {
+            found.insert(binding.repository.clone(), validation);
+        }
+    }
+    found
 }
 
 fn cloud_runtime_ssh_valid(path: &std::path::Path) -> bool {

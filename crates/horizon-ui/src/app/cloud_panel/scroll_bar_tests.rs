@@ -200,8 +200,9 @@ fn new_cloud_dialog_press_on_a_lower_control_reaches_it() {
 fn cloud_settings_press_on_a_lower_control_reaches_it() {
     let (_temp, ctx, mut app) = app();
     app.open_cloud_accounts(&ctx, false);
-    // A short screen leaves the Accounts section too little height once Hetzner adds its fields.
-    let size = Vec2::new(900.0, 460.0);
+    // A narrow, short screen stacks the cards and leaves the page too little height once Hetzner
+    // adds its fields; the guard measures one column of controls against the bar.
+    let size = Vec2::new(740.0, 620.0);
     let mut time = 0.0;
     let mut frame = |app: &mut HorizonApp, position: Pos2, events: Vec<Event>| {
         time += 0.05;
@@ -221,7 +222,7 @@ fn cloud_settings_press_on_a_lower_control_reaches_it() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let hetzner = loop {
         let output = frame(&mut app, Pos2::ZERO, Vec::new());
-        if let Some(hetzner) = label(&output, "Hetzner Cloud (CPU only)") {
+        if let Some(hetzner) = label(&output, "Use Hetzner Cloud for CPU clouds") {
             break hetzner;
         }
         assert!(std::time::Instant::now() < deadline, "the settings did not load");
@@ -236,7 +237,7 @@ fn cloud_settings_press_on_a_lower_control_reaches_it() {
         };
         frame(&mut app, hetzner, vec![button]);
     }
-    let token = label(&frame(&mut app, Pos2::ZERO, Vec::new()), "Hetzner Cloud API token")
+    let token = label(&frame(&mut app, Pos2::ZERO, Vec::new()), "Paste Hetzner API token")
         .expect("enabling Hetzner shows its token field");
     let layer = LayerId::new(Order::Tooltip, Id::new("cloud-accounts"));
     assert_press_reaches_lower_control(

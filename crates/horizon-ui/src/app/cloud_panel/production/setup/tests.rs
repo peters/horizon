@@ -130,7 +130,9 @@ fn account_form_never_renders_the_secret_value() {
     *draft.runpod_key = "synthetic-secret-marker".into();
     let ctx = Context::default();
     for _ in 0..2 {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| fields::accounts(ui, &mut draft));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            fields::providers(ui, &mut draft, &mut fields::Edits::default());
+        });
         output.textures_delta.clear();
         for shape in output.shapes {
             if let egui::epaint::Shape::Text(text) = shape.shape {
@@ -421,4 +423,155 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
     let rotated = &rotated.registries.as_ref().unwrap().bindings[0];
     assert_ne!(original.generation, rotated.generation);
     assert_eq!(rotated.retired, [original.generation]);
+}
+
+fn bound_registry_draft(root: &std::path::Path) -> Draft {
+    let mut draft = Draft::load(root).unwrap();
+    *draft.runpod_key = "synthetic-compute".into();
+    draft
+        .registries
+        .push(horizon_core::cloud_runtime::registry::draft::Draft {
+            repository: "registry.example/team/worker".into(),
+            pull_username: "reader".into(),
+            pull_secret: zeroize::Zeroizing::new("synthetic-pull".into()),
+            read_only_confirmed: true,
+            ..Default::default()
+        });
+    draft.save().unwrap();
+    Draft::load(root).unwrap()
+}
+
+fn validation() -> horizon_core::cloud_runtime::registry::Validation {
+    horizon_core::cloud_runtime::registry::Validation {
+        image: "registry.example/team/worker@sha256:0".into(),
+        scope: "read-only".into(),
+        expires_at: None,
+        checked_at: 0,
+    }
+}
+
+#[test]
+fn readiness_names_the_first_thing_left_to_do() {
+    use super::dashboard::{Readiness, Tone, Verified};
+    let temp = tempfile::tempdir().unwrap();
+    let mut verified = Verified::new();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    let first = Readiness::of(&draft, None, &verified, false);
+    assert_eq!(first.tone, Tone::Attention);
+    assert!(first.cause.contains("RunPod or Hetzner"));
+    *draft.runpod_key = "synthetic-key".into();
+    assert!(
+        Readiness::of(&draft, None, &verified, false)
+            .cause
+            .contains("Save settings")
+    );
+    let draft = bound_registry_draft(temp.path());
+    assert!(
+        Readiness::of(&draft, Some(true), &verified, false)
+            .cause
+            .contains("Validate pull access for registry.example/team/worker")
+    );
+    assert!(
+        Readiness::of(&draft, Some(false), &verified, false)
+            .cause
+            .contains("SSH identity is incomplete")
+    );
+    verified.insert("registry.example/team/worker".into(), validation());
+    let ready = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!((ready.tone, ready.title), (Tone::Ready, "Settings complete"));
+}
+
+#[test]
+fn a_registry_result_keeps_or_drops_the_proof_for_the_current_grant_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let draft = bound_registry_draft(temp.path());
+    let binding = draft.registries[0].original.clone().unwrap();
+    let mut state = State {
+        draft: Some(Box::new(draft)),
+        ..State::default()
+    };
+    let outcome = |generation: &str, verified| RegistryOutcome {
+        message: "Active.".into(),
+        repository: binding.repository.clone(),
+        generation: generation.into(),
+        verified,
+    };
+    state.record_registry(outcome("an-older-generation", Some(validation())));
+    assert!(state.verified.is_empty());
+    state.record_registry(outcome(&binding.generation, Some(validation())));
+    assert!(state.verified.contains_key(&binding.repository));
+    state.record_registry(outcome(&binding.generation, None));
+    assert!(state.verified.is_empty());
+}
+
+#[test]
+fn an_agent_api_key_holds_the_banner_until_it_is_saved() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    use horizon_core::cloud_runtime::setup::Authentication;
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    let verified = Verified::new();
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
+    assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
+    draft.openai_auth = Authentication::ApiKey;
+    let missing = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!(missing.tone, Tone::Attention);
+    assert!(missing.cause.contains("Codex API key"));
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs a key"));
+    *draft.openai_key = "synthetic-agent".into();
+    assert!(
+        Readiness::of(&draft, Some(true), &verified, false)
+            .cause
+            .contains("Save settings")
+    );
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Unsaved key"));
+    draft.settings.default_agents.clear();
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Choose one"));
+    assert!(
+        Readiness::of(&draft, Some(true), &verified, false)
+            .cause
+            .contains("Choose a coding agent")
+    );
+}
+
+#[test]
+fn an_agentless_profile_needs_no_agent_to_be_ready() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    let temp = tempfile::tempdir().unwrap();
+    let mut first = Draft::load(temp.path()).unwrap();
+    *first.runpod_key = "synthetic-compute".into();
+    first.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    draft.settings.default_agents.clear();
+    let verified = Verified::new();
+    assert_eq!(agents_status(&draft, true), (Tone::Ready, "None required"));
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, true).tone, Tone::Ready);
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Choose one"));
+    assert_eq!(
+        Readiness::of(&draft, Some(true), &verified, false).tone,
+        Tone::Attention
+    );
+}
+
+#[test]
+fn a_registry_edit_or_a_lost_credential_holds_the_banner_even_with_a_saved_proof() {
+    use super::dashboard::{Readiness, Tone, Verified};
+    let temp = tempfile::tempdir().unwrap();
+    let mut draft = bound_registry_draft(temp.path());
+    let binding = draft.registries[0].original.clone().unwrap();
+    let mut verified = Verified::new();
+    verified.insert(binding.repository.clone(), validation());
+    assert_eq!(Readiness::of(&draft, Some(true), &verified, false).tone, Tone::Ready);
+    draft.registries[0].pull_expiry = "2030-01-01T00:00:00Z".into();
+    let edited = Readiness::of(&draft, Some(true), &verified, false);
+    assert_eq!(edited.tone, Tone::Attention);
+    assert!(edited.cause.contains("Save the changes"));
+    std::fs::remove_file(&binding.pull.secret_file).unwrap();
+    let lost = Draft::load(temp.path()).unwrap();
+    let lost = Readiness::of(&lost, Some(true), &verified, false);
+    assert_eq!(lost.tone, Tone::Attention);
+    assert!(lost.cause.contains("pull credential"));
 }
