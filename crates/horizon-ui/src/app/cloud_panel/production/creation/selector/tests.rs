@@ -685,6 +685,38 @@ fn only_the_chosen_cpu_size_reads_exact_stock_and_the_rest_say_likely() {
         .unwrap();
     assert_eq!(widgets::stock(shown.stock(other, &form)).0, "Likely in stock");
     assert_eq!(widgets::stock(shown.stock(chosen, &form)).0, "Out of stock");
+    assert_ne!(shown.picks.cheapest, Some(chosen));
+    for index in [shown.picks.cheapest, shown.picks.balanced, shown.picks.powerful]
+        .into_iter()
+        .flatten()
+    {
+        assert!(
+            shown
+                .stock(index, &form)
+                .is_some_and(|stock| stock.level != Availability::None)
+        );
+    }
+    form.launch.selector.in_stock_only = false;
+    let unfiltered = catalog(&form).unwrap();
+    assert_eq!(unfiltered.picks.cheapest, Some(chosen));
+}
+
+#[test]
+fn stock_only_recommendations_are_empty_when_every_worker_is_unavailable() {
+    let mut form = form("gpu");
+    let mut sold_out = list(None);
+    for center in &mut sold_out.data_centers {
+        for (_, stock) in &mut center.gpus {
+            *stock = Availability::None;
+        }
+    }
+    form.prices.answered(sold_out, preferences(), Vec::new());
+    let shown = catalog(&form).unwrap();
+    assert!(shown.complete);
+    assert_eq!(shown.picks, Picks::default());
+    form.launch.selector.in_stock_only = false;
+    let unfiltered = catalog(&form).unwrap();
+    assert!(unfiltered.picks.cheapest.is_some());
 }
 
 #[test]

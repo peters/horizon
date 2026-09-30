@@ -164,49 +164,48 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
         && (profile.gpu
             || !runpod_interested
             || profile.storage.volume_tier == horizon_core::cloud_runtime::prices::StorageTier::Standard);
-    let stocked: std::collections::HashSet<_> = offers
+    let selected = offers
         .iter()
-        .zip(&places)
-        .filter(|(offer, places)| {
-            places
-                .iter()
-                .any(|place| place.availability != Availability::None && place_allowed(offer, place, form, profile))
+        .take(matching)
+        .position(|offer| is_selected(form, profile, offer));
+    let mut catalog = Catalog {
+        offers,
+        matching,
+        places,
+        picks: Picks::default(),
+        selected,
+        gpu: profile.gpu,
+        complete,
+        currency,
+    };
+    let stocked: std::collections::HashSet<_> = catalog
+        .offers
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            catalog
+                .stock(*index, form)
+                .is_some_and(|stock| stock.level != Availability::None)
         })
-        .map(|(offer, _)| (offer.provider, offer.id.as_str(), offer.location.as_deref()))
+        .map(|(_, offer)| (offer.provider, offer.id.as_str(), offer.location.as_deref()))
         .collect();
-    let picks = if complete {
-        offers::picks_matching(
-            &offers[..matching],
+    if complete {
+        catalog.picks = offers::picks_matching(
+            &catalog.offers[..matching],
             |offer| {
                 form.launch
                     .selector
                     .provider_filter
                     .as_ref()
                     .is_none_or(|provider| provider == offer.provider)
+                    && (!form.launch.selector.in_stock_only
+                        || stocked.contains(&(offer.provider, offer.id.as_str(), offer.location.as_deref())))
             },
-            |offer| {
-                form.launch.selector.in_stock_only
-                    && stocked.contains(&(offer.provider, offer.id.as_str(), offer.location.as_deref()))
-            },
+            |_| false,
             |offer| cost(offer).unwrap_or(f64::INFINITY),
-        )
-    } else {
-        Picks::default()
-    };
-    let selected = offers
-        .iter()
-        .take(matching)
-        .position(|offer| is_selected(form, profile, offer));
-    Some(Catalog {
-        offers,
-        matching,
-        places,
-        picks,
-        selected,
-        gpu: profile.gpu,
-        complete,
-        currency,
-    })
+        );
+    }
+    Some(catalog)
 }
 
 fn interested(
@@ -229,13 +228,6 @@ fn comparison_currency(runpod: bool, hetzner: bool) -> &'static str {
     } else {
         horizon_core::cloud_runtime::provider::RUNPOD.currency
     }
-}
-
-fn place_allowed(offer: &Offer, place: &Place, form: &Production, profile: &Profile) -> bool {
-    offer.location.is_some()
-        || super::provider::current(form.provider, profile).label != offer.provider
-        || form.placement.is_any()
-        || form.placement.data_centers.contains(&place.id)
 }
 
 fn is_selected(form: &Production, profile: &Profile, offer: &Offer) -> bool {
